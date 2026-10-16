@@ -422,6 +422,7 @@ vi.mock("./doctor-memory-search.js", () => ({
   noteMemorySearchHealth,
 }));
 
+// mock-isolation: Keep plugin discovery outside the command fixture.
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
   withDeferredPluginDoctorMigrations: (_pluginIds: readonly string[], run: () => unknown) => run(),
   applyPluginDoctorCompatibilityMigrations: (config: unknown) => ({
@@ -429,6 +430,7 @@ vi.mock("../plugins/doctor-contract-registry.js", () => ({
     changes: [],
   }),
   collectDoctorConfigRepairPluginIds: () => [],
+  resolvePluginDoctorProviderRenames: () => [],
   listPluginDoctorLegacyConfigRules,
 }));
 

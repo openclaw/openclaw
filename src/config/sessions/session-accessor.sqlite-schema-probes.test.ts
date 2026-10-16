@@ -3,13 +3,16 @@ import { constants } from "node:sqlite";
 import { afterEach, expect, it, vi, describe } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { SqliteWorkerBroker } from "../../infra/sqlite-worker-broker.js";
+import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   openOpenClawAgentDatabaseReadOnly,
   withOpenClawAgentDatabaseReadOnly,
 } from "../../state/openclaw-agent-db-readonly.js";
+import { withOpenClawAgentDatabaseWrite } from "../../state/openclaw-agent-db-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
@@ -17,6 +20,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { resolveInternalSessionEffectsIdentity } from "./internal-session-key.js";
 import { listSessionEntriesCore, listSessionEntriesReadOnly } from "./session-accessor.js";
@@ -25,20 +29,21 @@ import {
   readPreparedSessionSharingChange,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
 import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
-import {
-  readExactSessionEntryRow,
-  writeSessionEntry,
-} from "./session-accessor.sqlite-entry-store.js";
-import { replaceSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import * as identityPublication from "./session-accessor.sqlite-identity.js";
-import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
+import type { SessionMaintenanceMetadataResult } from "./session-accessor.sqlite-lifecycle-types.js";
+import { runSessionEntryWorkerMutation } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   measureSessionSchemaProbes,
   measureSqliteSchemaProbes,
   type SessionProbeOperations,
 } from "./session-accessor.sqlite-schema-probes.test-support.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
-import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
+import {
+  markCanonicalSessionValidationPending,
+  readCanonicalSessionMainKey,
+  setCanonicalSqliteSessionMainKey,
+} from "./session-canonical-key.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
@@ -48,67 +53,12 @@ afterEach(async () => {
   await closeStateDatabaseForTest();
 });
 
-it("publishes native writes into a warm cache without new generation probes", () => {
-  const options = {
-    agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("session-publication-probes-") },
-  };
-  const writer = openOpenClawAgentDatabase(options);
-  entryCache.readSessionEntryCache(writer, { cache: true });
-  const sql = observeHostDataSql();
-  const publicationQueries: string[] = [];
-  const observePublication = <T>(publish: () => T): T => {
-    const start = sql.queries.length;
-    try {
-      return publish();
-    } finally {
-      publicationQueries.push(
-        ...sql.queries
-          .slice(start)
-          .filter((query) => query.includes("openclaw_session_nodes_cache_generation")),
-      );
-    }
-  };
-  const publishEntry = entryCache.publishSessionEntryCacheInvalidation;
-  const cachePublication = vi
-    .spyOn(entryCache, "publishSessionEntryCacheInvalidation")
-    .mockImplementation((...args) => observePublication(() => publishEntry(...args)));
-  const publishIdentity = identityPublication.prepareSessionIdentityPublication;
-  const lifecyclePublication = vi
-    .spyOn(identityPublication, "prepareSessionIdentityPublication")
-    .mockImplementation((...args) => observePublication(() => publishIdentity(...args)));
-  const replacementKey = "agent:main:publication-replacement";
-  const initialKey = "agent:main:publication-initial";
-  try {
-    replaceSessionEntrySync(
-      { ...options, storePath: writer.path, sessionKey: replacementKey },
-      { sessionId: "publication-replacement", updatedAt: 1, label: "replacement" },
-    );
-    expect(
-      ensureSessionEntrySync(
-        { ...options, storePath: writer.path, sessionKey: initialKey },
-        { sessionId: "publication-initial", updatedAt: 1, label: "initial" },
-      ),
-    ).toBe(true);
-    expect(cachePublication).toHaveBeenCalled();
-    expect(lifecyclePublication).toHaveBeenCalled();
-    expect(publicationQueries).toEqual([]);
-    expect(readExactSessionEntryRow(writer, replacementKey)?.entry.label).toBe("replacement");
-    expect(readExactSessionEntryRow(writer, initialKey)?.entry.label).toBe("initial");
-  } finally {
-    lifecyclePublication.mockRestore();
-    cachePublication.mockRestore();
-    sql.restore();
-  }
-});
-
 it("refreshes admitted session readers after worker commits without schema or freshness probes", async () => {
   const options = {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("session-schema-probes-") },
   };
   const writer = openOpenClawAgentDatabase(options);
-  writeSessionEntry(writer, "agent:main:probe", { sessionId: "probe", updatedAt: 1 });
   const reader = openOpenClawAgentDatabaseReadOnly(options);
   if (!reader.found) {
     throw new Error("Session probe reader is missing");
@@ -126,6 +76,40 @@ it("refreshes admitted session readers after worker commits without schema or fr
     if (!worker) {
       throw new Error("Session probe worker is unavailable");
     }
+    const lookupDatabase = openOpenClawAgentDatabase({
+      ...options,
+      path: path.join(path.dirname(writer.path), "lookup-traffic.sqlite"),
+    });
+    expect(readCanonicalSessionMainKey(lookupDatabase)).toBe("main");
+    expect(
+      await worker.execute({ type: "mainKeyLookupTraffic", input: { path: lookupDatabase.path } }),
+    ).toEqual({
+      mainKeys: ["main", "main", "main"],
+      lookupMessages: 0,
+      workerPublishRefused: true,
+    });
+    const raced = await broker.runOperation(
+      worker,
+      (scope) => scope.execute({ type: "mainKey", input: { yieldAfterRead: true } }),
+      undefined,
+      undefined,
+      () => ({
+        nativeLocations: [writer.path],
+        admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+          setCanonicalSqliteSessionMainKey(writer, "configured-during-read");
+          writer.db.exec("CREATE TABLE main_key_race_unrelated (value TEXT)");
+          admitSqliteSchema(requireNativeSqliteDatabase(writer.db));
+          grant();
+        }),
+      }),
+    );
+    const afterRace = await worker.execute({ type: "mainKey", input: undefined });
+    expect({ raced, afterRace }).toEqual({
+      raced: { mainKey: "configured-during-read", statements: 1 },
+      afterRace: { mainKey: "configured-during-read", statements: 0 },
+    });
+    setCanonicalSqliteSessionMainKey(writer, "main");
+    writeSessionEntry(writer, "agent:main:probe", { sessionId: "probe", updatedAt: 1 });
     const borrowed = withOpenClawAgentDatabaseReadOnly(measureSessionSchemaProbes, options);
     if (!borrowed.found) {
       throw new Error("Session probe borrowed reader is missing");
@@ -171,19 +155,84 @@ it("refreshes admitted session readers after worker commits without schema or fr
         dataVersion: 0,
       });
     }
+    expect(readCanonicalSessionMainKey(writer)).toBe("main");
+    expect(await worker.execute({ type: "mainKey", input: undefined })).toEqual({
+      mainKey: "main",
+      statements: 0,
+    });
+    let fixtureWriteStarted = false;
+    let configured: Promise<void> | undefined;
+    await runSessionEntryWorkerMutation<SessionMaintenanceMetadataResult>(
+      { ...options, path: writer.path },
+      undefined,
+      () => {},
+      (maintenance) =>
+        maintenance.execute({
+          type: "session.maintenance.metadata",
+          input: { kind: "maintenance-statistics" },
+        }),
+      {
+        identityAgentId: options.agentId,
+        beforeCommit() {
+          // The real maintenance connection holds SQLite until this grant returns.
+          configured = withOpenClawAgentDatabaseWrite(
+            options,
+            () => {
+              fixtureWriteStarted = true;
+              runOpenClawAgentWriteTransaction((database) => {
+                setCanonicalSqliteSessionMainKey(database, "intermediate");
+                setCanonicalSqliteSessionMainKey(database, "configured");
+                expect(readCanonicalSessionMainKey(database)).toBe("configured");
+                expect(readCanonicalSessionMainKey(reader.database)).toBe("main");
+              }, options);
+            },
+            requireNativeSqliteDatabase(writer.db),
+          );
+          expect(fixtureWriteStarted).toBe(false);
+        },
+      },
+    );
+    await configured;
+    expect(fixtureWriteStarted).toBe(true);
+    expect(readCanonicalSessionMainKey(reader.database)).toBe("configured");
+    expect(await worker.execute({ type: "mainKey", input: undefined })).toEqual({
+      mainKey: "configured",
+      statements: 0,
+    });
+    await withOpenClawAgentDatabaseWrite(
+      options,
+      () => {
+        expect(() =>
+          runOpenClawAgentWriteTransaction((database) => {
+            setCanonicalSqliteSessionMainKey(database, "abandoned");
+            expect(readCanonicalSessionMainKey(database)).toBe("abandoned");
+            throw new Error("rollback main key");
+          }, options),
+        ).toThrow("rollback main key");
+      },
+      requireNativeSqliteDatabase(writer.db),
+    );
+    expect((await worker.execute({ type: "mainKey", input: undefined })).mainKey).toBe(
+      "configured",
+    );
+    expect(await worker.execute({ type: "mainKey", input: undefined })).toEqual({
+      mainKey: "configured",
+      statements: 0,
+    });
+    const nativeWriter = requireNativeSqliteDatabase(writer.db);
     // Exercise both native execution paths with statements retained before observation.
     const probeGroups = [
       ["schema_version", "user_version", "data_version"].map((name) =>
-        writer.db.prepare(`PRAGMA ${name}`),
+        nativeWriter.prepare(`PRAGMA ${name}`),
       ),
       [
-        writer.db.prepare(`SELECT schema_version, user_version, data_version
+        nativeWriter.prepare(`SELECT schema_version, user_version, data_version
           FROM main.pragma_schema_version(), main.pragma_user_version(), main.pragma_data_version()`),
       ],
     ];
     for (const statements of probeGroups) {
       for (const method of ["get", "all", "iterate"] as const) {
-        const probes = measureSqliteSchemaProbes(writer.db, () => {
+        const probes = measureSqliteSchemaProbes(nativeWriter, () => {
           for (const statement of statements) {
             if (method === "iterate") {
               Array.from(statement.iterate());
@@ -196,9 +245,9 @@ it("refreshes admitted session readers after worker commits without schema or fr
         expect(probes).toMatchObject({ schemaVersion: 100, userVersion: 100, dataVersion: 100 });
       }
     }
-    if (typeof writer.db.setAuthorizer === "function") {
+    if (typeof nativeWriter.setAuthorizer === "function") {
       let allowed = true;
-      writer.db.setAuthorizer(() => (allowed ? constants.SQLITE_OK : constants.SQLITE_DENY));
+      nativeWriter.setAuthorizer(() => (allowed ? constants.SQLITE_OK : constants.SQLITE_DENY));
       const read = () =>
         entryCache.readSessionEntryCache(writer, { cache: true }).entries.get("agent:main:probe");
       const publications: Array<{
@@ -215,11 +264,16 @@ it("refreshes admitted session readers after worker commits without schema or fr
       });
       try {
         expect(read()?.sessionId).toBe("probe");
-        writeSessionEntry(writer, "agent:main:probe", {
-          sessionId: "probe",
-          updatedAt: 1,
-          label: "current",
-        });
+        await withOpenClawAgentDatabaseWrite(
+          options,
+          (database) =>
+            writeSessionEntry(database, "agent:main:probe", {
+              sessionId: "probe",
+              updatedAt: 1,
+              label: "current",
+            }),
+          requireNativeSqliteDatabase(writer.db),
+        );
         expect(publications).toEqual([
           {
             prepared: expect.objectContaining({
@@ -234,7 +288,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
         expect(read).toThrow(/not authorized/i);
       } finally {
         stop();
-        writer.db.setAuthorizer(null);
+        nativeWriter.setAuthorizer(null);
       }
       expect(read()?.label).toBe("current");
     }
@@ -250,27 +304,32 @@ it.each<{
 }>(
   (
     [
-      { cronRetention: true },
+      { cronRetention: { limit: 32 } },
+      { cronRetention: { limit: 1, afterSessionKey: "agent:main:cron:job:run:old" } },
       { expiredCronRuns: { agentId: "main", updatedBefore: 2 } },
       { expiredCronRuns: { agentId: "main", updatedBefore: 0 } },
     ] satisfies SessionEntryListScope[]
   ).map((scope) => ({
     scope,
-    fullKeys: scope.cronRetention
-      ? [
-          "agent:main:cron:job:run:old",
-          "agent:main:cron:job:run:recent",
-          "agent:other:cron:job:run:old",
-        ]
-      : scope.expiredCronRuns?.updatedBefore === 2
-        ? ["agent:main:cron:job:run:old"]
-        : [],
+    fullKeys:
+      scope.cronRetention?.limit === 1
+        ? ["agent:main:cron:job:run:recent"]
+        : scope.cronRetention
+          ? [
+              "agent:main:cron:job:run:old",
+              "agent:main:cron:job:run:recent",
+              "agent:other:cron:job:run:old",
+            ]
+          : scope.expiredCronRuns?.updatedBefore === 2
+            ? ["agent:main:cron:job:run:old"]
+            : [],
   })),
 )(
   "loads only selected cold snapshots outside the retention transaction: $scope",
   ({ scope, fullKeys }) => {
     const { database, options, read } = fixture(listSessionEntriesReadOnly);
     const saved = { prompt: "cron saved snapshot", skills: [] };
+    const usageFamilySessionIds = Array.from({ length: 1024 }, (_, i) => `previous-run-${i}`);
     runOpenClawAgentWriteTransaction((db) => {
       for (const [sessionKey, updatedAt] of [
         ["agent:main:cron:job:run:old", 1],
@@ -281,15 +340,21 @@ it.each<{
           sessionId: sessionKey,
           updatedAt,
           skillsSnapshot: saved,
+          usageFamilySessionIds,
         });
       }
     }, options);
     read();
     const materialized: string[] = [];
-    const prepare = database.db.prepare.bind(database.db);
-    vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+    let hotPayloadBytes = 0;
+    const nativeDb = requireNativeSqliteDatabase(database.db);
+    const prepare = nativeDb.prepare.bind(nativeDb);
+    vi.spyOn(nativeDb, "prepare").mockImplementation((sql) => {
       const statement = prepare(sql);
       const observe = (row: Record<string, unknown>) => {
+        if (typeof row.entry_json === "string") {
+          hotPayloadBytes += Buffer.byteLength(row.entry_json);
+        }
         if (typeof row.skills_snapshot_json === "string") {
           materialized.push(String(row.session_key));
         }
@@ -334,6 +399,12 @@ it.each<{
       expect(entry.skillsSnapshot).toEqual(saved);
     }
     expect(entries.map(({ sessionKey }) => sessionKey)).toEqual(fullKeys);
+    if (scope.cronRetention?.limit === 1) {
+      // One page can read its hot payload twice, but must not hydrate its bloated siblings.
+      expect(hotPayloadBytes).toBeLessThan(
+        3 * Buffer.byteLength(JSON.stringify(usageFamilySessionIds)),
+      );
+    }
   },
 );
 

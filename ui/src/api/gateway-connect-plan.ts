@@ -218,6 +218,7 @@ export async function buildBrowserGatewayConnectPlan({
           "session-scoped-events",
           "inline-widgets",
           "model-selection-policy",
+          "model-wait-status",
           "ui-commands",
           "ultrafast",
           "usage-refreshing",

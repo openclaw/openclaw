@@ -10,7 +10,6 @@ import type { OpenClawConfig } from "../api.js";
 import {
   activateMemoryWikiCompiledCacheOwner,
   configureMemoryWikiCompiledCacheStore,
-  resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
   type MemoryWikiCompiledDigestClaim,
@@ -137,7 +136,6 @@ async function seedCompiledDigest(params: {
   await writeMemoryWikiCompiledCache(
     params.config,
     snapshot,
-    resolveMemoryWikiCompiledCacheGeneration(snapshot),
     publicationId,
     parentPublicationId,
     async () => {},
@@ -161,42 +159,6 @@ describe("Memory Wiki prompt section", () => {
     expect(lines.join("\n")).toContain("`memory_search` with `corpus=all`");
     expect(lines.join("\n")).toContain("`memory_get` with `corpus=wiki` or `corpus=all`");
     expect(lines.join("\n")).toContain("wiki-specific ranking or provenance details");
-  });
-
-  it("prepares a compact compiled digest from SQLite", async () => {
-    const config = resolveMemoryWikiConfig({
-      vault: { path: path.join(suiteRoot, "digest-enabled") },
-      context: { includeCompiledDigestPrompt: true },
-    });
-    await seedCompiledDigest({
-      config,
-      claimCount: 8,
-      contradictionCount: 1,
-      pages: [
-        {
-          title: "Alpha",
-          kind: "entity",
-          claimCount: 3,
-          questions: ["Still active?"],
-          contradictions: ["Conflicts with source.beta"],
-          topClaims: [
-            {
-              text: "Alpha uses PostgreSQL for production writes.",
-              confidence: 0.91,
-              freshnessLevel: "fresh",
-            },
-          ],
-        },
-      ],
-    });
-
-    const lines = await createStaticPreparer(config)({ availableTools: new Set() });
-
-    expect(lines.join("\n")).toContain("## Compiled Wiki Snapshot");
-    expect(lines.join("\n")).toContain(
-      "Alpha: entity, 3 claims, 1 open questions, 1 contradiction notes",
-    );
-    expect(lines.join("\n")).toContain("Alpha uses PostgreSQL for production writes.");
   });
 
   it.each([

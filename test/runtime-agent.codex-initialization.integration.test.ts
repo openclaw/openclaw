@@ -14,16 +14,14 @@ import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-re
 import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import * as sqliteAdmission from "../src/infra/sqlite-worker-operation-admission.js";
 import {
-  createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
   type OpenAsyncKeyedStoreOptions,
   type OpenKeyedStoreOptions,
+  type PluginStateActionAuthority,
 } from "../src/plugin-state/plugin-state-store.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
-import {
-  markPluginRegistryActive,
-  markPluginRegistryRetired,
-} from "../src/plugins/registry-lifecycle.js";
+import { markPluginRegistryActive } from "../src/plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../src/plugins/runtime/gateway-request-scope.js";
 import { createRuntimeAgent } from "../src/plugins/runtime/runtime-agent.js";
 import { createPluginRecord } from "../src/plugins/status.test-helpers.js";
@@ -56,10 +54,6 @@ describe("Codex initialization through the registered session deletion owner", (
       "successor link",
       "existing link",
       "source successor",
-      "source successor during link write",
-      "source successor during link cleanup",
-      "source link successor",
-      "registry rotation",
       "rollback commit",
       "native cleanup",
     ].map((failure) => ({ flow: "fork", failure })),
@@ -74,8 +68,11 @@ describe("Codex initialization through the registered session deletion owner", (
         const runtime = createPluginRuntimeMock({
           agent,
           state: {
-            openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
-              createPluginStateKeyedStore<T>("codex", { ...options, env: state.env }),
+            openKeyedStoreV2: <T>(
+              options: OpenAsyncKeyedStoreOptions,
+              authority: PluginStateActionAuthority = { assertCurrent() {} },
+            ) =>
+              createPluginStateKeyedStoreV2<T>("codex", { ...options, env: state.env }, authority),
             openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
               createPluginStateSyncKeyedStore<T>("codex", { ...options, env: state.env }),
           },
@@ -102,8 +99,6 @@ describe("Codex initialization through the registered session deletion owner", (
         };
         const sourceHistory = await loadTranscriptEvents(params.source);
         let linkOperation: "write" | "cleanup" | undefined;
-        let linkFailureInjected = false;
-        let linkGrantCount = 0;
         let linkGrantReads = 0;
         let rollbackCommitRefused = false;
         let rejectReadinessCommit = false;
@@ -138,27 +133,6 @@ describe("Codex initialization through the registered session deletion owner", (
         vi.spyOn(sqliteAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
           (admit, attachment) => {
             const operation = linkOperation;
-            if (
-              operation === "write" &&
-              failure === "source link successor" &&
-              !linkFailureInjected
-            ) {
-              // Replace the source after its command is captured, before the worker locks it.
-              expect(
-                upsertSessionUpstreamLink({
-                  ...expectDefined(
-                    readSessionUpstreamLinkInDatabase(
-                      openOpenClawStateDatabase().db,
-                      params.source.sessionKey,
-                      "main",
-                    ),
-                    "source link",
-                  ),
-                  threadId: "source-link-successor",
-                }),
-              ).toBe(true);
-              linkFailureInjected = true;
-            }
             return createAdmission((request, grant) => {
               if (
                 rejectReadinessCommit &&
@@ -172,20 +146,20 @@ describe("Codex initialization through the registered session deletion owner", (
                 throw new Error("injected readiness failure");
               }
               if (
-                operation &&
+                failure === "rollback commit" &&
                 request.stage === "commit" &&
-                failure === `source successor during link ${operation}` &&
-                !linkFailureInjected
+                isRecord(request.facts) &&
+                isRecord(request.facts.publication) &&
+                request.facts.publication.kind === "session-native-binding"
               ) {
-                replaceSource();
-                linkFailureInjected = true;
+                rollbackCommitRefused = true;
+                throw new Error("injected rollback failure");
               }
               const offsets = reads.calls.map((call) => call.mock.contexts.length);
               try {
                 admit(request, grant);
               } finally {
                 if (operation && (request.stage === "transaction" || request.stage === "commit")) {
-                  linkGrantCount++;
                   for (const [index, call] of reads.calls.entries()) {
                     linkGrantReads += call.mock.contexts
                       .slice(offsets[index])
@@ -285,12 +259,17 @@ describe("Codex initialization through the registered session deletion owner", (
                   context.agentId,
                 );
               }
-              if (failure === "import") {
-                openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
-                  "CREATE TEMP TRIGGER reject_import BEFORE INSERT ON transcript_events BEGIN SELECT RAISE(ABORT, 'injected import failure'); END",
-                );
+              let patch: Awaited<ReturnType<NonNullable<typeof input.afterCreate>>>;
+              try {
+                patch = await input.afterCreate!(context);
+              } finally {
+                if (failure === "import") {
+                  // The import fault must not alter schema admission during rollback.
+                  openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
+                    "DROP TRIGGER reject_import",
+                  );
+                }
               }
-              const patch = await input.afterCreate!(context);
               if (!patch) {
                 throw new Error("Codex initializer did not return its final patch");
               }
@@ -325,10 +304,6 @@ describe("Codex initialization through the registered session deletion owner", (
           if (failure === "source successor") {
             replaceSource();
           }
-          if (failure === "registry rotation") {
-            markPluginRegistryRetired(registry);
-            markPluginRegistryActive(registry);
-          }
           if (failure === "successor binding") {
             await mutate(identity, {
               kind: "patch",
@@ -358,16 +333,6 @@ describe("Codex initialization through the registered session deletion owner", (
               "main",
             );
           }
-          if (failure === "rollback commit") {
-            const database = openOpenClawAgentDatabase({ agentId: "main" });
-            database.db.function("observe_rollback_refusal", () => {
-              rollbackCommitRefused = true;
-              return 0;
-            });
-            database.db.exec(
-              "CREATE TEMP TRIGGER reject_rollback BEFORE DELETE ON session_nodes WHEN json_extract(OLD.entry_json, '$.initializationPending') = 1 BEGIN SELECT observe_rollback_refusal(); SELECT RAISE(ABORT, 'injected rollback failure'); END",
-            );
-          }
           if (
             [
               "after binding",
@@ -375,7 +340,6 @@ describe("Codex initialization through the registered session deletion owner", (
               "successor link",
               "rollback commit",
               "native cleanup",
-              "source successor during link cleanup",
             ].includes(failure)
           ) {
             throw new Error("injected post-write failure");
@@ -409,6 +373,12 @@ describe("Codex initialization through the registered session deletion owner", (
           return attached;
         });
 
+        if (failure === "import") {
+          // Allow the child header so the callback captures identity before imported messages fail.
+          openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
+            "CREATE TRIGGER reject_import BEFORE INSERT ON transcript_events WHEN NEW.navigation_type = 'message' BEGIN SELECT RAISE(ABORT, 'injected import failure'); END",
+          );
+        }
         const result = await withPluginRuntimeRegistryScope(
           registry,
           flow === "fork" ? invokeFork : fixture.adopt,
@@ -416,6 +386,9 @@ describe("Codex initialization through the registered session deletion owner", (
 
         if (failure === "rollback commit") {
           expect(rollbackCommitRefused).toBe(true);
+        }
+        if (failure === "import") {
+          expect(result.message).toContain("injected import failure");
         }
         if (failure === "final readiness") {
           expect(readinessCommitRefused).toBe(true);
@@ -425,21 +398,6 @@ describe("Codex initialization through the registered session deletion owner", (
           expect(readinessPublicationRefused).toBe(true);
           expect(readyAtPublication?.sessionId).toBe(childSessionId);
           expect(readyAtPublication?.initializationPending).toBeUndefined();
-        }
-        if (failure.startsWith("source successor during link")) {
-          expect(linkFailureInjected).toBe(true);
-          expect(linkGrantCount).toBeGreaterThan(0);
-        }
-        if (failure === "source link successor") {
-          expect(linkFailureInjected).toBe(true);
-          expect(result.message).toContain("Session upstream source changed during initialization");
-          expect(
-            readSessionUpstreamLinkInDatabase(
-              openOpenClawStateDatabase().db,
-              params.source.sessionKey,
-              "main",
-            )?.threadId,
-          ).toBe("source-link-successor");
         }
         expect(linkGrantReads).toBe(0);
         expect(result).toMatchObject({
@@ -465,9 +423,7 @@ describe("Codex initialization through the registered session deletion owner", (
           expect(link?.threadId).toBe(forkedThread.id);
           expect(native.archiveThread).not.toHaveBeenCalled();
           expect(deletion).not.toHaveBeenCalled();
-        } else if (
-          ["successor binding", "rollback commit", "registry rotation"].includes(failure)
-        ) {
+        } else if (["successor binding", "rollback commit"].includes(failure)) {
           expect(child?.initializationPending).toBe(true);
           expect(binding).toEqual(
             successorBinding ??

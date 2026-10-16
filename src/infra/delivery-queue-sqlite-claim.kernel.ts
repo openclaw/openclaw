@@ -14,6 +14,7 @@ type PlatformClaimParams = {
   requiresProducerClaim?: boolean;
   reconciledPlatformSendAttemptId?: string;
   reconciledPlatformSendStartedAt?: number;
+  allowUnknownSendReplay?: true;
 };
 
 export const PLATFORM_SEND_OWNER_LEASE_MS = 60_000;
@@ -131,15 +132,17 @@ export function claimDeliveryQueueEntryPlatformSendInDatabase(
     params,
     "claim",
     (entry, now) => {
-      const reconciledNotSent =
-        entry.recoveryState === "send_attempt_started" &&
+      const reconciledForReplay =
+        (entry.recoveryState === "send_attempt_started" ||
+          (entry.recoveryState === "unknown_after_send" &&
+            params.allowUnknownSendReplay === true)) &&
         typeof params.reconciledPlatformSendStartedAt === "number" &&
         entry.platformSendStartedAt === params.reconciledPlatformSendStartedAt &&
         typeof params.reconciledPlatformSendAttemptId === "string" &&
         entry.platformSendAttemptId === params.reconciledPlatformSendAttemptId;
       if (
         entry.recoveryState &&
-        !reconciledNotSent &&
+        !reconciledForReplay &&
         (entry.recoveryState !== "producer_claimed" ||
           typeof entry.availableAt !== "number" ||
           entry.availableAt > now)

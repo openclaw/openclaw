@@ -42,6 +42,7 @@ function verifyPluginRun(
     mkdirSync(join(trusted, "scripts/lib"), { recursive: true });
     for (const path of [
       "scripts/openclaw-npm-extended-stable-release.mjs",
+      "scripts/plugin-sdk-api-release-evidence.mjs",
       "scripts/lib/release-version.mjs",
     ]) {
       copyFileSync(path, join(trusted, path));

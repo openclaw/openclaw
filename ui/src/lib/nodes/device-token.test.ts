@@ -81,15 +81,12 @@ afterEach(() => {
 });
 
 describe("current browser device token", () => {
-  it.each(["operator.read", "operator.write", "operator.admin"])(
-    "accepts a stored credential with %s access",
-    (scope) => {
-      storeIdentity();
-      storeDeviceAuthToken({ ...tokenParams, token: "current-token", scopes: [scope] });
+  it("accepts a stored credential with operator.read access", () => {
+    storeIdentity();
+    storeDeviceAuthToken({ ...tokenParams, token: "current-token", scopes: ["operator.read"] });
 
-      expect(loadCurrentDeviceAuthToken(tokenParams.gatewayUrl)).toBe("current-token");
-    },
-  );
+    expect(loadCurrentDeviceAuthToken(tokenParams.gatewayUrl)).toBe("current-token");
+  });
 
   it("keeps credentials scoped to the requested Gateway route", () => {
     storeIdentity();
@@ -176,21 +173,8 @@ describe("device token request lifecycle", () => {
     expect(loadDeviceAuthToken(tokenParams)?.token).toBe("rotated-token");
   });
 
+  // Grant matching uses the same whitespace normalization as the device-auth store.
   it("reports a cross-device rotation the Gateway withheld the token for", async () => {
-    const state = createState(async () => ({
-      ...rotationResult,
-      tokenDelivery: "withheld-cross-device",
-    }));
-
-    expect(await rotateDeviceToken(state, tokenParams)).toEqual({
-      delivery: "withheld-cross-device",
-    });
-    expect(loadDeviceAuthToken(tokenParams)).toBeNull();
-  });
-
-  // The Gateway echoes the raw request deviceId and its own stored role, so a grant that
-  // differs only by surrounding whitespace is still the one this page asked to rotate.
-  it("accepts a result whose grant differs from the request only by whitespace", async () => {
     const state = createState(async () => ({
       ...rotationResult,
       deviceId: " 00 ",
@@ -201,6 +185,7 @@ describe("device token request lifecycle", () => {
     expect(await rotateDeviceToken(state, tokenParams)).toEqual({
       delivery: "withheld-cross-device",
     });
+    expect(loadDeviceAuthToken(tokenParams)).toBeNull();
   });
 
   // Gateways released before tokenDelivery answer without it; a present token is then

@@ -10,7 +10,6 @@ import {
   tryRouteCliMock,
   loadDotEnvMock,
   existsSyncOverride,
-  assertRuntimeMock,
   buildProgramMock,
   parkCurrentLaunchAgentForMaintenanceMock,
   readConfigFileSnapshotMock,
@@ -83,7 +82,7 @@ describe("runCli exit behavior", () => {
         tryRouteCliMock.mockResolvedValueOnce(false);
       }
       await withCliExitSpies(async (errorSpy, exitSpy) => {
-        await expect(runCli(argv)).rejects.toThrow("exit:78");
+        await expect(runCli(argv)).rejects.toMatchObject({ name: "ExitError", code: 78 });
 
         expect(parkCurrentLaunchAgentForMaintenanceMock).toHaveBeenCalledOnce();
         expect(exitSpy).toHaveBeenCalledWith(78);
@@ -206,7 +205,10 @@ describe("runCli exit behavior", () => {
       },
       () =>
         withCliExitSpies(async (errorSpy) => {
-          await expect(runCli(cliArgs("gateway", ...flags))).rejects.toThrow(`exit:${code}`);
+          await expect(runCli(cliArgs("gateway", ...flags))).rejects.toMatchObject({
+            name: "ExitError",
+            code,
+          });
           expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(action));
           expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
           expect(readConfigFileSnapshotMock.mock.calls).toEqual([[readOnlyCoreOptions]]);
@@ -229,7 +231,10 @@ describe("runCli exit behavior", () => {
           OPENCLAW_SERVICE_MARKER: undefined,
         },
         async () => {
-          await expect(runCli(cliArgs("gateway"))).rejects.toThrow("exit:78");
+          await expect(runCli(cliArgs("gateway"))).rejects.toMatchObject({
+            name: "ExitError",
+            code: 78,
+          });
           expect(process.env.OPENCLAW_SERVICE_MARKER).toBeUndefined();
           expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
           expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
@@ -269,7 +274,10 @@ describe("runCli exit behavior", () => {
           ),
         );
         await withCliExitSpies(async (errorSpy) => {
-          await expect(runCli(cliArgs("gateway"))).rejects.toThrow("exit:1");
+          await expect(runCli(cliArgs("gateway"))).rejects.toMatchObject({
+            name: "ExitError",
+            code: 1,
+          });
           expect(errorSpy).toHaveBeenCalledWith(
             expect.stringContaining("run gateway state preparation"),
           );
@@ -419,7 +427,10 @@ describe("runCli exit behavior", () => {
           ),
         );
         await withCliExitSpies(async (errorSpy) => {
-          await expect(runCli(cliArgs("gateway"))).rejects.toThrow("exit:1");
+          await expect(runCli(cliArgs("gateway"))).rejects.toMatchObject({
+            name: "ExitError",
+            code: 1,
+          });
           expect(errorSpy).toHaveBeenCalledWith(
             expect.stringContaining("run gateway state preparation"),
           );
@@ -487,25 +498,6 @@ describe("runCli exit behavior", () => {
     expect(commanderParseAsyncMock).toHaveBeenCalledWith(cliArgs("gateway"));
   });
 
-  it.each([
-    ["full Commander path with root options", cliArgs("--log-level", "debug", "gateway", "run")],
-  ])("isolates %s gateway proxy config reads core-only", async (_name, argv) => {
-    existsSyncOverride.value = (target) => target === path.join(process.cwd(), ".env");
-    if (_name === "full Commander path with root options") {
-      tryRouteCliMock.mockResolvedValueOnce(false);
-      buildProgramMock.mockReturnValueOnce(makeProgram("gateway", commanderParseAsyncMock));
-    }
-    await runCli(argv);
-
-    expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: false, quiet: true });
-    if (_name === "full Commander path with root options") {
-      expect(buildProgramMock).toHaveBeenCalledTimes(1);
-      expect(commanderParseAsyncMock).toHaveBeenLastCalledWith(argv);
-    }
-    expect(loadConfigMock).toHaveBeenCalledWith(readOnlyCoreOptions);
-    expect(startProxyMock).toHaveBeenCalledWith(undefined);
-  });
-
   it("keeps explicit database preflight isolated from default state selection", async () => {
     tryRouteCliMock.mockResolvedValueOnce(true);
 
@@ -516,18 +508,8 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).not.toHaveBeenCalled();
   });
 
-  it("stops before config selection when asynchronous runtime validation rejects", async () => {
-    const error = new Error("unsupported runtime");
-    const validation = Promise.reject(error);
-    // The regression must also join this rejection when old code ignores the returned promise.
-    void validation.catch(() => {});
-    assertRuntimeMock.mockReturnValueOnce(validation);
-
-    await expect(runCli(cliArgs("gateway", "run"))).rejects.toBe(error);
-    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
-  });
-
   it("replaces the early managed proxy with the final accepted gateway config", async () => {
+    existsSyncOverride.value = (target) => target === path.join(process.cwd(), ".env");
     const earlyHandle = makeProxyHandle();
     const finalHandle = makeProxyHandle();
     const earlyProxy = { proxyUrl: "http://127.0.0.1:19876" };
@@ -541,6 +523,8 @@ describe("runCli exit behavior", () => {
 
     await runCli(cliArgs("gateway", "run"));
 
+    expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: false, quiet: true });
+    expect(loadConfigMock).toHaveBeenCalledWith(readOnlyCoreOptions);
     expect(startProxyMock).toHaveBeenNthCalledWith(1, earlyProxy);
     expect(startProxyMock).toHaveBeenNthCalledWith(2, finalProxy);
     expect(stopProxyMock).toHaveBeenNthCalledWith(1, earlyHandle);

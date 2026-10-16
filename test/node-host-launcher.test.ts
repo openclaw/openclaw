@@ -5,10 +5,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createLauncherCommandBoundaryPlugin } from "./helpers/launcher-esbuild.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
-const processes = new Set<ChildProcessWithoutNullStreams>();
+const processes = new Map<ChildProcessWithoutNullStreams, Promise<unknown>>();
 let bootstrapSource: string;
 let launcherClientSource: string;
 
@@ -21,6 +22,7 @@ beforeAll(async () => {
       format: "esm",
       platform: "node",
       target: "node24",
+      plugins: [createLauncherCommandBoundaryPlugin()],
       banner: {
         js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
       },
@@ -40,11 +42,11 @@ beforeAll(async () => {
 
 afterEach(async () => {
   await Promise.all(
-    [...processes].map(async (child) => {
+    [...processes].map(async ([child, closed]) => {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGTERM");
-        await once(child, "exit");
       }
+      await closed;
     }),
   );
   processes.clear();
@@ -61,12 +63,14 @@ async function writePackage(root: string, version: string, body: string, schema 
   );
   for (const name of [
     "openclaw.mjs",
+    "cli-invocation.mjs",
     "node-host-launcher.mjs",
     "node-compile-cache.mjs",
     "node-version.mjs",
     "node-sqlite.mjs",
     "node-runtime-update.mjs",
     "node-runtime-recovery.mjs",
+    "cli-parent-lifetime.mjs",
     "node-runtime-env.mjs",
     "cli-root-options.mjs",
     "gateway-run-argv.mjs",
@@ -145,7 +149,6 @@ function run(
     },
     stdio: "pipe",
   });
-  processes.add(child);
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (chunk: Buffer) => {
@@ -155,6 +158,7 @@ function run(
     stderr += chunk.toString();
   });
   const done = once(child, "close").then(([code, signal]) => ({ code, signal, stdout, stderr }));
+  processes.set(child, done);
   return { child, done, output: () => stdout };
 }
 

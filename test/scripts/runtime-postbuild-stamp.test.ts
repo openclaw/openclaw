@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { RUNTIME_POSTBUILD_STAMP_FILE } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { writeRuntimePostBuildStamp } from "../../scripts/lib/local-build-metadata.mts";
-import { captureRunNodeInputState } from "../../scripts/lib/run-node-input-state.mts";
+import { resolveRunNodeInputSignature } from "../../scripts/lib/run-node-input-state.mts";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -93,7 +93,7 @@ describe("runtime-postbuild-stamp script", () => {
     writeRuntimePostBuildStamp({
       cwd,
       env,
-      inputState: captureRunNodeInputState({ ...deps, env }, "runtime"),
+      inputSignature: resolveRunNodeInputSignature({ ...deps, env }, "runtime"),
     });
     expect(fs.readFileSync(path.join(cwd, output), "utf8")).toBe("A");
     expect(resolveRuntimePostBuildRequirement(deps, { allowEquivalentInputs: true }).reason).toBe(
@@ -103,10 +103,10 @@ describe("runtime-postbuild-stamp script", () => {
       resolveRuntimePostBuildRequirement({ ...deps, env }, { allowEquivalentInputs: true })
         .shouldSync,
     ).toBe(false);
-    const inputState = captureRunNodeInputState(deps, "runtime");
+    const inputSignature = resolveRunNodeInputSignature(deps, "runtime");
     copyStaticExtensionAssets({ rootDir: cwd, env: {} });
     copyStaticExtensionAssetsToRuntimeOverlay({ rootDir: cwd, env: {} });
-    writeRuntimePostBuildStamp({ cwd, env: {}, inputState });
+    writeRuntimePostBuildStamp({ cwd, env: {}, inputSignature });
     expect(fs.readFileSync(path.join(cwd, output), "utf8")).toBe("B");
     expect(
       resolveRuntimePostBuildRequirement(deps, { allowEquivalentInputs: true }).shouldSync,

@@ -41,6 +41,42 @@ afterEach(() => {
 });
 
 describe("Gateway stop deadline independent of restart ownership", () => {
+  it.each([false, true])(
+    "skips only a validated external drain while retaining the native cleanup deadline (handoff=%s)",
+    (handoff) => {
+      const drain = resolveGatewayShutdownDrainBudget({
+        budget: { timeoutMs: 85_000, reserveMs: 10_000, nativeStopBudget: true },
+        action: "external-restart",
+        forceRestart: true,
+        interruptAfterDrain: handoff ? true : undefined,
+        restartWithoutSupervisor: false,
+        acceptedAtMs: performance.now(),
+        requestedRestartDrainTimeoutMs: 45_000,
+      });
+      if (handoff) {
+        expect(drain.drainTimeoutMs).toBe(0);
+        expect(drain.closeDrainTimeoutMs()).toBe(0);
+      } else {
+        expect(drain.drainTimeoutMs).toBeGreaterThan(44_000);
+        expect(drain.closeDrainTimeoutMs()).toBeGreaterThan(44_000);
+      }
+      expect(drain.forceExitMs).toBe(85_000);
+    },
+  );
+  it.each([15_000, 85_000])(
+    "bounds ordinary stop grace while retaining the %i ms write cleanup deadline",
+    (timeoutMs) => {
+      const drain = resolveGatewayShutdownDrainBudget({
+        budget: { timeoutMs, reserveMs: 10_000, nativeStopBudget: true },
+        action: "stop",
+        forceRestart: false,
+        restartWithoutSupervisor: false,
+        acceptedAtMs: performance.now(),
+      });
+      expect(drain.drainTimeoutMs).toBe(Math.min(20_000, timeoutMs - 10_000));
+      expect(drain.forceExitMs).toBe(timeoutMs);
+    },
+  );
   it("clamps an external system unit running as a service user", async () => {
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
     process.env.INVOCATION_ID = "own";

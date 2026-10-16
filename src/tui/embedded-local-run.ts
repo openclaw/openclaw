@@ -1,4 +1,5 @@
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
+import type { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
 import type { AssistantTextSnapshot } from "../gateway/agent-event-assistant-text.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { buildCollectPrompt, previewQueueSummaryPrompt } from "../utils/queue-helpers.js";
@@ -12,6 +13,7 @@ export type LocalRunState = {
   assistantScope?: AssistantTextSnapshot["scope"];
   managedMediaUrls: Set<string>;
   lastBroadcastText?: string;
+  textUpdates?: ReturnType<typeof createDraftStreamLoop<boolean>>;
   question?: string;
   finishing: boolean;
   lifecycleEnded: boolean;

@@ -12,6 +12,7 @@ import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-
 import { withFullRuntimeReplyConfig } from "../../auto-reply/reply/get-reply-fast-path.js";
 import { getReplyFromConfig } from "../../auto-reply/reply/get-reply.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -50,9 +51,10 @@ it.each([true, false])(
         plugins: { enabled: false },
       });
       await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
       const client = sharingPolicyClient({ deviceId: "caller-device", scopes: ["operator.admin"] });
       client.connect.caps = ["tool-events", "task-suggestions"];
-      const sessionTarget = prepareTalkSessionTarget(config, "agent:main:main");
+      const sessionTarget = await prepareTalkSessionTarget(config, "agent:main:main");
       const authority = resolveTalkAgentConsultAuthority(client.connect.scopes, client);
       const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
       const runId = "talk-authority-run";

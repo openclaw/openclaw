@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
+import { createNativeSessionCommitFinalizer } from "../../agents/harness/native-session/deletion-participant.js";
 import * as logging from "../../logging/logger.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -20,7 +21,6 @@ import {
   loadSessionEntry,
   loadTranscriptEventsSync,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
@@ -29,6 +29,7 @@ import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import * as reclamationDiagnostics from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
@@ -113,15 +114,18 @@ it.each(
             expect(database.db.isTransaction).toBe(false);
             expect(rows()).toEqual(before);
             order.push("native:prepare");
-            const result = await run({
-              commit: () => {
-                expect(database.db.isTransaction).toBe(true);
-                order.push("native:commit");
-              },
-              rollback: () => {
-                order.push("native:rollback");
-              },
-            });
+            const result = await run(
+              createNativeSessionCommitFinalizer({
+                commit: () => {
+                  expect(database.db.isTransaction).toBe(false);
+                  expect(rows()).toEqual([{ session_key: targetKey, label: "after" }]);
+                  order.push("native:commit");
+                },
+                rollback: () => {
+                  order.push("native:rollback");
+                },
+              }),
+            );
             order.push("native:release");
             return result;
           },
@@ -357,12 +361,19 @@ it("coalesces automatic maintenance through native planning and finalization", a
         finalized.resolve(result);
         return result;
       });
-    const deadlineRead = createDeferredCore();
+    const maintenanceSettled = createDeferredCore();
     const reclaim = reclamationRun.runSqliteSessionReclamation;
     vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
       const result = await reclaim(params);
-      if (params.plan.kind === "maintenance-age" && params.plan.expected === undefined) {
-        deadlineRead.resolve();
+      if (
+        result.kind === "maintenance-age" ||
+        (result.kind === "maintenance-plan" &&
+          result.value.archived === 0 &&
+          result.value.entryRemovals.length === 0 &&
+          result.value.stateDeletePlans.length === 0)
+      ) {
+        // Empty plans carry their verified deadline without another age request.
+        maintenanceSettled.resolve();
       }
       return result;
     });
@@ -384,7 +395,8 @@ it("coalesces automatic maintenance through native planning and finalization", a
       storePath,
       maintenanceConfig: resolveMaintenanceConfigFromInput({
         mode: "enforce",
-        pruneAfter: "1s",
+        // Native worker preparation must not age the active fixture into a second archive pass.
+        pruneAfter: "30d",
         maxEntries: 100,
       }),
     };
@@ -392,9 +404,7 @@ it("coalesces automatic maintenance through native planning and finalization", a
       kickSessionEntryMaintenanceAfterWrite(request);
       kickSessionEntryMaintenanceAfterWrite(request);
       await finalized.promise;
-      await deadlineRead.promise;
-      // Read-only preflight can precede writable planning; both kicks share one committed finalizer.
-      expect(operations).toContain("session.maintenance.plan");
+      await maintenanceSettled.promise;
       expect(
         operations.filter((operation) => operation === "session.reclamation.worker-commit"),
       ).toEqual(["session.reclamation.worker-commit"]);

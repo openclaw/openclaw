@@ -23,8 +23,9 @@ function createDeps(): MSTeamsMessageHandlerDeps {
   installMSTeamsTestRuntime();
 
   return {
-    cfg: {} as OpenClawConfig,
+    cfg: { channels: { msteams: { dmPolicy: "allowlist", allowFrom: ["user-aad"] } } },
     runtime: { error: vi.fn() } as unknown as RuntimeEnv,
+    accountId: "default",
     appId: "test-app",
     app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: {
@@ -127,6 +128,48 @@ function lastDispatchedCtxPayload(): Record<string, unknown> {
   }
   return dispatched.ctx;
 }
+
+describe("msteams members added handler", () => {
+  it("uses account-specific welcome card config", async () => {
+    const deps = {
+      ...createDeps(),
+      accountId: "support",
+      cfg: {
+        channels: {
+          msteams: {
+            welcomeCard: true,
+            accounts: {
+              support: {
+                appId: "support-app",
+                appPassword: "support-secret",
+                tenantId: "tenant-id",
+                webhook: { path: "/api/messages/support" },
+                welcomeCard: false,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    };
+    const handler = createMSTeamsActivityHandler(deps);
+    const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
+
+    await handler({
+      activity: {
+        type: "conversationUpdate",
+        membersAdded: [{ id: "bot-id" }],
+        recipient: { id: "bot-id", name: "Support" },
+        conversation: { id: "conversation-id", conversationType: "personal" },
+      },
+      sendActivity,
+      sendActivities: vi.fn(async () => []),
+      updateActivity: vi.fn(async () => undefined),
+      deleteActivity: vi.fn(async () => undefined),
+    });
+
+    expect(sendActivity).not.toHaveBeenCalled();
+  });
+});
 
 describe("msteams adaptive card action invoke", () => {
   beforeEach(() => {

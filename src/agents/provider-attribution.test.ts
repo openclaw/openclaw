@@ -176,9 +176,9 @@ import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   resolveProviderEndpoint,
+  resolveProviderFastModeRequestCapabilities,
   resolveProviderRequestCapabilities,
   resolveProviderRequestPolicy,
-  describeProviderRequestRoutingSummary,
 } from "./provider-attribution.js";
 
 describe("provider attribution", () => {
@@ -288,60 +288,61 @@ describe("provider attribution", () => {
     expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
-  it("identifies OpenClaw only on native OpenCode Go routes", () => {
-    const nativeGo = resolveProviderRequestPolicy(
-      {
-        provider: "opencode-go",
-        api: "openai-completions",
-        baseUrl: "https://opencode.ai/zen/go/v1",
-        transport: "stream",
-        capability: "llm",
-      },
-      { OPENCLAW_VERSION: "2026.3.22" },
-    );
+  it.each([
+    [
+      "opencode-go",
+      "https://opencode.ai/zen/go/v1",
+      "opencode-go-native",
+      "https://opencode.ai/zen/v1",
+    ],
+    ["opencode", "https://opencode.ai/zen/v1", "opencode-native", "https://opencode.ai/zen/go/v1"],
+  ])(
+    "identifies OpenClaw only on %s native routes",
+    (provider, baseUrl, endpointClass, otherUrl) => {
+      const nativeGo = resolveProviderRequestPolicy(
+        {
+          provider,
+          api: "openai-completions",
+          baseUrl,
+          transport: "stream",
+          capability: "llm",
+        },
+        { OPENCLAW_VERSION: "2026.3.22" },
+      );
 
-    expectRecordFields(nativeGo, {
-      endpointClass: "opencode-go-native",
-      attributionProvider: "opencode-go",
-      allowsHiddenAttribution: false,
-    });
-    expect(nativeGo.attributionHeaders).toEqual({
-      "User-Agent": "openclaw/2026.3.22",
-    });
+      expectRecordFields(nativeGo, {
+        endpointClass,
+        attributionProvider: provider,
+        allowsHiddenAttribution: false,
+      });
+      expect(nativeGo.attributionHeaders).toEqual({
+        "User-Agent": "openclaw/2026.3.22",
+      });
 
-    expect(
-      resolveProviderRequestPolicy({
-        provider: "opencode-go",
-        api: "openai-completions",
-        baseUrl: "https://proxy.example.com/v1",
-        transport: "stream",
-        capability: "llm",
-      }).attributionHeaders,
-    ).toBeUndefined();
-    expectRecordFields(
-      resolveProviderRequestPolicy({
-        provider: "opencode-go",
-        api: "openai-completions",
-        baseUrl: "https://opencode.ai/zen/v1",
-        transport: "stream",
-        capability: "llm",
-      }),
-      {
-        endpointClass: "opencode-native",
-        attributionProvider: undefined,
-        attributionHeaders: undefined,
-      },
-    );
-    expect(
-      resolveProviderRequestPolicy({
-        provider: "opencode",
-        api: "openai-completions",
-        baseUrl: "https://opencode.ai/zen/v1",
-        transport: "stream",
-        capability: "llm",
-      }).attributionHeaders,
-    ).toBeUndefined();
-  });
+      expect(
+        resolveProviderRequestPolicy({
+          provider,
+          api: "openai-completions",
+          baseUrl: "https://proxy.example.com/v1",
+          transport: "stream",
+          capability: "llm",
+        }).attributionHeaders,
+      ).toBeUndefined();
+      expectRecordFields(
+        resolveProviderRequestPolicy({
+          provider,
+          api: "openai-completions",
+          baseUrl: otherUrl,
+          transport: "stream",
+          capability: "llm",
+        }),
+        {
+          attributionProvider: undefined,
+          attributionHeaders: undefined,
+        },
+      );
+    },
+  );
 
   it("authorizes hidden xAI attribution on api.x.ai and the default xAI route", () => {
     expectRecordFields(
@@ -520,89 +521,6 @@ describe("provider attribution", () => {
     ).toBeUndefined();
   });
 
-  it("summarizes proxy-like, local, invalid, default, and native routing compactly", () => {
-    expect(
-      describeProviderRequestRoutingSummary({
-        provider: "openai",
-        api: "openai-responses",
-      }),
-    ).toBe("provider=openai api=openai-responses endpoint=default route=default policy=none");
-
-    expect(
-      describeProviderRequestRoutingSummary({
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "javascript:alert(1)",
-      }),
-    ).toBe("provider=openai api=openai-responses endpoint=invalid route=invalid policy=none");
-
-    expect(
-      describeProviderRequestRoutingSummary({
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://proxy.example.com/v1",
-        transport: "stream",
-        capability: "llm",
-      }),
-    ).toBe("provider=openai api=openai-responses endpoint=custom route=proxy-like policy=none");
-
-    expect(
-      describeProviderRequestRoutingSummary({
-        provider: "qwen",
-        api: "openai-responses",
-        baseUrl: "http://localhost:1234/v1",
-        transport: "stream",
-        capability: "llm",
-      }),
-    ).toBe("provider=qwen api=openai-responses endpoint=local route=local policy=none");
-
-    expect(
-      describeProviderRequestRoutingSummary({
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        transport: "stream",
-        capability: "llm",
-      }),
-    ).toBe(
-      "provider=openai api=openai-responses endpoint=openai-public route=native policy=hidden",
-    );
-
-    expect(
-      describeProviderRequestRoutingSummary({
-        provider: "openrouter",
-        api: "openai-responses",
-        baseUrl: "https://openrouter.ai/api/v1",
-        transport: "stream",
-        capability: "llm",
-      }),
-    ).toBe(
-      "provider=openrouter api=openai-responses endpoint=openrouter route=proxy-like policy=documented",
-    );
-
-    expect(
-      describeProviderRequestRoutingSummary({
-        provider: "groq",
-        api: "openai-completions",
-        baseUrl: "https://api.groq.com/openai/v1",
-        transport: "stream",
-        capability: "llm",
-      }),
-    ).toBe("provider=groq api=openai-completions endpoint=groq-native route=native policy=none");
-
-    expect(
-      describeProviderRequestRoutingSummary({
-        provider: "nvidia",
-        api: "openai-completions",
-        baseUrl: "https://integrate.api.nvidia.com/v1",
-        transport: "stream",
-        capability: "llm",
-      }),
-    ).toBe(
-      "provider=nvidia api=openai-completions endpoint=nvidia-native route=native policy=documented",
-    );
-  });
-
   it("classifies Google Gemini and Vertex endpoints separately from custom hosts", () => {
     expectRecordFields(resolveProviderEndpoint("https://generativelanguage.googleapis.com"), {
       endpointClass: "google-generative-ai",
@@ -674,17 +592,21 @@ describe("provider attribution", () => {
     });
   });
 
-  it("allows Anthropic service tiers on the default route", () => {
-    expectRecordFields(
-      resolveProviderRequestCapabilities({
-        provider: "anthropic",
-        api: "anthropic-messages",
-        capability: "llm",
-        transport: "stream",
-      }),
-      { endpointClass: "default", allowsAnthropicServiceTier: true },
-    );
-  });
+  it.each([
+    ["anthropic", "anthropic-messages", undefined, "default", true],
+    [" ANTHROPIC ", " ANTHROPIC-MESSAGES ", "https://api.anthropic.com", "anthropic-public", true],
+    ["anthropic", "anthropic-messages", "https://proxy.example.test", "custom", false],
+    ["anthropic", "openai-completions", undefined, "default", false],
+    ["custom", "anthropic-messages", "https://api.anthropic.com", "anthropic-public", false],
+  ] as const)(
+    "resolves catalog service-tier facts for %s / %s / %s",
+    (provider, api, baseUrl, endpointClass, allowsAnthropicServiceTier) => {
+      const input = { provider, api, baseUrl };
+      const expected = { endpointClass, allowsAnthropicServiceTier };
+      expect(resolveProviderFastModeRequestCapabilities(input)).toEqual(expected);
+      expectRecordFields(resolveProviderRequestCapabilities(input), expected);
+    },
+  );
 
   it("respects compat.supportsPromptCacheKey override on prompt cache stripping", () => {
     // compat.supportsPromptCacheKey = true disables the strip even on a

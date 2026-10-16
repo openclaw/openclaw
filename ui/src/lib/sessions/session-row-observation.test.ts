@@ -228,7 +228,6 @@ describe("session row observations", () => {
     });
     try {
       expect(observation.captureReconcile()(workRow)).toMatchObject({ status: "current" });
-      const pending = observation.captureReconcile();
       const event = (agentId: string, key = "global") => ({
         type: "event" as const,
         event: "sessions.changed",
@@ -248,7 +247,6 @@ describe("session row observations", () => {
       emitEvent(event("work", "agent:work:unrelated"));
       expect(observation.row).toEqual(workRow);
       expect(invalidated).toHaveBeenCalledTimes(1);
-      expect(pending(workRow)).toEqual({ status: "invalidated" });
       expect(observation.captureReconcile()(workRow)).toMatchObject({ status: "current" });
       expect(delivered).toHaveBeenCalledTimes(4);
       publish(false);
@@ -328,65 +326,6 @@ describe("session row observations", () => {
         late?.dispose();
         early.dispose();
         stop();
-        sessions.dispose();
-        vi.useRealTimers();
-      }
-    },
-  );
-
-  it.each(["row", "event"] as const)(
-    "keeps raw delivery when an earlier %s listener supersedes the frame's row facts",
-    async (source) => {
-      vi.useFakeTimers();
-      const { gateway, emitEvent } = createGatewayHarness(
-        createTestGatewayClient(async () => sessionsResult([mainRow], mainRow.updatedAt ?? 0)),
-      );
-      const sessions = createTestSessionCapability(gateway);
-      await sessions.refresh({ agentId: "main", force: true });
-      const target = { key: mainRow.key, agentId: "main" };
-      const newer = { ...mainRow, label: "Newer descriptor", updatedAt: 1_001 };
-      const delivered = vi.fn<SessionRowEventListener>();
-      let armed = false;
-      const supersede = () => {
-        if (armed) {
-          armed = false;
-          later?.captureReconcile()(newer);
-        }
-      };
-      const early = sessions.observeRow(
-        target,
-        () => {
-          if (source === "row") {
-            supersede();
-          }
-        },
-        {
-          onEvent: () => {
-            if (source === "event") {
-              supersede();
-            }
-          },
-        },
-      );
-      const later = sessions.observeRow(target, () => undefined, { onEvent: delivered });
-      try {
-        armed = true;
-        const frame = {
-          type: "event" as const,
-          event: "session.message",
-          payload: {
-            agentId: "main",
-            session: { ...mainRow, label: "Older frame", updatedAt: 1_000 },
-          },
-        };
-        emitEvent(frame);
-
-        expect(delivered).toHaveBeenCalledExactlyOnceWith(frame, { applied: false });
-        expect(later.row).toMatchObject(newer);
-        expect(sessions.state.result?.sessions[0]).toMatchObject(newer);
-      } finally {
-        later?.dispose();
-        early.dispose();
         sessions.dispose();
         vi.useRealTimers();
       }
@@ -505,47 +444,6 @@ describe("session row observations", () => {
     },
   );
 
-  it.each(["unadmitted event", "unobserved primary"] as const)(
-    "keeps a live descriptor past an %s incarnation",
-    async (source) => {
-      const h = await descriptorOwner(workRow);
-      if (source === "unadmitted event") {
-        h.emitEvent({
-          type: "event",
-          event: "sessions.changed",
-          payload: {
-            agentId: "work",
-            reason: "create",
-            session: { ...workRow, sessionId: "unadmitted-work-session", updatedAt: 1_000 },
-            ts: 1_000,
-          },
-        });
-        expect(h.observation.isCurrent()).toBe(true);
-        expect(h.changed).not.toHaveBeenCalled();
-        h.keepMain();
-      } else {
-        const unobserved = { ...workRow, sessionId: "unobserved-work-session", updatedAt: 100 };
-        expect(
-          h.sessions.reconcile(unobserved, undefined, {
-            resultAgentId: "work",
-            selectedGlobalAgentId: "work",
-            archivedFilter: "all",
-          }),
-        ).toBe(true);
-        expect(h.sessions.state.result?.sessions).toEqual([unobserved]);
-      }
-      expect(h.observation.row).toMatchObject(workRow);
-      if (source === "unobserved primary") {
-        const observation = h.sessions.observeRow(
-          { key: "global", agentId: "work" },
-          () => undefined,
-        );
-        h.disposers.push(observation.dispose);
-        expect(observation.row).toMatchObject(workRow);
-      }
-    },
-  );
-
   it("settles the descriptor-only run without donating the preceding run's timing or changing Main", async () => {
     const initial: GatewaySessionRow = {
       ...workRow,
@@ -558,7 +456,6 @@ describe("session row observations", () => {
     };
     const h = await descriptorOwner(initial);
     const list = h.holdWorkList();
-    const old = h.holdDescribe();
     expect(
       h.sessions.reconcileRunTerminal({
         sessionKeys: ["global"],
@@ -588,16 +485,6 @@ describe("session row observations", () => {
     expect(h.changed).toHaveBeenLastCalledWith(h.observation.row);
     h.keepMain();
 
-    old.response.resolve({ session: { ...initial, updatedAt: 250, derivedTitle: "Read title" } });
-    expect(await old.settled).toMatchObject({ status: "current", row: expected });
-    expect(h.observation.row).toMatchObject({
-      ...expected,
-      updatedAt: 250,
-      derivedTitle: "Read title",
-    });
-    expect(h.observation.row?.startedAt).toBeUndefined();
-    expect(h.observation.row?.runtimeMs).toBeUndefined();
-    h.keepMain();
     expect(h.sessions.state.loading).toBe(true);
 
     list.response.resolve(sessionsResult([initial], 200));
@@ -658,7 +545,6 @@ describe("session row observations", () => {
         status: "done",
         hasActiveRun: false,
         activeRunIds: [],
-        derivedTitle: "Read title",
         lastRunId: "work-run",
         startedAt: 100,
         endedAt: 200,
@@ -673,7 +559,6 @@ describe("session row observations", () => {
         status: "done",
         hasActiveRun: false,
         activeRunIds: [],
-        derivedTitle: "Read title",
       });
     },
   );

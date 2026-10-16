@@ -79,6 +79,7 @@ function createRunner(isRunCurrent: (runId: string) => boolean = () => true) {
       sessionKey: "main",
       canonicalKey: "agent:researcher:talk",
       storePath: "/tmp/sessions",
+      assertCurrent: vi.fn(),
     },
     getVoiceSessionId: () => "voice-session",
     initialItems: [],

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import type {
@@ -115,6 +116,14 @@ const opaqueLeafEntrySchema = z.looseObject({
   appendMode: z.literal("side").optional(),
 });
 const sessionHeaderSchema = z.looseObject({ type: z.literal("session"), id: z.string() });
+
+/** Legacy writers could repeat the same header with a different timestamp. */
+export function equivalentLegacySessionHeaders(
+  first: Record<string, unknown>,
+  next: Record<string, unknown>,
+): boolean {
+  return isDeepStrictEqual({ ...first, timestamp: undefined }, { ...next, timestamp: undefined });
+}
 
 export function findSessionTranscriptHeader(entries: Iterable<unknown>): SessionHeader | undefined {
   for (const entry of entries) {

@@ -1,4 +1,4 @@
-// Telegram tests cover monotonic update-offset persistence and retry.
+// Telegram tests cover monotonic update-offset checkpointing.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTelegramUpdateOffsetPersistence } from "./update-offset-persistence.js";
@@ -13,11 +13,10 @@ afterEach(() => {
 });
 
 describe("createTelegramUpdateOffsetPersistence", () => {
-  it("retries a failed write and coalesces the highest pending update", async () => {
-    vi.useFakeTimers();
+  it("reports a failed checkpoint and catches up on the next update", async () => {
     const writes: number[] = [];
     let failFirstWrite = true;
-    const onRetry = vi.fn();
+    const onError = vi.fn();
     const persistence = createTelegramUpdateOffsetPersistence({
       initialUpdateId: 100,
       writeUpdateId: async (updateId) => {
@@ -28,21 +27,18 @@ describe("createTelegramUpdateOffsetPersistence", () => {
         }
       },
       onInvalidUpdateId: vi.fn(),
-      onRetry,
+      onError,
     });
 
     persistence.persistUpdateId(101);
     await flushMicrotasks();
+    expect(writes).toEqual([101]);
+    expect(persistence.getCommittedUpdateId()).toBe(100);
     persistence.persistUpdateId(103);
     persistence.persistUpdateId(102);
 
-    expect(writes).toEqual([101]);
-    expect(persistence.getCommittedUpdateId()).toBe(100);
-    expect(onRetry).toHaveBeenCalledWith(expect.objectContaining({ attempt: 1, updateId: 101 }));
-
-    await vi.advanceTimersByTimeAsync(5_000);
     await flushMicrotasks();
-
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ updateId: 101 }));
     expect(writes).toEqual([101, 103]);
     expect(persistence.getCommittedUpdateId()).toBe(103);
     await persistence.stop();
@@ -58,7 +54,7 @@ describe("createTelegramUpdateOffsetPersistence", () => {
         await write.promise;
       },
       onInvalidUpdateId: vi.fn(),
-      onRetry: vi.fn(),
+      onError: vi.fn(),
     });
 
     persistence.persistUpdateId(103);
@@ -84,7 +80,7 @@ describe("createTelegramUpdateOffsetPersistence", () => {
         }
       },
       onInvalidUpdateId: vi.fn(),
-      onRetry: vi.fn(),
+      onError: vi.fn(),
     });
 
     persistence.persistUpdateId(101);
@@ -103,7 +99,7 @@ describe("createTelegramUpdateOffsetPersistence", () => {
       initialUpdateId: 100,
       writeUpdateId: async () => await write.promise,
       onInvalidUpdateId: vi.fn(),
-      onRetry: vi.fn(),
+      onError: vi.fn(),
     });
 
     persistence.persistUpdateId(101);
@@ -121,29 +117,7 @@ describe("createTelegramUpdateOffsetPersistence", () => {
     expect(persistence.getCommittedUpdateId()).toBe(101);
   });
 
-  it("cancels a scheduled retry when stopped", async () => {
-    vi.useFakeTimers();
-    const writeUpdateId = vi.fn(async () => {
-      throw new Error("offset store unavailable");
-    });
-    const persistence = createTelegramUpdateOffsetPersistence({
-      initialUpdateId: 100,
-      writeUpdateId,
-      onInvalidUpdateId: vi.fn(),
-      onRetry: vi.fn(),
-    });
-
-    persistence.persistUpdateId(101);
-    await flushMicrotasks();
-    await persistence.stop();
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(writeUpdateId).toHaveBeenCalledTimes(1);
-    expect(persistence.getCommittedUpdateId()).toBe(100);
-  });
-
-  it("does not rearm a failed write after the supplied signal aborts", async () => {
-    vi.useFakeTimers();
+  it("does not start another checkpoint after the supplied signal aborts", async () => {
     const abortController = new AbortController();
     const writeUpdateId = vi.fn(async () => {
       throw new Error("offset store unavailable");
@@ -152,14 +126,15 @@ describe("createTelegramUpdateOffsetPersistence", () => {
       initialUpdateId: 100,
       writeUpdateId,
       onInvalidUpdateId: vi.fn(),
-      onRetry: vi.fn(),
+      onError: vi.fn(),
       abortSignal: abortController.signal,
     });
 
     persistence.persistUpdateId(101);
     await flushMicrotasks();
     abortController.abort();
-    await vi.advanceTimersByTimeAsync(60_000);
+    persistence.persistUpdateId(102);
+    await flushMicrotasks();
 
     expect(writeUpdateId).toHaveBeenCalledTimes(1);
     expect(persistence.getCommittedUpdateId()).toBe(100);
@@ -175,7 +150,7 @@ describe("createTelegramUpdateOffsetPersistence", () => {
         writes.push(updateId);
       },
       onInvalidUpdateId,
-      onRetry: vi.fn(),
+      onError: vi.fn(),
     });
 
     persistence.persistUpdateId(Number.NaN);

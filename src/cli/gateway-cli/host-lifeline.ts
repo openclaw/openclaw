@@ -1,5 +1,4 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { registerSignalExitOwner } from "../signal-exit-barrier.js";
 
 /** The launching host retains the write end of stdin for this process's lifetime. */
 export function installGatewayHostLifeline(onHostExit: () => void): (() => void) | undefined {
@@ -30,13 +29,6 @@ export function installGatewayHostLifeline(onHostExit: () => void): (() => void)
     onHostExit();
   };
   const inputClosed = () => hostExited("stdin lifeline closed");
-  const releaseExitOwner = registerSignalExitOwner((code) => {
-    // A successful drain must not erase a failure already reported by the output owner.
-    if (Number(code) !== 0 && Number(process.exitCode ?? 0) === 0) {
-      process.exitCode = Number(code);
-    }
-    hostExited("output pipe closed");
-  });
   input.once("end", inputClosed);
   input.once("error", inputClosed);
   input.once("close", inputClosed);
@@ -47,6 +39,5 @@ export function installGatewayHostLifeline(onHostExit: () => void): (() => void)
   }
   return () => {
     stopInput();
-    releaseExitOwner();
   };
 }

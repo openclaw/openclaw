@@ -1,4 +1,8 @@
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { SqliteIntegrityOperation } from "../infra/sqlite-integrity.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -47,16 +51,23 @@ const boundary = vi.hoisted(() => {
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class {
     readonly isOpen = true;
+    constructor(private readonly pathname: string) {}
     location() {
-      return null;
+      return this.pathname;
     }
   },
 }));
 vi.mock("../config/state-dir.js", () => ({
   resolveStateDir: (env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/synthetic/default",
 }));
+// mock-isolation: Use a deterministic route to observe the captured environment before admission.
 vi.mock("./openclaw-agent-db.paths.js", () => ({
+  INCOGNITO_AGENT_SQLITE_BASENAME: "incognito-openclaw-agent.sqlite",
   resolveOpenClawAgentSqlitePath: boundary.route,
+}));
+// mock-isolation: This fixture tests native one-shot env/admission, not worker discovery.
+vi.mock("./openclaw-agent-execution.js", () => ({
+  supportsOpenClawAgentDatabaseExecution: () => false,
 }));
 // mock-isolation: Capture environment before queued admission without opening real databases.
 vi.mock("./openclaw-agent-write-admission.js", () => ({
@@ -91,6 +102,7 @@ vi.mock("../infra/sqlite-integrity.js", () => ({
 vi.mock("../infra/sqlite-wal-write-admission.js", () => ({
   registerDeferredSqliteWalWriteAdmission: vi.fn(),
 }));
+// mock-isolation: Exercise the admission owner without native database initialization.
 vi.mock("./openclaw-agent-db.js", async () => {
   const { DatabaseSync } = await import("node:sqlite");
   const { createSqliteWalReclamationResult } = await import("../infra/sqlite-wal-reclamation.js");
@@ -100,10 +112,12 @@ vi.mock("./openclaw-agent-db.js", async () => {
   const owner = createOpenClawAgentDatabaseAdmissionOwner(function* (
     options: OpenClawAgentDatabaseOptions,
   ): SqliteIntegrityOperation<OpenClawAgentDatabase> {
+    const pathname = boundary.route(options);
+    writeFileSync(pathname, "", { flag: "wx" });
     const database = {
       agentId: options.agentId,
-      path: boundary.route(options),
-      db: new DatabaseSync(":memory:"),
+      path: pathname,
+      db: new DatabaseSync(pathname),
       walMaintenance: {
         stop: async () => {},
         checkpoint: () => false,
@@ -128,6 +142,7 @@ afterEach(() => {
   boundary.controls.onIntegrity = undefined;
   vi.clearAllMocks();
 });
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 it.each([
   { driver: "write", platform: "win32", stateKey: "OpenClaw_State_Dir", input: "plain" },
@@ -136,8 +151,8 @@ it.each([
   { driver: "admission", platform: "win32", stateKey: "OpenClaw_State_Dir", input: "plain" },
   { driver: "write", platform: "linux", stateKey: "OPENCLAW_STATE_DIR", input: "plain" },
 ] as const)("pins $input environment through $driver capture on $platform", async (fixture) => {
+  const originalRoot = dirs.make("agent-db-env-capture-");
   await withMockedPlatform(fixture.platform, async () => {
-    const originalRoot = "/synthetic/captured";
     const rawEnv = { [fixture.stateKey]: originalRoot };
     const env = fixture.input === "precloned" ? cloneEnvWithPlatformSemantics(rawEnv) : rawEnv;
     const options = { agentId: "main", env };
@@ -191,14 +206,21 @@ it("cancels one coalesced waiter without aborting the shared integrity check", a
   };
   const first = vi.fn((database: OpenClawAgentDatabase) => database.path);
   const second = vi.fn((database: OpenClawAgentDatabase) => database.path);
-  const options = { agentId: "main", path: "/synthetic/coalesced.sqlite" };
+  const options = {
+    agentId: "main",
+    path: path.join(dirs.make("agent-db-coalesced-capture-"), "coalesced.sqlite"),
+  };
   const canceled = new AbortController();
   const stopped = Promise.allSettled([
     withOpenClawAgentDatabaseAsync(options, first, undefined, canceled.signal),
   ]);
   const remaining = withOpenClawAgentDatabaseAsync(options, second);
   try {
-    const physicalSignal = await started.promise;
+    const physicalSignal = await awaitGateBeforeSettlement(
+      started.promise,
+      remaining,
+      "Database admission settled before its integrity check",
+    );
     const reason = new Error("Stop only the first waiter");
     canceled.abort(reason);
     expect(await stopped).toMatchObject([

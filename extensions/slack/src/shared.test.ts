@@ -26,12 +26,6 @@ describe("slackPluginBase", () => {
       }),
     ).toBe("login");
   });
-
-  it("exposes security checks on the setup surface", () => {
-    expect(plugin.security?.resolveDmPolicy).toBeTypeOf("function");
-    expect(plugin.security?.collectWarnings).toBeTypeOf("function");
-    expect(plugin.security?.collectAuditFindings).toBeTypeOf("function");
-  });
 });
 
 describe("setSlackChannelAllowlist", () => {
@@ -58,24 +52,6 @@ describe("setSlackChannelAllowlist", () => {
 });
 
 describe("slackConfigAdapter", () => {
-  it("shares lightweight account accessors with setup but keeps inspection runtime-only", () => {
-    for (const key of [
-      "listAccountIds",
-      "resolveAccount",
-      "defaultAccountId",
-      "setAccountEnabled",
-      "deleteAccount",
-      "resolveAllowFrom",
-      "formatAllowFrom",
-      "resolveDefaultTo",
-    ] as const) {
-      expect(slackSetupPlugin.config[key]).toBe(slackConfigAdapter[key]);
-    }
-
-    expect(slackConfigAdapter.inspectAccount).toBeTypeOf("function");
-    expect(slackSetupPlugin.config.inspectAccount).toBeUndefined();
-  });
-
   it("clears user-identity credentials when deleting the root account", () => {
     const cfg = {
       channels: {

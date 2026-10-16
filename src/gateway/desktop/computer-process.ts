@@ -201,9 +201,6 @@ export function startComputerHostProcess(params: {
       sessionKey?: string;
     }) {
       await ready.promise;
-      assertActive();
-      request.assertCurrent();
-      request.signal?.throwIfAborted();
       const id = randomUUID();
       let timedOut = false;
       const cancel = () => {

@@ -33,6 +33,7 @@ import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-ident
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { findRestartRecoveryUnsafeChatAdmissionHook } from "../../plugins/restart-recovery-hook-safety.js";
+import { CommandLane } from "../../process/lanes.js";
 import {
   isCronSessionKey,
   isIncognitoSessionKey,
@@ -157,7 +158,7 @@ export function resolveDurableChatClaim(params: {
   clientRunId: string;
   entry?: SessionEntry;
   persistedSessionKey: string;
-  reloadEntry: () => SessionEntry | undefined;
+  reloadEntry: () => SessionEntry | undefined | Promise<SessionEntry | undefined>;
   storePath: string;
   recoveryRuntime?: GatewayRecoveryRuntime;
   warn: (message: string) => void;
@@ -187,6 +188,7 @@ export function resolveDurableChatClaim(params: {
       await retryRestartAbortedMainSessionRecovery({
         canonicalSessionKey: params.canonicalSessionKey,
         cfg: params.cfg,
+        lane: CommandLane.Main,
         expectedRecoveryRunId: entry.restartRecoveryDeliveryRunId,
         expectedRecoverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
         expectedSessionId: entry.sessionId,
@@ -197,7 +199,7 @@ export function resolveDurableChatClaim(params: {
     } catch (error) {
       params.warn(String(error));
     }
-    const current = params.reloadEntry();
+    const current = await params.reloadEntry();
     if (
       isAdoptedRestartRecoveryClaim(current, params.clientRunId) &&
       current.abortedLastRun === true
@@ -293,7 +295,7 @@ function hasRestartUnsafeChatWork(params: {
 
 export type PreparedRestartSafeChatPlacement = {
   sessionId: string;
-  facts: Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>;
+  facts: Awaited<ReturnType<WorkerSessionPlacementStore["prepareSessionPlacement"]>>;
 };
 
 /** Borrow placement facts only while the chat owner revalidates and commits admission. */
@@ -302,10 +304,10 @@ export async function withRestartSafeChatPlacement(
   sessionId: string,
   consume: (prepared: PreparedRestartSafeChatPlacement) => Promise<void>,
 ): Promise<void> {
-  if (!service.prepareRuntimeRefresh) {
+  if (!service.prepareSessionPlacement) {
     throw new Error("Worker placement admission reader is unavailable; retry.");
   }
-  const facts = await service.prepareRuntimeRefresh(sessionId);
+  const facts = await service.prepareSessionPlacement(sessionId);
   try {
     await consume({ sessionId, facts });
   } finally {
@@ -336,7 +338,7 @@ export function resolveRestartSafeChatAdmission(params: {
   const placement = params.placement;
   // Only local input may be consumed before turn admission. Worker setup and
   // reconciliation retain approved input in custody until their writer is ready.
-  if (placement && placement.state !== "local") {
+  if (params.cfg.cloudWorkers?.requiredProfile || (placement && placement.state !== "local")) {
     return undefined;
   }
   if (!request || !entry || !isRestartSafeChatSession({ ...params, entry })) {
@@ -397,6 +399,7 @@ export function buildRestartSafeChatTranscriptState(params: {
   clientRunId: string;
   startedAt: number;
   sourceIngress: "control-ui" | "internal";
+  lastInteractionAt?: number;
   operatorSource?: InternalSessionEntry["restartRecoveryOperatorSource"];
 }): {
   expectedSessionState?: SessionTranscriptTurnExpectedState;
@@ -416,6 +419,9 @@ export function buildRestartSafeChatTranscriptState(params: {
         event: { runId: params.clientRunId, ts: params.startedAt, data: { phase: "start" } },
       }),
       lifecycleRunId: params.clientRunId,
+      ...(params.lastInteractionAt !== undefined
+        ? { lastInteractionAt: params.lastInteractionAt }
+        : {}),
       lastRunId: undefined,
       restartRecoveryDeliveryContext: undefined,
       restartRecoveryDeliveryRequestFingerprint: params.admission.requestFingerprint,

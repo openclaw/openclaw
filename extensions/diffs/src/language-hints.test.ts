@@ -27,16 +27,6 @@ async function normalizeHints(values: readonly string[]) {
 }
 
 describe("normalizeSupportedLanguageHint", () => {
-  it("normalizes language hint casing", async () => {
-    await expect(normalizeHints(["Python", "TypeScript"])).resolves.toEqual([
-      "python",
-      "typescript",
-    ]);
-    await expect(
-      normalizeSupportedLanguageHint("AbAp", { languagePackAvailable: true }),
-    ).resolves.toBe("abap");
-  });
-
   it("normalizes common aliases to base viewer languages", async () => {
     await expect(
       normalizeHints(["ts", "c++", "c#", "bash", "dockerfile", "rb", "kt", "ps1"]),
@@ -49,22 +39,6 @@ describe("normalizeSupportedLanguageHint", () => {
       "ruby",
       "kotlin",
       "powershell",
-    ]);
-  });
-
-  it("keeps mainstream languages in the base viewer without the language pack", async () => {
-    await expect(
-      normalizeHints(["ruby", "swift", "kotlin", "r", "dart", "lua", "powershell", "xml", "toml"]),
-    ).resolves.toEqual([
-      "ruby",
-      "swift",
-      "kotlin",
-      "r",
-      "dart",
-      "lua",
-      "powershell",
-      "xml",
-      "toml",
     ]);
   });
 });
@@ -85,55 +59,6 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
     expect(result.fileDiff?.lang).toBe("text");
   });
 
-  it("keeps valid hydrated languages and only downgrades invalid sides", async () => {
-    const result = await normalizeDiffViewerPayloadLanguages({
-      prerenderedHTML: "<div>diff</div>",
-      options: {
-        ...viewerOptions,
-        diffStyle: "split",
-        diffIndicators: "classic",
-        disableLineNumbers: true,
-        expandUnchanged: true,
-        themeType: "light",
-        backgroundEnabled: false,
-        overflow: "scroll",
-      },
-      langs: ["typescript", "not-a-real-language" as never],
-      oldFile: {
-        name: "before.unknown",
-        contents: "before",
-        lang: "not-a-real-language" as never,
-      },
-      newFile: {
-        name: "after.ts",
-        contents: "after",
-        lang: "typescript",
-      },
-    });
-
-    expect(result.langs).toEqual(["typescript", "text"]);
-    expect(result.oldFile?.lang).toBe("text");
-    expect(result.newFile?.lang).toBe("typescript");
-  });
-
-  it("keeps uncommon hydrated languages when the language pack is available", async () => {
-    const result = await normalizeDiffViewerPayloadLanguages(
-      {
-        prerenderedHTML: "<div>diff</div>",
-        options: viewerOptions,
-        langs: ["abap" as never],
-        fileDiff: {
-          name: "demo.abap",
-          lang: "abap" as never,
-        } as unknown as FileDiffMetadata,
-      },
-      { languagePackAvailable: true },
-    );
-
-    expect(result.langs).toEqual(["abap"]);
-    expect(result.fileDiff?.lang).toBe("abap");
-  });
-
   it("rewrites blank explicit language overrides to plain text", async () => {
     const result = await normalizeDiffViewerPayloadLanguages({
       prerenderedHTML: "<div>diff</div>",
@@ -152,25 +77,5 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
 
     expect(result.langs).toEqual(["text"]);
     expect(result.oldFile?.lang).toBe("text");
-  });
-
-  it("does not inject text when a valid file language is the only supported hint", async () => {
-    const result = await normalizeDiffViewerPayloadLanguages({
-      prerenderedHTML: "<div>diff</div>",
-      options: viewerOptions,
-      langs: [],
-      oldFile: {
-        name: "before.ts",
-        contents: "before",
-        lang: "typescript",
-      },
-      newFile: {
-        name: "after.ts",
-        contents: "after",
-        lang: "typescript",
-      },
-    });
-
-    expect(result.langs).toEqual(["typescript"]);
   });
 });

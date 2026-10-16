@@ -9,11 +9,11 @@ import type { ChannelAutostartSuppression } from "./server-channels.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 
 export type GatewayCloseOptions = {
+  /** Run-loop host retains the writer until its final boot outcome is durable. */
+  retainSharedState?: boolean;
   reason?: string;
   restartExpectedMs?: number | null;
   drainTimeoutMs?: number | null;
-  /** Process-owning host only: exit after accepted writes and database close settle. */
-  onProcessExitReady?: () => Promise<void>;
   /** Process-owning host only: the process exits after close, releasing native watchers. */
   exitAfterClose?: boolean;
 };
@@ -63,7 +63,7 @@ export type GatewayServerOptions = {
   /** Retained run-loop ownership; direct servers acquire and release their own owner. */
   gatewayStateOwner?: Pick<
     import("../infra/gateway-lock.js").GatewayLockHandle,
-    "assertDatabaseAccess"
+    "assertDatabaseAccess" | "markListening"
   >;
   /** Internal native-host operation; direct readers retain their own execution owner. */
   prepareConfigSnapshot?: ConfigSnapshotPreparation;
@@ -124,7 +124,9 @@ export type GatewayServerOptions = {
    * Config snapshot already read by the CLI gateway preflight. Passing it avoids
    * reparsing openclaw.json during server startup.
    */
-  startupConfigSnapshotRead?: import("../config/io.js").ReadConfigFileSnapshotWithPluginMetadataResult;
+  startupConfigSnapshotRead?: import("../config/io.js").ReadConfigFileSnapshotWithPluginMetadataResult & {
+    databaseEngineSelection?: import("../infra/database-engine/context.js").DatabaseEngineSelection;
+  };
   /** Restart request override; direct servers fail closed on restart-required reloads. */
   hotReloadRecovery?: GatewayRestartEmitter;
 };

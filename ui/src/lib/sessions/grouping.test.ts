@@ -110,28 +110,6 @@ describe("groupSidebarSessionRows", () => {
     expect(sections[5]?.rows.map((item) => item.key)).toEqual(["wt-1"]);
   });
 
-  it("folds DM channel sessions into threads and group kinds into the groups zone", () => {
-    const sections = groupSidebarSessionRows([
-      { ...row({ key: "tg-dm" }), channel: "telegram", channelSession: true },
-      { ...row({ key: "dash-1" }) },
-      { ...row({ key: "wa-group", kind: "group" }), channel: "whatsapp", channelSession: true },
-      // Explicit user category beats smart group/coding classification.
-      { ...row({ key: "grouped-tg", kind: "group" }), category: "Project X" },
-      { ...row({ key: "acp-1" }), acpSession: true },
-    ]);
-
-    expect(sections.map((section) => section.id)).toEqual([
-      "category:Project X",
-      "ungrouped",
-      "groups",
-      "work",
-    ]);
-    expect(sections[0]?.rows.map((item) => item.key)).toEqual(["grouped-tg"]);
-    expect(sections[1]?.rows.map((item) => item.key)).toEqual(["tg-dm", "dash-1"]);
-    expect(sections[2]?.rows.map((item) => item.key)).toEqual(["wa-group"]);
-    expect(sections[3]?.rows.map((item) => item.key)).toEqual(["acp-1"]);
-  });
-
   it("flattens the kind-based zones into one list when grouping is none", () => {
     const sections = groupSidebarSessionRows(
       [
@@ -193,21 +171,6 @@ describe("groupSidebarSessionRows", () => {
     expect(sections[4]?.rows.map((item) => item.key)).toEqual(["thread"]);
     expect(sections[5]?.rows.map((item) => item.key)).toEqual(["grp"]);
     expect(sections[6]?.rows.map((item) => item.key)).toEqual(["no-repo"]);
-  });
-
-  it("keeps project sections ahead of the stored zone order", () => {
-    const sections = groupSidebarSessionRows(
-      [
-        { ...row({ key: "oc" }), workContext: { name: "openclaw", path: "/repos/openclaw" } },
-        row({ key: "thread" }),
-      ],
-      { grouping: "project", sectionOrder: ["work", "ungrouped"] },
-    );
-    expect(sections.map((section) => section.id)).toEqual([
-      "project:/repos/openclaw",
-      "work",
-      "ungrouped",
-    ]);
   });
 
   it("orders owner sections before stored zones and leaves ownerless rows in their smart zones", () => {
@@ -334,19 +297,6 @@ describe("groupSidebarSessionRows", () => {
     expect(sections[1]?.rows.map((item) => item.key)).toEqual(["b"]);
   });
 
-  it("keeps custom groups in their persisted order", () => {
-    const sections = groupSidebarSessionRows(
-      [row({ key: "a", category: "Alpha" }), row({ key: "z", category: "Zulu" })],
-      { knownGroups: ["Zulu", "Alpha"] },
-    );
-    expect(sections.map((section) => section.id)).toEqual([
-      "category:Zulu",
-      "category:Alpha",
-      "ungrouped",
-      "work",
-    ]);
-  });
-
   it("applies stored cross-section order after pinned rows", () => {
     const sections = groupSidebarSessionRows(
       [
@@ -366,41 +316,12 @@ describe("groupSidebarSessionRows", () => {
     ]);
   });
 
-  it("emits catalog sections after coding by default and honors their stored positions", () => {
-    const rows = [row({ key: "thread" }), row({ key: "work", workSession: true })];
-
-    expect(
-      groupSidebarSessionRows(rows, { catalogIds: ["claude", "codex"] }).map(
-        (section) => section.id,
-      ),
-    ).toEqual(["ungrouped", "work", "catalog:claude", "catalog:codex"]);
-    expect(
-      groupSidebarSessionRows(rows, {
-        catalogIds: ["claude", "codex"],
-        sectionOrder: ["catalog:codex", "ungrouped", "work", "catalog:claude"],
-      }).map((section) => section.id),
-    ).toEqual(["catalog:codex", "ungrouped", "work", "catalog:claude"]);
-  });
-
   it("appends sections missing from stored order in default relative order", () => {
     const sections = groupSidebarSessionRows(
       [row({ key: "a", category: "Alpha" }), row({ key: "thread" })],
       { sectionOrder: ["work"] },
     );
     expect(sections.map((section) => section.id)).toEqual(["category:Alpha", "work", "ungrouped"]);
-  });
-
-  it("collapses categories into the threads list when grouping is none", () => {
-    const sections = groupSidebarSessionRows(
-      [
-        row({ key: "p-1", pinned: true }),
-        row({ key: "a-1", category: "Alpha" }),
-        row({ key: "u-1" }),
-      ],
-      { grouping: "none", knownGroups: ["Alpha", "Apps"] },
-    );
-    expect(sections.map((section) => section.id)).toEqual(["pinned", "ungrouped", "work"]);
-    expect(sections[1]?.rows.map((item) => item.key)).toEqual(["a-1", "u-1"]);
   });
 });
 
@@ -413,43 +334,6 @@ describe("normalizeSessionSectionOrder", () => {
       "groups",
       "work",
     ]);
-  });
-
-  it("inserts a new category before the first built-in section", () => {
-    expect(
-      normalizeSessionSectionOrder(
-        ["category:Alpha", "ungrouped", "groups", "work"],
-        ["Alpha", "Beta"],
-      ),
-    ).toEqual(["category:Alpha", "category:Beta", "ungrouped", "groups", "work"]);
-  });
-
-  it("appends unseen catalogs after coding and drops disappeared catalogs", () => {
-    expect(
-      normalizeSessionSectionOrder(
-        ["catalog:codex", "ungrouped", "groups", "work", "catalog:removed"],
-        [],
-        ["claude", "codex"],
-      ),
-    ).toEqual(["catalog:codex", "ungrouped", "groups", "work", "catalog:claude"]);
-  });
-
-  it("drops invalid and duplicate tokens", () => {
-    expect(
-      normalizeSessionSectionOrder(
-        ["category:Stale", "bogus", "category:", "ungrouped", "ungrouped", "category:Alpha"],
-        ["Alpha"],
-      ),
-    ).toEqual(["ungrouped", "groups", "work", "category:Alpha"]);
-  });
-
-  it("reinserts a missing built-in after its default predecessor", () => {
-    expect(
-      normalizeSessionSectionOrder(
-        ["category:Alpha", "ungrouped", "category:Beta", "work"],
-        ["Alpha", "Beta"],
-      ),
-    ).toEqual(["category:Alpha", "ungrouped", "groups", "category:Beta", "work"]);
   });
 });
 
@@ -629,17 +513,5 @@ describe("groupSessionRows", () => {
       UNGROUPED_ID,
     ]);
     expect(groups[2]?.rows.map((item) => item.key)).toEqual(["ownerless", "blank"]);
-  });
-
-  it("preserves row order within a group", () => {
-    const rows = [
-      row({ key: "agent:main:discord:channel:1" }),
-      row({ key: "agent:main:discord:channel:2" }),
-    ];
-    const groups = groupSessionRows({ rows, mode: "channel" });
-    expect(groups[0]?.rows.map((r) => r.key)).toEqual([
-      "agent:main:discord:channel:1",
-      "agent:main:discord:channel:2",
-    ]);
   });
 });

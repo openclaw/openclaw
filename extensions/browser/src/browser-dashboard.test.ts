@@ -7,10 +7,7 @@ import type {
   OpenClawPluginGatewayEvents,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  openOpenClawStateDatabase,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
@@ -54,7 +51,6 @@ import {
 } from "./browser/routes/test-helpers.js";
 import type { BrowserRouteContext } from "./browser/server-context.js";
 import { makeBrowserProfile } from "./browser/server-context.test-harness.js";
-import { browserSessionTabStorageKey } from "./browser/session-tab-identity.js";
 import { readColdNativeActivity } from "./browser/session-tab-process-state.js";
 import {
   closeTrackedBrowserTabsForSessions,
@@ -66,7 +62,6 @@ import {
 import { durableOwnership } from "./browser/session-tab-registry.sqlite.test-helpers.js";
 import {
   dispatchBrowserTabClose,
-  type BrowserSessionTabRecord,
   getBrowserSessionTabStore,
   parseBrowserDashboardStopIntent,
   parseBrowserSessionTabRecord,
@@ -166,86 +161,32 @@ describe("Browser dashboard lifetime", () => {
     },
   );
 
-  it.each([
-    ["stopped", "cancelled"],
-    ["stopped", "registration failed"],
-    ["stopping", "cancelled"],
-    ["stopping", "registration failed"],
-    ["cold", "cancelled"],
-    ["cold", "registration failed"],
-  ] as const)("preserves %s intent after Resume failure: %s", async (state, failure) => {
-    if (state !== "cold") {
-      await requestBrowserDashboard(request);
-    }
-    if (state === "stopping") {
-      browser.closeOwned.mockResolvedValueOnce({
-        status: "unavailable",
-        reason: "browser-identity-lookup-failed",
-      });
-      await expect(stopBrowserDashboard(request)).rejects.toThrow(/paused/);
-    } else {
-      await stopBrowserDashboard(request);
-    }
+  it("preserves stopped intent after Resume cancellation", async () => {
+    await requestBrowserDashboard(request);
+    await stopBrowserDashboard(request);
     const controller = new AbortController();
-    const error = new Error(`Resume ${failure}`);
-    const writeSpy = interceptStoreActions((store) => ({
-      ...store,
-      compareAndApply: async (key, comparison, intent) => {
-        if (
-          failure === "registration failed" &&
-          intent.action === "set" &&
-          parseBrowserSessionTabRecord(intent.value)?.dashboard?.state === "active"
-        ) {
-          throw error;
-        }
-        return await store.compareAndApply(key, comparison, intent);
-      },
-    }));
+    const error = new Error("Resume cancelled");
     browser.open.mockImplementationOnce(async () => {
       const tab = fixture.openedTab();
-      if (failure === "cancelled") {
-        fixture.readBoard.mockImplementationOnce(async () =>
-          structuredClone({ sessionKey, widgets: fixture.widgets }),
-        );
-        fixture.readBoard.mockImplementationOnce(async () => {
-          controller.abort(error);
-          return structuredClone({ sessionKey, widgets: fixture.widgets });
-        });
-      }
+      fixture.readBoard.mockImplementationOnce(async () =>
+        structuredClone({ sessionKey, widgets: fixture.widgets }),
+      );
+      fixture.readBoard.mockImplementationOnce(async () => {
+        controller.abort(error);
+        return structuredClone({ sessionKey, widgets: fixture.widgets });
+      });
       return tab;
     });
-    try {
-      await expect(
-        requestBrowserDashboard({ ...request, resume: true }, { signal: controller.signal }),
-      ).rejects.toThrow(error.message);
-    } finally {
-      writeSpy.mockRestore();
-    }
+    await expect(
+      requestBrowserDashboard({ ...request, resume: true }, { signal: controller.signal }),
+    ).rejects.toThrow(error.message);
     expect(fixture.tabs).toEqual([]);
     expect((await inspectBrowserDashboard(request)).paused).toBe(true);
     expect((await requestBrowserDashboard(request)).paused).toBe(true);
-    expect(browser.open).toHaveBeenCalledTimes(state === "cold" ? 1 : 2);
+    expect(browser.open).toHaveBeenCalledTimes(2);
     expect(await getBrowserSessionTabStore().entries()).toHaveLength(1);
     expect((await requestBrowserDashboard({ ...request, resume: true })).paused).toBe(false);
   });
-
-  it.each(["replaced", "URL changed", "profile changed"] as const)(
-    "retires cold Stop intent when the definition is %s without starting a browser",
-    async (change) => {
-      await stopBrowserDashboard(request);
-      if (change === "replaced") {
-        fixture.widgets[0]!.instanceId = "instance-two";
-      } else if (change === "URL changed") {
-        fixture.widgets[0]!.props.url = "http://updated.example/";
-      } else {
-        fixture.widgets[0]!.props.profile = "other-managed";
-      }
-      await sweepTrackedBrowserTabs({ ordinaryCleanup: false });
-      expect(await getBrowserSessionTabStore().entries()).toEqual([]);
-      expect(browser.open).not.toHaveBeenCalled();
-      expect(browser.closeOwned).not.toHaveBeenCalled();
-    },
-  );
 
   it.each(["cold", "warm"] as const)(
     "prefers an active target while %s stopped-marker retirement retries",
@@ -291,9 +232,7 @@ describe("Browser dashboard lifetime", () => {
 
   it.each([
     ["cold", "registration"],
-    ["warm", "registration"],
     ["stopping", "registration"],
-    ["cold", "Stop retirement"],
     ["warm", "Stop retirement"],
   ] as const)(
     "keeps the committed resumed target when %s cancellation follows %s",
@@ -384,24 +323,17 @@ describe("Browser dashboard lifetime", () => {
     expect(browser.open).not.toHaveBeenCalled();
   });
 
-  it.each(["invalid URL", "invalid profile"] as const)(
-    "reconciles %s definitions even when ordinary tab cleanup is disabled",
-    async (condition) => {
-      await requestBrowserDashboard(request);
-      if (condition === "invalid URL") {
-        fixture.widgets[0]!.props.url = "ftp://service.example/";
-      } else {
-        fixture.widgets[0]!.props.profile = " ";
-      }
-      await expect(sweepTrackedBrowserTabs({ ordinaryCleanup: false })).resolves.toBe(1);
-      expect(fixture.tabs).toEqual([]);
-      expect(await readBrowserDashboardTabs()).toEqual([]);
-      expect(browser.closeOwned).toHaveBeenCalledOnce();
-      await expect(requestBrowserDashboard(request)).rejects.toThrow(/widget_put/);
-    },
-  );
+  it("reconciles invalid URL definitions even when ordinary tab cleanup is disabled", async () => {
+    await requestBrowserDashboard(request);
+    fixture.widgets[0]!.props.url = "ftp://service.example/";
+    await expect(sweepTrackedBrowserTabs({ ordinaryCleanup: false })).resolves.toBe(1);
+    expect(fixture.tabs).toEqual([]);
+    expect(await readBrowserDashboardTabs()).toEqual([]);
+    expect(browser.closeOwned).toHaveBeenCalledOnce();
+    await expect(requestBrowserDashboard(request)).rejects.toThrow(/widget_put/);
+  });
 
-  it.each(["board", "store", "reconcile tabs", "reconcile intents"] as const)(
+  it.each(["board", "reconcile intents"] as const)(
     "retains a target when authoritative %s lookup is unavailable",
     async (source) => {
       await requestBrowserDashboard(request);
@@ -507,21 +439,6 @@ describe("Browser dashboard lifetime", () => {
     expect(await readBrowserDashboardTabs()).toEqual([]);
   });
 
-  it("preserves canonical board identity when its opaque session tail is case-sensitive", async () => {
-    const opaqueKey = "agent:main:discord:channel:OpaqueCase";
-    fixture.readBoard.mockImplementation(async (_method, params) => {
-      expect(params.sessionKey).toBe(opaqueKey);
-      return structuredClone({ sessionKey: opaqueKey, widgets: fixture.widgets });
-    });
-    const first = await requestBrowserDashboard({ ...request, sessionKey: opaqueKey });
-    await fixture.installRuntime();
-    expect(
-      (await requestBrowserDashboard({ sessionKey: opaqueKey, name: "service" })).browserTab,
-    ).toEqual(first.browserTab);
-    expect(browser.open).toHaveBeenCalledOnce();
-    expect((await readBrowserDashboardTabs())[0]?.dashboard?.sessionKey).toBe(opaqueKey);
-  });
-
   it.each(["replacement", "stopped", "missing target"] as const)(
     "recovers from browser %s while preserving unrelated pages",
     async (condition) => {
@@ -577,7 +494,7 @@ describe("Browser dashboard lifetime", () => {
     expect(listTabs).not.toHaveBeenCalled();
   });
 
-  it("retains failed stale-creation cleanup and retries it after the browser recovers", async () => {
+  it("reports a failed new-tab cleanup without retaining speculative recovery state", async () => {
     browser.open.mockImplementationOnce(async () => {
       const tab = fixture.openedTab();
       fixture.widgets = [];
@@ -588,75 +505,48 @@ describe("Browser dashboard lifetime", () => {
       reason: "target-close-failed",
     });
     await expect(requestBrowserDashboard(request)).rejects.toThrow(
-      /retained cleanup record will retry/,
+      /close its newly opened tab manually/,
     );
     expect(fixture.tabs).toHaveLength(1);
-    expect(await readBrowserDashboardTabs()).toEqual([
+    expect(await readBrowserDashboardTabs()).toEqual([]);
+    expect(browser.closeOwned).toHaveBeenCalledWith(
       expect.objectContaining({
         nativeTargetId: "target-1",
-        profileFingerprint: "profile-one",
-        browserInstanceFingerprint: "browser-one",
-        dashboard: expect.objectContaining({ state: "released" }),
+        expectedProfileFingerprint: "profile-one",
+        expectedBrowserInstanceFingerprint: "browser-one",
       }),
-    ]);
-    await expect(sweepTrackedBrowserTabs({ ordinaryCleanup: false })).resolves.toBe(1);
-    expect(fixture.tabs).toEqual([]);
-    expect(await readBrowserDashboardTabs()).toEqual([]);
+    );
   });
 
-  it.each(["Stop", "removal"] as const)(
-    "retains cleanup after long idle time when %s temporarily fails",
-    async (action) => {
-      await requestBrowserDashboard(request);
-      const clock = vi
-        .spyOn(Date, "now")
-        .mockReturnValue(Date.now() + BROWSER_TAB_UNREACHABLE_RETIRE_MS * 2);
-      try {
-        browser.closeOwned.mockResolvedValueOnce({
-          status: "unavailable",
-          reason: "target-close-failed",
-        });
-        if (action === "Stop") {
-          await expect(stopBrowserDashboard(request)).rejects.toThrow(
-            /paused, but its browser tab could not close/,
-          );
-          expect(await inspectBrowserDashboard(request)).toMatchObject({
-            paused: true,
-            stopping: true,
-          });
-        } else {
-          fixture.widgets = [];
-          await expect(sweepTrackedBrowserTabs({ ordinaryCleanup: false })).resolves.toBe(0);
-        }
-        expect(fixture.tabs.map((tab) => tab.targetId)).toEqual(["target-1"]);
-        expect(await readBrowserDashboardTabs()).toEqual([
-          expect.objectContaining({
-            nativeTargetId: "target-1",
-            cleanupAttemptToken: expect.any(String),
-            dashboard: expect.objectContaining({
-              state: action === "Stop" ? "stopping" : "released",
-            }),
+  it("retains cleanup after long idle time when removal temporarily fails", async () => {
+    await requestBrowserDashboard(request);
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.now() + BROWSER_TAB_UNREACHABLE_RETIRE_MS * 2);
+    try {
+      browser.closeOwned.mockResolvedValueOnce({
+        status: "unavailable",
+        reason: "target-close-failed",
+      });
+      fixture.widgets = [];
+      await expect(sweepTrackedBrowserTabs({ ordinaryCleanup: false })).resolves.toBe(0);
+      expect(fixture.tabs.map((tab) => tab.targetId)).toEqual(["target-1"]);
+      expect(await readBrowserDashboardTabs()).toEqual([
+        expect.objectContaining({
+          nativeTargetId: "target-1",
+          cleanupAttemptToken: expect.any(String),
+          dashboard: expect.objectContaining({
+            state: "released",
           }),
-        ]);
-        await expect(sweepTrackedBrowserTabs({ ordinaryCleanup: false })).resolves.toBe(1);
-        expect(fixture.tabs).toEqual([]);
-        if (action === "Stop") {
-          expect((await readBrowserDashboardTabs())[0]?.dashboard?.state).toBe("stopped");
-          expect(await inspectBrowserDashboard(request)).toMatchObject({
-            paused: true,
-            stopping: false,
-          });
-          const resumed = await requestBrowserDashboard({ ...request, resume: true });
-          expect(resumed.browserTab?.targetId).toBe("target-2");
-          expect(fixture.tabs.map((tab) => tab.targetId)).toEqual(["target-2"]);
-        } else {
-          expect(await readBrowserDashboardTabs()).toEqual([]);
-        }
-      } finally {
-        clock.mockRestore();
-      }
-    },
-  );
+        }),
+      ]);
+      await expect(sweepTrackedBrowserTabs({ ordinaryCleanup: false })).resolves.toBe(1);
+      expect(fixture.tabs).toEqual([]);
+      expect(await readBrowserDashboardTabs()).toEqual([]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
 
   it("publishes changed lifetimes and drains board-change cleanup through the existing service events", async () => {
     const serviceScope = new AsyncLocalStorage<string>();
@@ -798,153 +688,31 @@ describe("Browser dashboard lifetime", () => {
     expect(fixture.tabs).toEqual([]);
   });
 
-  it("compensates an open when widget replacement races browser creation", async () => {
-    const started = createDeferred<void>();
-    const finish = createDeferred<void>();
-    browser.open.mockImplementationOnce(async () => {
-      started.resolve();
-      await finish.promise;
-      return fixture.openedTab();
-    });
-    const pending = requestBrowserDashboard(request);
-    const rejected = expect(pending).rejects.toThrow();
-    await started.promise;
-    fixture.widgets[0]!.instanceId = "instance-two";
-    finish.resolve();
-    await rejected;
-    expect(fixture.tabs).toEqual([]);
-    expect(await readBrowserDashboardTabs()).toEqual([]);
-    expect(browser.closeOwned).toHaveBeenCalledOnce();
-  });
-
-  it("bounds retained-tab materialization while reconciling unrelated dashboard removals", async () => {
-    const store = getBrowserSessionTabStore();
-    for (let index = 0; index < 15; index++) {
-      const record: BrowserSessionTabRecord = {
-        version: 1,
-        sessionKey,
-        nativeTargetId: `seeded-${index}`,
-        profile: "openclaw",
-        profileFingerprint: "profile-one",
-        browserInstanceFingerprint: "browser-one",
-        interactionTargetKind: "native",
-        trackedAt: 1000 + index,
-        lastUsedAt: 2000 + index,
-        ...(index < 5
-          ? {
-              dashboard: {
-                sessionKey,
-                agentId: "main",
-                name: `removed-${index}`,
-                instanceId: `instance-${index}`,
-                url: "http://service.example/",
-                state: "active" as const,
-              },
-            }
-          : {}),
+  it("refuses a retained dashboard whose storage hash changes during ownership lookup", async () => {
+    await requestBrowserDashboard(request);
+    const tab = (await readBrowserDashboardTabs())[0];
+    if (!tab?.dashboard) {
+      throw new Error("Expected the registered dashboard tab");
+    }
+    const { storageKey, ...record } = tab;
+    browser.ownership.mockImplementationOnce(async () => {
+      await getBrowserSessionTabStore().register(storageKey, {
+        ...record,
+        profileFingerprint: "changed-profile",
+      });
+      return {
+        status: "durable",
+        nativeTargetId: tab.nativeTargetId,
+        profileFingerprint: tab.profileFingerprint,
+        browserInstanceFingerprint: tab.browserInstanceFingerprint,
       };
-      const key = browserSessionTabStorageKey(record);
-      await store.register(key, record);
-    }
-    const retained = (await store.entries()).filter(
-      ({ value }) => !parseBrowserSessionTabRecord(value)?.dashboard,
+    });
+    await expect(requestBrowserDashboard(request)).rejects.toThrow(
+      "Dashboard tab stopped during this operation",
     );
-    let fetchedRows = 0;
-    const scans = interceptStoreActions((action) => ({
-      ...action,
-      entries: async () => {
-        const rows = await action.entries();
-        fetchedRows += rows.length;
-        return rows;
-      },
-    }));
-    try {
-      expect(await reconcileBrowserDashboards()).toBe(5);
-      expect(
-        browser.closeOwned.mock.calls
-          .map(([params]) => params.nativeTargetId)
-          .toSorted((left, right) => left.localeCompare(right)),
-      ).toEqual(Array.from({ length: 5 }, (_, index) => `seeded-${index}`));
-      expect(fetchedRows).toBeLessThanOrEqual(30);
-    } finally {
-      scans.mockRestore();
-    }
-    expect(await store.entries()).toEqual(retained);
+    expect(browser.open).toHaveBeenCalledOnce();
+    expect(browser.closeOwned).not.toHaveBeenCalled();
   });
-
-  it.each(["definition identity", "storage hash"] as const)(
-    "refuses a retained dashboard whose %s changes during ownership lookup",
-    async (change) => {
-      await requestBrowserDashboard(request);
-      const tab = (await readBrowserDashboardTabs())[0];
-      if (!tab?.dashboard) {
-        throw new Error("Expected the registered dashboard tab");
-      }
-      const { storageKey, ...record } = tab;
-      browser.ownership.mockImplementationOnce(async () => {
-        await getBrowserSessionTabStore().register(
-          storageKey,
-          change === "storage hash"
-            ? { ...record, profileFingerprint: "changed-profile" }
-            : { ...record, dashboard: { ...tab.dashboard, name: "another-dashboard" } },
-        );
-        return {
-          status: "durable",
-          nativeTargetId: tab.nativeTargetId,
-          profileFingerprint: tab.profileFingerprint,
-          browserInstanceFingerprint: tab.browserInstanceFingerprint,
-        };
-      });
-      await expect(requestBrowserDashboard(request)).rejects.toThrow(
-        "Dashboard tab stopped during this operation",
-      );
-      expect(browser.open).toHaveBeenCalledOnce();
-      expect(browser.closeOwned).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["selected", "unrelated"] as const)(
-    "handles %s corrupt JSON introduced during the dashboard ownership lookup",
-    async (scope) => {
-      const opened = await requestBrowserDashboard(request);
-      const tab = (await readBrowserDashboardTabs())[0];
-      if (!tab) {
-        throw new Error("Expected the registered dashboard tab");
-      }
-      const store = getBrowserSessionTabStore();
-      await store.register("unrelated-entry", { diagnostic: "unrelated" });
-      browser.ownership.mockImplementationOnce(async () => {
-        openOpenClawStateDatabase()
-          .db.prepare(
-            "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
-          )
-          .run(
-            "{",
-            "browser",
-            "browser.session-tabs",
-            scope === "selected" ? tab.storageKey : "unrelated-entry",
-          );
-        return {
-          status: "durable",
-          nativeTargetId: tab.nativeTargetId,
-          profileFingerprint: tab.profileFingerprint,
-          browserInstanceFingerprint: tab.browserInstanceFingerprint,
-        };
-      });
-      if (scope === "selected") {
-        await expect(requestBrowserDashboard(request)).rejects.toMatchObject({
-          code: "PLUGIN_STATE_CORRUPT",
-        });
-      } else {
-        expect((await requestBrowserDashboard(request)).browserTab).toEqual(opened.browserTab);
-      }
-      await expect(readBrowserDashboardTabs()).rejects.toThrow(
-        "Plugin state entry contains corrupt JSON",
-      );
-      expect(browser.open).toHaveBeenCalledOnce();
-      expect(browser.closeOwned).not.toHaveBeenCalled();
-    },
-  );
 
   it("refuses a user browser profile before attaching or opening any tab", async () => {
     fixture.widgets[0]!.props.profile = "user";

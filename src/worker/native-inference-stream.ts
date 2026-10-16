@@ -234,7 +234,7 @@ export function createNativeInferenceStreamGuard(native: NativeRuntimeResolved) 
         }
         // result() is authoritative, including end(result) without a terminal event.
         // Guard it before allowing the output stream to settle or release held events.
-        const final = structuredClone(await source.result());
+        const final = await source.result();
         publish(
           final.stopReason === "error" || final.stopReason === "aborted"
             ? { type: "error", reason: final.stopReason, error: final }

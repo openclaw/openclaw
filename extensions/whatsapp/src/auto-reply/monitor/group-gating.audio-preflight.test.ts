@@ -63,7 +63,7 @@ function makeParams(
     groupHistoryLimit: 20,
     groupMemberNames: new Map<string, Map<string, string>>(),
     logVerbose: vi.fn(),
-    replyLogger: { debug: vi.fn(), warn: vi.fn() },
+    replyLogger: { warn: vi.fn() },
   };
 }
 

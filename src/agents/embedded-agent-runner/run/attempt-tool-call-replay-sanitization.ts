@@ -2,14 +2,11 @@ import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import {
-  downgradeOpenAIFunctionCallReasoningPairs,
-  normalizeOpenAIResponsesToolCallIds,
-} from "../../embedded-agent-helpers/openai.js";
+import { normalizeOpenAIResponsesToolCallIds } from "../../embedded-agent-helpers/openai.js";
 import {
   mergeConsecutiveUserMessages,
   shouldAllowProviderOwnedThinkingReplay,
-  shouldMergeConsecutiveUserTurns,
+  shouldMergeConsecutiveTurns,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../embedded-agent-helpers/turns.js";
@@ -330,7 +327,7 @@ export function sanitizeReplayToolCallIdsForStream(params: {
 
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
   const repaired = sanitizeToolUseResultPairingForModel(messages, true);
-  return downgradeOpenAIFunctionCallReasoningPairs(normalizeOpenAIResponsesToolCallIds(repaired));
+  return normalizeOpenAIResponsesToolCallIds(repaired);
 }
 
 export function wrapStreamFnSanitizeMalformedToolCalls(
@@ -347,10 +344,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
   provider?: string | null,
 ): StreamFn {
   return (model, context, options) => {
-    const messages = context?.messages;
-    if (!Array.isArray(messages)) {
-      return baseFn(model, context, options);
-    }
+    const messages = context.messages;
     const modelApi = model.api;
     const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
       modelApi,
@@ -404,7 +398,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       }
       if (transcriptPolicy?.validateAnthropicTurns) {
         nextMessages = validateAnthropicTurns(nextMessages, {
-          mergeConsecutiveUserTurns: shouldMergeConsecutiveUserTurns(transcriptPolicy, modelApi),
+          mergeConsecutiveTurns: shouldMergeConsecutiveTurns(transcriptPolicy, modelApi),
         });
       }
     }

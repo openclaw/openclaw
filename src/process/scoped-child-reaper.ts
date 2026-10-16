@@ -1,34 +1,13 @@
 import type { ChildProcess } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { inspectChildWaitState, isSupported, reapChild } from "@openclaw/proc-safe/reaper";
 
 type TrackedChild = Pick<ChildProcess, "pid" | "exitCode" | "signalCode" | "once">;
-type WaitPid = (pid: number, status: null, options: number) => number;
 type GroupMember = { pid: number; ppid: number; state: string };
 
-const require = createRequire(import.meta.url);
 const scheduledChildren = new WeakSet<TrackedChild>();
 const POLL_INTERVAL_MS = 25;
 const CLEANUP_DEADLINE_MS = 30_000;
-const WNOHANG = 1;
-let waitPid: WaitPid | null | undefined;
-
-function loadWaitPid(): WaitPid | null {
-  if (waitPid !== undefined) {
-    return waitPid;
-  }
-  try {
-    // SAFETY: Koffi's require export matches its typed default export.
-    const koffi = require("koffi") as typeof import("koffi").default;
-    // Linux waitpid accepts a null status pointer when only reaping is required.
-    waitPid = koffi.load(null).func("int waitpid(int pid, int *status, int options)");
-  } catch {
-    // Native cleanup is best effort; loading it must not interrupt tree termination.
-    waitPid = null;
-  }
-  return waitPid;
-}
-
 function readGroupMembers(groupId: number): GroupMember[] {
   let entries: string[];
   try {
@@ -58,10 +37,6 @@ function readGroupMembers(groupId: number): GroupMember[] {
 }
 
 function retainAdoptedCleanup(rootPid: number, cleanupTimeoutMs: number): void {
-  const wait = loadWaitPid();
-  if (!wait) {
-    return;
-  }
   const deadline = performance.now() + Math.max(CLEANUP_DEADLINE_MS, cleanupTimeoutMs);
   let quietScans = 0;
   const tick = () => {
@@ -75,12 +50,18 @@ function retainAdoptedCleanup(rootPid: number, cleanupTimeoutMs: number): void {
       if (member.pid === rootPid) {
         continue;
       }
-      if (
-        member.ppid === process.pid &&
-        member.state === "Z" &&
-        wait(member.pid, null, WNOHANG) === member.pid
-      ) {
-        continue;
+      if (member.ppid === process.pid && member.state === "Z") {
+        try {
+          // Native first use can collect a process report; empty and live groups do not need it.
+          if (!isSupported()) {
+            return;
+          }
+          if (inspectChildWaitState(member.pid).kind === "exited" && reapChild(member.pid)) {
+            continue;
+          }
+        } catch {
+          // Best-effort cleanup must not interrupt tree termination; retry within its budget.
+        }
       }
       remaining = true;
     }

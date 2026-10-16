@@ -29,7 +29,7 @@
   "uiHints": {
     "apiKey": {
       "label": "TypeSafe API credential",
-      "help": "Hosted Jev only. Select a SecretRef in Settings \u2192 Secrets. Ignored for a local baseUrl. Never paste credentials in chat.",
+      "help": "Hosted Jev only. Select a SecretRef in Settings \u2192 Secrets. Ignored for a local baseUrl or an explicit models.providers.typesafe entry. Configure custom server credentials on that provider entry. Never paste credentials in chat.",
       "sensitive": true
     },
     "timeoutMs": {
@@ -38,7 +38,7 @@
     },
     "baseUrl": {
       "label": "Local System One origin",
-      "help": "Optional loopback origin, such as http://127.0.0.1:8009, for a running Kev server. Omit for hosted Jev. Local requests do not use the TypeSafe credential; the server chooses the loaded checkpoint."
+      "help": "Existing loopback-only origin, such as http://127.0.0.1:8009, for a running Kev server. For custom endpoints, authentication, proxy, and TLS settings, use models.providers.typesafe. A model-provider entry takes precedence over this setting. Without either, requests use hosted Jev."
     }
   },
   "configSchema": {

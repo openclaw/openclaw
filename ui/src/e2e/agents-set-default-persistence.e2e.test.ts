@@ -76,7 +76,7 @@ suite.define(() => {
       // Click auto-waits for the elements to be actionable (enabled), so
       // these implicitly assert the dropdown loaded and Set Default is clickable for a
       // non-default agent.
-      const agentSelect = page.locator("wa-dropdown.agent-select");
+      const agentSelect = page.locator("openclaw-agent-select");
       await agentSelect.locator(".agent-select__trigger").click();
       await agentSelect.getByRole("menuitemradio", { name: "Kimi agent", exact: true }).click();
       await page.getByRole("button", { name: "Set Default", exact: true }).click();
@@ -137,7 +137,7 @@ suite.define(() => {
             selectionRequired ? "ownerless.png" : "designated.png",
           ),
         });
-        expect(await page.locator("wa-dropdown-item .agent-select__badge").count()).toBe(0);
+        expect(await page.locator(".agent-select__option .agent-select__badge").count()).toBe(0);
         await page
           .getByRole("menuitemradio", {
             name: selectionRequired ? "Main agent" : "Research agent",

@@ -179,7 +179,9 @@ describe("memory command failures at the root JSON boundary", () => {
           message: "Missing search query. Provide a positional query or use --query <text>.",
         },
       });
-      expect(stderr()).toContain("The CLI command failed.");
+      expect(stderr().trim()).toBe(
+        "Missing search query. Provide a positional query or use --query <text>.",
+      );
       // Vitest suppresses the native one-shot exit; this checks the logical code only.
       expect(process.exitCode).toBe(1);
     });
@@ -244,8 +246,7 @@ describe("memory command failures at the root JSON boundary", () => {
           });
           expect(beforeRemovalSettled).toBe("");
           expect(cleanupAttempts).toBe(1);
-          expect(stderr()).toContain("[openclaw] The CLI command failed.");
-          expect(stderr()).not.toContain(cleanupError.message);
+          expect(stderr().trim()).toBe(cleanupError.message);
           expect(process.exitCode).toBe(1);
           expect(await fs.readFile(historyPath, "utf8")).toBe(history);
         } finally {

@@ -1,12 +1,12 @@
 import {
   listNativeCommandSpecsForConfig,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
 } from "openclaw/plugin-sdk/command-auth-native";
 import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
-import { isVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordAccount } from "../accounts.js";
 import { Client } from "../internal/discord.js";
 import { probeDiscordApplicationId } from "../probe.js";
@@ -24,7 +24,6 @@ export const discordProviderRuntime = {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
   listNativeCommandSpecsForConfig,
-  listSkillCommandsForAgents,
-  isVerbose,
+  prepareSkillCommandsForAgents,
   shouldLogVerbose,
 };

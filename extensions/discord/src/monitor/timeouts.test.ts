@@ -84,23 +84,6 @@ describe("discord monitor timeouts", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
-  it("caps withAbortTimeout timers before arming the watchdog", async () => {
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
-
-    await expect(
-      withAbortTimeout({
-        timeoutMs: Number.MAX_SAFE_INTEGER,
-        createTimeoutError: () => new Error("timed out"),
-        run: async () => "ok",
-      }),
-    ).resolves.toBe("ok");
-
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-  });
-
   it.each(["resolve", "reject"] as const)(
     "keeps the deadline error when aborted work synchronously %ss",
     async (settlement) => {

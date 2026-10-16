@@ -66,24 +66,48 @@ function navigationFooterLines(
   return [`${prefix}${hintLine}`];
 }
 
-function selectOptionRenderer<Value>(option: Option<Value>, state: string): string {
+function renderChoiceOption<Value>(
+  option: Option<Value>,
+  state:
+    | "inactive"
+    | "active"
+    | "selected"
+    | "active-selected"
+    | "submitted"
+    | "cancelled"
+    | "disabled",
+  multiple = false,
+): string {
   const label = getOptionLabel(option);
-  switch (state) {
-    case "disabled":
-      return `${styleText("gray", S_RADIO_INACTIVE)} ${computeLabel(label, "gray")}${
-        option.hint ? ` ${styleText("dim", `(${option.hint})`)}` : ""
-      }`;
-    case "selected":
-      return computeLabel(label, "dim");
-    case "active":
-      return `${styleText("green", S_RADIO_ACTIVE)} ${label}${
-        option.hint ? ` ${styleText("dim", `(${option.hint})`)}` : ""
-      }`;
-    case "cancelled":
-      return computeLabel(label, ["strikethrough", "dim"]);
-    default:
-      return `${styleText("dim", S_RADIO_INACTIVE)} ${computeLabel(label, "dim")}`;
+  if (state === "cancelled" || state === "submitted") {
+    return computeLabel(label, state === "cancelled" ? ["strikethrough", "dim"] : "dim");
   }
+  const active = state === "active" || state === "active-selected";
+  const selected = state === "selected" || state === "active-selected";
+  const disabled = state === "disabled";
+  const inactiveSymbol = multiple ? S_CHECKBOX_INACTIVE : S_RADIO_INACTIVE;
+  const symbol = selected
+    ? S_CHECKBOX_SELECTED
+    : active
+      ? multiple
+        ? S_CHECKBOX_ACTIVE
+        : S_RADIO_ACTIVE
+      : inactiveSymbol;
+  const color = disabled
+    ? "gray"
+    : selected || (active && !multiple)
+      ? "green"
+      : active
+        ? "cyan"
+        : "dim";
+  const renderedLabel = active
+    ? label
+    : computeLabel(label, disabled ? (multiple ? ["strikethrough", "gray"] : "gray") : "dim");
+  const hint =
+    (active || selected || disabled) && option.hint
+      ? ` ${styleText("dim", `(${option.hint})`)}`
+      : "";
+  return `${styleText(color, symbol)} ${renderedLabel}${hint}`;
 }
 
 export function selectWithNavigationFooter<Value>(
@@ -114,9 +138,9 @@ export function selectWithNavigationFooter<Value>(
           const prefix = showGuide ? `${styleText("gray", S_BAR)}  ` : "";
           const wrappedLines = wrapTextWithPrefix(
             opts.output,
-            selectOptionRenderer(
+            renderChoiceOption(
               expectDefined(this.options[this.cursor], "options entry at this.cursor"),
-              cancelled ? "cancelled" : "selected",
+              cancelled ? "cancelled" : "submitted",
             ),
             prefix,
           );
@@ -139,10 +163,7 @@ export function selectWithNavigationFooter<Value>(
             columnPadding: prefix.length,
             rowPadding: titleLineCount + footerLineCount,
             style: (item, active) =>
-              selectOptionRenderer(
-                item,
-                item.disabled ? "disabled" : active ? "active" : "inactive",
-              ),
+              renderChoiceOption(item, item.disabled ? "disabled" : active ? "active" : "inactive"),
           }).join(`\n${prefix}`)}\n${footerLines.join("\n")}\n`;
         }
       }
@@ -283,6 +304,41 @@ export function autocompleteWithNavigationFooter<Value>(
   }).prompt() as Promise<Value | symbol>;
 }
 
+function renderTextPrompt(
+  prompt: Pick<TextPrompt, "state" | "error">,
+  opts: NavigationPromptOptions<Pick<TextOptions, "message">>,
+  input: string,
+  value: string,
+  masked = false,
+): string {
+  const showGuide = clackSettings.withGuide;
+  const bar = showGuide ? styleText("gray", S_BAR) : "";
+  const title = `${showGuide ? `${bar}\n` : ""}${clackSymbol(prompt.state)}  ${opts.message}\n`;
+  if (prompt.state === "submit" || prompt.state === "cancel") {
+    const cancelled = prompt.state === "cancel";
+    // Password prompts reserve value padding even when empty; text prompts do not.
+    const padding = masked ? (showGuide ? "  " : "") : value ? "  " : "";
+    const valueText = value ? styleText(cancelled ? ["strikethrough", "dim"] : "dim", value) : "";
+    const trailingBar = cancelled && (masked ? value && showGuide : value.trim());
+    return `${title}${bar}${padding}${valueText}${trailingBar ? `\n${bar}` : ""}`;
+  }
+  const failed = prompt.state === "error";
+  const color = failed ? "yellow" : "cyan";
+  const prefix = showGuide ? `${styleText(color, S_BAR)}  ` : "";
+  const end = showGuide ? `${styleText(color, S_BAR_END)}${failed && masked ? "  " : ""}` : "";
+  const footerLines = navigationFooterLines(showGuide, color, opts.navigation);
+  const errorText = failed
+    ? masked
+      ? styleText("yellow", prompt.error)
+      : prompt.error
+        ? `  ${styleText("yellow", prompt.error)}`
+        : ""
+    : "";
+  return `${failed ? `${title.trim()}\n` : title}${prefix}${failed && masked ? value : input}\n${
+    footerLines.length ? `${footerLines.join("\n")}\n` : ""
+  }${end}${errorText}\n`;
+}
+
 export function textWithNavigationFooter(
   opts: NavigationPromptOptions<Omit<TextOptions, "defaultValue">>,
 ): Promise<string | symbol> {
@@ -294,47 +350,16 @@ export function textWithNavigationFooter(
     signal: opts.signal,
     input: opts.input,
     render() {
-      const showGuide = clackSettings.withGuide;
-      const titlePrefix = `${showGuide ? `${styleText("gray", S_BAR)}\n` : ""}${clackSymbol(
-        this.state,
-      )}  `;
-      const title = `${titlePrefix}${opts.message}\n`;
       const placeholder = opts.placeholder
         ? styleText("inverse", opts.placeholder[0] ?? "") +
           styleText("dim", opts.placeholder.slice(1))
         : styleText(["inverse", "hidden"], "_");
-      const userInput = !this.userInput ? placeholder : this.userInputWithCursor;
-      const value = this.value ?? "";
-
-      switch (this.state) {
-        case "error": {
-          const errorText = this.error ? `  ${styleText("yellow", this.error)}` : "";
-          const errorPrefix = showGuide ? `${styleText("yellow", S_BAR)}  ` : "";
-          const errorPrefixEnd = showGuide ? styleText("yellow", S_BAR_END) : "";
-          const footerLines = navigationFooterLines(showGuide, "yellow", opts.navigation);
-          return `${title.trim()}\n${errorPrefix}${userInput}\n${
-            footerLines.length ? `${footerLines.join("\n")}\n` : ""
-          }${errorPrefixEnd}${errorText}\n`;
-        }
-        case "submit": {
-          const valueText = value ? `  ${styleText("dim", value)}` : "";
-          const submitPrefix = showGuide ? styleText("gray", S_BAR) : "";
-          return `${title}${submitPrefix}${valueText}`;
-        }
-        case "cancel": {
-          const valueText = value ? `  ${styleText(["strikethrough", "dim"], value)}` : "";
-          const cancelPrefix = showGuide ? styleText("gray", S_BAR) : "";
-          return `${title}${cancelPrefix}${valueText}${value.trim() ? `\n${cancelPrefix}` : ""}`;
-        }
-        default: {
-          const defaultPrefix = showGuide ? `${styleText("cyan", S_BAR)}  ` : "";
-          const defaultPrefixEnd = showGuide ? styleText("cyan", S_BAR_END) : "";
-          const footerLines = navigationFooterLines(showGuide, "cyan", opts.navigation);
-          return `${title}${defaultPrefix}${userInput}\n${
-            footerLines.length ? `${footerLines.join("\n")}\n` : ""
-          }${defaultPrefixEnd}\n`;
-        }
-      }
+      return renderTextPrompt(
+        this,
+        opts,
+        this.userInput ? this.userInputWithCursor : placeholder,
+        this.value ?? "",
+      );
     },
   }).prompt() as Promise<string | symbol>;
 }
@@ -349,83 +374,9 @@ export function passwordWithNavigationFooter(
     input: opts.input,
     output: opts.output,
     render() {
-      const showGuide = clackSettings.withGuide;
-      const title = `${showGuide ? `${styleText("gray", S_BAR)}\n` : ""}${clackSymbol(
-        this.state,
-      )}  ${opts.message}\n`;
-      const userInput = this.userInputWithCursor;
-      const masked = this.masked;
-
-      switch (this.state) {
-        case "error": {
-          const errorPrefix = showGuide ? `${styleText("yellow", S_BAR)}  ` : "";
-          const errorPrefixEnd = showGuide ? `${styleText("yellow", S_BAR_END)}  ` : "";
-          const maskedText = masked ?? "";
-          const footerLines = navigationFooterLines(showGuide, "yellow", opts.navigation);
-          return `${title.trim()}\n${errorPrefix}${maskedText}\n${
-            footerLines.length ? `${footerLines.join("\n")}\n` : ""
-          }${errorPrefixEnd}${styleText("yellow", this.error)}\n`;
-        }
-        case "submit": {
-          const submitPrefix = showGuide ? `${styleText("gray", S_BAR)}  ` : "";
-          const maskedText = masked ? styleText("dim", masked) : "";
-          return `${title}${submitPrefix}${maskedText}`;
-        }
-        case "cancel": {
-          const cancelPrefix = showGuide ? `${styleText("gray", S_BAR)}  ` : "";
-          const maskedText = masked ? styleText(["strikethrough", "dim"], masked) : "";
-          return `${title}${cancelPrefix}${maskedText}${
-            masked && showGuide ? `\n${styleText("gray", S_BAR)}` : ""
-          }`;
-        }
-        default: {
-          const defaultPrefix = showGuide ? `${styleText("cyan", S_BAR)}  ` : "";
-          const defaultPrefixEnd = showGuide ? styleText("cyan", S_BAR_END) : "";
-          const footerLines = navigationFooterLines(showGuide, "cyan", opts.navigation);
-          return `${title}${defaultPrefix}${userInput}\n${
-            footerLines.length ? `${footerLines.join("\n")}\n` : ""
-          }${defaultPrefixEnd}\n`;
-        }
-      }
+      return renderTextPrompt(this, opts, this.userInputWithCursor, this.masked ?? "", true);
     },
   }).prompt() as Promise<string | symbol>;
-}
-
-function multiselectOptionRenderer<Value>(
-  option: Option<Value>,
-  state:
-    | "inactive"
-    | "active"
-    | "selected"
-    | "active-selected"
-    | "submitted"
-    | "cancelled"
-    | "disabled",
-): string {
-  const label = getOptionLabel(option);
-  if (state === "disabled") {
-    return `${styleText("gray", S_CHECKBOX_INACTIVE)} ${computeLabel(label, ["strikethrough", "gray"])}${option.hint ? ` ${styleText("dim", `(${option.hint})`)}` : ""}`;
-  }
-  if (state === "active") {
-    return `${styleText("cyan", S_CHECKBOX_ACTIVE)} ${label}${
-      option.hint ? ` ${styleText("dim", `(${option.hint})`)}` : ""
-    }`;
-  }
-  if (state === "selected") {
-    return `${styleText("green", S_CHECKBOX_SELECTED)} ${computeLabel(label, "dim")}${option.hint ? ` ${styleText("dim", `(${option.hint})`)}` : ""}`;
-  }
-  if (state === "cancelled") {
-    return computeLabel(label, ["strikethrough", "dim"]);
-  }
-  if (state === "active-selected") {
-    return `${styleText("green", S_CHECKBOX_SELECTED)} ${label}${
-      option.hint ? ` ${styleText("dim", `(${option.hint})`)}` : ""
-    }`;
-  }
-  if (state === "submitted") {
-    return computeLabel(label, "dim");
-  }
-  return `${styleText("dim", S_CHECKBOX_INACTIVE)} ${computeLabel(label, "dim")}`;
 }
 
 export function multiselectWithNavigationFooter<Value>(
@@ -464,16 +415,16 @@ export function multiselectWithNavigationFooter<Value>(
       const value = this.value ?? [];
       const styleOption = (option: Option<Value>, active: boolean) => {
         if (option.disabled) {
-          return multiselectOptionRenderer(option, "disabled");
+          return renderChoiceOption(option, "disabled", true);
         }
         const selected = value.includes(option.value);
         if (active && selected) {
-          return multiselectOptionRenderer(option, "active-selected");
+          return renderChoiceOption(option, "active-selected", true);
         }
         if (selected) {
-          return multiselectOptionRenderer(option, "selected");
+          return renderChoiceOption(option, "selected", true);
         }
-        return multiselectOptionRenderer(option, active ? "active" : "inactive");
+        return renderChoiceOption(option, active ? "active" : "inactive", true);
       };
 
       switch (this.state) {
@@ -481,7 +432,7 @@ export function multiselectWithNavigationFooter<Value>(
           const submitText =
             this.options
               .filter(({ value: optionValue }) => value.includes(optionValue))
-              .map((option) => multiselectOptionRenderer(option, "submitted"))
+              .map((option) => renderChoiceOption(option, "submitted", true))
               .join(styleText("dim", ", ")) || styleText("dim", "none");
           const wrappedSubmitText = wrapTextWithPrefix(
             opts.output,
@@ -493,7 +444,7 @@ export function multiselectWithNavigationFooter<Value>(
         case "cancel": {
           const label = this.options
             .filter(({ value: optionValue }) => value.includes(optionValue))
-            .map((option) => multiselectOptionRenderer(option, "cancelled"))
+            .map((option) => renderChoiceOption(option, "cancelled", true))
             .join(styleText("dim", ", "));
           if (label.trim() === "") {
             return `${title}${styleText("gray", S_BAR)}`;

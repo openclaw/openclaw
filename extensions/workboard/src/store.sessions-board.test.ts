@@ -8,6 +8,7 @@ import { registerWorkboardGatewayMethods } from "./gateway.js";
 import type { WorkboardSessionPlacementWrite } from "./persistence-types.js";
 import { WorkboardStore } from "./store.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
+import { sqliteOnly as test } from "./test/sqlite-only.js";
 import {
   createWorkboardSqliteTestHarness,
   createWorkboardSqliteTestStore,
@@ -141,7 +142,8 @@ describe("Sessions board storage", () => {
     ).rejects.toThrow("Unknown sessions board column");
   });
 
-  it("normalizes retired instructions and repairs placements while preserving operator pins", async () => {
+  // Injects legacy session placement data through a native SQLite file handle.
+  test("normalizes retired instructions and repairs placements while preserving operator pins", async () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness({
       createStores: createKernelStores,
     });
@@ -247,7 +249,8 @@ describe("Sessions board storage", () => {
 });
 
 describe("Sessions board schema reopening", () => {
-  it("preserves prior-schema cards and admits a new Sessions board through the Gateway method", async () => {
+  // Rebuilds and reopens a prior-schema SQLite file.
+  test("preserves prior-schema cards and admits a new Sessions board through the Gateway method", async () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness({
       createStores: createKernelStores,
     });

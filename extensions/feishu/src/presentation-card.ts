@@ -93,25 +93,20 @@ export function buildFeishuPresentationFallback(params: {
   };
 }
 
-function countFeishuCardElements(value: unknown, ancestors = new Set<object>()): number {
+function countFeishuCardElements(value: unknown): number {
   if (Array.isArray(value)) {
-    return value.reduce((count, entry) => count + countFeishuCardElements(entry, ancestors), 0);
+    return value.reduce((count, entry) => count + countFeishuCardElements(entry), 0);
   }
   if (!isRecord(value)) {
     return 0;
   }
-  if (ancestors.has(value)) {
-    return FEISHU_CARD_MAX_ELEMENTS + 1;
-  }
-  ancestors.add(value);
   let count = typeof value.tag === "string" ? 1 : 0;
   for (const entry of Object.values(value)) {
-    count += countFeishuCardElements(entry, ancestors);
+    count += countFeishuCardElements(entry);
     if (count > FEISHU_CARD_MAX_ELEMENTS) {
       break;
     }
   }
-  ancestors.delete(value);
   return count;
 }
 

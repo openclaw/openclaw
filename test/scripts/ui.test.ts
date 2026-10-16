@@ -1,6 +1,7 @@
 // Ui tests cover ui script behavior.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { brotliCompressSync, gzipSync } from "node:zlib";
@@ -27,6 +28,9 @@ import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
+const procSafeRoot = fs.realpathSync(
+  path.dirname(createRequire(import.meta.url).resolve("@openclaw/proc-safe/package.json")),
+);
 const fixtureLifetime = createFixtureLifetime();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -52,6 +56,7 @@ function copyUiFixture(root: string): void {
     "scripts/lib/build-identity.mts",
     "scripts/lib/output-root-guard.mjs",
     "scripts/lib/record-shared.mjs",
+    "scripts/lib/prepare-control-ui-settings.mts",
     "src/infra/process-env.ts",
     "src/infra/windows-process-start.ts",
     "src/shared/freebsd-process-identity.ts",
@@ -67,6 +72,10 @@ function copyUiFixture(root: string): void {
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.copyFileSync(file, destination);
   }
+  const nativeModules = path.join(root, "node_modules", "@openclaw");
+  fs.mkdirSync(nativeModules, { recursive: true });
+  // Resolve native optional dependencies from their installed package owner.
+  fs.symlinkSync(procSafeRoot, path.join(nativeModules, "proc-safe"), "junction");
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
 }
 
@@ -383,6 +392,95 @@ process.exitCode = ${expectedExit};\n`,
     `control-ui.build-${process.pid}-live`,
     `control-ui.build-${process.pid}-live.retired`,
   ];
+  it("invalidates a warm required-plugin cache when source metadata promises a new owner", () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-ui-required-cache-"));
+    copyUiFixture(root);
+    for (const file of [
+      "scripts/lib/build-artifact-cache.mts",
+      "scripts/lib/bundled-plugin-build-entries.mjs",
+      "scripts/lib/bundled-plugin-paths.mjs",
+      "scripts/lib/optional-bundled-clusters.mjs",
+      "scripts/lib/root-package-bundled-plugin-excludes.mjs",
+      "src/shared/non-packaged-plugin-dirs.ts",
+    ]) {
+      const destination = path.join(root, file);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.copyFileSync(file, destination);
+    }
+    const modules = path.join(root, "node_modules");
+    fs.symlinkSync(
+      path.dirname(createRequire(import.meta.url).resolve("@openclaw/fs-safe/package.json")),
+      path.join(modules, "@openclaw/fs-safe"),
+      "junction",
+    );
+    fs.mkdirSync(path.join(root, "extensions"));
+    // This fixture owns UI cache behavior; the native presenter builder is
+    // exercised with real source and distribution bytes in its delivery suite.
+    fs.writeFileSync(path.join(root, "scripts/tsx.mjs"), "export {};\n");
+    fs.writeFileSync(path.join(root, "scripts/build-plugin-control-ui.mts"), "export {};\n");
+    writeUiPackageBin(modules, "dompurify", "export {};\n");
+    writeUiPackageBin(
+      modules,
+      "vite",
+      `
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+export async function runnerImport() {
+  return { module: { refreshControlUiBuildOutput() {}, resolveControlUiBuildInfo() { return {}; } } };
+}
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const out = process.argv[process.argv.indexOf("--outDir") + 1];
+  fs.mkdirSync(out, { recursive: true });
+  for (const file of ["index.html", "sw.js", ".build-inputs.json"]) fs.writeFileSync(path.join(out, file), "[]");
+  console.log("fixture-bundler-ran");
+}
+`,
+    );
+    for (const file of [
+      "check-control-ui-precompressed-assets.mts",
+      "check-control-ui-performance.mts",
+    ]) {
+      fs.writeFileSync(path.join(root, "scripts", file), "export {};\n");
+    }
+    const run = () => {
+      const result = spawnSync(testNodeExecPath, ["scripts/ui.js", "build"], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          BUILD_ALL_CACHE_ROOT: path.join(root, "cache"),
+          OPENCLAW_BUILD_CACHE: "1",
+          OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+          OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS: "1",
+          OPENCLAW_CONTROL_UI_BUILD_ID: "cache-test",
+          OPENCLAW_BUILD_TIMESTAMP: "2026-08-27T00:00:00.000Z",
+          GIT_COMMIT: "a".repeat(40),
+        },
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    expect(run()).toContain("fixture-bundler-ran");
+    expect(run()).toContain("reused content cache");
+    const plugin = path.join(root, "extensions/new-board");
+    fs.mkdirSync(plugin);
+    fs.writeFileSync(
+      path.join(plugin, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/new-board",
+        openclaw: { controlUi: "browser.ts" },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(plugin, "openclaw.plugin.json"),
+      JSON.stringify({ id: "new-board" }),
+    );
+    expect(run()).toContain("fixture-bundler-ran");
+  });
+
   it.each([
     {
       label: "b: Vite failure with stale output",

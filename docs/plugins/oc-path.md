@@ -23,7 +23,7 @@ a workspace file. The plugin understands four file kinds:
 
 Self-hosters and editor extensions use the CLI to read or write a single leaf
 without scripting against the SDK directly; agents and hooks treat it as a
-deterministic substrate so byte-fidelity round-trips and the redaction
+predictable foundation so byte-fidelity round-trips and the redaction
 sentinel guard apply uniformly across kinds. See the
 [CLI reference](/cli/path) for the full grammar, verb-by-verb flag list, and
 worked examples per file kind; this page covers why and how to enable the

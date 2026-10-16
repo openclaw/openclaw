@@ -17,7 +17,6 @@ import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import {
   prepareGatewayCliFixture,
   prepareSharedStateReadArtifacts,
-  prepareUnreachableGatewayCliFixture,
   runIsolatedGatewayCli,
   snapshotDirectoryContents,
   snapshotSharedStateArtifacts,
@@ -318,41 +317,6 @@ describe("gateway-backed CLI process exit", () => {
     },
   );
 
-  it.each([{ label: "seeded", seeded: true }])(
-    "exports diagnostics without changing $label shared state",
-    async ({ label, seeded }) => {
-      const fixture = await prepareUnreachableGatewayCliFixture({
-        label: `gateway-diagnostics-export-${label}`,
-        seeded,
-      });
-      const outputPath = path.join(fixture.root, "diagnostics.zip");
-      const before = await snapshotSharedStateArtifacts(fixture.stateDir);
-
-      const result = await runIsolatedGatewayCli({
-        ...fixture,
-        args: [
-          "gateway",
-          "diagnostics",
-          "export",
-          "--json",
-          "--no-stability-bundle",
-          "--output",
-          outputPath,
-        ],
-      });
-
-      expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
-      const payload = JSON.parse(result.stdout) as { bytes?: unknown; path?: unknown };
-      expect(payload.path).toBe(outputPath);
-      expect(payload.bytes).toEqual(expect.any(Number));
-      expect(payload.bytes).toBeGreaterThan(0);
-      const outputStat = await fs.stat(outputPath);
-      expect(outputStat.isFile()).toBe(true);
-      expect(outputStat.size).toBe(payload.bytes);
-      expect(await snapshotSharedStateArtifacts(fixture.stateDir)).toEqual(before);
-    },
-  );
-
   it("rejects invalid remote config before a node pairing mutation without opening state", async () => {
     const root = tempDirs.make("openclaw-node-pairing-invalid-config-");
     const gateway = await startNodePairingGateway({ token: "test-token" });
@@ -494,30 +458,6 @@ describe("gateway-backed CLI process exit", () => {
     expect(result.stderr).not.toContain("Stack:");
     expect(result.stderr).not.toContain("openclaw doctor");
   });
-
-  it.each(["--wait-timeout"])(
-    "renders an invalid cron run %s duration as operator guidance",
-    async (flag) => {
-      const root = tempDirs.make("openclaw-cron-invalid-duration-");
-      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-        mode: "remote",
-        remote: { url: UNREACHABLE_GATEWAY_URL, token: "test-token" },
-      });
-      const result = await runIsolatedGatewayCli({
-        args: ["cron", "run", "missing-job", "--wait", flag, "not-a-duration", "--json"],
-        root,
-        stateDir,
-        configPath,
-      });
-      const message =
-        'Invalid duration: "not-a-duration". Use values like 500ms, 30s, 5m, 2h, or 1h30m.';
-      expect(result).toMatchObject({ code: 1, signal: null, stderr: `${message}\n` });
-      expect(JSON.parse(result.stdout)).toEqual({
-        ok: false,
-        error: { type: "cli_error", message },
-      });
-    },
-  );
 
   it.each([
     { label: "machine", args: ["cron", "show", "missing-job", "--json"], machineOutput: true },

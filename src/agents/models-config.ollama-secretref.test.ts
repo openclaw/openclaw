@@ -11,6 +11,7 @@ import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
@@ -77,6 +78,7 @@ describe("registered Ollama catalog", () => {
           profiles: owner === "profile" ? { "ollama:fixture": profile } : {},
         };
         if (owner === "profile") {
+          prepareSharedAuthStoreOwnershipForNative();
           setRuntimeAuthProfileStoreSnapshot(
             {
               version: 1,

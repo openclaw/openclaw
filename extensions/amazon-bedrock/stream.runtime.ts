@@ -80,12 +80,12 @@ import {
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import {
   asOptionalRecord,
-  isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBedrockRuntimeAuth } from "./aws-credential-refresh.js";
 import {
   resolveBedrockCachePoint,
+  resolveBedrockCacheRetention,
   resolveBedrockPromptCachePolicy,
   type BedrockOptions,
 } from "./bedrock-options.js";
@@ -95,17 +95,14 @@ import {
   supportsBedrockNativeMaxEffort,
 } from "./thinking-policy.js";
 
-type Block = (TextContent | ThinkingContent | ToolCall) & {
-  index?: number;
-  partialJson?: string;
-};
+type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number };
 type BedrockEventSink = { push(event: AssistantMessageEvent): void };
 type ToolArgumentPreviewSchedules = WeakMap<
   ToolCall,
   ReturnType<typeof createToolArgumentPreviewSchedule>
 >;
 type PendingBedrockToolCall = {
-  block: ToolCall & Pick<Block, "partialJson">;
+  block: ToolCall;
   contentIndex: number;
 };
 type BedrockBlockState = {
@@ -194,42 +191,34 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       config.endpoint = model.baseUrl;
     }
 
-    if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-      // Region resolution: explicit option > model ARN > env vars > SDK default chain.
-      // When AWS_PROFILE is set, leave region undefined so the SDK can resolve it.
-      if (requestRegion) {
-        config.region = requestRegion;
-      } else if (endpointRegion && useExplicitEndpoint) {
-        config.region = endpointRegion;
-      } else if (!hasConfiguredProfile) {
-        config.region = "us-east-1";
-      }
+    // Region resolution: explicit option > model ARN > env vars > SDK default chain.
+    // When AWS_PROFILE is set, leave region undefined so the SDK can resolve it.
+    if (requestRegion) {
+      config.region = requestRegion;
+    } else if (endpointRegion && useExplicitEndpoint) {
+      config.region = endpointRegion;
+    } else if (!hasConfiguredProfile) {
+      config.region = "us-east-1";
+    }
 
-      const proxyAgents = createHttpProxyAgentsForTarget(model.baseUrl);
-      if (proxyAgents) {
-        // Bedrock runtime uses NodeHttp2Handler by default since v3.798.0, which is based
-        // on `http2` module and has no support for http agent.
-        // Use NodeHttpHandler to support HTTP(S) proxy agents.
-        config.requestHandler = new NodeHttpHandler(proxyAgents);
-      } else if (process.env.AWS_BEDROCK_FORCE_HTTP1 === "1") {
-        // Some custom endpoints require HTTP/1.1 instead of HTTP/2
-        config.requestHandler = new NodeHttpHandler();
-      }
-    } else {
-      // Non-Node environment (browser): fall back to us-east-1 since
-      // there's no config file resolution available.
-      config.region =
-        requestRegion ||
-        (endpointRegion && useExplicitEndpoint ? endpointRegion : undefined) ||
-        "us-east-1";
+    const proxyAgents = createHttpProxyAgentsForTarget(model.baseUrl);
+    if (proxyAgents) {
+      // Bedrock runtime uses NodeHttp2Handler by default since v3.798.0, which is based
+      // on `http2` module and has no support for http agent.
+      // Use NodeHttpHandler to support HTTP(S) proxy agents.
+      config.requestHandler = new NodeHttpHandler(proxyAgents);
+    } else if (process.env.AWS_BEDROCK_FORCE_HTTP1 === "1") {
+      // Some custom endpoints require HTTP/1.1 instead of HTTP/2
+      config.requestHandler = new NodeHttpHandler();
     }
 
     let client: BedrockRuntimeClient | undefined;
     try {
       options.signal?.throwIfAborted();
       client = new BedrockRuntimeClient(config);
-      const cacheRetention = resolveCacheRetention(model, options.cacheRetention);
-      const cachePoint = resolveBedrockCachePoint(model, cacheRetention);
+      const cachePolicy = resolveBedrockPromptCachePolicy(model);
+      const cacheRetention = resolveBedrockCacheRetention(cachePolicy, options.cacheRetention);
+      const cachePoint = resolveBedrockCachePoint(cachePolicy, cacheRetention);
       const additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
       const thinking = (additionalModelRequestFields as Record<string, unknown> | undefined)
         ?.thinking;
@@ -359,8 +348,6 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
           output.content = output.content.filter((block) => block.type !== "toolCall");
           for (const block of output.content) {
             delete (block as Block).index;
-            // partialJson is only a streaming scratch buffer; never persist it.
-            delete (block as Block).partialJson;
           }
           if (refusalBuffer) {
             refusalBuffer.discard();
@@ -471,12 +458,11 @@ function handleContentBlockStart(
   const start = event.start;
 
   if (start?.toolUse) {
-    const startArguments = isRecord(start.toolUse) ? start.toolUse.input : undefined;
     const block: Block = {
       type: "toolCall",
       id: start.toolUse.toolUseId || "",
       name: start.toolUse.name || "",
-      arguments: isRecord(startArguments) ? startArguments : {},
+      arguments: {},
       partialJson: "",
       index,
     };
@@ -780,26 +766,6 @@ function mapThinkingLevelToEffort(
 }
 
 /**
- * Resolve cache retention preference.
- * Nova requires explicit opt-in; other models retain the existing env/default policy.
- */
-function resolveCacheRetention(
-  model: Model<"bedrock-converse-stream">,
-  cacheRetention?: CacheRetention,
-): CacheRetention {
-  if (cacheRetention) {
-    return cacheRetention;
-  }
-  if (resolveBedrockPromptCachePolicy(model) === "nova") {
-    return "none";
-  }
-  if (typeof process !== "undefined" && process.env.OPENCLAW_CACHE_RETENTION === "long") {
-    return "long";
-  }
-  return "short";
-}
-
-/**
  * Check if the model is an Anthropic Claude model on Bedrock.
  * Checks both model ID and model name to support application inference profiles
  * whose ARNs don't contain the model name.
@@ -1058,13 +1024,16 @@ function convertMessages(
 
   // Cache points include their entire prefix, so none may follow transient runtime context.
   if (cachePoint && result.at(-1)?.role === ConversationRole.USER) {
-    const cacheAnchor = result.findLast(
-      (message, index) =>
-        message.role === ConversationRole.USER &&
-        (firstVolatileMessageIndex === undefined || index < firstVolatileMessageIndex),
-    );
-    if (cacheAnchor?.content) {
-      cacheAnchor.content.push({ cachePoint });
+    // Keep the prior checkpoint reachable when a new turn exceeds AWS's 20-block lookback.
+    let remaining = 2;
+    for (let index = (firstVolatileMessageIndex ?? result.length) - 1; index >= 0; index--) {
+      const message = result[index];
+      if (message?.role === ConversationRole.USER && message.content) {
+        message.content.push({ cachePoint });
+        if (--remaining === 0) {
+          break;
+        }
+      }
     }
   }
 

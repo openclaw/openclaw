@@ -35,17 +35,9 @@ export async function runHostedStopNativeProbe(params: {
   let requested = false;
   let responseFinished = false;
   let closed = false;
-  await runGatewayLoop({
+  const code = await runGatewayLoop({
     ownsProcessLifecycle: true,
     lockPort: params.port,
-    runtime: {
-      log: () => {},
-      error: () => {},
-      exit: (code) => {
-        appendEvent("gateway-exit", { code });
-        process.exit(code);
-      },
-    },
     completeBoot: (completion) => appendEvent("boot-completion", completion),
     start: async (options) => {
       const host = options?.hostLifecycle;
@@ -151,12 +143,14 @@ export async function runHostedStopNativeProbe(params: {
             server.close((error) => (error ? reject(error) : resolve()));
           });
           child.send("stop");
-          const [code, signal] = await childExit;
-          assert.equal(code, 0);
-          assert.equal(signal, null);
-          appendEvent("descendant-exit", { code });
+          const [childCode, childSignal] = await childExit;
+          assert.equal(childCode, 0);
+          assert.equal(childSignal, null);
+          appendEvent("descendant-exit", { code: childCode });
         },
       };
     },
   });
+  appendEvent("gateway-exit", { code });
+  process.exitCode = code;
 }

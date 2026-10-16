@@ -45,7 +45,6 @@ export type SubagentCompletionMutation =
 
 export type SubagentCompletionRecord = {
   subagent: SubagentRunRecord;
-  version: string;
   cleanupHandled?: boolean;
 };
 

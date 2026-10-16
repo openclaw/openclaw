@@ -49,6 +49,7 @@ export type ApplicationOverlays = {
   subscribe: (listener: (snapshot: ApplicationOverlaySnapshot) => void) => () => void;
   refreshUpdateStatus: ReturnType<typeof createUpdateStatusRefresher>;
   acknowledgeUpdateRun: () => void;
+  captureUpdateTarget: () => () => boolean;
   runUpdate: () => Promise<void>;
   holdUpdate: () => Promise<boolean>;
   diagnoseUpdateFailure: (attemptId: string) => void;

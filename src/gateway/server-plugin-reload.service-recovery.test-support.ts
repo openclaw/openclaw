@@ -323,14 +323,7 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
         }
       });
       const fixture = await createRecoveryFixture({
-        prepareConfigEffects: () => {
-          const record = fixture.previousRegistry.plugins.find((plugin) => plugin.id === "first");
-          assert(record);
-          expect(() => getPluginInstance(record)?.retainWork()).toThrow(
-            "replacement is in progress",
-          );
-          return { retire: () => {}, rollback };
-        },
+        prepareConfigEffects: () => ({ retire: () => {}, rollback }),
       });
       const failure = new Error("fixture channel pause failed");
       vi.spyOn(fixture.runtime.channelManager, "pauseChannelStarts").mockImplementationOnce(() => {

@@ -1,5 +1,5 @@
 import type { WorkerInferenceTerminalOutcome } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { sanitizeOpenAIReasoningSignature } from "../../agents/transcript-redact.js";
+import { sanitizeOpenAIReasoningSignature } from "../../agents/transcript-sanitize.js";
 import type { AssistantMessage, Usage } from "../../llm/types.js";
 import {
   projectWorkerAssistantContent,
@@ -32,12 +32,14 @@ export function inferenceError(
   reason: Extract<WorkerInferenceTerminalOutcome, { type: "error" }>["reason"],
   usage?: Usage,
   message: string = ERROR_MESSAGES[reason],
+  retryAfterMs?: number | null,
 ): WorkerInferenceTerminalOutcome {
   return {
     type: "error",
     reason,
     message,
     ...(usage ? { usage: structuredClone(usage) } : {}),
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
   };
 }
 

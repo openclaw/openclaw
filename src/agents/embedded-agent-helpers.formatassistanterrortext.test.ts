@@ -63,6 +63,15 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(makeAssistantError(raw))).toBe(expected);
   });
 
+  it("explains client-restricted free tiers without exposing the provider response", () => {
+    const msg = makeAssistantError(
+      '403 {"type":"error","error":{"type":"FreeTierError","message":"OpenCode\\u0027s free tier can only be used from within OpenCode"}}',
+    );
+    expect(formatUserFacingAssistantErrorText(msg, { provider: "opencode" })).toBe(
+      "This model's free tier is limited to the provider's own client. Choose another model or use a paid plan.",
+    );
+  });
+
   it("surfaces provider-specific rate limit message with reset time (#54433)", () => {
     const msg = makeAssistantError(
       "You have hit your ChatGPT usage limit (go plan). Try again in ~4381 min.",

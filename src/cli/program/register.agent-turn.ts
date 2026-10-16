@@ -110,6 +110,12 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       "--config <path>",
       "Run against this config file instead of the ambient config (pins a reproducible run)",
     )
+    .option(
+      "--config-override <json>",
+      "Overlay a JSON object on this run's config (repeatable; does not save changes)",
+      collectOption,
+      [],
+    )
     .option("--isolated", "Ignore the ambient config and run against exec defaults only", false)
     .option("--model <provider/model>", "Use an explicit primary model for this run")
     .option("--code-mode <mode>", "Tool mode: direct | auto | code")

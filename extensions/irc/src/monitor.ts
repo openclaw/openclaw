@@ -129,7 +129,7 @@ export async function monitorIrcProvider(
     if (stopped || abortSignal.aborted || reconnectTimer) {
       return undefined;
     }
-    opts.statusSink?.({ lifecycle: "recovering" });
+    opts.statusSink?.({ connected: false, lifecycle: "recovering" });
     const delayMs = reconnectBackoff.nextDelayMs();
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
@@ -139,6 +139,7 @@ export async function monitorIrcProvider(
         }
         const message = error instanceof Error ? error.message : String(error);
         logger.error(`[${account.accountId}] IRC reconnect failed: ${message}`);
+        opts.statusSink?.({ lastError: message });
         scheduleReconnect();
       });
     }, delayMs);
@@ -154,14 +155,9 @@ export async function monitorIrcProvider(
       buildIrcConnectOptions(account, {
         channels: account.config.channels,
         abortSignal,
-        onLine: (line) => {
-          if (core.logging.shouldLogVerbose()) {
-            logger.debug?.(`[${account.accountId}] << ${line}`);
-          }
-        },
         onNotice: (text, target) => {
           if (core.logging.shouldLogVerbose()) {
-            logger.debug?.(`[${account.accountId}] notice ${target ?? ""}: ${text}`);
+            logger.debug?.(`[${account.accountId}] notice ${target ?? ""} len=${text.length}`);
           }
         },
         onError: (error) => {
@@ -176,6 +172,7 @@ export async function monitorIrcProvider(
             activeConnectionEpoch = null;
           }
           client = null;
+          opts.statusSink?.({ lastDisconnect: { at: Date.now() } });
           const delayMs = scheduleReconnect();
           if (delayMs !== undefined) {
             logger.warn?.(

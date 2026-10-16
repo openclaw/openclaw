@@ -98,6 +98,7 @@ export async function prepareCodexAttemptContext(
   };
   const hookContext = {
     runId: params.runId,
+    config: params.config,
     agentId: sessionAgentId,
     sessionKey: contextSessionKey,
     sessionId: params.sessionId,
@@ -141,6 +142,9 @@ export async function prepareCodexAttemptContext(
     await bootstrapHarnessContextEngine({
       hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
+      ...(runtimeParams.authoredContextTokenCap && effectiveContextTokenBudget
+        ? { tokenBudget: effectiveContextTokenBudget }
+        : {}),
       sessionId: runtimeParams.sessionId,
       sessionKey: contextSessionKey,
       sessionFile: runtimeParams.sessionFile,

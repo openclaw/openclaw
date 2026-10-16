@@ -443,7 +443,7 @@ export type ChannelMessagingAdapter = {
    * targets before plugin-specific normalization.
    */
   targetPrefixes?: readonly string[];
-  /** Re-resolve the current owner when channel behavior exceeds generic bindings. */
+  /** @deprecated Use prepareConversationRouteOwnersAsync for worker-backed route ownership. */
   resolveConversationRouteOwner?: (params: {
     cfg: OpenClawConfig;
     accountId: string;
@@ -469,13 +469,15 @@ export type ChannelMessagingAdapter = {
     | { kind: "unavailable" }
     | null
     | undefined;
-  /** Prepare current binding reads together; returned resolvers are consumed synchronously in input order. */
-  prepareConversationRouteOwners?: (
+  /** Prepare binding facts in workers; returned resolvers run under the current effect grant. */
+  prepareConversationRouteOwnersAsync?: (
     params: readonly Parameters<
       NonNullable<ChannelMessagingAdapter["resolveConversationRouteOwner"]>
     >[0][],
-    inspectBindings: (refs: readonly ConversationRef[]) => readonly SessionBindingInspection[],
-  ) => readonly NonNullable<ChannelMessagingAdapter["resolveConversationRouteOwner"]>[];
+    inspectBindings: (
+      refs: readonly ConversationRef[],
+    ) => Promise<() => readonly SessionBindingInspection[]>,
+  ) => Promise<readonly NonNullable<ChannelMessagingAdapter["resolveConversationRouteOwner"]>[]>;
   /** DM targets rebuilt from session keys require an explicit `user:` kind prefix. */
   directTargetStyle?: "user-prefixed";
   /** Equality rule for ids carried by prefixed outbound targets. */
@@ -637,6 +639,10 @@ export type ChannelMessagingAdapter = {
 };
 
 export type ChannelAgentPromptAdapter = {
+  /** Native controls that can present and resolve structured user questions. */
+  questionInputMode?: "buttons";
+  /** The channel supplies its own inline-button guidance through messageToolHints. */
+  customInlineButtonHint?: boolean;
   messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
   messageToolCapabilities?: (
     params: Parameters<NonNullable<ChannelAgentPromptAdapter["messageToolHints"]>>[0],
@@ -740,6 +746,10 @@ export type ChannelMessageActionAdapter = {
   describeMessageTool: (
     params: ChannelMessageActionDiscoveryContext,
   ) => ChannelMessageToolDiscovery | null | undefined;
+  /** Runtime discovery that may read worker-owned account state. Preferred by the host. */
+  describeMessageToolAsync?: (
+    params: ChannelMessageActionDiscoveryContext,
+  ) => Promise<ChannelMessageToolDiscovery | null | undefined>;
   /** Delegate conversation-read admission to the provider for registrations the host permits. */
   providerOwnedReadGates?: true | readonly ChannelMessageActionName[];
   /**

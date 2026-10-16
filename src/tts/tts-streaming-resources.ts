@@ -43,23 +43,10 @@ export async function captureSpeechProviderStream(
       return canceled;
     }));
   try {
-    // A failing stream getter must not hide its release callback, or vice versa.
-    const [releaseField, streamField] = await Promise.allSettled([
-      invoke(() => {
-        providerRelease = synthesis.release;
-      }),
-      invoke(() => {
-        source = synthesis.audioStream;
-      }),
-    ]);
-    const failures: unknown[] = [streamField, releaseField].flatMap((field) =>
-      field.status === "rejected" ? [field.reason] : [],
-    );
-    if (failures.length > 0) {
-      throw failures.length === 1
-        ? failures[0]
-        : new AggregateError(failures, formatErrorMessage(failures[0]), { cause: failures[0] });
-    }
+    await invoke(() => {
+      providerRelease = synthesis.release;
+      source = synthesis.audioStream;
+    });
     reader = source?.getReader();
     closed = reader?.closed.then(
       () => ({ ok: true as const, value: undefined }),

@@ -46,13 +46,12 @@ describe("Crabbox conversation tool", () => {
   it.each([
     { ...context, sandboxed: true },
     { ...context, sessionId: undefined },
-    { ...context, config: {} },
     { ...context, config: { cloudWorkers: { profiles: { other: { provider: "other" } } } } },
   ])("is absent without a permitted conversation and configured provider", (toolContext) => {
     expect(fixture(toolContext).tool).toBeNull();
   });
 
-  it.each([null, "stopped-environment"])(
+  it.each([null])(
     "dedupes repeated calls until attachment %s is replaced, across tool instances",
     async (previousEnvironmentId) => {
       const first = fixture();

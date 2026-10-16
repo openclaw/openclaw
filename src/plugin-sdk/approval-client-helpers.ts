@@ -9,6 +9,7 @@ import { getExecApprovalReplyMetadata } from "../infra/exec-approval-reply.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequest } from "../infra/system-agent-approvals.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import { normalizeAccountId } from "./routing.js";
@@ -115,7 +116,7 @@ export function isChannelExecApprovalTargetRecipient(params: {
  * Build the common approval-client profile used by channel plugins.
  * The returned helpers centralize enablement, approver auth, request filters, and local prompt suppression.
  */
-export function createChannelExecApprovalProfile(params: {
+type ChannelExecApprovalProfileParams = {
   /** Resolves channel approval config for the current account. */
   resolveConfig: (params: ApprovalProfileParams) => ChannelApprovalConfig | undefined;
   /** Resolves normalized approver ids for the current account. */
@@ -130,7 +131,25 @@ export function createChannelExecApprovalProfile(params: {
   fallbackAgentIdFromSessionKey?: boolean;
   /** Allows local prompt suppression even when the remote approval client is disabled. */
   requireClientEnabledForLocalPromptSuppression?: boolean;
-}) {
+};
+
+/** @deprecated Use createChannelExecApprovalProfileAsync for worker-owned account matching. Final compatibility day: 2026-12-31. */
+export function createChannelExecApprovalProfile(params: ChannelExecApprovalProfileParams) {
+  warnPluginSdkDeprecation({
+    family: "approval-session-routing",
+    method: "createChannelExecApprovalProfile",
+    replacement: "createChannelExecApprovalProfileAsync",
+  });
+  const profile = createChannelExecApprovalProfileBase(params);
+  return {
+    ...profile,
+    shouldHandleRequest: (input: ApprovalProfileParams & { request: ApprovalRequest }) =>
+      (!params.matchesRequestAccount || params.matchesRequestAccount(input)) &&
+      profile.shouldHandleRequest(input),
+  };
+}
+
+function createChannelExecApprovalProfileBase(params: ChannelExecApprovalProfileParams) {
   const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;
 
   const isClientEnabled = (input: ApprovalProfileParams): boolean => {
@@ -162,9 +181,6 @@ export function createChannelExecApprovalProfile(params: {
   const shouldHandleRequest = (
     input: ApprovalProfileParams & { request: ApprovalRequest },
   ): boolean => {
-    if (params.matchesRequestAccount && !params.matchesRequestAccount(input)) {
-      return false;
-    }
     const config = params.resolveConfig(input);
     const approverCount = params.resolveApprovers(input).length;
     if (
@@ -205,5 +221,25 @@ export function createChannelExecApprovalProfile(params: {
     shouldHandleRequest,
     /** Whether a local approval prompt should be suppressed for an already-rendered payload. */
     shouldSuppressLocalPrompt,
+  };
+}
+
+/** Build a profile that awaits worker-owned account eligibility. */
+export function createChannelExecApprovalProfileAsync(
+  params: Omit<ChannelExecApprovalProfileParams, "matchesRequestAccount"> & {
+    matchesRequestAccount?: (
+      params: ApprovalProfileParams & { request: ApprovalRequest },
+    ) => boolean | Promise<boolean>;
+  },
+) {
+  const profile = createChannelExecApprovalProfileBase({
+    ...params,
+    matchesRequestAccount: undefined,
+  });
+  return {
+    ...profile,
+    shouldHandleRequest: async (input: ApprovalProfileParams & { request: ApprovalRequest }) =>
+      profile.shouldHandleRequest(input) &&
+      (!params.matchesRequestAccount || (await params.matchesRequestAccount(input))),
   };
 }

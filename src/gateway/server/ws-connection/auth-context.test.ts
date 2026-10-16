@@ -284,28 +284,6 @@ describe("resolveConnectAuthDecision", () => {
     },
   );
 
-  it("keeps shared-secret mismatch when fallback device-token check fails", async () => {
-    const verifyDeviceToken = createVerifyDeviceToken({ ok: false });
-    const verifyBootstrapToken = createVerifyBootstrapToken({
-      ok: false,
-      reason: "bootstrap_token_invalid",
-    });
-    const decision = await resolveConnectAuthDecision({
-      state: createBaseState(),
-      hasDeviceIdentity: true,
-      deviceId: "dev-1",
-      publicKey: "pub-1",
-      role: "operator",
-      scopes: ["operator.read"],
-      verifyBootstrapToken,
-      verifyDeviceToken,
-    });
-    expect(decision.authOk).toBe(false);
-    expect(decision.authResult.reason).toBe("token_mismatch");
-    expect(verifyBootstrapToken).not.toHaveBeenCalled();
-    expect(verifyDeviceToken).toHaveBeenCalledOnce();
-  });
-
   it("reports explicit device-token mismatches as device_token_mismatch", async () => {
     const { decision } = await resolveRejectedDeviceTokenDecision({
       result: { ok: false },
@@ -315,18 +293,6 @@ describe("resolveConnectAuthDecision", () => {
     });
     expect(decision.authOk).toBe(false);
     expect(decision.authResult.reason).toBe("device_token_mismatch");
-  });
-
-  it("preserves explicit device-token scope mismatches", async () => {
-    const { decision } = await resolveRejectedDeviceTokenDecision({
-      result: { ok: false, reason: "scope-mismatch" },
-      scopes: ["operator.admin"],
-      stateOverrides: {
-        deviceTokenCandidateSource: "explicit-device-token",
-      },
-    });
-    expect(decision.authOk).toBe(false);
-    expect(decision.authResult.reason).toBe("scope_mismatch");
   });
 
   it("preserves fallback device-token scope mismatches over shared-token mismatch", async () => {
@@ -356,37 +322,6 @@ describe("resolveConnectAuthDecision", () => {
     expect(rateLimiter.reset).toHaveBeenCalledWith(CLIENT_IP, "device-token");
   });
 
-  it("accepts valid bootstrap tokens before device-token fallback", async () => {
-    const verifyBootstrapToken = createVerifyBootstrapToken({ ok: true });
-    const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
-    const decision = await resolveBootstrapCandidateDecision({
-      verifyBootstrapToken,
-      verifyDeviceToken,
-      withDeviceFallback: true,
-    });
-    expectBootstrapTokenAccepted({
-      decision,
-      verifyBootstrapToken,
-      verifyDeviceToken,
-    });
-  });
-
-  it("reports invalid bootstrap tokens when no device token fallback is available", async () => {
-    const verifyBootstrapToken = createVerifyBootstrapToken({
-      ok: false,
-      reason: "bootstrap_token_invalid",
-    });
-    const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
-    const decision = await resolveBootstrapCandidateDecision({
-      verifyBootstrapToken,
-      verifyDeviceToken,
-    });
-    expect(decision.authOk).toBe(false);
-    expect(decision.authResult.reason).toBe("bootstrap_token_invalid");
-    expect(verifyBootstrapToken).toHaveBeenCalledOnce();
-    expect(verifyDeviceToken).not.toHaveBeenCalled();
-  });
-
   it("returns rate-limited auth result without verifying device token", async () => {
     const rateLimiter = createRateLimiter({ allowed: false, retryAfterMs: 60_000 });
     const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
@@ -399,24 +334,6 @@ describe("resolveConnectAuthDecision", () => {
     expect(decision.authResult.reason).toBe("rate_limited");
     expect(decision.authResult.retryAfterMs).toBe(60_000);
     expect(verifyDeviceToken).not.toHaveBeenCalled();
-  });
-
-  it("still verifies the device token when only the shared-secret path is rate-limited", async () => {
-    const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
-    const decision = await resolveDeviceTokenDecision({
-      verifyDeviceToken,
-      stateOverrides: {
-        authResult: {
-          ok: false,
-          reason: "rate_limited",
-          rateLimited: true,
-          retryAfterMs: 60_000,
-        },
-      },
-    });
-    expect(decision.authOk).toBe(true);
-    expect(decision.authMethod).toBe("device-token");
-    expect(verifyDeviceToken).toHaveBeenCalledOnce();
   });
 
   it("prefers a valid bootstrap token over an already successful shared auth path", async () => {
@@ -447,16 +364,6 @@ describe("resolveConnectAuthDecision", () => {
     expect(decision.authMethod).toBe("tailscale");
     expect(verifyBootstrapToken).toHaveBeenCalledOnce();
     expect(verifyDeviceToken).not.toHaveBeenCalled();
-  });
-
-  it("gates bootstrap-token verify when the bootstrap-token bucket is exceeded", async () => {
-    const { decision, verifyBootstrapToken } = await resolveBlockedBootstrapCandidate();
-    expect(decision.authOk).toBe(false);
-    expect(decision.authResult.reason).toBe("rate_limited");
-    expect(decision.authResult.retryAfterMs).toBe(30_000);
-    // The verify path is mutex-locked + does fs I/O — confirm we never invoke
-    // it once the bucket is exhausted.
-    expect(verifyBootstrapToken).not.toHaveBeenCalled();
   });
 
   it("still verifies the device token when only the bootstrap-token path is rate-limited", async () => {

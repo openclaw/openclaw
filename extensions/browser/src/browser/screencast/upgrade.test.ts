@@ -68,7 +68,7 @@ describe("browser screencast WebSocket upgrade", () => {
     const token = mintBrowserScreencastToken(params).token;
     const ws = connect(token);
     await once(ws, "open");
-    expect(mocks.attach).toHaveBeenCalledWith(params, expect.any(WebSocket));
+    expect(mocks.attach).toHaveBeenCalledWith(params, expect.any(WebSocket), undefined);
     expect(await rejected(token)).toBe(401);
   });
 

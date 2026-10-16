@@ -165,13 +165,9 @@ describe("private inference HTTP relay", () => {
     );
   });
 
-  it("rejects OAuth use after refresh loses the admitted turn and before physical I/O loses the grant", async () => {
-    let loseAdmission = true;
+  it("rejects OAuth use when asynchronous transport preparation loses the grant", async () => {
     let grantCurrent = true;
     const resolve = vi.fn(async () => {
-      if (loseAdmission) {
-        registration.release();
-      }
       return {
         token: "synthetic-access",
         assertCurrent: () => {
@@ -181,10 +177,6 @@ describe("private inference HTTP relay", () => {
         },
       };
     });
-    const { proxy, body, registration } = await fixture(true, undefined, { resolve });
-    expect((await post(proxy.baseUrl + "/responses", body)).status).toBe(502);
-    expect(transport.fetch).not.toHaveBeenCalled();
-    loseAdmission = false;
     const next = await fixture(true, undefined, { resolve });
     let writes = 0;
     transport.fetch.mockImplementation(async (args) => {

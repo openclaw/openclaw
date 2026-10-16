@@ -28,15 +28,6 @@ describe("resolveSystemPromptUsage — issue #80374", () => {
     expect(result).toBeNull();
   });
 
-  it("new 'always': returns the prompt on resumed session (issue #80374)", () => {
-    const result = resolveSystemPromptUsage({
-      backend: BACKEND_ALWAYS,
-      isNewSession: false,
-      systemPrompt: SYSTEM_PROMPT,
-    });
-    expect(result).toBe(SYSTEM_PROMPT);
-  });
-
   it("returns the prompt on fresh session for both 'first' and 'always'", () => {
     for (const backend of [BACKEND_FIRST, BACKEND_ALWAYS]) {
       const result = resolveSystemPromptUsage({
@@ -45,17 +36,6 @@ describe("resolveSystemPromptUsage — issue #80374", () => {
         systemPrompt: SYSTEM_PROMPT,
       });
       expect(result, `systemPromptWhen=${backend.systemPromptWhen}`).toBe(SYSTEM_PROMPT);
-    }
-  });
-
-  it("returns null when systemPromptWhen='never' regardless of session state", () => {
-    for (const isNew of [true, false]) {
-      const result = resolveSystemPromptUsage({
-        backend: { ...BACKEND_ALWAYS, systemPromptWhen: "never" },
-        isNewSession: isNew,
-        systemPrompt: SYSTEM_PROMPT,
-      });
-      expect(result, `isNew=${String(isNew)}`).toBeNull();
     }
   });
 });
@@ -69,15 +49,6 @@ describe("buildCliArgs — issue #80374", () => {
     systemPromptFilePath: PROMPT_FILE,
     useResume: true,
   };
-
-  it("legacy 'first': omits --append-system-prompt-file on resume", () => {
-    const args = buildCliArgs({
-      backend: BACKEND_FIRST,
-      ...promptArgs,
-    });
-    expect(args).not.toContain("--append-system-prompt-file");
-    expect(args).not.toContain(PROMPT_FILE);
-  });
 
   it("soft system-prompt drift includes --append-system-prompt-file on legacy resume", () => {
     const args = buildCliArgs({

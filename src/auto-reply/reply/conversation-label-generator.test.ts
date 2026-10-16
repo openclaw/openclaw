@@ -1,7 +1,12 @@
 /** Tests generated conversation labels for reply sessions. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import { createDiagnosticLogRecordCapture } from "../../logging/test-helpers/diagnostic-log-capture.js";
+import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 
 const runIsolatedCompletion = vi.hoisted(() => vi.fn());
 const resolveSimpleCompletionSelectionForAgent = vi.hoisted(() => vi.fn());
@@ -42,6 +47,124 @@ beforeEach(() => {
 });
 
 describe("generateConversationLabel", () => {
+  it("uses utility backups for implicit thread and topic labels", async () => {
+    runIsolatedCompletion
+      .mockRejectedValueOnce(
+        new FailoverError("Fixture server unavailable", { reason: "server_error" }),
+      )
+      .mockResolvedValueOnce({ text: "Garden planning" });
+
+    await expect(
+      generateConversationLabel({
+        cfg: {
+          agents: {
+            defaults: {
+              model: "openai/gpt-main",
+              utilityModel: {
+                primary: "openai/gpt-mini",
+                fallbacks: ["openai/utility-backup"],
+              },
+            },
+          },
+          plugins: { enabled: false },
+        },
+        agentId: "main",
+        userMessage: "Plan a garden.",
+        prompt: "Generate a label.",
+      }),
+    ).resolves.toBe("Garden planning");
+    expect(runIsolatedCompletion.mock.calls.map(([request]) => request.model)).toEqual([
+      "gpt-mini",
+      "utility-backup",
+    ]);
+  });
+
+  it("warns once per model per minute without exposing provider errors or title source", async () => {
+    const warningLog = createWarnLogCapture("conversation-label");
+    const logs = createDiagnosticLogRecordCapture();
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    runIsolatedCompletion.mockRejectedValue(new Error("secret-bearing provider failure"));
+    const params = {
+      cfg: {},
+      modelRef: "warning-provider/always-thinking@private-profile",
+      prompt: "Generate a title",
+      userMessage: "Private title source",
+    };
+    const generate = () =>
+      expect(generateConversationLabel(params)).rejects.toThrow(
+        "conversation label generation failed",
+      );
+    try {
+      await generate();
+      now += 30_000;
+      await generate();
+      now += 30_001;
+      await generate();
+      await logs.flush();
+      const warnings = logs.records.filter((record) =>
+        record.message.includes("Conversation label generation failed"),
+      );
+      expect(warnings).toHaveLength(2);
+      for (const warning of warnings) {
+        expect(warning.message).toContain("warning-provider/always-thinking");
+        expect(warning.message).toContain("utilityModel");
+        expect(JSON.stringify(warning)).not.toMatch(
+          /secret-bearing|private-profile|Private title source/,
+        );
+      }
+    } finally {
+      clock.mockRestore();
+      logs.cleanup();
+      warningLog.cleanup();
+    }
+  });
+
+  it.each<{ primary: string; sessionRuntime?: string }>([
+    { primary: "claude-sonnet" },
+    { primary: "claude-opus", sessionRuntime: "openclaw" },
+  ])(
+    "keeps the utility label on its selected runtime ($primary, session=$sessionRuntime)",
+    async ({ primary, sessionRuntime }) => {
+      const utilityModel = "anthropic/claude-haiku";
+      const cfg = {
+        agents: {
+          defaults: {
+            model: `anthropic/${primary}`,
+            models: { [`anthropic/${primary}`]: { agentRuntime: { id: "claude-cli" } } },
+          },
+        },
+      };
+      const metadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "anthropic",
+            providers: ["anthropic"],
+            modelCatalog: {
+              providers: { anthropic: { defaultUtilityModel: "claude-haiku", models: [] } },
+            },
+          },
+        ],
+      });
+      await withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
+        generateConversationLabelWithFallback({
+          cfg,
+          agentId: "main",
+          utilityModelRef: utilityModel,
+          regularModelRef: `anthropic/${primary}`,
+          agentHarnessRuntimeOverride: sessionRuntime,
+          prompt: "Return a session title.",
+          userMessage: "Plan a garden.",
+        }),
+      );
+      expect(runIsolatedCompletion).toHaveBeenCalledOnce();
+      expect(runIsolatedCompletion.mock.calls[0]?.[0]).toMatchObject({
+        model: "claude-haiku",
+        agentHarnessRuntimeOverride: sessionRuntime ?? "claude-cli",
+      });
+    },
+  );
+
   it("uses one explicit model and timeout when supplied", async () => {
     await generateConversationLabel({
       userMessage: "Message",
@@ -62,7 +185,7 @@ describe("generateConversationLabel", () => {
     );
   });
 
-  it.each(["active", "retired", "aborted"] as const)(
+  it.each(["retired", "aborted"] as const)(
     "allows utility fallback only while its caller is active (%s)",
     async (state) => {
       const abort = new AbortController();
@@ -89,15 +212,8 @@ describe("generateConversationLabel", () => {
           }
         },
       });
-      if (state !== "active") {
-        await expect(label).rejects.toBe(expired);
-        expect(runIsolatedCompletion).toHaveBeenCalledOnce();
-        return;
-      }
-      await expect(label).resolves.toBe("Primary title");
-
-      expect(runIsolatedCompletion).toHaveBeenCalledTimes(2);
-      expect(runIsolatedCompletion.mock.calls[1]?.[0]?.model).toBe("gpt-main");
+      await expect(label).rejects.toBe(expired);
+      expect(runIsolatedCompletion).toHaveBeenCalledOnce();
     },
   );
 
@@ -126,32 +242,125 @@ describe("generateConversationLabelWithFallback", () => {
     preferredProfile: "work",
   };
 
-  it("skips a denied utility model and carries the requester into the permitted regular fallback", async () => {
-    const cfg = { agents: { entries: { main: {} }, defaults: { model: "label-test/regular" } } };
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "label-reader",
-      scopes: ["operator.write"],
-      assertCurrent: () => {},
-      modelPolicy: prepareOperatorModelPolicy({
-        cfg,
-        policy: { sourceAgent: "main" },
-        manifestPlugins: [],
-      }),
-    });
+  it("does not repeat a regular model already attempted by the utility chain", async () => {
+    runIsolatedCompletion.mockRejectedValue(
+      new FailoverError("Fixture server unavailable", { reason: "server_error" }),
+    );
     await expect(
       generateConversationLabelWithFallback({
         ...params,
-        cfg,
-        agentId: "main",
-        utilityModelRef: "label-test/utility",
-        regularModelRef: "label-test/regular",
-        operatorAuthority,
+        cfg: {
+          agents: {
+            defaults: {
+              utilityModel: {
+                primary: "openai/gpt-mini",
+                fallbacks: ["openai/gpt-main"],
+              },
+            },
+          },
+          plugins: { enabled: false },
+        },
       }),
-    ).resolves.toBe("Topic label");
-    expect(runIsolatedCompletion).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ provider: "label-test", model: "regular", operatorAuthority }),
-    );
+    ).rejects.toThrow("conversation label generation failed");
+    expect(runIsolatedCompletion.mock.calls.map(([request]) => request.model)).toEqual([
+      "gpt-mini",
+      "gpt-main",
+    ]);
   });
+
+  it.each(["utility backup", "regular model", "exhausted"] as const)(
+    "uses the utility chain before the existing label recovery: %s",
+    async (outcome) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "label-test/main", fallbacks: ["label-test/main-backup"] },
+            utilityModel: {
+              primary: "label-test/utility",
+              fallbacks: ["label-test/utility-backup"],
+            },
+          },
+        },
+        plugins: { enabled: false },
+      };
+      runIsolatedCompletion.mockImplementation(async ({ model }) => {
+        if (
+          (model === "utility-backup" && outcome === "utility backup") ||
+          (model === "main" && outcome === "regular model")
+        ) {
+          return { text: "Garden planning" };
+        }
+        throw new FailoverError("Fixture server unavailable", { reason: "server_error" });
+      });
+
+      const label = generateConversationLabelWithFallback({
+        ...params,
+        cfg,
+        utilityModelRef: "label-test/utility",
+        regularModelRef: "label-test/main",
+      });
+
+      if (outcome === "exhausted") {
+        await expect(label).rejects.toThrow("conversation label generation failed");
+      } else {
+        await expect(label).resolves.toBe("Garden planning");
+      }
+      expect(runIsolatedCompletion.mock.calls.map(([request]) => request.model)).toEqual(
+        outcome === "utility backup"
+          ? ["utility", "utility-backup"]
+          : ["utility", "utility-backup", "main"],
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "skips a denied utility primary: utility fallback=%s",
+    async (fallback) => {
+      const cfg = {
+        agents: {
+          entries: { main: {} },
+          defaults: {
+            model: "label-test/regular",
+            utilityModel: {
+              primary: "label-test/utility",
+              fallbacks: fallback ? ["label-test/backup"] : [],
+            },
+          },
+        },
+      };
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "label-reader",
+        scopes: ["operator.write"],
+        assertCurrent: () => {},
+        modelPolicy: prepareOperatorModelPolicy({
+          cfg,
+          policy: {
+            sourceAgent: "main",
+            allow: ["label-test/*"],
+            deny: ["label-test/utility"],
+          },
+          manifestPlugins: [],
+        }),
+      });
+      await expect(
+        generateConversationLabelWithFallback({
+          ...params,
+          cfg,
+          agentId: "main",
+          utilityModelRef: "label-test/utility",
+          regularModelRef: "label-test/regular",
+          operatorAuthority,
+        }),
+      ).resolves.toBe("Topic label");
+      expect(runIsolatedCompletion).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          provider: "label-test",
+          model: fallback ? "backup" : "regular",
+          operatorAuthority,
+        }),
+      );
+    },
+  );
 
   it("records an exhausted failure after fallback normalization rejects the result", async () => {
     runIsolatedCompletion

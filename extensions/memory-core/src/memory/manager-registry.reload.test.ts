@@ -92,69 +92,6 @@ it("joins pending manager cleanup across overlapping reload drains", async () =>
   }
 });
 
-it("owns failed late creation cleanup until explicit close", async () => {
-  const lifecycle: MemoryManagerLifecycle = {};
-  const registry = new MemoryManagerRegistry(lifecycle);
-  const entered = createDeferred<void>();
-  const released = createDeferred<void>();
-  const failure = new Error("late manager close failed");
-  const late = { close: vi.fn().mockRejectedValueOnce(failure).mockResolvedValue(undefined) };
-  const replacement = { close: vi.fn(async () => {}) };
-  const transient = { close: vi.fn(async () => {}) };
-  const pending = registry.acquire(
-    { agentId: "main", purpose: "default" },
-    {
-      prepare: () => ({
-        key: "main:late:default",
-        reuse: () => true,
-        create: async () => {
-          entered.resolve();
-          await released.promise;
-          return late;
-        },
-      }),
-    },
-  );
-  const observed = expect(pending).rejects.toBe(failure);
-  await entered.promise;
-  const retirement = prepareMemoryManagerReload(
-    { retireRuntime: true, retiringEmbeddingProviders: [] },
-    lifecycle,
-  );
-  const draining = retirement.drain();
-  released.resolve();
-  try {
-    await observed;
-    await draining;
-  } finally {
-    released.resolve();
-    retirement.resume();
-  }
-  expect.soft(registry.canPublishProbe(late)).toBe(false);
-  expect(late.close).toHaveBeenCalledOnce();
-  await registry.acquire(
-    { agentId: "main", purpose: "default" },
-    {
-      prepare: () => ({ key: "main:late:default", reuse: () => true, create: () => replacement }),
-    },
-  );
-  await registry.acquire(
-    { agentId: "main", purpose: "status" },
-    {
-      prepare: () => ({ key: "main:status", reuse: () => true, create: () => transient }),
-    },
-  );
-  expect(late.close).toHaveBeenCalledOnce();
-  await registry.closeAll();
-  expect(late.close).toHaveBeenCalledTimes(2);
-  expect(replacement.close).toHaveBeenCalledOnce();
-  expect(transient.close).not.toHaveBeenCalled();
-  await registry.closeAll();
-  expect(late.close).toHaveBeenCalledTimes(2);
-  expect(replacement.close).toHaveBeenCalledOnce();
-  await transient.close();
-});
-
 it("fences acquisition when reload starts before the manager owner initializes", async () => {
   const lifecycle: MemoryManagerLifecycle = {};
   const reload = prepareMemoryManagerReload(

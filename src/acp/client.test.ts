@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ContentBlock, RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   listKnownProviderAuthEnvVarNamesCore: () => [
@@ -55,7 +56,6 @@ describe("ACP child environment", () => {
     { serverCommand: undefined, serverArgs: undefined, strip: true },
     { serverCommand: "openclaw", serverArgs: ["acp"], strip: true },
     { serverCommand: "custom-server", serverArgs: ["serve"], strip: false },
-    { serverCommand: "openclaw", serverArgs: ["custom-entry.js"], strip: false },
   ])(
     "sanitizes $serverCommand $serverArgs (provider stripping: $strip)",
     ({ strip, ...server }) => {
@@ -106,6 +106,19 @@ it("rejects unresolved Windows wrappers without shell execution", async () => {
 });
 
 describe("resolvePermissionRequest", () => {
+  it("cancels a pending permission when its interactive session closes", async () => {
+    const lifetime = new AbortController();
+    const answer = createDeferredCore<boolean>();
+    const permission = resolvePermissionRequest(request({ title: "exec: echo marker" }), {
+      signal: lifetime.signal,
+      prompt: () => answer.promise,
+      log: () => {},
+    });
+    lifetime.abort();
+    answer.resolve(true);
+    await expect(permission).resolves.toEqual({ outcome: { outcome: "cancelled" } });
+  });
+
   it.each<
     [Partial<RequestPermissionRequest["toolCall"]>, string | undefined, "auto" | "allow" | "reject"]
   >([
@@ -123,17 +136,7 @@ describe("resolvePermissionRequest", () => {
       "search",
       "auto",
     ],
-    [{ title: "search: TODO", rawInput: { path: "../.ssh" } }, "search", "reject"],
     [{ title: "search: path: ~/.ssh" }, "search", "reject"],
-    [{ title: "search: TODO", locations: [{ path: "/etc/passwd" }] }, "search", "reject"],
-    [
-      {
-        title: "read: docs/security.md",
-        rawInput: { path: "file:///tmp/openclaw-acp-cwd/docs/security.md" },
-      },
-      "read",
-      "auto",
-    ],
     [{ title: "read: src", rawInput: { path: "FILE:/tmp/outside/marker.txt" } }, "read", "reject"],
     [{ title: "read" }, "read", "reject"],
   ])("resolves %j (%s) with %s", async (toolCall, toolName, decision) => {

@@ -17,6 +17,7 @@ import {
 } from "../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   UsageCostWorkerReplyError,
   type UsageCostWorkerInput,
@@ -144,7 +145,16 @@ export async function withSessionCostUsageWorkerDatabases<T>(
     const task = (async (): Promise<UsageCostWorkerResult> => {
       try {
         const reply = await runWithSqliteDatabaseAdmissionTurn(
-          [...resources].map((resource) => resource.database.path),
+          // Incognito reads use actor IPC; its sentinel has no physical schema to admit.
+          [...resources]
+            .filter(
+              ({ database }) =>
+                !isIncognitoOpenClawAgentSqlitePath(database.path, {
+                  agentId: database.agentId,
+                  env: input.location.env,
+                }),
+            )
+            .map((resource) => resource.database.path),
           () =>
             lane.pool.run(
               () => {

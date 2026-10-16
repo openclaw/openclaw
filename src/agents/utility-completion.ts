@@ -1,16 +1,26 @@
+import type { Static } from "typebox";
+import type { GatewayCompletionRouteSchema } from "../../packages/gateway-protocol/src/schema/model-runtime-options.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { formatAgentRuntimeName } from "../status/agent-runtime-label.js";
+import { assertOperatorModelAllowed } from "./admitted-run-context.js";
 import {
   resolveIsolatedCompletionRuntime,
   resolveIsolatedCompletionProvider,
 } from "./isolated-completion-route.js";
+import type { runIsolatedCompletion } from "./isolated-completion.js";
 import { hasAvailableAuthForProvider } from "./model-auth.js";
 import {
   prepareModelCatalogDecisions,
   type ModelCatalogDecisionParams,
 } from "./model-catalog-decisions.js";
 import { resolveSimpleCompletionSelectionForAgent } from "./simple-completion-runtime.js";
+import { readUtilityModelSetting } from "./utility-model-setting.js";
 import { resolveAutomaticUtilityRuntimeOverride } from "./utility-model.js";
+
+export type UtilityCompletionAttempt = Pick<
+  Parameters<typeof runIsolatedCompletion>[0],
+  "provider" | "model" | "authProfileId"
+>;
 
 function resolveUtilityCompletionForAgent(
   params: Parameters<typeof resolveSimpleCompletionSelectionForAgent>[0] & {
@@ -43,10 +53,72 @@ function resolveUtilityCompletionForAgent(
     model: selection.modelId,
     authProfileId: selection.profileId ?? params.preferredProfile,
     outputTextPolicy: "strict-visible" as const,
+    thinkLevel: "off" as const,
     agentId: params.agentId,
     agentDir: selection.agentDir,
+    ...(params.useUtilityModel ? { useUtilityModel: true as const } : {}),
     ...(inheritedRuntime ? { agentHarnessRuntimeOverride: inheritedRuntime } : {}),
   };
+}
+
+/** Utility calls share ordinary retry classification without inheriting the main model chain. */
+export async function runUtilityCompletion(
+  params: Parameters<typeof runIsolatedCompletion>[0] & {
+    useUtilityModel?: boolean;
+    onAttempt?: (attempt: UtilityCompletionAttempt) => void;
+  },
+  run?: typeof runIsolatedCompletion,
+) {
+  const { onAttempt, ...request } = params;
+  const complete = run ?? (await import("./isolated-completion.js")).runIsolatedCompletion;
+  const attempt = (candidate: Parameters<typeof runIsolatedCompletion>[0]) => {
+    onAttempt?.(candidate);
+    return complete(candidate);
+  };
+  const utility = params.useUtilityModel
+    ? readUtilityModelSetting(params.config ?? {}, params.agentId)
+    : undefined;
+  const fallbacks = utility?.kind === "disabled" ? undefined : utility?.fallbacks;
+  if (!fallbacks?.length) {
+    if (params.useUtilityModel) {
+      assertOperatorModelAllowed(params.operatorAuthority, {
+        provider: params.provider,
+        model: params.model,
+      });
+    }
+    return await attempt(request);
+  }
+  const { runWithModelFallback } = await import("./model-fallback-runner.js");
+  const result = await runWithModelFallback({
+    cfg: params.config,
+    agentId: params.agentId,
+    agentDir: params.agentDir,
+    provider: params.provider,
+    model: params.model,
+    requestedRouteResolution: "resolved",
+    fallbacksOverride: fallbacks,
+    abortSignal: params.abortSignal,
+    operatorAuthority: params.operatorAuthority,
+    resolveAgentHarnessRuntimeOverride: (provider, model) =>
+      provider === params.provider && model === params.model
+        ? params.agentHarnessRuntimeOverride
+        : undefined,
+    // Isolated completion already owns credential selection and profile rotation.
+    skipAuthProfileRuntime: true,
+    run: (provider, model, options) =>
+      attempt({
+        ...request,
+        provider,
+        model,
+        ...(options?.modelRoutingProvenance.stage === "fallback"
+          ? {
+              authProfileId: provider === params.provider ? params.authProfileId : undefined,
+              agentHarnessRuntimeOverride: undefined,
+            }
+          : {}),
+      }),
+  });
+  return result.result;
 }
 
 /** Keep visible-text retry/fallback in callers; the runtime owns authentication. */
@@ -54,10 +126,9 @@ export async function prepareUtilityCompletionForAgent(
   params: Parameters<typeof resolveUtilityCompletionForAgent>[0],
 ) {
   const prepared = resolveUtilityCompletionForAgent(params);
-  // Execution may refresh credentials. A prepared catalog projection must use
-  // its own captured readiness instead, or an unrelated store can change its label.
   if (
     prepared.agentHarnessRuntimeOverride &&
+    prepared.agentHarnessRuntimeOverride !== "claude-cli" &&
     (await hasAvailableAuthForProvider({
       provider: prepared.provider,
       cfg: params.cfg,
@@ -72,11 +143,7 @@ export async function prepareUtilityCompletionForAgent(
 }
 
 /** Provider-neutral route of a utility completion, as the Gateway reports it. */
-export type UtilityCompletionRuntime = {
-  id: string;
-  kind: "api" | "cli" | "harness";
-  label: string;
-};
+export type UtilityCompletionRuntime = Static<typeof GatewayCompletionRouteSchema>;
 
 export type UtilityCompletionRuntimeParams = Pick<
   ModelCatalogDecisionParams,
@@ -124,13 +191,16 @@ export async function resolveUtilityCompletionRuntimeForAgent(
         pinnedProfileId: prepared.authProfileId,
         profileProvider: provider,
       });
-      if (prepared.agentHarnessRuntimeOverride) {
+      if (
+        prepared.agentHarnessRuntimeOverride &&
+        prepared.agentHarnessRuntimeOverride !== "claude-cli"
+      ) {
         const direct = decisions.evaluateEntry(entry, params.snapshot.routeVariants, "openclaw");
         if (direct.availability === true) {
           delete prepared.agentHarnessRuntimeOverride;
         }
       }
-      const runtime = resolveIsolatedCompletionRuntime({
+      const runtime = await resolveIsolatedCompletionRuntime({
         ...prepared,
         agentDir: params.agentDir ?? prepared.agentDir,
         workspaceDir: params.workspaceDir,

@@ -5,10 +5,8 @@ import {
   PlatformMessageNotDispatchedError,
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
-import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   captureChannelReadAuthority,
-  captureEffectAuthority,
   responseWithRelease,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -44,7 +42,6 @@ const MATTERMOST_REQUEST_TIMEOUT_MS = 30_000;
 // generous text budget but still bound it instead of buffering the whole stream.
 const MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES = 64 * 1024;
 
-export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type MattermostRequestInit = RequestInit & {
   timeoutMs?: number;
   /**
@@ -189,7 +186,6 @@ export async function readMattermostError(
 export function createMattermostClient(params: {
   baseUrl: string;
   botToken: string;
-  fetchImpl?: MattermostFetch;
   /** Timeout for REST requests in milliseconds (default: 30000). */
   timeoutMs?: number;
   /** Allow requests to private/internal IPs (self-hosted/LAN deployments). */
@@ -224,12 +220,7 @@ export function createMattermostClient(params: {
         }
       }
     : undefined;
-  // When no custom fetchImpl is provided (production path), use an SSRF-guarded wrapper
-  // that validates the target URL before making the request (DNS rebinding protection etc.).
-  // A custom fetchImpl is accepted for testing and special cases.
-  const externalFetchImpl = params.fetchImpl;
-
-  const guardedFetchImpl = async (
+  const fetchImpl = async (
     input: RequestInfo | URL,
     init?: MattermostRequestInit,
   ): Promise<Response> => {
@@ -257,47 +248,6 @@ export function createMattermostClient(params: {
     });
     return responseWithRelease(response, release);
   };
-
-  const timedExternalFetchImpl: typeof guardedFetchImpl | undefined = externalFetchImpl
-    ? async (input, init) => {
-        const effect = captureEffectAuthority();
-        const assertReadAuthority = captureChannelReadAuthority();
-        assertReadAuthority?.();
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        const { timeoutMs: initTimeoutMs, isMessagePost, ...requestInit } = init ?? {};
-        const timeoutMs = resolveTimerTimeoutMs(initTimeoutMs, requestTimeoutMs);
-        const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
-          timeoutMs,
-          operation: "mattermost-api",
-          url,
-        });
-        const callerSignal = requestInit.signal ?? undefined;
-        const signal =
-          callerSignal && timeoutSignal
-            ? AbortSignal.any([callerSignal, timeoutSignal])
-            : (callerSignal ?? timeoutSignal);
-        try {
-          const response = await effect.initiate(() => {
-            assertReadAuthority?.();
-            assertRequestCurrent?.();
-            signal?.throwIfAborted();
-            if (isMessagePost) {
-              postDispatchStarted = true;
-            }
-            return externalFetchImpl(input, { ...requestInit, signal });
-          });
-          // Match guarded production fetches: retain cancellation and the
-          // request deadline until the custom response body is consumed.
-          return responseWithRelease(response, async () => cleanup());
-        } catch (error) {
-          cleanup();
-          throw error;
-        }
-      }
-    : undefined;
-
-  const fetchImpl = timedExternalFetchImpl ?? guardedFetchImpl;
 
   const request = async <T>(path: string, init?: MattermostRequestInit): Promise<T> => {
     const url = buildMattermostApiUrl(baseUrl, path);
@@ -517,20 +467,15 @@ export async function createMattermostDirectChannelWithRetry(
 
   return await retryAsync(
     async () => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       try {
         return await client.request<MattermostChannel>("/channels/direct", {
           method: "POST",
           body: JSON.stringify(userIds),
-          signal: controller.signal,
           timeoutMs,
         });
       } catch (err) {
         // Normalize before rethrowing so shouldRetry/onRetry below always see Errors.
         throw err instanceof Error ? err : new Error(String(err));
-      } finally {
-        clearTimeout(timeoutId);
       }
     },
     {

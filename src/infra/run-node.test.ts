@@ -10,7 +10,7 @@ import {
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "../../scripts/lib/local-build-metadata.mts";
-import { captureRunNodeInputState } from "../../scripts/lib/run-node-input-state.mts";
+import { resolveRunNodeInputSignature } from "../../scripts/lib/run-node-input-state.mts";
 import {
   acquireRunNodeBuildLock,
   resolveBuildRequirement,
@@ -114,6 +114,8 @@ describe("run-node script", () => {
   it.for([undefined, "node", "bun"])(
     "starts the %s CLI only after the Node runtime build completes",
     async (runtime, { tmp }) => {
+      const bunPath = path.join(tmp, "fixture-bun");
+      await fs.writeFile(bunPath, "", { mode: 0o755 });
       const build = new EventEmitter();
       const fakeProcess = createFakeProcess();
       const { promise: buildSpawned, resolve: markBuildSpawned } = createDeferred();
@@ -129,7 +131,9 @@ describe("run-node script", () => {
         spawn,
         process: fakeProcess,
         env: {
+          CI: "",
           OPENCLAW_FORCE_BUILD: "1",
+          OPENCLAW_BUN_PATH: bunPath,
           OPENCLAW_VITEST_RUNTIME: runtime,
           OPENCLAW_TRACE_SYNC_IO: "1",
         },
@@ -145,7 +149,12 @@ describe("run-node script", () => {
       expect(await result).toBe(0);
       expect(spawn.mock.calls.map(([cmd, args]) => [cmd].concat(args))).toEqual([
         expectedBuildSpawn(),
-        [runtime === "bun" ? "bun" : process.execPath, "--trace-sync-io", "openclaw.mjs", "status"],
+        [
+          runtime === "node" ? process.execPath : bunPath,
+          "--trace-sync-io",
+          "openclaw.mjs",
+          "status",
+        ],
       ]);
       // The canonical profile owns metadata and both stamps; the local runner
       // only invokes postbuild directly on its separate metadata-only path.
@@ -358,7 +367,13 @@ describe("run-node script", () => {
   it.runIf(process.platform !== "win32").for([false, true])(
     "force-cleans the active child process group after SIGTERM (rebuild: %s)",
     async (rebuild, { tmp }) => {
+      vi.stubEnv("CI", "true");
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
       await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+      const bunPath = path.join(tmp, "fixture-bun");
+      await fs.writeFile(bunPath, "", { mode: 0o755 });
 
       const fakeProcess = Object.assign(createFakeProcess(), { stdin: { isTTY: false } });
       const child = Object.assign(new EventEmitter(), {
@@ -373,7 +388,12 @@ describe("run-node script", () => {
       });
 
       const exitCodePromise = runNodeCommand(tmp, {
-        env: { OPENCLAW_FORCE_BUILD: rebuild ? "1" : "0", OPENCLAW_VITEST_RUNTIME: "bun" },
+        env: {
+          CI: "",
+          OPENCLAW_FORCE_BUILD: rebuild ? "1" : "0",
+          OPENCLAW_VITEST_RUNTIME: "bun",
+          OPENCLAW_BUN_PATH: bunPath,
+        },
         platform: "darwin",
         process: fakeProcess,
         signalProcess: (pid: number, signal?: string | number) => {
@@ -394,7 +414,7 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(143);
       const spawnCall = firstMockCall(spawn);
-      expect(spawnCall?.[0]).toBe(rebuild ? process.execPath : "bun");
+      expect(spawnCall?.[0]).toBe(rebuild ? process.execPath : bunPath);
       expect(spawnCall?.[1]).toEqual(
         rebuild ? expectedBuildSpawn().slice(1) : ["openclaw.mjs", "status"],
       );
@@ -568,12 +588,16 @@ describe("run-node script", () => {
         trackConfig: true,
       });
       const { deps } = await trackProjectWithGit(tmp);
-      const env = { ...process.env, OPENCLAW_DEV_SOURCE_ROOT: tmp };
+      const env = {
+        ...process.env,
+        OPENCLAW_DEV_SOURCE_ROOT: tmp,
+        OPENCLAW_VITEST_RUNTIME: "node",
+      };
       await fs.appendFile(resolvePath(tmp, input), "\n");
       writeRuntimePostBuildStamp({
         cwd: tmp,
         env,
-        inputState: captureRunNodeInputState({ ...deps, env }, "runtime"),
+        inputSignature: resolveRunNodeInputSignature({ ...deps, env }, "runtime"),
       });
       if (changed) {
         await fs.appendFile(resolvePath(tmp, input), "\n");

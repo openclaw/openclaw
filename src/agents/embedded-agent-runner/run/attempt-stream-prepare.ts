@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyToolAuthorityPreparation } from "../../../auto-reply/reply/reply-run-registry.contracts.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import { validateAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import {
@@ -15,6 +15,8 @@ import {
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { projectNestedToolActivityForHooks } from "../../../sessions/nested-tool-activity.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.start.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
@@ -108,6 +110,7 @@ type PrepareEmbeddedAttemptStreamInput = {
   runAbortController: AbortController;
   abortRun: (isTimeout?: boolean, reason?: unknown) => void;
   markExternalAbort: () => void;
+  recoverStalledModelCall?: () => boolean;
   getRunState: () => StreamRunState;
   onBlockReply: EmbeddedRunAttemptParams["onBlockReply"];
   onBlockReplyFlush: EmbeddedRunAttemptParams["onBlockReplyFlush"];
@@ -131,6 +134,8 @@ function prepareStream(
 ) {
   const { attempt, agentSession } = input;
   const { activeSession, hookRunner } = agentSession;
+  const recoverStalledModelCall = input.recoverStalledModelCall;
+  let stalledModelRecoveryAccepted = false;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
   let activeQueueAdmissions = 0;
@@ -142,7 +147,7 @@ function prepareStream(
   const completionCheck =
     attempt.operation !== "settled-tool-finalization" &&
     !attempt.silentExpected &&
-    resolveReplyExpectation(attempt) === "required"
+    resolveReplyExpectation(attempt) !== "optional"
       ? attempt.completionCheck
       : undefined;
   const onBeforeTerminalDelivery: Parameters<
@@ -180,7 +185,9 @@ function prepareStream(
             state.timedOut ||
             hasCompletedClientToolCall ||
             state.yieldDetected ||
-            (attempt.silentExpected && isSilentReplyText(lastAssistantMessage, SILENT_REPLY_TOKEN))
+            (resolveReplyExpectation(attempt) !== "result-required" &&
+              prepareAgentRunTerminalReply({ rawText: lastAssistantMessage }).terminalReply
+                .disposition === "silent")
           ) {
             return;
           }
@@ -573,6 +580,29 @@ function prepareStream(
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     terminalReplyExpectation: resolveReplyExpectation(attempt),
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
+    recoverStalledModelCall: recoverStalledModelCall
+      ? () => {
+          if (stalledModelRecoveryAccepted) {
+            // Keep recovery eligible during settlement, but stop shielding a
+            // parent cancelled by Stop or bounded lane reclamation.
+            return (
+              !externalAbortAccepted &&
+              !attempt.abortSignal?.aborted &&
+              registration !== undefined &&
+              ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(queueHandle) === registration &&
+              ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle &&
+              ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) === queueHandle
+            );
+          }
+          stalledModelRecoveryAccepted =
+            isSteeringAdmissionOpen() &&
+            !subscription.isCompacting() &&
+            countActiveToolExecutions(attempt.runId) === 0 &&
+            hasCurrentRegistration() &&
+            recoverStalledModelCall();
+          return stalledModelRecoveryAccepted;
+        }
+      : undefined,
     cancel: abortActiveRunExternally,
     abort: abortActiveRunExternally,
   };
@@ -612,7 +642,8 @@ function prepareStream(
     try {
       attempt.onDeferredLifecycleOwner(deferredLifecycleOwner);
     } catch (error) {
-      deferredLifecycleOwner.discard();
+      // Release ownership synchronously; the cleanup scope tracks the diagnostic flush.
+      void deferredLifecycleOwner.discard();
       throw error;
     }
   }

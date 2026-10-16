@@ -4,7 +4,7 @@ import type {
   ProviderAuthResult,
 } from "openclaw/plugin-sdk/core";
 import {
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { captureProviderApiKey } from "openclaw/plugin-sdk/provider-auth-api-key";
@@ -203,7 +203,7 @@ export const apiKeyAuthMethod: ProviderAuthMethod = {
     groupHint: "Entra ID + API key",
   },
   run: async (ctx) => {
-    const authStore = ensureAuthProfileStore(ctx.agentDir, {
+    const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
       allowKeychainPrompt: false,
     });
     const existing = authStore.profiles[`${PROVIDER_ID}:default`];

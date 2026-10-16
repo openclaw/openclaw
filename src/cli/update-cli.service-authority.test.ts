@@ -5,7 +5,6 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import * as serviceMembership from "../daemon/service-process-membership.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -70,7 +69,6 @@ describe("update-cli", () => {
     runWithGatewayServiceEnv,
     setupInstalledPackageRoot,
     mockPackageInstallStatus,
-    tempDirs,
   } = createUpdateCliFixture();
 
   it("admits an absent service update while its selected port has an unmanaged listener", async () => {
@@ -118,7 +116,7 @@ describe("update-cli", () => {
       ancestors: [],
       pid: process.ppid,
       runtime: { status: "stopped", state: "stopped", pid: gatewayFixturePid },
-      code: "service-ancestry-unverified",
+      code: process.platform === "darwin" ? undefined : "service-ancestry-unverified",
     },
   ])(
     "checks inherited Gateway ancestry before --no-restart updates: $caller",
@@ -254,7 +252,9 @@ describe("update-cli", () => {
       mockFileBackedPathExists();
       mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
       if (ancestor) {
-        mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, gatewayFixturePid]));
+        mockGetSelfAndAncestorPidsSync.mockReturnValue(
+          new Set([process.pid, gatewayFixturePid, 1]),
+        );
       }
       managedUpdateHandoff.start.mockResolvedValue({
         status: "started",
@@ -610,23 +610,5 @@ describe("update-cli", () => {
     );
     expect(freshRestartCalls()).toHaveLength(0);
     expect(getErrorOutput()).not.toContain("inspection-secret-canary");
-  });
-
-  it("reports a fresh JSON refusal once through Commander", async () => {
-    await mockPackageInstallAtCaseDir();
-    const stateDir = tempDirs.make("openclaw-fresh-cli-refusal-");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await expect(invokeUpdateCli({ tag: "main", yes: true, json: true })).rejects.toEqual(
-        new ExitError(1),
-      );
-      expect(fsSync.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
-    });
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(packageInstallCommandCall()).toBeUndefined();
-    expect(lastWriteJsonCall()).toMatchObject({
-      status: "error",
-      reason: "unsupported-package-target",
-    });
-    expect(defaultRuntime.error).toHaveBeenCalledOnce();
   });
 });

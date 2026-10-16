@@ -11,8 +11,11 @@ import { describe, expect, it, vi } from "vitest";
 import * as sqliteQueries from "../infra/kysely-sync.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
-import { createRequesterPublicationFixture } from "./github-publication-requester.test-support.js";
-import { readGitHubPublicationRequest } from "./github-publication-store.js";
+import {
+  createRequesterPublicationFixture,
+  holdWorkerTurn,
+} from "./github-publication-requester.test-support.js";
+import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
@@ -25,7 +28,7 @@ type Backend = Parameters<typeof fixture>[0];
 
 async function prepareExistingPullRequest(backend: Backend) {
   const f = await fixture(backend);
-  const first = await f.coordinator.requestForSession(f.request("first-publication", f.guest));
+  const first = await f.coordinator.requestForSessionV2(f.request("first-publication", f.guest));
   if (first.status !== "published") {
     throw new Error("The original fixture publication did not complete.");
   }
@@ -70,6 +73,46 @@ describe("shared GitHub publication reconciliation", () => {
   });
 
   it.each(["local", "repository"] as const)(
+    "settles the accepted %s publication before stopping recovery between requests",
+    async (backend) => {
+      const f = await fixture(backend);
+      const claim = await holdWorkerTurn(f);
+      const requests = [
+        await f.coordinator.requestForSessionV2(f.request("shutdown-first", f.guest)),
+        await f.coordinator.requestForSessionV2(f.request("shutdown-second", f.guest)),
+      ];
+      expect(requests.map((request) => request.status)).toEqual(["requested", "requested"]);
+      await f.placements.releaseTurn(claim);
+
+      const dispatched = Promise.withResolvers<void>();
+      const response = Promise.withResolvers<void>();
+      const transport = mocks.runCommand.getMockImplementation()!;
+      let stopping = false;
+      mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+        const result = await transport(argv, options);
+        if (argv.includes("POST") && argv.some((arg) => arg.endsWith("/pulls"))) {
+          dispatched.resolve();
+          await response.promise;
+        }
+        return result;
+      });
+
+      const recovery = f.coordinator.resumeSessionRequests(() => stopping);
+      await dispatched.promise;
+      stopping = true;
+      response.resolve();
+      await recovery;
+
+      expect(f.publishedTitles).toHaveLength(1);
+      expect(
+        requests
+          .map((request) => f.readReceipt(request.requestId)?.status)
+          .toSorted((left, right) => String(left).localeCompare(String(right))),
+      ).toEqual(["published", "requested"]);
+    },
+  );
+
+  it.each(["local", "repository"] as const)(
     "finds an older open PR beyond the first page after an accepted %s push loses authority",
     async (backend) => {
       const { f, first, pullRequest, transport, observePush } =
@@ -106,7 +149,7 @@ describe("shared GitHub publication reconciliation", () => {
         return response;
       });
 
-      const result = await f.coordinator.requestForSession(f.request("paged-update", f.guest));
+      const result = await f.coordinator.requestForSessionV2(f.request("paged-update", f.guest));
 
       expect(
         hostScans.mock.calls
@@ -132,7 +175,7 @@ describe("shared GitHub publication reconciliation", () => {
       expect(f.publishedTitles).toEqual(["first-publication"]);
       await f.restart().resumeSessionRequests();
       expect(f.externalWrites).toEqual(acceptedWrites);
-      expect(f.coordinator.read(first.requestId)).toEqual(first);
+      expect(await f.coordinator.readAsync(first.requestId)).toEqual(first);
     },
   );
 
@@ -161,7 +204,7 @@ describe("shared GitHub publication reconciliation", () => {
       });
 
       const idempotencyKey = "interrupted-existing-pr-update";
-      const pending = f.coordinator.requestForSession(f.request(idempotencyKey, f.guest));
+      const pending = f.coordinator.requestForSessionV2(f.request(idempotencyKey, f.guest));
       let requestId: string;
       if (backend === "local") {
         await expect(pending).rejects.toBeInstanceOf(GitHubPublicationRecoveryPendingError);
@@ -181,7 +224,7 @@ describe("shared GitHub publication reconciliation", () => {
         head_commit: pullRequest.headSha,
       });
       expect(pullRequest.body).not.toContain(`<!-- openclaw-publication:${requestId} -->`);
-      expect(f.coordinator.read(first.requestId)).toEqual(first);
+      expect(await f.coordinator.readAsync(first.requestId)).toEqual(first);
       const acceptedWrites = [...f.externalWrites];
 
       // The accepted update survives a later close; its existing PR retains the original body.
@@ -214,12 +257,12 @@ describe("shared GitHub publication reconciliation", () => {
       }
       await restarted.resumeSessionRequests();
 
-      expect(restarted.read(requestId)).toMatchObject({
+      expect(await restarted.readAsync(requestId)).toMatchObject({
         status: "published",
         url: first.url,
         headCommit: pullRequest.headSha,
       });
-      expect(restarted.read(first.requestId)).toEqual(first);
+      expect(await restarted.readAsync(first.requestId)).toEqual(first);
       expect(f.externalWrites).toEqual(acceptedWrites);
       expect(f.publishedTitles).toEqual(["first-publication"]);
     },

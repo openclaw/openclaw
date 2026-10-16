@@ -1,5 +1,15 @@
+import type { PluginControlUiModule } from "../../packages/gateway-protocol/src/schema/plugins.js";
+
 /** HTTP path for the Control UI bootstrap config payload. */
 export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
+
+export function matchesControlUiBootstrapConfigPath(pathname: string, basePath: string): boolean {
+  // The default SPA infers this namespace before it receives its bootstrap config.
+  return (
+    pathname === `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}` ||
+    (basePath === "" && pathname === `/__openclaw__${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`)
+  );
+}
 
 /** Authenticated document copy of the canonical bootstrap payload. */
 export const CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE = "data-openclaw-bootstrap-config";
@@ -44,6 +54,12 @@ export type ControlUiPluginFrameGrantAck = {
 
 /** Runtime config consumed by the browser Control UI during bootstrap. */
 export type ControlUiBootstrapConfig = {
+  /** Viewer-scoped display projection, never an editable config snapshot. */
+  preferences?: {
+    profileId?: string;
+    config?: Record<string, unknown>;
+    entries?: Record<string, unknown>;
+  };
   basePath: string;
   assistantName: string;
   assistantAvatar: string;
@@ -63,6 +79,10 @@ export type ControlUiBootstrapConfig = {
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   automaticallyFetchFavicons?: boolean;
+  /** Whether experimental speech-bubble presentation is available. */
+  chatBubblesEnabled?: boolean;
+  /** Whether optional composer prediction inference is enabled. */
+  composerPredictionsEnabled?: boolean;
   seamColor?: string;
   environment?: ControlUiEnvironment;
   /** Whether this Gateway's served UI may show the Discord community invitation. */
@@ -82,4 +102,5 @@ export type ControlUiBootstrapConfig = {
   /** Only explicit no-auth Gateways permit native asset loading without scoped cookies. */
   pluginAssetsRequireAuth?: boolean;
   pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
+  pluginControlUiModules?: PluginControlUiModule[];
 };

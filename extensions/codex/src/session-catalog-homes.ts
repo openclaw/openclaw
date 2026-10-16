@@ -14,6 +14,7 @@ import {
   resolveCodexAppServerUserHomeDir,
 } from "./app-server/auth-start-options.js";
 import { setCodexCatalogConnectionHomeResolver } from "./app-server/binding-connection.js";
+import type { CodexPluginConfig } from "./app-server/config-contracts.js";
 import { readCodexPluginConfig } from "./app-server/config-parsing.js";
 import type { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
 import { codexCatalogHomeIdFromCanonicalPath } from "./session-catalog-home-id.js";
@@ -35,7 +36,7 @@ type CatalogHomeCandidate = {
 type CatalogGeneration = {
   config: OpenClawConfig;
   assertCurrent: () => void;
-  pluginConfig: unknown;
+  pluginConfig: CodexPluginConfig;
   agentIds?: string[];
   agentDirs: Map<string, string>;
   paths: Map<string, string | Promise<string>>;
@@ -77,7 +78,7 @@ export function createCodexCatalogHomeResolver(params: {
             );
           }
         },
-        pluginConfig: params.getPluginConfig(),
+        pluginConfig: readCodexPluginConfig(params.getPluginConfig()),
         agentDirs: new Map(),
         paths: new Map(),
         directories: new Set(),
@@ -140,8 +141,7 @@ export function createCodexCatalogHomeResolver(params: {
           return candidates;
         }
       }
-      for (const entry of readCodexPluginConfig(snapshot.pluginConfig).sessionCatalog?.homes ??
-        []) {
+      for (const entry of snapshot.pluginConfig.sessionCatalog?.homes ?? []) {
         await scheduler.yield();
         const { path: home, label } = typeof entry === "string" ? { path: entry } : entry;
         await append(home, label);
@@ -165,7 +165,6 @@ export function createCodexCatalogHomeResolver(params: {
     fleet: boolean,
   ) => {
     await scheduler.yield();
-    snapshot.assertCurrent();
     if (!agentIds(snapshot).includes(agentId)) {
       return [];
     }
@@ -203,7 +202,6 @@ export function createCodexCatalogHomeResolver(params: {
       }
       candidates.push(...(await sharedCandidates(snapshot)));
     }
-    snapshot.assertCurrent();
     const homes: CodexCatalogHome[] = [];
     const seen = new Set<string>();
     for (const candidate of candidates) {
@@ -257,7 +255,6 @@ export function createCodexCatalogHomeResolver(params: {
         return prepareAgentHomes(snapshot, id, true);
       }
     }
-    snapshot.assertCurrent();
     return [];
   });
 
@@ -265,7 +262,7 @@ export function createCodexCatalogHomeResolver(params: {
     forAgent: (agentId: string) => prepareAgentHomes(generation(), agentId, true),
     async forNode(requestedAgentId?: string): Promise<CodexNodeHome> {
       const snapshot = generation();
-      const configured = readCodexPluginConfig(snapshot.pluginConfig).appServer;
+      const configured = snapshot.pluginConfig.appServer;
       if (
         configured?.homeScope === "agent" ||
         (configured?.transport && configured.transport !== "stdio")
@@ -290,7 +287,6 @@ export function createCodexCatalogHomeResolver(params: {
         };
       }
       const codexHome = await homePath(snapshot, resolveCodexAppServerUserHomeDir(env));
-      snapshot.assertCurrent();
       const appServer = params.resolveRuntimeOptions({
         pluginConfig: snapshot.pluginConfig,
         config: snapshot.config,

@@ -4,11 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import {
+  saveAuthProfileStore,
+  updateAuthProfileStoreWithLock,
+} from "../agents/auth-profiles/store-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as providerAuthRuntime from "./provider-auth-runtime.js";
 
-const callbackListener = vi.hoisted((): { port?: number } => ({}));
+const callbackListener = vi.hoisted(
+  (): { port?: number; servers: import("node:http").Server[] } => ({ servers: [] }),
+);
 
 vi.mock("node:http", async (importOriginal) => {
   const http = await importOriginal<typeof import("node:http")>();
@@ -33,8 +38,11 @@ vi.mock("node:http", async (importOriginal) => {
   }
   return {
     ...http,
-    createServer: (...args: ConstructorParameters<typeof CallbackServer>) =>
-      new CallbackServer(...args),
+    createServer: (...args: ConstructorParameters<typeof CallbackServer>) => {
+      const server = new CallbackServer(...args);
+      callbackListener.servers.push(server);
+      return server;
+    },
   };
 });
 
@@ -47,12 +55,13 @@ afterEach(async () => {
   }
   await Promise.all(pending.map(({ settled }) => settled));
   callbackListener.port = undefined;
+  callbackListener.servers.length = 0;
 });
 
 function startCallback(
   params: Omit<
     Parameters<typeof providerAuthRuntime.waitForLocalOAuthCallback>[0],
-    "signal" | "onProgress" | "port" | "redirectUri"
+    "signal" | "port" | "redirectUri"
   >,
   controller = new AbortController(),
 ) {
@@ -62,11 +71,12 @@ function startCallback(
     port: 61040,
     redirectUri: "http://127.0.0.1:61040/callback",
     signal: controller.signal,
-    onProgress: () => {
+    onProgress: (message) => {
       if (callbackListener.port === undefined) {
         throw new Error("Callback readiness requires a bound listener");
       }
       resolve(callbackListener.port);
+      params.onProgress?.(message);
     },
   });
   callbacks.push({ controller, settled: callback.then(() => undefined, reject) });
@@ -110,6 +120,29 @@ describe("plugin-sdk provider-auth-runtime", () => {
       profileId: "openai:chatgpt",
       accountId: "acct-openai-workspace",
     });
+    const params = { provider: "openai", profileId: "openai:chatgpt", agentDir };
+    await expect(
+      providerAuthRuntime.resolveProviderAuthProfileMetadataAsync(params),
+    ).resolves.toEqual({
+      profileId: "openai:chatgpt",
+      accountId: "acct-openai-workspace",
+    });
+    await updateAuthProfileStoreWithLock({
+      agentDir,
+      updater(store) {
+        const profile = store.profiles["openai:chatgpt"];
+        if (profile?.type === "oauth") {
+          profile.accountId = "acct-updated-workspace";
+        }
+        return true;
+      },
+    });
+    await expect(
+      providerAuthRuntime.resolveProviderAuthProfileMetadataAsync(params),
+    ).resolves.toEqual({
+      profileId: "openai:chatgpt",
+      accountId: "acct-updated-workspace",
+    });
   });
 
   it("generates random OAuth state tokens", () => {
@@ -137,7 +170,6 @@ describe("plugin-sdk provider-auth-runtime", () => {
       expectedState: "state-1",
       timeoutMs: 5_000,
       callbackPath: "/callback",
-      hostname: "127.0.0.1",
       successTitle: `OAuth <complete>&"'`,
       corsOriginAllowlist: ["auth.x.ai", "accounts.x.ai"],
     });
@@ -188,18 +220,21 @@ describe("plugin-sdk provider-auth-runtime", () => {
     await expect(callback).rejects.toThrow("OAuth callback cancelled");
   });
 
-  it("binds the redirect host when the public hostname option is omitted", async () => {
-    const { callback, ready } = startCallback({
+  it("closes the localhost listener when progress reporting throws", async () => {
+    const failure = new Error("Progress reporter failed");
+    const { callback } = startCallback({
       expectedState: "state-1",
       timeoutMs: 5_000,
       callbackPath: "/callback",
       successTitle: "OAuth complete",
+      onProgress: () => {
+        throw failure;
+      },
     });
 
-    const port = await ready;
-    const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
-    expect(response.status).toBe(200);
-    await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
+    await expect(callback).rejects.toBe(failure);
+    expect(callbackListener.servers).toHaveLength(1);
+    expect(callbackListener.servers[0]?.listening).toBe(false);
   });
 
   it("keeps an explicit localhost bind compatible with an IPv4 redirect", async () => {
@@ -216,7 +251,6 @@ describe("plugin-sdk provider-auth-runtime", () => {
     expect(response.status).toBe(200);
     await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
   });
-
   it("does not echo CORS for unallowlisted callback origins but keeps waiting", async () => {
     const { callback, ready } = startCallback({
       expectedState: "state-1",
@@ -331,10 +365,6 @@ describe("buildOAuthCallbackOriginResolver", () => {
     expect(resolver("not a url")).toBeUndefined();
     expect(resolver(undefined)).toBeUndefined();
     expect(resolver([])).toBeUndefined();
-  });
-
-  it("uses the first value when multiple Origin headers arrive", () => {
-    const resolver = providerAuthRuntime.buildOAuthCallbackOriginResolver(["auth.example.com"]);
     expect(resolver(["https://auth.example.com", "https://attacker.example.com"])).toBe(
       "https://auth.example.com",
     );

@@ -1,12 +1,14 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
+import type { AgentModelConfig } from "../../../../src/config/types.agents-shared.js";
 import type {
   ProviderUsageSnapshot,
   UsageSummary,
 } from "../../../../src/infra/provider-usage.types.js";
 import type { SessionModelUsage } from "../../../../src/infra/session-cost-usage.types.js";
 import type {
+  AgentsListResult,
   FastMode,
   ModelAuthStatusProvider,
   ModelAuthStatusProfile,
@@ -15,12 +17,20 @@ import type {
   ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon.ts";
+import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import {
   canonicalModelAuthProviderId,
   isMonitoredAuthProvider,
   listEffectiveModelAuthProviders,
 } from "../../lib/model-auth.ts";
 import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
+import {
+  modelSettingFallbacks,
+  modelSettingPrimary,
+  readModelSetting,
+} from "../../lib/model-setting.ts";
+import type { ProviderUsageRequestResult } from "../../lib/provider-usage-request.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 
 export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | "api-key";
 
@@ -30,6 +40,7 @@ type ModelProviderAuthSummary = {
 };
 
 type ModelProviderLocalCost = {
+  usageReport?: SessionModelUsage["totals"]["usageReport"];
   totalCost: number;
   totalTokens: number;
   messageCount: number;
@@ -355,6 +366,9 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     cost.totalCost += entry.totals.totalCost;
     cost.totalTokens += entry.totals.totalTokens;
     cost.messageCount += entry.count;
+    if (entry.totals.usageReport?.state === "unavailable") {
+      cost.usageReport = entry.totals.usageReport;
+    }
   }
 
   return drafts
@@ -368,7 +382,8 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         draft.card.modelCount > 0 ||
         Boolean(draft.catalogOutcome) ||
         draft.card.checkingModels ||
-        (draft.card.localCost?.totalTokens ?? 0) > 0,
+        (draft.card.localCost?.totalTokens ?? 0) > 0 ||
+        draft.card.localCost?.usageReport?.state === "unavailable",
     )
     .map((draft) => {
       const apiKeySupported = apiKeyCapabilities.get(draft.card.id);
@@ -386,7 +401,7 @@ export type DefaultModelSelection = {
   primary: string;
   fallbacks: string[];
   /** null = automatic/unset; empty string = explicitly disabled. */
-  utilityModel: string | null;
+  utilityModel: AgentModelConfig | null;
   /** Unset or null disables decisions globally. */
   decisionModel?: string | null;
 };
@@ -439,9 +454,12 @@ function buildSelectableDefaultModels(
   selection: DefaultModelSelection,
 ): ModelPickerEntry[] {
   const selected = new Set<string>(
-    [selection.primary, ...selection.fallbacks, selection.utilityModel].filter(
-      (value): value is string => typeof value === "string" && value.length > 0,
-    ),
+    [
+      selection.primary,
+      ...selection.fallbacks,
+      modelSettingPrimary(selection.utilityModel),
+      ...modelSettingFallbacks(selection.utilityModel),
+    ].filter((value): value is string => typeof value === "string" && value.length > 0),
   );
   const selectable: ModelPickerEntry[] = (models ?? []).filter(
     (model) => model.available !== false || selected.has(modelCatalogRef(model)),
@@ -492,17 +510,7 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
   const providers = asRecord(models?.providers);
   const agents = asRecord(config?.agents);
   const defaults = asRecord(agents?.defaults);
-  const model = defaults?.model;
-  const modelObject = asRecord(model);
-  const primary =
-    typeof model === "string"
-      ? model
-      : typeof modelObject?.primary === "string"
-        ? modelObject.primary
-        : "";
-  const fallbacks = Array.isArray(modelObject?.fallbacks)
-    ? modelObject.fallbacks.filter((entry): entry is string => typeof entry === "string")
-    : [];
+  const model = readModelSetting(defaults?.model);
   return {
     providers: Object.entries(providers ?? {}).map(([key, value]) => {
       const provider = asRecord(value);
@@ -516,9 +524,9 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
       return entry;
     }),
     defaults: {
-      primary,
-      fallbacks,
-      utilityModel: typeof defaults?.utilityModel === "string" ? defaults.utilityModel : null,
+      primary: modelSettingPrimary(model) ?? "",
+      fallbacks: modelSettingFallbacks(model),
+      utilityModel: readModelSetting(defaults?.utilityModel),
       ...(typeof defaults?.decisionModel === "string"
         ? { decisionModel: defaults.decisionModel }
         : {}),
@@ -543,4 +551,73 @@ export function buildUnconfiguredProviderOptions(
     }
   }
   return [...options.values()].toSorted((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+/** Assembles admitted snapshots for the Models page without owning state or effects. */
+export function buildModelProviderPresentation(params: {
+  configObject: Record<string, unknown> | null;
+  behavior: ModelBehaviorConfig;
+  catalog: ModelCatalogPresentation;
+  data: Omit<
+    ModelProviderCardsInput,
+    "models" | "configProviders" | "pendingProviders" | "providerUsage"
+  > & {
+    providerUsage: ProviderUsageRequestResult | null;
+  };
+  agentsState: { agentsList: AgentsListResult | null; agentsError: string | null };
+  agentId: string;
+  defaultsDraft: DefaultsDraft | null;
+}) {
+  const { catalog, data, agentsState, agentId } = params;
+  const agents = agentsState.agentsList?.agents ?? [];
+  const noSelectableAgents =
+    agentsState.agentsList !== null && listSelectableAgents(agents).length === 0;
+  const rosterError = agentsState.agentsList ? null : agentsState.agentsError;
+  const selected = agents.find((agent) => normalizeAgentId(agent.id) === agentId);
+  const config = readModelProviderConfig(params.configObject);
+  const configuredDefaults = { ...config.defaults, ...params.behavior };
+  const { defaults, configuredModels } = resolveDefaultModelPresentation(
+    catalog,
+    configuredDefaults,
+    params.defaultsDraft,
+  );
+  const cards = buildModelProviderCards({
+    ...data,
+    models: catalog.models,
+    providerOutcomes: catalog.hasSnapshot
+      ? (catalog.providerOutcomes ?? [])
+      : data.providerOutcomes,
+    pendingProviders: catalog.pendingProviders,
+    providerUsage: data.providerUsage?.ok ? data.providerUsage.value : null,
+    configProviders: config.providers,
+  });
+  const configuredProviderIds = new Set([
+    ...config.providers.map(({ key }) => key),
+    ...(data.authStatus?.providers
+      .filter((provider) => Boolean(provider.apiKey) || provider.profiles.length > 0)
+      .map((provider) => provider.provider) ?? []),
+  ]);
+  return {
+    configuredDefaults,
+    cards,
+    noSelectableAgents,
+    rosterError,
+    agentLabel: selected ? normalizeAgentLabel(selected) : agentId,
+    values: {
+      configuredModels,
+      defaultModels: defaults,
+      decisionModels: catalog.decisionModels ?? [],
+      authStatus: data.authStatus,
+      automaticUtilityModel: catalog.defaultModels?.automaticUtilityModel,
+      utilityRuntime: catalog.defaultModels?.utilityRuntime,
+      thinkingLevel: defaults.thinkingLevel,
+      thinkingOverridden: defaults.thinkingOverridden,
+      fastMode: defaults.fastMode,
+      fastModeOverridden: defaults.fastModeOverridden,
+      unconfiguredProviders: buildUnconfiguredProviderOptions(
+        data.authStatus?.providerCapabilities,
+        configuredProviderIds,
+      ),
+    },
+  };
 }

@@ -3,14 +3,16 @@ import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
+  DiagnosticEventPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOtelContentValue } from "./service-content-normalization.js";
 import {
   assignGenAiSpanIdentityAttrs,
   assignPositiveNumberAttr,
 } from "./service-genai-attributes.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
-import type { MessageDeliveryDiagnosticEvent, TrustedSpanAliasOwner } from "./service-types.js";
+import type { MessageDeliveryDiagnosticEvent } from "./service-types.js";
 
 export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
   const messageDeliveryAttrs = (evt: MessageDeliveryDiagnosticEvent): Record<string, string> => ({
@@ -206,6 +208,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
     recordMessageProcessed(
       evt: Extract<DiagnosticEventPayload, { type: "message.processed" }>,
       metadata: DiagnosticEventMetadata,
+      privateData: DiagnosticEventPrivateData,
     ) {
       const attrs = {
         "openclaw.channel": normalizeDiagnosticValue(evt.channel),
@@ -222,6 +225,18 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       runtime.addRunAttrs(spanAttrs, evt);
       if (evt.reason) {
         spanAttrs["openclaw.reason"] = normalizeDiagnosticValue(evt.reason, "unknown");
+      }
+      const inputValue = runtime.captureContent
+        ? normalizeOtelContentValue(privateData.messageContent?.userPrompt)
+        : undefined;
+      if (inputValue) {
+        spanAttrs["input.value"] = inputValue;
+      }
+      const outputValue = runtime.captureContent
+        ? normalizeOtelContentValue(privateData.messageContent?.finalResponse)
+        : undefined;
+      if (outputValue) {
+        spanAttrs["output.value"] = outputValue;
       }
       const trackedSpan = runtime.getTrackedInternalOrTrustedSpan(evt, metadata);
       const span =
@@ -288,7 +303,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       const spanAttrs: Record<string, string | number | boolean> = {};
       runtime.addRunAttrs(spanAttrs, evt);
-      const span = runtime.trackTrustedSpan(
+      const span = runtime.trackInternalOrTrustedSpan(
         evt,
         metadata,
         runtime.spanWithDuration("openclaw.run", spanAttrs, undefined, {
@@ -298,7 +313,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       );
       const parentSpanId = runtime.trustedTraceContext(evt, metadata)?.parentSpanId;
       if (parentSpanId && !runtime.activeTrustedSpans.has(parentSpanId)) {
-        const owner: TrustedSpanAliasOwner = { kind: "run", id: evt.runId };
+        const owner = evt.runId;
         runtime.activeTrustedSpanAliases.set(runtime.trustedSpanAliasKey(parentSpanId, owner), {
           span,
           spanId: parentSpanId,

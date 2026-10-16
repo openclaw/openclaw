@@ -37,6 +37,7 @@ import {
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "./bootstrap-files.js";
+import { buildBootstrapContextFiles } from "./embedded-agent-helpers/bootstrap.js";
 import { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "./sandbox/remote-fs-bridge.test-helpers.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
@@ -738,6 +739,39 @@ describe("hasCompletedBootstrapTurn", () => {
 });
 
 describe("makeBootstrapWarn", () => {
+  it("keeps content revisions distinct when decorating truncation warnings", () => {
+    const warnings: string[] = [];
+    const workspaceDir = `/tmp/${randomUUID()}`;
+    for (const { sessionLabel, content } of [
+      { sessionLabel: "first", content: "a" },
+      { sessionLabel: "second", content: "a" },
+      { sessionLabel: "first", content: "b" },
+    ]) {
+      buildBootstrapContextFiles(
+        [
+          {
+            name: "AGENTS.md",
+            path: `${workspaceDir}/AGENTS.md`,
+            content: content.repeat(1000),
+            missing: false,
+          },
+        ],
+        {
+          maxChars: 200,
+          warn: makeBootstrapWarn({
+            sessionLabel,
+            workspaceDir,
+            warn: (message) => warnings.push(message),
+          }),
+        },
+      );
+    }
+    expect(warnings).toEqual([
+      "workspace bootstrap file AGENTS.md is 1000 chars (limit 200); truncating in injected context (sessionKey=first)",
+      "workspace bootstrap file AGENTS.md is 1000 chars (limit 200); truncating in injected context (sessionKey=first)",
+    ]);
+  });
+
   it("deduplicates repeated warnings for the same session and message", () => {
     const warnings: string[] = [];
     const warn = makeBootstrapWarn({

@@ -6,7 +6,6 @@ import type {
   SessionTranscriptTurnMessageAppend,
   TranscriptMessageAppendOptions,
 } from "./session-accessor.types.js";
-import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import { captureExternalSessionCommitGuard } from "./session-source-authority.js";
 
 export function assertLegacyTranscriptPreparation<TMessage>(
@@ -20,9 +19,7 @@ export function assertLegacyTranscriptPreparation<TMessage>(
   ) {
     return;
   }
-  const source = captureIncognitoSessionSource(scope);
   if (
-    source ||
     isIncognitoSessionKey(scope.sessionKey) ||
     (scope.storePath && resolveExplicitIncognitoAgentSqliteTarget(scope.storePath, scope))
   ) {

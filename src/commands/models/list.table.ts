@@ -28,11 +28,16 @@ export function printModelTable(
   opts: { json?: boolean; plain?: boolean } & Pick<ModelsListResult, "providerOutcomes"> = {},
 ) {
   if (opts.json) {
-    const providerOutcomes = opts.providerOutcomes?.map(({ provider, profileId, status }) => ({
-      provider,
-      ...(profileId ? { profileId } : {}),
-      status,
-    }));
+    const providerOutcomes = opts.providerOutcomes?.map(
+      ({ provider, profileId, status, unlistedConfiguredModelIds }) => ({
+        provider,
+        ...(profileId ? { profileId } : {}),
+        status,
+        ...(status === "ready" && unlistedConfiguredModelIds?.length
+          ? { unlistedConfiguredModelIds }
+          : {}),
+      }),
+    );
     writeRuntimeJson(runtime, {
       count: rows.length,
       models: rows,

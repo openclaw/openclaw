@@ -1,22 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
-import {
-  hasSqliteWorkerOutcomeUnknown,
-  SqliteWorkerError,
-} from "../../infra/sqlite-worker-contract.js";
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
-import {
-  openOpenClawAgentDatabase,
-  getOpenClawAgentDatabaseIfOpen,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import type { SessionInputLifecycleAdmission } from "./restart-resume.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
@@ -24,84 +13,95 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import type { IncognitoSessionActor } from "./session-incognito-actor.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
-import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
+import { runSessionActorCommand } from "./session-actor-scope.js";
+import {
+  acquireSessionActorStorage,
+  captureSessionActorStorageOwner,
+} from "./session-actor-storage-binding.js";
+import { getSessionInputActor, throwSessionInputActorFailure } from "./session-input-actor.js";
+import { prepareMemoryPendingInputStore } from "./session-pending-input-memory-store.js";
 import {
   readPendingInputMutationReceipt,
   type PendingInputCustodyGrant,
   type PendingInputMutation,
   type PendingInputRead,
 } from "./session-pending-input-operations.types.js";
+import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
+import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import {
-  assertSessionStoreReadCandidate,
-  captureSessionStoreCandidateIdentities,
-} from "./session-store-read-candidates.js";
-import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+  settleSessionWorkerReceipt,
+  type SessionWorkerReceiptAdmission,
+} from "./session-worker-receipt.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export type PendingInputScope = SessionAccessScope & {
+  sessionActor?: import("./session-actor-storage-binding.js").SessionActorStorageBinding;
   agentId: string;
   sessionId: string;
-  /** Inactive until the atomic incognito activation supplies this captured owner. */
-  incognito?: {
-    actor: IncognitoSessionActor;
-    authority: IncognitoSessionAuthority;
-    admissionSignal?: AbortSignal;
-  };
 };
 
 export async function preparePendingInputStore(
   scope: PendingInputScope,
   assertCurrent: () => void,
+  lifecycleAdmission?: SessionInputLifecycleAdmission,
 ) {
+  const memoryOwner = captureSessionActorStorageOwner(scope, {
+    assertCurrent,
+    authorize: assertCurrent,
+  });
+  if (lifecycleAdmission && memoryOwner) {
+    throw new Error("Restart resume requires a durable session.");
+  }
+  if (memoryOwner) {
+    const acquired = await acquireSessionActorStorage(scope, {
+      lifetime: { assertCurrent, assertReadable: assertCurrent },
+      authority: { assertCurrent, authorize: assertCurrent },
+    });
+    if (!acquired) {
+      throw new Error("Pending input session was closed or removed");
+    }
+    return prepareMemoryPendingInputStore(acquired, assertCurrent, () => acquired.actor.release());
+  }
   const captured = {
     ...scope,
-    incognito: scope.incognito ?? captureIncognitoSessionOperation(scope),
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
-  const incognito = isIncognitoSessionKey(captured.sessionKey);
-  const logical = resolveSqliteScope({ ...captured, storePath: undefined });
-  const binding = captured.incognito && { ...captured.incognito };
-  const actor = binding?.actor;
-  if (actor && binding) {
-    actor.assertCurrent();
-    binding.authority.assertCurrent();
-    if (
-      !incognito ||
-      actor.agentId !== logical.agentId ||
-      actor.path !== resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical))
-    ) {
-      throw new Error("Pending input target differs from its captured incognito actor");
-    }
+  const inputActor = await getSessionInputActor(scope);
+  if (lifecycleAdmission && !inputActor) {
+    throw new Error("Restart resume requires the current input actor.");
   }
-  const storePath =
-    logical.path ??
-    captured.storePath ??
-    resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical));
-  const candidates = incognito ? [] : captureSessionStoreReadCandidates(storePath);
-  const identities = captureSessionStoreCandidateIdentities(candidates);
-  const resolved = actor ? resolveSqliteScope(captured) : await prepareSqliteScope(captured);
+  const logical = resolveSqliteScope({ ...captured, storePath: undefined });
+  const target = captureSessionStoreReadTarget(
+    captured,
+    "Pending input changed its captured database owner",
+  );
+  const inputSource = inputActor?.target.readSource;
+  const resolved = inputSource
+    ? resolveSqliteScope(captured, undefined, {
+        agentId: inputSource.agentId,
+        path: inputSource.path,
+        shared: inputSource.agentId !== logical.agentId,
+      })
+    : await prepareSqliteScope(captured);
   assertCurrent();
   const options = {
     ...toDatabaseOptions(resolved),
     path: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
   };
-  const identity = incognito
-    ? undefined
-    : identities.get(assertSessionStoreReadCandidate(options.path, candidates));
-  if (!incognito && (!identity || !identity.key.startsWith("file:"))) {
+  if (
+    inputActor &&
+    (inputActor.target.readSource?.path !== options.path ||
+      inputActor.target.readSource.agentId !== options.agentId)
+  ) {
+    throw new Error("Input actor changed the pending input's physical target");
+  }
+  const readTarget = target.resolve(resolved);
+  const identity = readTarget.identity;
+  if (!identity.key.startsWith("file:")) {
     throw new Error("Pending input changed its captured database owner");
   }
-  const assertSource = () => {
-    actor?.assertCurrent();
-    if (identity) {
-      assertSessionStoreReadCandidate(options.path, candidates);
-      assertExistingDatabaseIdentity(options.path, identity.key, identity.birthtime);
-    }
-  };
-  const { readPendingInput, mutatePendingInput } =
-    await import("./session-pending-input-operations.kernel.js");
+  const assertSource = readTarget.assertCurrent;
+  const { mutatePendingInput } = await import("./session-pending-input-operations.kernel.js");
   assertSource();
   let revoked = false;
   let revokeCustody = () => {};
@@ -145,13 +145,10 @@ export async function preparePendingInputStore(
     return operation;
   };
   const nativeMutation = (
-    input: PendingInputMutation,
+    input: Extract<PendingInputMutation, { kind: "complete" }>,
     guard: (stage: "transaction" | "commit", facts?: PendingInputCustodyGrant) => void,
   ) => {
     assertOpen();
-    if (actor) {
-      throw new IncognitoSessionSyncAccessError("complete", "completeAsync");
-    }
     return mutatePendingInput(
       input,
       {
@@ -167,8 +164,9 @@ export async function preparePendingInputStore(
     );
   };
   return {
+    sessionActor: undefined,
     assertCurrent: assertOpen,
-    withAdmission<T>(operation: () => Promise<T>, reentrant: boolean): Promise<T> {
+    async withAdmission<T>(operation: () => Promise<T>, reentrant: boolean): Promise<T> {
       let entered = false;
       const run = () =>
         runOpenClawAgentWriteAdmission(
@@ -178,13 +176,15 @@ export async function preparePendingInputStore(
             return operation();
           },
           reentrant,
-        ).catch((error: unknown) => {
-          if (!entered) {
-            unregister();
-          }
-          throw error;
-        });
-      return actor ? actor.sessions.withSharedState(run) : run();
+        );
+      try {
+        return await run();
+      } catch (error) {
+        if (!entered) {
+          unregister();
+        }
+        throw error;
+      }
     },
     sessionKey: resolved.sessionKey,
     databaseAgentId: options.agentId ?? resolved.agentId,
@@ -214,22 +214,6 @@ export async function preparePendingInputStore(
         (async () => {
           assertOpen();
           assertCurrent();
-          if (actor && binding) {
-            return actor.sessions.readPendingInput(
-              {
-                assertCurrent: () => {
-                  assertOpen();
-                  assertCurrent();
-                  binding.authority.assertCurrent();
-                },
-                authorize: (stage, facts) => binding.authority.authorize?.(stage, facts),
-              },
-              input,
-            );
-          }
-          if (incognito) {
-            return readPendingInput(openOpenClawAgentDatabase(options), input);
-          }
           return withSessionEntryWorker(
             options,
             identity?.key.slice(5),
@@ -250,7 +234,7 @@ export async function preparePendingInputStore(
         })(),
       );
     },
-    // Released synchronous recorder completion keeps its native visibility contract.
+    // Released SDK completion retains immediate transaction semantics; stage/finish use workers.
     nativeMutation,
     mutate(
       input: PendingInputMutation,
@@ -263,39 +247,81 @@ export async function preparePendingInputStore(
       return track(
         (async () => {
           assertOpen();
-          if (actor && binding) {
+          if (inputActor && input.kind === "stage") {
             let committedFacts: PendingInputCustodyGrant | undefined;
-            return actor.sessions.mutatePendingInput(
-              {
-                assertCurrent: () => {
+            let authorityFailure: unknown;
+            const authority = {
+              assertCurrent: assertOpen,
+              authorize(stage: "transaction" | "commit", _hot: unknown, publication?: unknown) {
+                try {
+                  if (
+                    isRecord(publication) &&
+                    publication.kind === "pending-input-settlement-custody"
+                  ) {
+                    // SAFETY: The actor delegates the same pending-input kernel and grant.
+                    committedFacts = publication as PendingInputCustodyGrant;
+                    guard(stage, committedFacts);
+                  }
                   assertOpen();
-                  binding.authority.assertCurrent();
-                },
-                authorize: (stage, facts) => binding.authority.authorize?.(stage, facts),
+                } catch (error) {
+                  authorityFailure = error;
+                  throw error;
+                }
               },
-              input,
-              (stage, facts) => {
-                committedFacts = facts;
-                guard(stage, facts);
+            };
+            let expectedState: ReturnType<typeof buildRestartRecoveryExpectedState> | undefined;
+            let receipt: ReturnType<typeof readPendingInputMutationReceipt>;
+            const outcome = await runSessionActorCommand(
+              inputActor.actor,
+              authority,
+              async (snapshot) => {
+                const hot = snapshot ?? (await inputActor.actor.read(authority));
+                if (!hot.entry) {
+                  throw new Error("Input actor lost its staged session");
+                }
+                // Select lifecycle facts inside the FIFO, then retain them across version rebasing.
+                const resume = input.expected.existing ? undefined : lifecycleAdmission;
+                expectedState ??=
+                  resume?.expectedState ?? buildRestartRecoveryExpectedState(hot.entry);
+                return inputActor.actor.acceptInput(
+                  {
+                    commandId: randomUUID(),
+                    phaseId: `accept:${input.runId}`,
+                    expected: hot.version,
+                    pending: input,
+                    lifecycle: resume?.lifecycle ?? {},
+                    expectedState,
+                  },
+                  authority,
+                  {
+                    committed(commit) {
+                      receipt = readPendingInputMutationReceipt(
+                        commit.value.pendingInputReceipt,
+                        input,
+                      );
+                      if (!receipt) {
+                        throw new Error("Input actor omitted its committed custody receipt");
+                      }
+                      publish?.(committedFacts, assertOpen);
+                    },
+                  },
+                );
               },
-              publish ? () => publish(committedFacts, assertOpen) : undefined,
             );
+            if (outcome.kind !== "committed") {
+              throwSessionInputActorFailure(outcome, authorityFailure);
+            }
+            if (outcome.failure && outcome.failure.origin !== "response") {
+              throw Object.assign(new Error(outcome.failure.message), {
+                name: outcome.failure.name,
+              });
+            }
+            if (!receipt) {
+              throw new Error("Input actor omitted its native completion receipt");
+            }
+            return receipt;
           }
-          if (incognito) {
-            let committedFacts: PendingInputCustodyGrant | undefined;
-            const result = nativeMutation(input, (stage, facts) => {
-              committedFacts = facts;
-              guard(stage, facts);
-            });
-            publish?.(committedFacts, assertOpen);
-            return result;
-          }
-          let admitted:
-            | {
-                admission: SqliteWorkerOperationAdmission;
-                retained: RetainedWorkerTransactionAdmission;
-              }
-            | undefined;
+          let admitted: SessionWorkerReceiptAdmission | undefined;
           const readReceipt = (facts: unknown) => readPendingInputMutationReceipt(facts, input);
           let committedFacts: PendingInputCustodyGrant | undefined;
           const checkGrant = (stage: "transaction" | "commit", facts: unknown) => {
@@ -314,55 +340,20 @@ export async function preparePendingInputStore(
             options,
             identity?.key.slice(5),
             assertOpen,
-            async (execution, source, context) => {
+            async (execution, source) => {
               const result = await execution.runExisting(source, async (worker) => {
-                const native = getOpenClawAgentDatabaseIfOpen(options);
-                const revision = native && readSqliteNativeMutationRevision(native.db);
-                const assertPublicationCurrent = () => {
-                  context.assertCurrent();
-                  if (
-                    getOpenClawAgentDatabaseIfOpen(options) !== native ||
-                    (native &&
-                      (native.db.isTransaction ||
-                        revision === undefined ||
-                        readSqliteNativeMutationRevision(native.db) !== revision))
-                  ) {
-                    throw new Error("Pending input authority changed before publication");
-                  }
-                };
-                const outcome = await worker
-                  .execute({ type: "session.pendingInputs.mutate", input })
-                  .then(
-                    (value) => ({ ok: true as const, value }),
-                    (error: unknown) => ({ ok: false as const, error }),
-                  );
-                if (admitted) {
-                  await admitted.retained.settled;
-                  const receipt = readReceipt(admitted.admission.committed?.facts);
-                  if (admitted.admission.settlement?.kind === "completed" && receipt) {
-                    if (publish) {
-                      assertOpen();
-                    }
-                    if (publish) {
-                      assertPublicationCurrent();
-                      publish(committedFacts, assertPublicationCurrent);
-                    }
-                    return receipt;
-                  }
-                  if (admitted.admission.settlement?.kind !== "completed") {
-                    throw new SqliteWorkerError(
-                      "Pending input native commitment is unknown; do not replay",
-                      "outcome-unknown",
-                    );
-                  }
-                }
-                if (!outcome.ok) {
-                  throw outcome.error;
-                }
-                throw new SqliteWorkerError(
+                const receipt = await settleSessionWorkerReceipt(
+                  () => worker.execute({ type: "session.pendingInputs.mutate", input }),
+                  () => admitted,
+                  readReceipt,
                   "Pending input has no confirmed native completion and commit receipt",
-                  "outcome-unknown",
+                  "Pending input native commitment is unknown; do not replay",
                 );
+                if (publish) {
+                  assertOpen();
+                  publish(committedFacts, assertOpen);
+                }
+                return receipt;
               });
               if (!result) {
                 throw new Error("Pending input lost its existing database");

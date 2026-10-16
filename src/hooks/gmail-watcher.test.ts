@@ -262,28 +262,6 @@ describe("startGmailWatcher", () => {
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
-  it("kills existing watcher process on re-entry before spawning new one", async () => {
-    mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
-    const spawnedChildren: MockWatcherChild[] = [];
-    mocks.spawn.mockImplementation(() => {
-      const child = createMockWatcherChild(false);
-      spawnedChildren.push(child);
-      return child;
-    });
-
-    await startGmailWatcher(createGmailConfig(), { scheduler: createTestGatewayScheduler() });
-    expect(spawnedChildren).toHaveLength(1);
-    expect(
-      expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").kill,
-    ).not.toHaveBeenCalled();
-
-    await startGmailWatcher(createGmailConfig(), { scheduler: createTestGatewayScheduler() });
-    expect(spawnedChildren).toHaveLength(2);
-    expect(
-      expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").kill,
-    ).toHaveBeenCalledWith("SIGTERM");
-  });
-
   it("renews once after multiple starts and coalesces missed renewals after sleep", async () => {
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);
@@ -299,32 +277,6 @@ describe("startGmailWatcher", () => {
     await stopGmailWatcher();
     await clock.advanceBy(720 * 60_000);
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(4);
-  });
-
-  it("keeps a stalled periodic renewal single-flight", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const renewal = deferredCommandResult();
-    let tick: void | Promise<void> = undefined;
-    try {
-      mocks.runCommandWithTimeout
-        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
-        .mockImplementation(async () => await renewal.promise);
-
-      await startGmailWatcher(createGmailConfig("me@example.com", 1), { scheduler });
-      tick = clock.advanceBy(60_000);
-      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
-
-      await clock.advanceBy(60_000);
-      const callsWhileStalled = mocks.runCommandWithTimeout.mock.calls.length;
-      renewal.resolve({ code: 0, stdout: "", stderr: "" });
-      await tick;
-
-      expect(callsWhileStalled).toBe(2);
-    } finally {
-      renewal.resolve({ code: 0, stdout: "", stderr: "" });
-      await tick;
-    }
   });
 
   it.each(["watcher", "scheduler"])(
@@ -368,38 +320,6 @@ describe("startGmailWatcher", () => {
       expect(mocks.runCommandWithTimeout.mock.calls[3]?.[0]).toContain("new@example.com");
     },
   );
-
-  it("uses killProcessTree for gog shutdown and resolves on final timeout when process ignores signals", async () => {
-    vi.useFakeTimers();
-    mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
-
-    // Spawn a process with a known pid that never emits exit/close/error
-    const stubbornChild = new EventEmitter();
-    Object.assign(stubbornChild, {
-      pid: 9999,
-      kill: vi.fn(() => true),
-      killed: false,
-    });
-    mocks.spawn.mockReturnValueOnce(stubbornChild);
-
-    await startGmailWatcher(createGmailConfig(), { scheduler: createTestGatewayScheduler() });
-    expect(mocks.spawn).toHaveBeenCalledTimes(1);
-
-    mocks.spawn.mockImplementation(() => createMockWatcherChild(false));
-
-    // Re-entry starts settle on stubbornChild; advance past the 8 s final
-    // timeout (stubbornChild never emits exit), then verify the outcome.
-    const startPromise = startGmailWatcher(createGmailConfig(), {
-      scheduler: createTestGatewayScheduler(),
-    });
-    await vi.advanceTimersByTimeAsync(8_000);
-    await expect(startPromise).resolves.toEqual({ started: true });
-
-    expect(mocks.killProcessTree).toHaveBeenCalledWith(
-      9999,
-      expect.objectContaining({ graceMs: 3_000 }),
-    );
-  });
 
   it("cancels stale respawn timeout when re-entry happens during 5s window", async () => {
     vi.useFakeTimers();

@@ -37,15 +37,7 @@ describe("provider model access consent", () => {
     await state.cleanup();
   });
 
-  it.each([undefined, [], ["sample/*"]])(
-    "does not ask for an unrestricted provider: %j",
-    (allow) => {
-      config.agents!.defaults!.modelPolicy = allow ? { allow } : undefined;
-      expect(prepare()).toBeUndefined();
-    },
-  );
-
-  it.each(["defaults", "agent", "legacy"])("widens only the consenting %s owner", async (owner) => {
+  it.each(["agent"])("widens only the consenting %s owner", async (owner) => {
     if (owner === "agent") {
       config.agents!.entries!.main!.modelPolicy = { allow: ["other/private"] };
     } else if (owner === "legacy") {

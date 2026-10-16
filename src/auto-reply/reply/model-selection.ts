@@ -34,10 +34,7 @@ import {
   listOpenAIAuthProfileProvidersForAgentRuntime,
 } from "../../agents/openai-routing.js";
 import { resolveOperatorModelDefault } from "../../agents/operator-model-policy.js";
-import {
-  needsThinkHydration,
-  resolveEffectiveAgentRuntime,
-} from "../../agents/thinking-runtime.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { hasSessionAutoModelSelection } from "../../config/sessions/model-override-provenance.js";
@@ -469,17 +466,19 @@ export async function createModelSelectionState(params: {
     sessionKey &&
     sessionEntry.authProfileOverride
   ) {
-    const { ensureAuthProfileStore, prepareAuthProfileProvider } =
+    const { ensureAuthProfileStoreAsync, prepareAuthProfileProvider } =
       await import("../../agents/auth-profiles.runtime.js");
-    const store = ensureAuthProfileStore(
+    const selection = { ...sessionEntry };
+    const authProfileId = sessionEntry.authProfileOverride;
+    const store = await ensureAuthProfileStoreAsync(
       params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined,
       {
         allowKeychainPrompt: false,
-        profileId: sessionEntry.authProfileOverride,
+        profileId: authProfileId,
       },
     );
     logStage("auth-profile-store-loaded", `profiles=${Object.keys(store.profiles).length}`);
-    const profile = store.profiles[sessionEntry.authProfileOverride];
+    const profile = store.profiles[authProfileId];
     const authConfig = resolveModelProviderAuthConfig({ config: cfg, provider, modelId: model });
     const harnessPolicy = resolveAgentHarnessPolicy({
       provider,
@@ -503,7 +502,6 @@ export async function createModelSelectionState(params: {
           credential: profile,
         }),
       );
-    const selection = { ...sessionEntry };
     const assertSelectionCurrent = () => {
       operatorAuthority?.assertCurrent();
       if (
@@ -585,19 +583,17 @@ export async function createModelSelectionState(params: {
     let catalog = thinkingCatalogs.get(key);
     if (!catalog) {
       catalog = visibilityPolicy.catalog;
-      if (needsThinkHydration(catalog, selection.provider, selection.model, agentRuntime)) {
-        const { loadProviderScopedThinkingCatalog } = await modelCatalogRuntimeLoader.load();
-        const preparedCatalog = await loadProviderScopedThinkingCatalog({
-          config: cfg,
-          agentId: params.agentId,
-          provider: selection.provider,
-          model: selection.model,
-          agentRuntime,
-        });
-        // An empty refresh cannot replace the admitted owner with a configuration-only row.
-        if (findSelectedCatalogEntry({ catalog: preparedCatalog, ...selection })) {
-          catalog = createVisibilityPolicy(preparedCatalog).catalog;
-        }
+      const { loadProviderScopedThinkingCatalog } = await modelCatalogRuntimeLoader.load();
+      const preparedCatalog = await loadProviderScopedThinkingCatalog({
+        config: cfg,
+        agentId: params.agentId,
+        provider: selection.provider,
+        model: selection.model,
+        agentRuntime,
+      });
+      // An empty refresh cannot replace the admitted owner with a configuration-only row.
+      if (findSelectedCatalogEntry({ catalog: preparedCatalog, ...selection })) {
+        catalog = createVisibilityPolicy(preparedCatalog).catalog;
       }
       thinkingCatalogs.set(key, catalog);
     }

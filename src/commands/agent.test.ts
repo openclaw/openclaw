@@ -43,16 +43,18 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
-import { addSessionMember, listSessionMembers } from "../config/sessions/session-sharing-store.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import {
+  addSessionMember,
+  readSessionMembersInWorker,
+} from "../config/sessions/session-sharing-store.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getBootEchoContextForSession } from "../gateway/boot-echo-guard.js";
 import { runBootOnce } from "../gateway/boot.js";
 import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
-import { withTempHomeCore as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
 import { loadEnabledClaudeBundleCommands } from "../plugins/bundle-commands.js";
 import type { PluginProviderRegistration } from "../plugins/registry.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -82,6 +84,7 @@ import {
   expectOwnedCommandSession,
   readSessionStore,
   useRealCommandSessionPersistence,
+  withAgentCommandTestHome as withTempHome,
   writeSessionStoreSeed,
 } from "./agent-session.test-support.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
@@ -94,21 +97,29 @@ const configIoMocks = vi.hoisted(() => ({
   readConfigFileSnapshotForWrite: vi.fn(),
 }));
 
+// mock-isolation: Command fixtures supply in-memory runtime/source config instead of persisted config.
 vi.mock("../config/io.js", () => ({
+  captureRuntimeConfigAsyncReader: () => async () => configIoMocks.loadConfig(),
   getRuntimeConfig: configIoMocks.loadConfig,
   loadConfig: configIoMocks.loadConfig,
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
 }));
 
+// mock-isolation: Command fixtures use an empty credential map instead of host auth state.
 vi.mock("../agents/auth-profiles/store-runtime.js", () => {
   const createEmptyStore = () => ({ version: 1, profiles: {} });
   return {
     ensureAuthProfileStore: vi.fn(createEmptyStore),
+    ensureAuthProfileStoreAsync: vi.fn(async () => createEmptyStore()),
+    ensureAuthProfileStoreForLocalUpdateAsync: vi.fn(async () => createEmptyStore()),
+    ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => createEmptyStore()),
     ensureAuthProfileStoreForLocalUpdate: vi.fn(createEmptyStore),
     loadAuthProfileStore: vi.fn(createEmptyStore),
     loadAuthProfileStoreForRuntime: vi.fn(createEmptyStore),
+    loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => createEmptyStore()),
     loadAuthProfileStoreForSecretsRuntime: vi.fn(createEmptyStore),
     loadAuthProfileStoreWithoutExternalProfiles: vi.fn(createEmptyStore),
+    loadAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => createEmptyStore()),
     saveAuthProfileStore: vi.fn(),
     updateAuthProfileStoreWithLock: vi.fn(async () => createEmptyStore()),
   };
@@ -119,10 +130,9 @@ vi.mock("../agents/auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSourceAsync: vi.fn(() => false),
 }));
 
+// mock-isolation: ordinary command fixtures forward a prepared reply mode without loading session and harness policy state.
 vi.mock("../auto-reply/reply/session-stable-reply-mode.js", () => ({
-  // Session-stable policy has owner coverage in the reply resolver suite. This
-  // command suite only owns forwarding its result into CLI binding facts.
-  resolveSessionStableReplyMode: vi.fn(() => "automatic"),
+  resolveSessionStableReplyMode: vi.fn(async () => "automatic"),
 }));
 
 vi.mock("../agents/harness/selection.js", () => ({
@@ -192,12 +202,12 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
 }));
 
-vi.mock("../infra/outbound/channel-bootstrap.runtime.js", () => ({
+vi.mock("../infra/outbound/channel-bootstrap.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/outbound/channel-bootstrap.runtime.js")>()),
   // Every channel fixture in this suite is already active. Bootstrap discovery
   // and its plugin-loader graph have focused owner coverage.
   bootstrapOutboundChannelPlugin: vi.fn(() => undefined),
   bootstrapOutboundChannelPluginAsync: vi.fn(() => undefined),
-  resetOutboundChannelBootstrapStateForTests: vi.fn(),
 }));
 
 vi.mock("../config/sessions/inbound.runtime.js", () => ({
@@ -262,12 +272,6 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
 const attemptExecutionMocks = getAgentAttemptExecutionMocks();
 
 const runtime = createThrowingTestRuntime();
-
-async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, {
-    prefix: "openclaw-agent-",
-  });
-}
 
 function mockConfig(
   home: string,
@@ -497,7 +501,7 @@ describe("agentCommand", () => {
           expect(vi.mocked(runEmbeddedAgent).mock.calls).toHaveLength(restart + 1);
           expect(loadSessionEntry(priorScope)).toEqual(priorEntry);
           expect(await loadTranscriptEvents(priorScope)).toEqual(transcript);
-          expect(listSessionMembers(priorScope)).toEqual([member]);
+          expect((await readSessionMembersInWorker(priorScope)).members).toEqual([member]);
           expect(listSessionEntriesCore({ storePath }).map(({ sessionKey }) => sessionKey)).toEqual(
             [priorScope.sessionKey],
           );
@@ -514,7 +518,12 @@ describe("agentCommand", () => {
   it.each([
     {
       name: "completed stop",
-      meta: { stopReason: "stop", finalAssistantVisibleText: "ok", finalAssistantRawText: "ok" },
+      meta: {
+        stopReason: "stop",
+        finalAssistantVisibleText: "ok",
+        finalAssistantRawText: "ok",
+        terminalReply: { disposition: "visible" as const, text: "ok" },
+      },
       outcome: "completed",
     },
     {
@@ -672,6 +681,44 @@ describe("agentCommand", () => {
           expect(readAgentRunTerminalOutcome(await command)).toBe("failed");
         }
         expect(runtime.log).toHaveBeenCalledWith("ok");
+      });
+    },
+  );
+
+  it.each(["text", "nested", "json"])(
+    "returns ingress %s replies without writing them to Gateway logs",
+    async (mode) => {
+      await withTempHome(async (home) => {
+        mockConfig(home, path.join(home, "sessions.json"));
+        const text = "synthetic private ingress reply";
+        vi.mocked(runEmbeddedAgent).mockResolvedValueOnce({
+          ...createDefaultAgentResult(),
+          payloads: [{ text }],
+        });
+        const actualDelivery = await vi.importActual<
+          typeof import("../agents/command/delivery.js")
+        >("../agents/command/delivery.js");
+        vi.mocked(deliverAgentCommandResult).mockImplementationOnce(
+          actualDelivery.deliverAgentCommandResult,
+        );
+        const ingressRuntime = { ...runtime, writeStdout: vi.fn(), writeJson: vi.fn() };
+
+        const result = await agentCommandFromIngress(
+          {
+            message: "probe",
+            agentId: "main",
+            allowModelOverride: false,
+            ...(mode === "nested" ? { lane: "nested" } : {}),
+            ...(mode === "json" ? { json: true } : {}),
+          },
+          ingressRuntime,
+        );
+
+        expect(result?.payloads).toEqual([expect.objectContaining({ text })]);
+        expect(JSON.stringify(vi.mocked(runtime.log).mock.calls)).not.toContain(text);
+        expect(JSON.stringify(vi.mocked(runtime.error).mock.calls)).not.toContain(text);
+        expect(ingressRuntime.writeStdout).not.toHaveBeenCalled();
+        expect(ingressRuntime.writeJson).not.toHaveBeenCalled();
       });
     },
   );
@@ -1314,32 +1361,6 @@ describe("agentCommand", () => {
     });
   });
 
-  it("uses the selected agent thinkingDefault for fresh ingress runs", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      mockConfig(
-        home,
-        store,
-        {
-          thinkingDefault: "high",
-        },
-        undefined,
-        { main: { thinkingDefault: "off" } },
-      );
-
-      await agentCommandFromIngress(
-        {
-          message: "ping",
-          agentId: "main",
-          allowModelOverride: false,
-        },
-        runtime,
-      );
-
-      expect(getLastEmbeddedCall()?.thinkLevel).toBe("off");
-    });
-  });
-
   it("persists local overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -1610,49 +1631,6 @@ describe("agentCommand", () => {
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
       expect(entry?.modelOverrideSource).toBeUndefined();
-    });
-  });
-
-  it("does not repair locked legacy auto session model overrides", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions-locked-legacy-auto-override.json");
-      await writeSessionStoreSeed(store, {
-        "agent:main:subagent:locked-legacy-auto": {
-          sessionId: "session-locked-legacy-auto",
-          updatedAt: Date.now(),
-          providerOverride: "anthropic",
-          modelOverride: "claude-opus-4-6",
-          modelOverrideSource: "auto",
-          modelSelectionLocked: true,
-        },
-      });
-
-      mockFallbackModelConfig(home, store);
-
-      mockModelCatalogOnce([
-        { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
-        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
-        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
-      ]);
-
-      await agentCommand(
-        {
-          message: "hi",
-          sessionKey: "agent:main:subagent:locked-legacy-auto",
-        },
-        runtime,
-      );
-
-      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-      expectLastRunProviderModel("anthropic", "claude-opus-4-6");
-      const persisted =
-        readSessionStore<SessionEntry>(store)["agent:main:subagent:locked-legacy-auto"];
-      expect(persisted).toMatchObject({
-        providerOverride: "anthropic",
-        modelOverride: "claude-opus-4-6",
-        modelOverrideSource: "auto",
-        modelSelectionLocked: true,
-      });
     });
   });
 

@@ -1,13 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
 import { sql, type Expression, type RawBuilder } from "kysely";
+import { jsonPathValue, jsonRemovePaths } from "../../infra/database-engine/json-values.js";
 import {
   createSqliteQueryCache,
-  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { supportsNodeSqliteJsonb } from "../../infra/node-sqlite.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
@@ -18,16 +20,19 @@ import {
   projectTranscriptPayloadNavigationSql,
 } from "./session-model-context-projection.js";
 import { projectSessionTranscriptReportFacts } from "./session-transcript-report-facts.js";
+import {
+  deriveTranscriptPredicateFields,
+  type TranscriptPredicateFields,
+} from "./transcript-predicate-fields.js";
 
 export const MAX_COMPRESSED_EVENT_BYTES = 4 * 1024 * 1024;
 const MAX_NAVIGATION_BYTES = 16 * 1024;
 const MIN_COMPRESS_BYTES = 1024;
 const DECODE_FUNCTION = "openclaw_transcript_payload_decode";
 const registeredDecoders = new WeakSet<DatabaseSync>();
-const storageEncodings = new WeakMap<DatabaseSync, string>();
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-export type TranscriptPayloadRecord = {
+export type TranscriptPayloadRecord = TranscriptPredicateFields & {
   event_json: string | null;
   event_zstd: Uint8Array | null;
   event_utf8_bytes: number | null;
@@ -43,7 +48,7 @@ export type PreparedTranscriptPayload = {
 export type TranscriptPayloadAlias = "transcript_events" | "event" | "te" | "parent";
 
 /** Physical payload writes participate in the transcript owner's admitted transaction. */
-export function createTranscriptEventInserter(database: DatabaseSync, sessionId: string) {
+export function createTranscriptEventInserter(database: EngineConnection, sessionId: string) {
   const insert = prepareSqliteQuerySync<
     TranscriptPayloadRecord & { seq: number; createdAt: number }
   >(database, (parameter) =>
@@ -56,6 +61,13 @@ export function createTranscriptEventInserter(database: DatabaseSync, sessionId:
         event_zstd: parameter((row) => row.event_zstd),
         event_utf8_bytes: parameter((row) => row.event_utf8_bytes),
         navigation_json: parameter((row) => row.navigation_json),
+        navigation_type: parameter((row) => row.navigation_type),
+        navigation_custom_type: parameter((row) => row.navigation_custom_type),
+        navigation_display: parameter((row) => row.navigation_display),
+        message_role: parameter((row) => row.message_role),
+        navigation_last_type: parameter((row) => row.navigation_last_type),
+        navigation_last_custom_type: parameter((row) => row.navigation_last_custom_type),
+        navigation_valid: parameter((row) => row.navigation_valid),
         created_at: parameter((row) => row.createdAt),
       }),
   );
@@ -69,14 +81,15 @@ export function createTranscriptEventInserter(database: DatabaseSync, sessionId:
     const prepared = row.preparedPayload;
     const payload =
       prepared?.eventJson === row.eventJson &&
-      prepared.storageEncoding === readTranscriptStorageEncoding(database)
+      prepared.storageEncoding === readTranscriptStorageEncoding(database) &&
+      (!isPostgresSqlConnection(database) || prepared.payload.event_zstd === null)
         ? prepared.payload
         : prepareTranscriptPayload(database, row.eventJson, row.parsedEvent);
     return insert({ ...row, ...payload });
   };
 }
 
-export function createTranscriptPayloadUpdater(database: DatabaseSync, sessionId: string) {
+export function createTranscriptPayloadUpdater(database: EngineConnection, sessionId: string) {
   return prepareSqliteQuerySync<TranscriptPayloadRecord & { seq: number }>(database, (parameter) =>
     getNodeSqliteKysely<Pick<DB, "transcript_events">>(database)
       .updateTable("transcript_events")
@@ -85,6 +98,13 @@ export function createTranscriptPayloadUpdater(database: DatabaseSync, sessionId
         event_zstd: parameter((row) => row.event_zstd),
         event_utf8_bytes: parameter((row) => row.event_utf8_bytes),
         navigation_json: parameter((row) => row.navigation_json),
+        navigation_type: parameter((row) => row.navigation_type),
+        navigation_custom_type: parameter((row) => row.navigation_custom_type),
+        navigation_display: parameter((row) => row.navigation_display),
+        message_role: parameter((row) => row.message_role),
+        navigation_last_type: parameter((row) => row.navigation_last_type),
+        navigation_last_custom_type: parameter((row) => row.navigation_last_custom_type),
+        navigation_valid: parameter((row) => row.navigation_valid),
       })
       .where("session_id", "=", sessionId)
       .where(
@@ -95,36 +115,39 @@ export function createTranscriptPayloadUpdater(database: DatabaseSync, sessionId
   );
 }
 
-export function readTranscriptStorageEncoding(database: DatabaseSync): string {
-  let encoding = storageEncodings.get(database);
-  if (encoding === undefined) {
-    const db = getNodeSqliteKysely<{ pragma_encoding: { encoding: string } }>(database);
-    encoding = executeSqliteQueryTakeFirstSync(
-      database,
-      db.selectFrom("pragma_encoding").select("encoding"),
-    )?.encoding;
-    if (encoding === undefined) {
-      throw new Error("SQLite did not report its transcript storage encoding");
-    }
-    storageEncodings.set(database, encoding);
+export function readTranscriptStorageEncoding(database: EngineConnection): string {
+  if (isPostgresSqlConnection(database)) {
+    return "UTF-8";
   }
-  return encoding;
+  const facts = getAdmittedSqliteSchemaFacts(database);
+  if (!facts) {
+    throw new Error("Transcript payload preparation requires admitted SQLite schema facts");
+  }
+  return facts.textEncoding;
+}
+
+/** Matches stored transcript byte accounting, including the exported JSONL newline. */
+export function transcriptSerializedBytes(database: EngineConnection, eventJson: string): number {
+  const encoding = readTranscriptStorageEncoding(database) === "UTF-8" ? "utf8" : "utf16le";
+  return Buffer.byteLength(eventJson, encoding) + 1;
 }
 
 /** Prepared bytes grant no write authority and must match the eventual envelope and encoding. */
 export function prepareTranscriptPayloadForReuse(
-  database: DatabaseSync,
+  database: EngineConnection,
   eventJson: string,
   parsedEvent?: unknown,
 ): PreparedTranscriptPayload {
+  const storageEncoding = readTranscriptStorageEncoding(database);
   return {
     eventJson,
-    storageEncoding: readTranscriptStorageEncoding(database),
-    payload: prepareTranscriptPayload(database, eventJson, parsedEvent),
+    storageEncoding,
+    payload: prepareTranscriptPayload(database, eventJson, parsedEvent, storageEncoding),
   };
 }
 
 function navigationProjection(
+  database: EngineConnection,
   event: Expression<string | Uint8Array>,
   report: Expression<string>,
   originalEvent: Expression<string>,
@@ -136,17 +159,17 @@ function navigationProjection(
       OR coalesce(json_type(${event}, '$.message'), 'null') NOT IN ('object', 'null') THEN NULL
     ELSE json_object('version', 1,
       'report', json(${report}),
-      'navigation', json(${projectTranscriptPayloadNavigationSql(event)}),
-      'reset', json(${projectResetBoundaryNavigationSql(originalEvent)}),
-      'model', json(${projectModelContextNavigationSql(event)}),
-      'modelBytes', octet_length(${projectModelContextEventSql(event, sql.lit(0))}),
-      'modelWithoutCheckpointBytes', octet_length(${projectModelContextEventSql(event, sql.lit(1))}),
+      'navigation', json(${projectTranscriptPayloadNavigationSql(database, event)}),
+      'reset', json(${projectResetBoundaryNavigationSql(database, originalEvent)}),
+      'model', json(${projectModelContextNavigationSql(database, event)}),
+      'modelBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(0))}),
+      'modelWithoutCheckpointBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(1))}),
       'withoutCustomDataBytes', octet_length(json_remove(${event}, '$.data')))
     END ELSE NULL END`;
 }
 
 type NavigationInput = { eventJson: string; reportJson: string };
-const navigationReader = createSqliteQueryCache((database) =>
+const navigationReader = createSqliteQueryCache((database: EngineConnection) =>
   prepareSqliteQueryTakeFirstSync<NavigationInput, { navigation_json: string | null }>(
     database,
     (parameter) => {
@@ -191,6 +214,7 @@ const navigationReader = createSqliteQueryCache((database) =>
                 .selectFrom("source")
                 .select((eb) =>
                   navigationProjection(
+                    database,
                     eb.ref("source.event_projection"),
                     eb.ref("source.report_json"),
                     eb.ref("source.event_json"),
@@ -204,7 +228,7 @@ const navigationReader = createSqliteQueryCache((database) =>
   ),
 );
 
-function readNavigation(database: DatabaseSync, input: NavigationInput): string | null {
+function readNavigation(database: EngineConnection, input: NavigationInput): string | null {
   const navigation = navigationReader(database)(input)?.navigation_json ?? null;
   return navigation !== null && Buffer.byteLength(navigation, "utf8") <= MAX_NAVIGATION_BYTES
     ? navigation
@@ -213,18 +237,24 @@ function readNavigation(database: DatabaseSync, input: NavigationInput): string 
 
 /** Prepare canonical UTF-8 bytes and native query metadata before publishing a transcript row. */
 export function prepareTranscriptPayload(
-  database: DatabaseSync,
+  database: EngineConnection,
   eventJson: string,
   parsedEvent?: unknown,
+  storageEncoding = readTranscriptStorageEncoding(database),
 ): TranscriptPayloadRecord {
   const rawBytes = Buffer.byteLength(eventJson, "utf8");
-  const utf8 = readTranscriptStorageEncoding(database) === "UTF-8";
+  const utf8 = storageEncoding === "UTF-8";
   const identity: TranscriptPayloadRecord = {
+    ...deriveTranscriptPredicateFields(eventJson),
     event_json: eventJson,
     event_zstd: null,
     event_utf8_bytes: utf8 ? rawBytes : null,
     navigation_json: null,
   };
+  // PostgreSQL rows never carry event_zstd; TOAST owns their physical compression.
+  if (isPostgresSqlConnection(database)) {
+    return identity;
+  }
   // Giant identity values stay available to native SQL without a second full buffer or projection.
   // SQLite and JS can disagree on escaped surrogates and embedded NUL; retain the native path.
   if (
@@ -316,9 +346,14 @@ export function readTranscriptPayload(
 
 /** Only selected bodies decode; identity TEXT remains inside SQLite for native repairs. */
 export function transcriptEventJsonSql(
-  database: DatabaseSync,
+  database: EngineConnection,
   alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<string> {
+  if (isPostgresSqlConnection(database)) {
+    return /* kysely-allow-raw: closed transcript aliases select PostgreSQL's canonical text. */ sql.ref<string>(
+      `${alias}.event_json`,
+    );
+  }
   registerDecoder(database);
   const identity =
     /* kysely-allow-raw: closed transcript aliases select the canonical identity column. */ sql.ref(
@@ -340,16 +375,29 @@ export function transcriptEventJsonSql(
 }
 
 export function transcriptEventNavigationSql(
+  database: EngineConnection,
   alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<string> {
   const identity =
     /* kysely-allow-raw: closed transcript aliases select the native identity fallback. */ sql.ref<string>(
       `${alias}.event_json`,
     );
-  return storedProjectionSql("navigation", identity, alias);
+  return storedProjectionSql(database, "navigation", identity, alias);
+}
+
+export function transcriptEventRunIdSql(
+  database: EngineConnection,
+  alias: TranscriptPayloadAlias = "transcript_events",
+): RawBuilder<string | null> {
+  return jsonPathValue(
+    database,
+    transcriptEventNavigationSql(database, alias),
+    sql.lit("$.message.__openclaw.runId"),
+  );
 }
 
 function storedProjectionSql(
+  database: EngineConnection,
   field: "navigation" | "reset" | "model",
   fallback: Expression<string>,
   alias: TranscriptPayloadAlias,
@@ -359,20 +407,27 @@ function storedProjectionSql(
       `${alias}.navigation_json`,
     );
   return /* kysely-allow-raw: exceptional identity rows retain native projection; other rows use the recorded owner projection. */ sql<string>`CASE WHEN ${metadata} IS NULL THEN ${fallback}
-    ELSE json_extract(${metadata}, ${`$.${field}`}) END`;
+    ELSE ${jsonPathValue(database, metadata, sql.val(`$.${field}`), "json")} END`;
 }
 
 export function transcriptEventResetNavigationSql(
+  database: EngineConnection,
   alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<string> {
   const identity =
     /* kysely-allow-raw: closed transcript aliases select the native identity fallback. */ sql.ref<string>(
       `${alias}.event_json`,
     );
-  return storedProjectionSql("reset", projectResetBoundaryNavigationSql(identity), alias);
+  return storedProjectionSql(
+    database,
+    "reset",
+    projectResetBoundaryNavigationSql(database, identity),
+    alias,
+  );
 }
 
 export function transcriptEventModelNavigationSql(
+  database: EngineConnection,
   alias: TranscriptPayloadAlias = "transcript_events",
   entryType?: Expression<unknown>,
 ): RawBuilder<string> {
@@ -380,11 +435,17 @@ export function transcriptEventModelNavigationSql(
     /* kysely-allow-raw: closed transcript aliases select the native identity fallback. */ sql.ref<string>(
       `${alias}.event_json`,
     );
-  return storedProjectionSql("model", projectModelContextNavigationSql(identity, entryType), alias);
+  return storedProjectionSql(
+    database,
+    "model",
+    projectModelContextNavigationSql(database, identity, entryType),
+    alias,
+  );
 }
 
 /** Model admission retains projected byte costs, which can be much smaller than canonical JSON. */
 export function transcriptEventModelBytesSql(
+  database: EngineConnection,
   omitCheckpoint: Expression<number>,
   alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<number> {
@@ -397,13 +458,19 @@ export function transcriptEventModelBytesSql(
       `${alias}.event_json`,
     );
   return /* kysely-allow-raw: native fallback preserves UTF-16 byte units; metadata excludes the JSONL separator. */ sql<number>`CASE WHEN ${metadata} IS NULL
-    THEN octet_length(${projectModelContextEventSql(identity, omitCheckpoint)})
-    ELSE json_extract(${metadata}, CASE WHEN ${omitCheckpoint} = 1
-      THEN '$.modelWithoutCheckpointBytes' ELSE '$.modelBytes' END) END`;
+    THEN octet_length(${projectModelContextEventSql(database, identity, omitCheckpoint)})
+    ELSE ${jsonPathValue(
+      database,
+      metadata,
+      sql`CASE WHEN ${omitCheckpoint} = 1
+      THEN '$.modelWithoutCheckpointBytes' ELSE '$.modelBytes' END`,
+      "number",
+    )} END`;
 }
 
 /** Suffix admission can retain opaque custom data without charging or decoding its body. */
 export function transcriptEventWithoutCustomDataBytesSql(
+  database: EngineConnection,
   alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<number> {
   const metadata =
@@ -415,8 +482,8 @@ export function transcriptEventWithoutCustomDataBytesSql(
       `${alias}.event_json`,
     );
   return /* kysely-allow-raw: preserve the native json_remove cost used by retained-custom suffix projection. */ sql<number>`CASE WHEN ${metadata} IS NULL
-    THEN octet_length(json_remove(${identity}, '$.data'))
-    ELSE json_extract(${metadata}, '$.withoutCustomDataBytes') END`;
+    THEN octet_length(${jsonRemovePaths(database, identity, [sql.lit("$.data")])})
+    ELSE ${jsonPathValue(database, metadata, sql.lit("$.withoutCustomDataBytes"), "number")} END`;
 }
 
 export function transcriptEventUtf8BytesSql(

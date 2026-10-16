@@ -4,11 +4,11 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import {
-  executeOpenClawStateWorker,
-  runOpenClawStateWorkerOperation,
-} from "./openclaw-state-worker-store.js";
+  captureOpenClawStateReadWorkerContext,
+  captureOpenClawStateWorkerContext,
+} from "./openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 import {
   beginUserPreferenceMutation,
   captureUserPreferenceRead,
@@ -32,28 +32,34 @@ export async function getUserPreferenceValues(
     return { values: new Map(), isCurrent: () => true };
   }
   const ids = [...new Set(profileIds)];
-  const context = captureOpenClawStateWorkerContext(options);
+  const context = captureOpenClawStateReadWorkerContext(options);
   const isCurrent = await captureUserPreferenceRead(context.admission);
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     { type: "userPreferences.values", profileIds: ids, key },
     { context, current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "userPreferences.values")) {
-    throw new Error(reply.ok ? "Unexpected user preference values reply" : reply.message);
-  }
   return { values: reply?.values ?? new Map(), isCurrent };
 }
 
-export function getCanonicalUserPreferences(
+export async function getCanonicalUserPreferences(
   profileId: string,
   keys?: readonly string[],
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
 ): Promise<CanonicalUserPreferences | undefined> {
-  return executeOpenClawStateWorker(captureOpenClawStateWorkerContext(options), {
-    type: "userPreferences.read",
-    input: { profileId, keys },
-  });
+  const context = captureOpenClawStateReadWorkerContext(options);
+  for (;;) {
+    const isCurrent = await captureUserPreferenceRead(context.admission);
+    const reply = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env: context.environment },
+      { type: "userPreferences.read", profileId, keys },
+      { context, current: true },
+    );
+    // A preference write or profile merge must not publish an older result afterward.
+    if (isCurrent()) {
+      return reply?.preferences;
+    }
+  }
 }
 
 export async function setCanonicalUserPreferences(
@@ -82,7 +88,6 @@ export async function setCanonicalUserPreferences(
       {
         assertCurrent: options.assertCurrent,
         createAdmission: (operation) => {
-          let stage: "transaction" | "commit" | "complete" = "transaction";
           let pending:
             | {
                 facts: UserPreferenceCoauthorMutation;
@@ -93,19 +98,13 @@ export async function setCanonicalUserPreferences(
           const admission = createSqliteWorkerOperationAdmission((request, grant) => {
             context.admission.assertCurrent();
             options.assertCurrent?.();
-            if (
-              stage === "transaction" &&
-              request.stage === "transaction" &&
-              request.facts === undefined
-            ) {
-              stage = "commit";
+            if (request.stage === "transaction") {
               grant();
               return;
             }
-            if (stage !== "commit" || request.stage !== "commit") {
+            if (request.stage !== "commit") {
               throw new Error("Profile preference mutation requires transaction admission");
             }
-            stage = "complete";
             if (request.facts === undefined) {
               grant();
               return;

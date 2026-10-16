@@ -4,13 +4,19 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  resolvePluginOwnedProviderAuthWith,
+  resolveProviderAuthScope,
+} from "../plugins/provider-auth-scope.js";
+import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
 import {
   withCurrentReadAuthority,
   type CurrentReadAuthority,
 } from "../shared/current-read-authority.js";
-import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
@@ -20,22 +26,23 @@ import type {
 } from "../state/user-model-accounts.js";
 import { captureUserProfileModelAccountLinksAuthority } from "../state/user-profile-events.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
-import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveExternalCliAuthScopeFromConfig } from "./auth-profiles/external-cli-scope.js";
 import { materializePreparedPersonalAuthProfile } from "./auth-profiles/personal-profiles.js";
+import { resolveAuthStoreReadOnlyValidUntil } from "./auth-profiles/read-only-availability.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { listCliRuntimeModelBackendBindings } from "./cli-backends.js";
-import { resolveAgentHarnessAvailabilityDecision } from "./harness/availability.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
-import { buildAgentHarnessSupportContext, resolveAutoAgentHarnessId } from "./harness/support.js";
+import { buildAgentHarnessSupportContext } from "./harness/support.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import {
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
 } from "./model-auth-availability.js";
+import { isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import { createUnlistedClaudeCliWildcardCheck } from "./model-catalog-cli-wildcard.js";
+import { resolveCatalogDecisionRuntime } from "./model-catalog-decision-runtime.js";
 import {
   createModelCatalogSnapshotView,
   listModelCatalogObservedRoutes,
@@ -53,6 +60,8 @@ import {
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+
+export { resolveCatalogDecisionRuntime } from "./model-catalog-decision-runtime.js";
 
 export type ModelCatalogDecisionParams = {
   cfg: OpenClawConfig;
@@ -258,24 +267,70 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     preferredProfilesByProvider.has(normalizeProviderId(entry.provider))
       ? host
       : nativeEvaluator(entry, host, runtimeId);
-  // Store revisions do not advance when a token or failure window expires.
   // Retire the captured host evaluation so its caller prepares fresh facts.
-  const preparedAt = Date.now();
-  const authValidUntil = Math.min(
-    ...[
-      ...Object.values(authStore.profiles).map((profile) =>
-        profile.type === "token" ? profile.expires : undefined,
-      ),
-      ...Object.values(authStore.usageStats ?? {}).flatMap((stats) => [
-        stats.blockedUntil,
-        stats.cooldownUntil,
-        stats.disabledUntil,
-      ]),
-    ].filter((deadline): deadline is number => deadline !== undefined && deadline > preparedAt),
-  );
+  const authValidUntil = resolveAuthStoreReadOnlyValidUntil(authStore, Date.now());
+  const isPluginAuthProvider = (provider: string) =>
+    resolveProviderAuthScope({
+      provider,
+      config: params.cfg,
+      workspaceDir,
+      pluginMetadataSnapshot: metadataSnapshot,
+    }) === "plugin";
+  const pluginAuthRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+  const hasPluginAuth = snapshot.entries.some((entry) => isPluginAuthProvider(entry.provider));
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
   let normalizedPlugins: NormalizedPluginsConfig | undefined;
   const authResolver = createModelAuthAvailabilityResolver({
+    evaluatePluginAuth: (provider, ref) => {
+      if (!params.pluginRegistry) {
+        return { availability: undefined, routeResolution: null, availabilityAuthoritative: true };
+      }
+      try {
+        return withPluginRuntimeGenerationScope(
+          { metadataSnapshot, pluginRegistry: params.pluginRegistry },
+          () => {
+            const auth = resolvePluginOwnedProviderAuthWith(
+              {
+                provider,
+                config: params.cfg,
+                workspaceDir,
+                pluginMetadataSnapshot: metadataSnapshot,
+                profileId: ref.requiredProfileId ?? ref.pinnedProfileId,
+                preferredProfile: ref.preferredProfileId,
+              },
+              resolveLoadedProviderRuntimePlugin,
+            );
+            // Credential and model policy must observe the same prepared owner generation.
+            const compatible =
+              isAuthModeAllowedForModel({
+                provider,
+                mode: auth.mode,
+                modelApi: ref.api ?? undefined,
+                modelBaseUrl: typeof ref.baseUrl === "string" ? ref.baseUrl : undefined,
+              }) &&
+              (!auth.nativeAuth || auth.nativeAuth.runtime === ref.runtimeId);
+            return {
+              availability: compatible,
+              selectedAuthMode: auth.mode,
+              ...(compatible && auth.nativeAuth
+                ? { runtimeAuth: { id: auth.nativeAuth.runtime, source: "native" as const } }
+                : {}),
+              evidence: "runtime" as const,
+              routeResolution: null,
+              availabilityAuthoritative: true as const,
+            };
+          },
+        );
+      } catch {
+        return {
+          availability: false,
+          unavailableReason: "missing-auth",
+          evidence: "runtime",
+          routeResolution: null,
+          availabilityAuthoritative: true,
+        };
+      }
+    },
     cfg: params.cfg,
     agentId: params.agentId,
     authStore,
@@ -335,7 +390,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   const isUnlistedWildcardCliModel = createUnlistedClaudeCliWildcardCheck({
     cfg: params.cfg,
     agentId: params.agentId,
-    entries: () => snapshot.entries,
+    outcomes: () => snapshot.providerOutcomes,
   });
   const evaluateStoredEntry = (
     entry: Pick<ModelCatalogEntry, "provider" | "id" | "api" | "baseUrl">,
@@ -351,7 +406,8 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       entry.baseUrl,
       observedRoutes,
     ]);
-    const cached = evaluations.get(cacheKey);
+    const pluginAuth = isPluginAuthProvider(entry.provider);
+    const cached = pluginAuth ? undefined : evaluations.get(cacheKey);
     if (cached) {
       return cached;
     }
@@ -405,7 +461,9 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
           unavailableUntil: undefined,
         }
       : listed;
-    evaluations.set(cacheKey, evaluation);
+    if (!pluginAuth) {
+      evaluations.set(cacheKey, evaluation);
+    }
     return evaluation;
   };
   const missingPersonalPin = Boolean(
@@ -427,6 +485,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   const accountObservations: Array<() => boolean> = [];
   const isCurrent = () =>
     Date.now() < authValidUntil &&
+    (!hasPluginAuth || getActiveSecretsRuntimeSnapshotRevisionState() === pluginAuthRevision) &&
     personalCatalog?.isCurrent() !== false &&
     (params.isCurrent?.() ?? params.observationConfig === undefined) &&
     accountObservations.every((current) => current());
@@ -626,6 +685,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
               provider: entry.provider,
               modelId: entry.id,
               requestedRuntime: runtimeId,
+              contextManagement: harness.contextManagement,
               modelProvider: {
                 api: route?.api ?? entry.api,
                 baseUrl: route?.baseUrl ?? entry.baseUrl,
@@ -654,79 +714,5 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     pluginRegistry: params.pluginRegistry,
     isCurrent,
     observationConfig: params.observationConfig,
-  };
-}
-
-/** Public runtime and thinking consume this same route/account decision. */
-export function resolveCatalogDecisionRuntime(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  entry: ModelCatalogEntry;
-  evaluation: ModelAuthAvailabilityEvaluation;
-  pluginRegistry?: PluginRegistry;
-}): GatewayAgentRuntime | undefined {
-  const route = params.evaluation.selectedRoute;
-  const context = {
-    config: params.cfg,
-    agentId: params.agentId,
-    provider: params.entry.provider,
-    modelId: params.entry.id,
-    modelProvider: {
-      api: route?.api ?? params.entry.api,
-      baseUrl: route?.baseUrl ?? params.entry.baseUrl,
-      requestTransportOverrides: route?.requestTransportOverrides,
-      runtimePolicy: route?.runtimePolicy,
-      preparedAuth: params.evaluation.selectedCredential,
-    },
-    preparedModelProvider: true,
-  };
-  const select = () => {
-    const { policy } = resolveAgentHarnessAvailabilityDecision({
-      ...context,
-      mode: "projection",
-      agentHarnessRuntimeOverride: params.evaluation.requestedRuntimeId,
-    });
-    return {
-      policy,
-      runtime:
-        policy.runtime === "auto"
-          ? (resolveAutoAgentHarnessId(context) ?? "openclaw")
-          : policy.runtime,
-    };
-  };
-  const selected = params.pluginRegistry
-    ? withPluginRuntimeRegistryScope(params.pluginRegistry, select)
-    : (() => {
-        const policy = resolveAgentHarnessPolicy({
-          ...context,
-          modelApi: context.modelProvider.api,
-          modelBaseUrl: context.modelProvider.baseUrl,
-          requestTransportOverrides: context.modelProvider.requestTransportOverrides,
-        });
-        return {
-          policy,
-          runtime:
-            params.evaluation.requestedRuntimeId ??
-            (policy.runtime === "auto" ? "openclaw" : policy.runtime),
-        };
-      })();
-  // Route projection must retain the native owner that supplied availability. Recomputing
-  // implicit policy from its API-key route alone would relabel that owner as OpenClaw.
-  const runtime =
-    selected.policy.runtimeSource === "implicit" &&
-    !selected.policy.forcedByEnvironment &&
-    isDefaultAgentRuntimeId(params.evaluation.requestedRuntimeId)
-      ? (params.evaluation.runtimeAuth?.id ?? selected.runtime)
-      : selected.runtime;
-  if (
-    selected.policy.runtime === "auto" &&
-    runtime === "openclaw" &&
-    !params.evaluation.requestedRuntimeId
-  ) {
-    return undefined;
-  }
-  return {
-    id: runtime,
-    source: selected.policy.runtimeSource ?? "implicit",
   };
 }

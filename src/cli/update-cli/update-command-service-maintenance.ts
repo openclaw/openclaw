@@ -17,6 +17,7 @@ import {
 import { resolveGatewayService } from "../../daemon/service.js";
 import { readSystemdServiceExecStart } from "../../daemon/systemd-service-files.js";
 import { captureSystemdServiceIdentity } from "../../daemon/systemd-service-identity.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { inspectSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -51,6 +52,7 @@ import {
 } from "./update-command-service-plan.js";
 import { isManagedGatewayServiceOffline } from "./update-command-service-publication.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
+import { windowsUpdateManualGuidance } from "./update-command-windows-preflight.js";
 import {
   createWindowsTaskAutoStartRecovery,
   UpdateCommandAbort,
@@ -122,7 +124,16 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
   } catch (err) {
     await recovery.restore().catch(() => undefined);
     await recovery.complete(!(err instanceof ScheduledTaskAutoStartRecoveryError));
-    throw err;
+    throw hasErrnoCode(err, "EACCES")
+      ? new GatewayServiceUpdateOwnershipError(
+          createUpdatePreflightFailure(
+            "windows-task-elevation-required",
+            windowsUpdateManualGuidance(),
+            "managed-service",
+          ),
+          err,
+        )
+      : err;
   }
   await abortWindowsTaskUpdateIfInterrupted(recovery);
   if (!suspended) {
@@ -504,16 +515,16 @@ async function stopManagedServiceBeforeMutableUpdate(
     if (params.phase === "refresh") {
       return inspected;
     }
-    if (!params.shouldRestart && !params.jsonMode && serviceState.running) {
-      const warning = `--no-restart is set while the managed gateway service is running; the ${params.updateInstallKind} update will not stop or restart that process.`;
-      defaultRuntime.log(theme.warn(warning));
+    if (!params.shouldRestart && serviceState.running) {
+      warn(
+        params.updateInstallKind === "package"
+          ? "--no-restart skips only the updater's managed restart; the running Gateway will restart itself when it detects the replaced package installation."
+          : "--no-restart is set while the managed gateway service is running; the git update will not stop or restart that process.",
+      );
     }
     const windowsTaskAutoStartRecovery =
       !params.shouldRestart && isGatewayServiceEnv(process.env) ? undefined : await suspendTask();
-    return {
-      ...inspected,
-      ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
-    };
+    return { ...inspected, windowsTaskAutoStartRecovery };
   }
   const block = await resolveAncestryBlock(serviceState);
   if (block) {
@@ -693,7 +704,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     ...inspected,
     stopped: true,
     stoppedAtMs,
-    ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
+    windowsTaskAutoStartRecovery,
   };
 }
 

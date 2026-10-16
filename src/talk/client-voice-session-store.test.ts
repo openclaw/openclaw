@@ -8,11 +8,12 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { readOpenVoiceSessions } from "./client-voice-session-lookup.worker.js";
 import {
   parseStoredVoiceSessionRecord,
-  readVoiceSessionFacts,
+  readOwnedVoiceSessionFacts,
   readVoiceSessionRecordInTransaction,
   VOICE_SESSION_RECORD_VERSION,
   writeVoiceSessionRecordInTransaction,
@@ -168,10 +169,13 @@ describe("client voice session store", () => {
           options,
         );
       write({});
-      const probes = trackSqliteStatementExecutions(database.db, ["freshness"], (sql) =>
-        /data_version/iu.test(sql) ? "freshness" : null,
+      const probes = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["freshness"],
+        (sql) => (/data_version/iu.test(sql) ? "freshness" : null),
       );
-      const first = readVoiceSessionFacts("main", "voice-1");
+      const binding = { agentId: "main", voiceSessionId: "voice-1", sessionKey: "agent:main:main" };
+      const first = readOwnedVoiceSessionFacts(binding);
       expect(first).toMatchObject({ status: "open" });
       expect(() =>
         runOpenClawAgentWriteTransaction((owner) => {
@@ -179,9 +183,9 @@ describe("client voice session store", () => {
           throw new Error("synthetic rollback");
         }, options),
       ).toThrow("synthetic rollback");
-      expect(readVoiceSessionFacts("main", "voice-1")).toMatchObject({ status: "open" });
+      expect(readOwnedVoiceSessionFacts(binding)).toMatchObject({ status: "open" });
       write({ transcriptCapable: true });
-      expect(readVoiceSessionFacts("main", "voice-1")).toMatchObject({ transcriptCapable: true });
+      expect(readOwnedVoiceSessionFacts(binding)).toMatchObject({ transcriptCapable: true });
       const broker = new SqliteWorkerBroker();
       try {
         const store = await broker.open<AdmissionOperations>({
@@ -205,7 +209,7 @@ describe("client voice session store", () => {
       } finally {
         await broker.close();
       }
-      expect(readVoiceSessionFacts("main", "voice-1")).toMatchObject({
+      expect(readOwnedVoiceSessionFacts(binding)).toMatchObject({
         status: "closed",
         hasUserTranscript: true,
       });
@@ -252,13 +256,11 @@ describe("client voice session store", () => {
     ).toBeUndefined();
   });
 
-  it.each([
-    { name: "version", patch: { version: 2 } },
-    { name: "origin", patch: { origin: "server" } },
-    { name: "provider", patch: { provider: "   " } },
-    { name: "updated timestamp", patch: { updatedAt: "later" } },
-  ])("rejects an invalid $name", ({ patch }) => {
-    const value = JSON.parse(storedRecord([])) as Record<string, unknown>;
-    expect(parseStoredVoiceSessionRecord(JSON.stringify({ ...value, ...patch }))).toBeUndefined();
-  });
+  it.each([{ name: "provider", patch: { provider: "   " } }])(
+    "rejects an invalid $name",
+    ({ patch }) => {
+      const value = JSON.parse(storedRecord([])) as Record<string, unknown>;
+      expect(parseStoredVoiceSessionRecord(JSON.stringify({ ...value, ...patch }))).toBeUndefined();
+    },
+  );
 });

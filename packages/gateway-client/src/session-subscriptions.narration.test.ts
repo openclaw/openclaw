@@ -274,7 +274,7 @@ describe("session narration subscription ownership", () => {
     await coordinator.release(approvalOwner);
   });
 
-  it("restores a timed-out downgrade and drains overlapping releases without orphaning narration", async () => {
+  it("retries a timed-out downgrade and drains overlapping releases without orphaning narration", async () => {
     const downgrade = createDeferred<unknown>();
     let holdDowngrade = false;
     const { client, request } = createClient(async (_method, params) => {
@@ -303,6 +303,7 @@ describe("session narration subscription ownership", () => {
     expect(request).toHaveBeenLastCalledWith("sessions.messages.subscribe", {
       subscriptionId: expect.any(String),
       key: "main",
+      mode: "narration",
     });
     await Promise.all([coordinator.release(foreground), coordinator.release(narration)]);
     expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {

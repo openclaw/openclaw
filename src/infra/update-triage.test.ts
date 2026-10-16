@@ -121,7 +121,7 @@ describe("update triage child lifecycle", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       JSON.stringify({ promptPath, bundlePath: null, bundleError: "Snapshot unavailable" }),
     );
-    expect(runtime.log).toHaveBeenCalledWith("Update failed. Preparing triage diagnostics...");
+    expect(runtime.log).toHaveBeenCalledWith("Preparing triage diagnostics...");
     expect(runtime.log).not.toHaveBeenCalledWith("Update failed. Entering triage...");
     expect(runtime.error).not.toHaveBeenCalled();
     expect(JSON.parse(await fs.readFile(receiptPath, "utf8"))).toMatchObject({ updateRunId: null });
@@ -181,8 +181,12 @@ describe("update triage child lifecycle", () => {
       expect(await pending).toEqual({ status: "cancelled" });
       // Command settlement includes its process-tree cleanup join.
       expect(isPidAlive(pid)).toBe(false);
-      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
-        "Update failed. Preparing triage diagnostics...",
+      expect(runtime.log).toHaveBeenCalledWith("Preparing triage diagnostics...");
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("openclaw triage --run --update-result"),
+      );
+      expect(runtime.log).not.toHaveBeenCalledWith(
+        "Triage diagnostics saved; no repair agent was started.",
       );
       expect(runtime.error).not.toHaveBeenCalled();
     } finally {

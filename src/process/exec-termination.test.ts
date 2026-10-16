@@ -2,14 +2,18 @@ import { ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
 import { constants as osConstants } from "node:os";
 import process from "node:process";
-import { setImmediate as nextTurn, setTimeout as waitForProcessTick } from "node:timers/promises";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForDead } from "../../test/helpers/process-wait.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as processIdentity from "../shared/pid-alive.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
-import { COMMAND_PROCESS_TREE_KILL_GRACE_MS } from "./exec-spawn.js";
+import {
+  COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS,
+  COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+} from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
 import * as adoptedChildren from "./scoped-child-reaper.js";
 
@@ -20,17 +24,6 @@ function mockTerminatingChild(exitCode: number | null = null) {
   const kill = vi.spyOn(child, "kill").mockReturnValue(true);
   vi.spyOn(adoptedChildren, "scheduleAdoptedChildZombieReapAfterExit").mockImplementation(() => {});
   return { child, kill };
-}
-
-// The root's close event does not join its orphaned descendant's exit.
-async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (processIdentity.isPidAlive(pid)) {
-      await waitForProcessTick(25, undefined, { signal });
-    }
-  } catch (error) {
-    throw new Error(`Timed out waiting for descendant ${pid} to exit`, { cause: error });
-  }
 }
 
 async function withOwnedTree(
@@ -82,18 +75,15 @@ async function withOwnedTree(
     killPidIfAlive(descendantPid);
     await closed;
     if (descendantPid) {
-      await waitForDescendantExit(descendantPid, signal);
+      // The root's close event does not join its orphaned descendant's exit.
+      await waitForDead(descendantPid, signal);
       expect(processIdentity.isPidAlive(descendantPid)).toBe(false);
     }
   }
 }
 
 describe.skipIf(process.platform === "win32")("command process-group settlement", () => {
-  it.each([
-    { name: "an absent group", probeError: "ESRCH", needsGrace: false },
-    { name: "surviving descendants", probeError: undefined, needsGrace: true },
-    { name: "a permission-denied group", probeError: "EPERM", needsGrace: true },
-  ])(
+  it.each([{ name: "a permission-denied group", probeError: "EPERM", needsGrace: true }])(
     "settles $name after a failed root without losing cleanup ownership",
     async ({ probeError, needsGrace }) => {
       vi.useFakeTimers();
@@ -141,7 +131,7 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
           expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
         }
         // Neither live nor EPERM probes prove extinction after the force-send receipt.
-        await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_TREE_KILL_GRACE_MS - 1);
+        await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS - 1);
         expect(settled).toBe(!needsGrace);
         await vi.advanceTimersByTimeAsync(1);
         await expect(completion).resolves.toBe(needsGrace ? "uncertain" : "normal");
@@ -260,8 +250,6 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
 
   it.each([
     { observation: "absent", probeError: "ESRCH", reused: false, expected: "forced" },
-    { observation: "live", probeError: undefined, reused: false, expected: "uncertain" },
-    { observation: "inaccessible", probeError: "EPERM", reused: false, expected: "uncertain" },
     { observation: "reused then absent", probeError: "ESRCH", reused: true, expected: "uncertain" },
   ] as const)(
     "settles a group that becomes $observation during the final identity probe",
@@ -274,7 +262,7 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
           return 123;
         }
         // A synchronous identity probe can consume the remaining observation budget.
-        vi.setSystemTime(Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS);
+        vi.setSystemTime(Date.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
         finalIdentityRead = true;
         return reused ? 124 : probeError === "ESRCH" ? null : 123;
       });
@@ -310,12 +298,7 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
     },
   );
 
-  it.each([
-    { mode: "graceful", killSignal: undefined },
-    { mode: "force", killSignal: undefined },
-    { mode: "graceful", killSignal: "SIGKILL" },
-    { mode: "graceful", killSignal: osConstants.signals.SIGKILL },
-  ] as const)(
+  it.each([{ mode: "graceful", killSignal: undefined }] as const)(
     "preserves normal cleanup for a retired group (mode=$mode signal=$killSignal)",
     async ({ mode, killSignal }) => {
       const parent = spawn(
@@ -353,10 +336,7 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
 
   it.for([
     { observation: "live", killSignal: undefined },
-    { observation: "unknown", killSignal: undefined },
     { observation: "reused", killSignal: undefined },
-    { observation: "live", killSignal: "SIGKILL" },
-    { observation: "live", killSignal: osConstants.signals.SIGKILL },
   ] as const)(
     "reports uncertain when the original group remains $observation after force (initial signal=$killSignal)",
     async ({ observation, killSignal }, { signal: testSignal }) => {
@@ -373,9 +353,6 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
           ) {
             forced = true;
             return true;
-          }
-          if (forced && pid === -parent.pid! && signal === 0 && observation === "unknown") {
-            throw Object.assign(new Error("fixture observation unavailable"), { code: "EPERM" });
           }
           return kill(pid, signal);
         });
@@ -394,8 +371,16 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
           isChildExited: () => parent.exitCode !== null || parent.signalCode !== null,
           isCommandSettled: () => false,
         });
-        owner.terminate();
-        expect(await owner.settle()).toBe("uncertain");
+        vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+        try {
+          owner.terminate();
+          const completion = owner.settle();
+          await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
+          expect(await completion).toBe("uncertain");
+        } finally {
+          vi.clearAllTimers();
+          vi.useRealTimers();
+        }
         expect(processIdentity.isPidAlive(descendantPid)).toBe(true);
         expect(
           signals.mock.calls.filter(

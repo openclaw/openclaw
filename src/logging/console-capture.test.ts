@@ -7,7 +7,11 @@ import {
   registerActiveProgressLine,
   unregisterActiveProgressLine,
 } from "../../packages/terminal-core/src/progress-line.js";
-import { registerSignalExitGate, waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
+import {
+  registerSignalExitGate,
+  waitForCliSignalExit,
+  waitForSignalExitBarriers,
+} from "../cli/signal-exit-barrier.js";
 import { setVerbose } from "../global-state.js";
 import { logError, logInfo, logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
@@ -478,7 +482,9 @@ describe("enableConsoleCapture", () => {
   it.each([
     { name: "stdout", stream: process.stdout },
     { name: "stderr", stream: process.stderr },
-  ])("exits on async EPIPE on $name", ({ stream }) => {
+  ])("records natural completion on async EPIPE on $name", async ({ stream }) => {
+    const originalExitCode = process.exitCode;
+    process.exitCode = undefined;
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as typeof process.exit);
     try {
       setLoggerOverride({ level: "info", file: tempLogPath() });
@@ -487,8 +493,12 @@ describe("enableConsoleCapture", () => {
       const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
       epipe.code = "EPIPE";
       stream.emit("error", epipe);
-      expect(exitSpy).toHaveBeenCalledWith(0);
+      expect(await waitForCliSignalExit()).toBe(0);
+      expect(process.exitCode).toBe(0);
+      expect(exitSpy).not.toHaveBeenCalled();
     } finally {
+      await waitForCliSignalExit();
+      process.exitCode = originalExitCode;
       exitSpy.mockRestore();
     }
   });
@@ -499,10 +509,10 @@ describe("enableConsoleCapture", () => {
     { outcome: "recovery failed", code: 1 },
   ])("waits for maintenance recovery on EPIPE ($outcome)", async ({ outcome, code }) => {
     const originalExitCode = process.exitCode;
-    const exited = createDeferredCore<number>();
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((exitCode) => {
-      exited.resolve(Number(exitCode));
-    }) as typeof process.exit);
+    process.exitCode = undefined;
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("forced process exit");
+    });
     const recovery = createDeferredCore();
     const unregister = registerSignalExitGate(recovery.promise);
     try {
@@ -518,17 +528,20 @@ describe("enableConsoleCapture", () => {
       } else {
         recovery.resolve();
       }
-      await expect(exited.promise).resolves.toBe(code);
+      await expect(waitForCliSignalExit()).resolves.toBe(code);
+      expect(process.exitCode).toBe(code);
+      expect(exitSpy).not.toHaveBeenCalled();
     } finally {
       recovery.resolve();
       unregister();
       await waitForSignalExitBarriers();
+      await waitForCliSignalExit();
       process.exitCode = originalExitCode;
       exitSpy.mockRestore();
     }
   });
 
-  it("preserves an existing nonzero exit code on async EPIPE", () => {
+  it("preserves an existing nonzero exit code on async EPIPE", async () => {
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as typeof process.exit);
     const originalExitCode = process.exitCode;
     try {
@@ -539,7 +552,9 @@ describe("enableConsoleCapture", () => {
       const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
       epipe.code = "EPIPE";
       process.stderr.emit("error", epipe);
-      expect(exitSpy).toHaveBeenCalledWith(2);
+      expect(await waitForCliSignalExit()).toBe(2);
+      expect(process.exitCode).toBe(2);
+      expect(exitSpy).not.toHaveBeenCalled();
     } finally {
       process.exitCode = originalExitCode;
       exitSpy.mockRestore();

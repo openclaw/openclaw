@@ -33,7 +33,7 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
   root: string;
   admittedPaths: string;
   baseline?: WorkerWorkspaceManifest;
-  signal: AbortSignal;
+  signal?: AbortSignal;
   assertCurrent: () => void;
 }): Promise<Set<string>> {
   const listed = await requireGitBuffer(params.root, ["ls-files", "--cached", "-z"], {

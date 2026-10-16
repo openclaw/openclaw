@@ -12,6 +12,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "active turn recovery",
@@ -120,6 +121,19 @@ async function startActiveTurn(
   const runId = (send.params as { idempotencyKey?: unknown }).idempotencyKey;
   expect(typeof runId).toBe("string");
 
+  await gateway.emitGatewayEvent("chat", {
+    deltaText: streamText,
+    message: {
+      content: [{ text: streamText, type: "text" }],
+      role: "assistant",
+      timestamp: 1_100,
+    },
+    runId,
+    sessionKey: "agent:main:main",
+    state: "delta",
+  });
+  await page.locator(".chat-text").getByText(streamText, { exact: true }).waitFor();
+  // Foreground work after a reply resumes activity under the same owned run.
   await gateway.emitGatewayEvent("agent", {
     runId,
     seq: 1,
@@ -132,18 +146,6 @@ async function startActiveTurn(
       phase: "start",
       args: { path: "README.md" },
     },
-  });
-  await page.waitForTimeout(200);
-  await gateway.emitGatewayEvent("chat", {
-    deltaText: streamText,
-    message: {
-      content: [{ text: streamText, type: "text" }],
-      role: "assistant",
-      timestamp: 1_100,
-    },
-    runId,
-    sessionKey: "agent:main:main",
-    state: "delta",
   });
   await assertActiveTurnVisible(page, streamText);
   return runId as string;
@@ -197,16 +199,9 @@ async function readWorkingStartedAts(page: Page): Promise<number[]> {
 
 async function waitForGatewayConnected(page: Page): Promise<void> {
   await expect
-    .poll(
-      () =>
-        page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-          };
-          return app.runtime?.context.gateway.snapshot.phase;
-        }),
-      { timeout: 15_000 },
-    )
+    .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase), {
+      timeout: 15_000,
+    })
     .toBe("connected");
 }
 
@@ -313,11 +308,9 @@ suite.define(() => {
 
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.locator(".sidebar-identity-card").click();
-      await sidebar
-        .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
-        .click();
+      await sidebar.locator('.sidebar-identity-menu [data-value="command:usage"]').click();
       await waitForControlUiRoute(page, { pathname: "/usage", routeId: "usage" });
-      await sidebar.getByRole("link", { name: "Home" }).click();
+      await openHomeFullPage(page);
       await waitForControlUiRoute(page, { pathname: "/chat/main", routeId: "chat" });
       await assertActiveTurnVisible(page, streamText);
       await expect.poll(() => readWorkingStartedAts(page)).toContain(startedAt);

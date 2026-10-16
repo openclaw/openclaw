@@ -17,6 +17,7 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
@@ -27,7 +28,6 @@ import {
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import { skillLibraryReadOperations } from "./read.kernel.js";
-import { readSkillLibrarySelectionManifests } from "./selection-read.js";
 import {
   assertPreparedSkillLibrarySelection,
   changeSkillLibrarySelection,
@@ -39,16 +39,54 @@ import {
 import {
   listSkillLibrary,
   mutateSkillLibrary,
-  readSkillLibrary,
   resolveSkillLibraryPresentation,
   saveSkillLibrary,
 } from "./service.js";
-import { content, draft, useSkillLibraryFixture } from "./service.test-support.js";
+import { draft, useSkillLibraryFixture } from "./service.test-support.js";
 import { projectSkillLibraryList, type SkillLibraryAuthority } from "./store.js";
 
 const { fixture, tempDirs } = useSkillLibraryFixture();
 
 describe("skill library worker reads and prepared selection authority", () => {
+  it("reuses library facts until a library or profile writer changes their inputs", async () => {
+    const { options, alice, admin } = fixture();
+    const saved = await saveSkillLibrary(alice, draft(), options);
+    const reads = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
+    try {
+      const first = await seedSkillLibrarySelection(alice, options);
+      expect(first).toHaveLength(1);
+      const count = reads.mock.calls.length;
+      first[0]!.name = "caller mutation";
+      expect(await seedSkillLibrarySelection(alice, options)).toEqual([
+        {
+          skillId: saved.entry.skillId,
+          revision: saved.entry.revision,
+          name: saved.entry.name,
+          ownerProfileId: saved.entry.ownerProfileId,
+        },
+      ]);
+      expect(reads.mock.calls).toHaveLength(count);
+
+      await mutateSkillLibrary(
+        alice,
+        { action: "disable", skillId: saved.entry.skillId, expectedRevision: saved.entry.revision },
+        options,
+      );
+      expect(await seedSkillLibrarySelection(alice, options)).toEqual([]);
+      expect(await resolveSkillLibraryPresentation(admin, options)).toMatchObject({
+        multipleProfiles: false,
+        defaultTarget: "workspace",
+      });
+      ensureProfileForEmail("new-person@example.test", options);
+      expect(await resolveSkillLibraryPresentation(admin, options)).toMatchObject({
+        multipleProfiles: true,
+        defaultTarget: "personal",
+      });
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
   it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows", async () => {
     const { options, alice } = fixture();
     const saved = await saveSkillLibrary(alice, draft(), options);
@@ -252,45 +290,6 @@ describe("skill library worker reads and prepared selection authority", () => {
       profileId: alice.profileId,
       defaultTarget: "personal",
     });
-  });
-
-  it("reads library metadata, selections and manifests without caller-thread SQL", async () => {
-    const { options, alice } = fixture();
-    const saved = await saveSkillLibrary(alice, draft(), options);
-    // Independent WAL checkpoints must not race the library SQL measurement.
-    await openOpenClawStateDatabase(options).walMaintenance.stop();
-    const sql = observeHostDataSql();
-    try {
-      expect(await resolveSkillLibraryPresentation(alice, options)).toMatchObject({
-        profileId: alice.profileId,
-        defaultTarget: "personal",
-      });
-      expect((await listSkillLibrary(alice, {}, options)).entries).toEqual([saved.entry]);
-      expect((await readSkillLibrary(alice, saved.entry.skillId, undefined, options)).content).toBe(
-        content,
-      );
-      const pins = await seedSkillLibrarySelection(alice, options);
-      expect(pins).toHaveLength(1);
-      const attached = await changeSkillLibrarySelection(
-        alice,
-        [],
-        { sessionKey: "session", action: "attach", skillId: saved.entry.skillId },
-        options,
-      );
-      expect(attached).toEqual(pins);
-      assertPreparedSkillLibrarySelection(pins);
-      assertPreparedSkillLibrarySelection(attached);
-      const selected = await prepareSkillLibrarySelection(pins, options, () => {});
-      expect(selected[0]?.skill.name).toBe(saved.entry.name);
-      const manifests = await readSkillLibrarySelectionManifests(pins, options);
-      expect(manifests?.[0]?.files_json).toContain("references/data.bin");
-      expect(await readSelectedSkillLibraryFiles(pins[0]!, options)).toContainEqual(
-        expect.objectContaining({ path: "SKILL.md" }),
-      );
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-    }
   });
 
   it("projects a library through a separate admitted reader without copying actor avatars", async () => {

@@ -1,14 +1,15 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { prepareAuthProfileProvider } from "../../agents/auth-profiles/store-runtime.js";
 import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
-import { resolveExecDefaults } from "../../agents/exec-defaults.js";
+import { resolveExecDefaultsAsync } from "../../agents/exec-defaults.js";
 import {
   formatFastModeCommandOptions,
   formatFastModeCurrentStatus,
   formatFastModeValue,
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -53,7 +54,6 @@ import {
   resolveDirectiveTouchedSessionFields,
   withOptions,
 } from "./directive-handling.shared.js";
-import type { ThinkLevel } from "./directives.js";
 import {
   findSelectedCatalogEntry,
   prepareModelSelectionRuntime,
@@ -134,12 +134,16 @@ export async function handleDirectiveOnly(
   const activeAgentId = params.agentId;
   const agentDir = resolveAgentDir(params.cfg, activeAgentId);
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey(params);
-  const runtimeIsSandboxed = resolveSandboxRuntimeStatus({
+  const sandboxRuntime = await resolveSandboxRuntimeStatusAsync({
     cfg: params.cfg,
     agentId: activeAgentId,
     sessionKey,
     classificationSessionKey: runtimePolicySessionKey,
-  }).sandboxed;
+    ...(runtimePolicySessionKey === sessionKey
+      ? { preparedSessionEntry: params.sessionEntry ?? null }
+      : {}),
+  });
+  const runtimeIsSandboxed = sandboxRuntime.sandboxed;
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
   let thinkingCatalog = params.thinkingCatalog?.length
     ? params.thinkingCatalog
@@ -336,7 +340,7 @@ export async function handleDirectiveOnly(
       return unexpectedExecArguments;
     }
     if (!directives.hasExecOptions) {
-      const execDefaults = resolveExecDefaults({
+      const execDefaults = await resolveExecDefaultsAsync({
         cfg: params.cfg,
         sessionEntry,
         agentId: activeAgentId,
@@ -382,18 +386,6 @@ export async function handleDirectiveOnly(
     );
   }
 
-  // Model changes normalize stored choices; inherited defaults must remain unpinned.
-  const nextThinkLevel = sessionEntry.thinkingLevel as ThinkLevel | undefined;
-  const remappedUnsupportedThinkLevel =
-    nextThinkLevel && (params.persistenceState ? modelSelection : !directives.hasThinkDirective)
-      ? resolveSupportedThinkingLevel({
-          ...thinkingPolicy,
-          level: nextThinkLevel,
-        })
-      : undefined;
-  const shouldRemapUnsupportedThinkLevel =
-    Boolean(remappedUnsupportedThinkLevel) && remappedUnsupportedThinkLevel !== nextThinkLevel;
-
   const prevReasoningLevel = currentReasoningLevel ?? sessionEntry.reasoningLevel ?? "off";
   const elevatedChanged =
     directives.hasElevatedDirective &&
@@ -408,9 +400,6 @@ export async function handleDirectiveOnly(
     allowPrivilegedPersistence,
     directiveOnly: !params.persistenceState,
   });
-  if (shouldRemapUnsupportedThinkLevel && !touchedSessionFields.includes("thinkingLevel")) {
-    touchedSessionFields.push("thinkingLevel");
-  }
   const fastModeChanged =
     (directives.hasFastDirective &&
       directives.fastMode !== undefined &&
@@ -422,6 +411,11 @@ export async function handleDirectiveOnly(
     directives.reasoningLevel !== prevReasoningLevel;
   // Validated, authorized directives have already named every field they can mutate.
   if (touchedSessionFields.length > 0) {
+    const pinnedProfile =
+      modelSelection && !profileOverride && sessionEntry.authProfileOverride?.trim();
+    const recordedProvider = pinnedProfile
+      ? await prepareAuthProfileProvider({ agentDir, profileId: pinnedProfile })
+      : undefined;
     const authProfileError = validateSelection();
     if (authProfileError) {
       return rejectModelTransaction(authProfileError);
@@ -435,9 +429,6 @@ export async function handleDirectiveOnly(
         allowPrivilegedPersistence,
         allowElevatedPersistence: elevatedEnabled && elevatedAllowed,
       });
-    if (shouldRemapUnsupportedThinkLevel && remappedUnsupportedThinkLevel) {
-      sessionEntry.thinkingLevel = remappedUnsupportedThinkLevel;
-    }
     if (modelSelection) {
       const applied = applyModelOverrideWithAuthProfileCompatibility({
         cfg: params.cfg,
@@ -447,6 +438,7 @@ export async function handleDirectiveOnly(
         selection: modelSelection,
         explicitDefaultSelection: modelSelection.isDefault,
         profileOverride,
+        recordedProvider,
         markLiveSwitchPending: true,
       });
       const appliedRuntime = applyModelRuntimeDirective(sessionEntry, modelRuntimeResolution);
@@ -496,8 +488,7 @@ export async function handleDirectiveOnly(
       });
     }
     // List projections must observe committed settings, not only model selections.
-    const sessionSettingsUpdated = directiveFieldsUpdated || shouldRemapUnsupportedThinkLevel;
-    if (sessionKey && (sessionSettingsUpdated || modelSelectionUpdated)) {
+    if (sessionKey && (directiveFieldsUpdated || modelSelectionUpdated)) {
       emitSessionLifecycleEvent({
         sessionKey,
         agentId: activeAgentId,
@@ -651,13 +642,6 @@ export async function handleDirectiveOnly(
     } else if (modelRuntimeResolution.kind === "set") {
       parts.push(`Runtime set to ${modelRuntimeResolution.runtime} for this session.`);
     }
-  }
-  // Report the model change before the thinking remap it triggered: the remap is a
-  // consequence of the model switch, so the cause should be announced first.
-  if (shouldRemapUnsupportedThinkLevel && remappedUnsupportedThinkLevel) {
-    parts.push(
-      `Thinking level set to ${remappedUnsupportedThinkLevel} (${nextThinkLevel} not supported for ${resolvedProvider}/${resolvedModel}).`,
-    );
   }
   if (directives.hasQueueDirective && directives.queueMode) {
     addSystemAck(`Queue mode set to ${directives.queueMode}.`);

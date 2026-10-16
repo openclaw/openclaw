@@ -14,6 +14,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { formatModelCatalogAuthLabel } from "./model-catalog-auth-labels.js";
@@ -90,30 +91,6 @@ module.exports = { id: ${JSON.stringify(UNRELATED_PLUGIN_ID)}, register() {} };
   return pluginFile;
 }
 
-function createJwtWithExp(exp: number, marker?: string): string {
-  const payload = Buffer.from(JSON.stringify({ exp, ...(marker ? { marker } : {}) })).toString(
-    "base64url",
-  );
-  return `header.${payload}.signature`;
-}
-
-export function writeCodexAuth(codexHome: string, marker: string): void {
-  const authPath = path.join(codexHome, "auth.json");
-  fs.writeFileSync(
-    authPath,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: createJwtWithExp(Math.floor(Date.now() / 1000) + 3600, marker),
-        refresh_token: `refresh-${marker}-not-real`,
-      },
-    }),
-    "utf8",
-  );
-  const future = new Date(Date.now() + 2_000);
-  fs.utimesSync(authPath, future, future);
-}
-
 export function writeFixturePlugin(params: {
   root: string;
   spinMs: number;
@@ -124,6 +101,8 @@ export function writeFixturePlugin(params: {
   asyncSyntheticAuth?: boolean;
   syntheticAuthAvailable?: boolean;
   catalogControl?: boolean;
+  /** Publishes the Codex client version handed to this worker request as a model id. */
+  reportCodexClientVersion?: boolean;
 }): string {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
@@ -229,6 +208,13 @@ module.exports = {
       catalog: {
         run(context) {
           ${catalogControlSource}
+          ${
+            params.reportCodexClientVersion
+              ? `// Same store the Codex client-version SDK facade reads inside a worker request.
+          const handedOff = globalThis[Symbol.for("openclaw.codexClientVersionHandoff")]?.getStore();
+          const codexClientVersion = handedOff ? (handedOff.version ?? "unreported") : "not-handed-off";`
+              : ""
+          }
           const refOnlyApi = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_API_PROVIDER_ID)}).apiKey;
           const refOnlyToken = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_TOKEN_PROVIDER_ID)}).apiKey;
           const durableAuth = context.resolveProviderApiKey(${JSON.stringify(DURABLE_AUTH_PROVIDER_ID)}).apiKey;
@@ -239,6 +225,7 @@ module.exports = {
             api: "openai-completions",
             models: [
               ${params.catalogControl ? "...legacyModels," : ""}
+              ${params.reportCodexClientVersion ? '{ id: "codex-client-" + codexClientVersion, name: "Codex client version proof" },' : ""}
               { id: "sqlite-model", name: "SQLite model" },
               {
                 id: ${JSON.stringify(`plugin-generation-${params.pluginVersion ?? "v1"}`)},
@@ -370,6 +357,7 @@ export async function createCatalogFixture(
     builtPluginVersion?: string;
     asyncSyntheticAuth?: boolean;
     catalogControl?: boolean;
+    reportCodexClientVersion?: boolean;
   },
 ) {
   const root = makeTempDir("openclaw-model-catalog-worker-");
@@ -392,6 +380,7 @@ export async function createCatalogFixture(
     [REF_ONLY_API_ENV]: "ref-only-api-secret-not-real",
     [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
   };
+  await prepareSharedAuthStoreOwnership(env);
   const config = {
     agents: {
       defaults: {
@@ -426,6 +415,7 @@ export async function createCatalogFixture(
       },
     },
   } satisfies OpenClawConfig;
+  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
   replaceRuntimeAuthProfileStoreSnapshots([
     {
       agentDir,
@@ -458,7 +448,6 @@ export async function createCatalogFixture(
         syncExternalCli: false,
       })
     : undefined;
-  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
   return { agentDir, config, env, marker, externalAuthPath, hydratedAuthStore, root, workspaceDir };
 }
 
@@ -613,6 +602,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
     [REF_ONLY_API_ENV]: "ref-only-api-secret-not-real",
     [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
   };
+  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
   replaceRuntimeAuthProfileStoreSnapshots([
     {
       agentDir,
@@ -630,7 +620,6 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
       },
     },
   ]);
-  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
   const input = {
     agentId: "main",
     agentDir,

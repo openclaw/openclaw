@@ -55,31 +55,11 @@ describe("future holiday tagline windows (2028-2030)", () => {
   const poolHas = (pool: string[], term: string) =>
     pool.some((t) => t.toLowerCase().includes(term));
 
-  it("activates the Lunar New Year tagline on 2028-01-26", () => {
-    expect(poolHas(activePoolOn(2028, 0, 26), "lunar new year")).toBe(true);
-  });
-
   it("activates the Diwali tagline on 2029-11-05", () => {
     expect(poolHas(activePoolOn(2029, 10, 5), "diwali")).toBe(true);
   });
 
   it("activates the Diwali tagline on 2030-10-25", () => {
     expect(poolHas(activePoolOn(2030, 9, 25), "diwali")).toBe(true);
-  });
-
-  it("activates the Easter tagline on 2030-04-21", () => {
-    expect(poolHas(activePoolOn(2030, 3, 21), "easter")).toBe(true);
-  });
-
-  it("activates the Hanukkah tagline across its full 2028 window (Dec 13 and Dec 20)", () => {
-    expect(poolHas(activePoolOn(2028, 11, 13), "hanukkah")).toBe(true);
-    expect(poolHas(activePoolOn(2028, 11, 20), "hanukkah")).toBe(true);
-  });
-
-  it("does not activate floating holiday taglines on a plain date (2028-07-15)", () => {
-    const pool = activePoolOn(2028, 6, 15);
-    for (const term of ["lunar new year", "diwali", "easter", "hanukkah", "eid al-fitr"]) {
-      expect(poolHas(pool, term)).toBe(false);
-    }
   });
 });

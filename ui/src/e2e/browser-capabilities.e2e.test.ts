@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { afterAll, expect, it, vi } from "vitest";
+import { afterAll, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -9,6 +9,7 @@ import {
   installMockGateway,
   startProductionControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { failControlUiModuleForDocuments } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const builds = useAutoCleanupTempDirTracker(afterAll);
@@ -16,15 +17,10 @@ const enabledBuildId = "browser-capabilities-e2e";
 const enabled = createControlUiE2eSuite({
   name: "Control UI browser capability gate enabled",
   startServer: async () => {
-    vi.stubEnv("VITE_OPENCLAW_REQUIRE_MODERN_BROWSER", "true");
-    try {
-      return await startProductionControlUiE2eServer(
-        builds.make("openclaw-browser-capabilities-"),
-        enabledBuildId,
-      );
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    return await startProductionControlUiE2eServer(
+      builds.make("openclaw-browser-capabilities-"),
+      enabledBuildId,
+    );
   },
 });
 
@@ -177,25 +173,21 @@ enabled.define(() => {
     await enabled.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       await setBrowserFeatures(page, false);
       await page.clock.install();
-      let failures = 0;
       let recoveryRequests = 0;
       page.on("request", (request) => {
         if (new URL(request.url()).searchParams.has("openclaw_mount_recovery")) {
           recoveryRequests += 1;
         }
       });
-      await page.route("**/assets/unsupported-browser-*.js", async (route) => {
-        if (failures === 0) {
-          failures += 1;
-          await route.fulfill({ status: 503, body: "temporarily unavailable" });
-        } else {
-          await route.continue();
-        }
-      });
+      const failure = await failControlUiModuleForDocuments(
+        page,
+        /\/assets\/unsupported-browser-[^/]+\.js$/u,
+      );
       await page.goto(`${enabled.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
       await page.getByRole("heading", { name: "Browser guidance could not load" }).waitFor();
       await page.clock.runFor(30_000);
       expect(recoveryRequests).toBe(0);
+      expect(failure.documentCount()).toBe(1);
       const frame = await takeControlUiScreenshotFrame(
         page,
         page.locator("#openclaw-mount-fallback"),
@@ -205,7 +197,7 @@ enabled.define(() => {
       await writeFile(path.join(enabled.artifactDir, "unsupported-download-failed.png"), frame.png);
       await page.getByRole("button", { name: "Try again", exact: true }).click();
       await page.getByRole("heading", { name: "Update your browser to use OpenClaw" }).waitFor();
-      expect(failures).toBe(1);
+      expect(failure.documentCount()).toBe(2);
     });
   });
 
@@ -224,27 +216,4 @@ enabled.define(() => {
       });
     },
   );
-});
-
-const dormant = createControlUiE2eSuite({ name: "Control UI browser capability gate dormant" });
-dormant.define(() => {
-  it("keeps today's application available on older browsers until cutover", async () => {
-    await dormant.withPage({ serviceWorkers: "block", colorScheme: "light" }, async ({ page }) => {
-      await setBrowserFeatures(page, false);
-      await installMockGateway(page);
-      await page.goto(`${dormant.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.waitFor();
-      expect(await page.locator(".unsupported-browser").count()).toBe(0);
-      const frame = await takeControlUiScreenshotFrame(
-        page,
-        page.locator("openclaw-app"),
-        [composer],
-        {
-          animations: "disabled",
-        },
-      );
-      await writeFile(path.join(dormant.artifactDir, "before-dormant.png"), frame.png);
-    });
-  });
 });

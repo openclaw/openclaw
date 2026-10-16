@@ -8,6 +8,7 @@ import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.
 import { resolveGatewayProgramArguments } from "./program-args.js";
 import { stageScheduledTask } from "./schtasks-install.js";
 import { readScheduledTaskCommand } from "./schtasks-layout.js";
+import { buildSystemdUnit, parseSystemdExecStart } from "./systemd-unit.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -142,3 +143,62 @@ describe("pnpm Scheduled Task entrypoint", () => {
     },
   );
 });
+
+it.each(["openclaw.mjs", "dist/index.js"])(
+  "keeps the persisted pnpm v11 systemd command usable after project replacement (%s)",
+  async (entry) => {
+    const home = tempDirs.make("openclaw-pnpm-systemd-");
+    const globalRoot = path.join(home, "global", "v11");
+    const projectLink = path.join(globalRoot, "hash-a1b2");
+    const writeProject = async (version: string) => {
+      const project = path.join(globalRoot, `${version}-0`);
+      const root = path.join(
+        project,
+        "node_modules",
+        ".pnpm",
+        `openclaw@${version}`,
+        "node_modules",
+        "openclaw",
+      );
+      await fs.mkdir(path.join(root, "dist"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", version }),
+      );
+      await fs.writeFile(path.join(root, "openclaw.mjs"), 'import "./dist/index.js";\n');
+      await fs.writeFile(path.join(root, "dist", "index.js"), `export default "${version}";\n`);
+      await fs.writeFile(
+        path.join(project, "package.json"),
+        JSON.stringify({ dependencies: { openclaw: version } }),
+      );
+      await fs.symlink(root, path.join(project, "node_modules", "openclaw"), "junction");
+      return { project, root };
+    };
+    const original = await writeProject("2026.10.1");
+    await fs.symlink(original.project, projectLink, "junction");
+    const { programArguments } = await resolveGatewayProgramArguments({
+      cliEntrypoint: path.join(original.root, entry),
+      runtime: "node",
+      runtimePath: process.execPath,
+      port: 18789,
+    });
+    const unitPath = path.join(home, "openclaw-gateway.service");
+    await fs.writeFile(unitPath, buildSystemdUnit({ programArguments }));
+
+    const replacement = await writeProject("2026.10.2");
+    await fs.unlink(projectLink);
+    await fs.symlink(replacement.project, projectLink, "junction");
+    await fs.rm(original.project, { recursive: true });
+
+    const unit = await fs.readFile(unitPath, "utf8");
+    const saved = parseSystemdExecStart(
+      unit
+        .split("\n")
+        .find((line) => line.startsWith("ExecStart="))!
+        .slice("ExecStart=".length),
+    );
+    const savedEntry = saved.at(-4)!;
+    await expect(fs.readFile(savedEntry, "utf8")).resolves.toBe('export default "2026.10.2";\n');
+    expect(savedEntry).toBe(path.join(projectLink, "node_modules", "openclaw", "dist", "index.js"));
+  },
+);

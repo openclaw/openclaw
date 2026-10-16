@@ -45,7 +45,7 @@ export async function prepareWorkerProjectSnapshot(params: {
   namespace: string;
   baseCommit?: string;
   signal?: AbortSignal;
-}): Promise<WorkerLocalProjectSnapshot | undefined> {
+}): Promise<WorkerLocalProjectSnapshot | null | undefined> {
   params.signal?.throwIfAborted();
   const root = await fsp.realpath(params.localPath);
   const options = {
@@ -99,14 +99,15 @@ export async function prepareWorkerProjectSnapshot(params: {
     throw new Error("Worker workspace Git base is not a commit id");
   }
   if ((await requireGit(root, ["cat-file", "-s", `${baseCommit}^{tree}`], options)) === "0") {
-    // Empty session repositories have no reusable project content. Keep their
-    // isolated Git metadata in ordinary workspace sync, outside the warm image.
-    return undefined;
+    // Only a committed empty tree admits runtime-only preparation. Undefined
+    // remains unavailable/unborn; session Git metadata still travels through sync.
+    return null;
   }
   const { canonicalRoot, commonDir } = await resolveGitRepositoryPaths(root, options);
-  const origin = await runGit(root, ["remote", "get-url", "origin"], options);
+  const origin = await runGit(canonicalRoot, ["remote", "get-url", "origin"], options);
   const label =
-    (origin.code === 0 ? normalizeCloudRepo(origin.stdout) : undefined) ?? path.basename(root);
+    (origin.code === 0 ? normalizeCloudRepo(origin.stdout) : undefined) ??
+    path.basename(canonicalRoot);
   params.signal?.throwIfAborted();
   // Linked session worktrees share the repository cache; their pinned commits and
   // mutable overlays must not create a new project identity.

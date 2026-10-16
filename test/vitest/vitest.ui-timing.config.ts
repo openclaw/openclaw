@@ -1,8 +1,6 @@
 // Root runs give wall-clock UI budgets their own scheduling group.
 import type { ViteUserConfig } from "vitest/config";
-import { controlUiSolidPlugin } from "../../ui/vite.config.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
-import { jsdomOptimizedDeps } from "./vitest.shared.config.ts";
 import uiIsolatedConfig from "./vitest.ui-isolated.config.ts";
 import { uiTimingTestFiles } from "./vitest.ui-paths.mjs";
 import uiConfig from "./vitest.ui.config.ts";
@@ -11,7 +9,6 @@ export function createUiTimingVitestConfig(
   env?: Record<string, string | undefined>,
 ): ViteUserConfig {
   const config = createScopedVitestConfig(uiTimingTestFiles, {
-    deps: jsdomOptimizedDeps,
     environment: "jsdom",
     env,
     excludeUnitFastTests: false,
@@ -19,11 +16,10 @@ export function createUiTimingVitestConfig(
     intersectIncludeFile: true,
     isolate: true,
     name: "ui-timing",
-    setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
+    setupFiles: ["ui/src/test-helpers/dom.setup.ts"],
   });
   return {
     ...config,
-    plugins: [...(config.plugins ?? []), controlUiSolidPlugin()],
     test: {
       ...config.test,
       sequence: {

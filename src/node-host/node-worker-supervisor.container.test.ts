@@ -9,6 +9,7 @@ import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpo
 import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
+import * as processIdentity from "./node-worker-process-identity.js";
 import { requireNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import {
   createNodeWorkerContainerFixture,
@@ -43,7 +44,24 @@ function containerFixture(options: Parameters<typeof createNodeWorkerContainerFi
     options,
   );
   const store = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env: fixture.env }));
-  return { ...fixture, store, [Symbol.asyncDispose]: () => fixture.supervisor.close() };
+  const pending: Promise<unknown>[] = [];
+  return {
+    ...fixture,
+    store,
+    ownOperation<T>(operation: Promise<T>): Promise<T> {
+      // Keep the original result assertable while disposal owns early failures.
+      void operation.catch(() => undefined);
+      pending.push(operation);
+      return operation;
+    },
+    async [Symbol.asyncDispose]() {
+      try {
+        await fixture.supervisor.close();
+      } finally {
+        await Promise.allSettled(pending);
+      }
+    },
+  };
 }
 
 function readWorkerFixture(
@@ -308,18 +326,21 @@ describe("node worker supervisor container isolation", () => {
     const createMarker = path.join(fixture.engineRoot, "hold-create");
     const removalMarker = path.join(fixture.engineRoot, "hold-removal");
     const { store } = fixture;
+    await fixture.supervisor.initialize();
     fs.writeFileSync(createMarker, "hold");
     fs.writeFileSync(removalMarker, "hold");
 
     try {
-      const launch = fixture.supervisor.launch(input, endpoint);
+      const launch = fixture.ownOperation(fixture.supervisor.launch(input, endpoint));
       await vi.waitFor(
         () => expect(fixture.events().some((event) => event.argv[0] === "create")).toBe(true),
         { timeout: 5_000 },
       );
       expect((await store.get(input.launchId))?.state).toBe("pending");
 
-      const cancellation = fixture.supervisor.cancel(testNodeWorkerLaunchIdentity(input));
+      const cancellation = fixture.ownOperation(
+        fixture.supervisor.cancel(testNodeWorkerLaunchIdentity(input)),
+      );
       await vi.waitFor(() => expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 }));
       expect((await store.get(input.launchId))?.state).toBe("pending");
 
@@ -355,10 +376,13 @@ describe("node worker supervisor container isolation", () => {
     const createMarker = path.join(fixture.engineRoot, "hold-create");
     const { store } = fixture;
     const controller = new AbortController();
+    await fixture.supervisor.initialize();
     fs.writeFileSync(createMarker, "hold");
 
     try {
-      const launch = fixture.supervisor.launch(input, endpoint, controller.signal);
+      const launch = fixture.ownOperation(
+        fixture.supervisor.launch(input, endpoint, controller.signal),
+      );
       await vi.waitFor(
         () => expect(fixture.events().some((event) => event.argv[0] === "create")).toBe(true),
         { timeout: 5_000 },
@@ -406,25 +430,36 @@ describe("node worker supervisor container isolation", () => {
     expect(fixture.events().some((event) => event.argv.includes(foreign.id))).toBe(false);
   });
 
-  it("preserves a live foreign supervisor's pending container during reconciliation", async () => {
-    await using fixture = containerFixture();
-    const launchId = "container-live-pending";
-    const container = fixture.seed({ id: "e".repeat(64), launchId });
-    const input = testWorkerLaunchInput(fixture.workspaceDir, launchId, "wait");
-    const identity = testNodeWorkerLaunchIdentity(input);
-    const { store } = fixture;
-    await store.claim(
-      { ...identity, gatewayNamespace: input.gatewayNamespace },
-      requireNodeWorkerProcessIdentity(process.pid),
-      8,
-    );
+  it.each([false, true])(
+    "reconciles a pending container with live PIDs and reboot=%s",
+    async (rebooted) => {
+      await using fixture = containerFixture();
+      const launchId = "container-live-pending";
+      const container = fixture.seed({ id: "e".repeat(64), launchId });
+      const input = testWorkerLaunchInput(fixture.workspaceDir, launchId, "wait");
+      const identity = testNodeWorkerLaunchIdentity(input);
+      const { store } = fixture;
+      const boot = vi.spyOn(processIdentity, "getNodeWorkerBootIdentity").mockReturnValue("boot-a");
+      try {
+        await store.claim(
+          { ...identity, gatewayNamespace: input.gatewayNamespace },
+          requireNodeWorkerProcessIdentity(process.pid),
+          8,
+        );
 
-    await fixture.supervisor.initialize();
+        boot.mockReturnValue(rebooted ? "boot-b" : "boot-a");
+        await fixture.supervisor.initialize();
 
-    expect(await store.get(launchId)).toMatchObject({ state: "pending" });
-    expect(fixture.exists(container.id)).toBe(true);
-    expect(fixture.events().some((event) => event.argv[0] === "kill")).toBe(false);
-  });
+        expect(await store.get(launchId)).toMatchObject({
+          state: rebooted ? "interrupted" : "pending",
+        });
+        expect(fixture.exists(container.id)).toBe(!rebooted);
+        expect(fixture.events().some((event) => event.argv[0] === "kill")).toBe(rebooted);
+      } finally {
+        boot.mockRestore();
+      }
+    },
+  );
 
   it("interrupts a stale running journal after verifying its dead container identity", async () => {
     await using fixture = containerFixture();

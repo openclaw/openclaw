@@ -105,12 +105,7 @@ export class TwilioProvider implements VoiceCallProvider {
     const webhookUrl = this.callWebhookUrls.get(providerCallId);
     let resolvedCallId = callId;
     if (!resolvedCallId && webhookUrl) {
-      try {
-        resolvedCallId = new URL(webhookUrl).searchParams.get("callId") || undefined;
-      } catch {
-        // The provider only stores URLs it constructed, but cleanup must still
-        // release provider-keyed state if a malformed value is injected.
-      }
+      resolvedCallId = new URL(webhookUrl).searchParams.get("callId") || undefined;
     }
     if (resolvedCallId) {
       this.twimlStorage.delete(resolvedCallId);
@@ -596,10 +591,7 @@ export class TwilioProvider implements VoiceCallProvider {
         await this.playTtsViaStream(input.text, streamSid);
         return;
       } catch (err) {
-        console.warn(
-          `[voice-call] Telephony TTS failed:`,
-          err instanceof Error ? err.message : err,
-        );
+        console.warn(`[voice-call] Telephony TTS failed callId=${input.callId}`);
         throw err instanceof Error ? err : new Error(String(err));
       }
     }

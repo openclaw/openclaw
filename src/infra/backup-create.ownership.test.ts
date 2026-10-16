@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
@@ -26,23 +25,12 @@ import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  resolveOpenClawStateSqlitePath,
-  resolveQuarantineStorePath,
-} from "../state/openclaw-state-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { inspectDatabase, expectDatabaseRows } from "./backup-create-family.test-support.js";
 import { listArchiveEntries } from "./backup-create.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
-
-function inspectDatabase(databasePath: string, inspect: (database: DatabaseSync) => void) {
-  const database = new (requireNodeSqlite().DatabaseSync)(databasePath, { readOnly: true });
-  try {
-    inspect(database);
-  } finally {
-    database.close();
-  }
-}
 
 type RegisteredAlias = "dot" | "symlink" | "namespace";
 const registeredAliases: { includeWorkspace: boolean; alias: RegisteredAlias }[] = [
@@ -137,13 +125,11 @@ describe("backup SQLite ownership", () => {
               restoredRoot,
               buildBackupArchivePath(archive.archiveRoot, aliasPath),
             );
-            inspectDatabase(restoredAgent, (database) => {
-              expect(
-                database
-                  .prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'")
-                  .get(),
-              ).toEqual({ agent_id: "main" });
-            });
+            expectDatabaseRows(
+              restoredAgent,
+              "SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'",
+              [{ agent_id: "main" }],
+            );
           }
         },
       );
@@ -313,18 +299,14 @@ describe("backup SQLite ownership", () => {
               ]);
             },
           );
-          const canonicalAgentPath = await fs.realpath(agentPath);
-          inspectDatabase(
-            path.join(
-              restored.targetPath,
-              buildBackupArchivePath(archive.archiveRoot, resolveQuarantineStorePath(state.env)),
+          await expect(
+            fs.stat(
+              path.join(
+                restored.targetPath,
+                `${buildBackupArchivePath(archive.archiveRoot, agentPath)}.seal`,
+              ),
             ),
-            (database) => {
-              expect(
-                database.prepare("SELECT path FROM agent_integrity_verifications").all(),
-              ).toEqual([{ path: canonicalAgentPath }]);
-            },
-          );
+          ).rejects.toMatchObject({ code: "ENOENT" });
         } finally {
           snapshot.mockRestore();
         }
@@ -397,17 +379,11 @@ describe("registered backup hardlinks", () => {
               target: state.path("restored"),
             });
             for (const source of [ownerPath, aliasPath]) {
-              const database = new sqlite.DatabaseSync(
+              expectDatabaseRows(
                 path.join(restored.targetPath, buildBackupArchivePath(archive.archiveRoot, source)),
-                { readOnly: true },
+                "SELECT value FROM durable_records",
+                [{ value: "committed-only-in-wal" }],
               );
-              try {
-                expect(database.prepare("SELECT value FROM durable_records").all()).toEqual([
-                  { value: "committed-only-in-wal" },
-                ]);
-              } finally {
-                database.close();
-              }
             }
           } finally {
             writer.close();

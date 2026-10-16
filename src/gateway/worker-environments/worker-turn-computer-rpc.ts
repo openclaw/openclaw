@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Value } from "typebox/value";
 import type { WorkerProtocolCloseReason } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -11,8 +12,6 @@ import {
   WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES,
 } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { ComputerTakeControlParamsSchema } from "../../agents/tools/computer-tool-control.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { redactSensitiveText } from "../../logging/redact.js";
 import {
   ComputerActParamsSchema,
   ScreenSnapshotParamsSchema,
@@ -107,7 +106,7 @@ export function createWorkerComputerRpc(params: {
       return {
         ok: false,
         reason: "gateway-unavailable",
-        message: truncateUtf16Safe(redactSensitiveText(message, { mode: "tools" }), 256),
+        message: truncateUtf16Safe(message, 256),
       };
     }
   };

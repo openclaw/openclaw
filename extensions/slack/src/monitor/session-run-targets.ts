@@ -1,5 +1,5 @@
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
+import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type { SlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
@@ -19,14 +19,13 @@ export async function captureSlackSessionTargetGuard(
   ctx: SlackMonitorContext,
   route: ResolvedAgentRoute,
   isActive?: () => boolean,
-): Promise<() => boolean> {
-  const { isCurrent } = await captureSessionEntryCurrentCheck({
+) {
+  return captureSessionEntryCurrentCheckAsync({
     agentId: route.agentId,
     sessionKey: route.sessionKey,
     storePath: resolveStorePath(ctx.cfg.session?.store, { agentId: route.agentId }),
     isActive,
   });
-  return isCurrent;
 }
 
 // Reloaded turn contexts inherit the same Bolt app; each new monitor owns a new app.

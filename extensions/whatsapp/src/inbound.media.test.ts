@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as waitForLogTick } from "node:timers/promises";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -82,6 +83,7 @@ let currentMockSocket:
       readMessages: ReturnType<typeof vi.fn>;
       groupFetchAllParticipating: ReturnType<typeof vi.fn>;
       updateMediaMessage: ReturnType<typeof vi.fn>;
+      getMediaHost: () => string;
       logger: Record<string, never>;
       user: { id: string };
     }
@@ -120,7 +122,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
-    getRuntimeConfig: vi.fn().mockReturnValue({
+    readRuntimeConfig: vi.fn().mockReturnValue({
       channels: {
         whatsapp: {
           allowFrom: ["*"], // Allow all in tests
@@ -248,6 +250,7 @@ vi.mock("./session.js", async () => {
         readMessages: vi.fn().mockResolvedValue(undefined),
         groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
         updateMediaMessage: vi.fn(),
+        getMediaHost: () => "media-conn.example",
         logger: {},
         user: { id: "me@s.whatsapp.net" },
       };
@@ -561,6 +564,68 @@ describe("web inbound media saves with extension", () => {
     await listener.close();
   });
 
+  it.for([
+    { urlHost: "a.whatsapp.net", fetchHost: "media-conn.example" },
+    // Recorded WhatsApp Web stickers carry the bare host as url (WhiskeySockets/Baileys#1085, #1557).
+    { urlHost: "web.whatsapp.net", fetchHost: "media-conn.example", bareUrl: true },
+    { urlHost: "mmg.whatsapp.net", fetchHost: "mmg.whatsapp.net" },
+    { urlHost: "custom-cdn.example", fetchHost: "custom-cdn.example" },
+  ])(
+    "downloads a sticker whose url is on $urlHost from $fetchHost",
+    async ({ urlHost, fetchHost, bareUrl }, { onTestFinished }) => {
+      const { downloadMediaMessage, getMediaKeys } =
+        await vi.importActual<typeof import("baileys")>("baileys");
+      downloadMediaMessageMock.mockImplementationOnce(downloadMediaMessage);
+
+      // 1x1 lossless WebP.
+      const sticker = Buffer.from("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==", "base64");
+      const mediaKey = crypto.randomBytes(32);
+      const { cipherKey, iv } = await getMediaKeys(mediaKey, "sticker");
+      const cipher = crypto.createCipheriv("aes-256-cbc", cipherKey, iv);
+      const encrypted = Buffer.concat([cipher.update(sticker), cipher.final()]);
+      const directPath = "/v/t62.15575-24/sticker.enc?ccb=11-4";
+      const fetchUrl = `https://${fetchHost}${directPath}`;
+      // Any other host fails the way undici fails a host with no DNS record.
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async (input) =>
+          resolveRequestUrl(input) === fetchUrl
+            ? new Response(encrypted)
+            : Promise.reject(new TypeError("fetch failed")),
+        );
+      onTestFinished(() => fetchSpy.mockRestore());
+
+      const onMessage = vi.fn();
+      const listener = await startMediaMonitor(onMessage);
+      onTestFinished(() => listener.close());
+      const realSock = await getMockSocket();
+
+      realSock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [
+          {
+            key: { id: `sticker-${urlHost}`, fromMe: false, remoteJid: "111@s.whatsapp.net" },
+            message: {
+              stickerMessage: {
+                url: bareUrl ? `https://${urlHost}` : `https://${urlHost}${directPath}`,
+                directPath,
+                mediaKey,
+                mimetype: "image/webp",
+              },
+            },
+            messageTimestamp: 1_700_000_012,
+          },
+        ],
+      });
+
+      const inbound = await waitForMessage(onMessage);
+      expect(fetchSpy.mock.calls.map(([input]) => resolveRequestUrl(input))).toEqual([fetchUrl]);
+      expect(inbound.payload.media?.type).toBe("image/webp");
+      const mediaPath = requireMediaPath(inbound.payload.media?.path);
+      expect(await fs.readFile(mediaPath)).toEqual(sticker);
+    },
+  );
+
   it("delivers native polls and preserves their questions when quoted", async () => {
     const onMessage = vi.fn();
     const listener = await startMediaMonitor(onMessage);
@@ -683,10 +748,7 @@ describe("web inbound media saves with extension", () => {
     expect(diagnostic).toContain('"failureStage":"direct"');
     expect(diagnostic).toContain('"errorClass":"Error"');
     expect(diagnostic).toContain('"statusCode":410');
-    expect(diagnostic).toContain("expired media reference");
-    expect(diagnostic).toContain("[redacted-url]");
-    expect(diagnostic).toContain("[redacted-phone]");
-    expect(diagnostic).toContain("[redacted-jid]");
+    expect(diagnostic).not.toContain("expired media reference");
     expect(diagnostic).not.toContain("media.example/private");
     expect(diagnostic).not.toContain("+15551234567");
     expect(diagnostic).not.toContain("111@s.whatsapp.net");
@@ -697,9 +759,9 @@ describe("web inbound media saves with extension", () => {
     const terminalDiagnostic = observedConsoleWarnings.mock.calls.find(
       ([message]) => message === "WhatsApp inbound media materialization failed",
     )?.[1]?.consoleMessage;
-    expect(terminalDiagnostic).toContain("stage=direct");
-    expect(terminalDiagnostic).toContain("status=410");
-    expect(terminalDiagnostic).toContain("[redacted-url]");
+    expect(terminalDiagnostic).toBe(
+      "WhatsApp inbound media materialization failed (stage=direct class=Error kind=image status=410)",
+    );
     expect(terminalDiagnostic).not.toContain("media.example/private");
     expect(terminalDiagnostic).not.toContain("789@hosted.lid");
     expect(terminalDiagnostic).not.toContain("42@c.us");
@@ -749,7 +811,7 @@ describe("web inbound media saves with extension", () => {
     expect(diagnostic).toContain('"failureStage":"quoted"');
     expect(diagnostic).toContain('"errorClass":"Error"');
     expect(diagnostic).toContain('"statusCode":410');
-    expect(diagnostic).toContain("quoted media reference expired");
+    expect(diagnostic).not.toContain("quoted media reference expired");
     expect(diagnostic).not.toContain("7@hosted");
     expect(diagnostic).not.toContain("88@newsletter");
     expect(diagnostic).not.toContain(QUOTED_SYNTHETIC_API_KEY);
@@ -757,8 +819,9 @@ describe("web inbound media saves with extension", () => {
     const terminalDiagnostic = observedConsoleWarnings.mock.calls.find(
       ([message]) => message === "WhatsApp inbound media materialization failed",
     )?.[1]?.consoleMessage;
-    expect(terminalDiagnostic).toContain("stage=quoted");
-    expect(terminalDiagnostic).toContain("status=410");
+    expect(terminalDiagnostic).toBe(
+      "WhatsApp inbound media materialization failed (stage=quoted class=Error kind=image status=410)",
+    );
     expect(terminalDiagnostic).not.toContain("7@hosted");
     expect(terminalDiagnostic).not.toContain("88@newsletter");
     expect(terminalDiagnostic).not.toContain(QUOTED_SYNTHETIC_API_KEY);

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { z } from "zod";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
+import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
 import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
 
@@ -148,6 +149,7 @@ const LockPayloadSchema = z.object({
   /** Present when Gateway cron writes use the dynamic-default ownership projection. */
   cronOwnerProjection: z.literal("dynamic-default-v1").optional(),
   createdAt: z.string(),
+  startupPhase: z.literal("starting").optional(),
   configPath: z.string(),
   port: z.number().int().min(1).max(65_535).optional(),
   role: z
@@ -155,12 +157,26 @@ const LockPayloadSchema = z.object({
     .optional(),
   stateDir: z.string().optional(),
   startTime: z.number().optional(),
+  parentPid: z.number().int().positive().optional(),
+  parentStartTime: z.number().optional(),
   // Null records an unavailable identity; absent fields retain legacy PID recovery.
   processNamespace: GatewayProcessNamespaceSchema.nullable().optional(),
 });
 
 export type LockPayload = z.infer<typeof LockPayloadSchema>;
 export type GatewayLockRole = NonNullable<LockPayload["role"]>;
+
+/** Parent loss cancels maintenance; peers still wait for its native process to exit. */
+export function isGatewayMaintenanceParentStale(owner: LockPayload | null): boolean {
+  return (
+    owner?.role === "sqlite-maintenance" &&
+    owner.parentPid !== undefined &&
+    ((owner.pid === process.pid && process.ppid !== owner.parentPid) ||
+      isLockOwnerDefinitelyStale({
+        payload: { pid: owner.parentPid, starttime: owner.parentStartTime },
+      }))
+  );
+}
 
 export function parseGatewayLockPayload(raw: string): LockPayload | null {
   return safeParseJsonWithSchema(LockPayloadSchema, raw);

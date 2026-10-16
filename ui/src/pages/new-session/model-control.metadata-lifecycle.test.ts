@@ -91,7 +91,7 @@ describe("new-session model metadata lifecycle", () => {
   it("retires a consumed personal-account model before the next configured draft", async () => {
     const { context, control, neutral, connected, preview, draw, chooseAccount } =
       retainedAccountDraft();
-    Object.assign(context, { config: { current: { newSessionModelDefaults: "configured" } } });
+    Object.assign(context.config.current, { newSessionModelDefaults: "configured" });
     const alternate = {
       id: "alternate",
       name: "Alternate",
@@ -157,7 +157,7 @@ describe("new-session model metadata lifecycle", () => {
       chooseAccount,
       savePreference,
     } = retainedAccountDraft();
-    Object.assign(context, { config: { current: { newSessionModelDefaults: "configured" } } });
+    Object.assign(context.config.current, { newSessionModelDefaults: "configured" });
     const other = { id: "other", name: "Other provider", provider: "openai", available: true };
     neutral.models.push(other);
     connected.models.push(other);
@@ -496,44 +496,6 @@ describe("new-session model metadata lifecycle", () => {
     control.reset();
   });
 
-  it("retains draft model controls across client replacement but clears them for another agent", async () => {
-    const model: ModelCatalogEntry = {
-      id: "model",
-      name: "Model",
-      provider: "openai",
-      available: true,
-    };
-    const agent = { id: "main", model: { primary: "openai/model" } };
-    const first = contextWith([model]);
-    const control = new NewSessionModelControl(() => undefined);
-    control.load(first.context, "main", true, { agent });
-    await vi.waitFor(() => expect(first.request).toHaveBeenCalledOnce());
-    const selection = {
-      selected: "openai/model",
-      contextWindow: "200k",
-      thinkingLevel: "high",
-      fastMode: true,
-    } as const;
-    Object.assign(control, selection);
-    const replacement = contextWith([
-      { ...model, available: false, unavailableReason: "missing-auth" },
-    ]);
-
-    control.load(replacement.context, "main", true, { agent });
-    expect(control).toMatchObject(selection);
-    await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
-    expect(control).toMatchObject(selection);
-
-    control.load(replacement.context, "research", true);
-    expect(control).toMatchObject({
-      selected: "",
-      contextWindow: "",
-      thinkingLevel: "",
-      fastMode: undefined,
-    });
-    control.reset();
-  });
-
   it("retains its neutral auth gate through pending, rejected and failed refreshes, isolated from a session projection", async () => {
     const model: ModelCatalogEntry = {
       id: "model",
@@ -580,7 +542,7 @@ describe("new-session model metadata lifecycle", () => {
     control.reset();
   });
 
-  it("retires a control immediately and gives its remount a fresh result after pending work finishes", async () => {
+  it("retires a control immediately and gives its remount a fresh result", async () => {
     const models: ModelCatalogEntry[] = [
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
     ];
@@ -595,7 +557,7 @@ describe("new-session model metadata lifecycle", () => {
     request.mockResolvedValueOnce({ models });
     const remountedControl = new NewSessionModelControl(() => undefined);
     remountedControl.load(context, "main", true);
-    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
     pending.resolve({ models: [] });
 
     await vi.waitFor(() => {

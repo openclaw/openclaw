@@ -102,10 +102,10 @@ struct LowCoverageHelperTests {
     }
 
     @Test @MainActor func `presence reporter summary and privacy parameters`() {
-        let summary = PresenceReporter._testComposePresenceSummary(mode: "local", reason: "test")
+        let summary = PresenceReporter.composePresenceSummary(mode: "local", reason: "test")
         #expect(summary.contains("mode local"))
         #expect(!summary.contains("last input"))
-        let privacyParameters = PresenceReporter._testActivityPrivacyParameters()
+        let privacyParameters = PresenceReporter.activityPrivacyParameters
         #expect(privacyParameters["lastInputSeconds"]?.base as? Int == 2_592_000)
         #expect(
             privacyParameters["tags"]?.base as? [String] ==

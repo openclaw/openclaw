@@ -52,7 +52,7 @@ const SOURCE_REPLY_ONLY_RUNTIME_ARG_NAMES = new Set(["to", "channelId", "final"]
 const SOURCE_REPLY_FINAL_PROPERTY = Type.Optional(
   Type.Boolean({
     description:
-      "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true only when the user explicitly requested the reaction to the current source message as the complete response; omit or set false for acknowledgements or reactions followed by more work.",
+      "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true when adding a reaction to the current source message is your complete response; omit or set false when more work follows. A confirmed final source reply ends the turn.",
   }),
 );
 
@@ -74,15 +74,8 @@ export function enforceSourceReplyOnlyTextDirectives(args: Record<string, unknow
     stripPlainTextToolCallBlocks(withoutCitationMarkers),
   ])) {
     const directives = parseReplyDirectives(normalized, { extractMarkdownImages: true });
-    if (
-      directives.replyToTag ||
-      directives.audioAsVoice ||
-      directives.mediaUrls?.length ||
-      directives.isSilent
-    ) {
-      throw sourceReplyPolicyError(
-        "Completion source replies cannot contain non-text or silent directives.",
-      );
+    if (directives.replyToTag || directives.audioAsVoice || directives.mediaUrls?.length) {
+      throw sourceReplyPolicyError("Completion source replies cannot contain non-text directives.");
     }
   }
 }

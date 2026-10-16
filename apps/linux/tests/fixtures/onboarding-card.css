@@ -1,0 +1,26 @@
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font:
+    16px system-ui,
+    sans-serif;
+}
+
+header {
+  padding: 18px 28px;
+  background: var(--bg-elevated);
+}
+
+main {
+  max-width: 880px;
+  margin: 32px auto;
+  padding: 0 28px;
+}
+
+nav {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-top: 30px;
+}

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readConfigFileSnapshot, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/health";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -9,6 +10,38 @@ import { buildWhatsAppQaConfig } from "./whatsapp-live.config.js";
 import { whatsappConversationScenarios } from "./whatsapp-live.scenario-implementations.conversation.js";
 
 describe("WhatsApp QA broadcast config", () => {
+  it("preserves audio preflight when enabling message actions", () => {
+    const base: OpenClawConfig = {
+      tools: {
+        alsoAllow: ["browser"],
+        media: {
+          audio: { enabled: false },
+          models: [{ provider: "openai", model: "existing-transcriber", capabilities: ["audio"] }],
+        },
+      },
+    };
+    const cfg = buildWhatsAppQaConfig(base, {
+      allowFrom: ["+15550000001"],
+      authDir: "/tmp/whatsapp-qa-auth",
+      dmPolicy: "allowlist",
+      ownerAllowFrom: ["+15550000001"],
+      overrides: { audioPreflight: true, actions: true },
+      sutAccountId: "sut",
+    });
+
+    expect(cfg.tools).toMatchObject({
+      alsoAllow: ["browser", "message"],
+      media: {
+        audio: { enabled: true },
+        models: [
+          { provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] },
+          { provider: "openai", model: "existing-transcriber", capabilities: ["audio"] },
+        ],
+      },
+    });
+    expect(base.tools?.media?.audio?.enabled).toBe(false);
+  });
+
   it.each(["generated", "explicit"] as const)(
     "builds valid WhatsApp broadcast config from the %s roster without replacing agents",
     async (roster) => {

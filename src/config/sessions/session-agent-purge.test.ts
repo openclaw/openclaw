@@ -6,13 +6,14 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import * as archives from "./session-accessor.sqlite-archive.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { purgeDeletedAgentSessionEntries } from "./session-accessor.sqlite-projection.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
-import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { withNativeBindingFixture } from "./session-native-binding.test-support.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
@@ -40,6 +41,7 @@ function fixture(storePath: string) {
     agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
     session: { store: database.path, maintenance: { mode: "warn" } },
   } satisfies OpenClawConfig;
+  setRuntimeConfigSnapshot(cfg);
   const scope = { agentId: "ops", sessionKey: "agent:ops:chat", storePath: database.path };
   const sharedScope = { ...scope, agentId: "main", sessionKey: "agent:main:survivor" };
   const write = (
@@ -163,13 +165,15 @@ it.each([false, true])(
         { ...f.scope, agentId: "main", sessionKey: oldKey },
         { sessionId: "maintenance-old", updatedAt: Date.now() - 86_400_000 },
       );
-      await state.writeConfig({
+      const cfg = {
         ...f.cfg,
         session: {
           ...f.cfg.session,
           maintenance: { mode: "enforce", maxEntries: 1, preserveRecent: false },
         },
-      });
+      } satisfies OpenClawConfig;
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const previous = [f.read(), f.read(oldKey), f.read("agent:main:survivor")];
       let protectedKeys: string[] = [];
       let sawCommit = false;

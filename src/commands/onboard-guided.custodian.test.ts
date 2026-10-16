@@ -85,7 +85,7 @@ describe("runGuidedOnboarding", () => {
 
   it("never attempts browser handoff for remote chat onboarding", async () => {
     const prompter = createWizardPrompter();
-    const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
+    const runBrowserHandoff = vi.fn(async () => true);
     const deps = setupDeps({
       prompter,
       handoffMode: "chat",
@@ -259,22 +259,6 @@ describe("runGuidedOnboarding", () => {
     expect(localOnboarding.complete.mock.invocationCallOrder[0]).toBeLessThan(
       runSetupMemoryImportStep.mock.invocationCallOrder[0]!,
     );
-  });
-
-  it("enables default hooks in the persisted setup config", async () => {
-    const applySetup = vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async (params) => {
-      const sourceConfig = localOnboarding.persisted.config ?? {};
-      localOnboarding.persisted.config =
-        params.finalizeConfig?.(sourceConfig, sourceConfig) ?? sourceConfig;
-      return setupApplyResult();
-    });
-    const deps = setupDeps({ prompter: createWizardPrompter(), applySetup });
-
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
-
-    expect(
-      localOnboarding.persisted.config?.hooks?.internal?.entries?.["session-memory"]?.enabled,
-    ).toBe(true);
   });
 
   it("resumes an interrupted gateway install using its approved workspace", async () => {

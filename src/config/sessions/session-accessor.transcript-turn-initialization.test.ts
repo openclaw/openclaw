@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -7,6 +7,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { readSessionGoalOperationInDatabase } from "./goals-operations.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -61,6 +62,7 @@ describe("first transcript turn initialization", () => {
       .get();
   const admit = (options: Partial<SessionTranscriptTurnPersistOptions> = {}) =>
     persistSessionTranscriptTurn(scope(), {
+      config: {},
       expectedSessionId: sessionId,
       initialSessionEntry,
       messages: [
@@ -84,9 +86,11 @@ describe("first transcript turn initialization", () => {
       ...options,
     });
 
+  beforeEach(() => setRuntimeConfigSnapshot({ session: { store: fixture.storePath() } }));
   afterEach(() => {
     vi.restoreAllMocks();
     closeOpenClawAgentDatabasesForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   it("creates the first session, Goal, input and run receipt atomically and replays after reopen", async () => {

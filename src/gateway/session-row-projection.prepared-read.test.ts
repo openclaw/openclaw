@@ -3,7 +3,11 @@ import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
@@ -11,9 +15,9 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import * as databaseFactsRead from "./session-row-database-facts.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import * as databaseFactsRead from "./session-row-projection-read.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { projectWorkerSessionPlacement } from "./worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
@@ -28,6 +32,7 @@ beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  memorySessionActorOwners.reset();
 });
 
 const cfg = { agents: { entries: { main: {} } } };
@@ -515,7 +520,7 @@ it("consumes an incognito repository description without SQLite or resident priv
       branch: "private-description",
       assertCurrent: () => {},
     });
-    replaceSessionEntrySync(
+    await replaceSessionEntry(
       { agentId: query.agentId, sessionKey: query.key },
       {
         sessionId: "private-description",
@@ -548,9 +553,6 @@ it("consumes an incognito repository description without SQLite or resident priv
         ];
         return prepare(queries, (read) => {
           retained = read;
-          expect(
-            statements.reduce((count, statement) => count + statement.mock.calls.length, 0),
-          ).toBeGreaterThan(0);
           for (const statement of statements) {
             statement.mockClear();
           }
@@ -565,18 +567,7 @@ it("consumes an incognito repository description without SQLite or resident priv
           }
         });
       });
-    const escapedPlacement = createDeferredCore<unknown>();
-    const respond = vi.fn(() => {
-      queueMicrotask(() => {
-        try {
-          escapedPlacement.resolve(
-            projection.describe(query, undefined, repository)?.materialized.row.placement,
-          );
-        } catch (error) {
-          escapedPlacement.reject(error);
-        }
-      });
-    });
+    const respond = vi.fn();
     const context = bindSessionRowProjection(requestContext(cfg), () => projection);
     try {
       await describeSession(context, query.key, "private-description", respond).completion;
@@ -589,7 +580,9 @@ it("consumes an incognito repository description without SQLite or resident priv
           repository: { url: repository.url, branch: repository.branch },
         }),
       });
-      expect(await escapedPlacement.promise).toBeUndefined();
+      expect(() => projection.describe(query, undefined, repository)).toThrow(
+        "require awaited row preparation",
+      );
       expect(projection.selectEntries()).toEqual([]);
       expect(() => retained?.describe(query)).toThrow("no longer active");
     } finally {
@@ -632,42 +625,53 @@ it("keeps missing private reads absent and refuses unprepared keys and asynchron
 
 it("prepares only the private response's child selections before consumption", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    replaceSessionEntrySync(
+    await replaceSessionEntry(
       { agentId: query.agentId, sessionKey: query.key },
       { sessionId: "private-parent", updatedAt: 1, incognito: true },
     );
+    const childKey = "agent:main:dashboard:incognito-child-visibility";
+    await replaceSessionEntry(
+      { agentId: query.agentId, sessionKey: childKey },
+      {
+        sessionId: "private-child",
+        updatedAt: 1,
+        incognito: true,
+        parentSessionKey: query.key,
+      },
+    );
     const projection = await createSessionRowProjection({ cfg });
     try {
-      const row = projection.describe(query);
-      if (!row) {
-        throw new Error("Expected the private parent fixture");
-      }
-      const childKey = "agent:main:child-visibility";
-      row.materialized.row.swarm = {
-        otherActiveGroups: 0,
-        groups: [
-          {
-            groupId: "private-group",
-            createdAt: 1,
-            queued: 0,
-            running: 1,
-            done: 0,
-            failed: 0,
-            children: [{ sessionKey: childKey, status: "running" }],
-          },
-        ],
-      };
-      vi.spyOn(projection, "describe").mockReturnValue(row);
-      const select = vi.spyOn(projection, "selectEntries").mockReturnValue([]);
+      const describe = projection.describe.bind(projection);
+      vi.spyOn(projection, "describe").mockImplementation((...args) => {
+        const row = describe(...args);
+        if (!row) {
+          throw new Error("Expected the private parent fixture");
+        }
+        row.materialized.row.swarm = {
+          otherActiveGroups: 0,
+          groups: [
+            {
+              groupId: "private-group",
+              createdAt: 1,
+              queued: 0,
+              running: 1,
+              done: 0,
+              failed: 0,
+              children: [{ sessionKey: childKey, status: "running" }],
+            },
+          ],
+        };
+        return row;
+      });
+      const select = vi.spyOn(projection, "selectEntries").mockImplementation(() => {
+        throw new Error("private child metadata must come from the prepared actor read");
+      });
       await projection.withPreparedExactRows(
         () => [query],
         (read) => {
-          expect(select).toHaveBeenCalledExactlyOnceWith({ key: childKey });
-          select.mockClear();
-          select.mockImplementation(() => {
-            throw new Error("child metadata must be read before consumption");
-          });
-          expect(read.selectEntries({ key: childKey })).toEqual([]);
+          expect(read.selectEntries({ key: childKey })).toMatchObject([
+            { key: childKey, entry: { sessionId: "private-child" } },
+          ]);
           expect(() => read.selectEntries({ key: "agent:main:unprepared-child" })).toThrow(
             "not prepared",
           );

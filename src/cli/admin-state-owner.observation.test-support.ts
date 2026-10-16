@@ -12,6 +12,7 @@ const { syncBuiltinESMExports } = require("node:module");
 const workerThreads = require("node:worker_threads");
 const { isMainThread, threadId } = workerThreads;
 const native = require("node:sqlite");
+const memoryStatements = new WeakSet();
 const eventsPath = ${JSON.stringify(path.join(control, "sql-observation.jsonl"))};
 const ownerPath = ${JSON.stringify(ownerPath)};
 if (isMainThread) fs.writeFileSync(eventsPath, "");
@@ -45,8 +46,12 @@ for (const method of ["prepare", "exec"]) {
     ...Object.getOwnPropertyDescriptor(native.DatabaseSync.prototype, method),
     value: new Proxy(native.DatabaseSync.prototype[method], {
       apply(target, receiver, args) {
-        observe(args[0]);
-        return Reflect.apply(target, receiver, args);
+        // Schema validation builds an in-memory reference database without touching persisted state.
+        const inMemory = receiver.location() === null;
+        if (!inMemory) observe(args[0]);
+        const result = Reflect.apply(target, receiver, args);
+        if (inMemory && method === "prepare") memoryStatements.add(result);
+        return result;
       },
     }),
   });
@@ -56,7 +61,7 @@ for (const method of ["get", "all", "run", "iterate"]) {
     ...Object.getOwnPropertyDescriptor(native.StatementSync.prototype, method),
     value: new Proxy(native.StatementSync.prototype[method], {
       apply(target, receiver, args) {
-        observe(receiver.sourceSQL);
+        if (!memoryStatements.has(receiver)) observe(receiver.sourceSQL);
         return Reflect.apply(target, receiver, args);
       },
     }),

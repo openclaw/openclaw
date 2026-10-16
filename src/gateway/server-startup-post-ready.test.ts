@@ -58,11 +58,13 @@ describe("Gateway post-ready startup work", () => {
       let beforeReadyWake: void | Promise<void> = undefined;
       let repairWake: void | Promise<void> = undefined;
       const plugins = await import("./server-startup-plugins.js");
-      vi.spyOn(plugins, "runGatewayPostReadyStartupMaintenance").mockImplementation(async () => {
-        repairStarted.resolve();
-        await repairRelease.promise;
-        throw new Error("synthetic optional repair failure");
-      });
+      const optionalRepair = vi
+        .spyOn(plugins, "runGatewayPostReadyStartupMaintenance")
+        .mockImplementation(async () => {
+          repairStarted.resolve();
+          await repairRelease.promise;
+          throw new Error("synthetic optional repair failure");
+        });
       const earlyModule = await import("./server-startup-early.js");
       const startEarlyRuntime = earlyModule.startGatewayEarlyRuntime;
       const earlyFactory = vi
@@ -128,9 +130,17 @@ describe("Gateway post-ready startup work", () => {
           expect(resumed).not.toHaveBeenCalled();
           repairWake = clock.advanceBy(1);
           await postReadyWork;
+          await beforeReadyWake;
+          expect(startMaintenance).toHaveBeenCalledOnce();
+          await vi.waitFor(
+            () => {
+              repairWake = clock.advanceBy(1_000) ?? repairWake;
+              expect(optionalRepair).toHaveBeenCalledOnce();
+            },
+            { timeout: 10_000, interval: 10 },
+          );
           await repairStarted.promise;
           expect(resumed).toHaveBeenCalledExactlyOnceWith(false);
-          expect(startMaintenance).not.toHaveBeenCalled();
           const readiness = await fetch(`http://127.0.0.1:${port}/readyz`);
           expect(readiness.status).toBe(200);
           if (outcome === "repair-closes") {

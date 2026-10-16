@@ -14,6 +14,10 @@ import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import {
+  attachInternalToolResultContentSource,
+  copyInternalToolResultState,
+} from "./runtime/internal-hooks.js";
+import {
   captureToolOutputSelection,
   readToolOutputSchemaVariants,
   type ToolOutputSelection,
@@ -27,6 +31,7 @@ import {
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
 } from "./tool-result-error.js";
+import { runWithToolResultDelivery } from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,
   prepareToolSearchCatalogExecutionTool,
@@ -127,12 +132,6 @@ async function validateCatalogSchemaValue(
   }
   try {
     if (schemaName === "outputSchema") {
-      if (
-        outputSelection &&
-        readToolOutputSchemaVariants(schema)?.inputProperty !== outputSelection.inputProperty
-      ) {
-        throw new Error("Tool output discriminator changed during execution.");
-      }
       schema = selectToolOutputSchema(
         schema,
         outputSelection ? { [outputSelection.inputProperty]: outputSelection.value } : undefined,
@@ -324,11 +323,38 @@ export class ToolSearchRuntime {
     );
   };
 
-  callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>
-    projectToolResultValue((await this.call(id, input, options)).result);
+  callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
+    const catalog = resolveCatalog(this.ctx);
+    return projectToolResultValue(
+      (
+        await this.callEntry(
+          findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
+          input,
+          options,
+          true,
+        )
+      ).result,
+    );
+  };
 
-  callExactValue = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) =>
-    projectToolResultValue((await this.callExactId(id, input, options)).result);
+  callExactValue = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) => {
+    const catalog = resolveCatalog(this.ctx);
+    return projectToolResultValue(
+      (
+        await this.callEntry(
+          findEntry(
+            catalog,
+            id,
+            { ...options, codeModeSkills: this.ctx.codeModeSkills },
+            "exact-id",
+          ),
+          input,
+          options,
+          true,
+        )
+      ).result,
+    );
+  };
 
   observeNetworkContent(parentToolCallId: string): void {
     const state = this.networkInvocations.get(parentToolCallId) ?? { active: 0, observed: false };
@@ -378,13 +404,16 @@ export class ToolSearchRuntime {
     entry: ToolSearchCatalogEntry,
     input?: unknown,
     options?: ToolSearchCallOptions,
+    fullValue = false,
   ) =>
     runScheduledToolSearchCall({
       ctx: this.ctx,
       entry,
       signal: options?.signal,
       execute: (currentEntry, signal) =>
-        this.executeEntry(resolveCatalog(this.ctx), currentEntry, input, { ...options, signal }),
+        runWithToolResultDelivery(fullValue, () =>
+          this.executeEntry(resolveCatalog(this.ctx), currentEntry, input, { ...options, signal }),
+        ),
     });
 
   private readonly executeEntry = async (
@@ -569,11 +598,13 @@ export function formatToolSearchControlResult<T>(
   } = {},
 ): AgentToolResult<T> {
   const serialized = serializeToolSearchControlResult(payload, options.compact);
-  const { text } = renderToolSearchControlText(
-    serialized,
-    runtime?.hasNetworkContent(options.parentToolCallId) ?? false,
-  );
+  const networkContent = runtime?.hasNetworkContent(options.parentToolCallId) ?? false;
+  const { text } = renderToolSearchControlText(serialized, networkContent);
   const result = textResult(text, payload);
+  if (networkContent) {
+    // The control tool has no static source; finalization reads this per-call fact.
+    attachInternalToolResultContentSource(result, "network");
+  }
   if (options.images?.length) {
     result.content.push(...options.images);
   }
@@ -581,7 +612,7 @@ export function formatToolSearchControlResult<T>(
     options.terminalBatchStatus !== "waiting" &&
     runtime?.takeTerminalTargetBatch(options.parentToolCallId) === true;
   // A failed guest cannot revoke an already completed tool's explicit terminal outcome.
-  return terminal ? { ...result, terminate: true } : result;
+  return terminal ? copyInternalToolResultState(result, { ...result, terminate: true }) : result;
 }
 
 /** Keep dynamic failures rejected without exposing network-controlled error text. */

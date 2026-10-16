@@ -204,7 +204,7 @@ it.each(["replacement abort", "title write failure"] as const)(
           rejectedTitle = true;
           throw new Error("fixture title write unavailable");
         }
-        await originalWrite(session);
+        return originalWrite(session);
       });
     const affected = new Set([provider.id]);
     let pendingStop: Promise<void> | undefined;

@@ -14,8 +14,11 @@ How the Codex model catalog is discovered, and what happens when discovery fails
 
 By default, the Codex plugin asks the app-server for available models. Model
 availability is owned by Codex app-server, so the list can change when
-OpenClaw upgrades the bundled `@openai/codex` version or when a deployment
-points `appServer.command` at a different Codex binary. Availability can also
+OpenClaw upgrades the bundled `@openai/codex` version, when OpenClaw selects a
+[newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex),
+or when a deployment points `appServer.command` at a different Codex binary.
+ChatGPT-login model discovery reports the selected binary's version as its
+`client_version`, so the list matches the binary that runs turns. Availability can also
 be account-scoped. Use `/codex models` on a running gateway to see the live
 catalog for that harness and account.
 
@@ -41,8 +44,10 @@ current. A missing account, failed refresh, account/config mutation, or retired
 client leaves native models unavailable until discovery succeeds again. The next
 picker/catalog request or native execution reacquires retired observations.
 
-A client with no owned work retires after 30 idle seconds. Requests in that grace
-period reuse it. Active requests, turns, retained or releasing threads, native
+A client with no owned work retires after five idle minutes. Periodic discovery
+and background turns reuse the same client within that window. Background turns
+release their own thread and MCP resources without retiring the shared process;
+strict one-shot CLI runs still close their unclaimed client. Active requests, turns, retained or releasing threads, native
 children, background terminals, and ephemeral history retain their client until
 their owners release it. The existing warm-session executor and thread-retention
 policies remain in effect. Clients and accounts stay isolated by agent home.
@@ -115,9 +120,9 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.160.0`. A `model/list`
+The current bundled harness is `@openai/codex` `0.162.0`. A `model/list`
 check against that app-server in an isolated, unauthenticated Codex home returned
-these visible bundled catalog entries on October 2, 2026:
+these visible bundled catalog entries on October 15, 2026:
 
 | Model id        | Input modalities | Reasoning efforts                    | Default effort |
 | --------------- | ---------------- | ------------------------------------ | -------------- |

@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsProcessesListResult } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { createTestSessionCapability } from "../../../lib/sessions/session-capability.test-support.ts";
 import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
@@ -7,11 +7,12 @@ import { createContext, createGatewayHarness } from "../../../test-helpers/app-s
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
-import "./chat-processes-panel.ts";
+import "./chat-processes-panel.tsx";
 
 it.each([false, true])(
   "distinguishes a retired process from an incomplete list (truncated: %s)",
   async (truncated) => {
+    vi.useFakeTimers();
     let result: SessionsProcessesListResult = {
       sessionId: "parent-session",
       truncated: false,
@@ -43,15 +44,16 @@ it.each([false, true])(
       provider.remove();
       sessions.dispose();
       disposeSidebarContextLifecycles();
+      vi.useRealTimers();
     });
     await panel.updateComplete;
-    await panel.refresh();
+    await vi.advanceTimersByTimeAsync(0);
     await panel.updateComplete;
     panel.querySelector<HTMLButtonElement>(".chat-processes__open")!.click();
     await panel.updateComplete;
     expect(panel.textContent).toContain("Compiling");
     result = { sessionId: "parent-session", processes: [], truncated };
-    await panel.refresh();
+    await vi.advanceTimersByTimeAsync(5_000);
     await panel.updateComplete;
     if (truncated) {
       expect(panel.textContent).toContain("limited list");

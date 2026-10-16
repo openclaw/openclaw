@@ -27,6 +27,9 @@ export function captureGatewayAuthPolicy(
   const authMethod = principal?.authMethod;
   const authModeOverride = principal?.authModeOverride;
   const browserOrigin = principal?.browserOrigin;
+  // Contextual grants carry live service closures. Never retain them in config's
+  // process-lived principal cache or share authority between matching audiences.
+  const contextualIngress = browserOrigin?.remoteControlUiIngress !== undefined;
   let cached = policies.get(config);
   if (!cached) {
     const gateway = config.gateway;
@@ -47,14 +50,10 @@ export function captureGatewayAuthPolicy(
     };
     policies.set(config, cached);
   }
-  const principalKey = stableStringify([
-    role,
-    verifiedIdentity,
-    authMethod,
-    authModeOverride,
-    browserOrigin,
-  ]);
-  let policy = cached.identities.get(principalKey);
+  const principalKey = contextualIngress
+    ? undefined
+    : stableStringify([role, verifiedIdentity, authMethod, authModeOverride, browserOrigin]);
+  let policy = principalKey === undefined ? undefined : cached.identities.get(principalKey);
   if (!policy) {
     const grant =
       role === "operator" && verifiedIdentity
@@ -112,7 +111,9 @@ export function captureGatewayAuthPolicy(
       verifiedIdentity,
       browserOrigin: browserOrigin && Object.freeze({ ...browserOrigin }),
     });
-    cached.identities.set(principalKey, policy);
+    if (principalKey !== undefined) {
+      cached.identities.set(principalKey, policy);
+    }
   }
   return policy;
 }

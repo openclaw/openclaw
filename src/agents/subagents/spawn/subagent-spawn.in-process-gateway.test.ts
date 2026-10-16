@@ -5,7 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
 import { createExecutionIdentityAdmissionToken } from "../../../audit/execution-identity-admission.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../config/config.js";
+import {
+  captureRuntimeConfigAsyncReader,
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+} from "../../../config/config.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
@@ -126,6 +130,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       })}\n`,
     );
     clearConfigCache();
+    await captureRuntimeConfigAsyncReader()();
   });
 
   afterEach(async () => {

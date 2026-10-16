@@ -66,7 +66,6 @@ export function createSlackProgressRuntime(runtimeParams: {
         cfg,
         token: ctx.botToken,
         accountId: account.accountId,
-        conversationChannelId: message.channel,
         eventScope: prepared.eventScope,
         // Impersonated Slack messages cannot be deleted. Keep the temporary
         // preview app-authored and apply custom identity only to final delivery.
@@ -80,7 +79,6 @@ export function createSlackProgressRuntime(runtimeParams: {
           }
           return ts;
         },
-        log: logVerbose,
         warn: logVerbose,
       })
     : undefined;
@@ -383,6 +381,7 @@ export function createSlackProgressRuntime(runtimeParams: {
         preambleOnlyProgress
           ? {
               text: previewText,
+              escapeMentions: true,
               allowNewMessage: typeof latestLine !== "object" || latestLine.complete !== false,
               ...(snapshot.preparedBlocks
                 ? { blocks: buildSlackProgressTextBlocks(snapshot.preparedBlocks) }
@@ -393,8 +392,16 @@ export function createSlackProgressRuntime(runtimeParams: {
                 text: progressCard.resolveCardText(cardBlocks),
                 blocks: cardBlocks,
               }
-            : snapshot.preparedBlocks
-              ? { text: previewText, blocks: buildSlackProgressTextBlocks(snapshot.preparedBlocks) }
+            : snapshot.preparedBlocks || (isProgressMode && slackProgressStyle === "compact")
+              ? {
+                  text: previewText,
+                  ...(isProgressMode && slackProgressStyle === "compact"
+                    ? { escapeMentions: true as const }
+                    : {}),
+                  ...(snapshot.preparedBlocks
+                    ? { blocks: buildSlackProgressTextBlocks(snapshot.preparedBlocks) }
+                    : {}),
+                }
               : previewText,
       );
       if (cardBlocks) {

@@ -14,7 +14,14 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
+import {
+  captureControlUiE2eFailureDiagnostics,
+  installControlUiE2ePageDiagnosticRing,
+  installControlUiE2eUnhandledRejectionRing,
+  installControlUiRpcDiagnostics,
+} from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { withControlUiRunInspector } from "../test-helpers/control-ui-run-inspector.ts";
 import {
@@ -186,7 +193,13 @@ suite.define(() => {
               baseUrl: suite.server.baseUrl,
               selector: { kind: "execution", id: executionId },
               receipt: { id: receipt.selectorId },
-              preparePage: (page) => pairControlUiPage(page, runCli),
+              preparePage: async (page) => {
+                installControlUiE2ePageDiagnosticRing(page);
+                installControlUiRpcDiagnostics(page);
+                await installControlUiE2eUnhandledRejectionRing(page);
+                await installControlUiE2eRendererStallProbe(page);
+                await pairControlUiPage(page, runCli);
+              },
             },
             async (page, inspector) => {
               const assertIdentity = async () => {
@@ -203,9 +216,17 @@ suite.define(() => {
                 );
                 expect(await detail.textContent()).toContain(receipt.decision.reasonCode);
               };
-              await assertIdentity();
-              await page.reload();
-              await assertIdentity();
+              try {
+                await assertIdentity();
+                await page.reload();
+                await assertIdentity();
+              } catch (error) {
+                await captureControlUiE2eFailureDiagnostics(page, {
+                  error: error instanceof Error ? error : new Error(String(error)),
+                  label: "Run Inspector identity retention",
+                });
+                throw error;
+              }
             },
           );
           expect(context.pages()).toEqual([chat]);

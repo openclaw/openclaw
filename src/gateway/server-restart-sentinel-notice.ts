@@ -72,17 +72,17 @@ type GatewayLifecycleNotice = RestartSentinelNoticeRoute & {
 };
 
 /** Resolve once before an update can replace lazily loaded channel modules. */
-export function resolveGatewayLifecycleNoticeRoute(params: {
+export async function resolveGatewayLifecycleNoticeRoute(params: {
   cfg: OpenClawConfig;
   deliveryContext?: DeliveryContext;
   threadId?: string;
-}): RestartSentinelNoticeRoute | undefined {
+}): Promise<RestartSentinelNoticeRoute | undefined> {
   const origin = params.deliveryContext;
   const channel = origin?.channel ? normalizeChannelId(origin.channel) : null;
   if (!channel || !origin?.to) {
     return undefined;
   }
-  const resolved = resolveOutboundTarget({
+  const resolved = await resolveOutboundTarget({
     cfg: params.cfg,
     channel,
     to: origin.to,

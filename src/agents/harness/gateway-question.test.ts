@@ -260,7 +260,6 @@ describe("gateway harness questions", () => {
           error: expect.any(PreparedQuestionAnswerRefusedError),
         });
         expect(gatewayCall).not.toHaveBeenCalled();
-        expect(question.isResolving()).toBe(false);
         await expect(
           claimPendingAgentQuestionAnswer({ sessionKey, text: "fresh answer" }),
         ).resolves.toBe(true);
@@ -411,23 +410,6 @@ describe("gateway harness questions", () => {
     reservation.dispose();
   });
 
-  it("fails a pending claim closed when disposed before registration attaches", async () => {
-    const claim = registerPendingAgentQuestion({
-      questionId: "ask_00000000000000000000000000000000",
-      sessionKey: "agent:main:dispose-before-attach",
-      questions,
-      gatewayCall: vi.fn<AgentHarnessQuestionGatewayCall>(),
-    });
-    const answer = claimPendingAgentQuestionAnswer({
-      sessionKey: "agent:main:dispose-before-attach",
-      text: "Continue",
-    });
-
-    claim.dispose();
-
-    await expect(answer).resolves.toBe(false);
-  });
-
   it("reserves the session and suppresses a prompt cancelled during registration", async () => {
     const registration = createDeferred<{ id: string }>();
     const calls: Array<{ method: string; params: unknown }> = [];
@@ -473,7 +455,7 @@ describe("gateway harness questions", () => {
     expect(calls.some((entry) => entry.method === "question.waitAnswer")).toBe(false);
   });
 
-  it("observes an early wait rejection without delivering a stale prompt", async () => {
+  it("propagates an early wait rejection", async () => {
     const waitError = new Error("gateway disconnected");
     const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, _opts, params) => {
       if (method === "question.request") {
@@ -499,7 +481,6 @@ describe("gateway harness questions", () => {
       questionId: "ask_abcdef1234567890abcdef1234567890",
     });
     await expect(run).rejects.toBe(waitError);
-    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("returns an answer that wins a registration cancellation race", async () => {

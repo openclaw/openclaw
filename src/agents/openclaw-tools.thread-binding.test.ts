@@ -42,6 +42,7 @@ describe("registered sessions_spawn binding discovery", () => {
     const capabilities = collectRuntimeChannelCapabilities({
       cfg: config,
       channel: "binding-chat",
+      requester: { agentTo: "room:parent" },
     });
     expect(capabilities ?? []).toEqual(
       available ? ["threadbound-subagent-spawn", "threadbound-acp-spawn"] : [],

@@ -152,6 +152,8 @@ it(
               filename: "proof.txt",
               contentType: "text/plain",
               ...(selected.name === "dry-run" ? { dryRun: true } : {}),
+              // Keep a follow-up request open so cancellation happens after delivery.
+              ...(selected.name === "cancel" ? { final: false } : {}),
             }),
           };
           writeOpenAiResponsesSse(response, [

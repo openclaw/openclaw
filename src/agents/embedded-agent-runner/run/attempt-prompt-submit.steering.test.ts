@@ -9,7 +9,7 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   appendTranscriptMessage,
   deleteSessionEntryLifecycle,
@@ -22,7 +22,7 @@ import { pruneAllSessionTranscriptArchivesToHighWater } from "../../../config/se
 import { findSessionTranscriptArchiveEventReadOnly } from "../../../config/sessions/session-history.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
-import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -46,7 +46,7 @@ import {
 import { writeSubagentSessionEntry } from "../../subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
 import {
   handleEmbeddedAttemptPromptError,
@@ -79,6 +79,8 @@ async function prepareSteering() {
   await registerSubagentRun({
     runId: childRunId,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: "kept-child-session" },
     requesterSessionKey,
     requesterDisplayKey: "main",
     task: "Inspect the findings",
@@ -86,7 +88,7 @@ async function prepareSteering() {
     spawnMode: "session",
     expectsCompletionMessage: true,
   });
-  const terminalReply = buildAgentRunTerminalReplySnapshot({ visibleText: answer });
+  const terminalReply = prepareAgentRunTerminalReply({ rawText: answer }).terminalReply;
   if (terminalReply.disposition !== "visible") {
     throw new Error("Expected visible terminal reply");
   }
@@ -154,7 +156,9 @@ async function invalidateCompletion(error: string) {
 function submissionInput(
   leasedSteering: Awaited<ReturnType<typeof prepareSteering>>["leasedSteering"],
 ) {
-  const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
+  const promptStateLease = retainEmbeddedSessionPromptState(sessionId);
+  onTestFinished(() => promptStateLease[Symbol.dispose]());
+  const sessionPromptState = promptStateLease.state;
   const prompt = prependAgentSteeringPrompt({
     steeringPrompt: leasedSteering.prompt,
     prompt: "Use the findings to finish the answer.",
@@ -411,6 +415,8 @@ async function publishChild(runId: string, resultText: string) {
   await registerSubagentRun({
     runId,
     childSessionKey: publishedSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: childSessionId },
     requesterSessionKey,
     requesterDisplayKey: "main",
     task: "Inspect the findings",
@@ -418,7 +424,7 @@ async function publishChild(runId: string, resultText: string) {
     spawnMode: "session",
     expectsCompletionMessage: true,
   });
-  const terminalReply = buildAgentRunTerminalReplySnapshot({ visibleText: resultText });
+  const terminalReply = prepareAgentRunTerminalReply({ rawText: resultText }).terminalReply;
   if (terminalReply.disposition !== "visible") {
     throw new Error("Expected visible terminal reply");
   }
@@ -463,7 +469,7 @@ it("submits deferred child results after canonical archive pruning without poiso
   if (!archivePath) {
     throw new Error("Expected published child transcript archive");
   }
-  await expect(access(archivePath)).resolves.toBeUndefined();
+  await access(archivePath);
   expect(
     await findSessionTranscriptArchiveEventReadOnly(archived.target, archived.child.runId),
   ).toMatchObject({
@@ -516,7 +522,8 @@ it("submits deferred child results after canonical archive pruning without poiso
     );
   });
   const onSteeringAcknowledged = vi.fn();
-  const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
+  using promptStateLease = retainEmbeddedSessionPromptState(sessionId);
+  const sessionPromptState = promptStateLease.state;
   const prompt = prependAgentSteeringPrompt({
     steeringPrompt: leased.prompt,
     prompt: "Use the findings to finish the answer.",

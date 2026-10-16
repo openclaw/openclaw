@@ -1,6 +1,7 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import { CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS } from "./session-catalog-limits.js";
 import {
   fixture,
   nodeFixture,
@@ -11,56 +12,26 @@ import { CODEX_APP_SERVER_THREADS_LIST_COMMAND } from "./session-catalog-parsing
 import { CODEX_TERMINAL_START_COMMAND } from "./session-catalog-terminal.js";
 import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 
-describe("Codex catalog list operation", () => {
-  it("serves the retained node immediately and rejects an older refresh after a newer publication", async () => {
-    const f = await nodeFixture();
-    await f.read();
-    const older = createDeferred<unknown>();
-    const newer = createDeferred<unknown>();
-    f.invoke.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
-    const first = observe(f.read());
-    const second = observe(f.read());
-    try {
-      await nextTurn();
-      expect(first.state.settled).toBe(true);
-      expect(second.state.settled).toBe(true);
-      for (const result of [first, second]) {
-        await expect(result.done).resolves.toMatchObject({
-          status: "fulfilled",
-          value: [
-            { hostId: "gateway:local" },
-            { hostId: "node:remote", sessions: [{ threadId: "original" }] },
-          ],
-        });
-      }
-      newer.resolve({ payloadJSON: JSON.stringify(page(["newer"])) });
-      await nextTurn();
-      older.resolve({ payloadJSON: JSON.stringify(page(["older"])) });
-      await Promise.all(f.publications);
-      const published = f.onHost.mock.calls.flatMap(([host]) =>
-        host.hostId === "node:remote"
-          ? host.sessions.map((row: { threadId: string }) => row.threadId)
-          : [],
-      );
-      expect(published).toContain("newer");
-      expect(published).not.toContain("older");
-      const held = createDeferred<unknown>();
-      f.invoke.mockReturnValueOnce(held.promise);
-      try {
-        await expect(f.read()).resolves.toMatchObject([
-          { hostId: "gateway:local" },
-          { hostId: "node:remote", sessions: [{ threadId: "newer" }] },
-        ]);
-      } finally {
-        held.resolve({ payloadJSON: JSON.stringify(page(["final"])) });
-      }
-    } finally {
-      older.resolve({ payloadJSON: JSON.stringify(page([])) });
-      newer.resolve({ payloadJSON: JSON.stringify(page([])) });
-      await Promise.allSettled([first.done, second.done, ...f.publications]);
-    }
-  });
+const adoption = vi.hoisted(() => ({
+  hold: undefined as { promise: Promise<Map<string, never>>; started: () => void } | undefined,
+}));
 
+vi.mock("./session-catalog-adoption.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-catalog-adoption.js")>();
+  return {
+    ...actual,
+    listAdoptedSessionEntries: vi.fn(
+      (params: Parameters<typeof actual.listAdoptedSessionEntries>[0]) => {
+        const held = adoption.hold;
+        adoption.hold = undefined;
+        held?.started();
+        return held?.promise ?? actual.listAdoptedSessionEntries(params);
+      },
+    ),
+  };
+});
+
+describe("Codex catalog list operation", () => {
   it("yields an inert exclusion checkpoint and retains filled rows, limits and cursors", async () => {
     const f = await fixture();
     f.listPage
@@ -249,15 +220,11 @@ describe("Codex catalog list operation", () => {
   });
 
   it.each(["reject", "no waitUntil"] as const)(
-    "keeps refill inline until a timed-out node's invocation and publication %s",
+    "settles timed-out local work while a node publication can still %s",
     async (outcome) => {
       const f = await fixture();
       vi.useFakeTimers();
       const first = createDeferred<CodexSessionCatalogPage>();
-      const second = createDeferred<CodexSessionCatalogPage>();
-      const third = createDeferred<CodexSessionCatalogPage>();
-      const secondStarted = createDeferred<void>();
-      const thirdStarted = createDeferred<void>();
       const invoked = createDeferred<void>();
       const invokeResult = createDeferred<unknown>();
       const published = createDeferred<void>();
@@ -267,17 +234,7 @@ describe("Codex catalog list operation", () => {
         invoked.resolve();
         return invokeResult.promise;
       });
-      f.listPage.mockImplementation(async (_home, params) => {
-        if (params.cursor === "second") {
-          secondStarted.resolve();
-          return second.promise;
-        }
-        if (params.cursor === "third") {
-          thirdStarted.resolve();
-          return third.promise;
-        }
-        return params.cursor === "fourth" ? page(["visible"]) : first.promise;
-      });
+      f.listPage.mockImplementation(async () => first.promise);
       const operation = f.start({
         hostIds: undefined,
         listNodes: async () => ({
@@ -302,57 +259,41 @@ describe("Codex catalog list operation", () => {
       const advancing = observe(operation.next());
       try {
         await invoked.promise;
-        await vi.advanceTimersByTimeAsync(8_000);
+        await vi.advanceTimersByTimeAsync(CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS);
+        expect(advancing.state.settled).toBe(true);
+        await expect(advancing.done).resolves.toMatchObject({
+          status: "fulfilled",
+          value: {
+            done: true,
+            hosts: [
+              { error: { code: "APP_SERVER_UNAVAILABLE" } },
+              { hostId: "node:remote", error: { code: "NODE_INVOKE_FAILED" } },
+            ],
+          },
+        });
+        operation.close();
         first.resolve(page(["managed"], "second"));
-        await expect(
-          Promise.race([
-            secondStarted.promise.then(() => "refilled"),
-            advancing.done.then(() => "settled"),
-          ]),
-        ).resolves.toBe("refilled");
-        expect(advancing.state.settled).toBe(false);
-
         invokeResult.resolve({ payloadJSON: JSON.stringify(page([])) });
         await published.promise;
-        second.resolve(page(["managed"], "third"));
-        await expect(
-          Promise.race([
-            thirdStarted.promise.then(() => "refilled"),
-            advancing.done.then(() => "settled"),
-          ]),
-        ).resolves.toBe("refilled");
-        expect(advancing.state.settled).toBe(false);
-
+        const tails = observe(Promise.allSettled(f.publications));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(f.listPage).toHaveBeenCalledOnce();
+        expect(f.runtime.nodes.invoke).toHaveBeenCalledOnce();
         if (outcome === "reject") {
+          expect(tails.state.settled).toBe(false);
           publication.reject(publicationError);
         } else {
           publication.resolve();
         }
-        await nextTurn();
-        third.resolve(page(["managed"], "fourth"));
-        await expect(advancing.done).resolves.toEqual({
-          status: "fulfilled",
-          value: { done: false },
-        });
-        expect(f.listPage).toHaveBeenCalledTimes(3);
-        await expect(operation.next()).resolves.toMatchObject({
-          done: true,
-          hosts: [
-            { sessions: [{ threadId: "visible" }] },
-            { hostId: "node:remote", error: { code: "NODE_INVOKE_FAILED" } },
-          ],
-        });
-        expect(f.runtime.nodes.invoke).toHaveBeenCalledOnce();
-        const tails = await Promise.allSettled(f.publications);
-        expect(tails.filter((tail) => tail.status === "rejected")).toEqual(
+        await expect(tails.done).resolves.toMatchObject({ status: "fulfilled" });
+        const results = await Promise.allSettled(f.publications);
+        expect(results.filter((tail) => tail.status === "rejected")).toEqual(
           outcome === "reject" ? [{ status: "rejected", reason: publicationError }] : [],
         );
       } finally {
         invokeResult.resolve({ payloadJSON: JSON.stringify(page([])) });
         publication.resolve();
         first.resolve(page([]));
-        second.resolve(page([]));
-        third.resolve(page([]));
         await advancing.done;
         operation.close();
         await Promise.allSettled(f.publications);
@@ -431,54 +372,6 @@ describe("Codex catalog list operation", () => {
       held.resolve({ payloadJSON: JSON.stringify(page([])) });
       await pending.done;
       await Promise.allSettled(f.publications);
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not bind a delayed inventory to a newer connection", async () => {
-    const f = await nodeFixture();
-    const inventory = createDeferred<Awaited<ReturnType<typeof f.listNodes>>>();
-    const inventoryStarted = createDeferred<void>();
-    const newer = createDeferred<unknown>();
-    f.invoke
-      .mockReturnValueOnce(newer.promise)
-      .mockResolvedValueOnce({ payloadJSON: JSON.stringify(page(["obsolete"])) });
-    const first = observe(
-      f.read({
-        listNodes: () => {
-          inventoryStarted.resolve();
-          return inventory.promise;
-        },
-      }),
-    );
-    await inventoryStarted.promise;
-    f.listNodes.mockResolvedValue({ nodes: [{ ...f.node, connectedAtMs: 2 }] });
-    vi.useFakeTimers();
-    const second = observe(f.read());
-    try {
-      await nextTurn();
-      inventory.resolve({ nodes: [f.node] });
-      await nextTurn();
-      await vi.advanceTimersByTimeAsync(250);
-      expect(first.state.settled).toBe(true);
-      expect(second.state.settled).toBe(true);
-      expect(
-        f.onHost.mock.calls.flatMap(([host]) =>
-          host.sessions.map((row: { threadId: string }) => row.threadId),
-        ),
-      ).not.toContain("obsolete");
-      newer.resolve({ payloadJSON: JSON.stringify(page(["current"])) });
-      await Promise.all(f.publications);
-      expect(f.onHost).toHaveBeenCalledWith(
-        expect.objectContaining({
-          hostId: "node:remote",
-          sessions: [expect.objectContaining({ threadId: "current" })],
-        }),
-      );
-    } finally {
-      inventory.resolve({ nodes: [f.node] });
-      newer.resolve({ payloadJSON: JSON.stringify(page([])) });
-      await Promise.allSettled([first.done, second.done, ...f.publications]);
       vi.useRealTimers();
     }
   });
@@ -569,6 +462,87 @@ describe("Codex catalog list operation", () => {
       await advancing.done;
       operation.close();
       await Promise.allSettled(f.publications);
+    }
+  });
+
+  it.each([
+    { phase: "page", progressive: false },
+    { phase: "page", progressive: true },
+    { phase: "adoption", progressive: false },
+    { phase: "adoption", progressive: true },
+  ])("isolates a stalled $phase with progressive=$progressive", async ({ phase, progressive }) => {
+    const f = await fixture(2);
+    vi.useFakeTimers();
+    const started = createDeferred<void>();
+    const heldPage = createDeferred<CodexSessionCatalogPage>();
+    const heldAdoption = createDeferred<Map<string, never>>();
+    if (phase === "adoption") {
+      adoption.hold = { promise: heldAdoption.promise, started: started.resolve };
+    }
+    f.listPage.mockImplementation(async (home) => {
+      if (home !== "home-0") {
+        if (phase === "adoption") {
+          await started.promise;
+        }
+        return page(["survivor"]);
+      }
+      if (phase === "page") {
+        started.resolve();
+        return heldPage.promise;
+      }
+      return page(["stalled"]);
+    });
+    const operation = f.start({ allowPartialResults: progressive });
+    const advancing = observe(operation.next());
+    try {
+      await started.promise;
+      if (progressive) {
+        await vi.advanceTimersByTimeAsync(250);
+        await expect(advancing.done).resolves.toMatchObject({
+          status: "fulfilled",
+          value: {
+            done: true,
+            hosts: [{ pending: true }, { sessions: [{ threadId: "survivor" }] }],
+          },
+        });
+        operation.close();
+      }
+      await vi.advanceTimersByTimeAsync(CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS);
+      if (!progressive) {
+        await expect(advancing.done).resolves.toMatchObject({
+          status: "fulfilled",
+          value: {
+            done: true,
+            hosts: [
+              { error: { code: "APP_SERVER_UNAVAILABLE" } },
+              { sessions: [{ threadId: "survivor" }] },
+            ],
+          },
+        });
+      }
+      await Promise.all(f.publications);
+      expect(f.onHost).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostId: f.homes[0]!.hostId,
+          connected: false,
+          sessions: [],
+          error: expect.objectContaining({ code: "APP_SERVER_UNAVAILABLE" }),
+        }),
+      );
+      heldPage.resolve(page(["late"]));
+      heldAdoption.resolve(new Map<string, never>());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(
+        f.onHost.mock.calls.filter(([host]) => host.hostId === f.homes[0]!.hostId),
+      ).toHaveLength(1);
+    } finally {
+      adoption.hold = undefined;
+      heldPage.resolve(page([]));
+      heldAdoption.resolve(new Map<string, never>());
+      await advancing.done;
+      operation.close();
+      await Promise.allSettled(f.publications);
+      vi.useRealTimers();
     }
   });
 });

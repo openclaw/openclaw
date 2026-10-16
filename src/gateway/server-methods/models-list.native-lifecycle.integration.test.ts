@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -295,15 +295,11 @@ it.for([false, true])(
             preparedOnly: true,
           });
         expect(requests.filter((path) => path === "/native/models")).toHaveLength(0);
-        const firstReads = Promise.all([list(), list()]);
-        await awaitGateBeforeSettlement(
-          nativeRequested.promise,
-          firstReads,
-          "models.list completed without starting native discovery",
-        );
+        const firstReads = await Promise.all([list(), list()]);
+        await withinTest(nativeRequested.promise, signal);
         const beforeReads = requests.length;
-        // Prepared metadata remains responsive while the first demanded discovery is held.
-        const pending = await Promise.all([preparedList(), preparedList()]);
+        // Ordinary and prepared-only reads return saved rows while discovery is held.
+        const pending = [...firstReads, ...(await Promise.all([preparedList(), preparedList()]))];
         expect.soft(requests.filter((path) => path === "/native/models")).toHaveLength(1);
         expect(requests).toHaveLength(beforeReads);
         for (const result of pending) {
@@ -312,9 +308,12 @@ it.for([false, true])(
           expect(result.models).not.toContainEqual(modelRow(provider, nativeModelId));
         }
         nativeReleased.resolve();
-        for (const result of await firstReads) {
-          expect(result.models.find((row) => row.id === nativeModelId)?.available).toBe(true);
-        }
+        await waitForCatalogPublication({
+          signal,
+          read: list,
+          ready: (result) =>
+            result.models.find((row) => row.id === nativeModelId)?.available === true,
+        });
         expect((await list()).models).toContainEqual(modelRow(provider, "harness-host-row"));
         if (!withProviderCredentials) {
           // Cold startup discovers the full catalog, as an explicit refresh would.
@@ -346,14 +345,13 @@ it.for([false, true])(
           nativeRequested = createDeferred();
           await client.request("models.authRefresh", { agentId: "main", operation: "logout" });
           expect(requests.slice(beforeOpaqueReload)).not.toContain("/native/models");
-          const firstOpaqueRead = list();
-          await awaitGateBeforeSettlement(
-            nativeRequested.promise,
-            firstOpaqueRead,
-            "models.list completed without rediscovering the changed native account",
-          );
+          const firstOpaqueRead = await list();
+          await withinTest(nativeRequested.promise, signal);
           const beforeOpaqueReads = requests.length;
-          const opaquePending = await Promise.all([preparedList(), preparedList()]);
+          const opaquePending = [
+            firstOpaqueRead,
+            ...(await Promise.all([preparedList(), preparedList()])),
+          ];
           expect(requests).toHaveLength(beforeOpaqueReads);
           for (const result of opaquePending) {
             expect(result.pendingProviders).toContain(provider);
@@ -361,7 +359,11 @@ it.for([false, true])(
             expect(result.models).toContainEqual(modelRow(provider, "provider-account"));
           }
           nativeReleased.resolve();
-          expect((await firstOpaqueRead).pendingProviders ?? []).not.toContain(provider);
+          await waitForCatalogPublication({
+            signal,
+            read: list,
+            ready: (result) => !result.pendingProviders?.includes(provider),
+          });
         }
         if (withProviderCredentials) {
           const beforeUnrelated = requests.length;
@@ -470,9 +472,12 @@ it.for([false, true])(
               agents: { defaults: { modelPolicy: { allow: [`${provider}/*`, "unused/*"] } } },
             }),
           });
-          expect((await list()).models.find((row) => row.id === nativeModelId)?.available).toBe(
-            true,
-          );
+          await waitForCatalogPublication({
+            signal,
+            read: list,
+            ready: (result) =>
+              result.models.find((row) => row.id === nativeModelId)?.available === true,
+          });
           expect(requests.filter((path) => path === "/native/models")).toHaveLength(
             beforeReloadNative + 1,
           );

@@ -44,7 +44,8 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   } = runtime;
   const { toolBridge, toolState } = attemptTools;
   const developerInstructions = joinPresentSections(
-    turnState.promptBuild.developerInstructions,
+    turnState.promptBuild.threadDeveloperInstructions ??
+      turnState.promptBuild.developerInstructions,
     attemptTools.configuredMcp?.diagnosticNotice,
   );
   const {
@@ -108,7 +109,11 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
-      refreshableInstructions: context.refreshableInstructions,
+      refreshableInstructions:
+        joinPresentSections(
+          context.refreshableInstructions,
+          turnState.promptBuild.turnDeveloperInstructions,
+        ) || undefined,
       agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       nativeModelAdmission: resources.nativeModelAdmission,

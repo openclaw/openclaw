@@ -26,6 +26,7 @@ import * as secureRandom from "../infra/secure-random.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setAvatar, setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail, listProfiles } from "../state/user-profiles.js";
 import {
@@ -915,6 +916,7 @@ describe("session.message websocket events", () => {
     const profileState = await createOpenClawTestState({
       label: "session-message-current-profile-display",
       layout: "state-only",
+      prepareProfileCatalog: true,
     });
     cleanupTestStates.push(profileState);
     const storePath = await createSessionStoreFile();
@@ -942,6 +944,7 @@ describe("session.message websocket events", () => {
       expect(setAvatar(created.id, new Uint8Array([1, 2, 3]), "image/png").ok).toBe(true);
       return created;
     });
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const firstAvatarUrl = currentProfileAvatarUrl(profile.id);
 
     const ws = await harness.openWs();
@@ -1786,9 +1789,11 @@ describe("session.message websocket events", () => {
         messageId: "msg-work-global",
       });
 
-      const workMessage = await workMessagePromise;
-      await mainMessagePromise;
-      const bareMessage = await bareMessagePromise;
+      const [workMessage, , bareMessage] = await Promise.all([
+        workMessagePromise,
+        mainMessagePromise,
+        bareMessagePromise,
+      ]);
       expectRecordFields(workMessage.payload, {
         sessionKey: "global",
         agentId: "work",
@@ -2172,7 +2177,7 @@ describe("session.message websocket events", () => {
       storePath,
     });
     const { committer, identity, receiver, push, sessionTarget, source } =
-      createWorkerFanoutFixture({
+      await createWorkerFanoutFixture({
         storePath,
         sessionId,
         sessionKey,
@@ -2308,6 +2313,7 @@ describe("session.message websocket events", () => {
       clearAgentRunContext("local");
       ws.off("message", collectWorkerChats);
       ws.close();
+      await source.release();
     }
   });
 

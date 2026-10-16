@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
@@ -9,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
 import { ensureDeviceToken, rotateDeviceToken } from "../infra/device-pairing-tokens.js";
+import { getPairedDevice, updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import type { PairedDevice } from "../infra/device-pairing.types.js";
 import type { PluginGatewayAccessPolicy } from "../plugins/gateway-access-policy.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -18,14 +20,26 @@ import {
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { setCanonicalUserProfileDisplayName } from "../state/user-profile-writes.js";
+import {
+  linkEmail,
+  setUserProfileRole,
+  syncGitHubIdentity,
+} from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
-import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
+import {
+  captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+} from "./device-revocation.js";
+import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import {
+  readGatewayOperatorRecoverySource,
+  restoreGatewayOperatorSource,
+} from "./operator-run-recovery.js";
 import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import {
@@ -53,35 +67,88 @@ function pairedOperator(): PairedDevice {
 }
 
 describe("restart recovery authenticated operator source", () => {
-  it.each(["unrelated issuance", "publication close"] as const)(
-    "tracks exact pairing publication during %s",
+  it.each(["current", "owner closed", "device revoked"] as const)(
+    "checks independently owned continuation custody after preparation: %s",
     async (change) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const profile = ensureProfileForEmail("publication-lifetime@example.test");
+        const profile = ensureProfileForEmail("continuation-source@example.test");
         const fixture = await createOperatorRecoveryFixture({
           stateDir: state.stateDir,
           context: createContext(),
           profileId: profile.id,
           config: {},
           device: pairedOperator(),
+          scopes: ["operator.write"],
         });
-        const restored = expectDefined(await fixture.restore(), "exact device source");
+        const snapshot = expectDefined(
+          fixture.entry.restartRecoveryOperatorSource?.snapshot,
+          "authenticated continuation source",
+        );
+        let current = true;
+        const restore = restoreGatewayOperatorSource({
+          snapshot,
+          target: fixture.target,
+          context: fixture.context,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Continuation owner closed");
+            }
+          },
+          prepareCurrent: async () => {
+            if (change === "owner closed") {
+              current = false;
+            } else if (change === "device revoked") {
+              invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
+            }
+          },
+        });
+        if (change !== "current") {
+          await expect(restore).rejects.toThrow(/owner closed|authority changed/);
+          return;
+        }
+        const restored = await restore;
+        const retained = expectDefined(restored.authority.retain, "continuation retention")();
         try {
-          if (change === "unrelated issuance") {
-            await issueDeviceBootstrapToken({ baseDir: state.stateDir });
-            expect(restored.authority.signal?.aborted).toBe(false);
-            expect(restored.authority.assertCurrent).not.toThrow();
-          } else {
-            await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath());
-            expect(restored.authority.signal?.aborted).toBe(true);
-            expect(restored.authority.assertCurrent).toThrow();
-          }
+          restored.release();
+          expect(restored.authority.profileId).toBe(profile.id);
+          expect(restored.authority.scopes).toEqual(["operator.write"]);
+          expect(restored.authority.assertCurrent).not.toThrow();
+          expect(
+            readGatewayOperatorRecoverySource(restored.authority, {
+              runId: fixture.target.recoveryRunId,
+              sessionKey: fixture.target.sessionKey,
+              sessionId: fixture.target.sessionId,
+            }),
+          ).toBeUndefined();
+          current = false;
+          expect(restored.authority.assertCurrent).toThrow("Continuation owner closed");
         } finally {
+          retained();
           restored.release();
         }
       });
     },
   );
+  it("keeps restored authority current during unrelated issuance", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const profile = ensureProfileForEmail("publication-lifetime@example.test");
+      const fixture = await createOperatorRecoveryFixture({
+        stateDir: state.stateDir,
+        context: createContext(),
+        profileId: profile.id,
+        config: {},
+        device: pairedOperator(),
+      });
+      const restored = expectDefined(await fixture.restore(), "exact device source");
+      try {
+        await issueDeviceBootstrapToken({ baseDir: state.stateDir });
+        expect(restored.authority.signal?.aborted).toBe(false);
+        expect(restored.authority.assertCurrent).not.toThrow();
+      } finally {
+        restored.release();
+      }
+    });
+  });
   it("does not adopt an incidental paired token for tokenless trusted-proxy ingress", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const profile = ensureProfileForEmail("proxy-source@example.test");
@@ -107,7 +174,7 @@ describe("restart recovery authenticated operator source", () => {
     });
   });
   it.each(["before capture", "after admission", "after restoration"] as const)(
-    "does not adopt a replacement device token %s without Gateway retirement",
+    "revokes the original device authority on Gateway retirement %s",
     async (timing) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const profile = ensureProfileForEmail("exact-token@example.test");
@@ -118,6 +185,15 @@ describe("restart recovery authenticated operator source", () => {
           config: {},
           device: pairedOperator(),
         });
+        const caller = captureGatewayDeviceRevocation(
+          fixture.context,
+          { deviceId: "recovery-device", role: "operator" },
+          () => !fixture.client.invalidated,
+        );
+        fixture.context.invalidateClientsForDevice = (deviceId, options) => {
+          invalidateGatewayDeviceRevocation(fixture.context, deviceId, options?.role);
+          fixture.client.invalidated = true;
+        };
         const restored =
           timing === "after restoration"
             ? expectDefined(await fixture.restore(), "restored device source")
@@ -129,6 +205,7 @@ describe("restart recovery authenticated operator source", () => {
                   client: captureAgentTurnPrincipal(fixture.client),
                   context: fixture.context,
                   sourceAuthority: null,
+                  hasCurrentClientAuthority: caller.isCurrent,
                 }),
                 "accepted exact original token",
               )
@@ -139,6 +216,13 @@ describe("restart recovery authenticated operator source", () => {
             role: "operator",
           });
           expect(rotated.ok).toBe(true);
+          retireDeviceTokenClients(
+            fixture.context,
+            "recovery-device",
+            ["operator"],
+            "device-token-rotated",
+          );
+          expect(fixture.client.invalidated).toBe(true);
           const source = restored ?? accepted;
           if (source) {
             expect(source.authority.signal?.aborted).toBe(true);
@@ -149,17 +233,19 @@ describe("restart recovery authenticated operator source", () => {
                 client: captureAgentTurnPrincipal(fixture.client),
                 context: fixture.context,
                 sourceAuthority: null,
+                hasCurrentClientAuthority: caller.isCurrent,
               }),
-            ).rejects.toThrow("original current pairing publication");
+            ).rejects.toThrow("Gateway caller authority is no longer active");
           }
         } finally {
           restored?.release();
           accepted?.release();
+          caller.release();
         }
       });
     },
   );
-  it("retires restored authority when a later handshake replaces its token issuer", async () => {
+  it("keeps restored authority when a same-device handshake reissues its token", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const profile = ensureProfileForEmail("issuer-replacement@example.test");
       const fixture = await createOperatorRecoveryFixture({
@@ -179,10 +265,73 @@ describe("restart recovery authenticated operator source", () => {
             issuer: { kind: "shared-gateway-auth", generation: "replacement-issuer" },
           }),
         ).not.toBeNull();
-        expect(restored.authority.signal?.aborted).toBe(true);
-        expect(restored.authority.assertCurrent).toThrow();
+        expect(restored.authority.signal?.aborted).toBe(false);
+        expect(restored.authority.assertCurrent).not.toThrow();
       } finally {
         restored.release();
+      }
+    });
+  });
+  it("keeps accepted device authority through unrelated pairing traffic until Gateway retirement", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const profile = ensureProfileForEmail("pairing-traffic@example.test");
+      const device = pairedOperator();
+      const fixture = await createOperatorRecoveryFixture({
+        stateDir: state.stateDir,
+        context: createContext(),
+        profileId: profile.id,
+        config: {},
+        device,
+      });
+      const caller = captureGatewayDeviceRevocation(
+        fixture.context,
+        { deviceId: device.deviceId, role: "operator" },
+        () => !fixture.client.invalidated,
+      );
+      fixture.context.invalidateClientsForDevice = (deviceId, options) => {
+        invalidateGatewayDeviceRevocation(fixture.context, deviceId, options?.role);
+        fixture.client.invalidated = true;
+      };
+      const accepted = expectDefined(
+        await captureGatewayOperatorRunAuthority({
+          client: captureAgentTurnPrincipal(fixture.client),
+          context: fixture.context,
+          sourceAuthority: null,
+          hasCurrentClientAuthority: caller.isCurrent,
+        }),
+        "accepted paired operator",
+      );
+      try {
+        // A sibling owner changes the revision before a partial lookup publishes it.
+        const unrelated = { ...pairedOperator(), deviceId: "unrelated-device" };
+        persistDevicePairingStoreState(
+          {
+            pendingById: {},
+            pairedByDeviceId: { [device.deviceId]: device, [unrelated.deviceId]: unrelated },
+          },
+          state.stateDir,
+          "paired",
+        );
+        expect((await getPairedDevice(unrelated.deviceId))?.deviceId).toBe(unrelated.deviceId);
+        expect(accepted.authority.signal?.aborted).toBe(false);
+        expect(accepted.authority.assertCurrent).not.toThrow();
+        expect(
+          await updatePairedDeviceMetadata(unrelated.deviceId, { displayName: "Renamed" }),
+        ).toBe(true);
+        expect(accepted.authority.signal?.aborted).toBe(false);
+        expect(accepted.authority.assertCurrent).not.toThrow();
+        retireDeviceTokenClients(
+          fixture.context,
+          device.deviceId,
+          ["operator"],
+          "device-token-revoked",
+        );
+        expect(fixture.client.invalidated).toBe(true);
+        expect(accepted.authority.signal?.aborted).toBe(true);
+        expect(accepted.authority.assertCurrent).toThrow();
+      } finally {
+        accepted.release();
+        caller.release();
       }
     });
   });
@@ -230,59 +379,117 @@ describe("restart recovery authenticated operator source", () => {
       });
     },
   );
-  it("requires the original access-plugin grant before restoration and after admission", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const original = { pluginId: "recovery-access", grantId: "original-accepted-grant" };
-      let permitted = true;
-      const controller = new AbortController();
-      const grant = {
-        grantId: original.grantId,
-        signal: controller.signal,
-        assertCurrent: () => controller.signal.throwIfAborted(),
-      };
-      const resume = vi.fn<NonNullable<PluginGatewayAccessPolicy["resume"]>>(() =>
-        permitted ? grant : undefined,
-      );
-      const registry = createEmptyPluginRegistry();
-      registry.plugins.push(createPluginRecord({ id: original.pluginId }));
-      registry.gatewayAccessPolicies.push({
-        pluginId: original.pluginId,
-        source: "fixture",
-        policy: { authorize: () => grant, resume },
-      });
-      const previous = captureActivePluginRegistrySnapshot();
-      stageActivePluginRegistry(registry, null, "default");
-      try {
-        const profile = ensureProfileForEmail("access@example.test");
-        const fixture = await createOperatorRecoveryFixture({
-          stateDir: state.stateDir,
-          context: createContext(),
-          profileId: profile.id,
-          config: {},
-          gatewayAccessGrant: original,
+  it.each(["signal", "assertion", "new policy", "github binding", "policy callback"] as const)(
+    "resumes the original access grant once and fences retained recovery through %s",
+    async (revocation) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const original = { pluginId: "recovery-access", grantId: "original-accepted-grant" };
+        let permitted = true;
+        let additionalApplicable = false;
+        let invalidateDuringPolicy = false;
+        const controller = new AbortController();
+        const grant = {
+          grantId: original.grantId,
+          signal: controller.signal,
+          assertCurrent: () => {
+            controller.signal.throwIfAborted();
+            if (!permitted) {
+              throw new Error("Original grant revoked");
+            }
+          },
+        };
+        const resume = vi.fn<NonNullable<PluginGatewayAccessPolicy["resume"]>>(({ profile }) =>
+          permitted && (revocation !== "github binding" || profile.githubAccountIds?.includes(42))
+            ? grant
+            : undefined,
+        );
+        const registry = createEmptyPluginRegistry();
+        registry.plugins.push(createPluginRecord({ id: original.pluginId }));
+        registry.gatewayAccessPolicies.push({
+          pluginId: original.pluginId,
+          source: "fixture",
+          policy: { authorize: () => grant, resume },
         });
-        permitted = false;
-        await expect(fixture.restore()).rejects.toThrow("Gateway access is not active");
-        permitted = true;
-        const restored = expectDefined(await fixture.restore(), "restored original grant");
+        registry.plugins.push(createPluginRecord({ id: "additional-access" }));
+        registry.gatewayAccessPolicies.push({
+          pluginId: "additional-access",
+          source: "fixture",
+          policy: {
+            authorize: () => {
+              if (invalidateDuringPolicy) {
+                permitted = false;
+              }
+              return additionalApplicable ? grant : undefined;
+            },
+          },
+        });
+        const previous = captureActivePluginRegistrySnapshot();
+        stageActivePluginRegistry(registry, null, "default");
         try {
-          expect(restored.authority.gatewayAccessGrant).toEqual(original);
-          expect(resume).toHaveBeenCalledWith(
-            expect.objectContaining({ grantId: original.grantId }),
-          );
-          controller.abort(new Error("Original grant revoked"));
-          expect(restored.authority.signal?.aborted).toBe(true);
-          expect(restored.authority.assertCurrent).toThrow();
+          const profile = ensureProfileForEmail("access@example.test");
+          if (revocation === "github binding") {
+            syncGitHubIdentity({
+              identity: { accountId: 41, login: "primary" },
+              authenticationAlias: { kind: "email", email: "access@example.test" },
+            });
+            syncGitHubIdentity({
+              identity: { accountId: 42, login: "secondary" },
+              authenticationAlias: { kind: "email", email: "secondary@example.test" },
+            });
+            linkEmail("secondary@example.test", profile.id);
+          }
+          const fixture = await createOperatorRecoveryFixture({
+            stateDir: state.stateDir,
+            context: createContext(),
+            profileId: profile.id,
+            config: {},
+            gatewayAccessGrant: original,
+          });
+          permitted = false;
+          await expect(fixture.restore()).rejects.toThrow("Gateway access is not active");
+          permitted = true;
+          resume.mockClear();
+          const restored = expectDefined(await fixture.restore(), "restored original grant");
+          try {
+            expect(restored.authority.gatewayAccessGrant).toEqual(original);
+            expect(resume).toHaveBeenCalledWith(
+              expect.objectContaining({ grantId: original.grantId }),
+            );
+            restored.authority.assertCurrent();
+            restored.authority.readCurrentRoleAssignment?.();
+            restored.authority.readCurrentGithubLogin?.();
+            expect(resume).toHaveBeenCalledTimes(1);
+            if (revocation === "signal") {
+              controller.abort(new Error("Original grant revoked"));
+              expect(restored.authority.signal?.aborted).toBe(true);
+            } else if (revocation === "assertion") {
+              permitted = false;
+            } else if (revocation === "policy callback") {
+              invalidateDuringPolicy = true;
+            } else if (revocation === "github binding") {
+              const { db } = openOpenClawStateDatabase();
+              // Seed a removed secondary identity, then publish through the profile writer.
+              db.prepare(
+                "DELETE FROM user_profile_identities WHERE provider = 'github' AND subject = ?",
+              ).run("42");
+              await setCanonicalUserProfileDisplayName(profile.id, "Updated display");
+            } else {
+              additionalApplicable = true;
+            }
+            expect(restored.authority.assertCurrent).toThrow();
+            expect(restored.authority.signal?.aborted).toBe(true);
+          } finally {
+            restored.release();
+          }
         } finally {
-          restored.release();
+          restoreActivePluginRegistrySnapshot(previous);
         }
-      } finally {
-        restoreActivePluginRegistrySnapshot(previous);
-      }
-    });
-  });
+      });
+    },
+  );
   it("re-admits durable input after the original authority closes without exporting credentials", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const profile = ensureProfileForEmail("recovery@example.test");
       const fixture = await createOperatorRecoveryFixture({
         stateDir: state.stateDir,

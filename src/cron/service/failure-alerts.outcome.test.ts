@@ -22,12 +22,13 @@ import {
   type SendCronFailureAlert,
 } from "./failure-alerts.test-support.js";
 import { applyJobResultAndDrainNotifications } from "./notification.test-helpers.js";
-import { stop as stopCronService } from "./ops-lifecycle.js";
+import { start as startCronService, stop as stopCronService } from "./ops-lifecycle.js";
+import { finishCronRun } from "./run-history.js";
 import { restoreFinalizedStartupRun } from "./startup-run-repair.js";
 import type { DeferredCronNotifications } from "./state.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
 import { applyTriggerNoFireResult } from "./timer-outcomes.js";
-import { authorCronRunCompletion } from "./timer.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-failure-alert-outcome-" });
 
@@ -397,7 +398,7 @@ async function finalize(
 }
 
 describe("cron failure incident startup recovery", () => {
-  it("reopens a recurring failure after replaying success whose job-row commit failed", async () => {
+  it("reopens a recurring failure after recovering a released split-commit success", async () => {
     const context = createFixture();
     const { store, clock, state, sendCronFailureAlert } = context;
     await saveCronStore(store.storePath, { version: 1, jobs: [context.job] });
@@ -407,57 +408,53 @@ describe("cron failure incident startup recovery", () => {
     clock.now += 1_000;
     pendingJob.state.runningAtMs = clock.now;
     await saveCronStore(store.storePath, { version: 1, jobs: [pendingJob] });
-    const database = openOpenClawStateDatabase().db;
-    database.exec(`
-      CREATE TRIGGER reject_recovered_cron_row
-      BEFORE UPDATE ON cron_jobs
-      WHEN NEW.store_key = '${cronStoreKey(store.storePath)}' AND NEW.job_id = '${pendingJob.id}'
-      BEGIN
-        SELECT RAISE(ABORT, 'recovery row write failed');
-      END;
-    `);
-    try {
-      await expect(finalize(context, pendingJob, { status: "ok" })).rejects.toThrow(
-        "recovery row write failed",
-      );
-    } finally {
-      database.exec("DROP TRIGGER IF EXISTS reject_recovered_cron_row");
-    }
-    const entry = readCronRunHistoryPageForTests({
+    // Released schedulers could persist terminal history before the separate job update.
+    await finishCronRun(state, {
+      job: pendingJob,
+      event: {
+        jobId: pendingJob.id,
+        action: "finished",
+        status: "ok",
+        completionStatus: "succeeded",
+        runAtMs: clock.now,
+        durationMs: 10,
+        deliveryStatus: "not-requested",
+        nextRunAtMs: context.job.createdAtMs + 60_000,
+      },
+    });
+    const recorded = readCronRunHistoryPageForTests({
       storeKey: cronStoreKey(store.storePath),
       jobId: pendingJob.id,
       status: "ok",
-    }).entries[0];
-    if (!entry || entry.status !== "ok") {
-      throw new Error("expected durable successful task history");
-    }
-    const staleJob = (await loadCronStore(store.storePath)).jobs[0]!;
-    expect(staleJob.state.failureAlertIncident?.signature).toBeDefined();
+    }).entries;
+    expect(recorded).toMatchObject([{ status: "ok", runAtMs: clock.now }]);
+    const before = (await loadCronStore(store.storePath)).jobs[0]!;
+    expect(before.state.failureAlertIncident?.signature).toBeDefined();
+    expect(before.state.runningAtMs).toBe(clock.now);
     expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-    const notifications: DeferredCronNotifications = [];
-    restoreFinalizedStartupRun({
-      state,
-      job: staleJob,
-      runningAtMs: clock.now,
-      entry: { ...entry, status: "ok" },
-      deferredNotifications: notifications,
-    });
-    expect(notifications).toEqual([]);
-    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-    expect(staleJob.state.failureAlertIncident).toBeUndefined();
-    expect(staleJob.state.lastFailureAlertAtMs).toBeUndefined();
-    await saveCronStore(store.storePath, { version: 1, jobs: [staleJob] });
+    try {
+      await startCronService(state);
+      const recovered = (await loadCronStore(store.storePath)).jobs[0]!;
+      expect(recovered.state.runningAtMs).toBeUndefined();
+      expect(recovered.state.failureAlertIncident).toBeUndefined();
+      expect(recovered.state.lastFailureAlertAtMs).toBeUndefined();
+      expect(recovered.state.lastRunStatus).toBe("ok");
+      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
 
-    clock.now += 1_000;
-    await finalize(context, staleJob, { status: "error", error: "monitor failed" });
-    expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
+      clock.now += 1_000;
+      await finalize(context, recovered, { status: "error", error: "monitor failed" });
+      expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
+    } finally {
+      stopCronService(state);
+      await state.schedulerDrain;
+    }
   });
 
   it.each(["trigger", "payload"] as const)(
     "reconciles a quiet startup check after a %s failure without historical notifications",
-    (source) => {
+    async (source) => {
       const { state, job, clock, sendCronFailureAlert } = createFixture();
-      applyJobResultAndDrainNotifications(state, job, {
+      await applyJobResultAndDrainNotifications(state, job, {
         status: "error",
         error: "plugin refresh failed",
         ...cronScriptFailureMetadata(source, "plugin_reload_failed"),
@@ -485,9 +482,9 @@ describe("cron failure incident startup recovery", () => {
     },
   );
 
-  it("keeps a replayed failure without script detail unresolved through a quiet trigger check", () => {
+  it("keeps a replayed failure without script detail unresolved through a quiet trigger check", async () => {
     const { state, job, clock, sendCronFailureAlert } = createFixture();
-    applyJobResultAndDrainNotifications(state, job, {
+    await applyJobResultAndDrainNotifications(state, job, {
       status: "error",
       error: "plugin refresh failed",
       ...cronScriptFailureMetadata("trigger", "plugin_reload_failed"),

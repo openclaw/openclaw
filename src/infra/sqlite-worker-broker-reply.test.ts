@@ -8,6 +8,7 @@ import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-e
 import { receiveSqliteWorkerReply } from "./sqlite-worker-broker-reply.js";
 import type { Actor, Job } from "./sqlite-worker-broker.types.js";
 import type { SqliteWorkerCloseReceipt } from "./sqlite-worker-contract.js";
+import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
 
 it.each(["valid", "framed", "close", "mismatched", "unsafe", "malformed"])(
@@ -55,6 +56,7 @@ it.each(["valid", "framed", "close", "mismatched", "unsafe", "malformed"])(
         },
       };
       const job: Job = {
+        custody: new SqliteWorkerSlotCustody().createRequest(),
         observation: { started() {}, completed() {} },
         request:
           kind === "close"
@@ -151,6 +153,7 @@ it("hydrates cached-context execute-frame errors without an explicit request con
     throw new Error("Failed continuation must not dispatch or finish successfully");
   };
   const job: Job = {
+    custody: new SqliteWorkerSlotCustody().createRequest(),
     observation: { started() {}, completed() {} },
     request: { type: "execute-frame", id: 1, actor: 1, input: new Uint8Array() },
     bytes: 0,

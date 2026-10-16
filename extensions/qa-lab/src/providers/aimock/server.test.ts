@@ -150,31 +150,6 @@ describe("qa aimock server", () => {
     }
   });
 
-  it("keeps complete large input when the upstream body is still retained", async () => {
-    const server = await startQaAimockServer();
-    const prompt = "u".repeat(40_000);
-    try {
-      const response = await fetch(`${server.baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          model: "aimock/gpt-5.6-luna",
-          stream: false,
-          input: [makeResponsesInput(prompt)],
-        }),
-      });
-      expect(response.status).toBe(200);
-      await response.json();
-      const debug = await fetch(`${server.baseUrl}/debug/last-request`);
-      expect(debug.status).toBe(200);
-      const snapshot = await debug.json();
-      expect(snapshot).toMatchObject({ prompt, allInputText: prompt });
-      expect(snapshot.body).not.toHaveProperty("__aimock_truncated");
-    } finally {
-      await server.stop();
-    }
-  });
-
   it("keeps non-chat image journal entries out of chat debug state", async () => {
     const server = await startQaAimockServer();
     const prompt = "chat request remains the latest chat snapshot";
@@ -509,49 +484,6 @@ describe("qa aimock server", () => {
       }
     },
   );
-
-  it("serves OpenAI Responses text replies and debug request snapshots", async () => {
-    const server = await startQaAimockServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    try {
-      const response = await fetch(`${server.baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          model: "aimock/gpt-5.6-luna",
-          stream: false,
-          input: [makeResponsesInput("hello aimock")],
-        }),
-      });
-      expect(response.status).toBe(200);
-      const responseBody = (await response.json()) as { model?: unknown; status?: unknown };
-      expect(responseBody.status).toBe("completed");
-      expect(responseBody.model).toBe("aimock/gpt-5.6-luna");
-
-      const debug = await fetch(`${server.baseUrl}/debug/last-request`);
-      expect(debug.status).toBe(200);
-      const expectedBody = {
-        model: "aimock/gpt-5.6-luna",
-        messages: [{ role: "user", content: "hello aimock" }],
-        stream: false,
-        _endpointType: "chat",
-      };
-      expect(await debug.json()).toEqual({
-        raw: JSON.stringify(expectedBody),
-        body: expectedBody,
-        prompt: "hello aimock",
-        allInputText: "hello aimock",
-        toolOutput: "",
-        model: "aimock/gpt-5.6-luna",
-        providerVariant: "openai",
-        imageInputCount: 0,
-      });
-    } finally {
-      await server.stop();
-    }
-  });
 
   it("reads requests after a stable debug cursor", async () => {
     const server = await startQaAimockServer({

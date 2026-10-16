@@ -1,3 +1,4 @@
+import { parseJsonPreservingUnsafeIntegers } from "@openclaw/ai/transports";
 import { Type } from "typebox";
 import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
@@ -9,8 +10,7 @@ const states = new Map<string, SwarmStructuredOutputState>();
 const pendingExecutions = new Map<string, Promise<unknown>>();
 
 export function peekSwarmStructuredOutput(runId: string): SwarmStructuredOutputState | undefined {
-  const state = states.get(runId);
-  return state ? structuredClone(state) : undefined;
+  return states.get(runId);
 }
 
 export function consumeSwarmStructuredOutput(
@@ -29,11 +29,11 @@ export function createStructuredOutputTool(params: {
 }): AnyAgentTool {
   const requestedSchema = JSON.stringify(params.schema);
   if (params.initialState && !states.has(params.runId)) {
-    states.set(params.runId, structuredClone(params.initialState));
+    states.set(params.runId, params.initialState);
   }
   const commitState = async (next: SwarmStructuredOutputState) => {
     try {
-      await params.onStateChange?.(structuredClone(next));
+      await params.onStateChange?.(next);
     } catch (error) {
       throw new ToolInputError(
         `Failed to persist structured_output: ${error instanceof Error ? error.message : String(error)}`,
@@ -63,7 +63,9 @@ export function createStructuredOutputTool(params: {
     execute: async (_toolCallId, args) => {
       const previous = pendingExecutions.get(params.runId) ?? Promise.resolve();
       const execution = previous
-        .catch(() => {})
+        .catch(() => {
+          // A rejected call must not block the run's permitted corrected result.
+        })
         .then(async () => {
           const prior = states.get(params.runId);
           if (prior?.structured !== undefined) {
@@ -78,11 +80,26 @@ export function createStructuredOutputTool(params: {
           }
           let validation: ReturnType<typeof validateJsonSchemaValue>;
           try {
-            validation = validateJsonSchemaValue({
+            const input = {
               schema: params.schema as JsonSchemaObject,
               cacheKey: `swarm-structured-output:${params.runId}`,
               value: (args as { result: unknown }).result,
-            });
+            };
+            validation = validateJsonSchemaValue(input);
+            // Preserve valid string results; decode only a rejected nested JSON string.
+            if (!validation.ok && typeof input.value === "string") {
+              try {
+                const decoded = validateJsonSchemaValue({
+                  ...input,
+                  value: parseJsonPreservingUnsafeIntegers(input.value),
+                });
+                if (decoded.ok) {
+                  validation = decoded;
+                }
+              } catch {
+                // Keep the original validation error when the string is not JSON.
+              }
+            }
           } catch (error) {
             throw new ToolInputError(
               `Invalid sessions_spawn outputSchema: ${error instanceof Error ? error.message : String(error)}`,

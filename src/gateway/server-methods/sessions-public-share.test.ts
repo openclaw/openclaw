@@ -5,12 +5,14 @@ import {
   SessionPublicShareSetResultSchema,
   SessionMembersListEvidenceResultSchema,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import * as sharingStore from "../../config/sessions/session-sharing-store.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import * as sharingLifecycle from "../../sessions/session-lifecycle-admission.js";
@@ -18,7 +20,6 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
-import * as profileReads from "../../state/user-profile-reads.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as publicSessionTokens from "../control-ui-public-session-token.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
@@ -33,6 +34,7 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
 });
 
+const cfg = {};
 const scope = { agentId: "main", sessionKey: "agent:main:public-example" };
 const sessionId = "public-example-generation";
 
@@ -42,7 +44,7 @@ async function call(
   client: GatewayClient = identifiedClient("owner"),
 ) {
   const responses: Parameters<RespondFn>[] = [];
-  const context = sessionSharingTestContext(vi.fn());
+  const context = sessionSharingTestContext(vi.fn(), cfg);
   await initializeSessionReadContext(context);
   await expectDefined(
     sessionSharingHandlers[method],
@@ -57,6 +59,7 @@ async function call(
 }
 
 async function createSession() {
+  setRuntimeConfigSnapshot(cfg);
   await upsertSessionEntryCore(scope, {
     sessionId,
     updatedAt: 1,
@@ -155,6 +158,17 @@ describe("world-readable session publication management", () => {
       const sessionKey = "global";
       const firstStorePath = state.path("public-share-first.sqlite");
       const secondStorePath = state.path("public-share-second.sqlite");
+      const configFor = (store: string) => ({
+        session: { scope: "global" as const, store },
+        agents: {
+          ownership: "explicit" as const,
+          defaults: { sessionStore: { agentId: "main" } },
+          entries: { main: {} },
+        },
+      });
+      const firstConfig = configFor(firstStorePath);
+      const secondConfig = configFor(secondStorePath);
+      setRuntimeConfigSnapshot(firstConfig);
       const entry = {
         sessionId,
         updatedAt: 1,
@@ -168,16 +182,6 @@ describe("world-readable session publication management", () => {
         { agentId: "main", sessionKey, storePath: secondStorePath },
         entry,
       );
-      const configFor = (store: string) => ({
-        session: { scope: "global" as const, store },
-        agents: {
-          ownership: "explicit" as const,
-          defaults: { sessionStore: { agentId: "main" } },
-          entries: { main: {} },
-        },
-      });
-      const firstConfig = configFor(firstStorePath);
-      const secondConfig = configFor(secondStorePath);
       let currentConfig = firstConfig;
       const requestContext = sessionSharingTestContext(vi.fn(), firstConfig);
       requestContext.getRuntimeConfig = () => currentConfig;
@@ -242,12 +246,14 @@ describe("world-readable session publication management", () => {
             },
           );
         } else {
-          const list = profileReads.listProfiles;
-          vi.spyOn(profileReads, "listProfiles").mockImplementationOnce(async () => {
-            const profiles = await list();
-            await resetSession();
-            return profiles;
-          });
+          const read = sharingStore.readSessionMembersInWorker;
+          vi.spyOn(sharingStore, "readSessionMembersInWorker").mockImplementationOnce(
+            async (input) => {
+              const evidence = await read(input);
+              await resetSession();
+              return evidence;
+            },
+          );
         }
         await expect(
           method === "session.publicShare.set"
@@ -298,12 +304,13 @@ describe("world-readable session publication management", () => {
           await setPublic(false);
         }
         if (restoredGrant) {
-          const list = profileReads.listProfiles;
-          vi.spyOn(profileReads, "listProfiles").mockImplementationOnce(async () => {
-            const profiles = await list();
-            await upsertSessionEntryCore(scope, { publicShare: grant });
-            return profiles;
-          });
+          const read = sharingStore.readSessionMembersInWorker;
+          vi.spyOn(sharingStore, "readSessionMembersInWorker").mockImplementationOnce(
+            async (input) => {
+              await upsertSessionEntryCore(scope, { publicShare: grant });
+              return read(input);
+            },
+          );
         }
         const loadCodec = publicSessionTokens.loadPublicSessionShareTokenCodec;
         vi.spyOn(publicSessionTokens, "loadPublicSessionShareTokenCodec").mockImplementationOnce(
@@ -325,6 +332,7 @@ describe("world-readable session publication management", () => {
 
   it("rejects an unencodable locator before persisting its publication grant", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot(cfg);
       const oversizedScope = {
         agentId: "main",
         sessionKey: `agent:main:${"🙂".repeat(2_000)}`,

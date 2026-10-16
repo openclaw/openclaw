@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import type { ApplicationRouter, RouteId } from "../app-routes.ts";
 import { selectRenderedRouteMatch } from "../app/router-outlet-controller.ts";
 
@@ -5,7 +6,7 @@ export type ContextualSidebar = {
   key: RouteId;
   data: unknown;
   loaderPending: boolean;
-  render: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+  render: (data: unknown, loaderPending: boolean, presented?: boolean) => JSX.Element;
 };
 
 /** Both page and sidebar consume the router owner's same rendered match. */

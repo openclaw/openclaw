@@ -2,6 +2,9 @@ openclaw-plugin-settings-editor {
   display: block;
   min-width: 0;
 }
+openclaw-plugin-settings-groups {
+  display: contents;
+}
 .plugin-editor {
   container-type: inline-size;
 }
@@ -84,7 +87,8 @@ openclaw-plugin-settings-editor {
   grid-row: 1;
   min-width: 0;
 }
-.plugin-editor__control > .settings-row {
+.plugin-editor__control > .settings-row,
+.plugin-editor__control > .lit-content > .settings-row {
   padding: 0;
   min-height: 0;
   background: transparent;
@@ -107,22 +111,21 @@ openclaw-plugin-settings-editor {
   accent-color: var(--accent);
 }
 .plugin-editor__menu {
-  /* The dropdown host uses display: contents; this wrapper owns its position. */
   position: absolute;
   left: 12px;
   top: 20px;
   opacity: 0;
 }
-.plugin-editor__menu button[slot="trigger"] {
+.plugin-editor__menu .oc-menu-trigger {
   width: 30px;
   height: 30px;
 }
-.plugin-editor__menu button[slot="trigger"] svg {
+.plugin-editor__menu .oc-menu-trigger svg {
   transform: rotate(90deg);
 }
 .plugin-editor__row:hover .plugin-editor__menu,
 .plugin-editor__row:focus-within .plugin-editor__menu,
-.plugin-editor__menu:has(wa-dropdown[open]) {
+.plugin-editor__menu:has([aria-expanded="true"]) {
   opacity: 1;
 }
 

@@ -12,7 +12,6 @@ import {
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -86,23 +85,24 @@ afterEach(() => {
 });
 
 describe("doctor agent memory schema repair", () => {
-  it("invalidates verification before a failed writable repair while inspection preserves it", async () => {
+  it("removes a stale clean-close seal before failed writable repair while inspection preserves it", async () => {
     const { databasePath, env } = createRegisteredAgentDatabase();
+    const sealPath = `${databasePath}.seal`;
+    const staleSeal = fs.readFileSync(sealPath);
     recreateUnreleasedInlineMemoryMetadata(databasePath);
-    expect(readOpenClawAgentIntegrityVerification(databasePath, env)?.clean_close).toBe(1);
+    // Model an external schema edit that leaves the prior clean-close marker behind.
+    fs.writeFileSync(sealPath, staleSeal);
     await noteDoctorAgentMemorySchemaHealth({ env, shouldRepair: false }, { note: vi.fn() });
-    expect(readOpenClawAgentIntegrityVerification(databasePath, env)?.clean_close).toBe(1);
+    expect(fs.readFileSync(sealPath)).toEqual(staleSeal);
 
     const sqlite = await import("../infra/node-sqlite.js");
     const nativeOpen = sqlite.openNodeSqliteDatabase;
-    let observedWritableOpen = false;
-    let receiptBeforeOpen: ReturnType<typeof readOpenClawAgentIntegrityVerification>;
+    let sealPresentBeforeOpen: boolean | undefined;
     const open = vi
       .spyOn(sqlite, "openNodeSqliteDatabase")
       .mockImplementation((pathname, options) => {
         if (pathname === databasePath && !options?.readOnly) {
-          observedWritableOpen = true;
-          receiptBeforeOpen = readOpenClawAgentIntegrityVerification(databasePath, env);
+          sealPresentBeforeOpen = fs.existsSync(sealPath);
           throw new Error("synthetic maintenance native open failed");
         }
         return nativeOpen(pathname, options);
@@ -112,11 +112,10 @@ describe("doctor agent memory schema repair", () => {
         { env, shouldRepair: true },
         { note: vi.fn() },
       );
-      expect(observedWritableOpen).toBe(true);
-      expect(receiptBeforeOpen).toBeUndefined();
+      expect(sealPresentBeforeOpen).toBe(false);
       expect(report.repaired).toEqual([]);
       expect(report.warnings.join(" ")).toContain("synthetic maintenance native open failed");
-      expect(readOpenClawAgentIntegrityVerification(databasePath, env)).toBeUndefined();
+      expect(fs.existsSync(sealPath)).toBe(false);
     } finally {
       open.mockRestore();
     }

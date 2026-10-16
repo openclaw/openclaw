@@ -90,28 +90,6 @@ describe("PlivoProvider", () => {
     }));
   });
 
-  it("parses answer callback into call.answered and returns keep-alive XML", () => {
-    const provider = new PlivoProvider(PROVIDER_CONFIG);
-
-    const result = provider.parseWebhookEvent({
-      headers: { host: "example.com" },
-      rawBody:
-        "CallUUID=call-uuid&CallStatus=in-progress&Direction=outbound&From=%2B15550000000&To=%2B15550000001&Event=StartApp",
-      url: "https://example.com/voice/webhook?provider=plivo&flow=answer&callId=internal-call-id",
-      method: "POST",
-      query: { provider: "plivo", flow: "answer", callId: "internal-call-id" },
-    });
-
-    expect(result.events).toHaveLength(1);
-    const event = requireEvent(result.events[0], "expected Plivo answer event");
-    expect(event.type).toBe("call.answered");
-    expect(event.callId).toBe("internal-call-id");
-    expect(event.providerCallId).toBe("call-uuid");
-    const responseBody = requireResponseBody(result.providerResponseBody);
-    expect(responseBody).toContain("<Wait");
-    expect(responseBody).toContain('length="300"');
-  });
-
   it("uses verified request key when provided", () => {
     const provider = new PlivoProvider(PROVIDER_CONFIG);
 

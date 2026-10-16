@@ -176,7 +176,7 @@ it.each([
             const execute = stateReadonly.executeExistingOpenClawStateRead;
             vi.spyOn(stateReadonly, "executeExistingOpenClawStateRead").mockImplementation(
               async (...args) => {
-                if (args[1].type !== "doctor.gatewayOwnerLease.read") {
+                if (args[1].type !== "gatewayOwnerLease.read") {
                   return execute(...args);
                 }
                 if (kind === "selected-source") {

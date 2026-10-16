@@ -2,16 +2,20 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { createSessionEntryWithTranscript } from "../config/sessions/session-accessor.entry-mutation.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
-  readSessionTranscriptMessageEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { readSessionTranscriptBoundedMessageTailPageAsync } from "../gateway/session-transcript-readers.js";
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -54,6 +58,11 @@ const { useClientVoiceDigestHarness, withClientVoiceDigestSettlement } = await v
 describe("client voice session lifecycle", () => {
   const harness = useClientVoiceDigestHarness();
   const { sendDurableMessageBatch, settleDigestAttempts } = harness;
+
+  beforeEach(({ onTestFinished }) => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(clearRuntimeConfigSnapshot);
+  });
 
   it("does not replay or mark a partially delivered digest after expiry and re-record", async () => {
     await withClientVoiceDigestSettlement(async (settle) => {
@@ -759,7 +768,7 @@ describe("client voice session lifecycle", () => {
           }));
         }
         const sessionId = await ensureClientVoiceAgentSessionEntry(storage);
-        expect(resolveClientVoiceAgentSessionId(storage)).toBe(sessionId);
+        expect(await resolveClientVoiceAgentSessionId(storage)).toBe(sessionId);
         const voiceTarget = { agentId: "main", sessionKey: "main" };
         const voiceSessionId = await createOrResumeClientVoiceSession({ ...voiceTarget, origin });
         const append =
@@ -772,7 +781,11 @@ describe("client voice session lifecycle", () => {
           role: "user",
           text: "Stored in the prepared session",
         });
-        expect(readSessionTranscriptMessageEvents({ ...storage, sessionId })).toEqual([
+        const transcript = await readSessionTranscriptBoundedMessageTailPageAsync(
+          { ...storage, sessionId },
+          { maxBytes: 4096, maxMessages: 10, offset: 0 },
+        );
+        expect(transcript.events).toEqual([
           expect.objectContaining({
             event: expect.objectContaining({
               message: expect.objectContaining({

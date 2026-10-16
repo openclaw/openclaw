@@ -7,6 +7,7 @@ import {
 } from "../../acp/runtime/session-meta.js";
 import { noteSessionTranscriptHealth } from "../../commands/doctor-session-transcripts.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createAgentDatabaseInspectionRefusal,
   preparePendingAgentDatabase,
@@ -18,12 +19,67 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import { seedCanonicalSessionValidation } from "./session-canonical-validation.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
+
+it.each([false, true])(
+  "inspects legacy keys while ACP inspection is pending, refusing handoff on ACP failure=%s",
+  async (refuse) => {
+    await withOpenClawTestState({ scenario: "empty" }, async ({ env, writeConfig }) => {
+      const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
+      await writeConfig(cfg);
+      replaceSessionEntrySync(
+        { agentId: "main", env, sessionKey: "agent:main:main" },
+        { sessionId: "retained-session", updatedAt: 100 },
+      );
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const originalRead = stateReads.executeExistingOpenClawStateRead;
+      const reading = vi
+        .spyOn(stateReads, "executeExistingOpenClawStateRead")
+        .mockImplementation(async (...args) => {
+          if (args[1].type === "acpSessions.list") {
+            entered.resolve();
+            await release.promise;
+            if (refuse) {
+              throw new Error("ACP inspection refused");
+            }
+          }
+          return await originalRead(...args);
+        });
+      const inspectLegacy = vi.fn(migrateLegacyMainSessionKeys);
+      const handoffDatabase = vi.fn(async () => {});
+      const outcome = runSessionStartupMigration({
+        cfg,
+        env,
+        log: { info() {}, warn() {} },
+        handoffDatabase,
+        deps: { migrateLegacyMainSessionKeys: inspectLegacy },
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await entered.promise;
+        expect(inspectLegacy).toHaveBeenCalledWith({ cfg, env, mode: "detect" });
+        expect(handoffDatabase).not.toHaveBeenCalled();
+        release.resolve();
+        expect(await outcome).toEqual(refuse ? new Error("ACP inspection refused") : undefined);
+        expect(handoffDatabase).toHaveBeenCalledTimes(refuse ? 0 : 1);
+      } finally {
+        release.resolve();
+        await outcome;
+        reading.mockRestore();
+      }
+    });
+  },
+);
 
 it.each(["recorded", "ownerless", "literal"] as const)(
   "startup defers %s ACP bindings until their physical store is admitted",

@@ -2,11 +2,17 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { registerWebPushSubscription } from "../../infra/push-web.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { prepareUserProfileSelectionAuthority } from "../../state/user-channel-identity-operations.js";
-import { readUserProfileIdentity } from "../../state/user-profile-list.js";
-import { resolveUserProfileId } from "../../state/user-profiles.js";
+import {
+  readResidentUserProfileIdentity,
+  readResidentUserProfileId,
+} from "../../state/user-profile-list.js";
 import {
   closeGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
@@ -40,8 +46,11 @@ vi.mock("../../infra/push-web.js", () => ({
   resolveVapidKeys: vi.fn(),
   setWebPushSubscriptionPreferences: vi.fn(),
 }));
-vi.mock("../../state/user-profiles.js", () => ({ resolveUserProfileId: vi.fn() }));
-vi.mock("../../state/user-profile-list.js", () => ({ readUserProfileIdentity: vi.fn() }));
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  readResidentUserProfileId: vi.fn(),
+  readResidentUserProfileIdentity: vi.fn(),
+}));
 vi.mock("../../state/user-channel-identity-operations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-channel-identity-operations.js")>()),
   prepareUserProfileSelectionAuthority: vi.fn(),
@@ -83,14 +92,14 @@ describe("Web Push router authority at the worker grant", () => {
         isCurrent: () => true,
       };
     });
-    vi.mocked(resolveUserProfileId).mockImplementation((profileId) => {
+    vi.mocked(readResidentUserProfileId).mockImplementation((profileId) => {
       if (inGrant) {
         forbiddenGrantReads();
         throw new Error("profile SQL attempted while the worker owns its transaction");
       }
       return profileId === "retired-profile" ? "profile-owner" : profileId;
     });
-    vi.mocked(readUserProfileIdentity).mockImplementation((profileId) => {
+    vi.mocked(readResidentUserProfileIdentity).mockImplementation((profileId) => {
       if (inGrant) {
         forbiddenGrantReads();
         throw new Error("profile catalog acquisition attempted during worker admission");
@@ -160,8 +169,12 @@ describe("Web Push router authority at the worker grant", () => {
     };
     const isConnectionActive = vi.fn(() => true);
     const getClientConnIds = vi.fn(() => new Set(["original-connection"]));
+    setRuntimeConfigSnapshot({});
     const context = createDirectChatContext({ isConnectionActive, getClientConnIds });
-    onTestFinished(() => closeGatewayDeviceRevocation(context));
+    onTestFinished(() => {
+      closeGatewayDeviceRevocation(context);
+      clearRuntimeConfigSnapshot();
+    });
     const harness = createDispatchTestHarness({
       connId: "original-connection",
       getRequiredSharedGatewaySessionGeneration: new SharedGatewaySessionGenerationState({
@@ -194,7 +207,7 @@ describe("Web Push router authority at the worker grant", () => {
       expect(prepareUserProfileSelectionAuthority).toHaveBeenCalledWith(
         client.authenticatedUserProfile?.profileId,
       );
-      expect(resolveUserProfileId).toHaveBeenCalled();
+      expect(readResidentUserProfileId).not.toHaveBeenCalled();
       expect(persisted).not.toHaveBeenCalled();
       if (scenario === "transport retirement") {
         connection.abort();

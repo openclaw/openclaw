@@ -90,6 +90,7 @@ it("returns cleanup before slow dev git discovery schedules a campaign", async (
       onGitProbeTimeout: expect.any(Function),
       fetchGit: false,
       includeRegistry: false,
+      useDetachedDevUpstream: true,
     });
     expect(checkUpdateStatus).toHaveBeenNthCalledWith(2, {
       root: "/opt/openclaw",

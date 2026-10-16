@@ -231,41 +231,46 @@ async function statPluginLocator(source: string) {
   return fs.stat(source, { bigint: true }).catch(ignoreMissingUpdateCandidateFile);
 }
 
-async function readCopiedPluginIndex(shared: string): Promise<
-  | {
-      value: Record<string, unknown>;
-      records: Record<string, PluginInstallRecord>;
-    }
-  | undefined
-> {
+export type UpdateCandidatePluginIndex = {
+  value: Record<string, unknown>;
+  records: Record<string, PluginInstallRecord>;
+};
+
+export function readUpdateCandidatePluginIndex(
+  db: import("./sql-connection.js").EngineConnection,
+): UpdateCandidatePluginIndex | undefined {
+  if (!tableExists(db, "config_machine_state")) {
+    return undefined;
+  }
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
+      .selectFrom("config_machine_state")
+      .select("value_json")
+      .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
+  );
+  if (!row) {
+    return undefined;
+  }
+  const parsed: unknown = JSON.parse(row.value_json);
+  if (!isRecord(parsed) || !isRecord(parsed.index)) {
+    throw new Error("Invalid copied plugin index");
+  }
+  const installed = parsePluginInstallRecordMap(parsed.index.installRecords);
+  if (!installed) {
+    throw new Error("Invalid copied plugin install records");
+  }
+  return { value: parsed, records: installed };
+}
+
+async function readCopiedPluginIndex(shared: string) {
   const stat = await fs.stat(shared).catch(ignoreMissingUpdateCandidateFile);
   if (!stat) {
     return undefined;
   }
   const db = openNodeSqliteDatabase(shared, { readOnly: true });
   try {
-    if (!tableExists(db, "config_machine_state")) {
-      return undefined;
-    }
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
-        .selectFrom("config_machine_state")
-        .select("value_json")
-        .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
-    );
-    if (!row) {
-      return undefined;
-    }
-    const parsed: unknown = JSON.parse(row.value_json);
-    if (!isRecord(parsed) || !isRecord(parsed.index)) {
-      throw new Error("Invalid copied plugin index");
-    }
-    const installed = parsePluginInstallRecordMap(parsed.index.installRecords);
-    if (!installed) {
-      throw new Error("Invalid copied plugin install records");
-    }
-    return { value: parsed, records: installed };
+    return readUpdateCandidatePluginIndex(db);
   } finally {
     db.close();
   }
@@ -275,6 +280,7 @@ async function readCopiedPluginIndex(shared: string): Promise<
 export async function prepareUpdateCandidatePlugins(
   params: UpdateCandidatePluginProjectionParams & {
     sharedStateDatabasePath?: string;
+    sharedStatePluginIndex?: UpdateCandidatePluginIndex;
     onProgress?: () => void | Promise<void>;
   },
 ): Promise<UpdateCandidatePluginPlan> {
@@ -282,7 +288,7 @@ export async function prepareUpdateCandidatePlugins(
   const targetStateDir = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
   const shared =
     params.sharedStateDatabasePath ?? path.join(targetStateDir, "state", "openclaw.sqlite");
-  const copied = await readCopiedPluginIndex(shared);
+  const copied = params.sharedStatePluginIndex ?? (await readCopiedPluginIndex(shared));
   const records = copied?.records ?? params.config.plugins?.installs ?? {};
   const resolve = (locator: string) => resolveUserPath(locator, params.env);
   const canonicalStateRoot = await fs
@@ -383,9 +389,6 @@ export async function prepareUpdateCandidatePlugins(
     candidateRoot: params.candidateRoot,
     onProgress: params.onProgress,
   });
-  for (const inspection of inspections) {
-    inspection.assertSourceCurrent();
-  }
   const aliases: UpdateCandidatePluginPlan["aliases"] = [];
   for (const { source, real, file, preserveBasename } of locators) {
     const copy = trees.copies.find(([directory]) => isPathInside(directory, real));

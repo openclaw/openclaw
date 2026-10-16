@@ -29,9 +29,17 @@ export function getPluginSetupModuleLoader(
     }
     void retirePluginCacheInstance(instance, cache).catch(() => {});
   };
+  const discardOnFailure = <T>(run: () => T): T => {
+    try {
+      return run();
+    } catch (error) {
+      discard();
+      throw error;
+    }
+  };
   if (!cached) {
     cache.setupModules.set(key, instance);
-    try {
+    discardOnFailure(() => {
       if (record.origin === "bundled" && isJavaScriptModulePath(source)) {
         const distribution = path.dirname(path.dirname(rootDir));
         const dependencyRoot =
@@ -50,31 +58,15 @@ export function getPluginSetupModuleLoader(
         source,
         rootDir,
       });
-    } catch (error) {
-      discard();
-      throw error;
-    }
+    });
   }
-  return Object.assign(
-    (entry: string) => {
-      try {
-        return instance.loadModule(entry);
-      } catch (error) {
-        discard();
-        throw error;
-      }
+  return Object.assign((entry: string) => discardOnFailure(() => instance.loadModule(entry)), {
+    initialize<T>(this: void, run: () => T): T {
+      return discardOnFailure(() => {
+        const result = run();
+        instance.controlPlaneInitialized = true;
+        return result;
+      });
     },
-    {
-      initialize<T>(this: void, run: () => T): T {
-        try {
-          const result = run();
-          instance.controlPlaneInitialized = true;
-          return result;
-        } catch (error) {
-          discard();
-          throw error;
-        }
-      },
-    },
-  );
+  });
 }

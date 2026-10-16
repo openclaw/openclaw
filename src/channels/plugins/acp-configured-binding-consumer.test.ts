@@ -86,27 +86,9 @@ describe("configured ACP binding thinking precedence", () => {
     expect(materializeThinking(cfg)).toBe("adaptive");
   });
 
-  it.each([false, "disabled", "none"])("forwards per-model thinking %s as off", (thinking) => {
-    expect(
-      materializeThinking({
-        ...baseCfg,
-        agents: {
-          ...baseCfg.agents,
-          defaults: {
-            thinkingDefault: "high",
-            models: { "ollama-cloud/glm-5.2:cloud": { params: { thinking } } },
-          },
-        },
-      }),
-    ).toBe("off");
+  it.each([undefined])("leaves unconfigured thinking to the harness with model %s", (model) => {
+    expect(materializeThinking({ agents: { entries: { codex: { model } } } })).toBeUndefined();
   });
-
-  it.each([undefined, "anthropic/claude-sonnet-4-6"])(
-    "leaves unconfigured thinking to the harness with model %s",
-    (model) => {
-      expect(materializeThinking({ agents: { entries: { codex: { model } } } })).toBeUndefined();
-    },
-  );
 
   it("forwards global thinking without requiring a configured model", () => {
     expect(

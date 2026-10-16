@@ -183,10 +183,54 @@ function parseSqliteDatabaseTokens(argv: string[]): string[] {
   return databaseTokens;
 }
 
+// Recognized variable-bearing file: URI bodies whose variables the shell
+// expands even inside double quotes. An optional empty or "localhost"
+// authority ("file://$VAR/…") expands to the valid URI "file:///<path>/…".
+// Other file: URIs (absolute, relative, opaque, tilde) keep fileURLToPath
+// semantics.
+const SQLITE_URI_RECOGNIZED_VARIABLE_BODY =
+  /^(?:\/\/(?:localhost)?)?\$(?:\{?OPENCLAW_STATE_DIR\}?|\{?HOME\}?)(?=$|[\\/])/iu;
+const SQLITE_URI_EMPTY_AUTHORITY = /^\/\/(?:localhost)?(?=\$)/iu;
+
 function expandSqliteDatabaseToken(token: string, stateDir: string): string | null {
   let expanded = token.trim();
   if (!expanded || expanded === ":memory:") {
     return null;
+  }
+  const fileUriBody = expanded.toLowerCase().startsWith("file:")
+    ? expanded.slice("file:".length)
+    : null;
+  if (fileUriBody !== null && SQLITE_URI_RECOGNIZED_VARIABLE_BODY.test(fileUriBody)) {
+    // A recognized variable-bearing file: URI (e.g. "file:$OPENCLAW_STATE_DIR/…")
+    // is not an absolute file URL: fileURLToPath would prefix the literal
+    // variable with "/" and hide it from expansion. Strip the scheme and any
+    // query/fragment, percent-decode, then run the variable expansions below.
+    const filename = fileUriBody.replace(SQLITE_URI_EMPTY_AUTHORITY, "").split(/[?#]/u, 1)[0] ?? "";
+    if (!filename) {
+      return null;
+    }
+    try {
+      expanded = decodeURIComponent(filename);
+    } catch {
+      expanded = filename;
+    }
+  } else if (fileUriBody !== null) {
+    // Absolute, relative, opaque, and tilde file: URIs keep fileURLToPath
+    // semantics (host/percent handling, root-relative resolution) so their
+    // allow/refuse behavior is unchanged by this guard.
+    try {
+      expanded = fileURLToPath(expanded);
+    } catch {
+      const filename = fileUriBody.split(/[?#]/u, 1)[0] ?? "";
+      if (!filename) {
+        return null;
+      }
+      try {
+        expanded = decodeURIComponent(filename);
+      } catch {
+        expanded = filename;
+      }
+    }
   }
   const stateVariable = expanded.match(
     /^\$(?:OPENCLAW_STATE_DIR|\{OPENCLAW_STATE_DIR\})(?=$|[\\/])/u,
@@ -200,21 +244,6 @@ function expandSqliteDatabaseToken(token: string, stateDir: string): string | nu
   }
   if (expanded === "~" || expanded.startsWith("~/") || expanded.startsWith("~\\")) {
     expanded = path.join(os.homedir(), expanded.slice(2));
-  }
-  if (expanded.toLowerCase().startsWith("file:")) {
-    try {
-      expanded = fileURLToPath(expanded);
-    } catch {
-      const filename = expanded.slice("file:".length).split(/[?#]/u, 1)[0];
-      if (!filename) {
-        return null;
-      }
-      try {
-        expanded = decodeURIComponent(filename);
-      } catch {
-        expanded = filename;
-      }
-    }
   }
   return expanded;
 }

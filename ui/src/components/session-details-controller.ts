@@ -1,4 +1,3 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type {
@@ -7,9 +6,10 @@ import type {
 } from "../lib/sessions/session-capability.ts";
 
 type DetailScope = { sessions: Pick<SessionCapability, "observeRow" | "describe"> };
+type DetailRow = Pick<GatewaySessionRow, "key" | "sessionId" | "rowMode" | "agentId">;
 
 /** The expanded view holds a descriptor; the session capability owns its row facts. */
-export class SessionDetailsController<Scope extends DetailScope> implements ReactiveController {
+export class SessionDetailsOwner<Scope extends DetailScope> {
   loading = false;
   error: string | null = null;
   private binding?: {
@@ -23,23 +23,14 @@ export class SessionDetailsController<Scope extends DetailScope> implements Reac
   }
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly notify: () => void,
     private readonly options: {
       captureScope: () => Scope | null;
       isCurrent: (scope: Scope) => boolean;
-      row: () => Pick<GatewaySessionRow, "key" | "sessionId" | "rowMode" | "agentId"> | undefined;
-      agentId: (
-        row: Pick<GatewaySessionRow, "key" | "sessionId" | "rowMode" | "agentId">,
-        scope: Scope,
-      ) => string;
+      row: () => DetailRow | undefined;
+      agentId: (row: DetailRow, scope: Scope) => string;
     },
-  ) {
-    host.addController(this);
-  }
-
-  hostDisconnected() {
-    this.reset();
-  }
+  ) {}
 
   reset() {
     this.binding?.dispose();
@@ -86,13 +77,13 @@ export class SessionDetailsController<Scope extends DetailScope> implements Reac
       }
       this.loading = true;
       this.error = null;
-      this.host.requestUpdate();
+      this.notify();
       try {
-        while (current() && observation?.isCurrent()) {
+        if (observation?.isCurrent()) {
           const reconcile = observation.captureReconcile();
           const { session } = await scope.sessions.describe({ key, agentId });
-          if (!current() || reconcile(session ?? undefined).status !== "invalidated") {
-            break;
+          if (current()) {
+            reconcile(session ?? undefined);
           }
         }
       } catch (error) {
@@ -102,7 +93,7 @@ export class SessionDetailsController<Scope extends DetailScope> implements Reac
       } finally {
         if (current()) {
           this.loading = false;
-          this.host.requestUpdate();
+          this.notify();
         }
       }
     };
@@ -111,12 +102,12 @@ export class SessionDetailsController<Scope extends DetailScope> implements Reac
       { key, agentId },
       () => {
         if (current()) {
-          this.host.requestUpdate();
+          this.notify();
         }
       },
       { onInvalidate: () => void refresh() },
     );
-    if (row.rowMode === "compact") {
+    if (row.rowMode) {
       void refresh();
     }
   }

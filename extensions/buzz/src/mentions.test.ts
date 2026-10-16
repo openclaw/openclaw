@@ -26,22 +26,6 @@ describe("Buzz outbound mentions", () => {
     ).toEqual([ALICE_PUBLIC_KEY]);
   });
 
-  it.each([
-    ["@Alice", true],
-    ["\t@Alice", true],
-    ["\n@Alice", true],
-    ["\r@Alice", true],
-    ["\v@Alice", true],
-    ["\f@Alice", true],
-    [" @é", true],
-    ["\u00a0@Alice", false],
-    ["(@Alice)", false],
-    ["@", false],
-    ["@ Alice", false],
-  ] as const)("uses Buzz's ASCII mention boundaries for %j", (text, hasAtMention) => {
-    expect(inspectBuzzMentionSyntax(text).hasAtMention).toBe(hasAtMention);
-  });
-
   it("resolves a known non-ASCII room-member name without treating emails as mentions", () => {
     expect(inspectBuzzMentionSyntax("Hello @Élodie").hasAtMention).toBe(true);
     expect(

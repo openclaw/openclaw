@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { buildEmbeddedAttemptToolRunContext } from "./embedded-agent-runner/run/attempt-tool-run-context.js";
@@ -16,6 +17,7 @@ import { consumeSwarmStructuredOutput } from "./tools/structured-output-tool.js"
 
 const runId = "collector-tool-contract";
 const sessionKey = "agent:main:subagent:collector-contract";
+const config = { agents: { entries: { main: {} } }, tools: { swarm: true } };
 const schema = {
   type: "object",
   properties: { answer: { type: "string" } },
@@ -25,6 +27,7 @@ const schema = {
 let workspaceDir: string;
 
 beforeEach(async () => {
+  setRuntimeConfigSnapshot(config);
   workspaceDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "collector-tools-")));
   await resetSubagentRegistryForTests({ persist: false });
   await configureMockSubagentRegistryPersistence({ persistRegistryRows: () => {} });
@@ -34,6 +37,7 @@ afterEach(async () => {
   consumeSwarmStructuredOutput(runId);
   await resetSubagentRegistryForTests({ persist: false });
   await fs.rm(workspaceDir, { recursive: true, force: true });
+  clearRuntimeConfigSnapshot();
 });
 
 it.each([{ toolsAllow: undefined }, { toolsAllow: [] }])(
@@ -52,10 +56,7 @@ it.each([{ toolsAllow: undefined }, { toolsAllow: [] }])(
     });
     const constructedTools = createOpenClawCodingTools({
       ...context,
-      config: {
-        agents: { entries: { main: {} } },
-        tools: { swarm: true },
-      },
+      config,
       agentId: "main",
       modelProvider: "openai",
       modelId: "gpt-5.6-luna",

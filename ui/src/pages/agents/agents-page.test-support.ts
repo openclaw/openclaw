@@ -1,98 +1,157 @@
-import { vi } from "vitest";
+import { flush } from "solid-js";
+import { afterEach, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  AgentsFilesListResult,
-  AgentsListResult,
-  ToolsEffectiveResult,
-} from "../../api/types.ts";
+import type { AgentsFilesListResult, AgentsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
-import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
-import type { AgentsPanel } from "../../lib/agents/panels.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
-import type { CronState } from "../../lib/cron/types.ts";
-import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
+import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import type { AgentFilesState } from "./files.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createAgentsPageState } from "./agents-page-state.ts";
 import type { AgentsRouteData } from "./route.ts";
 
 const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods([
   "config.patch",
   "config.set",
   "agents.update",
+  "cron.list",
+  "cron.status",
 ]);
 
-export type TestAgentsPage = HTMLElement & {
-  context: ApplicationContext;
-  readonly client: GatewayBrowserClient | null;
-  readonly connected: boolean;
-  agentsList: unknown;
-  agentsSelectedId: string | null;
-  routeData?: AgentsRouteData;
-  agentFilesLoading: boolean;
-  agentFilesList: AgentsFilesListResult | null;
-  agentFileActive: string | null;
-  agentFileEditors: AgentFilesState["agentFileEditors"];
-  agentIdentityLoading: boolean;
-  agentSkillsError: string | null;
-  readonly agentsPanel: AgentsPanel;
-  readonly sessions: ApplicationContext["sessions"];
-  toolsEffectiveError: string | null;
-  toolsEffectiveLoading: boolean;
-  toolsEffectiveResult: ToolsEffectiveResult | null;
-  readonly modelCatalog: ModelCatalogPresentation;
-  chatModelCatalogStatus: PanelRefreshStatus;
-  cron: CronState;
-  requestGeneration: number;
-  routeDataInitialized: boolean;
-  subscriptions: {
-    hostConnected: () => void;
-    hostUpdate: () => void;
-    hostDisconnected: () => void;
-  };
-  willUpdate: (changed: Map<PropertyKey, unknown>) => void;
-  gateway: {
-    readonly snapshot: ApplicationGatewaySnapshot | null;
-    applySnapshot: (
-      snapshot: ApplicationGatewaySnapshot,
-      binding: { initial: boolean; sourceChanged: boolean },
-    ) => void;
-    invalidate: () => void;
-  };
-  ensureAgentIdentities: () => void;
-  loadActivePanelData: () => void;
-  ensureModelCatalog: (options?: { refresh?: boolean }) => void;
-  refreshCron: () => Promise<void>;
-  requestUpdate: () => void;
-  runCronTask: <T>(task: (cronState: CronState) => Promise<T>) => Promise<T>;
-  loadEffectiveToolsForAgent: (agentId: string) => void;
-  loadAgentFiles: (agentId: string, force?: boolean) => Promise<void>;
-  clearAgentSkills: (agentId: string) => void;
-  refreshAgents: (mode?: "ensure" | "refresh" | "save") => Promise<void>;
-  identityDraft: { name: string | null; emoji: string | null; avatar: string | null };
-  identitySaving: boolean;
-  identityError: string | null;
-  saveIdentityDraft: () => void;
-  setDefaultAgent: (agentId: string) => void;
-};
+const pages = new Set<() => void>();
+type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
+const gatewayListeners = new WeakMap<ApplicationContext["gateway"], Set<GatewayListener>>();
 
-export function setPageGateway(
-  page: TestAgentsPage,
-  client: GatewayBrowserClient | null,
-  connected = true,
-  sourceChanged = false,
+afterEach(() => {
+  for (const dispose of pages) {
+    dispose();
+  }
+  pages.clear();
+});
+
+function fillMissing(target: object, defaults: object) {
+  for (const [key, value] of Object.entries(defaults)) {
+    if (Reflect.get(target, key) === undefined) {
+      Reflect.set(target, key, value);
+    }
+  }
+}
+
+function completeContext(context: ApplicationContext) {
+  const subscribe = () => () => {};
+  const defaultAgents = agentsCapability(async () => ({
+    agentId: "main",
+    workspace: "",
+    files: [],
+  }));
+  fillMissing(context, {
+    basePath: context.basePath ?? "",
+    agents: context.agents ?? defaultAgents,
+    agentIdentity: context.agentIdentity ?? {
+      get: (agentId: string) => ({ agentId }),
+      entries: () => [],
+      ensure: async () => {},
+      subscribe,
+    },
+    sessions: context.sessions ?? { state: { result: null, modelOverrides: {} }, subscribe },
+    runtimeConfig: context.runtimeConfig ?? { state: createInitialConfigState(), subscribe },
+    channels: context.channels ?? { state: {}, subscribe },
+    config: context.config ?? { current: { assistantIdentity: {} }, subscribe },
+    navigation: context.navigation ?? { snapshot: { pinnedAgentIds: [] }, subscribe },
+    router: context.router ?? {
+      getState: () => ({ matches: [{ routeId: "agents" }], pendingMatches: [] }),
+    },
+    navigate: context.navigate ?? vi.fn(),
+    replace: context.replace ?? vi.fn(),
+  });
+  for (const source of [
+    context.agents,
+    context.agentIdentity,
+    context.sessions,
+    context.runtimeConfig,
+    context.channels,
+    context.config,
+    context.navigation,
+  ]) {
+    source.subscribe ??= subscribe;
+  }
+  fillMissing(context.agents, {
+    state: context.agents.state ?? defaultAgents.state,
+    files: (agentId: string | null | undefined) => defaultAgents.files(agentId),
+    ensureList: context.agents.ensureList ?? (async () => context.agents.state.agentsList),
+    refreshList: context.agents.refreshList ?? (async () => context.agents.state.agentsList),
+    ensureFiles: context.agents.ensureFiles ?? defaultAgents.ensureFiles,
+    refreshFiles:
+      context.agents.refreshFiles ?? context.agents.ensureFiles ?? defaultAgents.ensureFiles,
+    recordFile: () => {},
+  });
+  fillMissing(context, {
+    settingsAgentSelection:
+      context.settingsAgentSelection ?? settingsSelection(context.agents.state.agentsList ?? null),
+  });
+  fillMissing(context.agentIdentity, {
+    entries: () => [],
+    ensure: context.agentIdentity.ensure ?? (async () => {}),
+  });
+  fillMissing(context.runtimeConfig, {
+    state: context.runtimeConfig.state ?? createInitialConfigState(),
+    ensureLoaded: context.runtimeConfig.ensureLoaded ?? (async () => {}),
+  });
+  fillMissing(context.channels, { state: context.channels.state ?? {} });
+  if (!gatewayListeners.has(context.gateway)) {
+    const listeners = new Set<GatewayListener>();
+    const subscribeGateway = context.gateway.subscribe.bind(context.gateway);
+    context.gateway.subscribe = (notify) => {
+      listeners.add(notify);
+      const stop = subscribeGateway(notify);
+      return () => {
+        listeners.delete(notify);
+        stop();
+      };
+    };
+    gatewayListeners.set(context.gateway, listeners);
+  }
+}
+
+/** Mount the same owner used by the page; fixtures only supply its external capabilities. */
+export function createAgentsPage(context: ApplicationContext, routeData?: AgentsRouteData) {
+  completeContext(context);
+  let state!: ReturnType<typeof createAgentsPageState>;
+  const mounted = mountSolid(() => {
+    state = createAgentsPageState(context, routeData);
+    return document.createElement("openclaw-agents-page");
+  });
+  flush();
+  const dispose = () => {
+    pages.delete(dispose);
+    mounted.unmount();
+  };
+  pages.add(dispose);
+  return {
+    read: () => state.read(),
+    setRouteData(next?: AgentsRouteData) {
+      state.setRouteData(next);
+      flush();
+    },
+    dispose,
+  };
+}
+
+export function emitGatewaySnapshot(
+  currentGateway: ApplicationContext["gateway"],
+  next: ApplicationGatewaySnapshot,
 ) {
-  const next = snapshot(client, connected);
-  const previous = page.gateway.snapshot;
-  if (previous) {
-    // Application connection retirement precedes page-local request invalidation.
-    createGatewayMetadataObserver((current) => current === next).synchronize(previous, next);
+  createGatewayMetadataObserver((current) => current === next).synchronize(
+    currentGateway.snapshot,
+    next,
+  );
+  Object.assign(currentGateway, { snapshot: next });
+  for (const notify of gatewayListeners.get(currentGateway) ?? []) {
+    notify(next);
   }
-  if (!page.context?.gateway || sourceChanged) {
-    page.context = { ...page.context, gateway: gateway(next) };
-  }
-  page.gateway.applySnapshot(next, { initial: false, sourceChanged });
+  flush();
 }
 
 export function snapshot(
@@ -129,7 +188,9 @@ export function emitCatalogChanged(currentGateway: ApplicationContext["gateway"]
 
 export function gateway(current: ApplicationGatewaySnapshot): ApplicationContext["gateway"] {
   const listeners = new Set<Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0]>();
+  const snapshots = new Set<GatewayListener>();
   const result = {
+    connection: { gatewayUrl: "ws://settings.test" },
     subscribeEvents: (
       listener: Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0],
     ) => {
@@ -137,9 +198,13 @@ export function gateway(current: ApplicationGatewaySnapshot): ApplicationContext
       return () => listeners.delete(listener);
     },
     snapshot: current,
-    subscribe: vi.fn(() => () => undefined),
+    subscribe: vi.fn((notify: GatewayListener) => {
+      snapshots.add(notify);
+      return () => snapshots.delete(notify);
+    }),
   } as unknown as ApplicationContext["gateway"];
   eventListeners.set(result, listeners);
+  gatewayListeners.set(result, snapshots);
   return result;
 }
 
@@ -173,7 +238,7 @@ export function agentsRouteData(
   currentGateway: ApplicationContext["gateway"],
   roster: AgentsListResult | null = agentsList,
   requestedAgentId: string | null = "main",
-  selection = settingsSelection(roster),
+  selection: ApplicationContext["settingsAgentSelection"] = settingsSelection(roster),
 ): AgentsRouteData {
   const pathname = requestedAgentId ? `/settings/agents/${requestedAgentId}` : "/settings/agents";
   return {

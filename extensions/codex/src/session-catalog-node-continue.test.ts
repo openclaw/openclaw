@@ -63,7 +63,7 @@ function nodeCatalog(options: Parameters<typeof createRuntime>[0] = {}) {
 }
 
 describe("Codex supervision actions", () => {
-  it.each(["openai/gpt-6-astra", "openai/gpt-5.6-sol"])(
+  it.each(["openai/gpt-6-astra"])(
     "advertises creation for %s from startup config before the live snapshot is available",
     (model) => {
       const startupConfig = {

@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, expect, it } from "vitest";
 import { canonicalLobsterLook, lobsterLookStyle, renderLobsterSvg } from "./lobster-pet-look.ts";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
@@ -24,7 +23,7 @@ it("wraps Clawnstantine's sash to the shell edge with the highlight inset", () =
     "Clawnstantine palette",
   );
   document.body.append(container);
-  render(renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true }), container);
+  container.replaceChildren(renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true }));
   const dome = expectDefined(
     container.querySelector<SVGPathElement>(".lob-standard-dome"),
     "shell path",
@@ -78,7 +77,7 @@ it.each([
   for (const clawSize of ["dainty", "regular", "mighty"] as const) {
     const look = { ...canonicalLobsterLook(palette), clawSize };
     container.style.cssText = lobsterLookStyle(look);
-    render(renderLobsterSvg(look), container);
+    container.replaceChildren(renderLobsterSvg(look));
     const claw = expectDefined(container.querySelector<SVGGElement>(".lob-claw--r"), "right claw");
     const hand = expectDefined(
       claw.querySelector<SVGPathElement>(`path:not(${propSelector})`),
@@ -109,10 +108,10 @@ it.each([
     }
     expect(poses.size).toBeGreaterThan(1);
   }
-  render(renderLobsterSvg(canonicalLobsterLook(palette), { bindle: true }), container);
+  container.replaceChildren(renderLobsterSvg(canonicalLobsterLook(palette), { bindle: true }));
   expect(container.querySelector(propSelector)).not.toBeNull();
   expect(container.querySelector(".lob-bindle")).toBeNull();
-  render(renderLobsterSvg(canonicalLobsterLook(palette), { shell: true }), container);
+  container.replaceChildren(renderLobsterSvg(canonicalLobsterLook(palette), { shell: true }));
   expect(container.querySelector(propSelector)).toBeNull();
 });
 
@@ -122,7 +121,7 @@ it("keeps the moving-in bag for unoccupied claws", () => {
       LOBSTER_PET_PALETTES.find((entry) => entry.id === id),
       "unoccupied palette",
     );
-    render(renderLobsterSvg(canonicalLobsterLook(palette), { bindle: true }), container);
+    container.replaceChildren(renderLobsterSvg(canonicalLobsterLook(palette), { bindle: true }));
     expect(container.querySelector(".lob-bindle")).not.toBeNull();
   }
 });

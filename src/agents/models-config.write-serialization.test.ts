@@ -3,9 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
@@ -21,6 +21,7 @@ import {
   encodePluginModelCatalogRelativePath,
   loadPersistedPluginModelCatalogsReadOnly,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  pruneRemovedProviderPluginModelCatalogs,
   replacePersistedPluginModelCatalogs,
 } from "./plugin-model-catalog.js";
 
@@ -120,28 +121,124 @@ beforeEach(() => {
 });
 
 describe("models-config write serialization", () => {
-  it("retains configless caller options across asynchronous config capture", async () => {
-    await withModelsTempHome(async (home) => {
-      setRuntimeConfigSnapshot(CUSTOM_PROXY_MODELS_CONFIG);
-      const options = {
-        env: { MODEL_CAPTURE_VALUE: "original" },
-        workspaceDir: home,
-        providerDiscoveryProviderIds: ["custom-proxy"],
-        providerDiscoveryTimeoutMs: 5000,
-        pluginMetadataSnapshot: { ...createPluginMetadataSnapshot(home), pluginIds: ["owner"] },
-      };
-      const pending = ensureOpenClawModelsJson(undefined, path.join(home, "agent"), options);
-      options.workspaceDir = path.join(home, "replacement");
-      options.providerDiscoveryProviderIds.push("replacement");
-      options.env.MODEL_CAPTURE_VALUE = "replacement";
-      await pending;
-      const context = planOpenClawModelsJsonMock.mock.calls[0]?.[0]?.context;
-      expect(context).toMatchObject({
-        workspaceDir: home,
-        providerDiscoveryProviderIds: ["custom-proxy"],
-        providerDiscoveryTimeoutMs: 5000,
-        env: { MODEL_CAPTURE_VALUE: "original" },
+  it.each([
+    {
+      name: "normalized authored endpoint",
+      persistedBaseUrl: "https://ollama.example/v1",
+      removedBaseUrl: " HTTPS://OLLAMA.EXAMPLE:443/v1///?ignored=true#fragment ",
+      removed: true,
+    },
+    {
+      name: "nonmatching local discovery endpoint",
+      persistedBaseUrl: "http://127.0.0.1:11434",
+      removedBaseUrl: "https://ollama.example/v1",
+      removed: false,
+    },
+  ])(
+    "prunes only the removed provider's $name",
+    async ({ persistedBaseUrl, removedBaseUrl, removed }) => {
+      await withModelsTempHome(async (home) => {
+        const agentDir = path.join(home, "agent");
+        const provider = {
+          baseUrl: persistedBaseUrl,
+          api: "ollama",
+          models: [{ id: "cached-model", name: "Cached model" }],
+        };
+        const contents = JSON.stringify({
+          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+          providers: { ollama: provider, sibling: provider },
+        });
+        const otherCatalog = JSON.stringify({
+          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+          providers: { other: provider },
+        });
+        await replacePersistedPluginModelCatalogs({
+          agentDir,
+          pluginCatalogWrites: {
+            [encodePluginModelCatalogRelativePath("ollama")]: contents,
+            [encodePluginModelCatalogRelativePath("other")]: otherCatalog,
+          },
+        });
+        const before = loadPersistedPluginModelCatalogsReadOnly(agentDir);
+        expect(
+          await pruneRemovedProviderPluginModelCatalogs({
+            agentDir,
+            removedProviderBaseUrls: { ollama: removedBaseUrl },
+          }),
+        ).toBe(removed);
+        expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual(
+          removed
+            ? [
+                {
+                  pluginId: "ollama",
+                  contents: JSON.stringify({
+                    generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+                    providers: { sibling: provider },
+                  }),
+                },
+                { pluginId: "other", contents: otherCatalog },
+              ]
+            : before,
+        );
+        expect(
+          await pruneRemovedProviderPluginModelCatalogs({
+            agentDir,
+            removedProviderBaseUrls: { ollama: removedBaseUrl },
+          }),
+        ).toBe(false);
       });
+    },
+  );
+
+  it("prunes after an older discovery plan finishes publishing", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      const contents = JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          ollama: {
+            baseUrl: "https://ollama.com",
+            api: "ollama",
+            models: [{ id: "cached-model", name: "Cached model" }],
+          },
+        },
+      });
+      const pluginCatalogWrites = { [encodePluginModelCatalogRelativePath("ollama")]: contents };
+      await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites });
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      planOpenClawModelsJsonMock.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return { action: "noop", pluginCatalogWrites };
+      });
+      const discovery = ensureOpenClawModelsJson({}, agentDir);
+      await entered.promise;
+      const removal = pruneRemovedProviderPluginModelCatalogs({
+        agentDir,
+        removedProviderBaseUrls: { ollama: "https://ollama.com" },
+      });
+      release.resolve();
+      const [published] = await Promise.all([discovery, removal]);
+      expect(published.publishedSource?.pluginCatalogs).toEqual([{ pluginId: "ollama", contents }]);
+      const pruned = JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {},
+      });
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+        { pluginId: "ollama", contents: pruned },
+      ]);
+      planOpenClawModelsJsonMock.mockImplementationOnce(async ({ pluginCatalogs }) => {
+        expect(pluginCatalogs).toEqual([{ pluginId: "ollama", contents: pruned }]);
+        return {
+          action: "noop",
+          pluginCatalogWrites: { [encodePluginModelCatalogRelativePath("ollama")]: pruned },
+        };
+      });
+      const next = await ensureOpenClawModelsJson({}, agentDir);
+      expect(next.publishedSource?.pluginCatalogs).toEqual([
+        { pluginId: "ollama", contents: pruned },
+      ]);
     });
   });
 
@@ -226,7 +323,7 @@ describe("models-config write serialization", () => {
       expect(writePrivateStoreTextWriteMock).toHaveBeenCalledOnce();
       expect(result.agentDir).toBe(path.join(home, ".openclaw", "agents", "ops", "agent"));
       const modelsPath = path.join(result.agentDir, "models.json");
-      await expect(fs.access(modelsPath)).resolves.toBeUndefined();
+      await fs.access(modelsPath);
       if (process.platform !== "win32") {
         // The captured mode proves privacy before the writer's follow-up chmod.
         expect(modeAfterWrite).toBe(0o600);
@@ -308,6 +405,7 @@ describe("models-config write serialization", () => {
       const result = await ensureOpenClawModelsJson({}, agentDir);
 
       expect(result.wrote).toBe(true);
+      expect(result.publishedSource?.pluginCatalogs).toEqual([]);
       expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([]);
     });
   });
@@ -368,14 +466,30 @@ describe("models-config write serialization", () => {
 
   it("keeps the ready cache warm while repairing models.json permissions", async () => {
     await withModelsTempHome(async () => {
+      const catalog = JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {},
+      });
+      planOpenClawModelsJsonMock.mockResolvedValue({
+        action: "write",
+        contents: '{"providers":{}}\n',
+        pluginCatalogWrites: {
+          [encodePluginModelCatalogRelativePath("fixture")]: catalog,
+        },
+      });
       const first = await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+      expect(first.publishedSource).toEqual({
+        modelsJsonContents: '{"providers":{}}\n',
+        pluginCatalogs: [{ pluginId: "fixture", contents: catalog }],
+      });
       const modelsPath = path.join(first.agentDir, "models.json");
       const contents = await fs.readFile(modelsPath, "utf8");
       if (process.platform !== "win32") {
         await fs.chmod(modelsPath, 0o644);
       }
-      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+      const cached = await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
 
+      expect(cached).toEqual({ agentDir: first.agentDir, wrote: true });
       expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
       expect(writePrivateStoreTextWriteMock).toHaveBeenCalledOnce();
       expect(await fs.readFile(modelsPath, "utf8")).toBe(contents);

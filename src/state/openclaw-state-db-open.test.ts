@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as kyselyCache from "../infra/kysely-sync-cache-state.js";
 import * as kyselySync from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
@@ -15,6 +16,7 @@ import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   openClawStateDatabaseCache,
   recordOpenClawStateDatabaseOpenFailure,
@@ -72,7 +74,7 @@ describe("unpublished state database acquisition", () => {
     const seed = openUnpublishedStateDatabase(params);
     seed.db.exec("INSERT INTO payload VALUES ('committed');");
     seed.walMaintenance.close();
-    closeTrackedStateDatabase(seed.db);
+    closeTrackedStateDatabase(requireNativeSqliteDatabase(seed.db));
     const opened: DatabaseSync[] = [];
     const targetLocations = new Set([pathname, nodeSqlite.resolveExistingSqliteFileUri(pathname)]);
     const openNative = nodeSqlite.openNodeSqliteDatabase;
@@ -104,7 +106,7 @@ describe("unpublished state database acquisition", () => {
       expect(prepare).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
     } finally {
       reopened.walMaintenance.close();
-      closeTrackedStateDatabase(reopened.db);
+      closeTrackedStateDatabase(requireNativeSqliteDatabase(reopened.db));
     }
     expect(maintenanceOwnerCount()).toBe(0);
     prepare.mockClear();
@@ -151,7 +153,7 @@ describe("unpublished state database acquisition", () => {
       } finally {
         acquired?.walMaintenance.close();
         if (acquired) {
-          closeTrackedStateDatabase(acquired.db);
+          closeTrackedStateDatabase(requireNativeSqliteDatabase(acquired.db));
         }
       }
 
@@ -204,7 +206,7 @@ describe("unpublished state database acquisition", () => {
     } finally {
       acquired?.walMaintenance.close();
       if (acquired) {
-        closeTrackedStateDatabase(acquired.db);
+        closeTrackedStateDatabase(requireNativeSqliteDatabase(acquired.db));
       }
     }
     expect.soft(failure).toBeInstanceOf(Error);
@@ -231,7 +233,7 @@ describe("unpublished state database acquisition", () => {
       vi.spyOn(fs, "statSync").mockImplementation((...args) => {
         const result = stat(...args);
         if (
-          process.platform === "linux" &&
+          (process.platform === "linux" || process.platform === "android") &&
           result &&
           args[0] === params.pathname &&
           "ctimeNs" in result
@@ -258,7 +260,7 @@ describe("unpublished state database acquisition", () => {
       try {
         const after = fs.statSync(params.pathname, { bigint: true });
         expect([after.dev, after.ino]).toEqual([before.dev, before.ino]);
-        if (process.platform === "linux") {
+        if (process.platform === "linux" || process.platform === "android") {
           expect(after.birthtimeNs).not.toBe(before.birthtimeNs);
         }
         expect(acquired.db.prepare("PRAGMA index_info(idx_payload)").all()).toEqual([
@@ -269,7 +271,7 @@ describe("unpublished state database acquisition", () => {
         ]);
       } finally {
         acquired.walMaintenance.close();
-        closeTrackedStateDatabase(acquired.db);
+        closeTrackedStateDatabase(requireNativeSqliteDatabase(acquired.db));
       }
     },
   );
@@ -291,7 +293,7 @@ describe("unpublished state database acquisition", () => {
     } finally {
       acquired?.walMaintenance.close();
       if (acquired) {
-        closeTrackedStateDatabase(acquired.db);
+        closeTrackedStateDatabase(requireNativeSqliteDatabase(acquired.db));
       }
     }
     expect.soft(fs.existsSync(directory)).toBe(false);
@@ -319,9 +321,10 @@ describe("unpublished state database acquisition", () => {
         const { params, open } = acquisitionFixture();
         const database = openUnpublishedStateDatabase(params);
         open.mockClear();
-        const prepare = database.db.prepare.bind(database.db);
+        const sqlite = requireNativeSqliteDatabase(database.db);
+        const prepare = sqlite.prepare.bind(sqlite);
         const checkpointFailure = new Error("checkpoint storage unavailable");
-        const intercepted = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+        const intercepted = vi.spyOn(sqlite, "prepare").mockImplementation((sql) => {
           if (sql === "PRAGMA wal_checkpoint(PASSIVE);") {
             throw checkpointFailure;
           }
@@ -355,13 +358,64 @@ describe("unpublished state database acquisition", () => {
         } finally {
           intercepted.mockRestore();
           database.walMaintenance.close();
-          closeTrackedStateDatabase(database.db);
+          closeTrackedStateDatabase(requireNativeSqliteDatabase(database.db));
         }
       } finally {
         Object.assign(loggingState, previousLogging);
       }
     });
   });
+
+  it.each([
+    { kind: "Doctor maintenance", owner: { role: "sqlite-maintenance" } },
+    { kind: "schema maintenance", owner: { role: "sqlite-maintenance", stateOwnerKind: "schema" } },
+  ])(
+    "defers scheduled shared-state checkpoints while a foreign $kind owner holds the database",
+    async ({ owner }) => {
+      await withEnvAsync({ OPENCLAW_LOG_LEVEL: undefined }, async () => {
+        const previousLogging = { ...loggingState };
+        const warn = vi.fn<(line: string) => void>();
+        try {
+          setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
+          setConsoleSubsystemFilter(["state/db"]);
+          loggingState.forceConsoleToStderr = false;
+          loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+          const { params } = acquisitionFixture();
+          const database = openUnpublishedStateDatabase(params);
+          const seed = acquireGatewayStateOwner({ databasePath: params.pathname });
+          const ownerPath = seed.path;
+          seed.release();
+          fs.writeFileSync(
+            ownerPath,
+            JSON.stringify({
+              pid: process.ppid,
+              createdAt: new Date().toISOString(),
+              configPath: path.join(path.dirname(params.pathname), "openclaw.json"),
+              ...owner,
+            }),
+          );
+          const prepare = vi.spyOn(database.db, "prepare");
+          try {
+            warn.mockClear();
+            await vi.advanceTimersByTimeAsync(30_000);
+            expect(prepare).not.toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
+            expect(database.walMaintenance.health).toBeUndefined();
+            expect(warn).not.toHaveBeenCalled();
+            fs.rmSync(ownerPath);
+            await vi.advanceTimersByTimeAsync(10_000);
+            expect(prepare).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
+            expect(database.walMaintenance.health).toMatchObject({ state: "complete" });
+          } finally {
+            fs.rmSync(ownerPath, { force: true });
+            database.walMaintenance.close();
+            closeTrackedStateDatabase(requireNativeSqliteDatabase(database.db));
+          }
+        } finally {
+          Object.assign(loggingState, previousLogging);
+        }
+      });
+    },
+  );
 
   it.each(["statement cache", "busy timeout finalization", "schema", "hardening"])(
     "releases every acquisition after failed %s and preserves committed state",

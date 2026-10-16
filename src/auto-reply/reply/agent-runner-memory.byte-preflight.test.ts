@@ -10,8 +10,9 @@ const { compact, account } = vi.hoisted(() => ({ compact: vi.fn(), account: vi.f
 vi.mock("../../agents/embedded-agent.js", () => ({ compactEmbeddedAgentSession: compact }));
 // mock-isolation: This preflight never dispatches a memory-flush model turn.
 vi.mock("../../agents/embedded-agent-runner/run-entry.js", () => ({}));
-// mock-isolation: Supply admitted transcript pressure without starting database workers.
+// mock-isolation: Keep byte-pressure admission independent of token estimates and database workers.
 vi.mock("./agent-runner-memory-transcript-context.js", () => ({
+  estimatePromptTokensFromSessionTranscript: async () => undefined,
   readSessionLogSnapshot: async () => ({ byteSize: 102_400 }),
 }));
 // mock-isolation: Observe admission accounting without starting database workers.

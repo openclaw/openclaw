@@ -1,5 +1,4 @@
 import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 /**
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
  */
@@ -34,7 +33,10 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
-import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
+import {
+  createAssistantStreamBlockState,
+  stripDowngradedToolCallText,
+} from "./embedded-agent-utils.js";
 import { sessionManagerReadTranscriptStart } from "./sessions/session-manager-current-turn.js";
 import { setSessionModelUsageSink } from "./sessions/session-model-usage.js";
 
@@ -338,15 +340,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     }
     // Re-filter the full raw buffer; live scanner state may hide an interrupted prefix.
     const visibleText = stripDowngradedToolCallText(
-      streamRendering.stripBlockTags(
-        text,
-        {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        },
-        { final: true },
-      ),
+      streamRendering.stripBlockTags(text, createAssistantStreamBlockState(), { final: true }),
     ).trimEnd();
     if (assistantTexts.length > state.assistantTextBaseline || state.hasFlushedPartialText) {
       replyDelivery.replaceCurrentAssistantText(visibleText);
@@ -464,25 +458,25 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
       providerStarted?: boolean;
       aborted?: boolean;
     }) => {
-      if (typeof meta.replayInvalid === "boolean") {
+      if (meta.replayInvalid !== undefined) {
         state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
       }
       if (meta.livenessState) {
         state.livenessState = meta.livenessState;
       }
-      if (typeof meta.stopReason === "string") {
+      if (meta.stopReason !== undefined) {
         state.terminalStopReason = meta.stopReason;
       }
-      if (typeof meta.yielded === "boolean") {
+      if (meta.yielded !== undefined) {
         state.yielded = meta.yielded;
       }
       if (meta.timeoutPhase) {
         state.timeoutPhase = meta.timeoutPhase;
       }
-      if (typeof meta.providerStarted === "boolean") {
+      if (meta.providerStarted !== undefined) {
         state.providerStarted = meta.providerStarted;
       }
-      if (typeof meta.aborted === "boolean") {
+      if (meta.aborted !== undefined) {
         state.terminalAborted = meta.aborted;
       }
     },

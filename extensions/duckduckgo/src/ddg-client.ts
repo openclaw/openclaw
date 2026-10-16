@@ -131,12 +131,7 @@ export async function runDuckDuckGoSearch(params: {
 }): Promise<Record<string, unknown>> {
   const count = resolveSearchCount(params.count, DEFAULT_SEARCH_COUNT);
   const region = params.region ?? resolveDdgRegion(params.config);
-  const safeSearch =
-    params.safeSearch === "strict" ||
-    params.safeSearch === "moderate" ||
-    params.safeSearch === "off"
-      ? params.safeSearch
-      : resolveDdgSafeSearch(params.config);
+  const safeSearch = params.safeSearch ?? resolveDdgSafeSearch(params.config);
   const timeoutSeconds = resolveTimeoutSeconds(params.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
   const cacheTtlMs = resolveCacheTtlMs(
     params.cacheTtlMinutes ?? params.config?.tools?.web?.search?.cacheTtlMinutes,

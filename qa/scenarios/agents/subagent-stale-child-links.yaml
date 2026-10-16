@@ -172,12 +172,27 @@ flow:
             expr: "claudeSessionStore[staleAcpKey]?.sessionId === 'sess-acp-stale'"
             message:
               expr: "`canonical Claude session entry missing: ${JSON.stringify(Object.keys(claudeSessionStore))}`"
-        - call: env.gateway.call
+        # Unscoped sessions.list returns only admitted agents while the restarted
+        # Gateway finishes the qa agent's background database inspection, which can
+        # outlive /readyz. Poll until the expected live/fresh children are listed,
+        # bounded by a deadline after which the last listing reaches the unchanged
+        # assertions below so a real regression still reports its precise failure.
+        - set: listDeadline
+          value:
+            expr: "Date.now() + 30000"
+        - call: waitForCondition
           saveAs: listed
           args:
-            - "sessions.list"
-            - {}
-            - timeoutMs: 60000
+            - lambda:
+                async: true
+                expr: |-
+                  env.gateway.call("sessions.list", {}, { timeoutMs: 15000 }).then((result) => {
+                    const children = result.sessions.find((session) => session.key === mainKey)?.childSessions ?? [];
+                    const settled = children.includes(freshDashboardKey) && children.includes(liveRunKey);
+                    return settled || Date.now() >= listDeadline ? result : undefined;
+                  })
+            - 60000
+            - 250
         - call: env.gateway.call
           saveAs: filtered
           args:

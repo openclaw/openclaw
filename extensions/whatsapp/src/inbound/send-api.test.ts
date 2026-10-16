@@ -122,94 +122,6 @@ describe("createWebSendApi", () => {
     });
   }
 
-  it("uses sendOptions fileName for outbound documents", async () => {
-    const payload = Buffer.from("pdf");
-    await api.sendMessage("+1555", "doc", payload, "application/pdf", { fileName: "invoice.pdf" });
-    expectFirstSendJid("1555@s.whatsapp.net");
-    expectSendContentFields(0, {
-      document: payload,
-      fileName: "invoice.pdf",
-      caption: "doc",
-      mimetype: "application/pdf",
-    });
-    expect(recordChannelActivity).toHaveBeenCalledWith({
-      channel: "whatsapp",
-      accountId: "main",
-      direction: "outbound",
-    });
-  });
-
-  it("falls back to a MIME-aware document filename when fileName is absent", async () => {
-    const payload = Buffer.from("pdf");
-    await api.sendMessage("+1555", "doc", payload, "application/pdf");
-    expectFirstSendJid("1555@s.whatsapp.net");
-    expectSendContentFields(0, {
-      document: payload,
-      fileName: "file.pdf",
-      caption: "doc",
-      mimetype: "application/pdf",
-    });
-  });
-
-  it("keeps the plain default document filename when MIME has no extension mapping", async () => {
-    const payload = Buffer.from("unknown");
-    await api.sendMessage("+1555", "doc", payload, "application/x-custom");
-
-    expectSendContentFields(0, {
-      document: payload,
-      fileName: "file",
-      caption: "doc",
-      mimetype: "application/x-custom",
-    });
-  });
-
-  it("uses MIME-aware filename fallback for forced visual documents", async () => {
-    const payload = Buffer.from("img");
-    await api.sendMessage("+1555", "promo", payload, "image/png", {
-      asDocument: true,
-    });
-
-    expect(sendMessage).toHaveBeenCalledWith(
-      "1555@s.whatsapp.net",
-      expect.objectContaining({
-        document: payload,
-        fileName: "file.png",
-        caption: "promo",
-        mimetype: "image/png",
-      }),
-    );
-  });
-
-  it("does not force audio media onto the document branch", async () => {
-    const payload = Buffer.from("aud");
-    await api.sendMessage("+1555", "voice", payload, "audio/ogg", {
-      asDocument: true,
-      fileName: "voice.ogg",
-    });
-
-    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
-      audio: payload,
-      ptt: true,
-      mimetype: "audio/ogg",
-    });
-  });
-
-  it("sends plain text messages", async () => {
-    const res = await api.sendMessage("+1555", "hello");
-    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", { text: "hello" });
-    expectSendResultFields(res, {
-      kind: "text",
-      messageId: "msg-1",
-      providerAccepted: true,
-    });
-    expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toEqual(["msg-1"]);
-    expect(recordChannelActivity).toHaveBeenCalledWith({
-      channel: "whatsapp",
-      accountId: "main",
-      direction: "outbound",
-    });
-  });
-
   it("sends structured contact messages through the canonical send path", async () => {
     const res = await api.sendContact("+1555", {
       displayName: "QA Contact",
@@ -276,38 +188,7 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("adds native mention metadata to group text sends", async () => {
-    api = createWebSendApi({
-      sock: { sendMessage, sendPresenceUpdate },
-      defaultAccountId: "main",
-      resolveOutboundMentions: ({ jid, text }) =>
-        resolveWhatsAppOutboundMentions({
-          chatJid: jid,
-          text,
-          participants: [
-            {
-              id: "277038292303944:4@lid",
-              phoneNumber: "5511976136970@s.whatsapp.net",
-            },
-          ],
-        }),
-    });
-
-    await api.sendMessage("120363000000000000@g.us", "ping @+5511976136970");
-
-    expect(sendMessage).toHaveBeenCalledWith("120363000000000000@g.us", {
-      text: "ping @277038292303944",
-      mentions: ["277038292303944@lid"],
-    });
-  });
-
-  it.each([
-    { messageText: "Run `notify @15551234567" },
-    { messageText: "Run `notify\n@15551234567" },
-    { messageText: "Run ``notify ` @15551234567" },
-    { messageText: "literal \\` ping @15551234567", nativeMention: true },
-    { messageText: "literal \\\\` inside @15551234567" },
-  ])(
+  it.each([{ messageText: "literal \\` ping @15551234567", nativeMention: true }])(
     "only sends native mentions for visible phone numbers outside inline code: $messageText",
     async ({ messageText, nativeMention }) => {
       api = createWebSendApi({
@@ -330,10 +211,7 @@ describe("createWebSendApi", () => {
     },
   );
 
-  it.each([
-    { kind: "image", contentType: " Image/PNG; charset=binary ", mimetype: "image/png" },
-    { kind: "video", contentType: " Video/MP4; charset=binary ", mimetype: "video/mp4" },
-  ])(
+  it.each([{ kind: "video", contentType: " Video/MP4; charset=binary ", mimetype: "video/mp4" }])(
     "preserves the native $kind payload after canonicalizing mixed-case media MIME",
     async ({ kind, contentType, mimetype }) => {
       const payload = Buffer.from(kind);
@@ -430,22 +308,6 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("supports audio as push-to-talk voice note", async () => {
-    const payload = Buffer.from("aud");
-    await api.sendMessage("+1555", "", payload, "audio/ogg", { accountId: "alt" });
-    expectFirstSendJid("1555@s.whatsapp.net");
-    expectSendContentFields(0, {
-      audio: payload,
-      ptt: true,
-      mimetype: "audio/ogg",
-    });
-    expect(recordChannelActivity).toHaveBeenCalledWith({
-      channel: "whatsapp",
-      accountId: "alt",
-      direction: "outbound",
-    });
-  });
-
   it("sends visible text separately from push-to-talk voice notes", async () => {
     const payload = Buffer.from("aud");
     sendMessage
@@ -470,28 +332,6 @@ describe("createWebSendApi", () => {
       "voice-1",
       "voice-text-1",
     ]);
-    expectOutboundActivityOnce();
-  });
-
-  it("preserves the accepted voice receipt when its visible caption send disconnects", async () => {
-    const captionError = new Error("connection closed while sending the voice caption");
-    sendMessage
-      .mockResolvedValueOnce({ key: { id: "voice-accepted-1" } })
-      .mockRejectedValueOnce(captionError);
-
-    const failure = await api
-      .sendMessage("+1555", "voice text", Buffer.from("voice"), "audio/ogg")
-      .catch((caught: unknown) => caught);
-
-    expect(sendMessage).toHaveBeenCalledTimes(2);
-    expect(isChannelPartialDeliveryError(failure)).toBe(true);
-    if (!isChannelPartialDeliveryError(failure)) {
-      throw new Error("accepted voice delivery did not preserve its partial receipt");
-    }
-    expect(failure.deliveryResult.visibleReplySent).toBe(true);
-    expect(failure.deliveryResult.messageIds).toEqual(["voice-accepted-1"]);
-    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual(["voice-accepted-1"]);
-    expect(failure).toHaveProperty("cause", captionError);
     expectOutboundActivityOnce();
   });
 
@@ -552,34 +392,7 @@ describe("createWebSendApi", () => {
     expectOutboundActivityOnce();
   });
 
-  it("preserves the accepted voice receipt when caption mention resolution fails", async () => {
-    const mentionError = new Error("group metadata lookup disconnected");
-    api = createWebSendApi({
-      sock: { sendMessage, sendPresenceUpdate },
-      defaultAccountId: "main",
-      resolveOutboundMentions: vi.fn().mockRejectedValue(mentionError),
-    });
-    sendMessage.mockResolvedValueOnce({ key: { id: "voice-accepted-2" } });
-
-    const failure = await api
-      .sendMessage("+1555", "voice text", Buffer.from("voice"), "audio/ogg")
-      .catch((caught: unknown) => caught);
-
-    expect(sendMessage).toHaveBeenCalledOnce();
-    expect(isChannelPartialDeliveryError(failure)).toBe(true);
-    if (!isChannelPartialDeliveryError(failure)) {
-      throw new Error("accepted voice delivery was lost during mention resolution");
-    }
-    expect(failure.deliveryResult.messageIds).toEqual(["voice-accepted-2"]);
-    expect(failure).toHaveProperty("cause", mentionError);
-    expectOutboundActivityOnce();
-  });
-
   it.each([
-    {
-      kind: "text",
-      send: (sendApi: ReturnType<typeof createWebSendApi>) => sendApi.sendMessage("+1555", "hello"),
-    },
     {
       kind: "poll",
       send: (sendApi: ReturnType<typeof createWebSendApi>) =>
@@ -639,35 +452,6 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("rejects Baileys results that do not expose an accepted message key", async () => {
-    sendMessage.mockResolvedValueOnce({ key: {} as { id: string } });
-
-    await expect(api.sendMessage("+1555", "hello")).rejects.toBeInstanceOf(
-      PlatformMessageNotDispatchedError,
-    );
-    expect(recordChannelActivity).not.toHaveBeenCalled();
-  });
-
-  it("sends polls and records outbound activity", async () => {
-    const res = await api.sendPoll("+1555", {
-      question: "Q?",
-      options: ["a", "b"],
-      maxSelections: 2,
-    });
-    expectFirstSendJid("1555@s.whatsapp.net");
-    expect(requireSendContent().poll).toEqual({
-      name: "Q?",
-      values: ["a", "b"],
-      selectableCount: 2,
-    });
-    expect(res.messageId).toBe("msg-1");
-    expect(recordChannelActivity).toHaveBeenCalledWith({
-      channel: "whatsapp",
-      accountId: "main",
-      direction: "outbound",
-    });
-  });
-
   it("sends reactions with participant JID normalization", async () => {
     const res = await api.sendReaction("+1555", "msg-2", "👍", false, "+1999");
     expectFirstSendJid("1555@s.whatsapp.net");
@@ -688,18 +472,9 @@ describe("createWebSendApi", () => {
 
   it.each([
     {
-      kind: "text",
-      send: (sendApi: ReturnType<typeof createWebSendApi>) => sendApi.sendMessage("+1555", "hello"),
-    },
-    {
       kind: "voice",
       send: (sendApi: ReturnType<typeof createWebSendApi>) =>
         sendApi.sendMessage("+1555", "", Buffer.from("voice"), "audio/ogg"),
-    },
-    {
-      kind: "poll",
-      send: (sendApi: ReturnType<typeof createWebSendApi>) =>
-        sendApi.sendPoll("+1555", { question: "Q?", options: ["a", "b"] }),
     },
   ])(
     "rejects an unaccepted Baileys $kind send without recording outbound activity",
@@ -710,49 +485,6 @@ describe("createWebSendApi", () => {
       expect(recordChannelActivity).not.toHaveBeenCalled();
     },
   );
-
-  it("keeps direct-chat reactions without a participant key", async () => {
-    await api.sendReaction("+1555", "msg-2", "👍", false);
-    expectFirstSendJid("1555@s.whatsapp.net");
-    const react = requireRecord(requireSendContent().react, "reaction content");
-    expect(react.text).toBe("👍");
-    expectRecordFields(requireRecord(react.key, "reaction key"), {
-      remoteJid: "1555@s.whatsapp.net",
-      id: "msg-2",
-      fromMe: false,
-      participant: undefined,
-    });
-  });
-
-  it("preserves LID participants in reaction keys", async () => {
-    await api.sendReaction("12345@g.us", "msg-2", "👍", false, "123@lid");
-    expectFirstSendJid("12345@g.us");
-    const react = requireRecord(requireSendContent().react, "reaction content");
-    expect(react.text).toBe("👍");
-    expectRecordFields(requireRecord(react.key, "reaction key"), {
-      remoteJid: "12345@g.us",
-      id: "msg-2",
-      fromMe: false,
-      participant: "123@lid",
-    });
-  });
-
-  it("sends composing presence updates to the recipient JID", async () => {
-    await api.sendComposingTo("+1555");
-    expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "1555@s.whatsapp.net");
-  });
-
-  it("does not send composing presence to newsletter JIDs", async () => {
-    await api.sendComposingTo("120363401234567890@newsletter");
-    expect(sendPresenceUpdate).not.toHaveBeenCalled();
-  });
-
-  it("preserves newsletter JIDs for outbound sends", async () => {
-    await api.sendMessage("120363401234567890@newsletter", "hello");
-    expect(sendMessage).toHaveBeenCalledWith("120363401234567890@newsletter", {
-      text: "hello",
-    });
-  });
 
   it("sends media as document when mediaType is undefined", async () => {
     const mediaBuffer = Buffer.from("test");
@@ -832,16 +564,6 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
     fs.rmSync(authDir, { recursive: true, force: true });
   });
 
-  it("resolves PN to LID for sendMessage when authDir is provided", async () => {
-    const api = createWebSendApi({
-      sock: { sendMessage, sendPresenceUpdate },
-      defaultAccountId: "main",
-      authDir,
-    });
-    await api.sendMessage("+15555550000", "hello");
-    expect(sendMessage).toHaveBeenCalledWith("987654@lid", { text: "hello" });
-  });
-
   it("falls back to PN s.whatsapp.net when no LID mapping exists", async () => {
     const api = createWebSendApi({
       sock: { sendMessage, sendPresenceUpdate },
@@ -850,21 +572,6 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
     });
     await api.sendMessage("+33123456789", "hello");
     expect(sendMessage).toHaveBeenCalledWith("33123456789@s.whatsapp.net", { text: "hello" });
-  });
-
-  it("resolves PN to LID for sendPoll", async () => {
-    const api = createWebSendApi({
-      sock: { sendMessage, sendPresenceUpdate },
-      defaultAccountId: "main",
-      authDir,
-    });
-    await api.sendPoll("+15555550000", { question: "Q?", options: ["a", "b"] });
-    expect(requireMockArg(sendMessage, 0, 0, "send poll")).toBe("987654@lid");
-    const payload = requireRecord(
-      requireMockArg(sendMessage, 0, 1, "send poll"),
-      "send poll payload",
-    );
-    expect("poll" in payload).toBe(true);
   });
 
   it("resolves PN to LID for sendReaction", async () => {

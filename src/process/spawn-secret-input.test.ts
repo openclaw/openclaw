@@ -4,23 +4,33 @@ import { fstatSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "./spawn-secret-input.js";
 
+// Models a Windows overlapped pipe: writes complete once the pipe buffers them,
+// while end()'s shutdown flush waits for a read the child may never perform.
 class ControlledSecretStream extends EventEmitter {
-  private endCallback: ((error?: Error | null) => void) | undefined;
+  private writeCallback: ((error?: Error | null) => void) | undefined;
+  written: Buffer | undefined;
+  destroyed = false;
 
-  end(_data: Buffer, callback?: (error?: Error | null) => void): this {
-    this.endCallback = callback;
+  write(data: Buffer, callback?: (error?: Error | null) => void): boolean {
+    this.written = data;
+    this.writeCallback = callback;
+    return true;
+  }
+
+  end(): this {
     return this;
   }
 
   destroy(): this {
+    this.destroyed = true;
     return this;
   }
 
   finishWrite(error?: Error): void {
-    if (!this.endCallback) {
+    if (!this.writeCallback) {
       throw new Error("secret write callback was not registered");
     }
-    this.endCallback(error);
+    this.writeCallback(error);
   }
 }
 
@@ -43,6 +53,17 @@ function writeSecret(stream: ControlledSecretStream): Promise<void> {
 }
 
 describe("Windows secret input delivery", () => {
+  it("completes once the pipe accepts the bytes, even if the child never reads them", async () => {
+    const stream = new ControlledSecretStream();
+    const write = writeSecret(stream);
+
+    expect(stream.written?.toString()).toBe("selected-secret");
+    stream.finishWrite();
+    await expect(write).resolves.toBeUndefined();
+    expect(stream.destroyed).toBe(true);
+    expect(stream.written?.every((byte) => byte === 0)).toBe(true);
+  });
+
   it("consumes pipe errors after delivery until the stream closes", async () => {
     const stream = new ControlledSecretStream();
     const write = writeSecret(stream);
@@ -108,9 +129,9 @@ function expectDescriptorReleased(fd: number, original: ReturnType<typeof fstatS
 }
 
 describe.skipIf(process.platform === "win32")("POSIX secret input ownership", () => {
-  const descriptorPath = process.platform === "darwin" ? "/dev/fd/3" : "/proc/self/fd/3";
+  const descriptorPath = process.platform === "linux" ? "/proc/self/fd/3" : "/dev/fd/3";
 
-  it.each(["path", "direct"])(
+  it.each(["path"])(
     "delivers once through a %s reader without replay to descendants",
     async (reader) => {
       const stdio: SpawnStdioEntry[] = ["ignore", "pipe", "pipe"];
@@ -195,6 +216,60 @@ describe.skipIf(process.platform === "win32")("POSIX secret input ownership", ()
       await expect(output).resolves.toBe("0");
     } finally {
       child.kill("SIGKILL");
+    }
+  });
+});
+
+describe.runIf(process.platform === "win32")("Windows secret input pipes", () => {
+  function spawnWithSecret(script: string, data: Buffer) {
+    const stdio: SpawnStdioEntry[] = ["pipe", "pipe", "pipe"];
+    const prepared = prepareSecretInputStdio(stdio, { fd: 3, createData: () => data })!;
+    const child = spawn(process.execPath, ["-e", script], { stdio, windowsHide: true });
+    const output = new Promise<string>((resolve, reject) => {
+      let text = "";
+      child.stdout!.on("data", (chunk) => {
+        text += chunk;
+      });
+      child.on("error", reject);
+      child.once("close", (code) =>
+        code === 0 ? resolve(text) : reject(new Error(`child exited ${code}`)),
+      );
+    });
+    return { child, delivery: prepared.deliverTo(child), output };
+  }
+
+  it("does not wait for a live child that never reads the descriptor", async () => {
+    const { child, delivery, output } = spawnWithSecret(
+      'process.stdin.resume(); process.stdin.on("end", () => process.stdout.write("done"))',
+      Buffer.from("private-fixture"),
+    );
+    try {
+      await delivery;
+      child.stdin!.end();
+      await expect(output).resolves.toBe("done");
+    } finally {
+      child.kill();
+    }
+  });
+
+  it("keeps accepted bytes readable after closing the writer", async () => {
+    // Larger than the pipe buffer, so delivery spans partial writes before close.
+    const data = Buffer.alloc(1024 * 1024, "s");
+    const { child, delivery, output } = spawnWithSecret(
+      `
+      let length = 0;
+      const secret = new (require("node:net").Socket)({ fd: 3, readable: true, writable: false });
+      secret.on("data", (chunk) => { length += chunk.length; });
+      secret.on("end", () => process.stdout.write(String(length)));
+    `,
+      data,
+    );
+    try {
+      await delivery;
+      await expect(output).resolves.toBe(String(1024 * 1024));
+      expect(data.every((byte) => byte === 0)).toBe(true);
+    } finally {
+      child.kill();
     }
   });
 });

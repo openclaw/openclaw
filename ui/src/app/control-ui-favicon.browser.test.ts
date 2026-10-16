@@ -243,9 +243,7 @@ describe("favicon presentation ownership", () => {
       state: { agentsList: null },
       subscribe: () => () => {},
     });
-    const sessions = createSessionCapability(harness.gateway, selection, {
-      rosterCache: { read: async () => null, write: () => {} },
-    });
+    const sessions = createSessionCapability(harness.gateway, selection);
     const overlays = createApplicationOverlays(harness.gateway);
     const shell = document.createElement("div");
     document.body.append(shell);

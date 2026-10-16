@@ -183,6 +183,7 @@ export function resolveChannelHandlerParams(
   return {
     cfg: params.cfg,
     agentId: params.session?.agentId,
+    sessionKey: params.session?.key,
     channel: params.channel,
     to: params.to,
     deps: params.deps,

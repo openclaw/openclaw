@@ -14,11 +14,12 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { expectObjectFields } from "../test-utils/mock-call-assertions.js";
 import {
   getCurrentPluginMetadataSnapshot,
   setGatewayPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "./installed-plugin-index-records.js";
 import {
   refreshPersistedInstalledPluginIndex,
   restorePersistedInstalledPluginIndexIfCurrent,
@@ -36,6 +37,7 @@ import {
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import * as metadataWorker from "./plugin-metadata-state-worker.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
@@ -84,9 +86,7 @@ function expectPluginFields(
   if (!plugin) {
     throw new Error(`Missing plugin ${pluginId}`);
   }
-  for (const [key, value] of Object.entries(expected)) {
-    expect(plugin[key as keyof typeof plugin], key).toEqual(value);
-  }
+  expectObjectFields(plugin, expected);
 }
 
 function expectInstallRecord(
@@ -98,9 +98,7 @@ function expectInstallRecord(
   if (!record) {
     throw new Error(`Missing install record ${pluginId}`);
   }
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key as keyof typeof record], key).toEqual(value);
-  }
+  expectObjectFields(record, expected);
 }
 
 function dropStartupConfigPaths(
@@ -456,7 +454,7 @@ describe("installed plugin index persistence", () => {
     });
     expectCanonicalIndexMissing();
 
-    expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toEqual({});
+    expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ stateDir })).toEqual({});
     expectCanonicalIndexMissing();
   });
 
@@ -548,7 +546,7 @@ describe("installed plugin index persistence", () => {
     fs.writeFileSync(filePath, JSON.stringify(createIndex()), "utf8");
 
     await expect(readPersistedInstalledPluginIndex({ filePath })).resolves.toBeNull();
-    expect(readPersistedInstalledPluginIndexInstallRecords({ filePath })).toBeNull();
+    expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ filePath })).toBeNull();
   });
 
   it("preserves existing install records when refreshing the manifest cache", async () => {
@@ -623,7 +621,9 @@ describe("installed plugin index install-record persistence", () => {
       await withPluginLifecycleLease(
         { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
         async () => {
-          expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toBeNull();
+          expect(
+            await readPersistedInstalledPluginIndexInstallRecordsAsync({ stateDir }),
+          ).toBeNull();
           expect(readPersistedInstalledPluginIndexSync({ stateDir })).toBeNull();
           const records = { demo: { source: "npm" as const, spec: "demo@1.0.0" } };
           await writePersistedInstalledPluginIndex(
@@ -644,17 +644,22 @@ describe("installed plugin index install-record persistence", () => {
           const iterate = vi.spyOn(StatementSync.prototype, "iterate");
           const get = vi.spyOn(StatementSync.prototype, "get");
           const all = vi.spyOn(StatementSync.prototype, "all");
-          const readRecords = () =>
-            expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toEqual(records);
+          const workerRead = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
+          const readRecords = async () =>
+            expect(
+              await readPersistedInstalledPluginIndexInstallRecordsAsync({ stateDir }),
+            ).toEqual(records);
           const readIndex = () => {
             const index = readPersistedInstalledPluginIndexSync({ stateDir });
             expect(index).toBeNull();
           };
 
-          for (const read of order === "records-first"
-            ? [readRecords, readIndex]
-            : [readIndex, readRecords]) {
-            read();
+          if (order === "records-first") {
+            await readRecords();
+            readIndex();
+          } else {
+            readIndex();
+            await readRecords();
           }
 
           expect(
@@ -669,8 +674,8 @@ describe("installed plugin index install-record persistence", () => {
                   )
                 );
               }),
-            ),
-          ).toHaveLength(1);
+            ).length + workerRead.mock.calls.length,
+          ).toBe(1);
         },
       );
     },

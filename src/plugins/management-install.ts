@@ -213,22 +213,33 @@ type ManagedPluginSourceInstallParams = {
   invalidateRuntimeCache?: boolean;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  requireCapabilityConsent?: boolean;
+  requireClawHubTrust?: boolean;
   applyRuntime?: PluginLifecycleRuntimeApply;
   deferRuntime?: PluginInstallRuntimeDeferral;
   beforePersistentApply?: () => void;
+  onBeforePluginArtifactCommit?: (
+    artifact: PluginInstallArtifactConsentRequest,
+    config: OpenClawConfig,
+  ) => void | Promise<void>;
   /** Revalidate the initiating owner after artifact review and before durable activation. */
   beforePersistentEffect?: () => void | Promise<void>;
 };
 
 export type ManagedPluginInstallOptions = Omit<
   ManagedPluginSourceInstallParams,
-  "request" | "snapshot" | "acknowledgeCapabilities" | "enable"
+  | "request"
+  | "snapshot"
+  | "acknowledgeCapabilities"
+  | "enable"
+  | "requireCapabilityConsent"
+  | "requireClawHubTrust"
 > & {
   /** The enclosing Claw coordinator owns its package lease and adoption record. */
   clawManaged?: boolean;
   snapshot?: ConfigSnapshotForInstallPersist;
   signal?: AbortSignal;
-  confirmInstall?: () => Promise<boolean>;
+  confirmInstall?: (warning?: string) => Promise<boolean>;
 };
 
 export async function installManagedPluginSource(
@@ -341,13 +352,24 @@ async function installResolvedManagedPluginSource(
     };
   }
 
-  const consentExemptSource = request.source === "local" && request.bundledOrigin === true;
+  const consentExemptSource =
+    request.source === "local" &&
+    request.bundledOrigin === true &&
+    !params.requireCapabilityConsent;
   const source =
     request.source === "local"
       ? request.recordSource
       : request.source === "npm-pack"
         ? "npm"
         : request.source;
+  const finalClawArtifactReview =
+    params.requireCapabilityConsent &&
+    (params.onBeforePluginArtifactCommit || params.beforePersistentEffect)
+      ? async (artifact: PluginInstallArtifactConsentRequest) => {
+          await params.beforePersistentEffect?.();
+          await params.onBeforePluginArtifactCommit?.(artifact, params.snapshot.config);
+        }
+      : undefined;
   const capabilityConsent = consentExemptSource
     ? undefined
     : await prepareManagedPluginArtifactConsentHandler({
@@ -364,6 +386,8 @@ async function installResolvedManagedPluginSource(
           : {}),
         acknowledgeCapabilities: params.acknowledgeCapabilities,
         onCapabilityConsent: params.onCapabilityConsent,
+        requireCapabilityConsent: params.requireCapabilityConsent,
+        ...(finalClawArtifactReview ? { beforePersistentEffect: finalClawArtifactReview } : {}),
       });
 
   const common = requestDeferredPluginInstall(
@@ -373,11 +397,14 @@ async function installResolvedManagedPluginSource(
       extensionsDir,
       logger: params.logger,
       beforePersistentApply: params.beforePersistentApply,
-      ...(capabilityConsent || params.beforePersistentEffect
+      ...(capabilityConsent || params.onBeforePluginArtifactCommit || params.beforePersistentEffect
         ? {
             onBeforePluginArtifactCommit: async (artifact: PluginInstallArtifactConsentRequest) => {
               await capabilityConsent?.onBeforePluginArtifactCommit(artifact);
-              await params.beforePersistentEffect?.();
+              if (!finalClawArtifactReview) {
+                await params.onBeforePluginArtifactCommit?.(artifact, params.snapshot.config);
+                await params.beforePersistentEffect?.();
+              }
             },
           }
         : {}),
@@ -554,6 +581,8 @@ async function installResolvedManagedPluginSource(
         ...(request.expectedPluginId ? { expectedPluginId: request.expectedPluginId } : {}),
         ...(request.expectedIntegrity ? { expectedIntegrity: request.expectedIntegrity } : {}),
         ...(request.confirmInstall ? { confirmInstall: request.confirmInstall } : {}),
+        ...(params.requireCapabilityConsent ? { confirmOnUpdate: true } : {}),
+        ...(params.requireClawHubTrust ? { requireClawHubTrust: true } : {}),
       }),
       {
         expectedPluginId: request.expectedPluginId,

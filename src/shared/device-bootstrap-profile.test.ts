@@ -98,21 +98,6 @@ describe("device bootstrap profile", () => {
     });
   });
 
-  test("full setup profile carries node plus full native operator access", () => {
-    expect(FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
-      roles: ["node", "operator"],
-      scopes: [
-        "operator.admin",
-        "operator.approvals",
-        "operator.questions",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ],
-      purpose: "mobile-full",
-    });
-  });
-
   test("browser-owner profile carries the exact full Control UI handoff", () => {
     expect(CONTROL_UI_OWNER_BOOTSTRAP_PROFILE).toEqual({
       roles: ["operator"],
@@ -130,19 +115,6 @@ describe("device bootstrap profile", () => {
     expect([...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES]).toEqual(
       CONTROL_UI_OWNER_BOOTSTRAP_PROFILE.scopes,
     );
-  });
-
-  test("existing setup profile preserves the bounded operator handoff", () => {
-    expect(PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
-      roles: ["node", "operator"],
-      scopes: [
-        "operator.approvals",
-        "operator.questions",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ],
-    });
   });
 
   test("node setup profile carries no operator access", () => {

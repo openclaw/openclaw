@@ -6,6 +6,7 @@ import {
   prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
@@ -16,7 +17,7 @@ import type {
 } from "./session-accessor.sqlite-generation.types.js";
 import { readSessionInputArtifactRows } from "./session-accessor.sqlite-pending-inputs-repair.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { createTranscriptIdentityInserter } from "./session-accessor.sqlite-transcript-store.js";
+import { createTranscriptIdentityInserter } from "./session-accessor.sqlite-transcript-identity.js";
 import {
   assertSessionTranscriptHot,
   readSessionColdTranscript,
@@ -27,6 +28,7 @@ import {
 } from "./session-transcript-index.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { transcriptEventJsonSql, type TranscriptPayloadRecord } from "./transcript-payload.js";
+import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
 export function readSqliteSessionGenerationWindows(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -234,9 +236,7 @@ export function copySqliteSessionGenerationRows(params: {
     readOpenClawAgentDatabaseIdentity(params.source).identity ===
     readOpenClawAgentDatabaseIdentity(params.destination).identity
   ) {
-    throw new Error(
-      "Transcript generation copy requires distinct source and destination databases.",
-    );
+    return;
   }
   assertSessionTranscriptHot(params.source.db, params.sessionId);
   assertSessionTranscriptHot(params.destination.db, params.sessionId);
@@ -287,11 +287,20 @@ export function copySqliteSessionGenerationRows(params: {
       event_zstd: parameter((row) => row.event_zstd),
       event_utf8_bytes: parameter((row) => row.event_utf8_bytes),
       navigation_json: parameter((row) => row.navigation_json),
+      navigation_type: parameter((row) => row.navigation_type),
+      navigation_custom_type: parameter((row) => row.navigation_custom_type),
+      navigation_display: parameter((row) => row.navigation_display),
+      message_role: parameter((row) => row.message_role),
+      navigation_last_type: parameter((row) => row.navigation_last_type),
+      navigation_last_custom_type: parameter((row) => row.navigation_last_custom_type),
+      navigation_valid: parameter((row) => row.navigation_valid),
     }),
   );
-  // UTF-16 destinations retain native TEXT byte accounting and JSON semantics.
-  // UTF-8 stores can preserve encoded payloads without another codec round trip.
-  const destinationEncoding = params.destination.db.prepare("PRAGMA encoding").get()?.encoding;
+  // PostgreSQL receives plain JSON; UTF-16 SQLite retains native TEXT byte accounting.
+  // UTF-8 SQLite can preserve encoded payloads without another codec round trip.
+  const destinationEncoding = isPostgresSqlConnection(params.destination.db)
+    ? undefined
+    : params.destination.db.prepare("PRAGMA encoding").get()?.encoding;
   if (destinationEncoding !== "UTF-8") {
     for (const row of iterateSqliteQuerySync(
       params.source.db,
@@ -301,6 +310,7 @@ export function copySqliteSessionGenerationRows(params: {
     )) {
       insertEvent({
         ...row,
+        ...deriveTranscriptPredicateFields(row.event_json),
         event_zstd: null,
         event_utf8_bytes: null,
         navigation_json: null,

@@ -14,7 +14,10 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { projectRealtimeVoicePublicProjection } from "./provider-policy-api.js";
 import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
-import { createOpenAIRealtimeClientSecret } from "./realtime-provider-shared.js";
+import {
+  createOpenAIRealtimeClientSecret,
+  resolveOpenAIRealtimeRequestHeaders,
+} from "./realtime-provider-shared.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { buildOpenAIQuicksilverInstructions } from "./realtime-quicksilver-instructions.js";
@@ -36,8 +39,10 @@ import {
   OPENAI_REALTIME_VOICES,
   buildOpenAIRealtimeGaSessionPolicy,
   hasOpenAIChatGptSubscriptionAuthInput,
+  hasOpenAIChatGptSubscriptionAuthInputAsync,
   hasOpenAIRealtimeApiKeyInput,
   hasOpenAIRealtimePlatformAuthInput,
+  hasOpenAIRealtimePlatformAuthInputAsync,
   normalizeOpenAIRealtimeTools,
   normalizeOpenAIRealtimeVoice,
   normalizeProviderConfig,
@@ -55,30 +60,37 @@ const CUSTOM_ENDPOINT_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
   supportsBrowserSession: false,
 };
 
-function resolveOpenAIRealtimeVoiceConfig(
-  {
-    cfg,
-    rawConfig,
-    agentId,
-    surface,
-    autoRespondToAudio,
-    requiredCapabilities,
-  }: RealtimeVoiceProviderResolveConfigContext,
-  context: OpenAIRealtimeHost,
-): OpenAIRealtimeVoiceProviderConfig {
+function prepareOpenAIRealtimeVoiceConfig({
+  rawConfig,
+  surface,
+  autoRespondToAudio,
+  requiredCapabilities,
+}: RealtimeVoiceProviderResolveConfigContext): OpenAIRealtimeVoiceProviderConfig {
   const config = normalizeProviderConfig(rawConfig);
-  if (config.model || (surface !== "browser-session" && surface !== "gateway-relay")) {
-    return config;
-  }
   // Live delegates natively; GA still owns manually triggered replies and video.
   if (
-    config.baseUrl ||
-    config.azureEndpoint ||
-    config.azureDeployment ||
-    autoRespondToAudio === false ||
-    requiredCapabilities?.supportsVideoFrames === true
+    !config.model &&
+    (surface === "browser-session" || surface === "gateway-relay") &&
+    (config.baseUrl ||
+      config.azureEndpoint ||
+      config.azureDeployment ||
+      autoRespondToAudio === false ||
+      requiredCapabilities?.supportsVideoFrames === true)
   ) {
     return { ...config, model: OPENAI_REALTIME_DEFAULT_MODEL };
+  }
+  return config;
+}
+
+// Retained for public synchronous SDK calls through 2026-12-31.
+function resolveOpenAIRealtimeVoiceConfig(
+  params: RealtimeVoiceProviderResolveConfigContext,
+  context: OpenAIRealtimeHost,
+): OpenAIRealtimeVoiceProviderConfig {
+  const { cfg, agentId, surface } = params;
+  const config = prepareOpenAIRealtimeVoiceConfig(params);
+  if (config.model || (surface !== "browser-session" && surface !== "gateway-relay")) {
+    return config;
   }
   const platformConfigured = hasOpenAIRealtimePlatformAuthInput(
     { configuredApiKey: config.apiKey, cfg, agentId },
@@ -86,6 +98,27 @@ function resolveOpenAIRealtimeVoiceConfig(
   );
   const model =
     !platformConfigured && hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context)
+      ? "gpt-live-1-codex"
+      : "gpt-live-1";
+  return { ...config, model };
+}
+
+async function resolveOpenAIRealtimeVoiceConfigAsync(
+  params: RealtimeVoiceProviderResolveConfigContext,
+  context: OpenAIRealtimeHost,
+): Promise<OpenAIRealtimeVoiceProviderConfig> {
+  const { cfg, agentId, surface } = params;
+  const config = prepareOpenAIRealtimeVoiceConfig(params);
+  if (config.model || (surface !== "browser-session" && surface !== "gateway-relay")) {
+    return config;
+  }
+  const platformConfigured = await hasOpenAIRealtimePlatformAuthInputAsync(
+    { configuredApiKey: config.apiKey, cfg, agentId },
+    context,
+  );
+  const model =
+    !platformConfigured &&
+    (await hasOpenAIChatGptSubscriptionAuthInputAsync({ cfg, agentId }, context))
       ? "gpt-live-1-codex"
       : "gpt-live-1";
   return { ...config, model };
@@ -178,7 +211,7 @@ async function createOpenAIRealtimeBrowserSession(
     const auth = await resolveOpenAIQuicksilverBridgeAuth({ ...authParams, model }, context);
     return await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);
   }
-  if (req.gatewayControl) {
+  if (req.clientControl) {
     if (!quicksilverBroker) {
       throw new Error("OpenAI realtime browser session broker is unavailable");
     }
@@ -248,16 +281,10 @@ async function createOpenAIRealtimeBrowserSession(
               },
               context,
             );
-            if (gatewayControl.bindControl) {
-              gatewayControl.bindControl({
-                submitToolResult: bridge.submitToolResult.bind(bridge),
-                sendUserMessage: bridge.sendUserMessage.bind(bridge),
-              });
-            } else {
-              // v2026.8.1 hosts expose only bindBridge. Remove this fallback when the
-              // minimum supported host includes bindControl; native negotiation never uses it.
-              gatewayControl.bindBridge(bridge);
-            }
+            gatewayControl.bindControl({
+              submitToolResult: bridge.submitToolResult.bind(bridge),
+              sendUserMessage: bridge.sendUserMessage.bind(bridge),
+            });
             return bridge;
           },
         },
@@ -273,7 +300,7 @@ async function createOpenAIRealtimeBrowserSession(
   );
   const auth = await resolveOpenAIRealtimePlatformAuth(authParams, context);
   if (!auth) {
-    if (hasOpenAIRealtimePlatformAuthInput(authParams, context)) {
+    if (await hasOpenAIRealtimePlatformAuthInputAsync(authParams, context)) {
       throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
     }
     const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
@@ -309,19 +336,16 @@ async function createOpenAIRealtimeBrowserSession(
     },
     context,
   );
-  const headers = context.resolveProviderRequestHeaders({
-    provider: "openai",
-    baseUrl: "https://api.openai.com/v1/realtime/calls",
-    capability: "audio",
-    transport: "http",
-    defaultHeaders: {},
-  });
+  const headers = resolveOpenAIRealtimeRequestHeaders(
+    context,
+    "https://api.openai.com/v1/realtime/calls",
+  );
   // Strip server-side-only attribution headers: browser direct fetches to
   // api.openai.com fail CORS preflight when these are present (only
   // authorization,content-type are allowed by the endpoint's CORS policy).
   const SERVER_ONLY_HEADERS = new Set(["user-agent", "originator", "version"]);
   const browserHeaders = Object.fromEntries(
-    Object.entries(headers ?? {}).filter(([key]) => !SERVER_ONLY_HEADERS.has(key.toLowerCase())),
+    Object.entries(headers).filter(([key]) => !SERVER_ONLY_HEADERS.has(key.toLowerCase())),
   );
   const offerHeaders = Object.keys(browserHeaders).length > 0 ? browserHeaders : undefined;
   return {
@@ -333,7 +357,7 @@ async function createOpenAIRealtimeBrowserSession(
     ...(offerHeaders ? { offerHeaders } : {}),
     model,
     voice,
-    ...(typeof clientSecret.expiresAt === "number" ? { expiresAt: clientSecret.expiresAt } : {}),
+    ...(clientSecret.expiresAt !== undefined ? { expiresAt: clientSecret.expiresAt } : {}),
   };
 }
 
@@ -353,13 +377,29 @@ export function buildOpenAIRealtimeVoiceProvider(
     voices: OPENAI_REALTIME_VOICES,
     autoSelectOrder: 10,
     capabilities: OPENAI_REALTIME_CAPABILITIES,
+    // Retained for public synchronous SDK calls through 2026-12-31.
     resolveConfig: (params) => resolveOpenAIRealtimeVoiceConfig(params, context),
+    resolveConfigAsync: (params) => resolveOpenAIRealtimeVoiceConfigAsync(params, context),
     isConfigured: ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (config.azureEndpoint || config.azureDeployment) {
         return hasOpenAIRealtimeApiKeyInput(config.apiKey);
       }
       return hasOpenAIRealtimePlatformAuthInput(
+        {
+          configuredApiKey: config.apiKey,
+          cfg,
+          agentId,
+        },
+        context,
+      );
+    },
+    isConfiguredAsync: async ({ cfg, providerConfig, agentId }) => {
+      const config = normalizeProviderConfig(providerConfig);
+      if (config.azureEndpoint || config.azureDeployment) {
+        return hasOpenAIRealtimeApiKeyInput(config.apiKey);
+      }
+      return hasOpenAIRealtimePlatformAuthInputAsync(
         {
           configuredApiKey: config.apiKey,
           cfg,
@@ -437,7 +477,31 @@ export function buildOpenAIRealtimeVoiceProvider(
         context,
       ),
   };
+  const isBrowserSessionConfiguredAsync: NonNullable<
+    InternalRealtimeVoiceProviderApi["isBrowserSessionConfiguredAsync"]
+  > = async ({ cfg, providerConfig, agentId }) => {
+    const config = normalizeProviderConfig(providerConfig);
+    if (config.baseUrl || config.azureEndpoint || config.azureDeployment) {
+      return false;
+    }
+    const model = config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
+    const isGptLive = isOpenAIGptLiveModel(model);
+    const hasBroker = options?.quicksilverBrowserSessionBroker !== undefined;
+    if (isGptLive && !hasBroker) {
+      return false;
+    }
+    return (
+      (await hasOpenAIRealtimePlatformAuthInputAsync(
+        { configuredApiKey: config.apiKey, cfg, agentId },
+        context,
+      )) ||
+      (hasBroker &&
+        (!isGptLive || isOpenAIGptLiveSubscriptionModel(model)) &&
+        (await hasOpenAIChatGptSubscriptionAuthInputAsync({ cfg, agentId }, context)))
+    );
+  };
   const internalApi: InternalRealtimeVoiceProviderApi = {
+    // Retained for public synchronous SDK calls through 2026-12-31.
     isBrowserSessionConfigured: ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (config.baseUrl || config.azureEndpoint || config.azureDeployment) {
@@ -459,6 +523,7 @@ export function buildOpenAIRealtimeVoiceProvider(
           hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context))
       );
     },
+    isBrowserSessionConfiguredAsync,
     resolveBrowserSessionCapabilities: ({ cfg, providerConfig, agentId, model, clientControl }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (config.baseUrl) {
@@ -466,7 +531,7 @@ export function buildOpenAIRealtimeVoiceProvider(
       }
       const effectiveModel = model ?? config.model ?? "";
       if (isOpenAIGptLiveModel(effectiveModel)) {
-        // Older hosts do not prepare this control claim, even when they own native delegations.
+        // Native delegation callbacks alone do not grant Gateway control of client media.
         const supportsGatewayControl =
           clientControl?.owner === "gateway" &&
           internalApi.isBrowserSessionConfigured({
@@ -492,6 +557,45 @@ export function buildOpenAIRealtimeVoiceProvider(
           : {}),
       };
     },
+    resolveBrowserSessionCapabilitiesAsync: async ({
+      cfg,
+      providerConfig,
+      agentId,
+      model,
+      clientControl,
+    }) => {
+      const config = normalizeProviderConfig(providerConfig);
+      if (config.baseUrl) {
+        return CUSTOM_ENDPOINT_CAPABILITIES;
+      }
+      const effectiveModel = model ?? config.model ?? "";
+      if (isOpenAIGptLiveModel(effectiveModel)) {
+        // Native delegation callbacks alone do not grant Gateway control of client media.
+        const supportsGatewayControl =
+          clientControl?.owner === "gateway" &&
+          (await isBrowserSessionConfiguredAsync({
+            cfg,
+            providerConfig: { ...providerConfig, model: effectiveModel },
+            agentId,
+          }));
+        return {
+          ...OPENAI_REALTIME_CAPABILITIES,
+          ...OPENAI_QUICKSILVER_CAPABILITIES,
+          ...resolveOpenAIQuicksilverVoiceCapabilities(effectiveModel),
+          ...(supportsGatewayControl ? { supportsGatewayControl: true } : {}),
+        };
+      }
+      return {
+        ...OPENAI_REALTIME_CAPABILITIES,
+        ...(options?.quicksilverBrowserSessionBroker !== undefined &&
+        (await hasOpenAIRealtimePlatformAuthInputAsync(
+          { configuredApiKey: config.apiKey, cfg, agentId },
+          context,
+        ))
+          ? { supportsGatewayControl: true }
+          : {}),
+      };
+    },
     isGatewayRelayConfigured: ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (!isOpenAIGptLiveModel(config.model)) {
@@ -507,6 +611,23 @@ export function buildOpenAIRealtimeVoiceProvider(
         ) ||
         (isOpenAIGptLiveSubscriptionModel(config.model) &&
           hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context))
+      );
+    },
+    isGatewayRelayConfiguredAsync: async ({ cfg, providerConfig, agentId }) => {
+      const config = normalizeProviderConfig(providerConfig);
+      if (!isOpenAIGptLiveModel(config.model)) {
+        return undefined;
+      }
+      if (config.baseUrl || config.azureEndpoint || config.azureDeployment) {
+        return false;
+      }
+      return (
+        (await hasOpenAIRealtimePlatformAuthInputAsync(
+          { configuredApiKey: config.apiKey, cfg, agentId },
+          context,
+        )) ||
+        (isOpenAIGptLiveSubscriptionModel(config.model) &&
+          (await hasOpenAIChatGptSubscriptionAuthInputAsync({ cfg, agentId }, context)))
       );
     },
     resolveGatewayRelayCapabilities: ({ providerConfig, model }) => {

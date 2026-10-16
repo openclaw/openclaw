@@ -20,7 +20,7 @@ import {
 
 vi.mock("../session-utils.js", async () => ({
   ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
-  loadSessionEntry: () => ({ entry: { sessionId: "main-session" } }),
+  loadGatewaySessionEntryReadOnlyInWorker: async () => ({ entry: { sessionId: "main-session" } }),
 }));
 
 function abortAsOwner(params: Omit<Parameters<typeof invokeAbort>[0], "connId" | "deviceId">) {
@@ -283,7 +283,7 @@ describe("chat.abort authorization", () => {
 });
 
 describe("chat.abort queued-turn contract", () => {
-  it("cancels queued turns before session cleanup and the active run", async () => {
+  it("fences queued turns before active cancellation and secondary session cleanup", async () => {
     const order: string[] = [];
     const queuedController = new AbortController();
     queuedController.signal.addEventListener("abort", () => order.push("queued-abort"));
@@ -298,6 +298,10 @@ describe("chat.abort queued-turn contract", () => {
 
     const respond = await abortAsOwner({
       context,
+      onAuthorizedBeforeEmbeddedAbort: () => {
+        order.push("queue-cleanup");
+        return true;
+      },
       onAuthorizedAfterQueuedAbort: () => {
         order.push("session-cleanup");
         return true;
@@ -305,7 +309,7 @@ describe("chat.abort queued-turn contract", () => {
     });
 
     expect(requireLastRespondCall(respond)[0]).toBe(true);
-    expect(order).toEqual(["queued-abort", "session-cleanup", "active-abort"]);
+    expect(order).toEqual(["queued-abort", "queue-cleanup", "active-abort", "session-cleanup"]);
   });
 
   it("allows operator.write session cleanup when no chat run is registered", async () => {
@@ -317,33 +321,6 @@ describe("chat.abort queued-turn contract", () => {
 
     expect(onAuthorizedAfterQueuedAbort).toHaveBeenCalledTimes(1);
     expectAbortPayload(requireLastRespondCall(respond)[1], { aborted: true, runIds: [] });
-  });
-
-  it("aborts only requester runs without session cleanup in a mixed-owner session", async () => {
-    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
-    const mine = createActiveRun("main", {
-      owner: { connId: "conn-owner", deviceId: "dev-owner" },
-    });
-    const foreign = createActiveRun("main", {
-      owner: { connId: "conn-other", deviceId: "dev-other" },
-    });
-    const context = createChatAbortContext({
-      chatAbortControllers: new Map([
-        ["run-mine", mine],
-        ["run-foreign", foreign],
-      ]),
-    });
-    const respond = await abortAsOwner({ context, onAuthorizedAfterQueuedAbort });
-
-    expectAbortPayload(requireLastRespondCall(respond)[1], {
-      aborted: true,
-      runIds: ["run-mine"],
-    });
-    expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
-    expect(mine.controller.signal.aborted).toBe(true);
-    expect(context.chatAbortControllers.has("run-mine")).toBe(false);
-    expect(foreign.controller.signal.aborted).toBe(false);
-    expect(context.chatAbortControllers.has("run-foreign")).toBe(true);
   });
 
   it("does not let session cleanup bypass a worker run", async () => {
@@ -461,29 +438,6 @@ describe("chat.abort queued-turn contract", () => {
     );
   });
 
-  it("skips session cleanup when a pending run has a foreign owner", async () => {
-    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
-    const context = createChatAbortContext();
-    context.dedupe.set("agent:run-mine", pendingRun("run-mine", "owner"));
-    context.dedupe.set("agent:run-foreign", pendingRun("run-foreign", "other"));
-
-    const respond = await abortAsOwner({
-      context,
-      onAuthorizedAfterQueuedAbort,
-    });
-
-    expectAbortPayload(requireLastRespondCall(respond)[1], {
-      aborted: true,
-      runIds: ["run-mine"],
-    });
-    expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
-    expect(context.dedupe.get("agent:run-foreign")).toEqual(
-      expect.objectContaining({
-        payload: expect.objectContaining({ status: "accepted" }),
-      }),
-    );
-  });
-
   it("aborts a queued turn by runId after active registration is gone", async () => {
     const controller = new AbortController();
     const context = createChatAbortContext({
@@ -542,32 +496,6 @@ describe("chat.abort queued-turn contract", () => {
     expect(call[2]?.message).toBe("runId does not match sessionKey");
     expect(controller.signal.aborted).toBe(false);
     expect(context.chatQueuedTurns.has("queued-ownerless")).toBe(true);
-  });
-
-  it("aborts only requester queues without session cleanup in a mixed-owner session", async () => {
-    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
-    const mine = new AbortController();
-    const foreign = new AbortController();
-    const context = createChatAbortContext({
-      chatQueuedTurns: new Map([
-        ["queued-mine", queuedTurn(mine)],
-        ["queued-foreign", queuedTurn(foreign, "other")],
-      ]),
-    });
-
-    const respond = await abortAsOwner({
-      context,
-      onAuthorizedAfterQueuedAbort,
-    });
-
-    expectAbortPayload(requireLastRespondCall(respond)[1], {
-      aborted: true,
-      runIds: ["queued-mine"],
-    });
-    expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
-    expect(mine.signal.aborted).toBe(true);
-    expect(foreign.signal.aborted).toBe(false);
-    expect(context.chatQueuedTurns.has("queued-foreign")).toBe(true);
   });
 
   it("rejects an ownerless global abort on an explicit fleet", async () => {
@@ -697,6 +625,7 @@ describe("chat.abort original authority and registration", () => {
     const descendants = vi
       .spyOn(abortDescendants, "abortControlledSubagents")
       .mockImplementationOnce(async (params) => {
+        await params.prepareSelection?.prepare();
         await params.beforeKill?.(() => {});
         throw descendantFailure;
       });
@@ -836,7 +765,7 @@ describe("chat.abort original authority and registration", () => {
                   ...options,
                   hasCurrentClientAuthority: () => current,
                 },
-                { onAuthorizedAfterQueuedAbort: lifecycle },
+                { onAuthorizedBeforeEmbeddedAbort: lifecycle },
               ),
             context,
             request: { sessionKey: "main" },

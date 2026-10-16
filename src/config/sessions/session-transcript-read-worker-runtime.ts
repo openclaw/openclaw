@@ -1,10 +1,10 @@
 import path from "node:path";
-import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
+import { WorkerTaskError } from "@openclaw/worker-runtime";
+import { ContextPreparationTimeoutError } from "../../agents/failover/local-preparation-error.js";
 import {
   resolveWorkerPoolSize,
   SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
 } from "../../infra/worker-pool-sizing.js";
-import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
@@ -17,10 +17,11 @@ import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fen
 import { createSessionTranscriptReadPool } from "./session-transcript-read-pools.js";
 import type {
   SessionEntryWorkerInput,
+  SessionEntriesWorkerInput,
   SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
   SessionSqliteTargetWorkerInput,
-} from "./session-transcript-worker.types.js";
+} from "./session-transcript-worker-read.types.js";
 
 // Callers retain writer admission and validate snapshots before consuming parallel reads.
 const modelContextReads = createSessionTranscriptReadPool<
@@ -31,7 +32,7 @@ const modelContextReads = createSessionTranscriptReadPool<
 
 // Background transcript exports cannot occupy the foreground context worker.
 const sessionEntries = createSessionTranscriptReadPool<
-  SessionEntryWorkerInput | SessionResetRecallWorkerInput
+  SessionEntryWorkerInput | SessionEntriesWorkerInput | SessionResetRecallWorkerInput
 >(resolveWorkerPoolSize("singleton"), true);
 
 export async function readSessionTranscriptModelContextInWorker(
@@ -44,14 +45,24 @@ export async function readSessionTranscriptModelContextInWorker(
 ): Promise<ReturnType<typeof readSessionTranscriptModelContext>> {
   signal?.throwIfAborted();
   const value = unwrapSessionTranscriptWorkerReply(
-    await runWithSqliteDatabaseAdmissionTurn(
-      [resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path],
-      () =>
-        modelContextReads.run(
-          { kind: "model-context", target, admission, through, limits, expectedIdentity },
-          { timeoutMs: 60_000, signal },
-        ),
-    ),
+    await modelContextReads
+      .run(
+        { kind: "model-context", target, admission, through, limits, expectedIdentity },
+        // Successful reads on slow hosts take 42–44s (#155627); allow startup headroom.
+        { timeoutMs: 180_000, signal },
+        {
+          storePaths: [target.storePath],
+          admissionPaths: [
+            resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path,
+          ],
+        },
+      )
+      .catch((error: unknown) => {
+        if (error instanceof WorkerTaskError && error.code === "timeout") {
+          throw new ContextPreparationTimeoutError(error);
+        }
+        throw error;
+      }),
   );
   if (!("events" in value)) {
     throw new Error("Session context worker returned a database target instead of context");
@@ -66,14 +77,14 @@ export async function resolveSessionSqliteTargetInWorker(
   signal?.throwIfAborted();
   const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(input.storePath);
   const value = unwrapSessionTranscriptWorkerReply(
-    await runWithSqliteDatabaseAdmissionTurn(
-      listSqliteTargetCandidatePathsForSessionStorePath(input.storePath),
-      () =>
-        modelContextReads.run(
-          { kind: "sqlite-target", ...input },
-          { inputBytes: JSON.stringify(input).length * 2, timeoutMs: 60_000, signal },
-        ),
-      target.agentId || target.shared ? [] : [path.dirname(target.path)],
+    await modelContextReads.run(
+      { kind: "sqlite-target", ...input },
+      { inputBytes: JSON.stringify(input).length * 2, timeoutMs: 60_000, signal },
+      {
+        storePaths: [input.storePath],
+        admissionPaths: listSqliteTargetCandidatePathsForSessionStorePath(input.storePath),
+        families: target.agentId || target.shared ? [] : [path.dirname(target.path)],
+      },
     ),
   );
   if (!("target" in value)) {
@@ -90,13 +101,13 @@ export async function readSessionTranscriptContextMessagesInWorker(
 ) {
   signal?.throwIfAborted();
   const value = unwrapSessionTranscriptWorkerReply(
-    await runWithSqliteDatabaseAdmissionTurn(
-      [resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path],
-      () =>
-        modelContextReads.run(
-          { kind: "context-messages", target, admission, expectedIdentity },
-          { timeoutMs: 60_000, signal },
-        ),
+    await modelContextReads.run(
+      { kind: "context-messages", target, admission, expectedIdentity },
+      { timeoutMs: 60_000, signal },
+      {
+        storePaths: [target.storePath],
+        admissionPaths: [resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path],
+      },
     ),
   );
   if (!("messages" in value)) {
@@ -108,35 +119,95 @@ export async function readSessionTranscriptContextMessagesInWorker(
 export async function prepareSessionEntryInWorker(
   absPath: string,
   options: SessionEntryWorkerInput["options"],
-  redaction: SensitiveTextRedactionSnapshot,
 ) {
-  const receipt = resolveSessionTranscriptReadFence(options);
-  const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
-    await runWithSqliteDatabaseAdmissionTurn(
-      [resolveUnsuffixedSqliteTargetFromSessionStorePath(options.storePath).path],
-      () =>
-        sessionEntries.run(
-          {
-            kind: "session-entry",
-            absPath,
-            options,
-            redaction,
-            ...(receipt ? { admission: { ...receipt } } : {}),
-          },
-          {
-            inputBytes:
-              2 *
-              (absPath.length +
-                options.agentId.length +
-                options.sessionId.length +
-                options.storePath.length +
-                (options.sessionKey?.length ?? 0) +
-                redaction.registeredSecretValues.reduce((bytes, value) => bytes + value.length, 0)),
-          },
-        ),
+  const result = await readSessionEntryInWorker({
+    kind: "session-entry",
+    absPath,
+    options,
+  });
+  if (!("entry" in result)) {
+    throw new Error("Session transcript worker returned a snapshot instead of an export");
+  }
+  return result;
+}
+
+export async function prepareSessionEntriesInWorker(entries: SessionEntriesWorkerInput["entries"]) {
+  const result = unwrapSessionTranscriptWorkerReply<
+    "session-entry" | "session-entries" | "session-reset-recall"
+  >(
+    await sessionEntries.run(
+      {
+        kind: "session-entries",
+        entries: entries.map((entry) => {
+          const receipt = resolveSessionTranscriptReadFence(entry.options);
+          return { ...entry, ...(receipt ? { admission: { ...receipt } } : {}) };
+        }),
+      },
+      { inputBytes: JSON.stringify(entries).length * 2 },
+      {
+        storePaths: entries.map(({ options }) => options.storePath),
+        admissionPaths: [
+          ...new Set(
+            entries.map(
+              ({ options }) =>
+                resolveUnsuffixedSqliteTargetFromSessionStorePath(options.storePath).path,
+            ),
+          ),
+        ],
+      },
     ),
   );
-  if (!("entry" in result)) {
+  if (!("entries" in result)) {
+    throw new Error("Session transcript worker returned a single export instead of a batch");
+  }
+  return result.entries;
+}
+
+export async function readSessionEntrySnapshotInWorker(
+  absPath: string,
+  options: SessionEntryWorkerInput["options"],
+  includeOriginalMessages: boolean,
+) {
+  const result = await readSessionEntryInWorker({
+    kind: "session-entry",
+    mode: "snapshot",
+    includeOriginalMessages,
+    absPath,
+    options,
+  });
+  if (!("snapshot" in result)) {
+    throw new Error("Session transcript worker returned an export instead of a snapshot");
+  }
+  return result.snapshot;
+}
+
+async function readSessionEntryInWorker(input: SessionEntryWorkerInput) {
+  const { absPath, options } = input;
+  const receipt = resolveSessionTranscriptReadFence(options);
+  const result = unwrapSessionTranscriptWorkerReply<
+    "session-entry" | "session-entries" | "session-reset-recall"
+  >(
+    await sessionEntries.run(
+      {
+        ...input,
+        ...(receipt ? { admission: { ...receipt } } : {}),
+      },
+      {
+        inputBytes:
+          2 *
+          (absPath.length +
+            options.agentId.length +
+            options.sessionId.length +
+            options.storePath.length +
+            (options.sessionKey?.length ?? 0)),
+      },
+      {
+        storePaths: [options.storePath],
+        admissionPaths: [resolveUnsuffixedSqliteTargetFromSessionStorePath(options.storePath).path],
+      },
+    ),
+  );
+  if (!("entry" in result) && !("snapshot" in result)) {
     throw new Error("Session transcript worker returned reset metadata instead of an export");
   }
   return result;
@@ -146,18 +217,20 @@ export async function readSessionResetRecallCutoffInWorker(
   scope: SessionResetRecallWorkerInput["scope"],
 ) {
   const receipt = resolveSessionTranscriptReadFence(scope);
-  const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
-    await runWithSqliteDatabaseAdmissionTurn(
-      [resolveUnsuffixedSqliteTargetFromSessionStorePath(scope.storePath).path],
-      () =>
-        sessionEntries.run(
-          {
-            kind: "session-reset-recall",
-            scope,
-            ...(receipt ? { admission: { ...receipt } } : {}),
-          },
-          { inputBytes: JSON.stringify(scope).length * 2 },
-        ),
+  const result = unwrapSessionTranscriptWorkerReply<
+    "session-entry" | "session-entries" | "session-reset-recall"
+  >(
+    await sessionEntries.run(
+      {
+        kind: "session-reset-recall",
+        scope,
+        ...(receipt ? { admission: { ...receipt } } : {}),
+      },
+      { inputBytes: JSON.stringify(scope).length * 2 },
+      {
+        storePaths: [scope.storePath],
+        admissionPaths: [resolveUnsuffixedSqliteTargetFromSessionStorePath(scope.storePath).path],
+      },
     ),
   );
   if (!("cutoff" in result)) {

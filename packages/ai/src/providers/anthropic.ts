@@ -5,35 +5,14 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import type { AnthropicContextManagementOptions, AnthropicOptions } from "../provider-options.js";
 import {
-  isAnthropicReplayRejection,
-  suppressAnthropicCompaction,
-} from "../transports/anthropic-compaction-replay.js";
-import {
-  buildAnthropicRequest,
-  prepareAnthropicRequest,
-} from "../transports/anthropic-messages.js";
-import {
   isDirectAnthropicModel,
   supportsAnthropicServerSideFallback,
 } from "../transports/anthropic-payload-policy.js";
-import { consumeAnthropicStream } from "../transports/anthropic-stream-reducer.js";
+import { runAnthropicStreamLifecycle } from "../transports/anthropic-stream-lifecycle.js";
 import { applyAnthropicThinkingOptions } from "../transports/anthropic-transport-options.js";
-import { createAssistantOutput } from "../transports/assistant-output.js";
 import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
-import {
-  assignTransportErrorDetails,
-  finalizeTransportStream,
-  notifyProviderHttpResponse,
-} from "../transports/transport-stream-shared.js";
 import { streamFragmentError } from "../transports/transport-utils.js";
-import type {
-  AssistantMessageEvent,
-  Context,
-  Model,
-  SimpleStreamOptions,
-  StreamFunction,
-} from "../types.js";
-import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
+import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { parseJsonWithRepair } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
@@ -47,7 +26,6 @@ import {
   buildAnthropicClaudeCodeIdentity,
   prepareClaudeNoPrefillRequestContext,
   supportsClaudeAdaptiveThinking,
-  usesClaudeStreamingRefusalContract,
 } from "./anthropic-model-contract.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
@@ -124,81 +102,33 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
   const requestContext = prepareClaudeNoPrefillRequestContext(model, context);
   const requestOptions = normalizeAnthropicThinkingOptions(model, options);
 
-  void (async () => {
-    const output = createAssistantOutput(model);
-    // Classifier refusals can invalidate partial output, so no event is safe
-    // to expose until the terminal stop reason is known.
-    const refusalBuffer = usesClaudeStreamingRefusalContract(model)
-      ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
-      : undefined;
-    let usedCompactionReplay = false;
-
-    try {
-      const {
-        client,
-        isOAuthToken,
-        serverSideFallback,
-        directApiKeyBetaHeader,
-        claudeCodeVersion,
-      } = createClient(model, requestContext, requestOptions);
-      const builtParams = await buildAnthropicRequest(
-        model,
-        requestContext,
-        requestOptions,
-        "provider",
-        isOAuthToken,
-        serverSideFallback,
-        claudeCodeVersion,
-      );
-      usedCompactionReplay = builtParams.usedCompactionReplay;
-      const { params, headers } = await prepareAnthropicRequest(
-        builtParams.params,
-        model,
-        requestOptions,
-        directApiKeyBetaHeader,
-      );
-      const sdkRequestOptions = {
-        ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
-        ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
-        maxRetries: 0,
-        headers,
+  void runAnthropicStreamLifecycle({
+    model,
+    stream,
+    options: requestOptions,
+    profile: "provider",
+    prepare: () => {
+      const { client, ...policy } = createClient(model, requestContext, requestOptions);
+      return {
+        ...policy,
+        context: requestContext,
+        options: requestOptions,
+        request: async (body, headers) => {
+          const response = await client.messages
+            .create(body, {
+              ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
+              ...(requestOptions?.timeoutMs !== undefined
+                ? { timeout: requestOptions.timeoutMs }
+                : {}),
+              maxRetries: 0,
+              headers,
+            })
+            .asResponse();
+          return { response, events: iterateAnthropicEvents(response, requestOptions?.signal) };
+        },
       };
-      const response = await client.messages
-        .create({ ...params, stream: true }, sdkRequestOptions)
-        .asResponse();
-      await notifyProviderHttpResponse({ options: requestOptions, response, model });
-
-      await consumeAnthropicStream({
-        events: iterateAnthropicEvents(response, requestOptions?.signal),
-        model,
-        options: requestOptions ?? {},
-        output,
-        stream,
-        refusalBuffer,
-        isOAuthToken,
-        toolProjection: builtParams.toolProjection,
-        profile: "provider",
-      });
-      finalizeTransportStream({ stream, output });
-    } catch (error) {
-      const terminal = assignTransportErrorDetails(output, error, requestOptions?.signal);
-      output.content = output.content.filter((block) => block.type !== "toolCall");
-      for (const block of output.content) {
-        delete (block as { index?: number }).index;
-        // partialJson is only a streaming scratch buffer; never persist it.
-        delete (block as { partialJson?: string }).partialJson;
-      }
-      if (refusalBuffer) {
-        refusalBuffer.discard();
-        output.content = [];
-      }
-      if (usedCompactionReplay && isAnthropicReplayRejection(error)) {
-        suppressAnthropicCompaction(output, model, requestOptions);
-      }
-      stream.push({ type: "error", reason: terminal.stopReason, error: output });
-      stream.end();
-    }
-  })();
+    },
+  });
 
   return stream;
 };
@@ -240,6 +170,7 @@ export const streamSimpleAnthropic: StreamFunction<
     anthropicServerCompaction: options?.anthropicServerCompaction,
     anthropicCompactThreshold: options?.anthropicCompactThreshold,
     cacheTtlPruning: options?.cacheTtlPruning,
+    onCompactionRejected: options?.onCompactionRejected,
     authProfileId: options?.authProfileId,
     maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
     toolChoice: options?.toolChoice,

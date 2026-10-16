@@ -1,5 +1,4 @@
 import { formatToolAggregate } from "../../auto-reply/tool-meta.js";
-import { redactToolDetail } from "../../logging/redact.js";
 import { formatFencedCodeBlock } from "../../shared/markdown-code.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
@@ -96,12 +95,11 @@ export function formatToolProgressOutput(
   if (!trimmed) {
     return undefined;
   }
-  const redacted = redactToolDetail(trimmed);
   const maxChars = options?.maxChars ?? TOOL_PROGRESS_OUTPUT_MAX_CHARS;
-  if (redacted.length <= maxChars) {
-    return redacted;
+  if (trimmed.length <= maxChars) {
+    return trimmed;
   }
-  return `${truncateUtf16Safe(redacted, maxChars)}\n...(truncated)...`;
+  return `${truncateUtf16Safe(trimmed, maxChars)}\n...(truncated)...`;
 }
 
 type ToolOutputState = {

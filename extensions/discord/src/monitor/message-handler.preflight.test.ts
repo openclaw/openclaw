@@ -1,4 +1,7 @@
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+import { shouldIgnoreBoundThreadWebhookMessage } from "./message-handler.preflight-helpers.js";
+import * as preflightRuntime from "./message-handler.preflight.js";
+import { processDiscordMessage } from "./message-handler.process.js";
 
 installDiscordIngressTestRuntime();
 import { ComponentType, MessageReferenceType } from "discord-api-types/v10";
@@ -6,7 +9,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as discordMessagesApi from "../internal/api.messages.js";
 import { ChannelType, MessageType } from "../internal/discord.js";
-import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 const fetchPluralKitMessageInfoMock = vi.hoisted(() => vi.fn());
@@ -62,16 +64,15 @@ import {
 } from "./message-handler.preflight.test-helpers.js";
 
 vi.mock("openclaw/plugin-sdk/media-runtime", { spy: true });
+vi.mock("./message-handler.process.js", { spy: true });
 let preflightDiscordMessage: typeof import("./message-handler.preflight.js").preflightDiscordMessage;
-let shouldIgnoreBoundThreadWebhookMessage: typeof import("./message-handler.preflight.js").shouldIgnoreBoundThreadWebhookMessage;
 let defaultThreadBindings: import("./thread-bindings.js").ThreadBindingManager;
 let createNoopThreadBindingManager: typeof import("./thread-bindings.js").createNoopThreadBindingManager;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let createDiscordMessageDispatcher: typeof import("./message-dispatcher.js").createDiscordMessageDispatcher;
 
 beforeAll(async () => {
-  ({ preflightDiscordMessage, shouldIgnoreBoundThreadWebhookMessage } =
-    await import("./message-handler.preflight.js"));
+  ({ preflightDiscordMessage } = await import("./message-handler.preflight.js"));
   ({ createThreadBindingManager, createNoopThreadBindingManager } =
     await import("./thread-bindings.js"));
   ({ createDiscordMessageDispatcher } = await import("./message-dispatcher.js"));
@@ -873,6 +874,16 @@ describe("preflightDiscordMessage", () => {
         return createGuildEvent({ channelId, guildId, author: message.author, message });
       });
       const evaluated = createDeferred<DiscordPreflightResult | null>();
+      const preflightSpy = vi
+        .spyOn(preflightRuntime, "preflightDiscordMessage")
+        .mockImplementation(async (params) => {
+          const result = await preflightDiscordMessage(params);
+          evaluated.resolve(result);
+          return result;
+        });
+      onTestFinished(() => preflightSpy.mockRestore());
+      const processSpy = vi.mocked(processDiscordMessage).mockImplementation(async () => {});
+      onTestFinished(() => processSpy.mockRestore());
       const dispatcher = createDiscordMessageDispatcher({
         ...createPreflightArgs({
           cfg: {
@@ -888,14 +899,6 @@ describe("preflightDiscordMessage", () => {
           log: vi.fn(),
           error: (...args) => evaluated.reject(new Error(args.join(" "))),
           exit: vi.fn(),
-        },
-        testing: {
-          preflightDiscordMessage: async (params) => {
-            const result = await preflightDiscordMessage(params);
-            evaluated.resolve(result);
-            return result;
-          },
-          processDiscordMessage: async () => {},
         },
       });
       onTestFinished(() => dispatcher.deactivate());
@@ -1171,7 +1174,7 @@ describe("preflightDiscordMessage", () => {
     },
   );
 
-  it("handles partial thread channel owner getters during mention preflight", async () => {
+  it("uses fetched thread metadata during mention preflight", async () => {
     const threadId = "thread-partial-owner";
     const parentId = "parent-partial-owner";
     const message = createDiscordMessage({
@@ -1180,21 +1183,6 @@ describe("preflightDiscordMessage", () => {
       content: "thread hello",
       author: HUMAN,
     });
-    Object.defineProperty(message, "channel", {
-      value: createPartialDiscordChannelWithThrowingGetters(
-        {
-          id: threadId,
-          isThread: () => true,
-          ownerId: "owner-1",
-          parentId,
-          parent: { id: parentId, name: "general" },
-        },
-        ["ownerId", "parentId", "parent"],
-      ),
-      configurable: true,
-      enumerable: true,
-    });
-
     const result = await runGuildPreflight({
       client: createThreadClient({
         threadId,

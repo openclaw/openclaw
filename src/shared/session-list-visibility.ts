@@ -1,4 +1,24 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { isSubagentSessionKey, parseAgentSessionKey } from "../sessions/session-key-utils.js";
+
+export function isSubagentSessionRow(
+  key: string,
+  entry?: { spawnedBy?: string; category?: string },
+): boolean {
+  return (
+    isSubagentSessionKey(key) ||
+    // Visible spawned conversations use dashboard keys even without a sidebar group.
+    // Lineage alone must not hide the session where the human follows the work.
+    Boolean(
+      entry?.spawnedBy &&
+      !parseAgentSessionKey(key)?.rest.toLowerCase().startsWith("dashboard:") &&
+      !normalizeOptionalString(entry.category),
+    )
+  );
+}
 
 /** Display/discovery classification; routing validates canonical keys separately. */
 export function isCronSessionDisplayKey(key: string): boolean {

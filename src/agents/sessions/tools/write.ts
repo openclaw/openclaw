@@ -5,7 +5,10 @@ import {
 } from "node:fs/promises";
 import { dirname } from "node:path";
 import { isMissingPathError } from "../../../infra/errors.js";
-import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
+import {
+  captureAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "../../agent-tool-source-execution-guard.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/tool-results.js";
 import { WRITE_DIFF_MAX_BYTES } from "./file-diff.js";
@@ -210,9 +213,11 @@ export function createWriteTool(
       const dir = dirname(absolutePath);
       const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
       return withFileMutationQueueKeyResolution(queueKey, async () => {
-        const precheck = await readOriginalWriteState(absolutePath, content, ops);
+        const precheck = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+          assertCurrent();
+          return readOriginalWriteState(absolutePath, content, ops);
+        });
         assertFileToolNotAborted(signal);
-        assertCurrent();
         // No-op: file already has identical content. Not terminal — the model
         // may still be mid-task and needs a continuation, not an ended turn.
         if (precheck.state === "same") {
@@ -220,41 +225,55 @@ export function createWriteTool(
             changed: false,
           } satisfies WriteToolDetails);
         }
-        const details = await resolveWriteDetails({
-          absolutePath,
-          content,
-          ops,
-          path,
-          precheck,
-          signal,
+        const details = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+          assertCurrent();
+          return resolveWriteDetails({
+            absolutePath,
+            content,
+            ops,
+            path,
+            precheck,
+            signal,
+          });
         });
-        assertCurrent();
         assertFileToolNotAborted(signal);
         try {
-          assertCurrent();
-          await ops.mkdir(dir);
+          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+            assertCurrent();
+            await ops.mkdir(dir);
+          });
           assertFileToolNotAborted(signal);
-          assertCurrent();
-          await ops.writeFile(absolutePath, content);
+          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+            assertCurrent();
+            await ops.writeFile(absolutePath, content);
+          });
           assertFileToolNotAborted(signal);
-          assertCurrent();
-          if (!(await verifyPersistedUtf8File(absolutePath, content, ops))) {
+          if (
+            !(await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+              assertCurrent();
+              return verifyPersistedUtf8File(absolutePath, content, ops);
+            }))
+          ) {
             throw new Error(
               `Write verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
             );
           }
-          assertCurrent();
           return successfulWriteResult(path, content, details);
         } catch (error: unknown) {
-          assertCurrent();
           if (isWriteRecoveryCandidate(error, signal)) {
-            const verified = await verifyPersistedUtf8File(absolutePath, content, ops);
-            const changed =
-              precheck.state === "different" ||
-              (precheck.state === "unknown" &&
-                (await didWriteMetadataChange(absolutePath, precheck.beforeStat, ops)));
-            if (verified && changed) {
-              assertCurrent();
+            const recovered = await runWithAgentToolSourceExecutionScope(
+              assertCurrent,
+              async () => {
+                assertCurrent();
+                const verified = await verifyPersistedUtf8File(absolutePath, content, ops);
+                const changed =
+                  precheck.state === "different" ||
+                  (precheck.state === "unknown" &&
+                    (await didWriteMetadataChange(absolutePath, precheck.beforeStat, ops)));
+                return { verified, changed };
+              },
+            );
+            if (recovered.verified && recovered.changed) {
               return successfulWriteResult(path, content, details);
             }
           }

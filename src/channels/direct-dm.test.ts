@@ -76,12 +76,13 @@ describe("dispatchInboundDirectDm", () => {
         replyOptions: { onModelSelected: mocks.onModelSelected },
       }),
     );
-    expect(vi.mocked(buildChannelInboundEventContext).mock.calls[0]?.[0].channelIngress).toBe(
+    expect(vi.mocked(buildChannelInboundEventContext).mock.calls.at(-1)?.[0].channelIngress).toBe(
       channelIngress,
     );
   });
 
   it("threads a durable ingress adoption lifecycle into the turn plan", async () => {
+    const assertAuthority = vi.fn();
     const turnAdoptionLifecycle = {
       admission: "exclusive" as const,
       onAdopted: vi.fn(async () => {}),
@@ -93,14 +94,17 @@ describe("dispatchInboundDirectDm", () => {
     await dispatchDm({
       channelIngress: "unsupported",
       turnAdoptionLifecycle,
+      assertAuthority,
     });
 
     expect(mocks.dispatchRoutedChannelTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
+        assertAuthority,
         replyOptions: expect.objectContaining({ turnAdoptionLifecycle }),
       }),
     );
-    expect(vi.mocked(buildChannelInboundEventContext).mock.calls[1]?.[0].channelIngress).toBe(
+    expect(assertAuthority).not.toHaveBeenCalled();
+    expect(vi.mocked(buildChannelInboundEventContext).mock.calls.at(-1)?.[0].channelIngress).toBe(
       "unsupported",
     );
   });

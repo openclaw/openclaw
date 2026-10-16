@@ -18,6 +18,7 @@ import {
 import { MIN_READABLE_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { backupDoctorSqliteRepair } from "../infra/sqlite-index-recovery.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   runOpenClawAgentWriteTransaction,
@@ -167,6 +168,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
   const env = params.env ?? process.env;
   let found = 0;
   let repaired = 0;
+  const preserved = new Set<string>();
 
   scanDoctorSessionTranscripts(
     {
@@ -213,9 +215,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
             }
             const events = parseCanonicalHeaderlessEvents(currentRows, sessionId);
             if (!events) {
-              throw new Error(
-                `transcript is no longer a canonical headerless session: ${sessionId}`,
-              );
+              throw new Error(`transcript is no longer a stored headerless session: ${sessionId}`);
             }
             const context = readHeaderRepairContext(database, sessionId);
             if (!context || context.sessionKey !== snapshot.sessionKey) {
@@ -230,6 +230,11 @@ export async function noteSessionTranscriptHeaderHealth(params: {
               sessionId,
               timestamp: headerTimestamp,
             });
+            if (!preserved.has(sqlitePath)) {
+              const backup = backupDoctorSqliteRepair(sqlitePath, "transcript-headers");
+              preserved.add(sqlitePath);
+              note(`- Saved pre-repair SQLite backup: ${backup}`, NOTE_TITLE);
+            }
             replaceSqliteTranscriptEventsInTransaction(
               database,
               {
@@ -268,7 +273,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
   } else if (!params.shouldRepair && found > 0) {
     note(
       [
-        `- Found ${countLabel(found, "canonical session transcript")} without a header.`,
+        `- Found ${countLabel(found, "stored session transcript")} without a header.`,
         `- Run "openclaw doctor --fix" to repair ${found === 1 ? "it" : "them"} before resuming the session.`,
       ].join("\n"),
       NOTE_TITLE,

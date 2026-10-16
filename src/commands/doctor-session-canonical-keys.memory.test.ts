@@ -4,9 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { build as esbuild } from "esbuild";
-import { afterEach, describe, expect, it } from "vitest";
+import { build } from "tsdown";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import packageJson from "../../package.json" with { type: "json" };
+import { createSqliteSchemaAssetsPlugin } from "../../scripts/lib/sqlite-schema-assets.mts";
+import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
@@ -26,15 +28,54 @@ const ENTRY_PAYLOAD_BYTES = 512 * 1024;
 const CHILD_HEAP_MIB = 160;
 let state: OpenClawTestState | undefined;
 let bundleDir: string | undefined;
+let childPath: string;
+
+beforeAll(async () => {
+  fs.mkdirSync(path.join(process.cwd(), "node_modules/.cache"), { recursive: true });
+  bundleDir = fs.mkdtempSync(path.join(process.cwd(), "node_modules/.cache/canonical-memory-"));
+  childPath = path.join(bundleDir, "child.mjs");
+  const { bundles } = await build({
+    config: false,
+    dts: false,
+    entry: { child: fileURLToPath(canonicalMemoryTestSupportModuleUrl) },
+    format: "esm",
+    // Keep generated source overhead out of the entry-data heap budget;
+    // preserve function/class names used by runtime dispatch and diagnostics.
+    minify: { codegen: true, compress: true, mangle: { keepNames: true } },
+    outDir: bundleDir,
+    outExtensions: () => ({ js: ".mjs" }),
+    // Preserve lazy runtime imports so unused provider SDKs do not consume the child heap.
+    outputOptions: { codeSplitting: true },
+    deps: {
+      alwaysBundle: (id) =>
+        Object.entries(packageJson.dependencies).some(
+          ([name, version]) =>
+            version.startsWith("workspace:") && (id === name || id.startsWith(`${name}/`)),
+        ),
+      neverBundle: Object.entries(packageJson.dependencies)
+        .filter(([, version]) => !version.startsWith("workspace:"))
+        .map(([name]) => name),
+    },
+    plugins: [createStateSchemaInlinePlugin(), createSqliteSchemaAssetsPlugin()],
+    platform: "node",
+    target: "node22",
+    logLevel: "error",
+  });
+  for (const bundle of bundles) {
+    await bundle[Symbol.asyncDispose]();
+  }
+});
 
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await state?.cleanup();
+  state = undefined;
+});
+
+afterAll(() => {
   if (bundleDir) {
     fs.rmSync(bundleDir, { force: true, recursive: true });
   }
-  state = undefined;
-  bundleDir = undefined;
 });
 
 function payloadFor(index: number): string {
@@ -68,35 +109,6 @@ describe("canonical SQLite session repair memory", () => {
         agentId: "main",
         env: state.env,
       }).path,
-    });
-    fs.mkdirSync(path.join(process.cwd(), "node_modules/.cache"), { recursive: true });
-    bundleDir = fs.mkdtempSync(path.join(process.cwd(), "node_modules/.cache/canonical-memory-"));
-    const childPath = path.join(bundleDir, "child.mjs");
-    fs.copyFileSync(
-      path.join(process.cwd(), "src/state/openclaw-agent-schema.sql"),
-      path.join(bundleDir, "openclaw-agent-schema.sql"),
-    );
-    fs.copyFileSync(
-      path.join(process.cwd(), "src/state/openclaw-state-schema.sql"),
-      path.join(bundleDir, "openclaw-state-schema.sql"),
-    );
-    await esbuild({
-      bundle: true,
-      entryPoints: { child: fileURLToPath(canonicalMemoryTestSupportModuleUrl) },
-      format: "esm",
-      // Keep generated source overhead out of the entry-data heap budget;
-      // preserve function/class names used by runtime dispatch and diagnostics.
-      minify: true,
-      keepNames: true,
-      outdir: bundleDir,
-      outExtension: { ".js": ".mjs" },
-      // Preserve lazy runtime imports so unused provider SDKs do not consume the child heap.
-      splitting: true,
-      external: Object.entries(packageJson.dependencies)
-        .filter(([, version]) => !version.startsWith("workspace:"))
-        .map(([name]) => name),
-      platform: "node",
-      target: "node22",
     });
     const runChild = async () => {
       const { stdout } = await execFileAsync(

@@ -89,6 +89,7 @@ export async function withOwnedHarnessGeneration<Registered, Result>(
 }
 
 export const privateHarnessParamCases = [
+  { field: "thinkingExplicit", value: false },
   {
     field: "runtimePluginToolGrant",
     value: { pluginId: "grant-owner", toolNames: ["optional_tool"] },
@@ -99,4 +100,5 @@ export const privateHarnessParamCases = [
   { field: "preparedSessionTarget", value: { target: {}, assertCurrent: () => undefined } },
   { field: "onContextAccountingEvent", value: () => undefined },
   { field: "onCompactionRequestBudget", value: () => undefined },
+  { field: "prepareContinuationRetryCount", value: () => undefined },
 ] as const;

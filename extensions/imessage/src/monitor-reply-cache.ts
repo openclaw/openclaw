@@ -35,7 +35,7 @@ type IMessageReplyCacheEntry = IMessageChatContext & {
   isFromMe?: boolean;
 };
 
-type IMessageReplyCacheStore = PluginStateKeyedStore<IMessageReplyCacheEntry>;
+type IMessageReplyCacheStore = PluginStateKeyedStore<IMessageReplyCacheEntry, 2>;
 type IMessageReplyCacheCounter = { counter: number };
 
 const imessageReplyCacheByMessageId = new Map<string, IMessageReplyCacheEntry>();
@@ -43,14 +43,14 @@ const imessageShortIdToUuid = new Map<string, string>();
 let imessageShortIdCounter = 0;
 
 function openReplyCacheStore(): IMessageReplyCacheStore {
-  return getIMessageRuntime().state.openKeyedStore<IMessageReplyCacheEntry>({
+  return getIMessageRuntime().state.openKeyedStoreV2<IMessageReplyCacheEntry>({
     namespace: IMESSAGE_REPLY_CACHE_NAMESPACE,
     maxEntries: IMESSAGE_REPLY_CACHE_MAX_ENTRIES,
   });
 }
 
-function openReplyCacheCounterStore(): PluginStateKeyedStore<IMessageReplyCacheCounter> {
-  return getIMessageRuntime().state.openKeyedStore<IMessageReplyCacheCounter>({
+function openReplyCacheCounterStore(): PluginStateKeyedStore<IMessageReplyCacheCounter, 2> {
+  return getIMessageRuntime().state.openKeyedStoreV2<IMessageReplyCacheCounter>({
     namespace: IMESSAGE_REPLY_CACHE_COUNTER_NAMESPACE,
     maxEntries: IMESSAGE_REPLY_CACHE_COUNTER_MAX_ENTRIES,
   });
@@ -95,10 +95,7 @@ async function hydrateFromStoreOnce(): Promise<void> {
       const counter = await openReplyCacheCounterStore().lookup(IMESSAGE_REPLY_CACHE_COUNTER_KEY);
       hydrateCounter(counter);
       const entries = await openReplyCacheStore().entries();
-      // A legacy host callback can finish synchronous hydration while this read waits.
-      if (!hydrated) {
-        hydrateRows(entries.map(({ value }) => value));
-      }
+      hydrateRows(entries.map(({ value }) => value));
     } catch (err) {
       reportPersistenceFailure("read", err);
     } finally {
@@ -106,32 +103,6 @@ async function hydrateFromStoreOnce(): Promise<void> {
     }
   })();
   await hydration;
-}
-
-function hydrateFromStoreOnceSync(): void {
-  if (hydrated) {
-    return;
-  }
-  hydrated = true;
-  try {
-    const state = getIMessageRuntime().state;
-    const counter = state
-      .openSyncKeyedStore<IMessageReplyCacheCounter>({
-        namespace: IMESSAGE_REPLY_CACHE_COUNTER_NAMESPACE,
-        maxEntries: IMESSAGE_REPLY_CACHE_COUNTER_MAX_ENTRIES,
-      })
-      .lookup(IMESSAGE_REPLY_CACHE_COUNTER_KEY);
-    hydrateCounter(counter);
-    const entries = state
-      .openSyncKeyedStore<IMessageReplyCacheEntry>({
-        namespace: IMESSAGE_REPLY_CACHE_NAMESPACE,
-        maxEntries: IMESSAGE_REPLY_CACHE_MAX_ENTRIES,
-      })
-      .entries();
-    hydrateRows(entries.map(({ value }) => value));
-  } catch (err) {
-    reportPersistenceFailure("read", err);
-  }
 }
 
 async function persistReplyCacheEntry(entry: IMessageReplyCacheEntry): Promise<void> {
@@ -178,10 +149,10 @@ function buildReplyCacheEntry(
     messageId,
     shortId,
     timestamp: entry.timestamp,
-    ...(typeof entry.chatGuid === "string" ? { chatGuid: entry.chatGuid } : {}),
-    ...(typeof entry.chatIdentifier === "string" ? { chatIdentifier: entry.chatIdentifier } : {}),
-    ...(typeof entry.chatId === "number" ? { chatId: entry.chatId } : {}),
-    ...(typeof entry.isFromMe === "boolean" ? { isFromMe: entry.isFromMe } : {}),
+    ...(entry.chatGuid !== undefined ? { chatGuid: entry.chatGuid } : {}),
+    ...(entry.chatIdentifier !== undefined ? { chatIdentifier: entry.chatIdentifier } : {}),
+    ...(entry.chatId !== undefined ? { chatId: entry.chatId } : {}),
+    ...(entry.isFromMe !== undefined ? { isFromMe: entry.isFromMe } : {}),
   };
 }
 
@@ -434,12 +405,6 @@ type CurrentMessageChatParams = {
   currentMessageId: string | number;
   chatContext: IMessageChatContext;
 };
-
-/** @deprecated Used only by hosts without asynchronous conversation matching. */
-export function isIMessageCurrentMessageInChat(params: CurrentMessageChatParams): boolean {
-  hydrateFromStoreOnceSync();
-  return isCurrentMessageInChat(params);
-}
 
 export async function isIMessageCurrentMessageInChatAsync(
   params: CurrentMessageChatParams,

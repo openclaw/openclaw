@@ -4,10 +4,7 @@ import {
   hasNonTextEmbeddingParts,
   type EmbeddingInput,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import {
-  buildFileEntry,
-  type MemorySource,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import {
@@ -33,6 +30,12 @@ export type MemoryEmbeddingCacheCandidate = {
   source: MemorySource;
 };
 
+export type MemoryCachedEmbeddings = {
+  embeddings: number[][];
+  missing: number[];
+  missingCandidates: MemoryEmbeddingCacheCandidate[];
+};
+
 export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOps {
   protected abstract embedBatchWithRetry(
     inputs: Array<string | EmbeddingInput>,
@@ -47,26 +50,12 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     }
     const database = this.database;
     const assertCurrent = () => {
-      if (this.closed || database.closed || !database.db.isOpen || this.database !== database) {
+      if (this.closed || !database.isOpen || this.database !== database) {
         throw new Error("Memory database owner closed or changed before write admission");
       }
     };
     while (await database.pruneEmbeddingCache(max, assertCurrent)) {
       await yieldToEventLoop();
-    }
-  }
-
-  protected assertEmbeddingCacheGenerationCurrent(
-    generation: MemorySemanticProviderGeneration,
-  ): void {
-    if (
-      this.closed ||
-      this.syncProviderGeneration !== generation ||
-      generation.database.closed ||
-      !generation.database.db.isOpen ||
-      this.publishedDatabase !== generation.database
-    ) {
-      throw new Error("Memory embedding generation changed during cache lookup");
     }
   }
 
@@ -84,10 +73,13 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
               hashes,
             },
           },
-          () => this.assertEmbeddingCacheGenerationCurrent(generation),
+          () => {
+            if (!generation.database.isOpen) {
+              throw new Error("Memory database owner is closed");
+            }
+          },
         )
       : new Map<string, number[]>();
-    this.assertEmbeddingCacheGenerationCurrent(generation);
     // Cache hits and new batches must inhabit the same vector space during a sync.
     for (const [hash, embedding] of cached) {
       if (!isValidMemoryEmbedding(embedding, generation.embeddingDimensions)) {
@@ -109,12 +101,10 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     candidates: MemoryEmbeddingCacheCandidate[],
     generation: MemorySemanticProviderGeneration,
     maxTokens: number,
+    prepared?: MemoryCachedEmbeddings,
   ): Promise<number[][]> {
-    const { embeddings, missing, missingCandidates } = await this.collectCachedEmbeddings(
-      candidates,
-      generation,
-    );
-    this.assertEmbeddingCacheGenerationCurrent(generation);
+    const { embeddings, missing, missingCandidates } =
+      prepared ?? (await this.collectCachedEmbeddings(candidates, generation));
 
     if (missing.length === 0) {
       return embeddings;
@@ -158,24 +148,17 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
         if (
           this.closed ||
           generation.database.closed ||
-          !generation.database.db.isOpen ||
+          !generation.database.isOpen ||
           this.database !== generation.database
         ) {
           throw new Error("Memory database owner closed or changed before write admission");
         }
       };
       // Rebuilds use a shadow index; cache writes retain the captured published owner.
-      await generation.database.mutateEmbeddingCache(
-        mutation,
-        assertCurrent,
-        () => {
-          assertCurrent();
-          return this.canWriteEmbeddingCache(generation) ? generation.databaseRevision : undefined;
-        },
-        () => {
-          generation.cacheWritesInvalidated = true;
-        },
-      );
+      await generation.database.mutateEmbeddingCache(mutation, assertCurrent, () => {
+        assertCurrent();
+        return this.canWriteEmbeddingCache(generation);
+      });
     });
   }
 
@@ -253,31 +236,18 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       if (!this.canWriteEmbeddingCache(generation)) {
         return;
       }
-      const entryValidity = new Map<MemoryIndexEntry, boolean>();
       const accepted: MemoryEmbeddingCacheEntry[] = [];
       for (const [index, candidate] of candidates.entries()) {
-        let valid = entryValidity.get(candidate.entry);
-        if (valid === undefined) {
-          if (candidate.source === "memory") {
-            const current = await (this.memoryFiles?.inspectFile ?? buildFileEntry)(
-              candidate.entry.absPath,
-              this.workspaceDir,
-              this.settings.multimodal,
-            );
-            valid = current?.hash === candidate.entry.hash;
-          } else {
-            const sessionId = candidate.entry.sessionId;
-            valid = Boolean(sessionId);
-          }
-          entryValidity.set(candidate.entry, valid);
+        if (candidate.source === "sessions" && !candidate.entry.sessionId) {
+          continue;
         }
-        if (valid) {
-          accepted.push({
-            hash: candidate.chunk.hash,
-            embedding: embeddings[index] ?? [],
-            ...(candidate.source === "sessions" ? { sessionId: candidate.entry.sessionId } : {}),
-          });
-        }
+        // Changed files may leave unused content-addressed vectors; normal cache eviction
+        // removes them. The publication worker still checks session tombstones.
+        accepted.push({
+          hash: candidate.chunk.hash,
+          embedding: embeddings[index] ?? [],
+          ...(candidate.source === "sessions" ? { sessionId: candidate.entry.sessionId } : {}),
+        });
       }
       if (accepted.length === 0) {
         return;

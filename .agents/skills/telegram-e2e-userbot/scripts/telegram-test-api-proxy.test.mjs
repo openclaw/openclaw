@@ -100,6 +100,177 @@ test("drains every pending Test Server update", async (t) => {
   assert.ok(rows[0].doneAt >= rows[0].at);
 });
 
+function startDrainProxy(t, responses) {
+  let now = 1_000_000;
+  t.mock.method(Date, "now", () => now);
+  const diagnostic = t.mock.method(console, "error", () => {});
+  const offsets = [];
+  const sleeps = [];
+  return startTelegramTestApiProxy({
+    fetchImpl: async (_url, init) => {
+      offsets.push(JSON.parse(await new Response(init.body).text()).offset);
+      const [status, body] = responses[Math.min(offsets.length, responses.length) - 1];
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      now += ms;
+    },
+  }).then((proxy) => {
+    t.after(() => proxy.close());
+    return { proxy, offsets, sleeps, diagnostic };
+  });
+}
+
+test("drain honors Telegram retry_after without logging tokens or descriptions", async (t) => {
+  const { proxy, offsets, sleeps, diagnostic } = await startDrainProxy(t, [
+    [
+      429,
+      {
+        ok: false,
+        error_code: 429,
+        description: "Too Many Requests: synthetic-private bot123:ABC",
+        parameters: { retry_after: 7 },
+      },
+    ],
+    [200, { ok: true, result: [{ update_id: 41 }] }],
+    [200, { ok: true, result: [] }],
+  ]);
+
+  await proxy.drainUpdates("123:ABC");
+
+  assert.deepEqual(offsets, [0, 0, 42]);
+  assert.deepEqual(sleeps, [7_000]);
+  const lines = diagnostic.mock.calls.map((call) => call.arguments[0]);
+  assert.deepEqual(
+    lines.map((line) => JSON.parse(line)),
+    [
+      {
+        event: "telegram_test_api_drain_failure",
+        attempt: 1,
+        status: 429,
+        telegramErrorCode: 429,
+        retryAfterSeconds: 7,
+        retryable: true,
+      },
+    ],
+  );
+  assert.doesNotMatch(lines.join("\n"), /123:ABC|synthetic-private|Too Many/u);
+});
+
+test("drain retries a releasing long-poll conflict with backoff", async (t) => {
+  const { proxy, offsets, sleeps } = await startDrainProxy(t, [
+    [409, { ok: false, error_code: 409, description: "Conflict: terminated by other getUpdates" }],
+    [200, { ok: true, result: [] }],
+  ]);
+
+  await proxy.drainUpdates("123:ABC");
+
+  assert.deepEqual(offsets, [0, 0]);
+  assert.deepEqual(sleeps, [1_000]);
+});
+
+test("drain fails with the last status after its retry budget", async (t) => {
+  const { proxy, offsets, sleeps } = await startDrainProxy(t, [
+    [502, { ok: false, error_code: 502, description: "Bad Gateway" }],
+  ]);
+
+  await assert.rejects(
+    proxy.drainUpdates("123:ABC"),
+    (error) =>
+      /after 15 attempt\(s\); last result HTTP 502, error_code 502 within the 120s retry budget/u.test(
+        error.message,
+      ) && !error.message.includes("123:ABC"),
+  );
+  assert.equal(offsets.length, 15);
+  assert.deepEqual(sleeps.slice(0, 5), [1_000, 2_000, 4_000, 8_000, 10_000]);
+  assert.ok(sleeps.reduce((sum, ms) => sum + ms, 0) < 120_000);
+});
+
+test("drain fails immediately on a non-retryable status", async (t) => {
+  const { proxy, offsets, sleeps } = await startDrainProxy(t, [
+    [401, { ok: false, error_code: 401, description: "Unauthorized" }],
+  ]);
+
+  await assert.rejects(
+    proxy.drainUpdates("123:ABC"),
+    /HTTP 401, error_code 401 \(not retryable\)/u,
+  );
+  assert.equal(offsets.length, 1);
+  assert.deepEqual(sleeps, []);
+});
+
+test("proxy close cancels a pending retry_after wait", async (t) => {
+  let waiting;
+  const diagnosed = new Promise((resolve) => {
+    waiting = resolve;
+  });
+  t.mock.method(console, "error", () => waiting());
+  let upstreamRequests = 0;
+  // Default sleep: a 60 s retry_after must not outlive teardown or keep the process alive.
+  const proxy = await startTelegramTestApiProxy({
+    fetchImpl: async () => {
+      upstreamRequests += 1;
+      return new Response('{"ok":false,"error_code":429,"parameters":{"retry_after":60}}', {
+        status: 429,
+      });
+    },
+  });
+  t.after(() => proxy.close());
+
+  const drained = proxy.drainUpdates("123:ABC");
+  await diagnosed;
+  await proxy.close();
+
+  await assert.rejects(drained, /Telegram Test Server proxy closed/u);
+  assert.equal(upstreamRequests, 1);
+});
+
+test("drain abandons a stalled attempt at the budget deadline", async (t) => {
+  let now = 1_000_000;
+  t.mock.method(Date, "now", () => now);
+  const diagnostic = t.mock.method(console, "error", () => {});
+  let upstreamRequests = 0;
+  const proxy = await startTelegramTestApiProxy({
+    fetchImpl: async (_url, init) => {
+      upstreamRequests += 1;
+      if (upstreamRequests === 1) {
+        return new Response('{"ok":false,"error_code":429,"parameters":{"retry_after":119}}', {
+          status: 429,
+        });
+      }
+      // The second attempt stalls until the drain abandons it. With 1 ms left, the drain may
+      // abort before the proxy forwards it, so only the drain's own outcome is asserted.
+      return await new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+      });
+    },
+    // The wait overshoots to leave 1 ms of budget for the stalled attempt.
+    sleep: async (ms) => {
+      now += ms + 999;
+    },
+  });
+  t.after(() => proxy.close());
+
+  await assert.rejects(
+    proxy.drainUpdates("123:ABC"),
+    /after 2 attempt\(s\); last result no HTTP response \(TIMEOUT\) within the 120s retry budget/u,
+  );
+  assert.deepEqual(JSON.parse(diagnostic.mock.calls.at(-1).arguments[0]), {
+    event: "telegram_test_api_drain_failure",
+    attempt: 2,
+    status: "none",
+    telegramErrorCode: "none",
+    retryAfterSeconds: "none",
+    retryable: true,
+    errorClass: "Error",
+    errorCode: "TIMEOUT",
+  });
+});
+
 test("logs only nonempty getUpdates counts and preserves response bytes", async (t) => {
   let payload;
   const proxy = await startTelegramTestApiProxy({
@@ -435,8 +606,10 @@ test("reports upstream failures without exposing exception details or bot tokens
   assert.doesNotMatch(line, /123:ABC|synthetic-private/u);
 });
 
-test("proxy close aborts the in-flight Test Server request", async (t) => {
-  t.mock.method(console, "error", () => {});
+test("getUpdates preserves the caller offset after upstream failure and closes without failure noise", async (t) => {
+  const diagnostic = t.mock.method(console, "error", () => {});
+  const offsets = [];
+  const cause = Object.assign(new Error("synthetic-private /bot123:ABC"), { code: "ECONNRESET" });
   let upstreamStarted;
   let upstreamAborted = false;
   const started = new Promise((resolve) => {
@@ -444,6 +617,15 @@ test("proxy close aborts the in-flight Test Server request", async (t) => {
   });
   const proxy = await startTelegramTestApiProxy({
     fetchImpl: async (_url, init) => {
+      offsets.push(JSON.parse(await new Response(init.body).text()).offset);
+      if (offsets.length === 1) {
+        throw new TypeError("synthetic-private upstream failure", { cause });
+      }
+      if (offsets.length === 2) {
+        return new Response('{"ok":true,"result":[{"update_id":123}]}', {
+          headers: { "content-type": "application/json" },
+        });
+      }
       upstreamStarted();
       return await new Promise((_resolve, reject) => {
         init.signal.addEventListener(
@@ -457,14 +639,38 @@ test("proxy close aborts the in-flight Test Server request", async (t) => {
       });
     },
   });
-  const request = fetch(`${proxy.apiRoot}/bot123:ABC/getUpdates`, {
-    method: "POST",
-    body: "{}",
-  }).catch(() => undefined);
+  t.after(() => proxy.close());
+  const poll = (offset) =>
+    fetch(`${proxy.apiRoot}/bot123:ABC/getUpdates`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ offset, timeout: 30 }),
+    });
+  const failed = await poll(123);
+  assert.equal(failed.status, 502);
+  assert.deepEqual(await failed.json(), {
+    ok: false,
+    description: "Telegram Test Server proxy failed.",
+  });
+  const recovered = await poll(123);
+  assert.equal(recovered.status, 200);
+  assert.deepEqual(await recovered.json(), { ok: true, result: [{ update_id: 123 }] });
+  const request = poll(124).catch(() => undefined);
   await started;
   await proxy.close();
   await request;
+  assert.deepEqual(offsets, [123, 123, 124]);
   assert.equal(upstreamAborted, true);
+  assert.equal(diagnostic.mock.calls.length, 1);
+  const line = diagnostic.mock.calls[0].arguments[0];
+  assert.deepEqual(JSON.parse(line), {
+    event: "telegram_test_api_proxy_failure",
+    phase: "upstream-fetch",
+    method: "getUpdates",
+    errorClass: "TypeError",
+    errorCode: "ECONNRESET",
+  });
+  assert.doesNotMatch(line, /123:ABC|synthetic-private/u);
 });
 
 test("lease revocation blocks every later Bot API request", async (t) => {

@@ -78,9 +78,7 @@ export async function runMatrixQaE2eeStateAfterMissingEncryptionScenario(
       scenarioId: "matrix-e2ee-state-after-missing-encryption",
       tokenPrefix: "MATRIX_QA_E2EE_STATE_AFTER",
     });
-    const stateAfterHits = faultRule
-      .hits()
-      .filter((hit) => hit.ruleId === MATRIX_QA_SYNC_STATE_AFTER_FAULT_RULE_ID);
+    const stateAfterHits = faultRule.hits();
     if (stateAfterHits.length > 0) {
       throw new Error(
         `Matrix E2EE gateway still sent ${MATRIX_QA_SYNC_STATE_AFTER_PARAM}=true on /sync`,

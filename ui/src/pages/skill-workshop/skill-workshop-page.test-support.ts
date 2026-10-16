@@ -3,12 +3,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 
-export type SkillWorkshopPageTestElement = HTMLElement & {
-  context: ApplicationContext;
-  updateComplete: Promise<boolean>;
-  requestUpdate(): void;
-};
-
 export function createRuntimeConfigStub(options?: {
   sourceConfig?: Record<string, unknown>;
   patch?: ReturnType<typeof vi.fn>;
@@ -34,6 +28,8 @@ export function createContext(
     methods?: string[];
     scopes?: string[];
     runtimeConfig?: ReturnType<typeof createRuntimeConfigStub>;
+    /** Route query, e.g. "?skill=deploy" from a chat notice link. */
+    search?: string;
   },
 ): ApplicationContext {
   const client = { request } as unknown as GatewayBrowserClient;
@@ -49,6 +45,8 @@ export function createContext(
     lastErrorCode: null,
   };
   const subscribe = () => () => undefined;
+  const selectionListeners = new Set<() => void>();
+  const selectionState = { selectedId: "research" };
   return {
     basePath: "",
     gateway: { snapshot, subscribe },
@@ -57,7 +55,19 @@ export function createContext(
       subscribe,
     },
     agents: { state: { agentsList: null }, subscribe },
-    agentSelection: { state: { selectedId: "research" }, subscribe },
+    agentSelection: {
+      state: selectionState,
+      set: vi.fn((selectedId: string) => {
+        selectionState.selectedId = selectedId;
+        for (const listener of selectionListeners) {
+          listener();
+        }
+      }),
+      subscribe: (listener: () => void) => {
+        selectionListeners.add(listener);
+        return () => selectionListeners.delete(listener);
+      },
+    },
     agentIdentity: {
       get: () => ({ agentId: "research", name: "Research" }),
       subscribe,
@@ -66,15 +76,10 @@ export function createContext(
     runtimeConfig: options?.runtimeConfig ?? createRuntimeConfigStub(),
     chatSubmissions: { retain: vi.fn() },
     navigate: vi.fn(),
-  } as unknown as ApplicationContext;
-}
-
-/** Simulates the operator connecting the same application context to another Gateway. */
-export function reconnectGateway(context: ApplicationContext, request: ReturnType<typeof vi.fn>) {
-  Object.assign(context.gateway, {
-    snapshot: {
-      ...context.gateway.snapshot,
-      client: createContext(request).gateway.snapshot.client,
+    router: {
+      getState: () => ({
+        location: { pathname: "/skills/workshop", search: options?.search ?? "" },
+      }),
     },
-  });
+  } as unknown as ApplicationContext;
 }

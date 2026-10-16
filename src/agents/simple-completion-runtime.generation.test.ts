@@ -24,17 +24,24 @@ vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: mocks.acquireRuntimeLease,
 }));
 
+// mock-isolation: generation ownership uses an empty auth store without host credential discovery.
+vi.mock("./auth-profiles/store-runtime.js", () => ({
+  ensureAuthProfileStoreAsync: async () => ({ version: 1, profiles: {} }),
+}));
+
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
+// mock-isolation: a private generation store records which generation each step reads.
 vi.mock("../plugins/runtime/generation-scope.js", async () => {
   const { AsyncLocalStorage } = await import("node:async_hooks");
   const generation = new AsyncLocalStorage<string>();
   mocks.readGeneration = () => generation.getStore() ?? mocks.publishedGeneration;
   return {
     getPluginRuntimeGenerationRegistry: () => undefined,
+    runOutsidePluginRuntimeGenerationScope: (run: () => unknown) => generation.exit(run),
     withPluginRuntimeGenerationScope: (snapshot: { testGeneration?: string }, run: () => unknown) =>
       generation.run(snapshot.testGeneration ?? "unknown", run),
   };

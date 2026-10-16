@@ -30,7 +30,7 @@ it.each(["committed", "failed"] as const)(
         sessionId: "terminal-compact",
         storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       };
-      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
       for (const content of ["First question", "Second question", "Third question"]) {
         await appendTranscriptMessage(scope, {
           cwd: state.workspaceDir,
@@ -107,7 +107,7 @@ it.each(["compact", "rewind"] as const)(
         sessionId: "live-settlement",
         storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       };
-      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
       for (const content of ["First question", "Second question", "Third question"]) {
         await appendTranscriptMessage(scope, {
           cwd: state.workspaceDir,

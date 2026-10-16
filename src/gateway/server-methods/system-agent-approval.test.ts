@@ -9,6 +9,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createSystemAgentTool } from "../../agents/tools/system-agent-tool.js";
+import { runConfigSet as runConfigSetCommand } from "../../cli/config-cli.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -41,6 +42,8 @@ import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const setupInferenceMocks = vi.hoisted(() => ({ resolvePersistentApplyInference: vi.fn() }));
+// mock-isolation: Exercise delegated approval without loading the machine's config CLI.
+vi.mock("../../cli/config-cli.js", () => ({ runConfigSet: vi.fn() }));
 const transcriptStoreMocks = vi.hoisted(() => ({
   appendReset: vi.fn(),
   appendTurn: vi.fn(),
@@ -116,7 +119,7 @@ describe("Full Access delegated chat", () => {
     setupInferenceMocks.resolvePersistentApplyInference.mockResolvedValue(
       fixture.binding.execution,
     );
-    const runConfigSet = vi.fn(async () => {});
+    vi.mocked(runConfigSetCommand).mockReset().mockResolvedValue(undefined);
     let proposed = false;
     const engine = new SystemAgentChatEngine({
       operatorApprovalOnly: true,
@@ -135,7 +138,6 @@ describe("Full Access delegated chat", () => {
             sourceConfig: verifiedConfig,
             issues: [],
           }) as never,
-        runConfigSet,
       },
       runAgentTurn: async (params) => {
         if (source === "typed" || (proposed && source !== "repair")) {
@@ -235,7 +237,7 @@ describe("Full Access delegated chat", () => {
       sessions,
       delegatedSession,
       context,
-      runConfigSet,
+      runConfigSet: vi.mocked(runConfigSetCommand),
       broadcast,
       callChat,
       requested,
@@ -372,6 +374,8 @@ describe("Full Access delegated chat", () => {
         value: "18789",
         cliOptions: {},
         beforePersistentApply: expect.any(Function),
+        runtime: expect.objectContaining({ log: expect.any(Function) }),
+        throwOnError: false,
       });
       expect(engine.getPendingOperatorProposal()).toBeNull();
     } finally {
@@ -600,6 +604,31 @@ describe("Full Access delegated chat", () => {
                   ? "failed"
                   : "cancelled";
         expect.soft(result.payload).toMatchObject({ reply: expect.stringContaining(expected) });
+        if (outcome === "expired") {
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("expired without a decision"),
+          });
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("approve it in the Control UI or OpenClaw apps"),
+          });
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("Retrying alone does not approve the change"),
+          });
+        } else if (outcome === "apply-failed" || outcome === "afterDecision-failed") {
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("application status is unconfirmed"),
+          });
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("before retrying"),
+          });
+        } else if (outcome !== "allow" && outcome !== "deny") {
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("approval request is no longer active"),
+          });
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("No change was made"),
+          });
+        }
         expect.soft(result.payload).not.toHaveProperty("needsApproval");
         expect.soft(result.payload).not.toHaveProperty("proposalId");
         await vi.waitFor(() => expect(engine.getPendingOperatorProposal()).toBeNull());

@@ -31,7 +31,7 @@ const runtime = vi.hoisted(() => ({
   resolveSessionStorePathCore: vi.fn(() => "/tmp/openclaw-sessions.json"),
   resolveSessionKeyFromResolveParams: vi.fn(),
   resolveSessionAgentId: vi.fn(() => "main"),
-  loadSessionEntry: vi.fn(() => ({
+  loadGatewaySessionEntryReadOnlyInWorker: vi.fn(async () => ({
     cfg: {},
     storePath: "/tmp/openclaw-sessions.json",
     entry: { sessionId: "sess-main" },
@@ -42,7 +42,9 @@ const runtime = vi.hoisted(() => ({
     messages: [] as unknown[],
     pagination: { offset: 0, totalMessages: 0, rawPageMessages: 0 },
   })),
-  resolveTranscriptSessionKeyBySessionId: vi.fn(() => "agent:main:main"),
+  resolveSessionKeyBySessionIdAsync: vi.fn(
+    async (): Promise<string | undefined> => "agent:main:main",
+  ),
   resolveEffectiveChatHistoryMaxChars: vi.fn(() => 100_000),
   getMaxChatHistoryMessagesBytes: vi.fn(() => 6 * 1024 * 1024),
   listProjectedSessions: vi.fn(
@@ -84,8 +86,9 @@ describe("embedded gateway stub", () => {
     runtime.getRuntimeConfig.mockClear();
     runtime.resolveSessionKeyFromResolveParams.mockReset();
     runtime.readChatHistoryPage.mockClear();
-    runtime.resolveTranscriptSessionKeyBySessionId.mockClear();
-    runtime.loadSessionEntry.mockClear();
+    runtime.resolveSessionKeyBySessionIdAsync.mockReset();
+    runtime.resolveSessionKeyBySessionIdAsync.mockResolvedValue("agent:main:main");
+    runtime.loadGatewaySessionEntryReadOnlyInWorker.mockClear();
     runtime.resolveSessionAgentId.mockClear();
     runtime.resolveSessionStoreKey.mockClear();
     runtime.resolveStoredSessionKeyForAgentStore.mockClear();
@@ -346,7 +349,11 @@ describe("embedded gateway stub", () => {
       params: { sessionKey, ...(agentId ? { agentId } : {}) },
     });
 
-    expect(runtime.loadSessionEntry).toHaveBeenCalledWith(sessionKey, { agentId: "work" });
+    expect(runtime.loadGatewaySessionEntryReadOnlyInWorker).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      key: sessionKey,
+      agentId: "work",
+    });
     expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
       sessionKey,
       config: {},
@@ -471,6 +478,24 @@ describe("embedded gateway stub", () => {
       }),
     );
   });
+
+  it.each([undefined, "agent:main:other"])(
+    "rejects a retained transcript with a different or missing owner (%s)",
+    async (transcriptSessionKey) => {
+      runtime.resolveSessionKeyBySessionIdAsync.mockResolvedValueOnce(transcriptSessionKey);
+      await expect(
+        createEmbeddedCallGateway()({
+          method: "chat.history",
+          params: {
+            sessionKey: "agent:main:main",
+            sessionId: "retained-session",
+            messageId: "message-3",
+          },
+        }),
+      ).rejects.toThrow("sessionId does not belong to sessionKey");
+      expect(runtime.readChatHistoryPage).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { cursor: "delta:current", message: "delta cursors require a running gateway" },

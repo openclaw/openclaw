@@ -5,6 +5,7 @@ import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
 } from "@openclaw/ai/internal/openai";
+import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import {
   filterCodeModePayloadTools,
   isCodeModeModelVisibleToolName,
@@ -274,7 +275,16 @@ export function createOpenAIResponsesContextManagementWrapper(
       ...(replayResponsesItemIds === undefined ? {} : { replayResponsesItemIds }),
     };
     return streamWithPayloadPatch(underlying, model, context, nextOptions, (payload) => {
-      applyOpenAIResponsesPayloadPolicy(payload, policy);
+      const compactThreshold =
+        policy.useServerCompaction && payload.service_tier !== undefined
+          ? resolveOpenAIResponsesServerCompactionPlan(model, {
+              ...extraParams,
+              serviceTier: payload.service_tier,
+              fastMode: undefined,
+              fast_mode: undefined,
+            }).threshold
+          : policy.compactThreshold;
+      applyOpenAIResponsesPayloadPolicy(payload, { ...policy, compactThreshold });
     });
   };
 }

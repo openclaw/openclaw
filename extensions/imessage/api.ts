@@ -7,7 +7,10 @@ export {
   type ResolvedIMessageAccount,
   resolveIMessageAccount,
 } from "./src/accounts.js";
-export { createIMessageConversationBindingManager } from "./src/conversation-bindings.js";
+export {
+  createIMessageConversationBindingManager,
+  createIMessageConversationBindingManagerV2,
+} from "./src/conversation-bindings.js";
 export {
   matchIMessageAcpConversation,
   normalizeIMessageAcpConversationId,

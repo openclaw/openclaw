@@ -1,0 +1,125 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { clearCommandLane, enqueueCommandInLane } from "../../process/command-queue.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
+import { getReplyFromConfig } from "./get-reply.js";
+import { finalizeInboundContext } from "./inbound-context.js";
+
+const preparation = vi.hoisted(() => ({
+  hold: undefined as (() => Promise<void>) | undefined,
+}));
+
+// Delay the real runtime import, retaining the production admission and queue owners.
+vi.mock("./get-reply-run-helpers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./get-reply-run-helpers.js")>();
+  return {
+    ...actual,
+    loadEmbeddedAgentRuntime: async () => {
+      await preparation.hold?.();
+      return actual.loadEmbeddedAgentRuntime();
+    },
+  };
+});
+
+// Provider execution is external I/O; cancellation must prevent reaching it.
+vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/embedded-agent.js")>()),
+  runEmbeddedAgent: vi.fn(async () => ({
+    payloads: [{ text: "Synthetic provider result" }],
+    meta: { durationMs: 1 },
+  })),
+}));
+
+let state: OpenClawTestState | undefined;
+afterEach(async () => {
+  preparation.hold = undefined;
+  await state?.cleanup();
+  clearRuntimeConfigSnapshot();
+  vi.clearAllMocks();
+});
+
+it("preserves a queued successor when interrupt input is canceled during runtime preparation", async () => {
+  state = await createOpenClawTestState({
+    label: "cancelled-interrupt",
+    env: { OPENCLAW_TEST_FAST: "0" },
+  });
+  const cfg = withFullRuntimeReplyConfig({
+    agents: {
+      defaults: {
+        workspace: state.workspaceDir,
+        skipBootstrap: true,
+        model: { primary: "mock-openai/gpt-4o" },
+        models: { "mock-openai/gpt-4o": { agentRuntime: { id: "openclaw" } } },
+      },
+    },
+    plugins: { enabled: false },
+    messages: { queue: { mode: "interrupt" } },
+  });
+  await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
+
+  const sessionKey = "agent:main:dashboard:cancelled-interrupt";
+  const lane = resolveEmbeddedSessionLane(sessionKey);
+  const enteredPreparation = createDeferred();
+  const releasePreparation = createDeferred();
+  const enteredLane = createDeferred();
+  const releaseLane = createDeferred();
+  const controller = new AbortController();
+  preparation.hold = async () => {
+    enteredPreparation.resolve();
+    await releasePreparation.promise;
+  };
+  const canceledReply = getReplyFromConfig(
+    finalizeInboundContext({
+      Provider: "webchat",
+      Surface: "webchat",
+      ChatType: "direct",
+      SessionKey: sessionKey,
+      Body: "Replace the earlier request",
+    }),
+    { abortSignal: controller.signal },
+    cfg,
+  ).catch((error: unknown) => error);
+
+  let blocker: Promise<void> | undefined;
+  let successor: Promise<PromiseSettledResult<string>[]> | undefined;
+  try {
+    await Promise.race([
+      enteredPreparation.promise,
+      canceledReply.then((result) => {
+        throw new Error("Reply ended before reaching runtime preparation", { cause: result });
+      }),
+    ]);
+    controller.abort(new Error("Input canceled by the user"));
+    blocker = enqueueCommandInLane(lane, async () => {
+      enteredLane.resolve();
+      await releaseLane.promise;
+    });
+    await enteredLane.promise;
+    successor = Promise.allSettled([
+      enqueueCommandInLane(lane, async () => "successor completed", {
+        sessionTarget: { agentId: "main", sessionKey, sessionId: "successor-session" },
+      }),
+    ]);
+
+    releasePreparation.resolve();
+    await canceledReply;
+    releaseLane.resolve();
+    await blocker;
+    expect(await successor).toEqual([{ status: "fulfilled", value: "successor completed" }]);
+  } finally {
+    releasePreparation.resolve();
+    releaseLane.resolve();
+    clearCommandLane(lane);
+    await Promise.allSettled([canceledReply, blocker, successor]);
+  }
+});

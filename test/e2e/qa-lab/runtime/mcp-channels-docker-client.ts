@@ -514,6 +514,26 @@ async function main() {
         2,
       ) + "\n",
     );
+  } catch (error) {
+    process.stderr.write(
+      `[mcp-channels] failure ${JSON.stringify({
+        error: formatUnknownError(error),
+        mcpConnected: Boolean(mcpHandle),
+        gatewayEvents: gateway.events.slice(-10).map((entry) => ({
+          event: entry.event,
+          sessionKey: entry.payload.sessionKey,
+        })),
+        channelNotifications: (mcpHandle?.rawMessages ?? [])
+          .map((entry) => ClaudeChannelNotificationSchema.safeParse(entry))
+          .flatMap((entry) => (entry.success ? [entry.data.params] : []))
+          .slice(-5),
+        permissionNotifications: (mcpHandle?.rawMessages ?? [])
+          .map((entry) => ClaudePermissionNotificationSchema.safeParse(entry))
+          .flatMap((entry) => (entry.success ? [entry.data.params] : []))
+          .slice(-5),
+      })}\n`,
+    );
+    throw error;
   } finally {
     const closeTasks: Array<Promise<unknown>> = [gateway.close()];
     if (nonOwnerGateway) {

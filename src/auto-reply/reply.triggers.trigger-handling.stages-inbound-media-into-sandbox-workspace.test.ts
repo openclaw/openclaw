@@ -8,6 +8,7 @@ import { MEDIA_MAX_BYTES } from "../media/store.js";
 import { SANDBOX_MEDIA_MAX_BYTES, stageSandboxMedia } from "./reply/stage-sandbox-media.js";
 import {
   createSandboxMediaContexts,
+  createSandboxWorkspacePreparation,
   createSandboxMediaStageConfig,
   withSandboxMediaTempHome,
 } from "./stage-sandbox-media.test-harness.js";
@@ -23,7 +24,12 @@ const mediaRootMocks = vi.hoisted(() => ({
   resolveChannelRemoteInboundAttachmentRoots: vi.fn(),
 }));
 
-vi.mock("../agents/sandbox.js", () => sandboxMocks);
+// mock-isolation: File-policy cases supply fixture workspaces and opt into real preparation explicitly.
+vi.mock("../agents/sandbox.js", () => ({
+  ...sandboxMocks,
+  prepareSandboxWorkspaceForSession: async (...args: unknown[]) =>
+    createSandboxWorkspacePreparation(await sandboxMocks.ensureSandboxWorkspaceForSession(...args)),
+}));
 vi.mock("../agents/sandbox-paths.js", () => ({
   assertSandboxPath: sandboxMocks.assertSandboxPath,
 }));

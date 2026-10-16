@@ -16,18 +16,16 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { registerActiveDebugProxyCapture } from "../proxy-capture/runtime-cleanup.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
 import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 
-const mocks = vi.hoisted(() => ({
-  closePluginStateDatabaseAsync: vi.fn(async () => {}),
-}));
-vi.mock("../plugin-state/plugin-state-store.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugin-state/plugin-state-store.js")>()),
-  closePluginStateDatabaseAsync: mocks.closePluginStateDatabaseAsync,
-}));
+const sharedStateLifecycle = resolveGlobalMap<string, boolean>(
+  Symbol("gateway-close-cleanup-shared-state"),
+  "shared-state",
+);
 
 const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory({
   disposeAllBundleLspRuntimes: async () => {},
@@ -38,7 +36,7 @@ const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory({
 });
 
 beforeEach(() => {
-  mocks.closePluginStateDatabaseAsync.mockClear();
+  sharedStateLifecycle.set("open", true);
 });
 
 afterEach(() => {
@@ -46,7 +44,6 @@ afterEach(() => {
 });
 
 it("finalizes capture after media drains even when stopping media cleanup fails", async () => {
-  mocks.closePluginStateDatabaseAsync.mockClear();
   const mediaCleanup = await import("./server-media-cleanup-lifecycle.js");
   const releaseMedia = createDeferredCore();
   const drainEntered = createDeferredCore();
@@ -86,14 +83,14 @@ it("finalizes capture after media drains even when stopping media cleanup fails"
     await Promise.race([drainEntered.promise, captureEntered.promise, closing]);
     expect(finalizeCapture).not.toHaveBeenCalled();
     expect(closed).toBe(false);
-    expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+    expect(sharedStateLifecycle.has("open")).toBe(true);
     releaseMedia.resolve();
     await Promise.race([captureEntered.promise, closing]);
     expect(finalizeCapture).toHaveBeenCalledOnce();
     expect(closed).toBe(false);
     releaseCapture.resolve();
     await expect(closing).resolves.toMatchObject({ warnings: ["media-cleanup"] });
-    expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+    expect(sharedStateLifecycle.size).toBe(0);
   } finally {
     releaseMedia.resolve();
     releaseCapture.resolve();
@@ -119,7 +116,7 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
     void trackAsyncWork(async () => {
       entered.resolve();
       await release.promise;
-      expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+      expect(sharedStateLifecycle.has("open")).toBe(true);
       completed();
     });
   });
@@ -147,12 +144,12 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
   try {
     await Promise.race([entered.promise, closing]);
     expect(cleanup).toHaveBeenCalledOnce();
-    expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+    expect(sharedStateLifecycle.has("open")).toBe(true);
     release.resolve();
     await expect(closing).resolves.toMatchObject({ warnings: [] });
     expect(instance.lifecycle.signal.aborted).toBe(true);
     expect(completed).toHaveBeenCalledOnce();
-    expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
+    expect(sharedStateLifecycle.size).toBe(0);
   } finally {
     release.resolve();
     await closing.catch(() => {});
@@ -160,7 +157,6 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
 });
 
 it("joins detached request attachment cleanup before shared state closes", async () => {
-  mocks.closePluginStateDatabaseAsync.mockClear();
   const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
   const attachments = await import("./chat-attachments.js");
   const mediaStore = await import("../media/store.js");
@@ -216,7 +212,7 @@ it("joins detached request attachment cleanup before shared state closes", async
       // The empty owner resolves in this microtask; a retained deletion cannot.
       await Promise.resolve();
       expect(drained).toBe(false);
-      expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+      expect(sharedStateLifecycle.has("open")).toBe(true);
       expect(await fs.readFile(uploaded.path, "utf8")).toBe("synthetic request attachment");
     } finally {
       releaseDeletion.resolve();
@@ -227,6 +223,6 @@ it("joins detached request attachment cleanup before shared state closes", async
       deleteSpy.mockRestore();
     }
     await expect(fs.stat(uploaded.path)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
+    expect(sharedStateLifecycle.size).toBe(0);
   });
 });

@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
@@ -54,7 +55,7 @@ describe("Doctor historical row repair", () => {
     initial
       .prepare("INSERT INTO task_delivery_state (task_id, requester_origin_json) VALUES (?, ?)")
       .run("missing-task", '{"channel":"synthetic"}');
-    removePreparedWorkerOwnershipColumns(initial);
+    removePreparedWorkerOwnershipColumns(requireNativeSqliteDatabase(initial));
     initial.exec("PRAGMA user_version = 16; UPDATE schema_meta SET schema_version = 16;");
     closeOpenClawStateDatabaseForTest();
 

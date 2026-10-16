@@ -2,7 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
+import { readAcpSessionMetaForEntryAsync } from "../../acp/runtime/session-meta-readonly.js";
 import { isSessionFileEntry } from "../../agents/sessions/session-file-parser.js";
 import {
   migrateSessionEntries,
@@ -38,15 +38,16 @@ interface SessionData {
 const BACKEND_DELEGATED_WARNING =
   "This session was handled by a backend runtime (e.g. CLI/ACP). Assistant replies, tool calls, and usage data are stored in the backend transcript and are not included in this export.";
 
-function hasPersistedAcpSession(params: {
+async function hasPersistedAcpSession(params: {
+  cfg: HandleCommandsParams["cfg"];
   sessionKey: string;
   entry: StoredSessionEntry;
-}): boolean {
+}): Promise<boolean> {
   if (params.entry.acp) {
     return true;
   }
   try {
-    return Boolean(readAcpSessionMetaForEntry(params));
+    return Boolean(await readAcpSessionMetaForEntryAsync(params));
   } catch {
     return false;
   }
@@ -110,55 +111,10 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
     loadTemplate(path.join("vendor", "highlight.min.js")),
   ]);
 
-  const themeVars = `
-    --cyan: #00d7ff;
-    --blue: #5f87ff;
-    --green: #b5bd68;
-    --red: #cc6666;
-    --yellow: #ffff00;
-    --gray: #808080;
-    --dimGray: #666666;
-    --darkGray: #505050;
-    --accent: #8abeb7;
-    --selectedBg: #3a3a4a;
-    --userMsgBg: #343541;
-    --toolPendingBg: #282832;
-    --toolSuccessBg: #283228;
-    --toolErrorBg: #3c2828;
-    --customMsgBg: #2d2838;
-    --text: #e0e0e0;
-    --dim: #666666;
-    --muted: #808080;
-    --border: #5f87ff;
-    --borderAccent: #00d7ff;
-    --borderMuted: #505050;
-    --success: #b5bd68;
-    --error: #cc6666;
-    --warning: #ffff00;
-    --thinkingText: #808080;
-    --userMessageBg: #343541;
-    --userMessageText: #e0e0e0;
-    --customMessageBg: #2d2838;
-    --customMessageText: #e0e0e0;
-    --customMessageLabel: #9575cd;
-    --toolTitle: #e0e0e0;
-    --toolOutput: #808080;
-    --mdHeading: #f0c674;
-    --mdLink: #81a2be;
-    --mdLinkUrl: #666666;
-    --mdCode: #8abeb7;
-    --mdCodeBlock: #b5bd68;
-  `;
   const sessionDataBase64 = Buffer.from(JSON.stringify(sessionData)).toString("base64");
 
-  const css = templateCss
-    .replace("/* {{THEME_VARS}} */", themeVars.trim())
-    .replace("/* {{BODY_BG_DECL}} */", "--body-bg: #1e1e28;")
-    .replace("/* {{CONTAINER_BG_DECL}} */", "--container-bg: #282832;")
-    .replace("/* {{INFO_BG_DECL}} */", "--info-bg: #343541;");
-
   const replacements: Array<[string, string]> = [
-    ["CSS", css],
+    ["CSS", templateCss],
     ["SESSION_DATA", sessionDataBase64],
     ["MARKED_JS", markedJs],
     ["HIGHLIGHT_JS", hljsJs],
@@ -236,7 +192,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   if (args.error) {
     return { text: args.error };
   }
-  const sessionTarget = resolveExportCommandSessionTarget(params);
+  const sessionTarget = await resolveExportCommandSessionTarget(params);
   if ("text" in sessionTarget) {
     return sessionTarget;
   }
@@ -256,7 +212,8 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     sessionEntry: entry,
   });
 
-  const hasStoredAcpSession = hasPersistedAcpSession({
+  const hasStoredAcpSession = await hasPersistedAcpSession({
+    cfg: params.cfg,
     sessionKey: params.sessionKey,
     entry,
   });

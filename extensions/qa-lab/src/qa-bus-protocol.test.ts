@@ -40,7 +40,7 @@ describe("QA Lab package bus protocol", () => {
     },
   );
 
-  it("matches canonical bounded redaction", () => {
+  it("matches canonical bounded normalization", () => {
     const toolCalls = [
       null,
       { name: 123 },

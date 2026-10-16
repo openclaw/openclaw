@@ -9,7 +9,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../sessions/session-capability.test-support.ts";
-import "./session-progress.ts";
+import "./session-progress.tsx";
 
 function createContext() {
   const { gateway } = createGatewayHarness(
@@ -80,9 +80,7 @@ describe("Session progress widget subscriptions", () => {
 
       element.session = { sessionKey: `agent:main:queued-${connections}` };
       const update = element.updateComplete;
-      expect(element.isUpdatePending).toBe(true);
       element.remove();
-      expect(owner.active()).toBe(0);
       await update;
       expect(element.isConnected).toBe(false);
       expect(owner.active()).toBe(0);

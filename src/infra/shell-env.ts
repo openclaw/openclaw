@@ -10,6 +10,7 @@ import {
   parseStrictNonNegativeInteger,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { killProcessTree } from "../process/kill-tree.js";
 import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
@@ -126,7 +127,7 @@ function createLoginShellExecSpec(params: LoginShellExecParams) {
 function execLoginShellEnvZeroAsync(params: LoginShellExecParams): Promise<Buffer> {
   const { shell, args, options } = createLoginShellExecSpec(params);
   return new Promise((resolve, reject) => {
-    const deadline = options.timeout > 0 ? performance.now() + options.timeout : undefined;
+    let exited = false;
     let outputTimeout: ReturnType<typeof setTimeout> | undefined;
     // execFile discards stdio and detached. spawn preserves the sync probe's terminal isolation.
     const child = spawn(shell, args, options);
@@ -159,19 +160,22 @@ function execLoginShellEnvZeroAsync(params: LoginShellExecParams): Promise<Buffe
       discardOutput();
       reject(error);
     });
+    // A spawn timeout only sends SIGTERM; startup may ignore it and never emit exit.
+    // Keep the deadline owned here until the shell and its output have settled.
+    if (options.timeout > 0) {
+      outputTimeout = setTimeout(() => {
+        reject(new Error("Login-shell environment check timed out"));
+        discardOutput();
+        if (!exited && child.pid !== undefined) {
+          killProcessTree(child.pid, { detached: true, force: true });
+        }
+      }, options.timeout);
+    }
     child.once("exit", () => {
+      exited = true;
       // A timed-out shell's descendants must not hold its output pipes open.
       if (child.killed) {
         discardOutput();
-      } else if (deadline !== undefined) {
-        // spawn clears its timeout on exit, but descendants can retain the output pipes.
-        outputTimeout = setTimeout(
-          () => {
-            reject(new Error("Login-shell environment check timed out"));
-            discardOutput();
-          },
-          Math.max(0, deadline - performance.now()),
-        );
       }
     });
     child.once("close", (code, signal) => {

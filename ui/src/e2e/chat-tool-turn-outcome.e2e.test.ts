@@ -210,7 +210,7 @@ suite.define(() => {
         ),
       ).toEqual([]);
 
-      const modeGroup = page.locator("wa-tab-group.chat-tool-card__modes");
+      const modeGroup = page.locator(".chat-tool-card__modes");
       await modeGroup.getByRole("tablist", { name: "Tool detail view" }).waitFor();
       const tabs = modeGroup.getByRole("tab");
       await expect.poll(() => tabs.count()).toBe(2);

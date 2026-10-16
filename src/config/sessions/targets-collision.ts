@@ -67,9 +67,22 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
   // Alias targets can change between calls. Reuse prepared identities only for this
   // synchronous dedupe invocation so collision ownership never relies on stale paths.
   const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
-  const resolvePhysicalGroupKey = <T>(groups: ReadonlyMap<string, T>, pathname: string) =>
-    [...groups.keys()].find((candidate) => isSameDatabasePath(candidate, pathname)) ??
-    path.resolve(pathname);
+  const physicalGroupKey = isSameDatabasePath.createIndex();
+  const logicalGroupKey = isSameDatabasePath.createIndex();
+  const resolveGroupKey = (
+    groups: ReadonlyMap<string, unknown>,
+    key: (pathname: string) => string,
+    pathname: string,
+  ) => {
+    // A singleton group needs no additional physical inspection.
+    if (groups.size === 0) {
+      return path.resolve(pathname);
+    }
+    if (groups.size === 1) {
+      key(groups.keys().next().value!);
+    }
+    return key(pathname);
+  };
   for (const target of targets) {
     const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
@@ -79,7 +92,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       isSameDatabasePath,
       readCandidates: options.readCandidates,
     });
-    const sqlitePath = resolvePhysicalGroupKey(grouped, resolved.path);
+    const sqlitePath = resolveGroupKey(grouped, physicalGroupKey, resolved.path);
     const group = grouped.get(sqlitePath) ?? [];
     group.push({
       target,
@@ -94,7 +107,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     const resolvedUnsuffixedPath = path.resolve(
       resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path,
     );
-    const unsuffixedPath = resolvePhysicalGroupKey(logicalGroups, resolvedUnsuffixedPath);
+    const unsuffixedPath = resolveGroupKey(logicalGroups, logicalGroupKey, resolvedUnsuffixedPath);
     const logicalGroup = logicalGroups.get(unsuffixedPath) ?? [];
     logicalGroup.push({
       target,

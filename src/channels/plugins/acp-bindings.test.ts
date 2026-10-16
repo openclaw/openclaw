@@ -95,22 +95,6 @@ describe("configured binding registry", () => {
     await clearActivePluginRegistry();
   });
 
-  it("resolves configured ACP bindings from an already loaded channel plugin", () => {
-    const plugin = createDiscordAcpPlugin();
-    publishPlugin(plugin);
-
-    const resolved = bindingRegistry.resolveConfiguredBindingRecord({
-      cfg: createConfig(),
-      channel: "discord",
-      accountId: "default",
-      conversationId: "1479098716916023408",
-    });
-
-    expect(resolved?.record.conversation.channel).toBe("discord");
-    expect(resolved?.record.metadata?.backend).toBe("acpx");
-    expect(plugin.bindings?.compileConfiguredBinding).toHaveBeenCalledTimes(1);
-  });
-
   it("resolves configured ACP bindings from canonical conversation refs", () => {
     const plugin = createDiscordAcpPlugin();
     publishPlugin(plugin);

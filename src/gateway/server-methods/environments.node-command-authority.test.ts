@@ -156,6 +156,10 @@ describe("node environment command authority", () => {
               : "openclaw plugins enable codex";
         expect(listed?.requiredNodeCommand?.message).toContain(remediation);
         if (state === "undeclared") {
+          expect(listed?.requiredNodeCommand?.message).toMatch(
+            /^This model uses the Codex harness, which is unavailable on this device\./,
+          );
+          expect(listed?.requiredNodeCommand?.message).toContain("OpenClaw harness");
           expect(listed?.requiredNodeCommand?.message).toContain(
             "openclaw plugins install @openclaw/codex",
           );

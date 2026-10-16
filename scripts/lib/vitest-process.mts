@@ -20,8 +20,10 @@ import {
   createVitestProcessCompletion,
   shouldUseDetachedVitestProcessGroup,
 } from "../vitest-process-group.mts";
-import { runWithFailedTrailer, writeFailedTrailer } from "./failed-trailer.mts";
+import { writeFailedTrailer } from "./failed-trailer.mts";
 import { signalExitCode } from "./managed-child-process.mts";
+import { resolveRepoRoot } from "./repo-root.mjs";
+import { vitestInfrastructureExitCode } from "./vitest-outcome.mts";
 import {
   createVitestResourceOwner,
   findVitestResourceOwner,
@@ -76,6 +78,12 @@ export function spawnOwnedVitestProcess(spec: {
       const callerHome = env.HOME ?? env.USERPROFILE ?? homedir();
       childEnv.COREPACK_HOME = resolveTestCorepackHome(env, callerHome);
       childEnv.PLAYWRIGHT_BROWSERS_PATH = resolveTestBrowserCache(env, callerHome);
+      // Bun's content-addressed compiler cache must survive test HOME cleanup.
+      childEnv.BUN_RUNTIME_TRANSPILER_CACHE_PATH ??= path.join(
+        resolveRepoRoot(import.meta.url),
+        ".cache",
+        "bun-transpiler",
+      );
       // Set the actual process environment before config imports and Worker creation.
       // Worker-local process.env and restored os.homedir mocks cannot retarget libuv.
       if (!policy.hermetic) {
@@ -140,14 +148,22 @@ export async function exitVitestBySignal(signal: NodeJS.Signals): Promise<void> 
 }
 
 /** Only public invocations report; internal children propagate their settled outcome. */
-export function runVitestCli(
-  tool: string,
+export async function runVitestCli(
+  tool: string | undefined,
   run: (exitBySignal: typeof exitVitestBySignal) => Promise<void>,
 ): Promise<void> {
-  return runWithFailedTrailer(tool, () =>
-    run(async (signal) => {
-      writeFailedTrailer(tool, signalExitCode(signal));
+  try {
+    await run(async (signal) => {
+      if (tool) {
+        writeFailedTrailer(tool, signalExitCode(signal));
+      }
       await exitVitestBySignal(signal);
-    }),
-  );
+    });
+  } catch (error) {
+    console.error(error);
+    process.exitCode = vitestInfrastructureExitCode(Number(process.exitCode));
+  }
+  if (tool) {
+    writeFailedTrailer(tool, process.exitCode);
+  }
 }

@@ -1,15 +1,18 @@
 import { isDeepStrictEqual } from "node:util";
 import {
   deleteSessionEntryLifecycle,
-  loadSessionEntryReadOnly,
   patchSessionEntryCore as patchAccessorSessionEntry,
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
 } from "../../config/sessions/session-accessor.js";
+import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
-import { sessionInitializationFingerprint } from "../../config/sessions/session-entry-read-revision.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
+import {
+  readSessionEntryReadOnlyInWorker,
+  withSessionEntryReadOnlyInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
 import { sessionEntryCommitGuardOptions } from "../../config/sessions/session-source-authority.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -26,21 +29,24 @@ import type { PluginRuntime } from "./types.js";
 export async function createRuntimeSessionEntry(
   params: Parameters<PluginRuntime["agent"]["session"]["createSessionEntry"]>[0],
 ): Promise<Awaited<ReturnType<PluginRuntime["agent"]["session"]["createSessionEntry"]>>> {
-  const source = captureIncognitoSessionSource({ sessionKey: params.key, agentId: params.agentId });
   const creationOwner = captureSessionInitializationOwner(
     "agentHarnessId" in params.initialEntry ? params.initialEntry.agentHarnessId : undefined,
+  );
+  const source = captureSessionActorStorageOwner(
+    { sessionKey: params.key, agentId: params.agentId },
+    { assertCurrent: creationOwner.assertCurrent, authorize: creationOwner.assertCurrent },
   );
   // Session creation stays behind the canonical Gateway lifecycle boundary while
   // keeping that heavier runtime out of plugin discovery and cold startup.
   const [
     { createGatewaySession },
-    { resolveGatewaySessionStoreTarget },
-    { readAcpSessionMetaForEntry },
+    { resolveGatewaySessionStoreTargetInWorker },
+    { readAcpSessionMetaForEntryAsync },
     { upsertAcpSessionMeta },
     { resolveSandboxedSessionCreation },
   ] = await Promise.all([
     import("../../gateway/session-create-service.js"),
-    import("../../gateway/session-utils.js"),
+    import("../../gateway/session-utils-store-worker.js"),
     import("../../acp/runtime/session-meta-readonly.js"),
     import("../../acp/runtime/session-meta.js"),
     import("../../gateway/operator-session-run.js"),
@@ -53,17 +59,17 @@ export async function createRuntimeSessionEntry(
   type CreatedContext = Parameters<
     NonNullable<Parameters<typeof createGatewaySession>[0]["afterCreate"]>
   >[0];
-  const selectedActor = source && !("kind" in source) ? source.actor : source;
-  const target = selectedActor
+  const target = source
     ? {
-        agentId: selectedActor.agentId,
-        canonicalKey: resolveSqliteSessionKey(params.key, selectedActor.agentId),
-        storeKeys: [resolveSqliteSessionKey(params.key, selectedActor.agentId)],
-        storePath: selectedActor.path,
+        agentId: source.agentId,
+        canonicalKey: resolveSqliteSessionKey(params.key, source.agentId),
+        storeKeys: [resolveSqliteSessionKey(params.key, source.agentId)],
+        storePath: source.path,
       }
-    : resolveGatewaySessionStoreTarget({
+    : await resolveGatewaySessionStoreTargetInWorker({
         cfg: params.cfg,
         key: params.key,
+        assertActive: creationOwner.assertCurrent,
         ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
       });
   const cliInitial = "cliBackendId" in params.initialEntry ? params.initialEntry : undefined;
@@ -132,6 +138,10 @@ export async function createRuntimeSessionEntry(
         creationOwner.assertCurrent();
         const afterCreate = params.afterCreate;
         let initialization: ReturnType<typeof createSessionInitialization> | undefined;
+        let initializationReceipt:
+          | ReturnType<typeof retainPreparedSessionEntryPredicate>
+          | undefined;
+        let initializationEntry: SessionEntry | undefined;
         let callbackContext: CreatedContext | undefined;
         let finalEntryPatch: { pluginExtensions: SessionEntry["pluginExtensions"] } | undefined;
         let rollbackExpectedEntry: SessionEntry | undefined;
@@ -161,6 +171,38 @@ export async function createRuntimeSessionEntry(
           rollbackExpectedEntry = structuredClone(callbackContext.entry);
           const captured = callbackContext;
           const expected = rollbackExpectedEntry;
+          const memory = captureMemoryExactSessionReader({
+            sessionKey: captured.key,
+            storePath: captured.storePath,
+          });
+          if (!memory) {
+            await withSessionEntryReadOnlyInWorker(
+              {
+                sessionKey: captured.key,
+                agentId: captured.agentId,
+                storePath: captured.storePath,
+              },
+              creationOwner.assertCurrent,
+              async (read, owner) => {
+                if (!read.ok) {
+                  throw read.error;
+                }
+                if (!isDeepStrictEqual(read.value, expected) || !owner.source) {
+                  throw new Error(`Session initialization owner changed: ${captured.key}`);
+                }
+                initializationEntry = read.value;
+                initializationReceipt = retainPreparedSessionEntryPredicate({
+                  databaseIdentity: `file:${owner.source.databaseIdentity}`,
+                  sessionKey: captured.key,
+                  entry: expected,
+                  matches: (_before, after) => {
+                    initializationEntry = after;
+                    return after === undefined || isDeepStrictEqual(after, expected);
+                  },
+                });
+              },
+            );
+          }
           initialization = createSessionInitialization(
             {
               storePath: captured.storePath,
@@ -174,24 +216,12 @@ export async function createRuntimeSessionEntry(
               } else {
                 creationOwner.assertCurrent();
               }
-              const selected = captureIncognitoSessionSource({
-                sessionKey: captured.key,
-                storePath: captured.storePath,
-              });
-              const current = selected
-                ? "kind" in selected
-                  ? undefined
-                  : selected.actor.sessions.readSharing(captured.key)?.entry
-                : loadSessionEntryReadOnly({
-                    sessionKey: captured.key,
-                    storePath: captured.storePath,
-                    readConsistency: "latest",
-                  });
-              const matches =
-                selected && !("kind" in selected)
-                  ? selected.actor.sessions.readInitializationFingerprint(captured.key) ===
-                    sessionInitializationFingerprint(expected)
-                  : isDeepStrictEqual(current, expected);
+              // This synchronous guard also runs immediately before external policy injection.
+              const current = memory ? memory.read(captured.key) : initializationEntry;
+              if (!memory && !initializationReceipt?.isCurrent()) {
+                throw new Error(`Session initialization owner changed: ${captured.key}`);
+              }
+              const matches = memory ? isDeepStrictEqual(current, expected) : true;
               if (
                 deleted
                   ? current !== undefined
@@ -240,9 +270,10 @@ export async function createRuntimeSessionEntry(
             const expectedExecNode = params.execNode?.trim() || undefined;
             const expectedExecCwd = params.execCwd?.trim() || undefined;
             const matchingAcpMeta = acpInitial
-              ? readAcpSessionMetaForEntry({
+              ? await readAcpSessionMetaForEntryAsync({
                   sessionKey: target.canonicalKey,
                   agentId: target.agentId,
+                  cfg: params.cfg,
                   entry: matchingEntry,
                 })
               : undefined;
@@ -488,10 +519,9 @@ export async function createRuntimeSessionEntry(
           throw error;
         } finally {
           initialization?.close();
+          initializationReceipt?.release();
         }
       },
     });
-  return source && !("kind" in source)
-    ? source.actor.sessions.withSharedState(create)
-    : await create();
+  return await create();
 }

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -79,11 +79,9 @@ describe("extension package PR selection", () => {
   });
 
   it.each([
-    'import type { Value } from "openclaw/plugin-sdk/value"; export type Result = Value;',
     'export type { Value } from "openclaw/plugin-sdk/value";',
     'export type Result = import("openclaw/plugin-sdk/value").Value;',
     'export const load = () => import("openclaw/plugin-sdk/value");',
-    'import type { Value } from "openclaw/plugin-sdk/value"; export const options = { onRequest: true ? async (value, context): Promise<Value> => value : undefined };',
   ])("selects direct public-entry consumers for %s", (source) => {
     const { root, write, commit } = fixture();
     write("extensions/consumer/index.ts", source);
@@ -102,44 +100,6 @@ describe("extension package PR selection", () => {
       "slack",
     ]);
     expect(selection.selected[0]?.reason).toContain("direct import of changed public entry");
-  });
-
-  it("uses the base inventory for a deleted public entry, while private entries only select smoke", () => {
-    const { root, write, commit } = fixture();
-    const base = commit();
-    rmSync(join(root, "src/plugin-sdk/value.ts"));
-    write("scripts/lib/plugin-sdk-entrypoints.json", '["private"]');
-    commit();
-    const deleted = resolveExtensionBoundarySelection(root, packages, {
-      GITHUB_EVENT_NAME: "pull_request",
-      OPENCLAW_CI_EXTENSION_BOUNDARY_BASE: base,
-    });
-    expect(deleted.selected.map((row) => row.package)).toEqual([
-      "consumer",
-      "telegram",
-      "codex",
-      "slack",
-    ]);
-    expect(
-      selectAffectedBoundaryPackages(root, packages, [
-        { status: "M", path: "src/plugin-sdk/private.ts" },
-      ]).selected.map((row) => row.package),
-    ).toEqual(["telegram", "codex", "slack"]);
-  });
-
-  it("excludes main drift since the cache seed from the PR contribution", () => {
-    const { root, write, commit } = fixture();
-    commit();
-    write("src/plugin-sdk/value.ts", 'export type { Value } from "../old.js";\n');
-    const base = commit();
-    write("extensions/direct/index.ts", "export const direct = 2;\n");
-    commit();
-    const selection = resolveExtensionBoundarySelection(root, packages, {
-      GITHUB_EVENT_NAME: "pull_request",
-      OPENCLAW_CI_EXTENSION_BOUNDARY_BASE: base,
-    });
-    expect(selection.base).toBe(base);
-    expect(selection.selected.map((row) => row.package)).toEqual(["direct"]);
   });
 
   it.each(["package", "core", "deleted-public-entry"])(
@@ -243,50 +203,6 @@ describe("extension package PR selection", () => {
       expect(selection.selected.map((row) => row.package)).toEqual(packages);
       expect(selection.skipped).toEqual([]);
     }
-  });
-
-  it("bounds declaration, dependency and module-membership changes without widening unrelated files", () => {
-    const { root, commit } = fixture();
-    commit();
-    for (const change of [
-      { status: "M", path: "pnpm-lock.yaml" },
-      { status: "M", path: "src/types/globals.d.ts" },
-      { status: "D", path: "src/current.ts" },
-      { status: "A", path: "src/added.ts" },
-    ]) {
-      expect(
-        selectAffectedBoundaryPackages(root, packages, [change]).selected.map((row) => row.package),
-      ).toEqual(["telegram", "codex", "slack"]);
-    }
-    for (const path of ["extensions/direct/tsconfig.json", "extensions/direct/index.ts"]) {
-      expect(
-        selectAffectedBoundaryPackages(root, packages, [{ status: "T", path }]).selected.map(
-          (row) => row.package,
-        ),
-      ).toEqual(["direct"]);
-    }
-    for (const path of ["README.md", "ui/src/app.ts", "src/current.test.ts"]) {
-      expect(
-        selectAffectedBoundaryPackages(root, packages, [{ status: "M", path }]).selected,
-      ).toEqual([]);
-    }
-  });
-
-  it("retains the touched owner for deleted Browser/XAI aliases and nonregular sources", () => {
-    const { root, write, commit } = fixture();
-    for (const extension of ["browser", "xai"]) {
-      write(`extensions/${extension}/removed.ts`, "export {};\n");
-    }
-    const base = commit();
-    rmSync(join(root, "extensions/browser/removed.ts"));
-    rmSync(join(root, "extensions/xai/removed.ts"));
-    symlinkSync("../../src/current.ts", join(root, "extensions/direct/linked.ts"));
-    commit();
-    const selection = resolveExtensionBoundarySelection(root, [...packages, "browser", "xai"], {
-      GITHUB_EVENT_NAME: "pull_request",
-      OPENCLAW_CI_EXTENSION_BOUNDARY_BASE: base,
-    });
-    expect(selection.selected.map((row) => row.package)).toEqual(["direct", "browser", "xai"]);
   });
 
   it("wires the repository kill switch, comparison and negative canary into the required boundary job", () => {

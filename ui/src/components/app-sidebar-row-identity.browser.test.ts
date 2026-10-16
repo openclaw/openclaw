@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "../test-helpers/load-styles.ts";
 
 afterEach(() => document.body.replaceChildren());
 
 describe.runIf("__vitest_browser__" in globalThis)("sidebar session row DOM identity", () => {
   it("moves existing row DOM when a new session shifts the list", async () => {
-    await import("./app-sidebar.ts");
+    await import("./app-sidebar.tsx");
     const { createGatewayHarness, createSessionsHarness, createSessionState, mountSidebar } =
       await import("../test-helpers/app-sidebar.ts");
     const alphaKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
@@ -46,7 +47,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session row DOM iden
       gamma.createdAt = Date.now();
     }
     harness.publishList(next);
-    await sidebar.updateComplete;
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    await settleLitElement(sidebar);
 
     const rowKeys = Array.from(sidebar.querySelectorAll("[data-session-tree]")).map((row) =>
       row.getAttribute("data-session-tree"),

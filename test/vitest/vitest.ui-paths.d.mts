@@ -11,3 +11,8 @@ export function isControlUiSourcePath(file: string): boolean;
 export function isUiTestTarget(relative: string): boolean;
 export function resolveUiTypeScriptPath(file: string, cwd?: string): string;
 export function uiTypeScriptPathGlob(file: string): string;
+
+export function getRepositoryFileInventory(
+  cwd?: string,
+  files?: string[],
+): ReadonlySet<string> | null;

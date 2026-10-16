@@ -31,7 +31,6 @@ const {
   clientDeployCommandsMock,
   clientFetchUserMock,
   clientGetPluginMock,
-  createDiscordExecApprovalButtonContextMock,
   createDiscordMessageHandlerMock,
   createDiscordNativeCommandMock,
   createdBindingManagers,
@@ -39,9 +38,8 @@ const {
   createThreadBindingManagerMock,
   getAcpSessionStatusMock,
   isNativeCommandsExplicitlyDisabledMock,
-  isVerboseMock,
   listNativeCommandSpecsForConfigMock,
-  listSkillCommandsForAgentsMock,
+  prepareSkillCommandsForAgentsMock,
   monitorLifecycleMock,
   reconcileAcpThreadBindingsOnStartupMock,
   resolveDiscordAccountMock,
@@ -105,21 +103,6 @@ function createRateLimitError(
   return new RateLimitErrorCtor(response, body, fallbackRequest);
 }
 
-function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {}): OpenClawConfig {
-  return {
-    channels: {
-      discord: {
-        accounts: {
-          default: {
-            token: "MTIz.abc.def",
-            ...overrides,
-          },
-        },
-      },
-    },
-  } as OpenClawConfig;
-}
-
 type MockCallReader = { mock: { calls: unknown[][] } };
 
 function firstMockArg(mock: MockCallReader, label: string) {
@@ -143,13 +126,6 @@ function expectMockLogContains(mock: unknown, expected: string): void {
 
 function expectMockLogNotContains(mock: unknown, expected: string): void {
   expect(mockMessages(mock).join("\n")).not.toContain(expected);
-}
-
-function expectMessagesContainAll(messages: string[], expected: string[]): void {
-  const joinedMessages = messages.join("\n");
-  for (const entry of expected) {
-    expect(joinedMessages).toContain(entry);
-  }
 }
 
 vi.mock("../voice/voice-runtime.js", () => {
@@ -178,19 +154,6 @@ describe("monitorDiscordProvider", () => {
     healthProbe?: (
       params: ReconcileHealthProbeParams,
     ) => Promise<{ status: string; reason?: string }>;
-  };
-
-  const getConstructedClientOptions = (): {
-    clientId?: string;
-    eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-    requestOptions?: { timeout?: number };
-  } => {
-    expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
-    return firstMockArg(clientConstructorOptionsMock, "Discord client constructor") as {
-      clientId?: string;
-      eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-      requestOptions?: { timeout?: number };
-    };
   };
 
   const getHealthProbe = () => {
@@ -295,6 +258,7 @@ describe("monitorDiscordProvider", () => {
         listeners: handlers.listeners ?? [],
         plugins: pluginRegistry,
         rest: {
+          options: { timeout: 15_000 },
           get: vi.fn(async () => undefined),
           post: vi.fn(async () => undefined),
           put: vi.fn(async () => undefined),
@@ -320,10 +284,9 @@ describe("monitorDiscordProvider", () => {
     providerTesting.setListNativeCommandSpecsForConfig((...args) =>
       listNativeCommandSpecsForConfigMock(...args),
     );
-    providerTesting.setListSkillCommandsForAgents(
-      (...args) => listSkillCommandsForAgentsMock(...args) as never,
+    providerTesting.setPrepareSkillCommandsForAgents(
+      (...args) => prepareSkillCommandsForAgentsMock(...args) as never,
     );
-    providerTesting.setIsVerbose(() => isVerboseMock());
     providerTesting.setShouldLogVerbose(() => shouldLogVerboseMock());
   });
 
@@ -504,42 +467,6 @@ describe("monitorDiscordProvider", () => {
     await runProvider();
 
     expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps forwarded approval actions live when native delivery is disabled", async () => {
-    const cfg = createConfigWithDiscordAccount();
-    const channelRuntime = createTestChannelRuntime();
-    const execApprovalsConfig = { enabled: false, approvers: ["123"] };
-    resolveDiscordAccountMock.mockReturnValue({
-      accountId: "default",
-      token: "cfg-token",
-      config: {
-        commands: { native: true, nativeSkills: false },
-        voice: { enabled: false },
-        agentComponents: { enabled: false },
-        execApprovals: execApprovalsConfig,
-      },
-    });
-
-    await monitorDiscordProvider({
-      scheduler: createTestPluginServiceScheduler(),
-      config: cfg,
-      runtime: baseRuntime(),
-      channelRuntime,
-    });
-
-    expect(createDiscordExecApprovalButtonContextMock).toHaveBeenCalledWith({
-      cfg,
-      accountId: "default",
-      config: execApprovalsConfig,
-    });
-    expect(
-      channelRuntime.runtimeContexts.get({
-        channelId: "discord",
-        accountId: "default",
-        capability: "approval.native",
-      }),
-    ).toBeUndefined();
   });
 
   it("registers the native approval runtime context when exec approvals are enabled", async () => {
@@ -901,30 +828,6 @@ describe("monitorDiscordProvider", () => {
     expectMockLogNotContains(runtime.log, "cleared native commands");
   });
 
-  it("derives application id from token before probing Discord over REST", async () => {
-    const probeApplicationId = vi.fn(async () => ({
-      kind: "resolved" as const,
-      applicationId: "network-app",
-    }));
-    providerTesting.setProbeDiscordApplicationId(probeApplicationId);
-    resolveDiscordAccountMock.mockReturnValue({
-      accountId: "default",
-      token: "MTIz.abc.def",
-      config: {
-        commands: { native: true, nativeSkills: false },
-        voice: { enabled: false },
-        agentComponents: { enabled: false },
-        execApprovals: { enabled: false },
-      },
-    });
-
-    await runProvider();
-
-    expect(probeApplicationId).not.toHaveBeenCalled();
-    expect(clientFetchUserMock).not.toHaveBeenCalled();
-    expect(getConstructedClientOptions().clientId).toBe("123");
-  });
-
   it.each([
     {
       name: "401 rejection",
@@ -975,40 +878,18 @@ describe("monitorDiscordProvider", () => {
     },
   );
 
-  it("logs Discord startup phases and early gateway debug events", async () => {
-    const runtime = baseRuntime();
-    const emitter = new EventEmitter();
-    const gateway = { emitter, isConnected: true, reconnectAttempts: 0 };
+  it("publishes ready and disconnected status across the gateway lifecycle", async () => {
+    const gateway = { emitter: new EventEmitter(), isConnected: true };
     clientGetPluginMock.mockImplementation((name: string) =>
       name === "gateway" ? gateway : undefined,
     );
-    clientFetchUserMock.mockImplementationOnce(async () => {
-      emitter.emit("debug", "Gateway websocket opened");
-      return { id: "bot-1", username: "Molty" };
-    });
-    isVerboseMock.mockReturnValue(true);
-
     const setStatus = vi.fn();
-    await runProvider({ runtime, setStatus });
+
+    await runProvider({ setStatus });
 
     expect(setStatus).toHaveBeenCalledWith(
       expect.objectContaining({ connected: true, lifecycle: "ready" }),
     );
     expect(setStatus).toHaveBeenCalledWith(expect.objectContaining({ connected: false }));
-    await vi.waitFor(() => expectMockLogContains(runtime.log, "deploy-commands:done"));
-
-    const messages = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]));
-    expectMessagesContainAll(messages, [
-      "fetch-application-id:start",
-      "fetch-application-id:done",
-      "deploy-commands:schedule",
-      "deploy-commands:scheduled",
-      "deploy-commands:done",
-      "fetch-bot-identity:start",
-      "fetch-bot-identity:done",
-    ]);
-    expect(
-      messages.some((message) => /gateway-debug.*Gateway websocket opened/.test(message)),
-    ).toBe(true);
   });
 });

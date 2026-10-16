@@ -10,8 +10,8 @@ import {
 } from "./subagent-registry-lifecycle.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
+import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentRunRuntimeKey,
@@ -30,6 +30,7 @@ export function createRunEntry(overrides: RunEntryOverrides = {}): SubagentRunRe
   return createSubagentRunRecord({
     runId: "run-1",
     childSessionKey: "agent:main:subagent:child",
+    childSessionIdentity: { sessionId: "session-id", lifecycleRevision: "session-revision" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: "finish the task",
@@ -87,7 +88,7 @@ function installPolicyWorkerStub(fallbackOwner?: FixtureOwner) {
       context.admission.assertCurrent();
       options?.assertCurrent?.();
       return operation({
-        // Controller policy cases exercise the real row owner with a transport ACK.
+        // Controller policy cases persist payloads for later selected reads.
         // Native FIFO/CAS/event authority belongs to the registered worker suites.
         execute: vi
           .fn()
@@ -119,12 +120,16 @@ function installPolicyWorkerStub(fallbackOwner?: FixtureOwner) {
                 await owner.beforeWrite?.({ runIds: [...postimages.keys()], postimages });
               }
               options?.assertCurrent?.();
+              saveSubagentRegistryChangesToSqlite(
+                new Map(
+                  [...postimages].filter(
+                    (entry): entry is [string, SubagentRunRecord] => entry[1] !== null,
+                  ),
+                ),
+                [...postimages.keys()],
+              );
               return {
                 writeId: write.writeId,
-                versions: new Map([
-                  ...values.map((row) => [row.run_id, subagentRunRowVersion(row)] as const),
-                  ...write.deleteRunIds.map((id) => [id, null] as const),
-                ]),
                 notices: [],
               };
             },

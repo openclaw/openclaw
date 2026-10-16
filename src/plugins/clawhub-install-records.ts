@@ -1,12 +1,12 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import type { ClawHubPackageChannel, ClawHubPackageFamily } from "../infra/clawhub-packages.js";
+import type { ClawHubPackageChannel } from "../infra/clawhub-packages.js";
 
 /** Install record fields captured for ClawHub plugin installs. */
 export type ClawHubPluginInstallRecordFields = {
   source: "clawhub";
   clawhubUrl: string;
   clawhubPackage: string;
-  clawhubFamily: Exclude<ClawHubPackageFamily, "skill">;
+  clawhubFamily: "code-plugin" | "bundle-plugin";
   clawhubChannel?: ClawHubPackageChannel;
   clawhubTrustDisposition?: "clean" | "review-recommended" | "review-required" | "blocked";
   clawhubTrustScanStatus?: string;

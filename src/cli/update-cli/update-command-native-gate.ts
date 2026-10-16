@@ -18,23 +18,24 @@ export function prepareUpdateCommandNativeGate(
   // enters argv; caller options stay on the private pipe until the owner admits it.
   const source = `
   const { spawn } = await import("node:child_process");
+  try {
   const chunks = [];
   let bytes = 0;
   for await (const chunk of process.stdin) {
     bytes += chunk.length;
-    if (bytes > ${Buffer.byteLength(input)}) process.exit(1);
+    if (bytes > ${Buffer.byteLength(input)}) throw new Error("Native command admission rejected");
     chunks.push(chunk);
   }
-  if (bytes !== ${Buffer.byteLength(input)}) process.exit(1);
+  if (bytes !== ${Buffer.byteLength(input)}) throw new Error("Native command admission rejected");
   let admission;
   try { admission = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(Buffer.concat(chunks))); }
-  catch { process.exit(1); }
+  catch { throw new Error("Native command admission rejected"); }
   if (!Array.isArray(admission) || admission.length !== 2 ||
-      typeof admission[0] !== "string" || !/^[0-9a-f-]{36}$/.test(admission[0])) process.exit(1);
+      typeof admission[0] !== "string" || !/^[0-9a-f-]{36}$/.test(admission[0])) throw new Error("Native command admission rejected");
   const [ticket, nodeOptions] = admission;
   if (nodeOptions !== null && (!Array.isArray(nodeOptions) || nodeOptions.length !== 2 ||
       typeof nodeOptions[0] !== "string" || typeof nodeOptions[1] !== "string" || nodeOptions[1].includes("\\0") ||
-      (process.platform === "win32" ? nodeOptions[0].toUpperCase() : nodeOptions[0]) !== "NODE_OPTIONS")) process.exit(1);
+      (process.platform === "win32" ? nodeOptions[0].toUpperCase() : nodeOptions[0]) !== "NODE_OPTIONS")) throw new Error("Native command admission rejected");
   const env = { ...process.env };
   if (nodeOptions !== null) env[nodeOptions[0]] = nodeOptions[1];
   const child = spawn(process.argv[1], process.argv.slice(2), {
@@ -52,6 +53,10 @@ export function prepareUpdateCommandNativeGate(
     if (signal) process.kill(process.pid, signal);
     else process.exitCode = code ?? 1;
   });
+  } catch {
+    process.stdin.destroy();
+    process.exitCode = 1;
+  }
 `;
   return { source, env, input };
 }

@@ -1,8 +1,9 @@
-import { ChildProcess, spawn } from "node:child_process";
+import { ChildProcess } from "node:child_process";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { spawnOomScoreAdjusted as spawn } from "openclaw/plugin-sdk/process-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspaceSync,
@@ -16,16 +17,13 @@ import { startRaftGatewayAccount } from "./gateway.js";
 
 const processRuntimeMocks = vi.hoisted(() => ({
   killProcessTree: vi.fn(),
+  spawn: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
   killProcessTree: processRuntimeMocks.killProcessTree,
-}));
-
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: vi.fn(),
+  spawnOomScoreAdjusted: processRuntimeMocks.spawn,
 }));
 
 vi.mock("openclaw/plugin-sdk/persistent-dedupe", async (importOriginal) => {

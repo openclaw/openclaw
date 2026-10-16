@@ -82,44 +82,36 @@ export function resolveUnavailableChannelAccountSnapshot(
 }
 
 export function resolveChannelAccountState(input: ChannelAccountStateInput): ChannelAccountState {
-  const lastError = input.runtime?.lastError ?? null;
-  if (!input.enabled) {
-    return {
-      displayState: "disabled",
-      snapshot: {
-        configured: input.configured,
-        ...(typeof input.linked === "boolean" ? { linked: input.linked } : {}),
-        running: false,
-        stateReason: input.disabledReason ?? "disabled",
-        lastError,
-      },
-    };
-  }
-  if (!input.configured || input.linked === false) {
-    return {
-      displayState: input.configured ? "not linked" : "not configured",
-      snapshot: {
-        configured: input.configured,
-        ...(input.configured ? { linked: false } : {}),
-        running: false,
-        stateReason: input.configured
-          ? (input.unlinkedReason ?? "not linked")
-          : (input.unconfiguredReason ?? "not configured"),
-        lastError,
-      },
-    };
-  }
+  const unavailable = !input.enabled || !input.configured || input.linked === false;
+  const displayState = !input.enabled
+    ? "disabled"
+    : !input.configured
+      ? "not configured"
+      : input.linked === false
+        ? "not linked"
+        : input.linked
+          ? "linked"
+          : undefined;
+  const stateReason = !input.enabled
+    ? (input.disabledReason ?? "disabled")
+    : !input.configured
+      ? (input.unconfiguredReason ?? "not configured")
+      : input.linked === false
+        ? (input.unlinkedReason ?? "not linked")
+        : undefined;
+  const linked = !input.enabled || input.configured ? input.linked : undefined;
   return {
-    displayState: input.linked ? "linked" : undefined,
+    displayState,
     snapshot: {
-      configured: true,
-      ...(input.linked ? { linked: true } : {}),
-      running: input.runtime?.running === true,
+      configured: input.configured,
+      ...(typeof linked === "boolean" ? { linked } : {}),
+      running: !unavailable && input.runtime?.running === true,
       // An absent connectivity signal is not a disconnect for socketless transports.
-      ...(typeof input.runtime?.connected === "boolean"
+      ...(!unavailable && typeof input.runtime?.connected === "boolean"
         ? { connected: input.runtime.connected }
         : {}),
-      lastError,
+      ...(stateReason !== undefined ? { stateReason } : {}),
+      lastError: input.runtime?.lastError ?? null,
     },
   };
 }

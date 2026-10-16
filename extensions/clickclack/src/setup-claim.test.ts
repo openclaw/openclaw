@@ -52,53 +52,10 @@ function claimResponse(extra: Record<string, unknown> = {}): Record<string, unkn
 }
 
 describe("ClickClack setup-code claim", () => {
-  it("claims over guarded HTTPS without bearer authentication", async () => {
-    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
-      Response.json(claimResponse()),
-    );
-
-    await expect(
-      claimClickClackSetupCode({
-        claimUrl: "https://clickclack.example/api/bot-setup-codes/claim",
-        code: "ABCD-EFGH-JKMP",
-        fetch: fetchMock as unknown as typeof fetch,
-      }),
-    ).resolves.toEqual({
-      token: "test-token",
-      bot: {
-        id: "usr_bot",
-        handle: "openclaw",
-        display_name: "OpenClaw",
-      },
-      workspace: {
-        id: "wsp_1",
-        route_id: "clickclack",
-        slug: "default",
-        name: "ClickClack",
-      },
-      defaults: {
-        defaultTo: "channel:general",
-        allowFrom: ["*"],
-        agentActivity: true,
-      },
-    });
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      "https://clickclack.example/api/bot-setup-codes/claim",
-    );
-    const init = fetchMock.mock.calls[0]?.[1];
-    expect(init).toMatchObject({ method: "POST", redirect: "manual" });
-    expect(requestBodyJson(init)).toEqual({ code: "ABCD-EFGH-JKMP" });
-    const headers = new Headers(init?.headers);
-    expect(headers.get("Authorization")).toBeNull();
-    expect(headers.get("Content-Type")).toBe("application/json");
-  });
-
   it("accepts a matching v1 contract with a path-mounted API base", async () => {
     const apiBaseUrl = "https://api.clickclack.example/services/clickclack";
     const claimUrl = `${apiBaseUrl}/api/bot-setup-codes/claim`;
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
       Response.json(
         claimResponse({
           contract_version: 1,
@@ -123,6 +80,12 @@ describe("ClickClack setup-code claim", () => {
       claimUrl,
       expect.objectContaining({ method: "POST", redirect: "manual" }),
     );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(requestBodyJson(init)).toEqual({ code: "ABCD-EFGH-JKMP" });
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Authorization")).toBeNull();
+    expect(headers.get("Content-Type")).toBe("application/json");
   });
 
   it("rejects incomplete, unsupported, and mismatched v1 metadata", async () => {

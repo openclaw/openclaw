@@ -1,6 +1,7 @@
 import { streamSimpleOpenAIResponses } from "@openclaw/ai/internal/openai";
 import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import { wrapOpenAIResponsesStream } from "./responses-stream.runtime.js";
@@ -89,15 +90,144 @@ describe("Daybreak Responses requests", () => {
   );
 });
 
-it.each([false, true])(
-  "uses host-admitted prompt updates on native Responses (enabled=%s)",
-  (inHistorySystemUpdates) => {
-    const policy = buildOpenAIReplayPolicy({
+it("uses host-admitted prompt updates on native Responses", () => {
+  const policy = buildOpenAIReplayPolicy({
+    provider: "openai",
+    modelApi: "openai-responses",
+    modelId: "gpt-5.4",
+    inHistorySystemUpdates: true,
+  });
+  expect(policy.inHistorySystemUpdates).toBe(true);
+});
+
+it("owns replay policy for OpenAI and Codex transports", () => {
+  const provider = buildOpenAIProvider();
+  const codexProvider = buildOpenAIProvider();
+
+  expect(
+    provider.buildReplayPolicy?.({
       provider: "openai",
-      modelApi: "openai-responses",
+      modelApi: "openai",
       modelId: "gpt-5.4",
-      inHistorySystemUpdates,
+    } as never),
+  ).toEqual({
+    sanitizeMode: "images-only",
+    applyAssistantFirstOrderingFix: false,
+    sanitizeToolCallIds: false,
+    validateGeminiTurns: false,
+    validateAnthropicTurns: false,
+  });
+
+  expect(
+    provider.buildReplayPolicy?.({
+      provider: "openai",
+      modelApi: "openai-completions",
+      modelId: "gpt-5.4",
+    } as never),
+  ).toEqual({
+    sanitizeMode: "images-only",
+    applyAssistantFirstOrderingFix: false,
+    sanitizeToolCallIds: true,
+    toolCallIdMode: "strict",
+    duplicateToolCallIdStyle: "openai",
+    validateGeminiTurns: false,
+    validateAnthropicTurns: false,
+  });
+
+  expect(
+    codexProvider.buildReplayPolicy?.({
+      provider: "openai",
+      modelApi: "openai-chatgpt-responses",
+      modelId: "gpt-5.4",
+    } as never),
+  ).toEqual({
+    sanitizeMode: "images-only",
+    applyAssistantFirstOrderingFix: false,
+    sanitizeToolCallIds: false,
+    validateGeminiTurns: false,
+    validateAnthropicTurns: false,
+    allowSyntheticToolResults: true,
+    appendOnlyRuntimeContext: true,
+  });
+});
+
+describe("configured speed defaults", () => {
+  const model: Model<"openai-responses"> = {
+    id: "speed-fixture",
+    name: "Speed fixture",
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: false,
+    contextWindow: 1_050_000,
+    maxTokens: 4096,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+
+  it("snapshots speed until the current payload finishes, then reads the next preference", async () => {
+    let fastMode: boolean | "ultrafast" = "ultrafast";
+    const stream = wrapOpenAIResponsesStream({
+      provider: "openai",
+      modelId: model.id,
+      model,
+      streamFn: streamSimple,
+      nativeWebSearchAllowedByToolPolicy: false,
+      extraParams: { serviceTier: "flex", fastMode: () => fastMode },
     });
-    expect(policy.inHistorySystemUpdates).toBe(inHistorySystemUpdates || undefined);
-  },
-);
+    const context = { messages: [{ role: "user" as const, content: "hello", timestamp: 0 }] };
+    const first = await stream(model, context, {
+      apiKey: "synthetic-test-key",
+      onPayload: async (payload) => {
+        fastMode = false;
+        // Async callers can replace a payload; the in-flight speed must not change.
+        await Promise.resolve();
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+          throw new Error("Expected a Responses request object");
+        }
+        return { ...payload };
+      },
+    });
+    expect((await first.result()).errorMessage).toBe("captured before sending");
+    expect(params.at(-1)).toMatchObject({
+      service_tier: "ultrafast",
+      context_management: [{ type: "compaction", compact_threshold: 260_000 }],
+    });
+    const next = await stream(model, context, { apiKey: "synthetic-test-key" });
+    expect((await next.result()).errorMessage).toBe("captured before sending");
+    expect(params.at(-1)).toMatchObject({
+      service_tier: "default",
+      context_management: [{ type: "compaction", compact_threshold: 735_000 }],
+    });
+  });
+
+  it.each(["serviceTier", "service_tier"])(
+    "preserves inherited %s and lets each explicit speed override its request payload",
+    async (key) => {
+      for (const tier of ["auto", "default", "flex", "priority", "ultrafast"]) {
+        for (const [fastMode, expected] of [
+          [undefined, tier],
+          [false, "default"],
+          [true, "priority"],
+          ["ultrafast", "ultrafast"],
+        ] as const) {
+          const stream = wrapOpenAIResponsesStream({
+            provider: "openai",
+            modelId: model.id,
+            model,
+            streamFn: streamSimple,
+            nativeWebSearchAllowedByToolPolicy: false,
+            extraParams: { [key]: tier, fastMode },
+          });
+          const output = await stream(
+            model,
+            { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+            { apiKey: "synthetic-test-key" },
+          );
+          expect((await output.result()).errorMessage).toBe("captured before sending");
+          expect(params.at(-1)).toMatchObject({ model: model.id, service_tier: expected });
+        }
+      }
+    },
+  );
+});

@@ -3,7 +3,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import * as knnSubprocess from "./manager-search-knn-subprocess.js";
+import * as knnSubprocess from "./manager-search-knn.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -38,27 +38,27 @@ describe("memory search generation", () => {
     const publishedChunks = manager.status().chunks;
     let shadowDb: DatabaseSync | undefined;
     const syncMemoryFiles = fields.syncMemoryFiles.bind(manager);
-    const runKnn = knnSubprocess.runVectorKnnInSubprocess;
+    const runKnn = knnSubprocess.searchMemoryVectorIndex;
     const querySpy = vi.spyOn(fields.provider, "embed").mockImplementation(async () => {
       queryStarted.resolve();
       await releaseQuery.promise;
       return [1, 0, 0, 0];
     });
-    const syncSpy = vi.spyOn(fields, "syncMemoryFiles").mockImplementation(async (params) => {
+    const syncSpy = vi.spyOn(fields, "syncMemoryFiles").mockImplementation(async (...params) => {
       shadowDb = fields.db;
       expect(manager.status().chunks).toBe(publishedChunks);
       const lexical = await manager.search("zebra", { lexicalOnly: true, minScore: 0 });
       expect(lexical.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
-      const result = await syncMemoryFiles(params);
+      const result = await syncMemoryFiles(...params);
       shadowReady.resolve();
       await releaseReindex.promise;
       return result;
     });
     const childSpy = vi
-      .spyOn(knnSubprocess, "runVectorKnnInSubprocess")
-      .mockImplementation(async (params) => {
+      .spyOn(knnSubprocess, "searchMemoryVectorIndex")
+      .mockImplementation(async (...params) => {
         try {
-          const result = await runKnn(params);
+          const result = await runKnn(...params);
           expect(result.rows.length).toBeGreaterThan(0);
           childReady.resolve();
           await releaseChild.promise;

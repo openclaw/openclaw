@@ -100,7 +100,7 @@ const pollTargets = createApprovalReactionTargetStore<IMessageApprovalPollTarget
   namespace: TARGET_NAMESPACE,
   maxEntries: MAX_ENTRIES,
   defaultTtlMs: DEFAULT_TARGET_TTL_MS,
-  openStore: (params) => getOptionalIMessageRuntime()?.state.openKeyedStore(params),
+  openStore: (params) => getOptionalIMessageRuntime()?.state.openKeyedStoreV2(params),
   logPersistentError: reportPersistentError,
   readPersistedTarget,
 });
@@ -109,7 +109,7 @@ const pollTombstones = createApprovalReactionTargetStore<IMessageApprovalPollTom
   namespace: TOMBSTONE_NAMESPACE,
   maxEntries: MAX_ENTRIES,
   defaultTtlMs: TOMBSTONE_TTL_MS,
-  openStore: (params) => getOptionalIMessageRuntime()?.state.openKeyedStore(params),
+  openStore: (params) => getOptionalIMessageRuntime()?.state.openKeyedStoreV2(params),
   logPersistentError: reportPersistentError,
   readPersistedTarget: (value) => {
     const approvalId = (value as { approvalId?: unknown } | undefined)?.approvalId;

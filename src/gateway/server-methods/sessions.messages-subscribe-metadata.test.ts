@@ -1,4 +1,8 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -10,6 +14,8 @@ import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 
+afterEach(() => clearRuntimeConfigSnapshot());
+
 it.each(["operator.read", "operator.sessions.read"])(
   "keeps %s approval subscriptions across metadata updates but rejects changed access",
   async (readScope) => {
@@ -17,6 +23,7 @@ it.each(["operator.read", "operator.sessions.read"])(
       const cfg = rolePolicyConfig();
       cfg.gateway!.roles!.definitions.view!.scopes.push("operator.approvals");
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const scope = { agentId: "main", sessionKey: "agent:main:subscribe-metadata" };
       const entry: SessionEntry = {
         sessionId: "subscribe-metadata",

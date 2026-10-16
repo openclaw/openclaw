@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { registerMatrixAccountCommands } from "./cli-account.js";
 import { registerMatrixDeviceCommands } from "./cli-devices.js";
 import { registerMatrixDirectCommands } from "./cli-direct.js";
+import { registerMatrixDoctorCommands } from "./cli-doctor.js";
 import { registerMatrixEncryptionCommands } from "./cli-encryption.js";
 import { registerMatrixProfileCommands } from "./cli-profile.js";
 import { registerMatrixVerificationCommands } from "./cli-verification.js";
@@ -18,4 +19,5 @@ export function registerMatrixCli(params: { program: Command }): void {
   registerMatrixEncryptionCommands(root);
   registerMatrixVerificationCommands(root);
   registerMatrixDeviceCommands(root);
+  registerMatrixDoctorCommands(root);
 }

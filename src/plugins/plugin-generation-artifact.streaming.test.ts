@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
@@ -95,184 +94,6 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it.each([
-  ["./optional.cjs", "optional.cjs"],
-  ["./optional", "optional.js"],
-  ["./nested/optional.cjs", "nested/optional.cjs"],
-])("recaptures standalone source when missing %s appears", async (reference, filename) => {
-  const source = fixture(
-    Buffer.from(`try { module.exports = require(${JSON.stringify(reference)}); }
-    catch { module.exports = "missing"; }`),
-    "entry.cjs",
-  );
-  const load = createRequire(import.meta.url);
-  await withPluginGenerationSourceCustody(async () => {
-    const first = source.capture(source.filename);
-    expect(load(first.resolve(source.filename))).toBe("missing");
-    const dependency = path.join(path.dirname(source.filename), filename);
-    fs.mkdirSync(path.dirname(dependency), { recursive: true });
-    fs.writeFileSync(dependency, 'module.exports = "available";');
-    const second = source.capture(source.filename);
-    expect(load(second.resolve(source.filename))).toBe("available");
-    expect(load(first.resolve(source.filename))).toBe("missing");
-  });
-});
-
-it("recaptures standalone source when a file supersedes a directory import", async () => {
-  const source = fixture(Buffer.from('module.exports = require("./helper");'), "entry.cjs");
-  const directory = path.join(path.dirname(source.filename), "helper");
-  fs.mkdirSync(directory);
-  fs.writeFileSync(path.join(directory, "index.js"), 'module.exports = "directory";');
-  const load = createRequire(import.meta.url);
-  await withPluginGenerationSourceCustody(async () => {
-    const first = source.capture(source.filename);
-    expect(load(first.resolve(source.filename))).toBe("directory");
-    fs.writeFileSync(
-      path.join(path.dirname(source.filename), "helper.js"),
-      'module.exports = "file";',
-    );
-    const second = source.capture(source.filename);
-    expect(load(second.resolve(source.filename))).toBe("file");
-    expect(load(first.resolve(source.filename))).toBe("directory");
-  });
-});
-
-it.each(["root", "nested"])(
-  "recaptures standalone source when %s package metadata appears",
-  async (scope) => {
-    const source = fixture(Buffer.from('module.exports = "steady";'), "entry.cjs");
-    let entry = source.filename;
-    if (scope === "nested") {
-      const nested = path.join(path.dirname(entry), "nested");
-      fs.mkdirSync(nested);
-      entry = path.join(nested, "entry.cjs");
-      fs.renameSync(source.filename, entry);
-    }
-    const load = createRequire(import.meta.url);
-    await withPluginGenerationSourceCustody(async () => {
-      const first = source.capture(entry);
-      const manifest = path.join(path.dirname(entry), "package.json");
-      fs.writeFileSync(manifest, '{"type":"commonjs"}');
-      const second = source.capture(entry);
-      expect(load(second.resolve(entry))).toBe("steady");
-      expect(fs.readFileSync(second.resolve(manifest), "utf8")).toBe('{"type":"commonjs"}');
-      expect(first.hasSource(manifest)).toBe(false);
-    });
-  },
-);
-
-it.each(["file", "directory", "symlink"])(
-  "refreshes metadata-only legacy entry selection after a %s change",
-  async (change) => {
-    const source = fixture(Buffer.from('module.exports = "steady";'), "entry.cjs");
-    const root = path.dirname(source.filename);
-    const dependency = path.join(root, "node_modules", "legacy");
-    fs.mkdirSync(dependency, { recursive: true });
-    fs.writeFileSync(path.join(root, "package.json"), '{"imports":{"#unused":"legacy"}}');
-    const main = change === "directory" ? "lib" : "main.cjs";
-    fs.writeFileSync(
-      path.join(dependency, "package.json"),
-      JSON.stringify({ name: "legacy", main }),
-    );
-    fs.writeFileSync(path.join(dependency, "index.js"), 'module.exports = "fallback";');
-    const preferred = path.join(dependency, "preferred.cjs");
-    if (change === "directory") {
-      fs.mkdirSync(path.join(dependency, "lib"));
-    } else if (change === "symlink") {
-      const outside = path.join(temp.make("legacy-entry-outside-"), "preferred.cjs");
-      fs.writeFileSync(outside, 'module.exports = "preferred";');
-      fs.linkSync(outside, preferred);
-      fs.symlinkSync(outside, path.join(dependency, main));
-    }
-    await withPluginGenerationSourceCustody(async () => {
-      const first = source.capture(source.filename);
-      const firstLoad = createRequire(first.resolve(source.filename));
-      expect(firstLoad("legacy")).toBe("fallback");
-      if (change === "symlink") {
-        fs.unlinkSync(path.join(dependency, main));
-        fs.symlinkSync(preferred, path.join(dependency, main));
-      } else {
-        fs.writeFileSync(
-          path.join(dependency, change === "directory" ? "lib/index.js" : main),
-          'module.exports = "preferred";',
-        );
-      }
-      const second = source.capture(source.filename);
-      expect(createRequire(second.resolve(source.filename))("legacy")).toBe("preferred");
-      expect(firstLoad("legacy")).toBe("fallback");
-    });
-  },
-);
-
-it.each(["file", "directory"])(
-  "recaptures a deferred %s link when an external alias moves inside the package",
-  async (kind) => {
-    const source = fixture(Buffer.from('module.exports = "steady";'), "entry.cjs");
-    const root = path.dirname(source.filename);
-    const outside = temp.make("plugin-deferred-alias-");
-    const external = path.join(outside, "external");
-    if (kind === "directory") {
-      fs.mkdirSync(external);
-    } else {
-      fs.writeFileSync(external, "outside");
-    }
-    const alias = path.join(outside, "alias");
-    const link = path.join(root, "link");
-    fs.symlinkSync(external, alias, kind === "directory" ? "junction" : "file");
-    fs.symlinkSync(alias, link, kind === "directory" ? "junction" : "file");
-    const internal = kind === "directory" ? path.join(root, "helper") : source.filename;
-    if (kind === "directory") {
-      fs.mkdirSync(internal);
-      fs.writeFileSync(path.join(internal, "entry.cjs"), 'module.exports = "steady";');
-    }
-    await withPluginGenerationSourceCustody(async () => {
-      const first = source.capture();
-      expect(first.hasSource(link)).toBe(false);
-      fs.unlinkSync(alias);
-      fs.symlinkSync(internal, alias, kind === "directory" ? "junction" : "file");
-      const second = source.capture();
-      const selected = kind === "directory" ? path.join(link, "entry.cjs") : link;
-      expect(createRequire(import.meta.url)(second.resolve(selected))).toBe("steady");
-      expect(first.hasSource(link)).toBe(false);
-    });
-  },
-);
-
-it.each(["missing asset", "empty directory"])(
-  "recaptures standalone source when a %s gains content",
-  async (kind) => {
-    const relative = kind === "empty directory" ? "./assets/" : "./optional.dat";
-    const read =
-      kind === "empty directory"
-        ? 'fs.readdirSync(asset).join(",")'
-        : 'fs.readFileSync(asset, "utf8")';
-    const source = fixture(
-      Buffer.from(`import fs from "node:fs";
-    const asset = new URL(${JSON.stringify(relative)}, import.meta.url);
-    export default fs.existsSync(asset) ? ${read} : "missing";`),
-      "entry.mjs",
-    );
-    const asset = path.join(path.dirname(source.filename), relative);
-    if (kind === "empty directory") {
-      fs.mkdirSync(asset);
-    }
-    const load = createRequire(import.meta.url);
-    await withPluginGenerationSourceCustody(async () => {
-      const first = source.capture(source.filename);
-      const previous = load(first.resolve(source.filename)).default;
-      fs.writeFileSync(
-        kind === "empty directory" ? path.join(asset, "added.dat") : asset,
-        "available",
-      );
-      const second = source.capture(source.filename);
-      expect(load(second.resolve(source.filename)).default).toBe(
-        kind === "empty directory" ? "added.dat" : "available",
-      );
-      expect(load(first.resolve(source.filename)).default).toBe(previous);
-    });
-  },
-);
-
 it.each(["changed bytes", "escaping link"])(
   "rejects retained source with %s before admission",
   async (change) => {
@@ -362,14 +183,13 @@ it("captures and verifies a native artifact without whole-file Buffer reads", ()
     return result;
   });
   const artifact = source.capture();
-  artifact.assertSourceCurrent();
   reads.mockRestore();
   chunks.mockRestore();
 
   expect(wholeFileReads).toBe(0);
   expect(largestBuffer).toBeLessThanOrEqual(1024 * 1024);
-  // One capture digest and two fresh checks; portable descriptor copies add one transfer.
-  const passes = process.platform === "linux" || process.platform === "darwin" ? 3 : 4;
+  // Receipt replay reads the copied payload; portable copies add one transfer.
+  const passes = process.platform === "linux" || process.platform === "darwin" ? 1 : 2;
   expect(streamedBytes).toBeLessThanOrEqual(bytes.length * passes);
   // SHA-256 of the existing package/directory/file receipt framing and this fixed payload.
   expect(artifact.sourceDigest).toBe(
@@ -384,44 +204,6 @@ it("captures and verifies a native artifact without whole-file Buffer reads", ()
   expect(fs.readFileSync(captured).equals(bytes)).toBe(true);
   fs.unlinkSync(source.filename);
   expect(fs.readFileSync(artifact.resolve(source.filename)).equals(bytes)).toBe(true);
-});
-
-it.each(["unchanged metadata", "growing source"])("rejects edits with %s", (kind) => {
-  const source = fixture(Buffer.from("before"), "fixture.js");
-  const before = fs.statSync(source.filename, { bigint: true });
-  const artifact = source.capture();
-  let reads = 0;
-  if (kind === "unchanged metadata") {
-    const statSync = fs.statSync;
-    vi.spyOn(fs, "statSync").mockImplementation((filename, options) => {
-      const stat = statSync(filename, options);
-      if (filename === source.filename && stat && "mtimeNs" in stat) {
-        stat.mtimeNs = before.mtimeNs;
-        stat.ctimeNs = before.ctimeNs;
-      }
-      return stat;
-    });
-    expect(artifact.assertSourceCurrent).not.toThrow();
-    fs.writeFileSync(source.filename, "edited");
-  } else {
-    const readSync = fs.readSync;
-    vi.spyOn(fs, "readSync").mockImplementation((...args) => {
-      const length = Reflect.apply(readSync, fs, args);
-      const stat = fs.fstatSync(args[0], { bigint: true });
-      if (stat.dev === before.dev && stat.ino === before.ino) {
-        if (++reads > 8) {
-          throw new Error("Verification did not bound a growing source");
-        }
-        fs.appendFileSync(source.filename, "growth");
-      }
-      return length;
-    });
-  }
-  expect(artifact.assertSourceCurrent).toThrow(
-    "Plugin source changed while preparing its reload; retry after the edit finishes.",
-  );
-  expect(reads).toBeLessThanOrEqual(2);
-  expect(fs.readFileSync(artifact.resolve(source.filename), "utf8")).toBe("before");
 });
 
 it.each(["cold", "warm", "lazy"] as const)(

@@ -112,9 +112,7 @@ export function createMemoryRunEntryMockImplementation(deps: {
   ensureSelectedAgentHarnessPlugin: typeof ensureSelectedAgentHarnessPlugin;
 }) {
   return async (params: Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0]) => {
-    const assistantErrorTranscript = createAssistantErrorTranscript({
-      runId: params.identity.runId,
-    });
+    const assistantErrorTranscript = createAssistantErrorTranscript();
     const fallbackResult = (await deps.runWithModelFallback({
       ...params.selection,
       ...params.identity,

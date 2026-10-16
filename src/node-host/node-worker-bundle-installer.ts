@@ -14,7 +14,7 @@ import {
   type WorkerAdmissionHandshake,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
-import { extractErrorCode, hasErrnoCode } from "../infra/errors.js";
+import { extractErrorCode, hasErrnoCode, isMissingPathError } from "../infra/errors.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -285,7 +285,14 @@ async function readReceipt(bundleDir: string): Promise<WorkerAdmissionHandshake 
       await fsp.readFile(path.join(bundleDir, INSTALL_RECEIPT), "utf8"),
     ) as unknown;
     return validateWorkerAdmissionHandshake(raw) ? raw : undefined;
-  } catch {
+  } catch (error) {
+    // Missing or malformed cache receipts are repaired by the next installation.
+    if (!isMissingPathError(error) && !(error instanceof SyntaxError)) {
+      log.warn(
+        "Worker bundle receipt read failed; treating installation as missing. Check node-host storage permissions and disk health.",
+        { errorCode: extractErrorCode(error) },
+      );
+    }
     return undefined;
   }
 }
@@ -314,7 +321,15 @@ async function validateInstalledBundle(
     const root = await fsp.realpath(bundleDir);
     const entry = await fsp.realpath(path.join(root, WORKER_BUNDLE_ENTRY_PATH));
     return isPathInside(root, entry) && (await fsp.stat(entry)).isFile();
-  } catch {
+  } catch (error) {
+    // Invalid inventory is regenerable; filesystem failures still need a diagnostic.
+    const errorCode = extractErrorCode(error);
+    if (errorCode && !isMissingPathError(error)) {
+      log.warn(
+        "Worker bundle cache read failed; treating installation as missing. Check node-host storage permissions and disk health.",
+        { errorCode },
+      );
+    }
     return false;
   }
 }
@@ -334,7 +349,6 @@ export class NodeWorkerBundleInstaller {
   readonly #root: string;
   readonly #packageRoot: string | null;
   readonly #operations = new KeyedAsyncQueue();
-  readonly #bundleGenerationsByNamespace = new Map<string, Map<string, number>>();
   readonly #currentGenerationByNamespace = new Map<string, number>();
   readonly #prewarmedBundles = new Set<string>();
   readonly #workerEnv: NodeJS.ProcessEnv;
@@ -346,13 +360,9 @@ export class NodeWorkerBundleInstaller {
     this.#workerEnv = snapshotNodeWorkerEnv(env);
   }
 
-  #markPendingRetention(gatewayNamespace: string, bundleHash: string): void {
+  #recordInstall(gatewayNamespace: string): void {
     const generation = (this.#currentGenerationByNamespace.get(gatewayNamespace) ?? 0) + 1;
     this.#currentGenerationByNamespace.set(gatewayNamespace, generation);
-    const generations =
-      this.#bundleGenerationsByNamespace.get(gatewayNamespace) ?? new Map<string, number>();
-    generations.set(bundleHash, generation);
-    this.#bundleGenerationsByNamespace.set(gatewayNamespace, generations);
   }
 
   async #prewarmBundle(bundleDir: string, signal?: AbortSignal): Promise<void> {
@@ -454,8 +464,8 @@ export class NodeWorkerBundleInstaller {
           await this.#prewarmBundle(destination, params.signal);
         }
         params.signal?.throwIfAborted();
-        this.#markPendingRetention(input.gatewayNamespace, input.build.bundleHash);
-        return structuredClone(input.build);
+        this.#recordInstall(input.gatewayNamespace);
+        return input.build;
       } catch (error) {
         if (error instanceof NodeWorkerBundleInstallError) {
           throw error;
@@ -522,20 +532,6 @@ export class NodeWorkerBundleInstaller {
         throw error;
       }
       const protectedHashes = new Set(params.bundleHashes);
-      const generations = this.#bundleGenerationsByNamespace.get(params.gatewayNamespace);
-      const acknowledgedGeneration = params.acknowledgedGeneration ?? 0;
-      if (generations) {
-        for (const [bundleHash, generation] of generations) {
-          if (generation > acknowledgedGeneration) {
-            protectedHashes.add(bundleHash);
-          } else {
-            generations.delete(bundleHash);
-          }
-        }
-        if (generations.size === 0) {
-          this.#bundleGenerationsByNamespace.delete(params.gatewayNamespace);
-        }
-      }
       const candidates = entries
         .filter(
           (entry) =>

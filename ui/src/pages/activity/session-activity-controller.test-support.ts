@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { SessionActivityController } from "./session-activity-controller.ts";
+import { createSessionActivity } from "./session-activity-owner.ts";
 
 export function useSessionActivityControllerFixture() {
   const active: GatewaySessionRow = {
@@ -23,13 +23,13 @@ export function useSessionActivityControllerFixture() {
     sessions,
     defaults: { model: null, modelProvider: null, contextTokens: null },
   });
-  const controllers = new Set<SessionActivityController>();
+  const controllers = new Set<ReturnType<typeof createSessionActivity>>();
   beforeEach(() => {
     vi.spyOn(Math, "random").mockReturnValue(0);
   });
   afterEach(() => {
     for (const controller of controllers) {
-      controller.hostDisconnected();
+      controller.dispose();
     }
     controllers.clear();
     vi.restoreAllMocks();
@@ -42,13 +42,8 @@ export function useSessionActivityControllerFixture() {
       const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
       const request = vi.spyOn(client, "request").mockResolvedValue(listing([active]));
       const publications: Array<readonly GatewaySessionRow[] | undefined> = [];
-      const controller = new SessionActivityController({
-        addController() {},
-        removeController() {},
-        requestUpdate() {
-          publications.push(controller.result?.sessions);
-        },
-        updateComplete: Promise.resolve(true),
+      const controller = createSessionActivity(() => {
+        publications.push(controller.result?.sessions);
       });
       controllers.add(controller);
       return { client, request, controller, publications };

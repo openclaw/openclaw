@@ -12,12 +12,15 @@ import {
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import type { SessionDeleteTarget } from "../../lib/sessions/session-capability.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
   createModalDialogTestFixture,
   getRenderedModalDialog,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
+import { selectMenuValue, settleSessionMenu } from "../../test-helpers/session-menu.ts";
 import {
   createContext,
   createGateway,
@@ -96,10 +99,7 @@ async function setupArchivedPageWithSelection(
   const { context, changeScope } = withNotifyingAgentSelection(baseContext, scopeId);
   const page = await createRenderedPage(
     context,
-    {
-      count: 1,
-      sessions: [{ key: "agent:writer:old-1", archived: true }],
-    } as SessionsListResult,
+    sessionsResult([{ key: "agent:writer:old-1", kind: "direct", archived: true }], 1),
     "archived",
     expandedSessionKey,
   );
@@ -174,6 +174,104 @@ describe("sessions page agent-scope retirement", () => {
     }
   });
 
+  it.each([
+    { retired: false, fails: true },
+    { retired: true, fails: true },
+    { retired: true, fails: false },
+  ])(
+    "keeps placement outcomes in their captured agent scope (retired=$retired, fails=$fails)",
+    async ({ retired, fails }) => {
+      const row: GatewaySessionRow = {
+        key: "global",
+        agentId: "writer",
+        sessionId: "writer-global",
+        kind: "direct",
+        updatedAt: 1,
+        placement: {
+          state: "draining",
+          generation: 2,
+          createdAtMs: 1,
+          updatedAtMs: 2,
+          stateChangedAtMs: 2,
+          environmentId: "worker:writer",
+          activeOwnerEpoch: 7,
+          workerBundleHash: "a".repeat(64),
+          workspaceBaseManifestRef: "base",
+          remoteWorkspaceDir: "/workspace",
+        },
+        placementMove: {
+          target: { kind: "gateway" },
+          updatedAtMs: 2,
+          error: "Sync failed",
+          retry: {
+            expected: { generation: 1, environmentId: "worker:writer", ownerEpoch: 7 },
+            target: { kind: "gateway" },
+          },
+        },
+      };
+      const pending = createDeferred<unknown>();
+      const request = vi.fn(async (method: string) =>
+        method === "sessions.move" ? pending.promise : { profiles: [] },
+      );
+      const client = createTestGatewayClient(request);
+      const clientRequest = vi.spyOn(client, "request");
+      const connection = createGateway(client);
+      connection.emit({
+        hello: gatewayHelloForMethods(["sessions.move"], ["operator.read", "operator.write"]),
+      });
+      const reconcileMutation = vi.fn<SessionCapability["reconcileMutation"]>(async () => ({
+        status: "refreshed",
+      }));
+      const sessions = createSessions({ reconcileMutation });
+      const { context, changeScope } = withNotifyingAgentSelection(
+        createContext(connection.gateway, sessions),
+        "writer",
+      );
+      const page = await createRenderedPage(context, sessionsResult([row], 1));
+      await vi.waitFor(() => expect(page.loading).toBe(false));
+      page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
+      await page.updateComplete;
+      const menu =
+        page.querySelector<HTMLElementTagNameMap["openclaw-session-menu"]>(
+          "openclaw-session-menu",
+        )!;
+      await settleSessionMenu(menu);
+      await selectMenuValue(menu, "move-session");
+      await vi.waitFor(() =>
+        expect(clientRequest).toHaveBeenCalledWith("sessions.move", {
+          key: "global",
+          agentId: "writer",
+          ...row.placementMove!.retry,
+        }),
+      );
+      const result =
+        clientRequest.mock.results[
+          clientRequest.mock.calls.findIndex(([method]) => method === "sessions.move")
+        ]!.value;
+      if (retired) {
+        changeScope("main");
+        changeScope("writer");
+        await page.updateComplete;
+        await vi.waitFor(() => expect(page.loading).toBe(false));
+        page.error = "New foreground error.";
+      }
+      if (fails) {
+        pending.reject(new Error("Old placement failed."));
+      } else {
+        pending.resolve({ ok: true });
+      }
+      await Promise.resolve(result).catch(() => undefined);
+      await page.updateComplete;
+      if (retired) {
+        expect(reconcileMutation).not.toHaveBeenCalled();
+        expect(page.error).toBe("New foreground error.");
+      } else {
+        await vi.waitFor(() => expect(page.error).toBe("Old placement failed."));
+        expect(reconcileMutation).toHaveBeenCalledWith("writer");
+      }
+    },
+  );
+
   it("retires pending enumeration after switching away and back", async () => {
     const writerKeys = ["agent:writer:old-1", "agent:writer:old-2"];
     const listResponse = createDeferred<SessionsListResult>();
@@ -197,15 +295,12 @@ describe("sessions page agent-scope retirement", () => {
     changeScope("main");
     changeScope("writer");
     listResponse.resolve({
-      count: writerKeys.length,
+      ...sessionsResult(
+        writerKeys.map((key) => ({ key, kind: "direct", updatedAt: 1, archived: true })),
+        1,
+      ),
       totalCount: writerKeys.length,
-      sessions: writerKeys.map((key) => ({
-        key,
-        kind: "direct",
-        updatedAt: 1,
-        archived: true,
-      })),
-    } as SessionsListResult);
+    });
     await operation;
 
     expect(showConfirmDialog).not.toHaveBeenCalled();
@@ -215,13 +310,15 @@ describe("sessions page agent-scope retirement", () => {
 
   it("retires pending confirmation after switching away and back", async () => {
     const writerKeys = ["agent:writer:old-1", "agent:writer:old-2"];
-    const list = vi.fn(async () => ({
-      count: writerKeys.length,
+    const list = vi.fn<SessionCapability["list"]>(async () => ({
+      ...sessionsResult(
+        writerKeys.map((key) => ({ key, kind: "direct", archived: true })),
+        1,
+      ),
       totalCount: writerKeys.length,
-      sessions: writerKeys.map((key) => ({ key, archived: true })),
       hasMore: false,
       nextOffset: null,
-    })) as unknown as SessionCapability["list"];
+    }));
     const deleteMany = vi.fn(async () => ({
       deleted: writerKeys,
       errors: [],
@@ -267,7 +364,6 @@ describe("sessions page agent-scope retirement", () => {
     let newRequest: Promise<void> | undefined;
     try {
       await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledTimes(1));
-      expect(page.sessionMutationPending).toBe(true);
       changeScope("main");
       await page.updateComplete;
       await vi.waitFor(() => expect(page.loading).toBe(false));
@@ -283,7 +379,6 @@ describe("sessions page agent-scope retirement", () => {
       expect(deleteMany.mock.calls[1]?.[0]).toEqual([
         { key: newRow.key, agentId: undefined, archivedOnly: true },
       ]);
-      expect(page.sessionMutationPending).toBe(true);
 
       oldDelete.resolve({
         deleted: [],
@@ -292,14 +387,12 @@ describe("sessions page agent-scope retirement", () => {
       });
       await oldRequest;
       expect(page.error).toBeNull();
-      expect(page.sessionMutationPending).toBe(true);
       changeScope("main");
       await page.deleteSessionFromMenu(newRow);
       expect(deleteMany).toHaveBeenCalledTimes(2);
 
       newDelete.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
       await newRequest;
-      expect(page.sessionMutationPending).toBe(false);
       await page.deleteSessionFromMenu(newRow);
       expect(deleteMany).toHaveBeenCalledTimes(3);
     } finally {

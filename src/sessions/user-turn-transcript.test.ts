@@ -1,17 +1,23 @@
-// User turn transcript tests cover transcript extraction for user turns.
 import path from "node:path";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { rewritePreparedTranscriptMessageAtAnchor } from "../config/sessions/session-message-rewrite.js";
 import { transcriptMessage } from "../config/sessions/transcript-message.test-support.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+// User turn transcript tests cover transcript extraction for user turns.
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { readPendingUserTurnTranscriptAdmission } from "./user-turn-transcript-admission.js";
 import {
@@ -22,6 +28,7 @@ import {
   type UserTurnInput,
 } from "./user-turn-transcript.js";
 import {
+  isUserMessage,
   projectRecordedModelPrompt,
   readModelPromptProjection,
 } from "./user-turn-transcript.message.js";
@@ -32,7 +39,15 @@ import {
 } from "./user-turn-transcript.test-support.js";
 
 describe("user turn transcript persistence", () => {
-  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-user-turn-persist-");
+  const sessionDirs = useSessionStoreTempDirs(
+    (cleanup) =>
+      afterAll(async () => {
+        await cleanup();
+        clearRuntimeConfigSnapshot();
+      }),
+    "openclaw-user-turn-persist-",
+  );
+  beforeEach(() => setRuntimeConfigSnapshot({}));
   const unusedRecorderTarget = {
     agentId: "main",
     sessionEntry: undefined,
@@ -207,6 +222,29 @@ describe("user turn transcript persistence", () => {
   });
 
   describe("createUserTurnTranscriptRecorder", () => {
+    it("captures the current stored message and reuses a projection written by another recorder", async () => {
+      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const input = { text: "original", timestamp: 123, idempotencyKey: "shared-projection" };
+      const first = createUserTurnTranscriptRecorder({ input, target });
+      const second = createUserTurnTranscriptRecorder({ input, target });
+      await first.persistApproved();
+      await second.persistApproved();
+      await rewritePreparedTranscriptMessageAtAnchor(first.getAdmissionReceipt()!, (message) => {
+        if (!isUserMessage(message)) {
+          throw new Error("Expected the persisted user message");
+        }
+        return { ...message, independentMetadata: "preserved" };
+      });
+
+      const captured = await first.captureModelPromptProjection!("enriched", () => {});
+      expect(captured).toMatchObject({ content: "original", independentMetadata: "preserved" });
+      expect(await second.captureModelPromptProjection!("enriched", () => {})).toEqual(captured);
+      await expect(second.captureModelPromptProjection!("changed", () => {})).rejects.toThrow(
+        "cannot be changed",
+      );
+      await expect(readTranscriptMessages(target)).resolves.toEqual([captured]);
+    });
+
     it("freezes the original prompt after initial steering and across reopened recorders", async () => {
       const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
       const input = { text: "original prompt", timestamp: 123, idempotencyKey: "projection:user" };
@@ -240,19 +278,19 @@ describe("user turn transcript persistence", () => {
       await expect(readTranscriptMessages(target)).resolves.toEqual([captured, steered?.message]);
     });
 
-    it("uses the persisted target's redaction for capture, dispatch, and reopened replay", async () => {
+    it("preserves capture, dispatch, and replay bytes despite logging patterns", async () => {
       const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
-      const input = { text: "private", timestamp: 123, idempotencyKey: "redaction:user" };
-      const redactedTarget = { ...target, config: { logging: { redactPatterns: ["private"] } } };
+      const input = { text: "private", timestamp: 123, idempotencyKey: "fidelity:user" };
+      const loggingTarget = { ...target, config: { logging: { redactPatterns: ["private"] } } };
       const recorder = createUserTurnTranscriptRecorder({
         input,
         target: { ...target, config: { logging: { redactPatterns: [] } } },
       });
-      await recorder.persistApproved({ target: redactedTarget });
+      await recorder.persistApproved({ target: loggingTarget });
       const rawProjection = "prepend\n\nprivate\n\nappend";
       const captured = await recorder.captureModelPromptProjection!(rawProjection, () => {});
-      const expected = "prepend\n\n***\n\nappend";
-      expect(captured.content).toBe("***");
+      const expected = rawProjection;
+      expect(captured.content).toBe(input.text);
       expect(readModelPromptProjection(captured)).toBe(expected);
       expect(projectRecordedModelPrompt(makeUserMessage(input.text, 123), captured)).toMatchObject({
         content: expected,
@@ -263,9 +301,9 @@ describe("user turn transcript persistence", () => {
       );
       const stored = await readTranscriptMessages(target);
       expect(stored).toEqual([captured]);
-      expect(JSON.stringify(stored)).not.toContain("private");
+      expect(stored[0]?.content).toBe(input.text);
 
-      const reopened = createUserTurnTranscriptRecorder({ input, target: redactedTarget });
+      const reopened = createUserTurnTranscriptRecorder({ input, target: loggingTarget });
       await reopened.persistApproved();
       const replay = await reopened.captureModelPromptProjection!(rawProjection, () => {});
       expect(readModelPromptProjection(replay)).toBe(expected);
@@ -528,12 +566,15 @@ describe("user turn transcript persistence", () => {
         agentId: target.agentId,
         path: admission.storePath,
       });
-      const work = trackSqliteStatementExecutions(db, ["fts", "size"], (sql) =>
-        /\bsession_transcript_fts\b/i.test(sql)
-          ? "fts"
-          : sql.includes("octet_length")
-            ? "size"
-            : null,
+      const work = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(db),
+        ["fts", "size"],
+        (sql) =>
+          /\bsession_transcript_fts\b/i.test(sql)
+            ? "fts"
+            : sql.includes("octet_length")
+              ? "size"
+              : null,
       );
       try {
         await recorder.confirmSteerTargetRunIdForPersistence?.("active-run");

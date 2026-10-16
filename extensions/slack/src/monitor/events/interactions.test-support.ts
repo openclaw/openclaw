@@ -201,7 +201,7 @@ export function createContext(overrides?: {
     client: listenerClient,
   };
   const runtimeLog = vi.fn();
-  const resolveSessionKey = vi.fn().mockReturnValue({
+  const resolveSessionKey = vi.fn().mockResolvedValue({
     agentId: "ops",
     sessionKey: "agent:ops:slack:channel:C1",
   });

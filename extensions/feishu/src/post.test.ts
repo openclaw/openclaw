@@ -267,3 +267,13 @@ describe("parsePostContent", () => {
     });
   });
 });
+
+it("preserves code-block content containing Markdown fences through rich-post parsing", () => {
+  const code = "Before\n```markdown\n# literal heading\n```\nAfter";
+  const result = parsePostContent(
+    JSON.stringify({ content: [[{ tag: "code_block", language: "markdown", text: code }]] }),
+  );
+  expect(parseFeishuMarkdown(result.textContent)).toMatchObject({
+    children: [{ type: "code", lang: "markdown", value: code }],
+  });
+});

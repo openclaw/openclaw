@@ -427,6 +427,17 @@ describe("diagnostic stability bundles", () => {
             external: 1024,
             arrayBuffers: 512,
             sampleAgeMs: 20,
+            retainedData: [
+              {
+                structure: "catalog-source",
+                entries: 100,
+                approximateBytes: 512,
+                generations: 1,
+                providers: 2,
+                accounts: 3,
+                truncated: true,
+              },
+            ],
           },
         ],
         workerMemoryMissing: [
@@ -474,6 +485,17 @@ describe("diagnostic stability bundles", () => {
           external: 1024,
           arrayBuffers: 512,
           sampleAgeMs: 20,
+          retainedData: [
+            {
+              structure: "catalog-source",
+              entries: 100,
+              approximateBytes: 512,
+              generations: 1,
+              providers: 2,
+              accounts: 3,
+              truncated: true,
+            },
+          ],
         },
       ],
       workerMemoryMissing: [{ script: "other", threadId: 3, reason: "stale" }],
@@ -523,6 +545,32 @@ describe("diagnostic stability bundles", () => {
             heapUsedBytes: 1536,
             externalBytes: 128,
             arrayBuffersBytes: 64,
+            workerHeaps: [
+              {
+                script: "prepared-model-catalog.worker.js",
+                heapUsed: 512,
+                heapTotal: 1024,
+                retainedData: [
+                  {
+                    structure: "catalog-config",
+                    entries: 1,
+                    approximateBytes: 256,
+                    stringBytes: 128,
+                    objects: 2,
+                    providers: 2,
+                    accounts: 3,
+                    truncated: false,
+                    credentials: "catalog-credential-secret",
+                    modelKeys: ["private-model-key"],
+                  },
+                  {
+                    structure: "private-provider-name",
+                    entries: 1,
+                    approximateBytes: 100,
+                  },
+                ],
+              },
+            ],
           },
           topSessionFiles: [
             {
@@ -548,7 +596,7 @@ describe("diagnostic stability bundles", () => {
     });
     const snapshot = bundle.snapshot as Record<string, unknown>;
     Object.assign(snapshot, {
-      count: 3,
+      count: 4,
       privateSnapshot: "snapshot-secret",
       events: [
         {
@@ -578,12 +626,22 @@ describe("diagnostic stability bundles", () => {
           usage: {},
           context: {},
         },
+        {
+          seq: 4,
+          ts: 4,
+          type: "model.call.error",
+          durationMs: 130,
+          providerProcessingMs: 20.25,
+          providerWaitEstimateMs: 109.75,
+          failureKind: "aborted",
+        },
       ],
       summary: {
         byType: {
           "webhook.error": 1,
           "exec.approval.followup_suppressed": 1,
           "model.usage": 1,
+          "model.call.error": 1,
           "private summary type": 1,
         },
         privateSummary: "summary-secret",
@@ -607,6 +665,25 @@ describe("diagnostic stability bundles", () => {
       "agents/<agent>/sessions/<session>.jsonl",
     );
     expect(result.bundle.evidence?.memoryPressure).toMatchObject(retainedRuntimeEvidence);
+    expect(result.bundle.evidence?.memoryPressure?.memory?.workerHeaps?.[0]?.retainedData).toEqual([
+      {
+        structure: "catalog-config",
+        entries: 1,
+        approximateBytes: 256,
+        stringBytes: 128,
+        objects: 2,
+        providers: 2,
+        accounts: 3,
+        truncated: false,
+      },
+    ]);
+    for (const secret of [
+      "catalog-credential-secret",
+      "private-model-key",
+      "private-provider-name",
+    ]) {
+      expect(JSON.stringify(result.bundle)).not.toContain(secret);
+    }
     expect(result.bundle.evidence?.memoryPressure).toMatchObject({
       thresholdBytes: 0,
       rssGrowthBytes: -1,
@@ -643,10 +720,20 @@ describe("diagnostic stability bundles", () => {
         context: {},
       }),
     );
+    expect(result.bundle.snapshot.events[3]).toEqual({
+      seq: 4,
+      ts: 4,
+      type: "model.call.error",
+      failureKind: "aborted",
+      durationMs: 130,
+      providerProcessingMs: 20.25,
+      providerWaitEstimateMs: 109.75,
+    });
     expect(result.bundle.snapshot.summary.byType).toEqual({
       "webhook.error": 1,
       "exec.approval.followup_suppressed": 1,
       "model.usage": 1,
+      "model.call.error": 1,
     });
     const sanitized = JSON.stringify(result.bundle);
     for (const secret of [

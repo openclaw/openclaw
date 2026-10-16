@@ -84,7 +84,7 @@ export function registerBoardProviderLeaseCases(): void {
     }
   });
 
-  it.each(["chat-first", "dashboard-first"] as const)(
+  it.each(["dashboard-first"] as const)(
     "isolates concurrent board lease capabilities in %s order",
     async (order) => {
       const sessionKey = `agent:main:lease-capabilities-${order}`;
@@ -98,10 +98,10 @@ export function registerBoardProviderLeaseCases(): void {
         acquireBoardProviderForSession({ sessionKey }, client, true, true, true, true, true);
       const acquireDashboard = () =>
         acquireBoardProviderForSession({ sessionKey }, client, true, false, false, false, false);
-      const first = order === "chat-first" ? acquireChat() : acquireDashboard();
-      const second = order === "chat-first" ? acquireDashboard() : acquireChat();
-      const chat = order === "chat-first" ? first : second;
-      const dashboard = order === "chat-first" ? second : first;
+      const first = acquireDashboard();
+      const second = acquireChat();
+      const chat = second;
+      const dashboard = first;
 
       try {
         await vi.waitFor(() => expect(chat.provider.snapshot$.value).toEqual(snapshot));

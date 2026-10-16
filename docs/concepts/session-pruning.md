@@ -101,16 +101,16 @@ Two safety rules apply regardless of thresholds: the last three assistant turns 
 
 Only `toolResult` messages are eligible; normal conversation text is left alone. Use `agents.defaults.contextPruning.tools.{allow,deny}` to scope which tool names are prunable on either path.
 
-## Legacy image cleanup
+<a id="legacy-image-cleanup" />
 
-OpenClaw also builds a separate idempotent replay view for sessions that persist raw image blocks or prompt-hydration media markers in history.
+## Image history
 
-- It preserves at least the **3 most recent completed turns** byte-for-byte. After the first cleanup, the boundary advances in batches of **8 completed turns**, retaining 3–10 completed turns between cuts. This count includes text-only turns; appending a turn between cuts leaves the earlier replay bytes unchanged.
-- The window advances only when a new user turn begins, never within a tool loop. Replay derives the same boundary after a restart; compaction or an explicit history-window cut starts a new retained history segment. Image cleanup does not enforce the total model context limit; normal compaction and overflow recovery still own that limit.
-- In the replay view, older already-processed image blocks from `user` or `toolResult` history are replaced with `[image data removed - already processed by model]`.
-- Older textual media references such as `[media attached: ...]`, `[Image: source: ...]`, and `media://inbound/...` are replaced with `[media reference removed - already processed by model]`. Current-turn attachment markers stay intact so vision models can still hydrate fresh images.
-- The raw session transcript is not rewritten, so history viewers can still render the original message entries and their images.
-- This is separate from normal cache-TTL pruning above. It exists to stop repeated image payloads or stale media refs from busting prompt caches on later turns.
+Image blocks and attachment references stay in retained conversation history as
+new turns arrive. Replacing an already-sent image with a cleanup marker changes
+the prompt prefix and discards the provider's cached context. Compaction and
+explicit history-window limits own removal of old image-bearing turns; there is
+no separate age-based image cleanup. The raw transcript keeps the original
+attachments for history viewers.
 
 ## Smart defaults
 

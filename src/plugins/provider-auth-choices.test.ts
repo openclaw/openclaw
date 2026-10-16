@@ -500,6 +500,32 @@ describe("provider auth choice manifest helpers", () => {
     run();
   });
 
+  it.each([true, false])("preserves legacy credential aliases with native realm=%s", (native) => {
+    setManifestPlugins([
+      {
+        ...createManifestPlugin("anthropic", [
+          {
+            provider: "anthropic",
+            method: "cli",
+            choiceId: "anthropic-cli",
+            deprecatedChoiceIds: ["claude-cli"],
+            optionKey: "anthropicCli",
+            cliFlag: "--anthropic-cli",
+            cliOption: "--anthropic-cli",
+          },
+        ]),
+        ...(native ? { syntheticAuthRefs: ["claude-cli"] } : {}),
+      },
+    ]);
+    expect(resolveProviderIdForAuth("claude-cli")).toBe("anthropic");
+    expect(resolveManifestDeprecatedProviderAuthChoice("claude-cli")?.choiceId).toBe(
+      "anthropic-cli",
+    );
+    expect(resolveProviderOnboardAuthFlags()).toContainEqual(
+      expect.objectContaining({ authChoice: "anthropic-cli", cliFlag: "--anthropic-cli" }),
+    );
+  });
+
   it("can exclude untrusted workspace plugin auth choices during onboarding resolution", () => {
     setManifestPlugins([
       {

@@ -247,13 +247,9 @@ extension OpenClawChatViewModel {
     {
         struct Page: Decodable {
             let sessionId: String?
-            let totalMessages: Int?
-            let deltaCursor: String?
-            let sessionInfo: Info?
             let messages: [OpenClawKit.AnyCodable]?
             let hasMore: Bool?
             let nextOffset: Int?
-            struct Info: Decodable { let activeLeafEntryId: String? }
         }
         func page(_ offset: Int, limit: Int = 1000) async throws -> Page {
             var params = OpenClawChatGatewayRequests.sessionMenuTarget(session)
@@ -271,7 +267,7 @@ extension OpenClawChatViewModel {
         var offset = 0
         var pages: [[OpenClawKit.AnyCodable]] = []
         var seen: [OpenClawKit.AnyCodable: Int] = [:]
-        // ui/src/lib/sessions/session-menu-navigation.ts:90: tail-relative pages must share one incarnation and branch.
+        // Copy is best effort while a run appends messages; only a replaced session invalidates the export.
         while true {
             var counts: [OpenClawKit.AnyCodable: Int] = [:]
             pages.append((current.messages ?? []).filter { message in
@@ -292,14 +288,7 @@ extension OpenClawChatViewModel {
             guard let next = current.nextOffset, next > offset else { throw changed }
             offset = next
             current = try await page(offset)
-            guard current.sessionId == first.sessionId,
-                  current.totalMessages == first.totalMessages else { throw changed }
-        }
-        if pages.count > 1 {
-            let tail = try await page(0, limit: 1)
-            guard tail.sessionId == first.sessionId, tail.totalMessages == first.totalMessages,
-                  tail.deltaCursor == first.deltaCursor,
-                  tail.sessionInfo?.activeLeafEntryId == first.sessionInfo?.activeLeafEntryId else { throw changed }
+            guard current.sessionId == first.sessionId else { throw changed }
         }
         let messages = pages.reversed().flatMap(\.self).compactMap {
             try? GatewayPayloadDecoding.decode($0, as: OpenClawChatMessage.self)

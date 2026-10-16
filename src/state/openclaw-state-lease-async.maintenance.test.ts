@@ -100,7 +100,7 @@ function publishExpiry(scope: WorkerLeaseScope, expiresAt: number): number {
   const { admission } = scope.createAdmission({ settled: settled.promise });
   try {
     const attachment = withSqliteWorkerOperationAdmission(
-      { port: admission.port },
+      admission,
       takeSqliteWorkerOperationAdmissionAttachment,
     );
     if (

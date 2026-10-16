@@ -29,7 +29,7 @@ import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import {
   isCodexCommandBearingToolCall,
   resolveCodexToolProgressDetailMode,
-  sanitizeCodexToolArguments,
+  asCodexToolArguments,
 } from "./tool-progress-normalization.js";
 import type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.js";
 
@@ -206,7 +206,7 @@ export function createCodexAttemptServerRequestController(
       const toolMeta = inferToolMetaFromArgs(call.tool, call.arguments, {
         detailMode: resolveCodexToolProgressDetailMode(params.toolProgressDetail),
       });
-      const toolArgs = sanitizeCodexToolArguments(call.arguments);
+      const toolArgs = asCodexToolArguments(call.arguments);
       const commandBearing = isCodexCommandBearingToolCall(call.tool, toolArgs);
       const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool);
       if (shouldEmitDynamicToolProgress) {

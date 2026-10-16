@@ -8,7 +8,7 @@ import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveMSTeamsAccountConfig } from "../accounts.js";
 import { formatUnknownError } from "../errors.js";
 import {
   extractMSTeamsConversationMessageId,
@@ -23,6 +23,7 @@ import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { wasMSTeamsMessageSentWithPersistence } from "../sent-message-cache.js";
 import { admitMSTeamsMessage } from "./access.js";
+import { createMSTeamsHandlerConfigReader } from "./config.js";
 import { prepareMSTeamsInboundContent } from "./inbound-content.js";
 import { dispatchMSTeamsInboundTurn } from "./inbound-dispatch.js";
 import {
@@ -35,6 +36,8 @@ import { prepareMSTeamsThreadRouting, resolveMSTeamsThreadContext } from "./thre
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const {
     cfg,
+    accountPolicyCfg = cfg,
+    accountId,
     runtime,
     appId,
     app,
@@ -51,16 +54,20 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       log.debug?.(message);
     }
   };
-  const msteamsCfg = cfg.channels?.msteams;
+  const msteamsCfg = cfg.channels?.msteams
+    ? resolveMSTeamsAccountConfig(cfg, accountId)
+    : undefined;
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
     channel: "msteams",
+    accountId,
   });
   const historyLimit = resolvePromptHistoryLimit(
     msteamsCfg?.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
   );
   const conversationHistories = new Map<string, HistoryEntry[]>();
-  const readConfig = createRuntimeConfigReader(cfg);
+  const readFullConfig = createRuntimeConfigReader(accountPolicyCfg);
+  const readConfig = deps.readConfig ?? createMSTeamsHandlerConfigReader(deps);
   const resolveDebounceMs = () =>
     core.channel.debounce.resolveInboundDebounceMs({ cfg: readConfig(), channel: "msteams" });
 
@@ -69,15 +76,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const {
       context,
       activity,
-      rawText,
       text,
-      attachments,
       advertisedMedia,
       rawBody,
       quoteInfo,
       from,
-      conversation,
-      attachmentTypes,
       htmlSummary,
       conversationId,
       conversationMessageId,
@@ -89,18 +92,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const historyBody = [text, formatMediaPlaceholderText(advertisedMedia)]
       .filter(Boolean)
       .join("\n");
-    log.info("received message", {
-      rawText: truncateUtf16Safe(rawText, 50),
-      text: truncateUtf16Safe(text, 50),
-      attachments: attachments.length,
-      attachmentTypes,
-      from: from?.id,
-      conversation: conversation?.id,
-    });
-    if (htmlSummary) {
-      log.debug?.("html attachment summary", htmlSummary);
-    }
-
     if (!from?.id) {
       log.debug?.("skipping message without from.id");
       return;
@@ -128,6 +119,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           conversationId,
           messageId: facts.threadId,
           botId: activity.recipient.id,
+          accountId,
         });
         currentCfg = readConfig();
       }
@@ -142,6 +134,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     const admission = await admitMSTeamsMessage({
       cfg: currentCfg,
+      accountId,
       activity,
       text,
       conversationId,
@@ -179,12 +172,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           log.debug?.("poll vote ignored (poll not found)", {
             pollId: pollVote.pollId,
           });
-        } else {
-          log.info("recorded poll vote", {
-            pollId: pollVote.pollId,
-            voter: senderId,
-            selections: pollVote.selections,
-          });
         }
       } catch (err) {
         log.error("failed to record poll vote", {
@@ -197,16 +184,17 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     const threadRouting = prepareMSTeamsThreadRouting({
       cfg: currentCfg,
+      accountId,
       context,
       isDirectMessage,
       isChannel,
       senderId,
       conversationId,
-      conversationMessageId: conversationMessageId ?? undefined,
+      conversationMessageId,
       teamId,
       log,
     });
-    const { route, deadline: preprocessingDeadline } = threadRouting;
+    const { route } = threadRouting;
 
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`
@@ -267,7 +255,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
               sender: senderName,
               body: historyBody,
               timestamp: timestamp?.getTime(),
-              messageId: activity.id ?? undefined,
+              messageId: activity.id,
             },
           });
         }
@@ -278,10 +266,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       entry: params,
       rawBody,
       advertisedMedia,
-      htmlSummary: htmlSummary ?? undefined,
+      htmlSummary,
       conversationType,
       conversationId,
-      conversationMessageId: conversationMessageId ?? undefined,
+      conversationMessageId,
       teamAadGroupId: threadRouting.getTeamAadGroupId(),
       resolveTeamAadGroupId: threadRouting.resolveTeamAadGroupId,
       mediaMaxBytes,
@@ -289,7 +277,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       mediaAllowHosts: currentMSTeamsCfg?.mediaAllowHosts,
       mediaAuthAllowHosts: currentMSTeamsCfg?.mediaAuthAllowHosts,
       graphMediaFallback: currentMSTeamsCfg?.graphMediaFallback,
-      deadline: preprocessingDeadline,
       log,
     });
     if (!content) {
@@ -314,6 +301,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     await dispatchMSTeamsInboundTurn({
       cfg: currentCfg,
+      accountPolicyCfg: readFullConfig(),
+      readConfig,
+      listenerAccountId: accountId,
       runtime,
       app,
       tokenProvider,
@@ -417,6 +407,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   ) {
     const entry = await prepareMSTeamsDebounceEntry({
       context,
+      accountId,
       turnAdoptionLifecycle,
     });
     await inboundDebouncer.enqueue(entry);

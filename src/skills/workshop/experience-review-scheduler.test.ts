@@ -1,13 +1,26 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence-error.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
+import { GatewayDrainingError } from "../../process/gateway-work-admission.js";
 import {
   createSkillExperienceReviewScheduler,
   type ExperienceReviewCandidate,
   type SkillExperienceReviewParams,
 } from "./experience-review-scheduler.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
+
+const log = vi.hoisted(() => ({ debug: vi.fn(), warn: vi.fn() }));
+// mock-isolation: Capture review log severity without initializing real log sinks.
+vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
+
+beforeEach(() => {
+  log.debug.mockReset();
+  log.warn.mockReset();
+});
+
+afterEach(() => vi.restoreAllMocks());
 
 const source = {
   agentId: "main",
@@ -67,6 +80,109 @@ function createHarness() {
 }
 
 describe("skill experience review scheduler", () => {
+  it("backs off all sessions after a TPM rejection without replaying the failed review", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { turn, fireTimers, runReview } = createHarness();
+    runReview.mockRejectedValue(new Error("429 Rate limit reached: tokens per min (TPM)"));
+
+    turn(10);
+    fireTimers();
+    await setImmediate();
+    expect(runReview).toHaveBeenCalledTimes(1);
+    for (const minutes of [15, 30, 60]) {
+      turn(10, { sessionKey: `agent:main:session-${minutes}` });
+      now += minutes * 60_000 - 1;
+      fireTimers();
+      await setImmediate();
+      const before = runReview.mock.calls.length;
+      // The queue cannot bypass a cooldown through another session.
+      expect(before).toBe([15, 30, 60].indexOf(minutes) + 1);
+      now += 1;
+      fireTimers();
+      await setImmediate();
+      expect(runReview).toHaveBeenCalledTimes(before + 1);
+    }
+    now += 60 * 60_000;
+    fireTimers();
+    await setImmediate();
+    expect(runReview).toHaveBeenCalledTimes(4);
+  });
+
+  it("defers queued reviews when a foreground turn hits the shared rate limit", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { turn, fireTimers, runReview } = createHarness();
+    turn(10);
+    turn(1, {
+      sessionKey: "agent:other:interactive",
+      event: { messages: [], success: false, error: "429 Rate limit reached (TPM)" },
+    });
+    fireTimers();
+    await setImmediate();
+    expect(runReview).not.toHaveBeenCalled();
+    now += 15 * 60_000 - 1;
+    turn(1, {
+      sessionKey: "agent:other:interactive",
+      event: { messages: [], success: false, error: "429 Rate limit reached (TPM)" },
+    });
+    now += 1;
+    fireTimers();
+    await setImmediate();
+    expect(runReview).not.toHaveBeenCalled();
+    now += 15 * 60_000;
+    fireTimers();
+    await setImmediate();
+    expect(runReview).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["Gateway shutdown", new GatewayDrainingError(), "debug"],
+    [
+      "source transcript change",
+      new SessionTranscriptReadFenceError("Session transcript changed during context read"),
+      "debug",
+    ],
+    [
+      "wrapped source authority revocation",
+      new Error("admitted run authority is no longer active", {
+        cause: new SessionTranscriptReadFenceError(
+          "Session transcript changed during context read",
+        ),
+      }),
+      "debug",
+    ],
+    [
+      "cancellation with cleanup failure",
+      new AggregateError([new GatewayDrainingError(), new Error("database close failed")]),
+      "warn",
+    ],
+    ["provider failure", new Error("provider request failed"), "warn"],
+  ] as const)("reports %s with the appropriate log level", async (_reason, error, level) => {
+    const { turn, fireTimers, runReview } = createHarness();
+    const reported = Promise.withResolvers<void>();
+    const observe = (message: string) => {
+      if (message.startsWith("skill experience review ")) {
+        reported.resolve();
+      }
+    };
+    log.debug.mockImplementation(observe);
+    log.warn.mockImplementation(observe);
+    runReview.mockRejectedValue(error);
+
+    turn(10);
+    log.debug.mockClear();
+    fireTimers();
+    await reported.promise;
+
+    expect(log[level]).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `skill experience review ${level === "debug" ? "cancelled" : "failed"}:`,
+      ),
+    );
+    expect(log[level === "debug" ? "warn" : "debug"]).not.toHaveBeenCalled();
+  });
+
   it("accumulates model iterations across turns and reviews once the session reaches ten", async () => {
     const { turn, fireTimers, runReview, timers } = createHarness();
 
@@ -128,7 +244,7 @@ describe("skill experience review scheduler", () => {
     expect(runReview).not.toHaveBeenCalled();
   });
 
-  it("reviews right after a turn that used a learned skill, but not other skills", async () => {
+  it("waits for ten accumulated iterations even when turns use a learned skill", async () => {
     const { turn, fireTimers, runReview, timers } = createHarness();
     const workshopSkill = path.join(resolveWorkshopSkillsDir({}, "main"), "deploy", "SKILL.md");
 
@@ -138,11 +254,14 @@ describe("skill experience review scheduler", () => {
       ],
     });
     expect(timers).toHaveLength(0);
-    turn(1, {
-      usedSkills: [
-        { name: "deploy", source: "workspace", activation: "read", skillFile: workshopSkill },
-      ],
-    });
+    const usedSkills = [
+      { name: "deploy", source: "workspace", activation: "read", skillFile: workshopSkill },
+    ] as const;
+    turn(1, { usedSkills });
+    expect(timers).toHaveLength(0);
+    turn(7, { usedSkills });
+    expect(timers).toHaveLength(0);
+    turn(1, { usedSkills });
     expect(timers).toHaveLength(1);
     fireTimers();
     await vi.waitFor(() => expect(runReview).toHaveBeenCalledTimes(1));

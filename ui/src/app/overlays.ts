@@ -159,15 +159,14 @@ export function createApplicationOverlays(
       approvalDecision = null;
       promptState.execApprovalBusy = false;
     }
-    if (accessTransition.adminRevoked || accessTransition.pairingSetupRevoked) {
-      // Admin revocation invalidates bearer setup codes; losing both setup
-      // authorities must also close a pairing-only operator's retained modal.
+    if (accessTransition.adminRevoked) {
+      // Losing setup authority retires both the modal and any retained bearer code.
       closeDevicePairSetupState(devicePairSetupState);
       pairingPendingCount.invalidate({ clear: true });
     }
     if (accessTransition.pairingChanged) {
       pairingPendingCount.invalidate({
-        clear: !(operatorAccess.canAdmin || operatorAccess.canPair),
+        clear: !operatorAccess.canAdmin,
       });
     }
     activeClient = next.client;
@@ -201,7 +200,7 @@ export function createApplicationOverlays(
     if (
       accessTransition.pairingChanged &&
       devicePairSetupState.devicePairSetupOpen &&
-      (operatorAccess.canAdmin || operatorAccess.canPair)
+      operatorAccess.canAdmin
     ) {
       void runConnectionBootstrap("pairing-pending-count", () =>
         pairingPendingCount.refresh(),
@@ -280,6 +279,7 @@ export function createApplicationOverlays(
     subscribe: (listener) => registerListener(listeners, listener),
     refreshUpdateStatus: updates.refreshUpdateStatus,
     acknowledgeUpdateRun: updates.acknowledgeUpdateRun,
+    captureUpdateTarget: updates.captureUpdateTarget,
     runUpdate: updates.runUpdate,
     holdUpdate: updates.holdUpdate,
     diagnoseUpdateFailure: updates.diagnoseUpdateFailure,
@@ -360,7 +360,7 @@ export function createApplicationOverlays(
     },
     async openDevicePairSetup() {
       const access = readGatewayOperatorAccess(gateway.snapshot);
-      if (disposed || (!access.canAdmin && !access.canPair)) {
+      if (disposed || gateway.snapshot.phase !== "connected" || !access.canAdmin) {
         return false;
       }
       devicePairSetupState.pendingCount = 0;

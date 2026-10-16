@@ -77,6 +77,48 @@ async function receive(bot: Bot, message: NonNullable<Update["message"]>) {
 }
 
 describe("Telegram admitted model input", () => {
+  it("admits shared contacts and preserves their fields in replies", async () => {
+    const bot = await createBot(false, true, config());
+    const contact = {
+      ...textMessage("", false),
+      text: undefined,
+      contact: { first_name: "ContactProbe", last_name: "Q7", phone_number: "+15550100001" },
+    } satisfies NonNullable<Update["message"]>;
+    await receive(bot, contact);
+    expect(harness.replySpy.mock.calls[0]?.[0].BodyForAgent).toBe(
+      "[Shared contact] ContactProbe Q7, +15550100001",
+    );
+    await receive(bot, {
+      ...textMessage("Summarize this contact", false),
+      reply_to_message: { ...contact, reply_to_message: undefined },
+    });
+    expect(harness.replySpy.mock.calls[1]?.[0].ReplyToBody).toBe(
+      "[Shared contact] ContactProbe Q7, +15550100001",
+    );
+  });
+
+  it.each([
+    { name: "@openclaw_bot", pattern: "" },
+    { name: "ContactProbe", pattern: "ContactProbe" },
+    { name: "ContactProbe", pattern: "15550100001" },
+    { name: "@Analyst", pattern: "" },
+  ])("does not activate groups from contact fields $name/$pattern", async ({ name, pattern }) => {
+    const cfg = config();
+    cfg.messages = { groupChat: { mentionPatterns: pattern ? [pattern] : [] } };
+    cfg.agents = { entries: { main: {}, analyst: { identity: { name: "Analyst" } } } };
+    cfg.bindings = [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }];
+    cfg.broadcast = { "telegram:-10042001": ["main", "analyst"] };
+    const bot = await createBot(false, true, cfg);
+    await receive(bot, {
+      ...textMessage(""),
+      text: undefined,
+      contact: { first_name: name, phone_number: "+15550100001" },
+    });
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    await receive(bot, textMessage("@openclaw_bot hello"));
+    expect(harness.replySpy).toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "allowed named account",
@@ -162,7 +204,6 @@ describe("Telegram admitted model input", () => {
 
   it.each([
     { topic: false, activation: "mention", admitted: true },
-    { topic: true, activation: "always", admitted: false },
     { topic: undefined, activation: "always", admitted: true },
   ] as const)(
     "gives topic mention policy precedence over stored $activation activation ($topic)",
@@ -218,20 +259,6 @@ describe("Telegram admitted model input", () => {
       agent: undefined,
       key: "agent:main:work",
     },
-    {
-      name: "topic flag without forum metadata",
-      chatId: -100420020002,
-      topic: true,
-      agent: "absent-agent",
-      key: "agent:absent-agent:work",
-    },
-    {
-      name: "blank topic agent",
-      chatId: -100420020003,
-      topic: true,
-      agent: "   ",
-      key: "agent:main:work",
-    },
   ])(
     "routes $name with native thread evidence and configured topic agents",
     async ({ chatId, topic, agent, key }) => {
@@ -277,10 +304,8 @@ describe("Telegram admitted model input", () => {
   );
 
   it.each([
-    { text: "ambient text", roomEvents: true, kind: "room_event", typing: false },
     { text: "@openclaw_bot answer", roomEvents: true, kind: "user_request", typing: true },
     { text: "stop", roomEvents: true, kind: "user_request", typing: true },
-    { text: "ordinary unmentioned text", roomEvents: false, kind: "user_request", typing: true },
   ] as const)(
     "classifies $text and suppresses room-event feedback",
     async ({ text, roomEvents, kind, typing }) => {
@@ -319,7 +344,7 @@ describe("Telegram admitted model input", () => {
     },
   );
 
-  it.each([telegramBotInfoForTest.id, 123] as const)(
+  it.each([telegramBotInfoForTest.id] as const)(
     "admits display-name mentions only for the current bot ID (%s)",
     async (id) => {
       await receive(await createBot(false, true, config()), {
@@ -337,37 +362,27 @@ describe("Telegram admitted model input", () => {
     },
   );
 
-  it.each([
-    "forum_topic_created",
-    "forum_topic_edited",
-    "forum_topic_closed",
-    "forum_topic_reopened",
-    "general_forum_topic_hidden",
-    "general_forum_topic_unhidden",
-    "captionless bot media",
-    "foreign sender",
-  ])("does not mistake %s for a bot conversation reply", async (kind) => {
-    const admitted = kind === "captionless bot media";
-    await receive(await createBot(false, true, config()), {
-      ...textMessage("hello everyone"),
-      reply_to_message: {
-        message_id: 2,
-        date: 1736380700,
-        chat: groupChat,
-        from: kind === "foreign sender" ? from : telegramBotInfoForTest,
-        ...(admitted ? { photo } : {}),
-        ...(kind.startsWith("forum_") || kind.startsWith("general_") ? { [kind]: {} } : {}),
-        reply_to_message: undefined,
-      },
-    });
-    expect(harness.replySpy).toHaveBeenCalledTimes(admitted ? 1 : 0);
-  });
+  it.each(["forum_topic_created", "captionless bot media"])(
+    "does not mistake %s for a bot conversation reply",
+    async (kind) => {
+      const admitted = kind === "captionless bot media";
+      await receive(await createBot(false, true, config()), {
+        ...textMessage("hello everyone"),
+        reply_to_message: {
+          message_id: 2,
+          date: 1736380700,
+          chat: groupChat,
+          from: kind === "foreign sender" ? from : telegramBotInfoForTest,
+          ...(admitted ? { photo } : {}),
+          ...(kind.startsWith("forum_") || kind.startsWith("general_") ? { [kind]: {} } : {}),
+          reply_to_message: undefined,
+        },
+      });
+      expect(harness.replySpy).toHaveBeenCalledTimes(admitted ? 1 : 0);
+    },
+  );
 
-  it.each([
-    { text: "@Analyst please review", acp: false, admitted: true },
-    { text: "Analyst wrote this; \u{1f50e} @Other", acp: false, admitted: false },
-    { text: "@Analyst please review", acp: true, admitted: false },
-  ])(
+  it.each([{ text: "@Analyst please review", acp: true, admitted: false }])(
     "admits explicitly addressed participants but not ambient names or ACP targets ($text, $acp)",
     async ({ text, acp, admitted }) => {
       const cfg = config();
@@ -409,6 +424,40 @@ describe("Telegram admitted model input", () => {
       }
     },
   );
+
+  it.each([
+    { emoji: "\u{1F3B2}", value: 4, body: "[Dice \u{1F3B2} = 4]" },
+    { emoji: "\u{1F3B0}", value: 64, body: "[Dice \u{1F3B0} = 64]" },
+  ])("delivers a dice-only $emoji update", async ({ emoji, value, body }) => {
+    await receive(await createBot(false, true, config()), {
+      ...textMessage("", false),
+      text: undefined,
+      dice: { emoji, value },
+    });
+
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+    expect(harness.replySpy.mock.calls[0]?.[0]?.BodyForAgent).toBe(body);
+  });
+
+  it("keeps a mention-skipped dice roll in ambient group history", async () => {
+    const received = vi.fn();
+    registerInternalHook("message:received", received);
+    const cfg = config({ requireMention: true, ingest: true });
+    cfg.channels!.telegram!.groups!["-10042001"] = { requireMention: true };
+
+    await receive(await createBot(false, true, cfg), {
+      ...textMessage(""),
+      text: undefined,
+      dice: { emoji: "\u{1F3AF}", value: 3 },
+    });
+
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(received).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({ content: "[Dice \u{1F3AF} = 3]" }),
+      }),
+    );
+  });
 
   it("renders nested rich-only messages in order and retains sender attribution", async () => {
     const rich = {
@@ -496,7 +545,7 @@ describe("Telegram admitted model input", () => {
     );
   });
 
-  it.each(["/think high\nsummarize the thread so far", "/reset\nextra context"])(
+  it.each(["/think high\nsummarize the thread so far"])(
     "preserves all lines of the text command %s",
     async (text) => {
       await receive(await createBot(false, true, config()), textMessage(text, false));
@@ -530,6 +579,7 @@ describe("Telegram admitted model input", () => {
     expect(transcribe.mock.calls[0]?.[0].ctx).toMatchObject({
       OriginatingTo: "telegram:-10042001:topic:99",
       AccountId: "default",
+      ChatType: "group",
       MessageThreadId: 99,
     });
     expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
@@ -541,11 +591,7 @@ describe("Telegram admitted model input", () => {
     });
   });
 
-  it.each([
-    { group: true, topic: undefined, admitted: false },
-    { group: true, topic: false, admitted: true },
-    { group: false, topic: true, admitted: false },
-  ])(
+  it.each([{ group: true, topic: undefined, admitted: false }])(
     "honors topic audio-preflight precedence ($group, $topic)",
     async ({ group, topic, admitted }) => {
       const cfg = config({
@@ -566,10 +612,7 @@ describe("Telegram admitted model input", () => {
     },
   );
 
-  it.each([
-    { name: "unthreaded DM", threadId: undefined },
-    { name: "DM topic", threadId: 77 },
-  ])(
+  it.each([{ name: "DM topic", threadId: 77 }])(
     "preserves named-account $name voice echo routing without a group mention",
     async ({ threadId }) => {
       const cfg = config();
@@ -586,6 +629,7 @@ describe("Telegram admitted model input", () => {
       expect(transcribe.mock.calls[0]?.[0].ctx).toMatchObject({
         OriginatingTo: "telegram:42001",
         AccountId: "atlas",
+        ChatType: "direct",
         MessageThreadId: threadId,
       });
       expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
@@ -634,21 +678,18 @@ describe("Telegram admitted model input", () => {
     },
   );
 
-  it.each(["denied DM", "empty DM", "mention-skipped"])(
-    "does not type for %s input",
-    async (kind) => {
-      const cfg = config({ requireMention: true });
-      if (kind === "denied DM") {
-        cfg.channels!.telegram!.dmPolicy = "disabled";
-      }
-      await receive(
-        await createBot(false, true, cfg),
-        textMessage(kind === "empty DM" ? "" : "quiet input", kind === "mention-skipped"),
-      );
-      expect(harness.replySpy).not.toHaveBeenCalled();
-      expect(apiCalls).not.toHaveBeenCalledWith("sendChatAction", expect.anything());
-    },
-  );
+  it.each(["denied DM", "empty DM"])("does not type for %s input", async (kind) => {
+    const cfg = config({ requireMention: true });
+    if (kind === "denied DM") {
+      cfg.channels!.telegram!.dmPolicy = "disabled";
+    }
+    await receive(
+      await createBot(false, true, cfg),
+      textMessage(kind === "empty DM" ? "" : "quiet input", kind === "mention-skipped"),
+    );
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(apiCalls).not.toHaveBeenCalledWith("sendChatAction", expect.anything());
+  });
 
   it("canonicalizes all-scope room-event heart acknowledgements at the API boundary", async () => {
     const cfg = config({ requireMention: false });

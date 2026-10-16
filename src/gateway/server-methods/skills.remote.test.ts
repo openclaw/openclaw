@@ -4,13 +4,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { seedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { saveSkillLibrary } from "../../skills/library/service.js";
-import { readWorkspaceSkillSources } from "../../skills/loading/workspace-skill-loader.js";
+import { readWorkspaceSkillSources } from "../../skills/loading/workspace-skill-source-reader.js";
 import {
   resolveWorkspaceSkillSourcePlan,
   type WorkspaceSkillSourceRequest,
@@ -143,6 +144,7 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
         skills: { load: { watch: false } },
         agents: { entries: { main: { workspace: state.workspaceDir } } },
       };
+      setRuntimeConfigSnapshot(cfg);
       const alice = ensureProfileForEmail("alice@example.test");
       const bob = ensureProfileForEmail("bob@example.test");
       const authority = {

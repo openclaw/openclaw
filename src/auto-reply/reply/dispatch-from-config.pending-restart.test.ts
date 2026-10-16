@@ -1,6 +1,10 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   listSessionPendingInputs,
   loadTranscriptEvents,
@@ -27,6 +31,8 @@ it("dispatches freshly reclaimed pending input despite its pre-restart inbound d
       plugins: { enabled: false },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const sessionKey = "agent:main:pending-restart";
     const sessionId = "pending-restart-session";
     const runId = "pending-restart-input";
@@ -156,6 +162,8 @@ it.each([
   "keeps completed inbound receipts bound to one exact recovered source (%s)",
   async (control) => {
     await withOpenClawTestState({ label: "pending-input-dedupe-controls" }, async () => {
+      setRuntimeConfigSnapshot({});
+      onTestFinished(() => clearRuntimeConfigSnapshot());
       const target = {
         agentId: "main",
         sessionKey: "agent:main:dedupe",

@@ -11,13 +11,14 @@ import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js
 import type { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { createEmbeddedRunProgressController } from "./progress-controller.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime.js";
 import type { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import type { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export type PreparedEmbeddedRunInput = {
+  modelCallSequence?: { value: number };
   /** Retain lazy-writer cleanup with this prepared runtime after its logical result. */
   onInitialWriterPrepared: (resource: AsyncDisposable) => void;
   preReplyGeneration?: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;

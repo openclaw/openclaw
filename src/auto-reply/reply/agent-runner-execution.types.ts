@@ -1,4 +1,7 @@
-import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type {
+  CompactionAccountingFact,
+  CompactionAccountingTarget,
+} from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
@@ -8,19 +11,13 @@ import type { VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { resolveBlockStreamingChunking } from "./block-streaming.js";
-import type { CurrentTurnImages } from "./current-turn-images.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { FollowupRun } from "./queue.js";
+import type { InternalFollowupRun } from "./queue/types.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
-
-export type InternalFollowupRun = FollowupRun & {
-  /** Keep admission state out of the public plugin-facing FollowupRun contract. */
-  currentTurnImagesPrepared?: true;
-  mediaImageLayout?: CurrentTurnImages["mediaImageLayout"];
-};
 
 export type CompletedAgentAuthSelection = Pick<
   FollowupRun["run"],
@@ -62,6 +59,8 @@ export type AgentTurnInternalResult =
 
 type SettledAgentTurnBase = {
   kind: "settled";
+  /** The runtime's claimed writer, independent of whether it compacted. */
+  sessionWriter?: CompactionAccountingTarget;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   compactionRequestBudget?: CompactionRequestBudget;
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
@@ -85,7 +84,7 @@ export type SettledAgentTurn = SettledAgentTurnBase &
       }
     | {
         status: "failed";
-        terminalFailurePayload: ReplyPayload;
+        terminalFailurePayload?: ReplyPayload;
         postCompactionModelFailure?: true;
       }
   );
@@ -109,7 +108,7 @@ export type AgentTurnExecutionResult = {
 export type ReplyAgentTurnContext = {
   commandBody: string;
   transcriptCommandBody?: string;
-  followupRun: FollowupRun;
+  followupRun: InternalFollowupRun;
   sessionCtx: TemplateContext;
   replyOperation?: ReplyOperation;
   opts?: InternalGetReplyOptions;

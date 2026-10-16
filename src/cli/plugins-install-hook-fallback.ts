@@ -4,6 +4,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { PluginsInstallParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
+  HOOK_INSTALL_ERROR_CODE,
   installHooksFromNpmSpec,
   installHooksFromPath,
   type InstallHooksResult,
@@ -35,6 +36,7 @@ import {
   createPluginInstallLogger,
   formatPluginInstallWithHookFallbackError,
 } from "./plugins-command-helpers.js";
+import { runWithLocalPluginState } from "./plugins-local-state.js";
 
 type HookCompatibleSource = Extract<PluginsInstallParams, { source: "local" | "npm" }>;
 type InstallParams = Parameters<typeof installManagedPlugin>[0] & {
@@ -106,6 +108,17 @@ async function installHookPack(
         "--no-enable is only supported for plugins. Install hook packs separately with openclaw hooks install.",
     };
   }
+  return await runWithLocalPluginState("install (hook fallback)", (assertCurrent) =>
+    installHookPackLocal(source, params, expectedPackageKind, assertCurrent),
+  );
+}
+
+async function installHookPackLocal(
+  source: HookCompatibleSource,
+  params: InstallParams,
+  expectedPackageKind: "hook-only" | undefined,
+  assertCurrent: () => void,
+): Promise<InstallResult> {
   // Online plugin rejection can precede this fallback; acquire and reread only for the hook write.
   return await withPluginLifecycleLease({ signal: params.signal }, async (lease) => {
     const request = resolvePluginInstallRequestContext({
@@ -134,6 +147,7 @@ async function installHookPack(
       return { ok: false, error: "Linked hook pack paths must be directories." };
     }
     const beforePersistentApply = () => {
+      assertCurrent();
       params.signal?.throwIfAborted();
       lease.assertOwned();
       snapshot.writeOptions.assertConfigPathForWrite?.();
@@ -212,7 +226,21 @@ async function installInspectedHookPack(
   params: InstallParams,
 ): Promise<InstallResult | undefined> {
   const probe = await attemptHookInstall(source, params, { inspection: "package-kind" });
-  if (!probe.ok || probe.packageKind !== "hook-only") {
+  if (!probe.ok) {
+    // A package without hook manifest entries is a confirmed negative. Any other
+    // failure leaves the artifact unidentified, so its reason must stay visible
+    // beside the original rejection the caller still returns.
+    if (
+      probe.code !== HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS &&
+      probe.code !== HOOK_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_HOOKS
+    ) {
+      (params.runtime ?? defaultRuntime).log(
+        theme.warn(`Hook-pack fallback skipped: package inspection failed: ${probe.error}`),
+      );
+    }
+    return undefined;
+  }
+  if (probe.packageKind !== "hook-only") {
     return undefined;
   }
   const pinned =

@@ -11,7 +11,7 @@ import {
   RUNTIME_POSTBUILD_STAMP_FILE,
   writeRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mts";
-import { captureRunNodeInputState } from "./lib/run-node-input-state.mts";
+import { resolveRunNodeInputSignature } from "./lib/run-node-input-state.mts";
 import { resolveRunNodePreparation } from "./run-node.mts";
 import { runRuntimePostBuild } from "./runtime-postbuild.mts";
 import { listTsdownOutputRoots } from "./tsdown-build.mts";
@@ -62,7 +62,7 @@ export async function prepareTestRuntime(
           console.error(fence.message);
           return 1;
         }
-        const inputState = captureRunNodeInputState(
+        const inputSignature = resolveRunNodeInputSignature(
           {
             cwd,
             distRoot: path.join(cwd, "dist"),
@@ -75,7 +75,7 @@ export async function prepareTestRuntime(
         fs.rmSync(path.join(cwd, "dist", RUNTIME_POSTBUILD_STAMP_FILE), { force: true });
         runRuntimePostBuild({ cwd, env });
         signal?.throwIfAborted();
-        writeRuntimePostBuildStamp({ cwd, env, inputState });
+        writeRuntimePostBuildStamp({ cwd, env, inputSignature });
       }
       return 0;
     },

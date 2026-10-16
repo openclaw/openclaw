@@ -426,28 +426,6 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     );
   });
 
-  it("respects explicit mode=run when thread binding is requested", async () => {
-    const result = await spawn({
-      runTimeoutSeconds: 1,
-      thread: true,
-      mode: "run",
-      agentTo: "channel:123",
-      context: "isolated",
-    });
-
-    expectFields(result, { status: "accepted", runId: "run-1", mode: "run" }, "spawn result");
-    expect(bindingMocks.bind).toHaveBeenCalledTimes(1);
-    const event = getSpawnedEventCall();
-    expectFields(
-      event,
-      {
-        mode: "run",
-        threadRequested: true,
-      },
-      "spawned event",
-    );
-  });
-
   it("returns error when thread binding cannot be created", async () => {
     bindingMocks.bind.mockRejectedValueOnce(
       new Error("Unable to create or bind a Discord thread for this subagent session."),

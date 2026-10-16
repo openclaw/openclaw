@@ -95,6 +95,7 @@ export class UpdateFinalizationLifecycle {
   private reportTimeout?: () => void;
   private failureObservation?: UpdateRunResult;
   private failureReason?: string;
+  private readonly recordedWarningCounts = new Map<"doctor" | "plugins", number>();
 
   constructor(
     private readonly json: boolean,
@@ -197,10 +198,33 @@ export class UpdateFinalizationLifecycle {
     }
   }
 
+  /** Records the phase's complete current warning list, retiring rows a shorter list drops. */
   recordWarnings(warnings: readonly string[], phase: "doctor" | "plugins" = "doctor"): void {
     warnings.forEach((detail, index) => {
       this.record(`warning:finalize:${phase}:${index}`, "completed", Date.now(), detail);
     });
+    const recorded = this.recordedWarningCounts.get(phase) ?? 0;
+    this.recordedWarningCounts.set(phase, warnings.length);
+    if (!this.runId) {
+      return;
+    }
+    // Reports render only completed warning rows; retired rows stay as bounded history.
+    for (let index = warnings.length; index < recorded; index += 1) {
+      try {
+        recordUpdateRunStep(
+          this.runId,
+          {
+            step: `warning:finalize:${phase}:${index}`,
+            status: "skipped",
+            endedAtMs: Date.now(),
+            detail: "Settled or superseded later in this update.",
+          },
+          this.ledgerOptions,
+        );
+      } catch {
+        defaultRuntime.error("[update finalize] Could not retire a settled warning.");
+      }
+    }
   }
 
   recordDoctorStep(step: UpdateStepResult): void {
@@ -371,16 +395,29 @@ export class UpdateFinalizationLifecycle {
         failure.message = `Update finalization timed out in ${phase} after ${budgetMs}ms`;
         deadline.start(failure, budgetMs);
       }
-      const result = await deadline.run(() =>
-        withCommandProcessScope(async (stop) => {
-          stopPhaseChildren = stop;
-          scope.assertCurrent();
-          return await output.run(() => run(scope));
-        }, scope.signal),
+      const result = await deadline.run(
+        () =>
+          withCommandProcessScope(async (stop) => {
+            stopPhaseChildren = stop;
+            scope.assertCurrent();
+            return await output.run(() => run(scope));
+          }, scope.signal),
+        // Optional cache failure can settle during cancellation; unjoined work
+        // and cleanup errors still refuse finalization in the deadline owner.
+        phase === "completionCache" ? (cacheResult) => cacheResult === "failed" : undefined,
       );
       await withCommandProcessScope(async () => {
         await custody?.restore?.(result);
       });
+      if (deadline.failure) {
+        this.record(
+          `warning:finalize:${phase}:deadline`,
+          "completed",
+          Date.now(),
+          deadline.failure.message,
+        );
+        this.reportTimeout = undefined;
+      }
       const completed = outcome?.(result) ?? "completed";
       end(
         typeof completed === "string" ? completed : completed.outcome,
@@ -529,21 +566,27 @@ export class UpdateFinalizationLifecycle {
     if (!hasCliProcessScope()) {
       return;
     }
-    // Recovery may still await diagnostics after terminal output; arm the watchdog
-    // from finishRecovery before unwinding resource cleanup.
+    // Recovery may still await diagnostics after terminal output. Once it has
+    // settled, the watchdog diagnoses stalls and cancels only this owner's children;
+    // the CLI finalizer still joins their cleanup before recording the exit code.
     this.deferredExitWatch = () =>
-      watchCliExitAfterOutput(exitCode, () => {
-        const diagnostic = JSON.stringify({
-          activeResources: [...new Set(process.getActiveResourcesInfo())].toSorted(),
-          unsettledDisposers: getPendingCliDisposers(),
-          ...inspectUpdateFinalizationChildren(),
-        });
-        writeSync(
-          2,
-          `[update finalize] Process still alive after terminal output: ${diagnostic}\n`,
-        );
-        this.recordDiagnostic(diagnostic);
-        this.stopChildren();
+      watchCliExitAfterOutput(() => {
+        try {
+          const diagnostic = JSON.stringify({
+            activeResources: [...new Set(process.getActiveResourcesInfo())].toSorted(),
+            unsettledDisposers: getPendingCliDisposers(),
+            ...inspectUpdateFinalizationChildren(),
+          });
+          writeSync(
+            2,
+            `[update finalize] Process still alive after terminal output: ${diagnostic}\n`,
+          );
+          this.recordDiagnostic(diagnostic);
+        } catch {
+          // A broken diagnostic sink cannot interrupt owner cancellation or cleanup.
+        } finally {
+          this.stopChildren();
+        }
       });
   }
 }

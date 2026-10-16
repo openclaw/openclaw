@@ -57,7 +57,7 @@ it.each([false, true])(
         expect(
           await resolveHeartbeatDeliveryTargetWithSessionRoute({ cfg, agentId: "main" }),
         ).toMatchObject({ channel: "none", reason: "no-route" });
-        const ctx = await withPluginRuntimeRegistryScope(registry, () =>
+        await using ctx = await withPluginRuntimeRegistryScope(registry, () =>
           prepareDoctorContext(configPath),
         );
         if (history) {

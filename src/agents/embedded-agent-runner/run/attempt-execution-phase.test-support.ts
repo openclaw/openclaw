@@ -19,9 +19,13 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
   flushPendingToolResultsAfterIdle: mocks.flushPendingToolResultsAfterIdle,
 }));
 vi.mock("./abortable.js", () => ({ abortable: mocks.abortable }));
-vi.mock("./attempt-finalize.js", () => ({
-  createEmbeddedAttemptRunAbort: mocks.createRunAbort,
-}));
+vi.mock("./attempt-finalize.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./attempt-finalize.js")>();
+  return {
+    ...actual,
+    createEmbeddedAttemptRunAbort: mocks.createRunAbort,
+  };
+});
 vi.mock("./attempt-history-prepare.js", () => ({
   prepareEmbeddedAttemptHistory: mocks.prepareHistory,
 }));
@@ -204,7 +208,6 @@ export async function createFixture(
     order.push("history");
     return {
       contextEnginePromptAuthority: "assembled",
-      contextEngineAssemblySucceeded: true,
     };
   });
   mocks.createRunAbort.mockImplementation(() => {

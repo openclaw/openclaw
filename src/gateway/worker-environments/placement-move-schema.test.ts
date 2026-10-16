@@ -113,7 +113,7 @@ describe("worker placement move schema", () => {
 
     const reopened = openOpenClawStateDatabase(options);
     const reopenedStore = createWorkerSessionPlacementStore({ database: reopened });
-    expect(reopenedStore.getPlacementMove("session-move")).toEqual(begun.intent);
+    expect(await reopenedStore.getPlacementMoveAsync("session-move")).toEqual(begun.intent);
     expect(
       (await reopenedStore.readProjection(["session-move"])).moves.get("session-move"),
     ).toEqual(begun.intent);

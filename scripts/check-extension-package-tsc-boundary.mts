@@ -173,14 +173,14 @@ export function formatBoundaryCheckSuccessSummary(params: BoundarySummaryParams 
   if (Number.isInteger(params.canaryCount)) {
     lines.push(`canary plugins: ${params.canaryCount}`);
   }
-  if (isPositiveFinite(params.prepElapsedMs)) {
-    lines.push(`prep elapsed: ${params.prepElapsedMs}ms`);
-  }
-  if (isPositiveFinite(params.compileElapsedMs)) {
-    lines.push(`compile elapsed: ${params.compileElapsedMs}ms`);
-  }
-  if (isPositiveFinite(params.canaryElapsedMs)) {
-    lines.push(`canary elapsed: ${params.canaryElapsedMs}ms`);
+  for (const [phase, elapsed] of [
+    ["prep", params.prepElapsedMs],
+    ["compile", params.compileElapsedMs],
+    ["canary", params.canaryElapsedMs],
+  ] as const) {
+    if (isPositiveFinite(elapsed)) {
+      lines.push(`${phase} elapsed: ${elapsed}ms`);
+    }
   }
   if (Number.isFinite(params.elapsedMs)) {
     lines.push(`elapsed: ${params.elapsedMs}ms`);
@@ -491,7 +491,6 @@ async function runCompileCheck(extensionIds: string[], selectedPreparation: bool
     recordPath: string;
     config: string;
     args: string[];
-    startedAt: number;
     inputReceipt: string;
   }[] = [];
   // Source bytes are a cold-cache scheduling hint, never a coverage selector.
@@ -538,18 +537,16 @@ async function runCompileCheck(extensionIds: string[], selectedPreparation: bool
       }
       rmSync(recordPath, { force: true });
       rmSync(inputReceipt, { force: true });
-      let startedAt = 0;
       return {
         label: extensionId,
         onStart() {
-          startedAt = Date.now();
           process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId}\n`);
         },
         onSuccess(result) {
           process.stdout.write(
             `[${index + 1}/${extensionIds.length}] ${extensionId} (${result.elapsedMs}ms)\n`,
           );
-          completed.push({ recordPath, config, args, startedAt, inputReceipt });
+          completed.push({ recordPath, config, args, inputReceipt });
           compileTimings.push({
             extensionId,
             elapsedMs: result.elapsedMs,
@@ -574,14 +571,9 @@ async function runCompileCheck(extensionIds: string[], selectedPreparation: bool
     const after = new BoundaryInputSnapshot(repoRoot, metadataInputs);
     const records = completed.map((unit) =>
       Object.assign(unit, {
-        record: after.record(
-          unit.config,
-          unit.args,
-          unit.inputReceipt,
-          [portableRelativePath(repoRoot, unit.inputReceipt)],
-          before,
-          unit.startedAt,
-        ),
+        record: after.record(unit.config, unit.args, unit.inputReceipt, [
+          portableRelativePath(repoRoot, unit.inputReceipt),
+        ]),
       }),
     );
     for (const unit of records) {
@@ -684,48 +676,40 @@ async function runBoundaryCheck(argv: string[]) {
   const canaryExtensionIds = optInExtensionIds.slice(-1);
   const shouldRunCanary = mode === "all" || mode === "canary";
   const teardownCanaryCleanup = installCanaryArtifactCleanup(optInExtensionIds);
-  let prepElapsedMs: number | undefined;
-  let compileCount = 0;
-  let skippedCompileCount = 0;
-  let compileElapsedMs: number | undefined;
-  let compileTimings: CompileTiming[] = [];
-  let canaryElapsedMs: number | undefined;
+  const summary: BoundarySummaryParams & SlowCompileParams = {
+    mode,
+    compileCount: 0,
+    skippedCompileCount: 0,
+    canaryCount: shouldRunCanary ? canaryExtensionIds.length : 0,
+  };
 
   try {
     cleanupCanaryArtifactsForExtensions(optInExtensionIds);
     if (mode === "all" || mode === "compile") {
       const selection = resolveExtensionBoundarySelection(repoRoot, optInExtensionIds);
-      const summary = formatBoundarySelection(selection);
-      process.stdout.write(summary);
+      const selectionSummary = formatBoundarySelection(selection);
+      process.stdout.write(selectionSummary);
       if (process.env.GITHUB_STEP_SUMMARY) {
-        appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+        appendFileSync(process.env.GITHUB_STEP_SUMMARY, selectionSummary);
       }
-      ({ prepElapsedMs, compileCount, skippedCompileCount, compileElapsedMs, compileTimings } =
+      Object.assign(
+        summary,
         await runCompileCheck(
           selection.selected.map((row) => row.package),
           selection.mode === "affected",
-        ));
+        ),
+      );
     }
     if (shouldRunCanary) {
-      ({ canaryElapsedMs } = await runCanaryCheck(canaryExtensionIds));
+      Object.assign(summary, await runCanaryCheck(canaryExtensionIds));
     }
     process.stdout.write(
       formatBoundaryCheckSuccessSummary({
-        mode,
-        compileCount,
-        skippedCompileCount,
-        canaryCount: shouldRunCanary ? canaryExtensionIds.length : 0,
-        prepElapsedMs,
-        compileElapsedMs,
-        canaryElapsedMs,
+        ...summary,
         elapsedMs: Date.now() - startedAt,
       }),
     );
-    process.stdout.write(
-      formatSlowCompileSummary({
-        compileTimings,
-      }),
-    );
+    process.stdout.write(formatSlowCompileSummary(summary));
   } finally {
     teardownCanaryCleanup();
     cleanupCanaryArtifactsForExtensions(optInExtensionIds);

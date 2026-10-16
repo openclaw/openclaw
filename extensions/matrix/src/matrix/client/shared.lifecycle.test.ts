@@ -7,12 +7,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMatrixFullRuntime } from "../../../index.js";
 import { getOptionalMatrixRuntime, setMatrixRuntime } from "../../runtime.js";
 import { acquireSharedMatrixClient, stopSharedClientForAccount } from "./shared.js";
-import { authFor, createMockClient } from "./shared.test-support.js";
+import {
+  authFor,
+  createMockClient,
+  prepareMockMatrixClientStorage,
+} from "./shared.test-support.js";
 
 const createMatrixClientMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Keep disk and SDK initialization outside these generation lifecycle fixtures.
 vi.mock("./create-client.js", () => ({
   createMatrixClient: createMatrixClientMock,
+  prepareMatrixClientStorage: prepareMockMatrixClientStorage,
 }));
 
 type SharedLease = Awaited<ReturnType<typeof acquireSharedMatrixClient>>;

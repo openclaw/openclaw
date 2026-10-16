@@ -128,10 +128,6 @@ export async function monitorNextcloudTalkProvider(
     await stop();
     throw error;
   }
-  if (opts.abortSignal?.aborted) {
-    await stop();
-    return { stop };
-  }
   opts.statusSink?.(channelReadyPatch());
 
   if (routeConflict && legacyListener) {

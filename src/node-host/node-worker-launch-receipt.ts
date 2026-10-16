@@ -26,6 +26,7 @@ export type NodeWorkerContainerIdentity = {
 };
 
 export type NodeWorkerLaunchRow = Selectable<OpenClawStateDatabase["node_worker_launches"]> & {
+  boot_id?: string | null;
   container_json?: string | null;
   cleanup_mode?: string | null;
   lineage_settled?: number | null;
@@ -129,6 +130,7 @@ export function nodeWorkerLaunchReceiptFromRow(row: NodeWorkerLaunchRow) {
     runId: row.run_id,
     state: row.state,
     supervisor: { pid: row.supervisor_pid, startTime: row.supervisor_start_time },
+    ...(row.boot_id ? { bootId: row.boot_id } : {}),
     worker:
       row.worker_pid === null || row.worker_start_time === null
         ? null

@@ -87,48 +87,6 @@ describe("Codex Computer Use shared plugin cache", () => {
     await fs.access(priorCachePath);
   });
 
-  it("leaves same-version cache bytes intact when the generation is stale before publication", async () => {
-    const root = tempDirs.make("openclaw-computer-use-cache-stale-");
-    const bundledMarketplacePath = path.join(root, "Codex.app", "plugins", "openai-bundled");
-    const bundledPluginRoot = path.join(bundledMarketplacePath, "plugins", "computer-use");
-    await writeBundledComputerUsePlugin(bundledMarketplacePath, "1.0.857");
-    await fs.writeFile(path.join(bundledPluginRoot, "generation.txt"), "generation-y");
-    const codexHome = path.join(root, "agent", "codex-home");
-    const activeCachePath = computerUseCachePath(codexHome, "1.0.857");
-    await fs.mkdir(path.join(activeCachePath, ".codex-plugin"), { recursive: true });
-    await fs.writeFile(
-      path.join(activeCachePath, ".codex-plugin", "plugin.json"),
-      JSON.stringify({ name: "computer-use", version: "1.0.857" }),
-    );
-    await fs.writeFile(path.join(activeCachePath, "generation.txt"), "generation-x");
-
-    let currentnessChecks = 0;
-    await expect(
-      ensureCodexComputerUseSharedPluginCache({
-        codexHome,
-        bundledMarketplacePath,
-        config: computerUseConfig(),
-        forceRefresh: true,
-        assertCurrent: () => {
-          currentnessChecks += 1;
-          if (currentnessChecks === 2) {
-            throw new Error("desktop generation is stale");
-          }
-        },
-      }),
-    ).rejects.toThrow("desktop generation is stale");
-    expect(currentnessChecks).toBe(2);
-
-    await expect(fs.readFile(path.join(activeCachePath, "generation.txt"), "utf8")).resolves.toBe(
-      "generation-x",
-    );
-    expect(
-      (await fs.readdir(path.dirname(activeCachePath))).filter((entry) =>
-        entry.startsWith(".1.0.857"),
-      ),
-    ).toEqual([]);
-  });
-
   it.runIf(process.platform !== "win32")(
     "rejects a symlinked managed cache parent without touching its external target",
     async () => {

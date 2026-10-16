@@ -196,31 +196,6 @@ describe("mantis before/after process runtime", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "leaves only an empty unique directory after Git rejects worktree add",
-    async () => {
-      await initializeGitRepo(repoRoot);
-      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "invalid-ref");
-
-      await expect(
-        runMantisBeforeAfter({
-          baseline: "refs/heads/missing-mantis-ref",
-          candidate: "HEAD",
-          outputDir: ".artifacts/qa-e2e/mantis/invalid-ref",
-          repoRoot,
-          skipBuild: true,
-          skipInstall: true,
-        }),
-      ).rejects.toThrow("baseline worktree-add failed");
-
-      const preparedEntries = await fs.readdir(`${outputDir}.worktrees`);
-      expect(preparedEntries).toEqual([expect.stringMatching(/^baseline-/u)]);
-      await expect(
-        fs.readdir(path.join(`${outputDir}.worktrees`, preparedEntries[0] as string)),
-      ).resolves.toEqual([]);
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
     "keeps an owner-bound cwd when its registered path is replaced after identity verification",
     async () => {
       await initializeGitRepo(repoRoot);
@@ -229,6 +204,17 @@ describe("mantis before/after process runtime", () => {
       await fs.mkdir(path.dirname(worktreeDir), { recursive: true });
       await runGit(repoRoot, ["worktree", "add", "--detach", "--", worktreeDir, "HEAD"]);
       const ownership = await fs.lstat(worktreeDir, { bigint: true });
+      const naturalExitWitness = path.join(repoRoot, "owner-bound-before-exit.json");
+      const preload = path.join(repoRoot, "owner-bound-before-exit.cjs");
+      await fs.writeFile(
+        preload,
+        `const fs = require("node:fs");
+if (process.argv[1] === ${JSON.stringify(ownership.dev.toString())} &&
+    process.argv[2] === ${JSON.stringify(ownership.ino.toString())}) {
+  process.once("beforeExit", (code) => fs.writeFileSync(${JSON.stringify(naturalExitWitness)}, JSON.stringify({ code })));
+}
+`,
+      );
       const replaceThenRemoveScript = String.raw`
 const fs = require("node:fs");
 const path = require("node:path");
@@ -246,7 +232,7 @@ process.exit(result.status ?? 1);
         ["--input-type=commonjs", "--eval", replaceThenRemoveScript, worktreeDir, displacedDir],
         {
           cwd: worktreeDir,
-          env: process.env,
+          env: { ...process.env, NODE_OPTIONS: `--require=${JSON.stringify(preload)}` },
           expectedCwdIdentity: { dev: ownership.dev, ino: ownership.ino },
           stage: "worktree-cleanup",
           timeoutMs: 5_000,
@@ -254,6 +240,9 @@ process.exit(result.status ?? 1);
       );
 
       expect(result.code).not.toBe(0);
+      expect(JSON.parse(await fs.readFile(naturalExitWitness, "utf8"))).toEqual({
+        code: result.code,
+      });
       await expect(fs.readFile(path.join(worktreeDir, "replacement.txt"), "utf8")).resolves.toBe(
         "replacement",
       );

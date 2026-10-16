@@ -1,31 +1,25 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { t } from "../i18n/index.ts";
-import { renderSensitiveInput } from "./sensitive-input.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
+import { SensitiveInput } from "./sensitive-input.tsx";
 
 describe("renderSensitiveInput", () => {
-  afterEach(() => {
-    for (const container of document.body.querySelectorAll("div")) {
-      render(nothing, container);
-    }
-    document.body.replaceChildren();
-  });
+  afterEach(cleanupSolid);
 
   it("conceals the value and keeps the Carapace mask in sync", () => {
-    const container = document.createElement("div");
     const onInput = vi.fn();
-    document.body.append(container);
-    render(
-      renderSensitiveInput({
+    const { container } = mountSolid(() =>
+      createComponent(SensitiveInput, {
         id: "secret",
         value: "secret",
         revealed: false,
         onInput,
         onToggle: vi.fn(),
       }),
-      container,
     );
 
     const input = container.querySelector<HTMLInputElement>("[data-sensitive-value]");
@@ -57,11 +51,9 @@ describe("renderSensitiveInput", () => {
   });
 
   it("reveals the value and presents the hide action", () => {
-    const container = document.createElement("div");
     const onToggle = vi.fn();
-    document.body.append(container);
-    render(
-      renderSensitiveInput({
+    const { container } = mountSolid(() =>
+      createComponent(SensitiveInput, {
         id: "secret",
         value: "secret",
         revealed: true,
@@ -69,7 +61,6 @@ describe("renderSensitiveInput", () => {
         onInput: vi.fn(),
         onToggle,
       }),
-      container,
     );
 
     const input = container.querySelector<HTMLInputElement>("[data-sensitive-value]");
@@ -84,5 +75,32 @@ describe("renderSensitiveInput", () => {
 
     toggle?.click();
     expect(onToggle).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a controlled concealed value usable after clearing and restoring it", () => {
+    let restore!: (value: string) => void;
+    const { container } = mountSolid(() => {
+      const [value, setValue] = createSignal("secret", { ownedWrite: true });
+      restore = setValue;
+      return createComponent(SensitiveInput, {
+        id: "controlled-secret",
+        get value() {
+          return value();
+        },
+        revealed: false,
+        onInput: setValue,
+        onToggle: vi.fn(),
+      });
+    });
+    const input = container.querySelector<HTMLInputElement>("[data-sensitive-value]")!;
+    const mask = container.querySelector<HTMLElement>("[data-sensitive-mask-text]")!;
+    input.value = "";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(mask.textContent).toBe("");
+    restore("restored");
+    flush();
+    expect(input.value).toBe("restored");
+    expect(mask.textContent).toBe("********");
   });
 });

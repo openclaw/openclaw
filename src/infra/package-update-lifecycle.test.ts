@@ -521,7 +521,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
           },
         );
         expect(removalAttempts).toBeGreaterThan(0);
-        await expect(fs.access(stage.prefix)).resolves.toBeUndefined();
+        await fs.access(stage.prefix);
         await expectSiblingUntouched(fixture);
         if (phase === "pre-commit") {
           expectNoActivation(fixture);
@@ -532,9 +532,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
           );
           expect(result.failedStep?.advisory).toBeUndefined();
           expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
-          await expect(
-            fs.access(path.join(stage.packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH)),
-          ).resolves.toBeUndefined();
+          await fs.access(path.join(stage.packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
         } else {
           expect(fixture.params.beforeActivate).toHaveBeenCalledOnce();
           expect(fixture.params.onTransaction).toHaveBeenCalledOnce();

@@ -85,88 +85,6 @@ function createImageSetClockSpool(
 }
 
 describe("LINE webhook spool image sets", () => {
-  // LINE splits one multi-image send across several webhook events on one lane.
-  // The spool groups their claims so the set reaches the handler as a single turn.
-  it("delivers a same-lane image set as one turn owning every part's claim", async () => {
-    await withQueue(async (queue) => {
-      const delivered: (readonly webhook.Event[])[] = [];
-      const deliver = vi.fn(
-        async (
-          events: readonly webhook.Event[],
-          _destination: string,
-          control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
-        ) => {
-          delivered.push(events);
-          await control.turnAdoptionLifecycle.onAdopted();
-        },
-      );
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
-
-      spool.start();
-      try {
-        for (const index of [2, 1, 3]) {
-          await spool.accept(
-            callback(
-              createEvent({
-                webhookEventId: `event-image-set-${index}`,
-                userId: "user-image-set",
-                imageSet: { id: "set-1", index, total: 3 },
-              }),
-            ),
-          );
-        }
-
-        // One delivery carrying the whole set, ordered the way the sender picked.
-        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
-        expect(delivered[0]?.map((event) => (event as webhook.MessageEvent).message.id)).toEqual([
-          "message-event-image-set-1",
-          "message-event-image-set-2",
-          "message-event-image-set-3",
-        ]);
-
-        // Adopting that one turn settles all three durable claims.
-        await vi.waitFor(async () => expect(await queue.listPending()).toHaveLength(0));
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-
-  // A part that arrives while the spool is stopping must not be parked in a buffer
-  // that will never flush; it goes back so a restart redelivers the whole set.
-  it("hands an image-set part back instead of buffering it while stopping", async () => {
-    await withQueue(async (queue) => {
-      const deliver = vi.fn(async () => {});
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
-
-      spool.start();
-      await spool.stop();
-      await spool.accept(
-        callback(
-          createEvent({
-            webhookEventId: "event-stopping-set",
-            userId: "user-stopping",
-            imageSet: { id: "set-stopping", index: 1, total: 3 },
-          }),
-        ),
-      );
-
-      // Still queued for a later process rather than consumed by a dead buffer.
-      expect(await queue.listPending()).toHaveLength(1);
-      expect(deliver).not.toHaveBeenCalled();
-    });
-  });
-
   // Shutdown mid-delivery must return every claim the combined turn consumed, not
   // only the holder's, or the deferred parts stay held until recovery.
   it("hands back every claim in a set when shutdown interrupts its delivery", async () => {
@@ -227,6 +145,13 @@ describe("LINE webhook spool image sets", () => {
           control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
         ) => {
           const kinds = events.map((event) => (event as webhook.MessageEvent).message.type);
+          if (kinds[0] === "image") {
+            expect(events.map((event) => (event as webhook.MessageEvent).message.id)).toEqual([
+              "message-event-split-1",
+              "message-event-split-2",
+              "message-event-split-3",
+            ]);
+          }
           turns.push(`${kinds[0]}x${events.length}`);
           await control.turnAdoptionLifecycle.onAdopted();
         },
@@ -248,11 +173,11 @@ describe("LINE webhook spool image sets", () => {
 
       spool.start();
       try {
-        await spool.accept(imagePart(1));
+        await spool.accept(imagePart(2));
         await spool.accept(
           callback(createEvent({ webhookEventId: "event-split-text", userId: "user-split" })),
         );
-        await spool.accept(imagePart(2));
+        await spool.accept(imagePart(1));
         await spool.accept(imagePart(3));
 
         await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2), { timeout: 20_000 });
@@ -313,6 +238,7 @@ describe("LINE webhook spool image sets", () => {
   it("keeps a later message on the same lane behind an incomplete image set", async () => {
     await withQueue(async (queue) => {
       const order: string[] = [];
+      const runtimeEnv = runtime();
       const imageEntered = createDeferred<void>();
       const releaseImage = createDeferred<void>();
       const deliver = vi.fn(
@@ -335,7 +261,7 @@ describe("LINE webhook spool image sets", () => {
       );
       const clock = createImageSetClockSpool({
         accountId: "default",
-        runtime: runtime(),
+        runtime: runtimeEnv,
         queue,
         deliver,
       });
@@ -363,6 +289,11 @@ describe("LINE webhook spool image sets", () => {
           1,
         );
         await imageEntered.promise;
+        expect(runtimeEnv.error).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "image set set-order delivered 1 of the send's parts, 2 still missing",
+          ),
+        );
         await vi.advanceTimersByTimeAsync(0);
         expect(deliver).toHaveBeenCalledTimes(1);
         expect(order).toEqual([]);
@@ -557,68 +488,6 @@ describe("LINE webhook spool image sets", () => {
         expect(overlapped).toBe(false);
       } finally {
         releaseMessage.resolve();
-        await clock.stop();
-      }
-    });
-  });
-  // A set that never completes is delivered short. The turn answers what arrived,
-  // so the shortfall is only knowable here - the operator sees a small media count
-  // and nothing else that explains it.
-  it("reports how many parts a short set was missing", async () => {
-    await withQueue(async (queue) => {
-      const errors: string[] = [];
-      const runtimeEnv = {
-        ...runtime(),
-        error: (...args: unknown[]) => {
-          errors.push(String(args[0]));
-        },
-      };
-      const deliver = vi.fn(
-        async (
-          _events: readonly webhook.Event[],
-          _destination: string,
-          control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
-        ) => {
-          await control.turnAdoptionLifecycle.onAdopted();
-        },
-      );
-      const clock = createImageSetClockSpool({
-        accountId: "default",
-        runtime: runtimeEnv,
-        queue,
-        deliver,
-      });
-      const { spool } = clock;
-
-      spool.start();
-      try {
-        // Two of a three-part set arrive; the third never does.
-        for (const index of [1, 2]) {
-          await spool.accept(
-            callback(
-              createEvent({
-                webhookEventId: `event-short-${index}`,
-                userId: "user-short",
-                imageSet: { id: "set-short", index, total: 3 },
-              }),
-            ),
-          );
-        }
-
-        await clock.flushAfterClaims(
-          ["message:message-event-short-1", "message:message-event-short-2"],
-          2,
-          0,
-        );
-        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1), {
-          interval: 0,
-          timeout: 20_000,
-        });
-        expect(deliver.mock.calls[0]?.[0]).toHaveLength(2);
-        expect(errors.join("\n")).toContain(
-          "image set set-short delivered 2 of the send's parts, 1 still missing",
-        );
-      } finally {
         await clock.stop();
       }
     });

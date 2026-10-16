@@ -22,9 +22,9 @@ import {
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import { parseSessionPendingInputMessage } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
+import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
 import { discardSessionPendingInput } from "./session-pending-input-withdrawal.js";
 
 type WithdrawalScope = Parameters<typeof discardSessionPendingInput>[0];

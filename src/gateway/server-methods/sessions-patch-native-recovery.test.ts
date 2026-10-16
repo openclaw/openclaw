@@ -1,9 +1,24 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
+import type * as ModelRuntimeNormalization from "../../auto-reply/reply/model-runtime-normalization.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { prepareSessionPatchRuntimeSelection } from "./sessions-patch-model-selection.js";
+import { prepareSessionPatchRuntimeSelection as prepareRuntimeSelection } from "./sessions-patch-model-selection.js";
+import type * as SessionsShared from "./sessions-shared.js";
+
+const releaseSelections: Array<() => void> = [];
+afterEach(() => releaseSelections.splice(0).forEach((release) => release()));
+
+async function prepareSessionPatchRuntimeSelection(
+  params: Parameters<typeof prepareRuntimeSelection>[0],
+) {
+  const result = await prepareRuntimeSelection(params);
+  if (result.ok && result.release) {
+    releaseSelections.push(result.release);
+  }
+  return result;
+}
 
 const preparation = vi.hoisted(() => {
   const validate = vi.fn((): string | undefined => undefined);
@@ -24,11 +39,16 @@ const preparation = vi.hoisted(() => {
     })),
   };
 });
-vi.mock("../../auto-reply/reply/model-runtime-normalization.js", () => ({
+vi.mock("../../auto-reply/reply/model-runtime-normalization.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ModelRuntimeNormalization>()),
   prepareModelSelectionRuntime: preparation.prepare,
 }));
-vi.mock("./sessions-shared.js", () => ({
-  resolveSessionWorkerPlacementPatchError: () => undefined,
+vi.mock("./sessions-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionsShared>()),
+  prepareSessionWorkerPlacementPatchValidation: async () => ({
+    validate: () => undefined,
+    release() {},
+  }),
 }));
 
 beforeEach(() => {
@@ -95,6 +115,21 @@ it.each([
       (await prepare({ ...entry, nativeRuntimeConsent: "different-runtime" }, true, config)).ok,
     ).toBe(false);
   }
+});
+
+it("applies remembered native permissions on selection without creating per-chat consent", async () => {
+  const config = {
+    ...cfg,
+    agents: { ...cfg.agents, entries: { main: { nativeRuntimeConsent: ["native-fixture"] } } },
+  } satisfies OpenClawConfig;
+  const entry = { ...original };
+  expect((await prepare(entry, true, config)).ok).toBe(true);
+  expect(entry).toMatchObject({ permissionMode: "full", sandboxMode: "off" });
+  expect(entry).not.toHaveProperty("nativeRuntimeConsent");
+  expect((await prepare({ ...original, sandbox: "required" }, true, config)).ok).toBe(false);
+  expect((await prepare({ ...original }, false, config)).ok).toBe(false);
+  config.agents.entries.main.nativeRuntimeConsent = [];
+  expect((await prepare({ ...original }, true, config)).ok).toBe(false);
 });
 
 it.each([

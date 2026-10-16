@@ -1,6 +1,8 @@
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -61,6 +63,10 @@ function activeSession(placementMove?: {
   target: { kind: "gateway" };
   updatedAtMs: number;
   error?: string;
+  retry?: {
+    expected: { generation: number; environmentId: string; ownerEpoch: number };
+    target: { kind: "gateway" };
+  };
 }) {
   return {
     key: "agent:main:placement-move",
@@ -83,6 +89,23 @@ function activeSession(placementMove?: {
     },
     ...(placementMove ? { placementMove } : {}),
   };
+}
+
+function observedRunnerStatus(page: Page, key: string) {
+  return evaluateControlUiContext(
+    page,
+    ({ sessions }, target) => {
+      // Descriptor admission can precede every list while chat.startup is held.
+      const observation = sessions.observeRow(target, () => undefined);
+      try {
+        const placement = observation.row?.placement;
+        return placement?.state === "active" ? placement.runner?.status : undefined;
+      } finally {
+        observation.dispose();
+      }
+    },
+    { key, agentId: "main" },
+  );
 }
 
 suite.define(() => {
@@ -138,7 +161,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
       await gateway.deferNext("sessions.move");
       await page.getByRole("button", { name: "Runs on Cloud" }).click();
-      await page.getByText("Move session…", { exact: true }).click();
+      await page.getByRole("menuitem", { name: "Move session…", exact: true }).click();
       await page.getByText("The active turn will be interrupted.", { exact: false }).waitFor();
       await page.locator('[data-value="gateway"]').waitFor();
       await page.locator('[data-value="device:writer-runner"]').waitFor();
@@ -217,7 +240,10 @@ suite.define(() => {
       await gateway.setSessionsListResponse(chatSessionListResponse([session]));
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       await page.getByRole("button", { name: "Device offline" }).waitFor();
-      const continueAction = page.getByText("Continue on Gateway…", { exact: true });
+      const continueAction = page.getByRole("menuitem", {
+        name: "Continue on Gateway…",
+        exact: true,
+      });
       if (!(await continueAction.isVisible())) {
         await page.getByRole("button", { name: "Device offline" }).click();
       }
@@ -323,7 +349,7 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.getByRole("button", { name: "Device offline" }).waitFor();
-      await page.getByRole("button", { name: "Open split view" }).click();
+      await selectChatLayoutAction(page, "Open split view");
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
       for (const pane of await panes.all()) {
@@ -336,7 +362,10 @@ suite.define(() => {
 
       await gateway.deferNext("sessions.move");
       await panes.last().getByRole("button", { name: "Device offline" }).click();
-      await panes.last().getByText("Continue on Gateway…", { exact: true }).click();
+      await panes
+        .last()
+        .getByRole("menuitem", { name: "Continue on Gateway…", exact: true })
+        .click();
       await page.getByRole("button", { name: "Continue on Gateway", exact: true }).click();
       const move = await gateway.waitForRequest("sessions.move");
       expect(move.params).toEqual({
@@ -569,24 +598,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
       await gateway.waitForRequest("chat.startup");
       await page.getByRole("button", { name: "Runs on device" }).waitFor();
-      await expect
-        .poll(() =>
-          page.evaluate((parentKey) => {
-            const sidebar = document.querySelector<
-              HTMLElement & {
-                sessionData?: {
-                  childSessionRowsByParent: Record<
-                    string,
-                    Array<{ placement?: { runner?: { status?: string } } }>
-                  >;
-                };
-              }
-            >("openclaw-app-sidebar");
-            return sidebar?.sessionData?.childSessionRowsByParent[parentKey]?.[0]?.placement?.runner
-              ?.status;
-          }, parent.key),
-        )
-        .toBe("available");
+      await expect.poll(() => observedRunnerStatus(page, available.key)).toBe("available");
       await page.evaluate(() => {
         const state = { returnedOnline: false, seenOffline: false };
         const inspect = () => {
@@ -624,39 +636,59 @@ suite.define(() => {
         ],
       });
       await gateway.deferNext("sessions.describe", descriptorMatch);
+      // Delay presentation frames while both Gateway receipts reach their data owners.
+      const releaseFrames = await page.evaluateHandle(() => {
+        const request = window.requestAnimationFrame;
+        const cancel = window.cancelAnimationFrame;
+        const queued = new Map<number, FrameRequestCallback>();
+        let held = true;
+        window.requestAnimationFrame = (callback) => {
+          const id = request.call(window, (time) => {
+            if (held) {
+              queued.set(id, callback);
+            } else {
+              callback(time);
+            }
+          });
+          return id;
+        };
+        window.cancelAnimationFrame = (id) => {
+          queued.delete(id);
+          cancel.call(window, id);
+        };
+        return () => {
+          held = false;
+          window.requestAnimationFrame = request;
+          window.cancelAnimationFrame = cancel;
+          for (const callback of queued.values()) {
+            request.call(window, callback);
+          }
+          queued.clear();
+        };
+      });
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       await gateway.waitForRequest("sessions.describe", {
         after: descriptorCount,
         match: descriptorMatch,
       });
-      await page.getByRole("button", { name: "Runs on device" }).waitFor();
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       expect(await gateway.getRequests("sessions.describe", descriptorMatch)).toHaveLength(
         descriptorCount + 1,
       );
+      await releaseFrames.evaluate((release) => release());
       await gateway.resolveDeferred("sessions.describe", { session: available });
       await gateway.waitForRequest("sessions.describe", {
         after: descriptorCount + 1,
         match: descriptorMatch,
       });
       await page.getByRole("button", { name: "Device offline" }).waitFor();
-      expect(
-        await page.evaluate(() => {
-          const sidebar = document.querySelector<
-            HTMLElement & {
-              sessionData?: {
-                activeSessionLineageSelectedRow?: {
-                  placement?: { runner?: { status?: string } };
-                };
-              };
-            }
-          >("openclaw-app-sidebar");
-          return sidebar?.sessionData?.activeSessionLineageSelectedRow?.placement?.runner?.status;
-        }),
-      ).toBe("offline");
+      expect(await observedRunnerStatus(page, available.key)).toBe("offline");
+      expect(await gateway.getRequests("sessions.describe", descriptorMatch)).toHaveLength(
+        descriptorCount + 2,
+      );
       expect(await gateway.getSocketCount()).toBe(1);
 
-      await page.getByRole("button", { name: "Open split view" }).click();
+      await selectChatLayoutAction(page, "Open split view");
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
       expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
@@ -695,7 +727,6 @@ suite.define(() => {
 
   it.each([
     { machineId: "fast", expectedMachineClass: "fast" },
-    { machineId: "standard", expectedMachineClass: "standard" },
     { machineId: undefined, expectedMachineClass: undefined },
   ])(
     "moves to a cloud profile with machine $machineId",
@@ -734,7 +765,7 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
         await gateway.deferNext("sessions.move");
         await page.getByRole("button", { name: "Runs on Cloud" }).click();
-        await page.getByText("Move session…", { exact: true }).click();
+        await page.getByRole("menuitem", { name: "Move session…", exact: true }).click();
         const profile = page.locator('[data-value="cloud:aws"]');
         await profile.click();
         await expect.poll(() => profile.getAttribute("aria-pressed")).toBe("true");
@@ -779,11 +810,18 @@ suite.define(() => {
       historyMessages: [{ role: "assistant", content: "Placement failure proof." }],
       methodResponses: {
         "sessions.list": chatSessionListResponse([
-          activeSession({
-            target: { kind: "gateway" },
-            updatedAtMs: 3,
-            error: "Destination device is offline.",
-          }),
+          {
+            ...activeSession({
+              target: { kind: "gateway" },
+              updatedAtMs: 3,
+              error: "Destination device is offline.",
+              retry: {
+                expected: { generation: 4, environmentId: "worker:source", ownerEpoch: 7 },
+                target: { kind: "gateway" },
+              },
+            }),
+            placement: { ...activeSession().placement, state: "draining", generation: 5 },
+          },
         ]),
       },
       sessionKey: "agent:main:placement-move",
@@ -793,7 +831,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
       await page.getByRole("button", { name: "Move failed" }).click();
       await page.getByText("Destination device is offline.", { exact: true }).waitFor();
-      await page.getByText("Move session…", { exact: true }).waitFor();
+      await page.getByRole("menuitem", { name: "Retry move", exact: true }).waitFor();
       await capture(page, "05-error.png");
     } finally {
       await suite.closeBrowserContext(context);

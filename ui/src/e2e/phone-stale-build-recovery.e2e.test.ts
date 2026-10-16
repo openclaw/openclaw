@@ -8,6 +8,7 @@ import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-
 import {
   controlUiBundledGatewayUrl,
   installMockGateway,
+  pauseVirtualClock,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -366,8 +367,9 @@ suite.define(() => {
         await gateway.rejectDeferred("connect", mismatch);
         await page.waitForFunction(
           () =>
-            sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ===
-              "replacement-build" &&
+            JSON.parse(
+              sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ?? "null",
+            )?.buildId === "replacement-build" &&
             sessionStorage.getItem("openclaw.control-ui-e2e.build-rejection-loads") === "2",
         );
 
@@ -462,8 +464,23 @@ suite.define(() => {
         ]);
 
         await waitForConnect();
+        await page.clock.install();
+        await pauseVirtualClock(page);
+        // Manual refresh preserves the shared build target, so this document
+        // defers its automatic reload until that target's 30-second guard expires.
+        const guardRemainingMs = await page.evaluate(() => {
+          const guard = JSON.parse(
+            sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")!,
+          ) as { at: number };
+          return guard.at + 30_000 - Date.now();
+        });
+        expect(guardRemainingMs).toBeGreaterThan(0);
         await gateway.rejectDeferred("connect", mismatch);
+        await page.clock.runFor(guardRemainingMs - 1);
+        expect(documentRequests).toHaveLength(3);
+        await page.clock.runFor(1);
         await expect.poll(() => documentRequests.length).toBe(4);
+        await page.clock.resume();
         await waitForConnect();
         await gateway.resolveDeferred("connect");
 
@@ -494,7 +511,7 @@ suite.define(() => {
         ).toEqual(
           Array.from({ length: 4 }, () => ({
             cacheControl: "no-cache",
-            fromWorker: false,
+            fromWorker: serviceWorker === "normal",
             status: 200,
           })),
         );
@@ -522,7 +539,6 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [actions]),
         );
         await actions.tap();
-        await page.getByRole("menuitem", { name: "Session settings", exact: true }).tap();
         const assignment = page.getByRole("menuitem", { name: "Assign to…", exact: true });
         await assignment.waitFor();
         await assignment.tap();

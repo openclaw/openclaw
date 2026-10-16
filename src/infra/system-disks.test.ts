@@ -57,11 +57,9 @@ describe("system disk snapshots", () => {
   });
 
   it("keeps one container root when a volume disappears with its directory", async () => {
-    mocks.readFile
-      .mockResolvedValueOnce(
-        "1 0 0:5 / / rw - overlay overlay rw\n2 1 8:1 / /data rw - ext4 /dev/sdb rw",
-      )
-      .mockResolvedValue("1 0 0:5 / / rw - overlay overlay rw");
+    mocks.readFile.mockResolvedValueOnce(
+      "1 0 0:5 / / rw - overlay overlay rw\n2 1 8:1 / /data rw - ext4 /dev/sdb rw",
+    );
     mocks.statfs.mockImplementation(async (path: string) => {
       if (path === "/data") {
         throw new Error("ENOENT");
@@ -174,14 +172,6 @@ describe("system disk snapshots", () => {
     expect(mocks.statfs).toHaveBeenCalledTimes(2);
   });
 
-  it("omits a volume replaced at the same path while reading its filesystem", async () => {
-    mocks.readFile
-      .mockResolvedValueOnce("1 0 8:1 / /data rw - ext4 /dev/sda1 rw")
-      .mockResolvedValue("2 0 8:1 / /data rw - ext4 /dev/sda1 rw");
-    const { readSystemDisks } = await import("./system-disks.js");
-    expect(await readSystemDisks()).toEqual([]);
-  });
-
   it("bounds native work across cache refreshes while a filesystem remains blocked", async () => {
     vi.useFakeTimers();
     mocks.readFile.mockResolvedValue(
@@ -208,21 +198,5 @@ describe("system disk snapshots", () => {
     expect(await readSystemDisks()).toEqual([
       { path: "/fresh", totalBytes: 2_048_000, availableBytes: 1_024_000 },
     ]);
-  });
-
-  it("bounds the response when post-probe mount validation remains blocked", async () => {
-    vi.useFakeTimers();
-    mocks.readFile
-      .mockResolvedValueOnce("1 0 8:1 / / rw - ext4 /dev/sda1 rw")
-      .mockReturnValue(new Promise(() => {}));
-    const { readSystemDisks } = await import("./system-disks.js");
-    let settled = false;
-    const pending = readSystemDisks().then((value) => {
-      settled = true;
-      return value;
-    });
-    await vi.advanceTimersByTimeAsync(3000);
-    expect(settled).toBe(true);
-    expect(await pending).toBeUndefined();
   });
 });

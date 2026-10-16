@@ -176,7 +176,7 @@ async function configureChannelAccount(
     }
     const { loadChannelSetupPluginRegistrySnapshotForChannel } =
       await import("../channel-setup/plugin-install.js");
-    const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
+    const snapshot = await loadChannelSetupPluginRegistrySnapshotForChannel({
       cfg: nextConfig,
       runtime,
       channel: channelId,
@@ -280,9 +280,13 @@ async function configureChannelAccount(
         channel: selectedChannel,
       });
 
-      await params?.beforePersistentEffect?.();
       const committed = await persistChannelPluginConfig({
         cfg: nextConfig,
+        setup: {
+          previousConfig: cfg,
+          beforePersistentEffect: params?.beforePersistentEffect,
+          assertCurrent: writeSnapshot.writeOptions.assertConfigPathForWrite,
+        },
         pluginInstalled: pluginRegistrySourceChanged,
         writeOptions: writeSnapshot.writeOptions,
         baseHash: writeSnapshot.snapshot.hash,

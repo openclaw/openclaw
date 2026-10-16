@@ -7,6 +7,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   pauseVirtualClock,
+  waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -221,22 +222,29 @@ suite.define(() => {
       await page.route(hovercardModule, (route) => route.abort());
       const gateway = await installMockGateway(page, {
         automaticallyFetchFavicons: true,
-        historyMessages: [
-          {
-            role: "assistant",
-            content: '[Field guide](https://example.com/field-guide "Guide details")',
-            timestamp: 2000,
-          },
-        ],
       });
-      await page.goto(suite.server.baseUrl + "chat");
-      const link = page.getByRole("link", { name: "Field guide", exact: true });
+      // Chat mounts this runtime eagerly; About retains the optional shell provider.
+      await page.goto(suite.server.baseUrl + "settings/about");
+      await waitForControlUiRoute(page, { routeId: "about" });
+      const link = page.locator(
+        'openclaw-about-page .about-hero__link[href="https://docs.openclaw.ai"]',
+      );
+      await link.waitFor({ state: "visible" });
+      await link.evaluate((anchor) => anchor.setAttribute("title", "Guide details"));
+      expect(
+        await page.evaluate(
+          () => customElements.get("openclaw-link-reader-hovercard-provider") === undefined,
+        ),
+      ).toBe(true);
       // A missing hashed chunk reloads the page; wait before hovering the new document.
       await Promise.all([
         page.waitForEvent("requestfailed", (request) => hovercardModule.test(request.url())),
         page.waitForEvent("domcontentloaded"),
         link.hover(),
       ]);
+      await waitForControlUiRoute(page, { routeId: "about" });
+      await link.waitFor({ state: "visible" });
+      await link.evaluate((anchor) => anchor.setAttribute("title", "Guide details"));
       await page.mouse.move(0, 0);
       await link.hover();
       await page.locator(".tooltip-content").filter({ hasText: "Guide details" }).waitFor();

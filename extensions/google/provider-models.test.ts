@@ -96,6 +96,22 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     });
   });
 
+  it("resolves newer Gemini 4 releases from the Gemini 4 Argon template", () => {
+    const model = resolveModel("google", "gemini-4-argon-preview-11-02", [
+      createTemplateModel("google", "gemini-4-argon", {
+        reasoning: true,
+        contextWindow: 1_048_576,
+      }),
+    ]);
+
+    expectModelFields(model, {
+      provider: "google",
+      id: "gemini-4-argon-preview-11-02",
+      reasoning: true,
+      contextWindow: 1_048_576,
+    });
+  });
+
   it("canonicalizes retired Gemini 3 Pro preview requests before cloning templates", () => {
     const model = resolveModel("google", "gemini-3-pro-preview", [
       createTemplateModel("google", "gemini-3-pro-preview"),
@@ -385,9 +401,10 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     });
   });
 
-  it("treats gemini 2.5 ids as modern google models", () => {
+  it("treats current Gemini families as modern google models", () => {
     expect(isModernGoogleModel("gemini-2.5-pro")).toBe(true);
     expect(isModernGoogleModel("gemini-2.5-flash-lite")).toBe(true);
+    expect(isModernGoogleModel("gemini-4-argon")).toBe(true);
     expect(isModernGoogleModel("gemini-1.5-pro")).toBe(false);
   });
 

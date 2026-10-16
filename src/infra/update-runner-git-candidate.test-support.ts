@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
-import { resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
+import { afterAll, expect, it, vi } from "vitest";
+import { copyTreeCloseOnExec } from "../../test/helpers/close-on-exec-copy.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveNodeRuntimeInfo } from "../daemon/runtime-paths.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { pathExists } from "../utils.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
+import { verifyGitUpdateRecovery } from "./update-git-runtime.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
@@ -61,6 +66,29 @@ export async function createGitFixtureCheckout(
   ]) {
     vi.stubEnv(key, undefined);
   }
+  const seed = await getOrCreatePromise(gitFixtureSeeds, JSON.stringify(manifest), async () => {
+    const seedDirectory = await fs.realpath(gitFixtureDirectories.make("openclaw-git-seed-"));
+    return { directory: seedDirectory, ...(await createGitFixtureSeed(seedDirectory, manifest)) };
+  });
+  copyTreeCloseOnExec(seed.directory, directory);
+  const root = path.join(directory, "checkout");
+  const remote = path.join(directory, "remote");
+  await runFixtureGit(root, "remote", "set-url", "origin", remote);
+  return { root, remote, beforeSha: seed.beforeSha };
+}
+
+const gitFixtureDirectories = useAutoCleanupTempDirTracker(afterAll);
+const gitFixtureSeeds = new Map<
+  string,
+  Promise<{
+    directory: string;
+    root: string;
+    remote: string;
+    beforeSha: string;
+  }>
+>();
+
+async function createGitFixtureSeed(directory: string, manifest: Record<string, unknown>) {
   const root = path.join(directory, "checkout");
   const remote = path.join(directory, "remote");
   await fs.mkdir(remote);
@@ -113,11 +141,12 @@ export async function resolveCandidateNodeRuntimeForTest(): Promise<{
   if (!process.versions.bun) {
     return { path: process.execPath, version: process.versions.node };
   }
-  const systemNode = await resolveSystemNodeInfo({});
-  if (systemNode?.status !== "supported" || !systemNode.version) {
-    throw new Error("This candidate runtime test requires a supported system Node");
+  const nodePath = resolveTestNodeExecPath();
+  const node = await resolveNodeRuntimeInfo(nodePath);
+  if (node.status !== "supported" || !node.version) {
+    throw new Error("This candidate runtime test requires a supported Node");
   }
-  return { path: systemNode.path, version: systemNode.version };
+  return { path: nodePath, version: node.version };
 }
 
 export async function expectCancelledGitCandidateCleanup({
@@ -448,30 +477,42 @@ export function registerGitRuntimeStagingTests(
       await advanceRemote();
       const failure = new Error("candidate canary failed");
       const onStepComplete = vi.fn();
-      await expect(
-        update({
-          progress: {
-            onStepComplete,
-            onStepStart: ({ name }) => {
-              if (failurePoint === "runtime staging" && name === "preflight-cleanup") {
-                expect(onStepComplete).toHaveBeenCalledWith(
-                  expect.objectContaining({
-                    name: "preflight-runtime-stage",
-                    exitCode: 1,
-                    failureFacts: [expect.objectContaining({ check: "preflight-runtime-stage" })],
-                  }),
-                );
-              }
-            },
-          },
-          validateCandidate: async () => {
-            if (failurePoint === "validation") {
-              throw failure;
+      const cause: unknown = await update({
+        progress: {
+          onStepComplete,
+          onStepStart: ({ name }) => {
+            if (failurePoint === "runtime staging" && name === "preflight-cleanup") {
+              expect(onStepComplete).toHaveBeenCalledWith(
+                expect.objectContaining({
+                  name: "preflight-runtime-stage",
+                  exitCode: 1,
+                  failureFacts: [expect.objectContaining({ check: "preflight-runtime-stage" })],
+                }),
+              );
             }
-            vi.spyOn(fs, "cp").mockRejectedValueOnce(failure);
           },
-        }),
-      ).rejects.toBe(failure);
+        },
+        validateCandidate: async () => {
+          if (failurePoint === "validation") {
+            throw failure;
+          }
+          vi.spyOn(fs, "cp").mockRejectedValueOnce(failure);
+        },
+      }).catch((error: unknown) => error);
+      if (failurePoint === "validation") {
+        expect(cause).toBe(failure);
+      } else {
+        const { resolveMutableUpdateFailure } =
+          await import("../cli/update-cli/update-command-result.js");
+        const { result } = await resolveMutableUpdateFailure({
+          cause,
+          durationMs: 0,
+          mode: "git",
+          root,
+          originalRecovery: () => verifyGitUpdateRecovery({ root, sha: beforeSha }),
+        });
+        expect(result.recovery).toMatchObject({ serviceRestartSafe: true, buildId: beforeSha });
+      }
       expect(isStopped()).toBe(false);
       expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
       expect(await fs.readFile(path.join(root, "node_modules", "identity.cjs"), "utf8")).toContain(

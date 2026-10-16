@@ -5,10 +5,13 @@ import { whatsappApprovalCapability } from "./approval-native.js";
 const fixture = createNativeApprovalTestFixture({
   channel: "whatsapp",
   capability: whatsappApprovalCapability,
-  buildConfig: ({ channel, approvals } = {}) => ({
-    channels: { whatsapp: { enabled: true, ...channel } },
-    approvals,
-  }),
+  buildConfig: (options = {}) => {
+    const { channel, approvals } = options;
+    return {
+      channels: { whatsapp: { enabled: true, ...channel } },
+      approvals,
+    };
+  },
 });
 const { buildConfig, buildExecRequest, buildPluginRequest, checks } = fixture;
 
@@ -155,7 +158,7 @@ describe("whatsapp approval capability", () => {
     checks.defaultAccountBothTarget,
   );
 
-  it("allows group-origin emoji approvals only after exec forwarding and approvers are configured", () => {
+  it("allows group-origin emoji approvals only after exec forwarding and approvers are configured", async () => {
     const request = buildExecRequest("120363401234567890@g.us");
     const withoutApprovers = buildConfig({ approvals: { exec: { enabled: true } } });
     const withApprovers = buildConfig({
@@ -164,7 +167,7 @@ describe("whatsapp approval capability", () => {
     });
 
     expect(
-      whatsappApprovalCapability.native?.resolveOriginTarget?.({
+      await whatsappApprovalCapability.nativeAsync?.resolveOriginTarget?.({
         cfg: withoutApprovers,
         accountId: "default",
         approvalKind: "exec",
@@ -172,7 +175,7 @@ describe("whatsapp approval capability", () => {
       }),
     ).toBeNull();
     expect(
-      whatsappApprovalCapability.native?.resolveOriginTarget?.({
+      await whatsappApprovalCapability.nativeAsync?.resolveOriginTarget?.({
         cfg: withApprovers,
         accountId: "default",
         approvalKind: "exec",

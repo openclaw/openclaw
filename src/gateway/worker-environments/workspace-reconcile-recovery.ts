@@ -34,7 +34,6 @@ import {
 } from "./workspace-reconcile-derived-paths.js";
 import {
   directoryContainsOnlyWorkspaceEntries,
-  entryMatches,
   localPath,
   removeEmptyWorkspaceDirectory,
 } from "./workspace-reconcile-fs.js";
@@ -439,8 +438,8 @@ async function assertWorkspaceRecoveryDirectoriesRecoverable(
     const baseEntry = baseEntries.get(entryPath);
     const appliedEntry = appliedEntries.get(entryPath);
     if (
-      (baseEntry && (await entryMatches(params.root, baseEntry))) ||
-      (appliedEntry && (await entryMatches(params.root, appliedEntry)))
+      (baseEntry && sameEntry(local, baseEntry)) ||
+      (appliedEntry && sameEntry(local, appliedEntry))
     ) {
       continue;
     }

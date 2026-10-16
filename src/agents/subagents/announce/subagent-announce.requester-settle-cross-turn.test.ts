@@ -1,6 +1,10 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
-  countActiveDescendantRunsFromRuns,
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
+import {
+  buildScopedSubagentRunReadIndexFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
 } from "../registry/subagent-registry-queries.js";
 import {
@@ -15,7 +19,14 @@ import {
   makeSettledChild,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 
-afterEach(() => vi.useRealTimers());
+beforeEach(() => {
+  setRuntimeConfigSnapshot({ session: { mainKey: "main", scope: "per-sender" } });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  clearRuntimeConfigSnapshot();
+});
 
 it.each(["older batch", "cross-agent descendant", "paused member", "pending cleanup"] as const)(
   "waits only for owned work: %s",
@@ -30,6 +41,7 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
       ...(crossAgent ? { childSessionKey: "agent:research:subagent:short" } : {}),
       createdAt: now - 100,
       endedAt: now,
+      completion: { required: true, terminalReply: { disposition: "empty" } },
       requesterSettleWake: {
         status: "pending",
         attemptCount: 0,
@@ -44,11 +56,13 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
       ...(crossAgent ? { requesterStorePath: "/research/sessions.json" } : {}),
       createdAt: now - 200,
       requesterSessionKey: crossAgent ? short.childSessionKey : REQUESTER,
+      completion: { required: true, terminalReply: { disposition: "empty" } },
       execution:
         scenario === "paused member" || scenario === "pending cleanup"
           ? { status: "terminal", startedAt: now - 200, endedAt: now }
           : { status: "running", startedAt: now - 200 },
       ...(scenario === "paused member" ? { pauseReason: "sessions_yield" as const } : {}),
+      ...(scenario === "pending cleanup" ? { delivery: { status: "pending" as const } } : {}),
       requesterSettleWake: {
         status: "pending",
         attemptCount: 0,
@@ -62,6 +76,7 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
       [...runs.values()].filter((entry) => entry.requesterSessionKey === key),
     );
     readDescendantFacts.mockImplementation(async (params) => ({
+      deliveryWaitUntil: now + 300_000,
       unsettled: hasDescendantRunAwaitingSettleFromRuns(
         runs,
         params.requesterSessionKey,
@@ -71,13 +86,13 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
         params.settledBefore,
         params.rootRunIds,
       ),
-      active: countActiveDescendantRunsFromRuns(
+      active: buildScopedSubagentRunReadIndexFromRuns(
         runs,
         params.requesterSessionKey,
         params.requesterAgentId,
         params.requesterStorePath,
         params.rootRunIds,
-      ),
+      ).countActiveDescendantRuns(params.requesterSessionKey),
     }));
     const early = scenario === "older batch";
     expect(

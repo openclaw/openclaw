@@ -77,6 +77,8 @@ describe("guarded config final effects", () => {
     { name: "private file chmod failure", foreign: true, stateRoot: true, fileFailure: true },
   ])("preserves only optional directory hardening: $name", async (scenario) => {
     const f = fixture();
+    // A temporary root can inherit a group that cannot retain the setgid bit.
+    fs.chownSync(f.dir, process.getuid!(), process.getgid!());
     fs.chmodSync(f.dir, 0o2775);
     const root = fs.statSync(f.dir);
     const uid = scenario.foreign ? root.uid + 1 : root.uid;

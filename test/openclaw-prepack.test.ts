@@ -48,6 +48,7 @@ if (!rootPnpmEnvironment) {
 
 const standaloneBundledChannelSmokeFiles = [
   "scripts/test-built-bundled-channel-entry-smoke.mts",
+  "scripts/lib/build-smoke-env.mts",
   "scripts/lib/bundled-plugin-build-entries.mjs",
   "scripts/lib/bundled-plugin-paths.mjs",
   "scripts/lib/optional-bundled-clusters.mjs",
@@ -208,9 +209,8 @@ function createPrepackLifecycleFixture() {
   );
   writeFileSync(
     path.join(rootDir, "check-update-compat.mjs"),
-    'import { existsSync, writeFileSync } from "node:fs";\n' +
-      'writeFileSync("compat-check-invoked", "update:compat:check\\n");\n' +
-      'if (existsSync("stale-update-compat")) throw new Error("Missing latest updater inventory; run pnpm update:compat:gen");\n',
+    'import { writeFileSync } from "node:fs";\n' +
+      'writeFileSync("compat-check-invoked", "update:compat:check\\n");\n',
   );
   writeFileSync(
     path.join(rootDir, "lifecycle.mjs"),
@@ -419,21 +419,14 @@ describe("prepared prepack ownership", () => {
 });
 
 describe("prepack lifecycle", () => {
-  it("rejects prepared packages with stale updater inventory without rebuilding or leaving source mutations", () => {
+  it("packs prepared packages without rebuilding or consulting live npm updater coverage", () => {
     const fixture = createPrepackLifecycleFixture();
-    writeFileSync(path.join(fixture.rootDir, "stale-update-compat"), "stale\n");
     const result = fixture.pack(true);
 
     expect(result.error).toBeUndefined();
-    expect(result.status).not.toBe(0);
-    const prepack = fixture.readLifecycleResult("prepack");
-    expect(prepack).toMatchObject({ status: 1, signal: null });
-    expect(prepack.stderr).toContain(
-      "Missing latest updater inventory; run pnpm update:compat:gen",
-    );
+    expect(fixture.readLifecycleResult("prepack")).toMatchObject({ status: 0, signal: null });
+    expect(existsSync(path.join(fixture.rootDir, "compat-check-invoked"))).toBe(false);
     expect(existsSync(path.join(fixture.rootDir, "build-invoked"))).toBe(false);
-    expect(readdirSync(fixture.packDir)).toEqual([]);
-    fixture.expectRestored();
   });
 });
 

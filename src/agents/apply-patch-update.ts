@@ -5,6 +5,7 @@
  */
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "../infra/errors.js";
+import { ToolInputError } from "./tool-input-error.js";
 
 const DASH_PUNCTUATION = /[\u2010-\u2015\u2212]/g;
 const SINGLE_QUOTE_PUNCTUATION = /[\u2018-\u201B]/g;
@@ -66,12 +67,12 @@ function computeReplacements(
     if (chunk.changeContext) {
       const contextSearch = seekSequence(originalLines, [chunk.changeContext], lineIndex, false);
       if (contextSearch.kind === "ambiguous") {
-        throw new Error(
+        throw new ToolInputError(
           `Found ${contextSearch.occurrences} occurrences of context '${chunk.changeContext}' in ${filePath}. The context must be unique; use a more specific @@ context line.`,
         );
       }
       if (contextSearch.kind === "missing") {
-        throw new Error(`Failed to find context '${chunk.changeContext}' in ${filePath}`);
+        throw new ToolInputError(`Failed to find context '${chunk.changeContext}' in ${filePath}`);
       }
       lineIndex = contextSearch.index + 1;
     }
@@ -114,12 +115,12 @@ function computeReplacements(
     }
 
     if (search.kind === "ambiguous") {
-      throw new Error(
+      throw new ToolInputError(
         `Found ${search.occurrences} occurrences of these lines in ${filePath}. The lines must be unique; include more surrounding lines in the hunk:\n${chunk.oldLines.join("\n")}`,
       );
     }
     if (search.kind === "missing") {
-      throw new Error(
+      throw new ToolInputError(
         `Failed to find expected lines in ${filePath}:\n${chunk.oldLines.join("\n")}`,
       );
     }
@@ -161,22 +162,24 @@ function buildChunkLines(params: {
     if (oldContext === undefined || oldContext >= pattern.length || newContext >= newSlice.length) {
       continue;
     }
-    lines.push(
-      ...buildChangedLines({
+    appendLines(
+      lines,
+      buildChangedLines({
         sourceLines: source.lines,
         startIndex: matchIndex + oldStart,
         oldCount: oldContext - oldStart,
         newLines: newSlice.slice(newStart, newContext),
         preferredEnding: source.preferredEnding,
       }),
-      source.lines[matchIndex + oldContext]!,
     );
+    lines.push(source.lines[matchIndex + oldContext]!);
     oldStart = oldContext + 1;
     newStart = newContext + 1;
   }
 
-  lines.push(
-    ...buildChangedLines({
+  appendLines(
+    lines,
+    buildChangedLines({
       sourceLines: source.lines,
       startIndex: matchIndex + oldStart,
       oldCount: pattern.length - oldStart,
@@ -185,6 +188,13 @@ function buildChunkLines(params: {
     }),
   );
   return lines;
+}
+
+// Spreading a large hunk into push() exceeds the engine's call argument limit.
+function appendLines(target: SourceLine[], items: SourceLine[]) {
+  for (const item of items) {
+    target.push(item);
+  }
 }
 
 function buildChangedLines(params: {
@@ -215,11 +225,11 @@ function buildChangedLines(params: {
 }
 
 function applyReplacements(lines: SourceLine[], replacements: Replacement[]): SourceLine[] {
-  const result = [...lines];
+  let result = lines;
   // Apply from the end of the file backward so earlier replacement indexes stay
-  // stable while later replacements mutate the array.
+  // stable while later replacements rebuild the array.
   for (const [startIndex, oldLen, newLines] of replacements.toReversed()) {
-    result.splice(startIndex, oldLen, ...newLines);
+    result = result.slice(0, startIndex).concat(newLines, result.slice(startIndex + oldLen));
   }
   return result;
 }

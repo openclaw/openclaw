@@ -17,9 +17,43 @@ Bundled and catalog-known routes take their `compat` capabilities from the ownin
 
 A custom endpoint does not inherit the original catalog route's preferred Code Mode tier. With automatic Code Mode and no custom `compat.codeMode` declaration, the embedded runtime keeps its normal tool surface. Set `compat.codeMode: "preferred"` only after verifying Code Mode on that endpoint.
 
-Provider-normalized aliases, such as an Anthropic endpoint's `/v1` suffix, keep their canonical catalog capabilities.
+Provider-normalized aliases, such as an Anthropic endpoint's `/v1` suffix, keep their standard catalog capabilities.
 
 Gateway model capability checks also read explicit `models.providers.<id>.models[]` metadata. If a custom or proxy model accepts images, set `input: ["text", "image"]` on that model so WebChat and node-origin attachment paths pass images as native model inputs instead of text-only media refs.
+
+Servers that do not enforce authentication are supported through an explicit
+`auth: "none"` on the provider. OpenClaw then sends no `Authorization` header,
+and setup/onboarding live checks pass without an API key. This is required for
+private-but-remote hosts (tailnet/VPN inference servers), where automatic
+no-auth detection only covers loopback and RFC1918 addresses:
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "my-studio/qwen3.8" } },
+  },
+  models: {
+    providers: {
+      "my-studio": {
+        baseUrl: "https://studio.example.ts.net/v1",
+        api: "openai-completions",
+        auth: "none",
+        models: [{ id: "qwen3.8", name: "Qwen3.8" }],
+      },
+    },
+  },
+}
+```
+
+Onboarding covers the same choice: leaving the API key blank on a non-local
+host prompts to confirm no-auth mode (loopback/RFC1918 hosts treat a blank
+key as no-auth automatically), or pass `--custom-no-auth` with
+`--custom-base-url`/`--custom-model-id` in non-interactive mode.
+`auth: "none"` applies only to the effective `openai-completions` adapter,
+including a model-level `api` override. It takes precedence over retained inline,
+environment, stored-profile, and SecretRef credentials. Unsupported adapters fail
+before credential fallback. Responses, Azure OpenAI, and Anthropic-compatible
+endpoints without auth still need a placeholder key.
 
 `agents.defaults.models["provider/model"]` controls aliases and per-model metadata for agents. It neither restricts overrides nor registers a new runtime model by itself. For custom provider models, also add `models.providers.<provider>.models[]` with at least the matching `id`; use `agents.defaults.modelPolicy.allow` separately when you want an override restriction.
 
@@ -250,7 +284,7 @@ discovery, authentication, and managed local embeddings.
 llmman is configured via `models.providers` as an OpenAI-compatible local server. It pulls models as OCI artifacts and serves them through upstream `llama-server`, `vllm`, or `mlx-lm`, and can pair a local model with a hosted one under a single model id:
 
 - Provider: `llmman` (custom; `api: "openai-completions"`)
-- Auth: none enforced; set `LLMMAN_API_KEY=llmman-local` and use `apiKey: "${LLMMAN_API_KEY}"`
+- Auth: none on loopback, so set `LLMMAN_API_KEY=llmman-local`; off loopback, set it to the daemon's key. Use `apiKey: "${LLMMAN_API_KEY}"`
 - Default base URL: `http://127.0.0.1:17434/v1`
 - Example model: `llmman/qwen3.8`
 - Hybrid example: `llmman/llmman.hybrid/qwen3.8,openai/gpt-5.6-luna`
@@ -439,11 +473,11 @@ Example (OpenAI-compatible):
     - Custom `openai-completions` models marked `reasoning: true` send `reasoning_effort` by default when thinking is enabled. Set `compat.supportsReasoningEffort: false` on the model if its endpoint rejects that field. `/think off` omits it by default, leaving the server's own reasoning default in effect; see [custom endpoint thinking](/tools/thinking#custom-openai-compatible-endpoints) for explicit off mappings and supported effort levels.
     - For OpenAI-compatible Completions proxies that need vendor-specific fields, set `agents.defaults.models["provider/model"].params.extra_body` (or `extraBody`) to merge extra JSON into the outbound request body.
     - For vLLM chat-template controls, set `agents.defaults.models["provider/model"].params.chat_template_kwargs`. The bundled vLLM plugin automatically sends `enable_thinking: false` and `force_nonempty_content: true` for `vllm/nemotron-3-*` when the session thinking level is off.
-    - For slow local models or remote LAN/tailnet hosts, set `models.providers.<id>.timeoutSeconds`. This extends provider model HTTP request handling, including connect, headers, body streaming, and the total guarded-fetch abort, without increasing the whole agent runtime timeout. The initial response-header wait uses the first-event budget: 120 seconds for cloud endpoints and 300 seconds for local/self-hosted endpoints, unless overridden by the provider timeout or a lower run ceiling. This does not add idle-gap policing to local streams after the provider accepts the request. Without an explicit provider timeout, TCP/TLS connection setup keeps its 10-second default independently of the longer streaming timeout, including when reconnecting a pooled transport. If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend the whole run.
+    - For slow local models or remote LAN/tailnet hosts, set `models.providers.<id>.timeoutSeconds`. This extends provider model HTTP request handling, including connect, headers, body streaming, and the total guarded-fetch abort, without increasing the agent runtime's per-attempt timeout. The initial response-header wait uses the first-event budget: 120 seconds for cloud endpoints and 300 seconds for local/self-hosted endpoints, unless overridden by the provider timeout or a lower attempt ceiling. This does not add idle-gap policing to local streams after the provider accepts the request. Without an explicit provider timeout, TCP/TLS connection setup keeps its 10-second default independently of the longer streaming timeout, including when reconnecting a pooled transport. If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend the current model attempt. Each configured fallback gets a fresh attempt budget.
     - Model provider HTTP calls allow Surge, Clash, and sing-box fake-IP DNS answers in `198.18.0.0/15` and `fc00::/7` only for the configured provider `baseUrl` hostname. Custom/local provider endpoints also trust that exact configured `scheme://host:port` origin for guarded model requests, including loopback, LAN, and tailnet hosts. This is not a new config option; the `baseUrl` you configure extends the request policy only for that origin. Fake-IP hostname allowance and exact-origin trust are independent mechanisms. Other private, loopback, link-local, metadata, local-use NAT64 (`64:ff9b:1::/48`) destinations, and different ports still require an explicit `models.providers.<id>.request.allowPrivateNetwork: true` opt-in. Set `models.providers.<id>.request.allowPrivateNetwork: false` to opt out of the exact-origin trust.
     - If `baseUrl` is empty/omitted, OpenClaw keeps the default OpenAI behavior (which resolves to `api.openai.com`).
     - For safety, an explicit `compat.supportsDeveloperRole: true` is still overridden on non-native `openai-completions` endpoints.
-    - For `api: "anthropic-messages"` on non-direct endpoints (any provider other than canonical `anthropic`, or a custom `models.providers.anthropic.baseUrl` whose host is not a public `api.anthropic.com` endpoint), OpenClaw suppresses implicit Anthropic beta headers such as `claude-code-20250219`, `interleaved-thinking-2025-05-14`, and OAuth markers, so custom Anthropic-compatible proxies do not reject unsupported beta flags. Set `models.providers.<id>.headers["anthropic-beta"]` explicitly if your proxy needs specific beta features.
+    - For `api: "anthropic-messages"` on non-direct endpoints (any provider other than the standard `anthropic` provider, or a custom `models.providers.anthropic.baseUrl` whose host is not a public `api.anthropic.com` endpoint), OpenClaw suppresses implicit Anthropic beta headers such as `claude-code-20250219`, `interleaved-thinking-2025-05-14`, and OAuth markers, so custom Anthropic-compatible proxies do not reject unsupported beta flags. Set `models.providers.<id>.headers["anthropic-beta"]` explicitly if your proxy needs specific beta features.
 
   </Accordion>
 </AccordionGroup>

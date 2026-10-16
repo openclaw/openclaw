@@ -174,8 +174,8 @@ suite.define(() => {
         const verify = await gateway.waitForRequest("models.probe");
         expect(verify.params).toEqual({ provider: "openai", agentId: "main" });
         await currentProvider
-          .locator(".model-providers__probe-summary")
-          .getByText("1234 ms", { exact: true })
+          .locator(".model-providers__probe-target")
+          .getByText("Connected · Request round-trip: 1234 ms", { exact: true })
           .waitFor();
         await currentProvider
           .locator(".model-providers__probe-summary")
@@ -195,8 +195,8 @@ suite.define(() => {
           .getByRole("button", { name: "Test connection", exact: true })
           .waitFor();
         await currentProvider
-          .locator(".model-providers__probe-summary")
-          .getByText("1234 ms", { exact: true })
+          .locator(".model-providers__probe-target")
+          .getByText("Connected · Request round-trip: 1234 ms", { exact: true })
           .waitFor();
         await currentProvider
           .locator(".model-providers__probe-summary")

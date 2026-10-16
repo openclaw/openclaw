@@ -35,7 +35,10 @@ export function isOpenClawCliImageCachePath(filePath: string): boolean {
 }
 
 export function resolveMediaFactLocalRef(fact: MediaFact): MediaFileRef | undefined {
-  const mediaUri = [fact.url, fact.path].find((value) => value?.startsWith("media://inbound/"));
+  const mediaUri =
+    fact.staged && fact.path
+      ? undefined
+      : [fact.url, fact.path].find((value) => value?.startsWith("media://inbound/"));
   const identity = mediaUri ?? fact.path ?? fact.url;
   if (!identity) {
     return undefined;

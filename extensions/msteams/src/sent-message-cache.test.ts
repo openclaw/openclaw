@@ -24,6 +24,7 @@ describe("msteams sent message cache", () => {
   afterEach(() => {
     sentMessageMemory.clear();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("records and resolves sent message ids", async () => {
@@ -40,7 +41,7 @@ describe("msteams sent message cache", () => {
     vi.spyOn(Date, "now").mockReturnValue(1_234_567);
     const register = vi.fn().mockResolvedValue(undefined);
     const lookup = vi.fn().mockResolvedValue({ sentAt: Date.now() });
-    const openKeyedStore = vi.fn(() => ({
+    const openKeyedStoreV2 = vi.fn(() => ({
       register,
       lookup,
       consume: vi.fn(),
@@ -49,7 +50,7 @@ describe("msteams sent message cache", () => {
       clear: vi.fn(),
     }));
     setMSTeamsRuntime({
-      state: { openKeyedStore },
+      state: { openKeyedStoreV2 },
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
     } as never);
 
@@ -62,7 +63,7 @@ describe("msteams sent message cache", () => {
     await expect(
       wasMSTeamsMessageSentWithPersistence({ conversationId: "conv-1", messageId: "msg-2" }),
     ).resolves.toBe(true);
-    expect(openKeyedStore).toHaveBeenCalledTimes(1);
+    expect(openKeyedStoreV2).toHaveBeenCalledTimes(1);
     expect(lookup).toHaveBeenCalledWith("conv-1:msg-2");
 
     lookup.mockClear();
@@ -78,7 +79,7 @@ describe("msteams sent message cache", () => {
   it("preserves the original TTL when recovering sent-message ids from persistent state", async () => {
     const sentAt = 1_000_000;
     const lookup = vi.fn(async () => (Date.now() - sentAt < TTL_MS ? { sentAt } : undefined));
-    const openKeyedStore = vi.fn(() => ({
+    const openKeyedStoreV2 = vi.fn(() => ({
       register: vi.fn(),
       lookup,
       consume: vi.fn(),
@@ -87,7 +88,7 @@ describe("msteams sent message cache", () => {
       clear: vi.fn(),
     }));
     setMSTeamsRuntime({
-      state: { openKeyedStore },
+      state: { openKeyedStoreV2 },
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
     } as never);
 
@@ -112,7 +113,7 @@ describe("msteams sent message cache", () => {
     const warn = vi.fn();
     setMSTeamsRuntime({
       state: {
-        openKeyedStore: vi.fn(() => {
+        openKeyedStoreV2: vi.fn(() => {
           throw new Error("sqlite unavailable");
         }),
       },

@@ -64,7 +64,11 @@ async function success(
     content: [{ type: "text", text: JSON.stringify(content) }],
     details,
   });
-  expect(mock).toHaveBeenCalledWith({ cfg: context.cfg ?? cfg, ...expectedArgs });
+  expect(mock).toHaveBeenCalledWith({
+    cfg: context.cfg ?? cfg,
+    accountId: context.accountId,
+    ...expectedArgs,
+  });
 }
 
 function ok(action: string, result: Record<string, unknown> = {}) {
@@ -91,6 +95,32 @@ beforeEach(() => {
 });
 
 describe("Teams action routing and authority", () => {
+  it.each([{ selected: undefined, expected: "support" }])(
+    "preserves the selected/default account for presentation sends: $expected",
+    async ({ selected, expected }) => {
+      const accountCfg: OpenClawConfig = {
+        channels: {
+          msteams: {
+            defaultAccount: "support",
+            accounts: { support: { appId: "support-app" } },
+          },
+        },
+      };
+      runtime.sendAdaptiveCardMSTeams.mockResolvedValue({
+        messageId: "sent-1",
+        conversationId: "conv-1",
+      });
+      await run(
+        "send",
+        { to: conversation, presentation: { blocks: [{ type: "text", text: "Hello" }] } },
+        { cfg: accountCfg, accountId: selected },
+      );
+      expect(runtime.sendAdaptiveCardMSTeams).toHaveBeenCalledWith(
+        expect.objectContaining({ accountId: expected, to: conversation }),
+      );
+    },
+  );
+
   it("reads the trusted current conversation under restrictive policies", async () => {
     await success(
       "read",
@@ -102,20 +132,6 @@ describe("Teams action routing and authority", () => {
       {
         ...current({ To: ` ${conversation} ` }),
         cfg: { channels: { msteams: { groupPolicy: "allowlist", dmPolicy: "pairing" } } },
-      },
-    );
-  });
-
-  it("uses the global group policy for an explicit Graph target", async () => {
-    await success(
-      "read",
-      { to: graphTarget, messageId: "msg-1" },
-      runtime.getMessageMSTeams,
-      message,
-      { to: graphTarget, messageId: "msg-1" },
-      ok("read", { message }),
-      {
-        cfg: { channels: { defaults: { groupPolicy: "open" }, msteams: {} } },
       },
     );
   });
@@ -365,17 +381,6 @@ describe("Teams action routing and authority", () => {
     );
   });
 
-  it("falls back to messageId when no pinned resource id is supplied", async () => {
-    await success(
-      "unpin",
-      { target: conversation, messageId: " pin-2 " },
-      runtime.unpinMessageMSTeams,
-      { ok: true },
-      { to: conversation, pinnedMessageId: "pin-2" },
-      { channel: "msteams", action: "unpin", ok: true },
-    );
-  });
-
   it("rejects unpin without either id", async () => {
     await error(
       "unpin",
@@ -439,20 +444,57 @@ describe("Teams action routing and authority", () => {
     );
   });
 
-  it.each(["react", "reactions"] as const)("uses the current inbound id for %s", async (action) => {
-    const mock = action === "react" ? runtime.reactMessageMSTeams : runtime.listReactionsMSTeams;
-    mock.mockResolvedValue(action === "react" ? { ok: true } : { reactions: [] });
+  it.each(["reactions"] as const)("uses the current inbound id for %s", async (action) => {
+    const mock = runtime.listReactionsMSTeams;
+    mock.mockResolvedValue({ reactions: [] });
     const context = current({ ChatType: "group", To: conversation });
     await expect(
-      run(action, action === "react" ? { emoji: "like" } : {}, {
-        ...context,
-        toolContext: { ...context.toolContext, currentMessageId: 1751234567890 },
-      }),
+      run(
+        action,
+        {},
+        {
+          ...context,
+          toolContext: { ...context.toolContext, currentMessageId: 1751234567890 },
+        },
+      ),
     ).resolves.not.toMatchObject({ isError: true });
     expect(mock).toHaveBeenCalledWith(
       expect.objectContaining({ cfg, to: conversation, messageId: "1751234567890" }),
     );
   });
+
+  it.each([
+    { action: "react", params: { emoji: "like" }, mock: runtime.reactMessageMSTeams },
+    {
+      action: "react",
+      params: { emoji: "like", remove: true },
+      mock: runtime.unreactMessageMSTeams,
+    },
+    { action: "reactions", params: {}, mock: runtime.listReactionsMSTeams },
+  ] as const)(
+    "addresses the current channel reply for $action $params beneath its thread root",
+    async ({ action, params, mock }) => {
+      mock.mockResolvedValue({ ok: true, reactions: [] });
+      const base = current({
+        ChatType: "channel",
+        To: conversation,
+        NativeChannelId: graphTarget,
+        MessageThreadId: "root-1",
+      });
+      const context = {
+        ...base,
+        toolContext: { ...base.toolContext, currentMessageId: "reply-1" },
+      };
+
+      await run(action, params, context);
+      await run(action, { ...params, messageId: "other-1" }, context);
+
+      expect(mock.mock.calls.map(([call]) => [call.messageId, call.threadRootId])).toEqual([
+        ["reply-1", "root-1"],
+        ["other-1", undefined],
+      ]);
+    },
+  );
 
   it.each([
     { action: "react", params: { to: "conversation:19:other@thread.tacv2", emoji: "like" } },
@@ -581,21 +623,4 @@ describe("Teams action routing and authority", () => {
       expect(mock).not.toHaveBeenCalled();
     },
   );
-
-  it("preserves an explicit Graph target over the current channel", async () => {
-    await success(
-      "react",
-      { target: graphTarget, messageId: "msg-1", emoji: "like" },
-      runtime.reactMessageMSTeams,
-      { ok: true },
-      { to: graphTarget, messageId: "msg-1", reactionType: "like" },
-      { channel: "msteams", action: "react", reactionType: "like", ok: true },
-      {
-        toolContext: {
-          currentChannelId: "team-other/channel-other",
-          currentGraphChannelId: "team-other/channel-other",
-        },
-      },
-    );
-  });
 });

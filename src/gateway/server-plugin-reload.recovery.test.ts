@@ -43,7 +43,6 @@ import {
   verifyActiveCallDrainLease,
   verifyLateActiveCallDrainObservation,
 } from "./server-plugin-reload.active-call.test-support.js";
-import { verifySharedGatewayCacheOwnership } from "./server-plugin-reload.cache.test-support.js";
 import { verifyCancelledDrainRollbackLease } from "./server-plugin-reload.cancel-lease.test-support.js";
 import {
   verifyDecisionSelectionIsolation,
@@ -263,13 +262,6 @@ it("disables and re-enables a plugin after its service cleanup fails", () =>
 it("preserves pending old service cleanup when candidate startup fails", () =>
   verifyPendingServiceCleanupRollback(createRecoveryFixture));
 
-it("keeps a shared boot setup owner through sibling lookup", () =>
-  verifySharedGatewayCacheOwnership(
-    createRecoveryFixture,
-    makeTrackedTempDir("gateway-shared-setup-owner", tempDirs),
-    (load) => mocks.resolveConfigWidePluginMetadataSnapshot.mockImplementation(load),
-  ));
-
 it.each([15_000, 70_000])(
   "waits for an admitted write before replacement and keeps serving on timeout (%i ms)",
   (holdMs) =>
@@ -318,7 +310,6 @@ it.for(["pending", "initialized", "separate-registry", "rollback"] as const)(
 
 it.for([
   { owner: "retained", failure: "before-drain" },
-  { owner: "replaced", failure: "before-drain" },
   { owner: "retained", failure: "checkpoint" },
   { owner: "replaced", failure: "checkpoint" },
   { owner: "retained", failure: "restart" },

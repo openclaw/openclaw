@@ -71,11 +71,19 @@ identity checks. Agent pickers and the agent directory wait for a live roster;
 stored agent lists cannot establish the current role’s discovery permissions. Short
 conversation links use cached routing defaults and session rows before agent
 discovery; the Gateway revalidates the established session after connecting.
+Unique display-name links use the same cached route resolution, including the
+`/dashboard` namespace. Missing or ambiguous names still wait for the Gateway.
 
 Exact conversation links also wait for the scoped cached roster before presenting
 their header. Dashboard layouts restore before the pane renders, and embedded
 HTML widgets keep one loading surface while their board metadata and document
 arrive. Widget requests still require the current Gateway connection.
+
+Loading more sessions keeps the sidebar's warm-reload snapshot usable. The
+routing roster retains its first page; the sidebar separately keeps its visible
+rows, pinned destinations, and selected view for display while connecting. The
+Pages view saves and restores its dashboard catalog without waiting for the
+inactive Sessions roster.
 
 Boot and roster records retain the existing 30-day expiry, and transcripts keep
 their bounded cache limits. Clearing site data removes local recovery data.
@@ -104,8 +112,10 @@ Production builds prepare a generic offline shell and the critical Chat and New
 Session interface files, plus the signed-out fallback, through the service worker.
 Static asset preparation can use the browser’s existing same-origin proxy sign-in;
 only integrity-matched build bytes with cacheable responses are admitted. After preparation
-completes, a browser that explicitly reports itself offline can reload those
-routes from the current build cache. Interrupted preparation resumes on the
+completes, a failed navigation to a built-in app route can use the cached shell,
+including when the browser still reports itself online. Network navigation waits
+up to 10 seconds before falling back; HTTP authentication responses are not replaced.
+Interrupted preparation resumes on the
 existing startup/resume checks when the browser returns online, reusing verified
 downloads instead of starting over. Preparation is bounded so a stalled download
 cannot hold a UI update indefinitely. The existing warm-reload credential and
@@ -114,7 +124,9 @@ Gateway-rendered private HTML, API responses, or authorization tickets are
 added to this shell cache.
 
 Reloads reuse cached build-versioned fonts, themes, and the web manifest without
-contacting the Gateway. The service worker keeps only the current build's assets.
+contacting the Gateway. The service worker keeps the current complete build and
+one complete previous generation, so older open documents can still load their
+cached chunks. An incomplete replacement does not discard the last complete shell.
 After an update, open tabs reload automatically unless unsaved-work protection
 blocks recovery; then save or discard the protected work and use the **Reload**
 banner. Uploaded profile avatars use private browser caching only when the URL
@@ -124,10 +136,11 @@ Content-addressed plugin interface assets stay in the private browser HTTP cache
 across grant renewal; requests reaching the Gateway still require current plugin
 authorization, and plugin data remains subject to per-call RPC authorization.
 
-Online navigations still go directly to the network so reverse-proxy HTTP
-authentication dialogs work normally. If the browser reports itself online
-despite a broken connection, navigation keeps that network behavior. An open
-tab remains the most reliable way to keep working through intermittent service.
+Navigations try the network first. API, download, and standalone
+authentication paths do not receive the offline shell. Plugin catalog detail
+links under `/plugins/` remain network-dependent because that namespace also
+hosts plugin HTTP endpoints. An open tab remains the
+most reliable way to keep working through intermittent service.
 Unvisited views and uncached external resources may still need a connection.
 
 ## Gateway updates and suspended tabs
@@ -137,11 +150,31 @@ or is restored from browser history. If an update finished while the tab was sus
 can recover without receiving the original update notification or opening a new tab.
 
 Automatic build-recovery reloads spread their first page check over up to two seconds
-and reload only once per target build. Reloads wait for the page to be reachable
+and reload at most once per target build every 30 seconds. Reloads wait for the page to be reachable
 and respect unsaved-work protection.
 The current route and stored drafts survive the reload. If browser storage is unavailable
 or reload protection blocks recovery, reload the tab after saving your work;
 do not clear site data while drafts or queued messages still need recovery.
+
+If a view or stylesheet download fails during a network interruption, the open
+page keeps checking reachability with a backoff capped at 15 seconds. Coming
+back online or returning to the tab wakes that check early. Once the document
+is reachable, a cold route retries its import without replacing the page. The
+previous page stays visible while the route is pending. A persistent import
+failure can still require a guarded reload because browsers can retain failed
+module downloads. Failed Vite CSS preloads also require guarded recovery to avoid
+opening a view without its styles. Optional font and theme stylesheet failures do not trigger
+document recovery. Unsaved-work protection still applies, and the manual
+**Reload** action remains available.
+
+During startup, slow app downloads keep the **Control UI is still loading**
+notice without interrupting the download. After the document finishes loading,
+the app gets another 12 seconds to render before recovery starts. If the
+Gateway is unreachable, startup recovery keeps probing with a backoff capped
+at 15 seconds. It allows up to three automatic recovery navigations; if fresh
+pages still cannot start, use **Try again** or the troubleshooting guide.
+Network failures and **Try again** preserve service-worker registrations and
+their offline caches.
 
 Unsaved file edits block automatic and in-app reloads, even after you close their
 previews or switch conversations. Reopen each edited file and save or discard its
@@ -184,12 +217,16 @@ embedded dashboard. Connection status does not replace the Gateway name in the a
 The client retries ordinary connection loss automatically with randomized backoff: the first
 retry waits 800–960 ms, and sustained failures spread retries across 12.5–15 seconds.
 Server retry hints remain minimum waits and can extend beyond that normal cap, with up to
-20% additional spread. The connection watchdog allows two advertised heartbeat
-intervals of silence before reconnecting. An individual request timeout does not
-reset a socket that is still receiving traffic. Reconnecting does not replay
+20% additional spread. The Gateway's WebSocket ping/pong keepalive detects dead
+transports. Delayed application heartbeats on a busy Gateway do not by themselves
+reconnect an open tab. Returning to a suspended tab still recovers a connection
+after two advertised heartbeat intervals of silence. An individual request
+timeout does not reset the socket. Reconnecting does not replay
 arbitrary requests; read owners retry their reads, and write owners reconcile
 uncertain outcomes. Gateway startup hints keep their separate bounded timing
 (100–2000 ms), with up to 20% additional spread across reconnecting tabs.
+If a dropped connection interrupts a Usage export, the export shows an error. Once
+the connection returns, choose **Export** again; exports are not replayed automatically.
 If the browser provides no reason for the disconnect, the connection tooltip explains that
 the connection was interrupted and whether automatic reconnection is underway. It retains
 the WebSocket close code for troubleshooting; specific Gateway errors keep their explanation.
@@ -271,7 +308,8 @@ actions to open Main or browse sessions. A connection failure or a conversation
 missing from the current sidebar page does not count as deletion.
 
 Opening a view for the first time can fail if its interface files cannot be downloaded.
-Check the connection, then use **Reload**. The same error can occur after an update;
+The UI waits for reachability and reloads automatically, subject to reload protection
+and the 30-second loop guard. You can also use **Reload**. The same error can occur after an update;
 it does not by itself mean a new version was installed. If unsaved work blocks the
 reload, follow the displayed save or cancel guidance, then try again.
 
@@ -344,7 +382,9 @@ instead report missing attachments. Independent tabs do not share newly authored
 After connecting, chat waits for account-scoped recovery before accepting or sending ordinary
 messages. During this brief check, submitted text and attachments stay in the composer. Offline
 queues resume once recovery is ready, unless the session still owns an unresolved initial turn;
-resolve that turn with its **Retry** or **Check delivery** action first.
+resolve that turn with its **Retry** or **Check delivery** action first. While disconnected, a
+notice above the composer says the initial message is unresolved; the composer still accepts
+queued messages.
 If the initial message is waiting for recovery, its chat shows a loading placeholder
 until the message can be restored, rather than the empty new-chat welcome screen.
 Recovery notices appear below the composer and clear when the blocking condition resolves.

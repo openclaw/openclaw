@@ -8,7 +8,7 @@ import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import { backupCreateCommand } from "../commands/backup.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
 import {
   restoreSessionColdTranscript,
@@ -27,6 +27,7 @@ import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { restoreGitBackupDirectory } from "./git-backup-codec.js";
 import { createGitBackup } from "./git-backup.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
@@ -82,7 +83,9 @@ async function createColdFixture() {
   ]);
   await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: sourcePath });
   await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
-  const database = openOpenClawAgentDatabase({ agentId: "main", path: sourcePath }).db;
+  const database = requireNativeSqliteDatabase(
+    openOpenClawAgentDatabase({ agentId: "main", path: sourcePath }).db,
+  );
   database
     .prepare(
       "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",

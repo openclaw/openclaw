@@ -1,11 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import { renderTranscriptSearch, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import {
+  render,
+  renderChatThread,
+  renderTranscriptSearch,
+} from "../test-helpers/chat-transcript-native.tsx";
+import { getTranscriptState, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -25,6 +28,33 @@ function touchPointerUp(element: Element): void {
 }
 
 describe("chat transcript message controls", () => {
+  it("refreshes native search from the mutable pane state without replacing its input", () => {
+    const paneId = "native-search-revision";
+    const state = getTranscriptState(paneId);
+    const container = document.body.appendChild(document.createElement("div"));
+    const update = () => render(renderTranscriptSearch(paneId, update), container);
+    try {
+      update();
+      expect(container.querySelector("input")).toBeNull();
+      state.searchOpen = true;
+      update();
+      const input = expectDefined(
+        container.querySelector<HTMLInputElement>("input"),
+        "native search input",
+      );
+      input.focus();
+      state.searchQuery = "updated query";
+      update();
+      expect(container.querySelector("input")).toBe(input);
+      expect(input.value).toBe("updated query");
+      expect(document.activeElement).toBe(input);
+      state.searchOpen = false;
+      update();
+      expect(container.querySelector("input")).toBeNull();
+    } finally {
+      render(null, container);
+    }
+  });
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 

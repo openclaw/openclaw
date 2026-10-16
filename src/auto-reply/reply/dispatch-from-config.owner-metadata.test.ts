@@ -28,7 +28,10 @@ it.each([
   "read-recovery",
   "lifecycle-change",
   "parent-change",
+  "parent-added",
   "replacement-parent",
+  "metadata-created",
+  "metadata-cleared",
   "owner-error",
 ] as const)("keeps explicit-owner ACP metadata current across gather: %s", async (scenario) => {
   state = await createOpenClawTestState({ label: "dispatch-owner-metadata" });
@@ -51,7 +54,7 @@ it.each([
     sessionId: "child",
     lifecycleRevision: "before-gather",
     updatedAt: 1,
-    spawnedBy: "agent:work:parent",
+    spawnedBy: scenario === "parent-added" ? undefined : "agent:work:parent",
   };
   replaceSessionEntrySync(scope, entry);
   const meta = {
@@ -62,11 +65,13 @@ it.each([
     state: "idle",
     lastActivityAt: 1,
   } as const;
-  sessionMeta.writeAcpSessionMetaForMigration({
-    sessionKey: buildAcpDatabaseSessionKey("global", "work"),
-    lifecycleRevision: entry.lifecycleRevision,
-    meta,
-  });
+  if (scenario !== "metadata-created") {
+    sessionMeta.writeAcpSessionMetaForMigration({
+      sessionKey: buildAcpDatabaseSessionKey("global", "work"),
+      lifecycleRevision: entry.lifecycleRevision,
+      meta,
+    });
+  }
   if (scenario === "read-recovery") {
     vi.spyOn(entryReadRuntime, "readSessionEntryReadOnlyInWorker").mockRejectedValueOnce(
       new Error("synthetic initial read failure"),
@@ -98,8 +103,21 @@ it.each([
     if (scenario === "parent-change") {
       replaceSessionEntrySync(scope, { ...entry, spawnedBy: undefined });
     }
+    if (scenario === "parent-added") {
+      replaceSessionEntrySync(scope, { ...entry, parentSessionKey: "agent:work:parent" });
+    }
+    if (scenario === "metadata-created" || scenario === "metadata-cleared") {
+      await sessionMeta.upsertAcpSessionMeta({
+        cfg,
+        agentId: scope.agentId,
+        sessionKey: scope.sessionKey,
+        skipMaintenance: true,
+        mutate: () => (scenario === "metadata-created" ? meta : null),
+      });
+    }
     return await loadRuntimePlugins();
   });
+  using resources = new DisposableStack();
   const dispatcher = createReplyDispatcher({ deliver: async () => undefined });
   try {
     const gathered = await gatherDispatchRequest(
@@ -117,6 +135,9 @@ it.each([
         dispatcher,
       },
       undefined,
+      false,
+      undefined,
+      (dispose) => resources.defer(dispose),
     );
     expect(gathered.status).toBe("ready");
     if (gathered.status !== "ready") {
@@ -133,7 +154,10 @@ it.each([
     }
     const prepared = await prepareDispatchDelivery(gathered.state);
     expect(prepared.suppressAcpChildUserDelivery).toBe(
-      scenario === "read-recovery" || scenario === "replacement-parent",
+      scenario === "read-recovery" ||
+        scenario === "replacement-parent" ||
+        scenario === "parent-added" ||
+        scenario === "metadata-created",
     );
   } finally {
     dispatcher.markComplete();

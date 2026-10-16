@@ -14,12 +14,10 @@ type RequestClient = {
 export class GatewayChatEvents {
   private readonly stream = new GatewayChatStreamProjection();
   private readonly projectedEvents = new WeakMap<EventFrame, EventFrame | null>();
-  private generation = 0;
 
   constructor(private readonly reconnect: (reason: string) => void) {}
 
   clear(): void {
-    this.generation += 1;
     this.stream.clear();
   }
 
@@ -29,9 +27,9 @@ export class GatewayChatEvents {
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
-    const generation = this.generation;
     const result = await client.request<T>(method, params, options);
-    if (method === "sessions.messages.unsubscribe" && generation === this.generation) {
+    // Late custom-client ACKs may drop a baseline; missing-baseline recovery reconnects.
+    if (method === "sessions.messages.unsubscribe") {
       const key = asNullableRecord(result)?.key;
       const request = asNullableRecord(params);
       const agentId =

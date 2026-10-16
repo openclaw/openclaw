@@ -91,6 +91,7 @@ export type ResolverContext = {
   env: NodeJS.ProcessEnv;
   cache: SecretRefResolveCache;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  managedSyntheticAuthProviders?: ReadonlySet<string>;
   warnings: SecretResolverWarning[];
   warningKeys: Set<string>;
   assignments: SecretAssignment[];

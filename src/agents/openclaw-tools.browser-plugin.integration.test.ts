@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -16,6 +17,8 @@ import {
 import { resolveGatewayScopedTools } from "../gateway/tool-resolution.js";
 import { buildOutboundMediaLoadOptions } from "../media/load-options.js";
 import { loadWebMediaRaw } from "../media/web-media.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -24,9 +27,13 @@ import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
 import type { resolvePluginTools } from "../plugins/tools.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { jsonResult } from "./tools/common.js";
 
@@ -130,6 +137,57 @@ afterEach(() => {
 });
 
 describe("createOpenClawTools browser plugin integration", () => {
+  it("awaits account discovery before publishing message actions and schema", async () => {
+    const enteredDiscovery = createDeferred();
+    const releaseDiscovery = createDeferred();
+    const describeMessageTool = vi.fn(() => ({ actions: [] }));
+    const describeMessageToolAsync = vi.fn(async () => {
+      enteredDiscovery.resolve();
+      await releaseDiscovery.promise;
+      return {
+        actions: ["send", "react"] as const,
+        capabilities: ["delivery-pin"] as const,
+        schema: { properties: { reactionKind: Type.Optional(Type.String()) } },
+      };
+    });
+    installChannel({
+      ...createChannelTestPluginBase({ id: "matrix" }),
+      actions: {
+        describeMessageTool,
+        describeMessageToolAsync,
+      },
+    });
+    let published = false;
+    const pending = createOpenClawToolsAsync({
+      config: { tools: { web: { search: { enabled: false }, fetch: { enabled: false } } } },
+      agentChannel: "matrix",
+      agentAccountId: "work",
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+    }).then((tools) => {
+      published = true;
+      return tools;
+    });
+    await awaitGateBeforeSettlement(
+      enteredDiscovery.promise,
+      pending,
+      "Message tool construction skipped asynchronous account discovery",
+    );
+    expect(published).toBe(false);
+    releaseDiscovery.resolve();
+    const message = (await pending).find((tool) => tool.name === "message");
+    expect(message?.description).toContain("react");
+    expect(message?.parameters).toMatchObject({
+      properties: {
+        action: { enum: expect.arrayContaining(["react"]) },
+        reactionKind: { type: "string" },
+        delivery: { type: "object", properties: { pin: expect.any(Object) } },
+      },
+    });
+    expect(describeMessageTool).not.toHaveBeenCalled();
+    expect(describeMessageToolAsync).toHaveBeenCalledOnce();
+  });
+
   it.each([SESSION_KEY, undefined])("binds delivery for %s", async (key) => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-delivery-"));
     const mediaUrl = path.join(workspaceDir, "photo.png");
@@ -312,10 +370,12 @@ describe("createOpenClawTools browser plugin integration", () => {
       requesterAccountId: "work",
       requesterSenderId: "sender-1",
     });
+    const cfg: OpenClawConfig = { tools: { allow: ["message"] } };
+    setRuntimeConfigSnapshot(cfg);
     setActivePluginRegistry(createEmptyPluginRegistry());
     await resolveGatewayScopedTools({
       ...identity,
-      cfg: { tools: { allow: ["message"] } },
+      cfg,
       surface: "loopback",
       messageProvider: "telegram",
       accountId: "work",
@@ -456,6 +516,36 @@ describe("createOpenClawTools browser plugin integration", () => {
     await expect(params.context.resolveApiKeyForProvider?.("acme")).resolves.toBe("env-only-key");
   });
 
+  it("does not borrow agent credentials when tool preparation excludes plugin-owned auth", async () => {
+    const config = { ...authConfig("ACME_API_KEY"), auth: { order: { acme: ["acme:profile"] } } };
+    const metadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "acme",
+          providers: ["acme"],
+          modelCatalog: { providers: { acme: { authScope: "plugin", models: [] } } },
+        },
+      ],
+    });
+    await withPluginMetadataSnapshotScope(
+      metadata,
+      async () => {
+        const params = resolveTools({
+          config,
+          agentDir: TEST_AGENT_DIR,
+          authProfileStore: {
+            version: 1,
+            profiles: { "acme:profile": { type: "api_key", provider: "acme", key: "profile-key" } },
+          },
+        });
+        expect(params.hasAuthForProvider?.("acme")).toBe(false);
+        expect(params.context.hasAuthForProvider?.("acme")).toBe(false);
+        await expect(params.context.resolveApiKeyForProvider?.("acme")).resolves.toBeUndefined();
+      },
+      { config, trustConfigIdentity: true },
+    );
+  });
+
   it("keeps ordered profile precedence when runtime auth is also available", async () => {
     vi.stubEnv("ACME_API_KEY", "env-key");
     const params = resolveTools({
@@ -519,6 +609,7 @@ function requirePluginTool(overrides: Parameters<typeof createOpenClawTools>[0])
     agentSessionKey: "agent:main:discord:channel:123",
     disableMessageTool: true,
     pluginToolAllowlist: [name],
+    config: {},
     requesterAgentIdOverride: "main",
     wrapBeforeToolCallHook: false,
     ...overrides,

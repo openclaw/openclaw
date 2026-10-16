@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import {
@@ -13,6 +14,7 @@ import {
   loadSessionEntryReadOnly,
   loadSessionEntryByIdReadOnly,
   patchSessionEntryCore,
+  prepareQualifiedSessionEntryTarget,
   replaceSessionEntry,
   replaceSessionEntrySync,
   resolveSessionEntryAccessTarget,
@@ -33,16 +35,20 @@ describe("qualified session accessor projection", () => {
     await state.cleanup();
   });
 
-  async function captureSession(entry: SessionEntry, incognito = false) {
+  async function captureSession(entry: SessionEntry) {
     const cfg: OpenClawConfig = {
-      ...(!incognito ? { session: { store: storePath, scope: "global" as const } } : {}),
+      session: { store: storePath, scope: "global" },
       agents: { entries: { main: {} } },
     };
-    const sessionKey = incognito ? "agent:main:dashboard:incognito-capture" : "global";
-    const physical = { agentId: "main", storePath, sessionKey };
+    const sessionKey = "global";
+    const physical = {
+      agentId: "main",
+      storePath,
+      sessionKey,
+    };
     await replaceSessionEntry(physical, entry);
     const scope = { cfg, sessionKey, agentId: "main" };
-    const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+    const target = await resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
     return { physical, scope, target };
   }
 
@@ -79,7 +85,9 @@ describe("qualified session accessor projection", () => {
       await replaceSessionEntry(physical, { sessionId: "selected", updatedAt: 1, label: "before" });
       const scope = { cfg, agentId: "research", sessionKey: input };
       const legacy = resolveSessionEntryAccessTarget(scope);
-      const projected = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+      const projected = await resolveSessionEntryAccessTarget(scope, {
+        keyFormat: "agent-qualified",
+      });
       expect(projected).toMatchObject({
         agentId: "research",
         canonicalKey: logical,
@@ -130,9 +138,9 @@ describe("qualified session accessor projection", () => {
     }
     const scope = { cfg, sessionKey, agentId: "research" };
     expect(resolveSessionEntryAccessTarget(scope).entry?.sessionId).toBe("raw");
-    expect(() => resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" })).toThrow(
-      "ambiguous stored identity",
-    );
+    await expect(
+      resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" }),
+    ).rejects.toThrow("ambiguous stored identity");
     expect(
       listSessionEntriesCore(physical)
         .map((row) => row.entry.sessionId)
@@ -152,7 +160,7 @@ describe("qualified session accessor projection", () => {
     };
     await replaceSessionEntry(physical, { sessionId: "literal", updatedAt: 1 });
     const scope = { cfg, agentId: "research", sessionKey: "global" };
-    const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+    const target = await resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
     expect(target.entry).toBeUndefined();
     const update = vi.fn();
     await expect(updateResolvedSessionEntry(scope, update, { target })).resolves.toMatchObject({
@@ -182,7 +190,7 @@ describe("qualified session accessor projection", () => {
     };
     await replaceSessionEntry(physical, { sessionId: "research-global", updatedAt: 1 });
     const scope = { cfg, sessionKey: physical.sessionKey, agentId: "research" };
-    const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+    const target = await resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
     expect(target.agentId).toBe("research");
     expect(target.readSource?.agentId).toBe("ops");
     expect(target.storeKeys).toEqual([physical.sessionKey]);
@@ -202,56 +210,37 @@ describe("qualified session accessor projection", () => {
   it.each([
     { kind: "session", error: "Captured session generation changed" },
     { kind: "file", error: "file identity changed" },
-    { kind: "incognito", recreated: false, error: /Captured session database/ },
-    { kind: "incognito", recreated: true, error: /Captured session database/ },
-  ] as const)(
-    "rejects a replaced or retired $kind capture (recreated=$recreated)",
-    async (variant) => {
-      const capturedEntry: SessionEntry =
-        variant.kind === "session"
-          ? { sessionId: "original", updatedAt: 1 }
-          : { sessionId: "same-session", lifecycleRevision: "same", updatedAt: 1 };
-      const { physical, scope, target } = await captureSession(
-        capturedEntry,
-        variant.kind === "incognito",
-      );
-      if (variant.kind === "session") {
-        await replaceSessionEntry(physical, { sessionId: "replacement", updatedAt: 2 });
-      } else if (variant.kind === "file") {
-        await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
-        const previousPath = `${target.storePath}.original`;
-        fs.renameSync(target.storePath, previousPath);
-        fs.copyFileSync(previousPath, target.storePath);
-      } else {
-        expect(typeof target.readSource?.databaseIdentity).toBe("symbol");
-        await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
-        if (variant.recreated) {
-          await replaceSessionEntry(physical, capturedEntry);
-        }
-      }
-      const update = vi.fn((entry: SessionEntry) => {
-        entry.label = "must not write";
+  ] as const)("rejects a replaced $kind capture", async (variant) => {
+    const capturedEntry: SessionEntry =
+      variant.kind === "session"
+        ? { sessionId: "original", updatedAt: 1 }
+        : { sessionId: "same-session", lifecycleRevision: "same", updatedAt: 1 };
+    const { physical, scope, target } = await captureSession(capturedEntry);
+    if (variant.kind === "session") {
+      await replaceSessionEntry(physical, { sessionId: "replacement", updatedAt: 2 });
+    } else if (variant.kind === "file") {
+      await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+      const previousPath = `${target.storePath}.original`;
+      fs.renameSync(target.storePath, previousPath);
+      fs.copyFileSync(previousPath, target.storePath);
+    }
+    const update = vi.fn((entry: SessionEntry) => {
+      entry.label = "must not write";
+    });
+    await expect(updateResolvedSessionEntry(scope, update, { target })).rejects.toThrow(
+      variant.error,
+    );
+    expect(update).not.toHaveBeenCalled();
+    expect(loadSessionEntryReadOnly(physical)?.label).toBeUndefined();
+    if (variant.kind === "file") {
+      expect(loadSessionEntryReadOnly(physical)).toMatchObject({
+        sessionId: "same-session",
+        lifecycleRevision: "same",
       });
-      await expect(updateResolvedSessionEntry(scope, update, { target })).rejects.toThrow(
-        variant.error,
-      );
-      expect(update).not.toHaveBeenCalled();
-      expect(loadSessionEntryReadOnly(physical)?.label).toBeUndefined();
-      if (variant.kind === "file") {
-        expect(loadSessionEntryReadOnly(physical)).toMatchObject({
-          sessionId: "same-session",
-          lifecycleRevision: "same",
-        });
-        const fresh = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
-        expect(fresh.readSource?.databaseIdentity).not.toBe(target.readSource?.databaseIdentity);
-      } else if (variant.kind === "incognito") {
-        expect(loadSessionEntryReadOnly(physical)?.sessionId).toBe(
-          variant.recreated ? "same-session" : undefined,
-        );
-        expect(fs.existsSync(target.storePath)).toBe(false);
-      }
-    },
-  );
+      const fresh = await resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+      expect(fresh.readSource?.databaseIdentity).not.toBe(target.readSource?.databaseIdentity);
+    }
+  });
 
   it("rejects a successor lifecycle with the same SID after waiting for FIFO admission", async () => {
     const { physical, scope, target } = await captureSession({
@@ -323,7 +312,7 @@ describe("qualified session accessor projection", () => {
       },
     );
     const scope = { cfg, agentId: "main", sessionKey: "global" };
-    const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+    const target = await resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
     expect(target.readSource).toBeDefined();
     await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
     await updateResolvedSessionEntry(
@@ -333,7 +322,7 @@ describe("qualified session accessor projection", () => {
       },
       { target },
     );
-    const reopened = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+    const reopened = await resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
     expect(reopened.canonicalKey).toBe("agent:main:global");
     expect(reopened.readSource).toEqual(target.readSource);
     expect(loadSessionEntryByIdReadOnly({ ...physical, sessionId: "parent" })?.sessionKey).toBe(
@@ -379,5 +368,61 @@ describe("qualified session accessor projection", () => {
     expect(
       loadSessionEntryReadOnly({ ...physical, sessionKey: "agent:main:global" })?.sessionId,
     ).toBe("new-literal");
+  });
+
+  it("checks sibling ambiguity off-thread once and keeps later writes on the selected source", async () => {
+    const sessionKey = "agent:main:source-pinned";
+    const cfg: OpenClawConfig = { session: { store: storePath } };
+    const scope = { cfg, agentId: "main", sessionKey };
+    const siblingStorePath = state.path("sibling.sqlite");
+    await replaceSessionEntry(
+      { agentId: "main", storePath, sessionKey },
+      { sessionId: "selected", updatedAt: 1 },
+    );
+    await replaceSessionEntry(
+      { agentId: "main", storePath: siblingStorePath, sessionKey: "agent:main:other" },
+      { sessionId: "other", updatedAt: 1 },
+    );
+    const selected = await resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+    const sibling = await resolveSessionEntryAccessTarget(
+      {
+        cfg: { session: { store: siblingStorePath } },
+        agentId: "main",
+        sessionKey: "agent:main:other",
+      },
+      { keyFormat: "agent-qualified" },
+    );
+    if (!sibling.readSource) {
+      throw new Error("Expected captured sibling source");
+    }
+    const host = observeHostDataSql();
+    const target = await prepareQualifiedSessionEntryTarget(selected, [sibling.readSource]).finally(
+      () => host.restore(),
+    );
+    expect(host.queries).toEqual([]);
+    await replaceSessionEntry(
+      { agentId: "main", storePath: siblingStorePath, sessionKey },
+      { sessionId: "later-duplicate", updatedAt: 2 },
+    );
+    await updateResolvedSessionEntry(
+      scope,
+      (entry) => {
+        entry.label = "selected only";
+      },
+      { target },
+    );
+    expect(loadSessionEntryReadOnly({ agentId: "main", storePath, sessionKey })?.label).toBe(
+      "selected only",
+    );
+    const duplicate = loadSessionEntryReadOnly({
+      agentId: "main",
+      storePath: siblingStorePath,
+      sessionKey,
+    });
+    expect(duplicate?.sessionId).toBe("later-duplicate");
+    expect(duplicate?.label).toBeUndefined();
+    await expect(
+      prepareQualifiedSessionEntryTarget(selected, [sibling.readSource]),
+    ).rejects.toThrow("ambiguous stored identity");
   });
 });

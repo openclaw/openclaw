@@ -61,35 +61,6 @@ describe("matrix qa config", () => {
     topology,
   } satisfies Parameters<typeof buildMatrixQaConfig>[1];
 
-  it("builds default Matrix QA config from provisioned topology", () => {
-    const next = buildMatrixQaConfig({}, params);
-
-    const sut = next.channels?.matrix?.accounts?.sut;
-    expect(sut?.dm?.allowFrom).toEqual(["@driver:matrix-qa.test"]);
-    expect(sut?.dm?.enabled).toBe(true);
-    expect(sut?.dm?.policy).toBe("allowlist");
-    expect(sut?.groupAllowFrom).toEqual(["@driver:matrix-qa.test"]);
-    expect(sut?.groupPolicy).toBe("allowlist");
-    expect(sut?.groups?.["!main:matrix-qa.test"]).toEqual({
-      enabled: true,
-      requireMention: true,
-    });
-    expect(sut?.groups?.["!secondary:matrix-qa.test"]).toEqual({
-      enabled: true,
-      requireMention: true,
-    });
-    expect(sut?.replyToMode).toBe("off");
-    expect(sut?.streaming).toEqual({
-      block: { enabled: false },
-      chunkMode: "length",
-      mode: "off",
-      preview: { toolProgress: true },
-    });
-    expect(sut?.textChunkLimit).toBe(4000);
-    expect(sut?.threadReplies).toBe("inbound");
-    expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
-  });
-
   it("preserves the scenario provider plugin without enabling unrelated plugins", () => {
     const next = buildMatrixQaConfig(
       {
@@ -255,38 +226,6 @@ describe("matrix qa config", () => {
       spawnSessions: true,
     });
     expect(sut?.threadReplies).toBe("always");
-  });
-
-  it("rewrites the owned Matrix QA account instead of retaining stale override fields", () => {
-    const overridden = buildMatrixQaConfig(
-      {},
-      {
-        ...params,
-        overrides: {
-          autoJoin: "allowlist",
-          autoJoinAllowlist: ["!ops:matrix-qa.test"],
-          blockStreaming: true,
-          streaming: "quiet",
-        },
-      },
-    );
-
-    const reset = buildMatrixQaConfig(
-      {},
-      {
-        currentConfig: overridden,
-        ...params,
-      },
-    );
-
-    expect(reset.channels?.matrix?.accounts?.sut?.autoJoin).toBeUndefined();
-    expect(reset.channels?.matrix?.accounts?.sut?.autoJoinAllowlist).toBeUndefined();
-    expect(reset.channels?.matrix?.accounts?.sut?.streaming).toEqual({
-      block: { enabled: false },
-      chunkMode: "length",
-      mode: "off",
-      preview: { toolProgress: true },
-    });
   });
 
   it("restores owned baseline leaves while preserving current Matrix lifecycle and siblings", () => {

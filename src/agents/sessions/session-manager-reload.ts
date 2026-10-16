@@ -4,11 +4,19 @@ import type { SessionTranscriptBoundedActiveContext } from "../../config/session
 import {
   inspectTranscriptEventsSync,
   loadTranscriptReadSnapshotSync,
+  loadTranscriptEventsFromDatabase,
 } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { resolveSqliteTranscriptReadScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { readTranscriptContextVersionInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { findSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
+import { resolveSqliteSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { captureSessionManagerIncognitoBinding } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
+import { prepareSessionManagerMemoryRead } from "./session-manager-memory-read.js";
 import type {
   PreparedSessionTranscriptReload,
   SessionManagerBoundedContextLimits,
@@ -119,14 +127,34 @@ export function readSessionManagerReload(
   target: SessionTranscriptRuntimeTarget,
   limits: SessionManagerBoundedContextLimits | undefined,
   ignoreReadFence: boolean,
+  transaction?: OpenClawAgentDatabase,
 ): PreparedSessionTranscriptReload {
+  if (transaction && !transaction.db.isTransaction) {
+    throw new Error("Session reload lost its borrowed transaction");
+  }
   if (limits) {
     return {
       kind: "bounded",
       snapshot: readSessionTranscriptBoundedActiveContextCore(target, {
         ...limits,
         ...(ignoreReadFence ? { ignoreReadFence: true } : {}),
+        transaction,
       }),
+    };
+  }
+  if (transaction) {
+    const resolved = resolveSqliteTranscriptReadScope(target);
+    const fence = ignoreReadFence
+      ? undefined
+      : resolveSqliteSessionTranscriptReadFence({ database: transaction, ...resolved });
+    return {
+      kind: "full",
+      snapshot: {
+        events: loadTranscriptEventsFromDatabase(transaction, resolved.sessionId, {
+          beforeEventSeq: fence?.beforeRawSeq,
+        }),
+        version: readTranscriptContextVersionInTransaction(transaction, resolved.sessionId),
+      },
     };
   }
   if (!ignoreReadFence) {
@@ -144,4 +172,26 @@ export function readSessionManagerReload(
       },
     },
   };
+}
+
+/** A committed append may need rows after the current model-context admission. */
+export function readCommittedSessionManagerReload(
+  target: SessionTranscriptRuntimeTarget,
+  limits: SessionManagerBoundedContextLimits | undefined,
+): Promise<PreparedSessionTranscriptReload> {
+  const memory = captureSessionManagerIncognitoBinding(target);
+  if (memory) {
+    return prepareSessionManagerMemoryRead(memory).read("session.history.hydrate", {
+      sessionId: target.sessionId,
+      limits,
+    });
+  }
+  return withSessionTranscriptReadSource(target, ({ scope, resolved, owner, expectedIdentity }) =>
+    owner.readTranscript({
+      target: { ...scope, sessionId: target.sessionId, sessionKey: target.sessionKey },
+      resolvedScope: resolved,
+      limits,
+      expectedIdentity,
+    }),
+  );
 }

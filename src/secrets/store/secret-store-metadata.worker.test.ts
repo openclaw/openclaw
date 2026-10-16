@@ -16,9 +16,11 @@ import {
 import { resolveSecretRefString } from "../resolve.js";
 import { resolveSecretSentinel } from "../sentinel.js";
 import {
+  consumeGitHubSetupHandoff,
   deleteSecretStoreEntry,
   listSecretStoreEntries,
   readSecretStoreExecEnvironment,
+  readSelectedSecretStoreEntries,
   readSecretStoreValue,
   SecretStoreValidationError,
   writeSecretStoreEntries,
@@ -45,6 +47,11 @@ it("reads exec and SecretRef values without caller-thread SQL and registers host
     entries: [
       { name: "WORKER_READ_SECRET", kind: "secret", value: "synthetic-worker-read" },
       { name: "WORKER_READ_ENV", kind: "env", value: "synthetic-env" },
+      {
+        name: "github-setup-11111111111111111111111111111111",
+        kind: "secret",
+        value: "synthetic-handoff",
+      },
     ],
   });
   await closeOpenClawStateDatabaseAsync();
@@ -69,6 +76,11 @@ it("reads exec and SecretRef values without caller-thread SQL and registers host
   expect(isSecretValueRegisteredForRedaction("synthetic-worker-read")).toBe(true);
   expect(environment.env).toEqual({ WORKER_READ_ENV: "synthetic-env" });
   expect(resolveSecretSentinel(environment.secretSentinels?.WORKER_READ_SECRET ?? "")).toBe(value);
+  resetSecretRedactionRegistryForTest();
+  expect(
+    await consumeGitHubSetupHandoff({ name: "github-setup-11111111111111111111111111111111" }),
+  ).toBe("synthetic-handoff");
+  expect(isSecretValueRegisteredForRedaction("synthetic-handoff")).toBe(true);
   await closeOpenClawStateDatabaseAsync();
   for (const spy of sql) {
     expect(spy).not.toHaveBeenCalled();
@@ -106,6 +118,71 @@ it("pins the physical read source before yielding and refuses revoked disclosure
       cause: new Error("Synthetic read authority revoked"),
     },
   });
+});
+
+it("loads only named protected rows with their host policy in a worker snapshot", async () => {
+  await writeSecretStoreEntries({
+    scope,
+    updatedBy: "fixture",
+    entries: [
+      {
+        name: "SELECTED_ONE",
+        kind: "secret",
+        value: "synthetic-selected-one",
+        allowedHosts: ["one.example.test"],
+      },
+      {
+        name: "SELECTED_TWO",
+        kind: "secret",
+        value: "synthetic-selected-two",
+        allowedHosts: ["two.example.test"],
+      },
+      { name: "UNRELATED_SECRET", kind: "secret", value: "synthetic-unrelated" },
+      { name: "READABLE_ENV", kind: "env", value: "synthetic-readable" },
+      { name: "DELETED_SECRET", kind: "secret", value: "synthetic-deleted" },
+    ],
+  });
+  await deleteSecretStoreEntry({ scope, name: "DELETED_SECRET" });
+  await closeOpenClawStateDatabaseAsync();
+  const { DatabaseSync, StatementSync } = requireNodeSqlite();
+  const sql = [
+    vi.spyOn(DatabaseSync.prototype, "prepare"),
+    vi.spyOn(DatabaseSync.prototype, "exec"),
+    vi.spyOn(StatementSync.prototype, "get"),
+    vi.spyOn(StatementSync.prototype, "all"),
+    vi.spyOn(StatementSync.prototype, "iterate"),
+  ];
+  resetSecretRedactionRegistryForTest();
+  expect(
+    await readSelectedSecretStoreEntries({
+      names: [
+        "SELECTED_TWO",
+        "READABLE_ENV",
+        "SELECTED_ONE",
+        "DELETED_SECRET",
+        "MISSING_SECRET",
+        "SELECTED_ONE",
+      ],
+    }),
+  ).toEqual([
+    { name: "SELECTED_ONE", value: "synthetic-selected-one", allowedHosts: ["one.example.test"] },
+    { name: "SELECTED_TWO", value: "synthetic-selected-two", allowedHosts: ["two.example.test"] },
+  ]);
+  expect(isSecretValueRegisteredForRedaction("synthetic-selected-one")).toBe(true);
+  expect(isSecretValueRegisteredForRedaction("synthetic-unrelated")).toBe(false);
+  expect(isSecretValueRegisteredForRedaction("synthetic-deleted")).toBe(false);
+  await expect(
+    readSelectedSecretStoreEntries({
+      names: ["SELECTED_ONE"],
+      assertCurrent: () => {
+        throw new Error("selected authority revoked");
+      },
+    }),
+  ).rejects.toThrow("selected authority revoked");
+  await closeOpenClawStateDatabaseAsync();
+  for (const spy of sql) {
+    expect(spy).not.toHaveBeenCalled();
+  }
 });
 
 it("rejects oversized value and exec replies without returning partial secrets", async () => {

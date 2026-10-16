@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { createProviderAuthAvailability } from "./provider-auth-availability-core.js";
 
@@ -22,12 +22,19 @@ describe("capability-aware provider auth", () => {
     },
   };
   const cfg = { auth: { order: { openai: ["openai:siwc", "openai:codex", "openai:key"] } } };
-  const auth = createProviderAuthAvailability({
+  const authStore = {
     ensureAuthProfileStore: vi.fn(() => store),
+    ensureAuthProfileStoreAsync: vi.fn(async () => store),
+    loadAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => store),
+    loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => store),
     findPersistedAuthProfileCredential: vi.fn(({ profileId }) => store.profiles[profileId]),
+    findPersistedAuthProfileCredentialAsync: vi.fn(
+      async ({ profileId }) => store.profiles[profileId],
+    ),
     loadAuthProfileStoreForSecretsRuntime: vi.fn(() => store),
     loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => store),
-  });
+  };
+  const auth = createProviderAuthAvailability(authStore);
 
   beforeEach(() => {
     resolveApiKeyForProfile.mockReset();
@@ -37,6 +44,8 @@ describe("capability-aware provider auth", () => {
       credential: store.profiles[profileId],
     }));
   });
+
+  afterEach(() => vi.unstubAllEnvs());
 
   it("skips unsupported profiles before refreshing and selects supported media auth", async () => {
     expect(
@@ -71,5 +80,109 @@ describe("capability-aware provider auth", () => {
         cfg,
       }),
     ).resolves.toBe("openai:key");
+  });
+
+  it("checks the persisted selected key instead of a profile id or runtime overlay", async () => {
+    const configured = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://example.test/v1",
+            apiKey: "openai:key",
+            models: [],
+          },
+        },
+      },
+    };
+    const params = {
+      provider: "openai",
+      cfg: configured,
+      agentDir: "/synthetic/agent",
+      store: {
+        version: 1,
+        profiles: {
+          "openai:key": {
+            type: "api_key" as const,
+            provider: "openai",
+            key: "runtime-overlay",
+          },
+        },
+      },
+    };
+    await expect(
+      auth.isProviderApiKeyConfiguredAsync({
+        ...params,
+        acceptsApiKey: (key) => key === "synthetic-key",
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      auth.isProviderApiKeyConfiguredAsync({
+        ...params,
+        acceptsApiKey: (key) => key === "runtime-overlay" || key === "openai:key",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("answers config-only availability without opening an auth store", async () => {
+    const params = {
+      provider: "openai",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://example.test/v1",
+              apiKey: "config-only-key",
+              models: [],
+            },
+          },
+        },
+      },
+      agentDir: "/synthetic/agent",
+    };
+    authStore.ensureAuthProfileStore.mockClear();
+    authStore.ensureAuthProfileStoreAsync.mockClear();
+    await expect(auth.isProviderApiKeyConfiguredAsync(params)).resolves.toBe(true);
+    expect(authStore.ensureAuthProfileStore).not.toHaveBeenCalled();
+    expect(authStore.ensureAuthProfileStoreAsync).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "keeps persisted profile fallback and ordering (async: %s)",
+    async (useAsync) => {
+      const empty: AuthProfileStore = { version: 1, profiles: {} };
+      const params = {
+        provider: "openai",
+        agentDir: "/synthetic/agent",
+        cfg: { auth: { order: { openai: ["openai:key", "openai:codex"] } } },
+      };
+      const fallbackAuth = createProviderAuthAvailability({
+        ...authStore,
+        loadAuthProfileStoreForSecretsRuntime: () => empty,
+        loadAuthProfileStoreForRuntimeAsync: async () => empty,
+      });
+      const result = useAsync
+        ? await fallbackAuth.listUsableProviderAuthProfileIdsAsync(params)
+        : fallbackAuth.listUsableProviderAuthProfileIds(params);
+      expect(result).toEqual({
+        agentDir: "/synthetic/agent",
+        profileIds: ["openai:key", "openai:codex"],
+      });
+    },
+  );
+
+  it("rejects a selected local profile even when the environment key is acceptable", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "acceptable-env-key");
+    authStore.ensureAuthProfileStore.mockClear();
+    authStore.ensureAuthProfileStoreAsync.mockClear();
+    await expect(
+      auth.isProviderApiKeyConfiguredAsync({
+        provider: "openai",
+        cfg: { auth: { order: { openai: ["openai:key"] } } },
+        agentDir: "/synthetic/agent",
+        acceptsApiKey: (key) => key === "acceptable-env-key",
+      }),
+    ).resolves.toBe(false);
+    expect(authStore.ensureAuthProfileStore).not.toHaveBeenCalled();
+    expect(authStore.ensureAuthProfileStoreAsync).toHaveBeenCalledOnce();
   });
 });

@@ -12,7 +12,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { WORKTREE_CREATE_LEASE_SCOPE } from "./capacity-contract.js";
+import { WORKTREE_MUTATION_LEASE_SCOPE } from "./capacity-contract.js";
 import { lockState } from "./git-lock.js";
 import * as worktreeGit from "./git.js";
 import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
@@ -237,7 +237,7 @@ describe("managed worktree registry worker reads", () => {
     },
   );
 
-  it.each(["replacement", "retained lock", "allocation lease", "caller"] as const)(
+  it.each(["replacement", "retained lock", "checkout lease", "caller"] as const)(
     "preserves registry and checkout on refused publication (%s)",
     async (kind) => {
       const { env, now, service, params } = await serviceFixture();
@@ -273,10 +273,10 @@ describe("managed worktree registry worker reads", () => {
             "replacement-branch",
             existing.id,
           );
-        } else if (kind === "allocation lease") {
+        } else if (kind === "checkout lease") {
           db.prepare("UPDATE state_leases SET owner = ? WHERE scope = ?").run(
             "replacement-owner",
-            WORKTREE_CREATE_LEASE_SCOPE,
+            WORKTREE_MUTATION_LEASE_SCOPE,
           );
         } else {
           current = false;

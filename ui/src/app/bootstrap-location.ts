@@ -5,7 +5,7 @@ import type {
   SessionsResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsListResult } from "../api/types.ts";
-import { pathForRoute, pluginSlugCandidate } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForRoute, pluginSlugCandidate } from "../app-route-paths.ts";
 import { routeIdFromPath, type ApplicationRouter } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
@@ -298,7 +298,7 @@ export function subscribeForegroundChatBootstrap({
     // Admission previews have no transcript controller and cannot claim its
     // bootstrap priority. Resume ordinary scheduling until the real pane mounts.
     connectionBootstrap.setForegroundRoute(
-      match?.routeId !== "chat" || chatSubmissions.creation
+      !isSessionRouteId(match?.routeId) || chatSubmissions.creation
         ? null
         : match.status === "pending"
           ? undefined

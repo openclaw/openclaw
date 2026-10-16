@@ -146,6 +146,7 @@ describe("native Codex cold thread recovery", () => {
       expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
       const params = {
         ...createParams(path.join(root, "session.jsonl"), native.cwd),
+        disableTools: false,
         agentId: "main",
         agentDir,
         modelId: "gpt-5.6-luna",

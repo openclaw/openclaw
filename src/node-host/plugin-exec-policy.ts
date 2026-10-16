@@ -1,10 +1,11 @@
 import { getRuntimeConfig } from "../config/config.js";
 import { assertCurrentUsageAuthorization } from "../infra/exec-approvals-authorization.kernel.js";
-import { prepareExecApprovalsCurrentRead } from "../infra/exec-approvals-store.js";
-import { createExecApprovalPolicySnapshot, loadExecApprovals } from "../infra/exec-approvals.js";
+import {
+  createExecApprovalPolicySnapshot,
+  type ExecApprovalsFile,
+} from "../infra/exec-approvals.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveNodeExecConfigPolicy } from "./exec-policy.js";
 
 /** Local policy stays on the executor; Gateway approval never overrides a local deny. */
@@ -15,6 +16,7 @@ export function preparePluginExecAuthorization(params: {
   command: string;
   sessionKey?: string;
   assertActive: () => void;
+  readCurrent: () => ExecApprovalsFile;
 }): () => void {
   params.assertActive();
   const agentId = parseAgentSessionKey(params.sessionKey)?.agentId;
@@ -24,9 +26,8 @@ export function preparePluginExecAuthorization(params: {
       agentId,
     });
   const policy = resolvePolicy();
-  const approvals = loadExecApprovals();
-  const policyContext = captureOpenClawStateWorkerContext();
-  const readCurrent = prepareExecApprovalsCurrentRead(policyContext);
+  const readCurrent = params.readCurrent;
+  const approvals = readCurrent();
   const policySnapshot = createExecApprovalPolicySnapshot({ file: approvals, agentId });
   const assertCurrent = () => {
     params.assertActive();
@@ -40,7 +41,7 @@ export function preparePluginExecAuthorization(params: {
     ) {
       throw new Error("SYSTEM_RUN_DENIED: node-local exec policy does not authorize this launch");
     }
-    // The released synchronous launch guard must observe foreign policy commits.
+    // Committed in-process policy facts remain current through awaited plugin setup.
     assertCurrentUsageAuthorization({
       file: readCurrent(),
       agentId,

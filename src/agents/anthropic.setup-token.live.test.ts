@@ -10,7 +10,7 @@ import path from "node:path";
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { validateAnthropicSetupToken } from "../commands/auth-token.js";
-import { discoverAuthStorageFacts, discoverModels } from "./agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModelsAsync } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import {
   type AuthProfileCredential,
@@ -188,8 +188,8 @@ describeLive("live anthropic setup-token", () => {
         const cfg = await readLiveTestConfig();
         await ensureOpenClawModelsJson(cfg, tokenSource.agentDir);
 
-        const { authStorage } = discoverAuthStorageFacts(tokenSource.agentDir);
-        const modelRegistry = discoverModels(authStorage, tokenSource.agentDir);
+        const { authStorage } = await discoverAuthStorageFacts(tokenSource.agentDir);
+        const modelRegistry = await discoverModelsAsync(authStorage, tokenSource.agentDir);
         const all = Array.isArray(modelRegistry) ? modelRegistry : modelRegistry.getAll();
         const candidates = all.filter(
           (model) => normalizeProviderId(model.provider) === "anthropic",

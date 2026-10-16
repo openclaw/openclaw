@@ -203,25 +203,4 @@ describe("candidate service capability startup", () => {
     },
     getCliProcessTestTimeout(CLI_CHILD_TIMEOUT_MS, CLI_CHILD_TIMEOUT_MS, CLI_CHILD_TIMEOUT_MS),
   );
-
-  it("keeps ordinary service commands behind the live Gateway schema fence", async () => {
-    const fixture = createFixture();
-    const before = fs.readFileSync(fixture.databasePath);
-    try {
-      const result = await fixture.run(["gateway", "install", "--json"]);
-      expect(result.code).toBe(1);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        ok: false,
-        error: {
-          type: "cli_error",
-          message: expect.stringContaining(
-            `OpenClaw state database is busy at ${fixture.databasePath}.`,
-          ),
-        },
-      });
-      expect(fs.readFileSync(fixture.databasePath)).toEqual(before);
-    } finally {
-      fixture.gateway.release();
-    }
-  });
 });

@@ -16,6 +16,7 @@ type VirtualRowPaintSample = {
 };
 
 type VirtualRowPaintProbe = {
+  finish: () => boolean;
   frameIds: number[];
   observer: MutationObserver;
   pendingSamples: number;
@@ -66,6 +67,27 @@ export async function startVirtualRowPaintProbe(thread: Locator, anchor: Visible
       delete target.chatPrependPaintProbe;
     }
     const probe: VirtualRowPaintProbe = {
+      finish: () => {
+        // Queued records belong to this observation window even when their
+        // MutationObserver callback has not run yet.
+        if (probe.observer.takeRecords().length > 0) {
+          scheduleSample();
+        }
+        if (
+          probe.pendingSamples > 0 ||
+          !probe.samples.some(
+            (sample) =>
+              (sample.index !== null && sample.index > expected.index) ||
+              sample.totalSize > expected.totalSize,
+          )
+        ) {
+          return false;
+        }
+        // Seal in the same browser turn that proves every admitted sample
+        // finished; a later mutation must not reopen a completed observation.
+        probe.observer.disconnect();
+        return true;
+      },
       frameIds: [],
       observer: new MutationObserver(() => undefined),
       pendingSamples: 0,
@@ -124,21 +146,22 @@ export async function startVirtualRowPaintProbe(thread: Locator, anchor: Visible
   }, anchor);
 }
 
-async function readVirtualRowPaintProbe(thread: Locator) {
-  return thread.evaluate(() => {
-    const probe = (
-      globalThis as typeof globalThis & {
-        chatPrependPaintProbe?: VirtualRowPaintProbe;
-      }
-    ).chatPrependPaintProbe;
-    if (!probe) {
-      throw new Error("expected an active virtual row paint probe");
-    }
-    return {
-      pendingSamples: probe.pendingSamples,
-      samples: probe.samples,
-    };
-  });
+export async function waitForPaintedVirtualRowAnchor(thread: Locator) {
+  await expect
+    .poll(() =>
+      thread.evaluate(() => {
+        const probe = (
+          globalThis as typeof globalThis & {
+            chatPrependPaintProbe?: VirtualRowPaintProbe;
+          }
+        ).chatPrependPaintProbe;
+        if (!probe) {
+          throw new Error("expected an active virtual row paint probe");
+        }
+        return probe.finish();
+      }),
+    )
+    .toBe(true);
 }
 
 export async function stopVirtualRowPaintProbe(thread: Locator): Promise<VirtualRowPaintResult> {
@@ -173,15 +196,6 @@ function virtualRowAnchorStatus(anchor: VisibleVirtualRow, samples: VirtualRowPa
     present: samples.length > 0 && samples.every((sample) => sample.viewportTop !== null),
     visible: samples.every((sample) => sample.intersectsViewport),
   };
-}
-
-export async function waitForPaintedVirtualRowAnchor(thread: Locator, anchor: VisibleVirtualRow) {
-  await expect
-    .poll(async () => {
-      const probe = await readVirtualRowPaintProbe(thread);
-      return probe.pendingSamples === 0 && virtualRowAnchorStatus(anchor, probe.samples).advanced;
-    })
-    .toBe(true);
 }
 
 export function expectPaintedVirtualRowAnchor(

@@ -243,7 +243,7 @@ describe("Models route admission", () => {
     const loading = harness.router.navigate("model-providers", harness.context);
     await harness.router.navigate("other", harness.context);
     await loading;
-    expect(harness.request).not.toHaveBeenCalledWith("agents.list", {});
+    expect(harness.request).not.toHaveBeenCalledWith("agents.list", expect.anything());
     expect(harness.modelCalls()).toEqual([]);
   });
 

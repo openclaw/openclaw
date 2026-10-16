@@ -14,13 +14,6 @@ export type { NodePairingGeneration } from "./device-pairing.js";
 /** Registry projection of a paired device's authenticated node-role state. */
 export type PairedDeviceNodeBinding = DevicePairingBinding;
 
-export async function captureNodePairingState(
-  nodeId: string,
-  baseDir?: string,
-): Promise<NodePairingState | null> {
-  return resolveNodePairingState(await getPairedDevice(nodeId, baseDir));
-}
-
 export async function resolveCurrentPairedDeviceNodeBinding(
   nodeId: string,
 ): Promise<PairedDeviceNodeBinding | undefined> {
@@ -43,7 +36,7 @@ export function isPairedDeviceNodeBindingCurrent(
 export async function captureNodePairingGeneration(
   nodeId: string,
 ): Promise<NodePairingGeneration | null> {
-  return (await captureNodePairingState(nodeId))?.generation ?? null;
+  return resolveNodePairingState(await getPairedDevice(nodeId))?.generation ?? null;
 }
 
 /** Binds a connected session to the exact device key and node token used for authentication. */

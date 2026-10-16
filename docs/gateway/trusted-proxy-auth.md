@@ -194,6 +194,13 @@ These grants are session-only. They do not create or update device pairing
 records and do not trigger device scope-upgrade requests. Token, password, and
 no-auth connections do not carry a verified identity and never receive a grant.
 
+Each connection receiving additional identity scopes emits an `info` security
+audit record with the verified identity, added scopes, authentication method,
+and connection id. Reconnects retain their own records so the log can account
+for every application of the grant. Keep `logging.level` at `info` or more
+verbose to retain these records; applying a configured session grant is not a
+warning. This connection log is separate from the [activity audit ledger](/gateway/audit).
+
 ## Automatic device approval
 
 Trusted-proxy auth can optionally use the proxy identity as the approval boundary for new browser and native UI operator devices and same-key scope upgrades:
@@ -454,7 +461,7 @@ If startup fails with an error like `gateway auth mode is trusted-proxy, but a s
 - Remove the shared token when using trusted-proxy mode, or
 - Switch `gateway.auth.mode` to `"token"` if you intend token-based auth.
 
-Loopback trusted-proxy identity headers still fail closed: same-host callers are not silently authenticated as proxy users. Internal OpenClaw callers that bypass the proxy may authenticate with `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead. Token fallback remains intentionally unsupported in trusted-proxy mode.
+Loopback trusted-proxy identity headers are still rejected by default: same-host callers are not silently authenticated as proxy users. Internal OpenClaw callers that bypass the proxy may authenticate with `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead. Token fallback remains intentionally unsupported in trusted-proxy mode.
 
 ## Restrict a separate Gateway to one owner
 
@@ -489,7 +496,7 @@ Before enabling trusted-proxy auth, verify:
 
 - [ ] **Proxy is the only path**: The Gateway port is firewalled from everything except your proxy.
 - [ ] **trustedProxies is minimal**: Only your actual proxy IPs, not entire subnets.
-- [ ] **Loopback proxy source is deliberate**: trusted-proxy auth fails closed for loopback-source requests unless `gateway.auth.trustedProxy.allowLoopback` is explicitly enabled for a same-host proxy.
+- [ ] **Loopback proxy source is deliberate**: trusted-proxy auth rejects loopback-source requests unless `gateway.auth.trustedProxy.allowLoopback` is explicitly enabled for a same-host proxy.
 - [ ] **Proxy strips headers**: Your proxy overwrites (not appends) `x-forwarded-*` headers from clients.
 - [ ] **Client IP is attributable**: The proxy always rebuilds `X-Forwarded-For` with the original non-loopback client address.
 - [ ] **TLS termination**: Your proxy handles TLS; users connect via HTTPS.
@@ -549,7 +556,7 @@ A Gateway token cannot replace proxy authentication. Do not send identity header
 
   </Accordion>
   <Accordion title="trusted_proxy_local_interface_source / trusted_proxy_local_interface_check_failed">
-    The request's source IP matched one of the Gateway host's own non-loopback network interface addresses (not the proxy), a guard against spoofed same-host traffic on tailnets or Docker bridge networks. `..._check_failed` means interface discovery itself errored, so OpenClaw fails closed.
+    The request's source IP matched one of the Gateway host's own non-loopback network interface addresses (not the proxy), a guard against spoofed same-host traffic on tailnets or Docker bridge networks. `..._check_failed` means interface discovery itself errored, so OpenClaw rejects the request.
 
     Check:
 

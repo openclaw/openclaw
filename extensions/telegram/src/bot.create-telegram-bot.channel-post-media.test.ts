@@ -1,5 +1,5 @@
 import type { File as TelegramFile } from "grammy/types";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import * as keyedAsyncQueue from "openclaw/plugin-sdk/keyed-async-queue";
 import type { SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -53,8 +53,7 @@ vi.mock("./sticker-cache.js", () => ({
 }));
 
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
-const { getLoadConfigMock, getOnHandler, replySpy, sendMessageSpy, telegramBotDepsForTest } =
-  harness;
+const { getLoadConfigMock, getOnHandler, replySpy, sendMessageSpy } = harness;
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
 const {
   getTelegramSpooledReplayDeferredParticipant,
@@ -270,7 +269,6 @@ describe("createTelegramBot channel_post media", () => {
           close: async () => {},
         },
         ...opts,
-        telegramDeps: telegramBotDepsForTest,
       });
   });
 
@@ -295,27 +293,40 @@ describe("createTelegramBot channel_post media", () => {
     );
   });
 
-  it("reports the 20 MB Bot API limit even with a higher configured limit (#100000)", async () => {
-    setOpenTelegramDirectConfig(100);
-    await createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-    const messageId = 100021;
-    await handler(
-      createTelegramPrivateMediaContext({
+  it.each([
+    { configuredLimit: 100, reportedLimit: "20MB", messageId: 100021 },
+    { configuredLimit: 0.5, reportedLimit: "512KB", messageId: 100022 },
+    { configuredLimit: 0.3, reportedLimit: "307.20KB", messageId: 100023 },
+  ])(
+    "reports the effective Bot API limit with $configuredLimit MB configured",
+    async ({ configuredLimit, reportedLimit, messageId }) => {
+      setOpenTelegramDirectConfig(configuredLimit);
+      await createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      await handler(
+        createTelegramPrivateMediaContext({
+          messageId,
+          fileId: "doc-100001",
+          fileName: "large.bin",
+          getFile: async () => {
+            throw new Error("Bad Request: file is too big");
+          },
+        }),
+      );
+      await waitForTelegramMockCalls(sendMessageSpy, 1);
+      expectTelegramDownloadWarning(
         messageId,
-        fileId: "doc-100001",
-        fileName: "large.bin",
-        getFile: async () => {
-          throw new Error("Bad Request: file is too big");
-        },
-      }),
-    );
-    await waitForTelegramMockCalls(sendMessageSpy, 1);
-    expectTelegramDownloadWarning(messageId, "⚠️ File too large. Maximum size is 20MB.");
-    expect(replySpy).toHaveBeenCalledOnce();
-    expectUnavailableMediaPayload("document", "", "[media unavailable: file exceeds 20MB limit]");
-    expect(saveRemoteMedia).not.toHaveBeenCalled();
-  });
+        `⚠️ File too large. Maximum size is ${reportedLimit}.`,
+      );
+      expect(replySpy).toHaveBeenCalledOnce();
+      expectUnavailableMediaPayload(
+        "document",
+        "",
+        `[media unavailable: file exceeds ${reportedLimit} limit]`,
+      );
+      expect(saveRemoteMedia).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {
@@ -335,8 +346,26 @@ describe("createTelegramBot channel_post media", () => {
       warning: "⚠️ File too large. Maximum size is 100MB.",
       notice: "[media unavailable: file exceeds 100MB limit]",
     },
+    {
+      name: "fractional oversized media",
+      messageId: 98078,
+      mediaMaxMb: 0.5,
+      error: new MediaFetchError("max_bytes", "payload exceeds maxBytes 524288"),
+      result: { kind: "completed" },
+      warning: "⚠️ File too large. Maximum size is 512KB.",
+      notice: "[media unavailable: file exceeds 512KB limit]",
+    },
+    {
+      name: "non-binary-exact oversized media",
+      messageId: 98079,
+      mediaMaxMb: 0.3,
+      error: new MediaFetchError("max_bytes", "payload exceeds maxBytes 314572"),
+      result: { kind: "completed" },
+      warning: "⚠️ File too large. Maximum size is 307.20KB.",
+      notice: "[media unavailable: file exceeds 307.20KB limit]",
+    },
   ])("preserves durable replay handling for $name (#98076)", async (testCase) => {
-    setOpenTelegramDirectConfig();
+    setOpenTelegramDirectConfig("mediaMaxMb" in testCase ? testCase.mediaMaxMb : undefined);
     saveRemoteMedia.mockRejectedValue(testCase.error);
     await createTelegramBot({ token: "tok" });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
@@ -450,10 +479,11 @@ describe("createTelegramBot channel_post media", () => {
     rejectFirstTelegramAlbumDownloadWhen(testCase.partial);
     const fetchSpy = createImageFetchSpy();
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
+    const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
     const albumWork = () =>
       enqueueSpy.mock.results.flatMap((result, index) =>
-        enqueueSpy.mock.calls[index]?.[0] === "media:-100456:none:main" && result.type === "return"
+        enqueueSpy.mock.calls[index]?.[0].key === "media:-100456:none:main" &&
+        result.type === "return"
           ? [result.value]
           : [],
       );
@@ -574,7 +604,7 @@ describe("createTelegramBot channel_post media", () => {
     });
 
     const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
-    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
+    const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
     try {
       await createTelegramBot({
         token: "tok",
@@ -628,7 +658,7 @@ describe("createTelegramBot channel_post media", () => {
 
     const runtimeError = vi.fn();
     const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
-    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
+    const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
     try {
       await createTelegramBot({
         token: "tok",

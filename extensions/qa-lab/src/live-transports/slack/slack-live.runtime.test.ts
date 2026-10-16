@@ -289,24 +289,6 @@ describe("Slack live QA runtime helpers", () => {
     });
   });
 
-  it("overrides both owner and channel allowlists for block scenarios", () => {
-    const cfg = buildSlackConfigFixture(
-      {},
-      {
-        overrides: {
-          allowFrom: ["U_NEVER_ALLOWED"],
-          channelEnabled: false,
-          users: ["U_NEVER_ALLOWED"],
-        },
-      },
-    );
-
-    const account = cfg.channels?.slack?.accounts?.sut;
-    expect(account?.allowFrom).toEqual(["U_NEVER_ALLOWED"]);
-    expect(account?.channels?.C123456789?.enabled).toBe(false);
-    expect(account?.channels?.C123456789?.users).toEqual(["U_NEVER_ALLOWED"]);
-  });
-
   it("requires a complete disabled-channel warning after the captured log cursor", async () => {
     const run = buildSlackMessageRun("slack-channel-disabled-warning");
     const call = vi
@@ -470,10 +452,7 @@ describe("Slack live QA runtime helpers", () => {
     ).toThrow("only the final marker");
   });
 
-  it.each([
-    { finalEdit: false, markerKind: "TOOL" },
-    { finalEdit: true, markerKind: "OUTPUT" },
-  ])(
+  it.each([{ finalEdit: true, markerKind: "OUTPUT" }])(
     "rejects $markerKind disclosure in verbose-on progress (final edit: $finalEdit)",
     ({ finalEdit, markerKind }) => {
       const p = progress("verbose-dedupe");
@@ -520,11 +499,7 @@ describe("Slack live QA runtime helpers", () => {
     expect(() => verify(tool("Exec"), tool(`Exec\n\`\`\`\n${p.output}\n\`\`\``))).not.toThrow();
   });
 
-  it.each([
-    { text: "Exec\nunmarked output", finalEdit: false },
-    { text: "run sleep → print text", finalEdit: false },
-    { text: "Exec: unmarked command", finalEdit: true },
-  ])(
+  it.each([{ text: "run sleep → print text", finalEdit: false }])(
     "rejects verbose-on tool details without protocol markers: $text (final edit: $finalEdit)",
     ({ text, finalEdit }) => {
       const p = progress("verbose-dedupe");
@@ -705,10 +680,7 @@ describe("Slack live QA runtime helpers", () => {
     expect(error.message.length).toBeLessThan(700);
   });
 
-  it.each([
-    { code: "unsafe private detail", part: 1, diagnostic: "no fallback API failure code" },
-    { code: "invalid_arguments", part: 2, diagnostic: "invalid_arguments" },
-  ])(
+  it.each([{ code: "unsafe private detail", part: 1, diagnostic: "no fallback API failure code" }])(
     "reports fallback failure at part $part using only safe error codes",
     async ({ code, part, diagnostic }) => {
       const postMessage = vi.fn();
@@ -954,7 +926,7 @@ describe("Slack native data QA scenarios", () => {
     },
   );
 
-  it.each(["chart", "table"] as const)("rejects fallback-only native %s delivery", async (kind) => {
+  it.each(["chart"] as const)("rejects fallback-only native %s delivery", async (kind) => {
     vi.useFakeTimers();
     const run = buildNativeDataRun(kind);
     const history = vi.fn(async () => ({

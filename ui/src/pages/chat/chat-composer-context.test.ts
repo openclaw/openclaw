@@ -7,12 +7,17 @@ import type {
   ModelAuthStatusProfile,
   ModelAuthStatusProvider,
 } from "../../api/types.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
 
 type ComposerOverrides = Parameters<typeof renderComposerFixture>[0];
 
 function renderComposer(overrides: ComposerOverrides = {}) {
-  return renderComposerFixture(overrides).container;
+  const container = renderComposerFixture(overrides).container;
+  document.body.append(container);
+  container.querySelector<HTMLElement>(".context-usage summary")?.click();
+  flush();
+  return container;
 }
 
 function sessionRow(overrides: Partial<GatewaySessionRow>): GatewaySessionRow {
@@ -53,6 +58,10 @@ describe("renderChatComposer context usage", () => {
         contextBudgetStatus: contextBudgetStatusFixture(),
       }),
     });
+    expect(container.querySelector(".context-ring")?.textContent?.trim()).toBe("");
+    expect(container.querySelector(".context-ring")?.getAttribute("title")).toBe(
+      "Open context usage details",
+    );
     expect(container.querySelector(".context-usage__context-value")?.textContent).toContain("180k");
     expect(container.querySelector(".context-usage__title")?.textContent).toBe("Prompt budget");
     expect(
@@ -104,6 +113,50 @@ describe("renderChatComposer context usage", () => {
         ?.getAttribute("href"),
     ).toBe("/control/usage");
   });
+
+  it.each([false, true])(
+    "does not borrow the default model's capacity when session capacity is unknown (plan usage: %s)",
+    (withPlanUsage) => {
+      const session = sessionRow({
+        modelProvider: "openai",
+        model: "selected-model",
+        totalTokens: 46_000,
+        totalTokensFresh: true,
+      });
+      const container = renderComposer({
+        selectedSession: session,
+        sessions: {
+          ts: 1,
+          path: "",
+          count: 1,
+          sessions: [session],
+          defaults: {
+            modelProvider: "openai",
+            model: "default-model",
+            contextTokens: 200_000,
+          },
+        },
+        providerUsage: withPlanUsage
+          ? planUsage([
+              planProvider("openai", "OpenAI", {
+                providerId: "openai",
+                windows: [{ label: "Week", usedPercent: 72 }],
+              }),
+            ])
+          : undefined,
+      });
+
+      expect(container.querySelector(".context-usage__context-value")).toBeNull();
+      expect(container.querySelector(".context-usage__bar")).toBeNull();
+      const ring = container.querySelector(".context-ring");
+      if (withPlanUsage) {
+        expect(ring?.getAttribute("aria-label")).toBe("Usage Remaining");
+        expect(container.querySelector(".context-usage__limit")?.textContent).toContain("72%");
+      } else {
+        expect(ring).toBeNull();
+      }
+    },
+  );
 
   it("deduplicates provider aliases and hides cost estimates for subscriptions", () => {
     const resetAt = Date.now() + 2 * 3_600_000 + 45_000;

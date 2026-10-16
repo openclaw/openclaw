@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Expression, Property } from "acorn";
 import {
   isThemeId,
@@ -10,6 +11,7 @@ import {
   THEME_BRAND_ICON_IDS,
   THEME_CRITTER_IDS,
 } from "../../packages/gateway-protocol/src/theme.ts";
+import { omitUndefinedManifestFields } from "./manifest-capability-normalizers.js";
 import type { PluginManifestTheme } from "./manifest-types.js";
 
 const MAX_PLUGIN_THEMES = 32;
@@ -44,7 +46,7 @@ function validateArtworkDuplicates(source: string): void {
       }
       for (const artwork of objectProperties(theme)) {
         const kind = propertyName(artwork);
-        if (kind !== "icons" && kind !== "hats" && kind !== "critters") {
+        if (kind !== "icons" && kind !== "hats" && kind !== "critters" && kind !== "backgrounds") {
           continue;
         }
         const ids = new Set<string>();
@@ -60,12 +62,16 @@ function validateArtworkDuplicates(source: string): void {
   }
 }
 
-function normalizeArtworkEntries(
+function normalizeArtworkEntries<T>(
   value: unknown,
   label: string,
   catalogIds: readonly string[],
-): Array<[string, unknown]> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  normalize: (value: unknown, label: string) => T,
+): Record<string, T> | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
     throw new Error(`${label} must be a map with at most ${MAX_THEME_ARTWORK_ENTRIES} entries`);
   }
   const entries = Object.entries(value);
@@ -77,7 +83,7 @@ function normalizeArtworkEntries(
       throw new Error(`${label}.${id} must use a safe local ID outside the built-in catalog`);
     }
   }
-  return entries;
+  return Object.fromEntries(entries.map(([id, entry]) => [id, normalize(entry, `${label}.${id}`)]));
 }
 
 function normalizeArtworkPath(value: unknown, label: string): string {
@@ -88,69 +94,59 @@ function normalizeArtworkPath(value: unknown, label: string): string {
   return relativePath;
 }
 
-function normalizeArtwork(
-  icons: unknown,
-  hats: unknown,
-  critters: unknown,
+function normalizeBackgrounds(
+  value: unknown,
   label: string,
-): Pick<PluginManifestTheme, "icons" | "hats" | "critters"> {
-  const paths = (value: unknown, kind: string, catalogIds: readonly string[]) =>
-    Object.fromEntries(
-      normalizeArtworkEntries(value, `${label}.${kind}`, catalogIds).map(([id, source]) => [
-        id,
-        normalizeArtworkPath(source, `${label}.${kind}.${id}`),
-      ]),
-    );
-  return {
-    ...(icons !== undefined ? { icons: paths(icons, "icons", THEME_BRAND_ICON_IDS) } : {}),
-    ...(hats !== undefined ? { hats: paths(hats, "hats", THEME_AVATAR_HAT_IDS) } : {}),
-    ...(critters !== undefined
-      ? {
-          critters: Object.fromEntries(
-            normalizeArtworkEntries(critters, `${label}.critters`, THEME_CRITTER_IDS).map(
-              ([id, metadata]) => {
-                const entryLabel = `${label}.critters.${id}`;
-                if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-                  throw new Error(`${entryLabel} must be an object with an SVG source`);
-                }
-                // SAFETY: metadata is an object; its supported fields are validated below.
-                const { source, title, crossMs } = metadata as Record<string, unknown>;
-                if (
-                  Object.keys(metadata).some((key) => !["source", "title", "crossMs"].includes(key))
-                ) {
-                  throw new Error(`${entryLabel} has unsupported fields`);
-                }
-                if (
-                  title !== undefined &&
-                  (typeof title !== "string" ||
-                    title.length > 60 ||
-                    /[\p{Cc}\p{Cf}\p{Cs}]/u.test(title))
-                ) {
-                  throw new Error(`${entryLabel}.title must be at most 60 printable characters`);
-                }
-                if (
-                  crossMs !== undefined &&
-                  (typeof crossMs !== "number" ||
-                    !Number.isInteger(crossMs) ||
-                    crossMs < 5000 ||
-                    crossMs > 90000)
-                ) {
-                  throw new Error(`${entryLabel}.crossMs must be an integer from 5000 to 90000`);
-                }
-                return [
-                  id,
-                  {
-                    source: normalizeArtworkPath(source, `${entryLabel}.source`),
-                    ...(title !== undefined ? { title } : {}),
-                    ...(crossMs !== undefined ? { crossMs } : {}),
-                  },
-                ];
-              },
-            ),
-          ),
-        }
-      : {}),
-  };
+): PluginManifestTheme["backgrounds"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const entries = isRecord(value) ? Object.entries(value) : [];
+  if (!entries.length || entries.some(([mode]) => mode !== "light" && mode !== "dark")) {
+    throw new Error(`${label} must map light and/or dark to an image`);
+  }
+  return Object.fromEntries(
+    entries.map(([mode, source]) => {
+      const relativePath = typeof source === "string" ? source.replace(/^\.\//, "") : "";
+      if (
+        !/^(?:[a-z0-9_-][a-z0-9._-]*\/)*[a-z0-9_-][a-z0-9._-]*\.(?:png|jpe?g|webp)$/i.test(
+          relativePath,
+        )
+      ) {
+        throw new Error(
+          `${label}.${mode} must be a PNG, JPEG, or WebP file inside the plugin root`,
+        );
+      }
+      return [mode, relativePath];
+    }),
+  );
+}
+
+function normalizeCritter(metadata: unknown, label: string) {
+  if (!isRecord(metadata)) {
+    throw new Error(`${label} must be an object with an SVG source`);
+  }
+  const { source, title, crossMs } = metadata;
+  if (Object.keys(metadata).some((key) => !["source", "title", "crossMs"].includes(key))) {
+    throw new Error(`${label} has unsupported fields`);
+  }
+  if (
+    title !== undefined &&
+    (typeof title !== "string" || title.length > 60 || /[\p{Cc}\p{Cf}\p{Cs}]/u.test(title))
+  ) {
+    throw new Error(`${label}.title must be at most 60 printable characters`);
+  }
+  if (
+    crossMs !== undefined &&
+    (typeof crossMs !== "number" || !Number.isInteger(crossMs) || crossMs < 5000 || crossMs > 90000)
+  ) {
+    throw new Error(`${label}.crossMs must be an integer from 5000 to 90000`);
+  }
+  return omitUndefinedManifestFields({
+    source: normalizeArtworkPath(source, `${label}.source`),
+    title,
+    crossMs,
+  });
 }
 
 export function normalizeManifestThemes(
@@ -180,14 +176,23 @@ export function normalizeManifestThemes(
       return { ok: false, error: `themes[${index}] must be an object` };
     }
     // SAFETY: entry is a non-null, non-array object; every field is validated below.
-    const { id, name, description, source, icons, hats, critters } = entry as Record<
+    const { id, name, description, source, icons, hats, critters, backgrounds } = entry as Record<
       string,
       unknown
     >;
     if (
       Object.keys(entry).some(
         (key) =>
-          !["id", "name", "description", "source", "icons", "hats", "critters"].includes(key),
+          ![
+            "id",
+            "name",
+            "description",
+            "source",
+            "icons",
+            "hats",
+            "critters",
+            "backgrounds",
+          ].includes(key),
       ) ||
       typeof id !== "string" ||
       !THEME_LOCAL_ID_PATTERN.test(id) ||
@@ -221,14 +226,37 @@ export function normalizeManifestThemes(
         name: name.trim(),
         description: description.trim(),
         source: relativePath,
-        ...normalizeArtwork(icons, hats, critters, `themes[${index}]`),
+        ...omitUndefinedManifestFields({
+          icons: normalizeArtworkEntries(
+            icons,
+            `themes[${index}].icons`,
+            THEME_BRAND_ICON_IDS,
+            normalizeArtworkPath,
+          ),
+          hats: normalizeArtworkEntries(
+            hats,
+            `themes[${index}].hats`,
+            THEME_AVATAR_HAT_IDS,
+            normalizeArtworkPath,
+          ),
+          critters: normalizeArtworkEntries(
+            critters,
+            `themes[${index}].critters`,
+            THEME_CRITTER_IDS,
+            normalizeCritter,
+          ),
+          backgrounds: normalizeBackgrounds(backgrounds, `themes[${index}].backgrounds`),
+        }),
       });
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "invalid theme artwork" };
     }
     ids.add(id);
   }
-  if (manifestSource && themes.some((theme) => theme.icons || theme.hats || theme.critters)) {
+  if (
+    manifestSource &&
+    themes.some((theme) => theme.icons || theme.hats || theme.critters || theme.backgrounds)
+  ) {
     try {
       validateArtworkDuplicates(manifestSource);
     } catch (error) {

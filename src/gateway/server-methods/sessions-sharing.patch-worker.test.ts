@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { deleteSessionEntryRows } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import {
   loadSessionEntry,
@@ -20,7 +21,6 @@ import { loadPublicSessionShareTokenCodec } from "../control-ui-public-session-t
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
-import * as sharingAuthority from "./sessions-sharing-authority.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
 import { identifiedClient, sessionSharingTestContext } from "./sessions-sharing.test-support.js";
 import type { RespondFn } from "./types.js";
@@ -30,6 +30,7 @@ afterEach(() => vi.restoreAllMocks());
 type PatchMethod = "session.visibility.set" | "session.publicShare.set";
 
 async function fixture() {
+  await captureRuntimeConfigAsyncReader()();
   const scope = { agentId: "main", sessionKey: "agent:main:sharing-patch-worker" };
   const sessionId = "sharing-patch-worker";
   await upsertSessionEntryCore(scope, {
@@ -76,28 +77,10 @@ async function fixture() {
   };
 }
 
-it("limits sharing caller-thread SQLite to the final stored-authority read", async () => {
+it("publishes sharing changes without caller-thread SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = await fixture();
     const sql = observeMainThreadSql();
-    const prepareAccess = sharingAuthority.prepareManagedSessionAccess;
-    let finalReadSqlCalls = 0;
-    vi.spyOn(sharingAuthority, "prepareManagedSessionAccess").mockImplementation(async (params) => {
-      const access = await prepareAccess(params);
-      if (access) {
-        const read = access.currentStored;
-        vi.spyOn(access, "currentStored").mockImplementation(() => {
-          sql.expectIdle();
-          try {
-            return read();
-          } finally {
-            finalReadSqlCalls += sql.count();
-            sql.clear();
-          }
-        });
-      }
-      return access;
-    });
     try {
       for (const visibility of ["draft", "shared"]) {
         const response = await f.call("session.visibility.set", { visibility });
@@ -134,7 +117,6 @@ it("limits sharing caller-thread SQLite to the final stored-authority read", asy
         }
       }
       sql.expectIdle();
-      expect(finalReadSqlCalls).toBeGreaterThan(0);
     } finally {
       sql.restore();
     }

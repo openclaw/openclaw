@@ -13,6 +13,7 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../process/supervisor/cancellation-policy.js";
+import * as processLineage from "../process/supervisor/inherited-process-lineage.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { createMcpStdioClient, type McpStdioClient } from "./mcp-stdio-client.js";
 
@@ -63,8 +64,9 @@ afterEach(async () => {
 async function createFixture(
   hold: "relay" | "blocked-relay" | "anchor" | "anchor-kill-fails" = "relay",
 ) {
-  // These faults target the retained two-process POSIX relay. The Linux native
-  // owner has no intermediate relay to hold or forcibly retire.
+  // These faults target the retained two-process POSIX relay. The inherited
+  // native owner takes precedence over platform detection and has no relay to hold.
+  vi.spyOn(processLineage, "getInheritedNativeProcessOwner").mockReturnValue(undefined);
   mockProcessPlatform("darwin");
   const root = tempDirs.make("mcp-relay-retirement-");
   const preload = path.join(root, "retain-relay.mjs");
@@ -73,10 +75,10 @@ async function createFixture(
   await fs.writeFile(
     preload,
     hold === "relay" || hold === "blocked-relay"
-      ? // The real relay calls exit only after reaping its real anchor. Hold that last step.
+      ? // The real relay disconnects only after reaping its real anchor. Hold that last step.
         hold === "blocked-relay"
-        ? "process.exit = () => { while (true) {} };"
-        : "process.exit = () => { setInterval(() => {}, 1000); };"
+        ? "process.disconnect = () => { while (true) {} };"
+        : "process.disconnect = () => { setInterval(() => {}, 1000); };"
       : `import cp from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -84,7 +86,7 @@ ${fixtureReceiptClientSource(receipts.endpoint)}
 if (process.argv.some(arg => arg.includes("service-child-group-anchor"))) {
   const exit = process.exit;
   process.on("SIGTERM", () => {});
-  process.exit = () => {
+  process.disconnect = () => {
     process.kill(0, "SIGTERM");
     fs.writeFileSync(${JSON.stringify(heldPath)}, String(process.pid));
     sendReceipt(${JSON.stringify(heldPath)}, "held-exit");

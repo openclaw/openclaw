@@ -236,9 +236,22 @@ async function runPreparedChannelTurnCoreInTrace<
       const agentId =
         params.ctxPayload.AgentId ?? parseAgentSessionKey(params.routeSessionKey)?.agentId;
       if (agentId) {
-        await getAgentDatabaseStartupAdmission()?.waitForAgentPreparation(agentId, {
+        const preparation = getAgentDatabaseStartupAdmission()?.waitForAgentPreparation(agentId, {
           signal: getPluginServiceSchedulerBinding()?.().signal,
         });
+        if (preparation) {
+          log.info("channel message waiting for agent database preparation", {
+            agentId,
+            channel: params.channel,
+            accountId: params.accountId,
+          });
+          emit(params, {
+            stage: "record",
+            event: "start",
+            reason: "agent-database-preparation-pending",
+          });
+          await preparation;
+        }
       }
       if (params.ctxPayload.SessionTranscriptContext) {
         const { mergeSessionTranscriptContext } =
@@ -251,6 +264,7 @@ async function runPreparedChannelTurnCoreInTrace<
         });
       }
       emitStage("record", "start");
+      params.assertAuthority?.();
       await params.recordInboundSession({
         storePath: params.storePath,
         sessionKey: recordSessionKey,
@@ -260,6 +274,7 @@ async function runPreparedChannelTurnCoreInTrace<
         updateLastRoute: params.record?.updateLastRoute,
         onRecordError: params.record?.onRecordError ?? (() => undefined),
         trackSessionMetaTask: params.record?.trackSessionMetaTask,
+        assertAuthority: params.assertAuthority,
       });
       emitStage("record", "done");
       await params.afterRecord?.();
@@ -277,6 +292,7 @@ async function runPreparedChannelTurnCoreInTrace<
     emitStage("dispatch", "start");
     let dispatchResult: TDispatchResult;
     try {
+      params.assertAuthority?.();
       let processedOutcome: DispatchProcessedNote | undefined;
       if (admission.kind === "observeOnly") {
         if (options.suppressObserveOnlyDispatch) {

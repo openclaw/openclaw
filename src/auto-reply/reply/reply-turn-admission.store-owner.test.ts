@@ -90,12 +90,6 @@ function rotate(operation: registry.ReplyOperation, storePath: string, id = succ
   operation.updateSessionId(id);
   seed(storePath, id);
 }
-function expectRotated(result: Admission, id = successorId) {
-  const { operation } = owned(result);
-  expect(operation.sessionId).toBe(id);
-  operation.complete();
-}
-
 it("preserves same-store rotation across foreground maintenance", async () => {
   const ownerStore = store();
   const admitted = owned(await admit(ownerStore, { agentId: "main" }));
@@ -152,103 +146,4 @@ it("rejects rotation after the waited owner adopts another physical store", asyn
   rotate(active, adoptedStore);
   active.complete();
   await expect(pending).resolves.toMatchObject(invalidated);
-});
-
-it("keeps same-store rotation when a foreign barrier is already installed", async () => {
-  const ownerStore = store();
-  const foreignStore = store();
-  const first = await owner(ownerStore);
-  const delivery = deferred();
-  const foreignDelivery = deferred();
-  first.completeWithAfterClearBarrier(delivery.promise);
-  const waited = vi.spyOn(registry, "waitForReplyRunFollowupAdmission");
-  const pending = queue(ownerStore);
-  await vi.waitFor(() => expect(waited).toHaveBeenCalled());
-  (await owner(foreignStore)).completeWithAfterClearBarrier(foreignDelivery.promise);
-  const visible = await owner(ownerStore);
-  rotate(visible, ownerStore);
-  visible.complete();
-  delivery.resolve();
-  foreignDelivery.resolve();
-  expectRotated(await pending);
-});
-
-it("rejects a storeless unrelated replacement with a delivery barrier", async () => {
-  const first = await owner();
-  const delivery = deferred();
-  const replacementDelivery = deferred();
-  first.completeWithAfterClearBarrier(delivery.promise);
-  const waited = vi.spyOn(registry, "waitForReplyRunFollowupAdmission");
-  const pending = queue();
-  await vi.waitFor(() => expect(waited).toHaveBeenCalled());
-  const replacement = await owner(undefined, "unrelated-replacement");
-  expect(replacement.sessionId).toBe("unrelated-replacement");
-  expect(replacement.captureOwnedSessionIds().has(sessionId)).toBe(false);
-  replacement.completeWithAfterClearBarrier(replacementDelivery.promise);
-  delivery.resolve();
-  replacementDelivery.resolve();
-  await expect(pending).resolves.toMatchObject(invalidated);
-});
-
-it("keeps rekeyed source lineage separate from the adopted target", async () => {
-  const storePath = store();
-  const first = await owner(storePath);
-  const release = deferred();
-  registry.registerReplyOperationSuccessorBarrier({
-    operation: first,
-    sessionId,
-    sessionKeys: [sessionKey],
-    start: () => release.promise,
-  });
-  rotate(first, storePath);
-  const targetKey = "agent:main:adopted-target";
-  const targetId = "adopted-session";
-  seed(storePath, targetId, targetKey);
-  owned(
-    await admit(storePath, {
-      sessionKey: targetKey,
-      sessionId: successorId,
-      expectedSessionId: targetId,
-      adoptOperation: first,
-    }),
-  );
-  first.updateSessionId(targetId);
-  expect(first.captureOwnedSessionIds().has(targetId)).toBe(true);
-  const waited = vi.spyOn(registry, "waitForReplyRunSuccessorAdmission");
-  const pending = [sessionId, targetId].map(async (id) => {
-    const result = await queue(storePath, id);
-    if (result.status !== "owned") {
-      return { status: result.status, reason: result.reason };
-    }
-    result.operation.complete();
-    return { status: result.status, sessionId: result.operation.sessionId };
-  });
-  work.push(...pending);
-  await vi.waitFor(() => expect(waited).toHaveBeenCalledTimes(2));
-  first.complete();
-  release.resolve();
-  await expect(Promise.all(pending)).resolves.toEqual([
-    { status: "owned", sessionId: successorId },
-    invalidated,
-  ]);
-});
-
-it("invalidates restart-aborted ancestry", async () => {
-  const storePath = store();
-  const initial = await owner(storePath);
-  const delivery = deferred();
-  initial.completeWithAfterClearBarrier(delivery.promise);
-  const waited = vi.spyOn(registry, "waitForReplyRunFollowupAdmission");
-  const pending = queue(storePath);
-  await vi.waitFor(() => expect(waited).toHaveBeenCalledTimes(1));
-  const predecessor = await owner(storePath);
-  rotate(predecessor, storePath);
-  expect(predecessor.abortForRestart()).toBe(true);
-  predecessor.completeWithAfterClearBarrier(delivery.promise);
-  const successor = await owner(storePath);
-  rotate(successor, storePath, "second-compaction");
-  successor.complete();
-  delivery.resolve();
-  const result = await pending;
-  expect(result).toMatchObject(invalidated);
 });

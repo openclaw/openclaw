@@ -1,27 +1,25 @@
 import { performance } from "node:perf_hooks";
 import { expect, vi } from "vitest";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
-import { getRuntimeConfig } from "../config/io.runtime.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
-import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry-list.read.js";
-import * as canonical from "../config/sessions/session-canonical-key.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
-import * as agentDatabases from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import * as databaseFactsRead from "./session-row-database-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
-import * as databaseFactsRead from "./session-row-projection-read.js";
 import { ready, type Row } from "./session-row-projection-record.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import * as rowInputs from "./session-utils-row.js";
 
-/** Pause after the real read boundary has released Worker, continuation, and native custody. */
+/** Pause after the real worker read scope has released its request hold. */
 export async function withAcceptedSuffix(
   run: (fixture: {
     projection: SessionRowProjection;
@@ -44,7 +42,13 @@ export async function withAcceptedSuffix(
   } = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    getRuntimeConfig();
+    const cfg = {
+      agents: {
+        entries: { main: {} },
+        defaults: { utilityModel: "unit-test/small" },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
     const keys = [
       "agent:main:accepted-a",
       options.acpMeta === undefined ? "agent:main:accepted-b" : "agent:main:acp:accepted-b",
@@ -102,12 +106,7 @@ export async function withAcceptedSuffix(
     }
     const releaseForeground = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({
-      cfg: {
-        agents: {
-          entries: { main: {} },
-          defaults: { utilityModel: "unit-test/small" },
-        },
-      },
+      cfg,
       modelCatalog: [],
     });
     const paused = createDeferredCore();
@@ -115,8 +114,6 @@ export async function withAcceptedSuffix(
     let reading: Promise<void> | undefined;
     try {
       await projection.ensureMaterialized();
-      // Cold projection admission is worker-owned; explicitly admit the native continuation fixture.
-      listSessionEntriesReadOnly({ agentId: "main" });
       const query = { agentId: "main", key: keys[1]! };
       const previous = await withReadySessionRows(
         projection,
@@ -125,41 +122,26 @@ export async function withAcceptedSuffix(
       );
       const count = projection.materializedCount;
       const releases: string[] = [];
-      const continuations: SharedArrayBuffer[] = [];
       let trackingCustody = false;
-      const capture = canonical.captureCanonicalSessionReaderContinuation;
-      vi.spyOn(canonical, "captureCanonicalSessionReaderContinuation").mockImplementation((db) => {
-        const owner = capture(db);
-        if (!owner || !trackingCustody) {
-          return owner;
-        }
-        continuations.push(owner.receipt.live);
-        return {
-          ...owner,
-          release() {
-            owner.release();
-            releases.push("continuation");
-          },
-        };
-      });
-      const retain = agentDatabases.retainOpenClawAgentDatabaseReadCandidates;
-      const nativeCustody = vi.spyOn(agentDatabases, "retainOpenClawAgentDatabaseReadCandidates");
       const reads: SessionRowDatabaseFacts[][] = [];
       const readDatabases = history.withSessionHistoryWorkerDatabases;
       vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-        async (selected, consume) => {
+        async (selected, consume, lane) => {
           const tracked = trackingCustody;
-          const result = await readDatabases(selected, (owners) =>
-            consume(
-              owners.map((owner) => ({
-                ...owner,
-                async readRowFacts(input) {
-                  const reply = await owner.readRowFacts(input);
-                  reads.push(structuredClone(reply.rows));
-                  return reply;
-                },
-              })),
-            ),
+          const result = await readDatabases(
+            selected,
+            (owners) =>
+              consume(
+                owners.map((owner) => ({
+                  ...owner,
+                  async readRowFacts(input) {
+                    const reply = await owner.readRowFacts(input);
+                    reads.push(structuredClone(reply.rows));
+                    return reply;
+                  },
+                })),
+              ),
+            lane,
           );
           if (tracked) {
             releases.push("worker");
@@ -178,18 +160,6 @@ export async function withAcceptedSuffix(
       const readFacts = databaseFactsRead.withSessionRowDatabaseFacts;
       vi.spyOn(databaseFactsRead, "withSessionRowDatabaseFacts").mockImplementationOnce(
         async (...args) => {
-          // The row reader acquires its hold before worker admission retains its own.
-          nativeCustody.mockImplementationOnce((...selected) => {
-            const owner = retain(...selected);
-            expect(owner.databases).toHaveLength(1);
-            return {
-              ...owner,
-              release() {
-                owner.release();
-                releases.push("native");
-              },
-            };
-          });
           trackingCustody = true;
           try {
             await readFacts(...args);
@@ -205,6 +175,12 @@ export async function withAcceptedSuffix(
           { agentId: "main", sessionKey },
           { ...entries[index]!, updatedAt: 2, label: `accepted-${index}` },
         );
+        sessionChanges.emit({
+          agentId: "main",
+          storePath: previous.storeTarget.storePath,
+          sessionKey,
+          factsInvalidated: true,
+        });
       }
       reading = projection.ensureMaterialized();
       await Promise.race([
@@ -213,9 +189,7 @@ export async function withAcceptedSuffix(
           throw new Error("Drain bypassed the released-custody boundary");
         }),
       ]);
-      expect(releases).toEqual(["worker", "continuation", "native"]);
-      expect(continuations).toHaveLength(1);
-      expect(Atomics.load(new Int32Array(continuations[0]!), 0)).toBe(0);
+      expect(releases).toEqual(["worker"]);
       const suffix = projection.findBySessionId({
         agentId: "main",
         sessionId: entries[1]!.sessionId,

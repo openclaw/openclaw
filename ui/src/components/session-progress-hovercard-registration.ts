@@ -7,7 +7,7 @@ import {
   SESSION_TITLE_TARGET_SELECTOR,
   sessionProgressHoverTargetFromEvent,
 } from "./session-progress-hovercard-target.ts";
-import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.ts";
+import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
 
 const HOVERCARD_TAG = "openclaw-session-progress-hovercard-provider";
 
@@ -15,8 +15,10 @@ let bootstrapObserver: MutationObserver | null = null;
 
 const bootstrap = new LazyHovercardBootstrap<SessionProgressHovercardProvider>({
   tag: HOVERCARD_TAG,
-  load: async () =>
-    (await import("./session-progress-hovercard.runtime.ts")).SessionProgressHovercardProvider,
+  load: async () => {
+    await import("./session-progress-hovercard.runtime.tsx");
+    return customElements.get(HOVERCARD_TAG)!;
+  },
   onDefined: () => {
     bootstrapObserver?.disconnect();
     bootstrapObserver = null;

@@ -1,7 +1,7 @@
 // Coverage for prompt-cache diagnostic tracking across turns.
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
-import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "../../llm/types.js";
 import { withEnv } from "../../test-utils/env.js";
@@ -28,93 +28,7 @@ function scopedKey(value: string): string {
 describe("prompt cache observability", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("keeps concurrent review and foreground usage in their own diagnostic sessions", () => {
-    const promptCacheKey = scopedKey("shared-provider-affinity");
-    const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
-    const context = { systemPrompt: "stable", messages: [] };
-    const foregroundResult = vi.fn();
-    const reviewResult = vi.fn();
-    const foreground = createPromptCacheRequestObserver(
-      { sessionId: scopedKey("foreground"), promptCacheKey, streamStrategy: "test" },
-      foregroundResult,
-    );
-    const review = createPromptCacheRequestObserver(
-      { sessionId: scopedKey("review"), promptCacheKey, streamStrategy: "test" },
-      reviewResult,
-    );
-    review.onModelRequest(model, context);
-    foreground.onModelRequest(model, context);
-    foreground.onModelUsage({ cacheRead: 9_000 });
-    review.onModelUsage({ cacheRead: 0, input: 1_000 });
-    expect(review.getObservation()).toMatchObject({ broke: false });
-    foreground.onModelRequest(model, context);
-    foreground.onModelUsage({ cacheRead: 2_000 });
-    expect(foreground.getObservation()).toMatchObject({
-      broke: true,
-      previousCacheRead: 9_000,
-      cacheRead: 2_000,
-    });
-  });
-
-  it.each([
-    ["system", { instructions: "provider rewritten system" }],
-    ["tools", { tools: [{ type: "function", name: "changed" }] }],
-    ["message:0", { input: [{ role: "user", content: "provider rewritten history" }] }],
-    ["parameters", { reasoning: { effort: "high" } }],
-    [
-      "prefix-match",
-      {
-        input: [
-          { role: "user", content: "first" },
-          { role: "user", content: "appended" },
-        ],
-      },
-    ],
-  ] as const)(
-    "identifies final encoded %s changes despite unchanged assembled context",
-    (expected, replacement) => {
-      const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
-      const observer = createPromptCacheRequestObserver(
-        { sessionId: scopedKey(`wire-${expected}`), streamStrategy: "test" },
-        () => {},
-      );
-      const payload = {
-        instructions: "original system",
-        tools: [{ type: "function", name: "read" }],
-        input: [{ role: "user", content: "first" }],
-        reasoning: { effort: "low" },
-      };
-      const request = (body: unknown, cacheRead: number) => {
-        observer.onModelRequest(
-          { provider: "openai", id: "test-model", api: "openai-responses" },
-          { systemPrompt: "original system", messages: [] },
-        );
-        const { encoded: _encoded, ...fingerprint } = prepareProviderPrompt({
-          payload: body,
-          encode: true,
-        });
-        observer.onModelUsage(
-          {
-            cacheRead,
-            contextUsage: { state: "available", promptTokens: 10_000, totalTokens: 10_100 },
-          },
-          { scopeDigest: "same-provider-scope", ...fingerprint },
-        );
-      };
-      request(payload, 9_000);
-      clock.mockReturnValue(3_000);
-      request({ ...payload, ...replacement }, 2_000);
-      expect(observer.getObservation()).toMatchObject({
-        broke: true,
-        changes: null,
-        providerPrefix: expected,
-        requestGapMs: 2_000,
-        promptTokens: 10_000,
-      });
-    },
-  );
-
-  it("does not claim a bounded message tail matched when the history grows", () => {
+  it("bounds field details while detecting later item and tail changes", () => {
     const identity = { sessionId: scopedKey("bounded-wire-tail") };
     const message = { role: "user", content: "synthetic history" };
     const input = Array.from({ length: 513 }, () => message);
@@ -130,7 +44,11 @@ describe("prompt cache observability", () => {
         providerPrompt: { scopeDigest: "same-provider-scope", ...fingerprint },
       });
     };
-    complete(9_000);
+    complete(15_000);
+    input[31] = { ...message, content: "changed detailed item" };
+    expect(complete(12_000)?.providerPrefix).toBe("message:31.content");
+    input[32] = { ...message, content: "changed item beyond field limit" };
+    expect(complete(9_000)?.providerPrefix).toBe("message:32");
     input.push(message);
     expect(complete(6_000)?.providerPrefix).toBe("unverified-after:512");
     input[513] = { ...message, content: "changed tail" };
@@ -139,47 +57,6 @@ describe("prompt cache observability", () => {
 
   beforeEach(() => {
     testScope += 1;
-  });
-
-  it.each([
-    {
-      name: "three healthy calls then one",
-      turns: [[10_000, 10_000, 10_000], [10_000]],
-      misses: [],
-    },
-    {
-      name: "one call then a miss and two hits",
-      turns: [[10_000], [0, 10_000, 10_000]],
-      misses: ["2:1"],
-    },
-    { name: "a complete miss below the drop threshold", turns: [[500], [0]], misses: ["2:1"] },
-  ])("observes each request: $name", ({ turns, misses }) => {
-    const sessionId = scopedKey("request-usage");
-    const observed: Array<{ request: string; cacheRead: number | undefined; broke: boolean }> = [];
-    for (const [turnIndex, reads] of turns.entries()) {
-      const observer = createPromptCacheRequestObserver(
-        { sessionId, streamStrategy: "test" },
-        (observation) =>
-          observed.push({
-            request: `${turnIndex + 1}:${observation.requestIndex}`,
-            cacheRead: observation.cacheRead,
-            broke: observation.broke,
-          }),
-      );
-      for (const cacheRead of reads) {
-        observer.onModelRequest(
-          { provider: "anthropic", id: "claude-sonnet-4-6", api: "anthropic-messages" },
-          {
-            messages: [],
-            systemPrompt: "stable prefix",
-            tools: [{ name: "read", description: "Read text", parameters: Type.Object({}) }],
-          },
-        );
-        observer.onModelUsage({ input: 10_000 - cacheRead, cacheRead, cacheWrite: 0 });
-      }
-    }
-    expect(observed.map((entry) => entry.cacheRead)).toEqual(turns.flat());
-    expect(observed.filter((entry) => entry.broke).map((entry) => entry.request)).toEqual(misses);
   });
 
   it.each([false, true])(
@@ -268,6 +145,23 @@ describe("prompt cache observability", () => {
     });
     expect(first[0]?.descriptionDigest).not.toBe(changedDescription[0]?.descriptionDigest);
     expect(first[0]?.schemaDigest).not.toBe(changedSchema[0]?.schemaDigest);
+  });
+
+  it("preserves canonical schema identity when descriptors become published", () => {
+    const source = {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "published-schema-fixture" },
+      },
+    };
+    const first = collectPromptCacheTools([{ name: "read", parameters: source }]);
+    const parameters = publishRuntimeToolInputSchema(source).schema;
+    if (parameters === null || typeof parameters !== "object") {
+      throw new Error("Expected published object schema");
+    }
+    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    expect(collectPromptCacheTools([{ name: "read", parameters }])).toEqual(first);
+    expect(hashes).not.toHaveBeenCalled();
   });
 
   it("fingerprints own __proto__ schema properties without prototype pollution", () => {
@@ -636,42 +530,51 @@ describe("prompt cache observability", () => {
       cacheWrite: 0,
       cacheTelemetry: { state: "unavailable" },
     } satisfies Partial<Usage>,
-  ])("preserves the measured cache baseline across unavailable telemetry: %j", (missingUsage) => {
-    const sessionId = scopedKey("missing-cache-telemetry");
-    const observe = (usage: Partial<Usage> | undefined, changed: boolean) => {
-      const observer = createPromptCacheRequestObserver(
-        {
-          sessionId,
-          streamStrategy: "test",
-          cacheRetention: changed ? "short" : "long",
-          transport: changed ? "websocket" : "sse",
-        },
-        () => {},
-      );
-      observer.onModelRequest(
-        { provider: "ollama", id: "local-model", api: "ollama" },
-        { systemPrompt: changed ? "changed prefix" : "stable prefix", messages: [] },
-      );
-      observer.onModelUsage(normalizeUsage(usage));
-      return observer.getObservation();
-    };
+  ])(
+    "preserves the measured cache baseline across unavailable telemetry: %j",
+    async (missingUsage) => {
+      const sessionId = scopedKey("missing-cache-telemetry");
+      const observe = async (usage: Partial<Usage> | undefined, changed: boolean) => {
+        const observer = createPromptCacheRequestObserver(
+          {
+            sessionId,
+            streamStrategy: "test",
+            cacheRetention: changed ? "short" : "long",
+            transport: changed ? "websocket" : "sse",
+          },
+          () => {},
+        );
+        await observer.onModelRequest(
+          { provider: "ollama", id: "local-model", api: "ollama" },
+          { systemPrompt: changed ? "changed prefix" : "stable prefix", messages: [] },
+        );
+        observer.onModelUsage(normalizeUsage(usage));
+        return observer.getObservation();
+      };
 
-    observe({ cacheRead: 8_000 }, false);
-    expect(observe(missingUsage, true)).toMatchObject({
-      broke: false,
-      cacheRead: undefined,
-      cacheWrite: undefined,
-    });
-    expect(observe({ cacheRead: 2_000 }, true)).toMatchObject({
-      broke: true,
-      previousCacheRead: 8_000,
-      cacheRead: 2_000,
-      changes: null,
-    });
-    expect(observe({ input: 10_000, cacheRead: 0 }, true)).toMatchObject({
-      broke: true,
-      previousCacheRead: 2_000,
-      cacheRead: 0,
-    });
-  });
+      await observe({ cacheRead: 8_000 }, false);
+      expect(await observe(missingUsage, true)).toMatchObject({
+        broke: false,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+      });
+      await observe(missingUsage, true);
+      expect(await observe({ cacheRead: 2_000 }, true)).toMatchObject({
+        broke: true,
+        previousCacheRead: 8_000,
+        cacheRead: 2_000,
+        changes: [
+          { code: "cacheRetention", detail: "long -> short" },
+          { code: "transport", detail: "sse -> websocket" },
+          { code: "systemPrompt", detail: "system prompt digest changed" },
+        ],
+      });
+      expect(await observe({ input: 10_000, cacheRead: 0 }, true)).toMatchObject({
+        broke: true,
+        previousCacheRead: 2_000,
+        cacheRead: 0,
+        changes: null,
+      });
+    },
+  );
 });

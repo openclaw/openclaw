@@ -93,33 +93,6 @@ async function postWebhook(params: {
   });
 }
 
-async function postUntilRateLimited(params: {
-  baseUrl: string;
-  path: string;
-  secret: string;
-  withNonceQuery?: boolean;
-  attempts?: number;
-}): Promise<boolean> {
-  const attempts = params.attempts ?? 130;
-  for (let i = 0; i < attempts; i += 1) {
-    const url = params.withNonceQuery
-      ? `${params.baseUrl}${params.path}?nonce=${i}`
-      : `${params.baseUrl}${params.path}`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "x-bot-api-secret-token": params.secret,
-        "content-type": "application/json",
-      },
-      body: "{}",
-    });
-    if (response.status === 429) {
-      return true;
-    }
-  }
-  return false;
-}
-
 describe("handleZaloWebhookRequest", () => {
   afterEach(() => {
     for (const unregister of unregisterTargets.splice(0)) {
@@ -194,6 +167,7 @@ describe("handleZaloWebhookRequest", () => {
     const acceptWebhook = vi.fn(async () => {
       await admission;
     });
+    const body = '{ "event_name": "message.text.received", "extra": true }';
     registerTarget({ path: "/hook-durable-ack", acceptWebhook });
 
     try {
@@ -202,13 +176,14 @@ describe("handleZaloWebhookRequest", () => {
         const responsePromise = postWebhook({
           baseUrl,
           path: "/hook-durable-ack",
-          body: '{"event_name":"message.text.received"}',
+          body,
         }).then((response) => {
           settled = true;
           return response;
         });
 
         await vi.waitFor(() => expect(acceptWebhook).toHaveBeenCalledTimes(1));
+        expect(acceptWebhook).toHaveBeenCalledWith(body);
         expect(settled).toBe(false);
         releaseAdmission();
         const response = await responsePromise;
@@ -218,18 +193,6 @@ describe("handleZaloWebhookRequest", () => {
     } finally {
       releaseAdmission();
     }
-  });
-
-  it("passes the exact raw webhook JSON to durable admission", async () => {
-    const acceptWebhook = vi.fn(async () => {});
-    registerTarget({ path: "/hook-raw", acceptWebhook });
-    const body = '{ "event_name": "message.text.received", "extra": true }';
-
-    await withServer(webhookRequestHandler, async (baseUrl) => {
-      const response = await postWebhook({ baseUrl, path: "/hook-raw", body });
-      expect(response.status).toBe(200);
-    });
-    expect(acceptWebhook).toHaveBeenCalledWith(body);
   });
 
   it("does not acknowledge a durable admission failure", async () => {
@@ -279,13 +242,18 @@ describe("handleZaloWebhookRequest", () => {
     registerTarget({ path: "/hook-query-rate" });
 
     await withServer(webhookRequestHandler, async (baseUrl) => {
-      const saw429 = await postUntilRateLimited({
-        baseUrl,
-        path: "/hook-query-rate",
-        secret: "secret", // pragma: allowlist secret
-        withNonceQuery: true,
-      });
-
+      let saw429 = false;
+      for (let i = 0; i < 130; i += 1) {
+        const response = await postWebhook({
+          baseUrl,
+          path: `/hook-query-rate?nonce=${i}`,
+          body: "{}",
+        });
+        if (response.status === 429) {
+          saw429 = true;
+          break;
+        }
+      }
       expect(saw429).toBe(true);
     });
   });

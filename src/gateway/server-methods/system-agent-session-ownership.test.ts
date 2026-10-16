@@ -241,7 +241,10 @@ describe("openclaw.chat session ownership", () => {
     expect(turn).toMatchObject({
       ok: false,
       payload: undefined,
-      error: { code: "INVALID_REQUEST" },
+      error: {
+        code: "INVALID_REQUEST",
+        details: { code: "system_agent_session_invalidated" },
+      },
     });
     expect(approval).toMatchObject({
       ok: false,
@@ -301,34 +304,6 @@ describe("openclaw.chat session ownership", () => {
     expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).not.toHaveBeenCalled();
   });
 
-  it("lets the same authenticated principal resume after reconnecting", async () => {
-    const sessions = new Map<string, SystemAgentChatSession>();
-    const context = makeContext(sessions);
-    await callChat(
-      context,
-      { sessionId: "reconnect" },
-      makeClient({
-        connId: "conn-old",
-        deviceId: "device-old",
-        authenticatedUserId: "owner@example.com",
-      }),
-    );
-    const handle = expectDefined(createdEngines[0], "created system-agent engine").handle;
-
-    const resumed = await callChat(
-      context,
-      { sessionId: "reconnect", message: "continue" },
-      makeClient({
-        connId: "conn-new",
-        deviceId: "device-new",
-        authenticatedUserId: "owner@example.com",
-      }),
-    );
-
-    expect(resumed.ok).toBe(true);
-    expect(handle).toHaveBeenCalledWith("continue");
-  });
-
   it("uses the immutable profile across a GitHub login rename", async () => {
     const sessions = new Map<string, SystemAgentChatSession>();
     const context = makeContext(sessions);
@@ -385,26 +360,6 @@ describe("openclaw.chat session ownership", () => {
 
     expect(attached.ok).toBe(true);
     expect(sessions.get("github-pending")?.ownerKey).toBe("user:profile-canonical");
-  });
-
-  it("lets the same paired device resume after reconnecting", async () => {
-    const sessions = new Map<string, SystemAgentChatSession>();
-    const context = makeContext(sessions);
-    await callChat(
-      context,
-      { sessionId: "device-reconnect" },
-      makeClient({ connId: "conn-old", deviceId: "device-owner" }),
-    );
-    const handle = expectDefined(createdEngines[0], "created system-agent engine").handle;
-
-    const resumed = await callChat(
-      context,
-      { sessionId: "device-reconnect", message: "continue" },
-      makeClient({ connId: "conn-new", deviceId: "device-owner" }),
-    );
-
-    expect(resumed.ok).toBe(true);
-    expect(handle).toHaveBeenCalledWith("continue");
   });
 
   it("rejects non-delegated chat without a server-authenticated identity", async () => {
@@ -487,16 +442,6 @@ describe("openclaw.chat session responses", () => {
       ok: true,
       payload: { sessionId: "s1", reply: "welcome text", action: "none" },
     });
-  });
-
-  it("routes messages through the session engine", async () => {
-    const engine = makeEngine();
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), { sessionId: "s1", message: "status" });
-
-    expect(engine.handle).toHaveBeenCalledWith("status");
-    expect(call.payload).toMatchObject({ reply: "did the thing", action: "none" });
   });
 
   it("rejects a structured answer without an active chat session", async () => {

@@ -1,8 +1,14 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import {
+  TALK_CAPTURE_SCOPED_EVENT_TYPES,
+  TALK_EVENT_TYPES,
+  TALK_TURN_SCOPED_EVENT_TYPES,
+} from "../talk-event-vocabulary.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString, SecretInputSchema } from "./primitives.js";
 import { GatewayEventLoopHealthSchema } from "./runtime-vitals.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 // Browser clients, Gateway relays, and channel adapters share this Talk vocabulary.
 export const TalkModeParamsSchema = closedObject({
@@ -40,91 +46,21 @@ export const TtsSpeakParamsSchema = closedObject({
   text: NonEmptyString,
 });
 
-const TalkModeSchema = Type.Union([
-  Type.Literal("realtime"),
-  Type.Literal("stt-tts"),
-  Type.Literal("transcription"),
-]);
+const TalkModeSchema = stringLiteralUnion(["realtime", "stt-tts", "transcription"]);
 
 /** Transport families; browser clients branch on this value to choose setup flow. */
-const TalkTransportSchema = Type.Union([
-  Type.Literal("webrtc"),
-  Type.Literal("provider-websocket"),
-  Type.Literal("gateway-relay"),
-  Type.Literal("managed-room"),
+const TalkTransportSchema = stringLiteralUnion([
+  "webrtc",
+  "provider-websocket",
+  "gateway-relay",
+  "managed-room",
 ]);
 
-const TalkBrainSchema = Type.Union([
-  Type.Literal("agent-consult"),
-  Type.Literal("direct-tools"),
-  Type.Literal("none"),
-]);
+const TalkBrainSchema = stringLiteralUnion(["agent-consult", "direct-tools", "none"]);
 
-const TalkAgentControlModeSchema = Type.Union([
-  Type.Literal("status"),
-  Type.Literal("steer"),
-  Type.Literal("cancel"),
-  Type.Literal("followup"),
-]);
+const TalkAgentControlModeSchema = stringLiteralUnion(["status", "steer", "cancel", "followup"]);
 
-const TalkEventTypeSchema = Type.Union([
-  Type.Literal("session.started"),
-  Type.Literal("session.ready"),
-  Type.Literal("session.closed"),
-  Type.Literal("session.error"),
-  Type.Literal("session.replaced"),
-  Type.Literal("turn.started"),
-  Type.Literal("turn.ended"),
-  Type.Literal("turn.cancelled"),
-  Type.Literal("capture.started"),
-  Type.Literal("capture.stopped"),
-  Type.Literal("capture.cancelled"),
-  Type.Literal("capture.once"),
-  Type.Literal("input.audio.delta"),
-  Type.Literal("input.audio.committed"),
-  Type.Literal("transcript.delta"),
-  Type.Literal("transcript.done"),
-  Type.Literal("output.text.delta"),
-  Type.Literal("output.text.done"),
-  Type.Literal("output.audio.started"),
-  Type.Literal("output.audio.delta"),
-  Type.Literal("output.audio.done"),
-  Type.Literal("tool.call"),
-  Type.Literal("tool.progress"),
-  Type.Literal("tool.result"),
-  Type.Literal("tool.error"),
-  Type.Literal("usage.metrics"),
-  Type.Literal("latency.metrics"),
-  Type.Literal("health.changed"),
-]);
-
-/** Event types that must carry a turn id for client-side stream correlation. */
-const TURN_SCOPED_TALK_EVENT_TYPES = [
-  "turn.started",
-  "turn.ended",
-  "turn.cancelled",
-  "input.audio.delta",
-  "input.audio.committed",
-  "transcript.delta",
-  "transcript.done",
-  "output.text.delta",
-  "output.text.done",
-  "output.audio.started",
-  "output.audio.delta",
-  "output.audio.done",
-  "tool.call",
-  "tool.progress",
-  "tool.result",
-  "tool.error",
-];
-
-/** Capture lifecycle events must include capture id to avoid cross-turn ambiguity. */
-const CAPTURE_SCOPED_TALK_EVENT_TYPES = [
-  "capture.started",
-  "capture.stopped",
-  "capture.cancelled",
-  "capture.once",
-];
+const TalkEventTypeSchema = stringLiteralUnion(TALK_EVENT_TYPES);
 
 /** Builds JSON Schema conditional requirements while avoiding reserved word syntax. */
 function requireJsonSchemaProperties(properties: string[]): Record<string, { required: string[] }> {
@@ -157,14 +93,14 @@ export const TalkEventSchema = Type.Object(
     allOf: [
       {
         if: {
-          properties: { type: { enum: TURN_SCOPED_TALK_EVENT_TYPES } },
+          properties: { type: { enum: TALK_TURN_SCOPED_EVENT_TYPES } },
           required: ["type"],
         },
         ...requireJsonSchemaProperties(["turnId"]),
       },
       {
         if: {
-          properties: { type: { enum: CAPTURE_SCOPED_TALK_EVENT_TYPES } },
+          properties: { type: { enum: TALK_CAPTURE_SCOPED_EVENT_TYPES } },
           required: ["type"],
         },
         ...requireJsonSchemaProperties(["captureId"]),
@@ -193,11 +129,11 @@ export const TalkClientCreateParamsSchema = closedObject({
   brain: Type.Optional(TalkBrainSchema),
   capabilities: Type.Optional(
     Type.Array(
-      Type.Union([
-        Type.Literal("camera-frame"),
-        Type.Literal("voice-transcript"),
-        Type.Literal("gateway-control-v1"),
-        Type.Literal("voice-selection"),
+      stringLiteralUnion([
+        "camera-frame",
+        "voice-transcript",
+        "gateway-control-v1",
+        "voice-selection",
       ]),
       { uniqueItems: true },
     ),
@@ -218,7 +154,7 @@ export const TalkClientTranscriptParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   voiceSessionId: VoiceIdString,
   entryId: VoiceIdString,
-  role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
+  role: stringLiteralUnion(["user", "assistant"]),
   text: NonEmptyString,
   timestamp: Type.Optional(Type.Number()),
 });
@@ -254,7 +190,7 @@ export const TalkAgentControlResultSchema = closedObject({
   active: Type.Boolean(),
   queued: Type.Optional(Type.Boolean()),
   aborted: Type.Optional(Type.Boolean()),
-  target: Type.Optional(Type.Union([Type.Literal("embedded_run"), Type.Literal("reply_run")])),
+  target: Type.Optional(stringLiteralUnion(["embedded_run", "reply_run"])),
   reason: Type.Optional(Type.String()),
   message: Type.String(),
   speak: Type.Boolean(),
@@ -305,9 +241,7 @@ export const TalkSessionCancelOutputParamsSchema = closedObject({
 /** Reports whether a Talk output cancellation applied to the requested turn. */
 export const TalkSessionCancelOutputResultSchema = closedObject({
   ok: Type.Literal(true),
-  status: Type.Optional(
-    Type.Union([Type.Literal("applied"), Type.Literal("stale"), Type.Literal("idle")]),
-  ),
+  status: Type.Optional(stringLiteralUnion(["applied", "stale", "idle"])),
   turnId: Type.Optional(NonEmptyString),
 });
 
@@ -332,15 +266,18 @@ export const TalkSessionSteerParamsSchema = closedObject({
 
 export const TalkSessionCloseParamsSchema = closedObject({
   sessionId: NonEmptyString,
+  disposition: Type.Optional(stringLiteralUnion(["abort", "detach"])),
+  discard: Type.Optional(Type.Boolean()),
 });
 
 export const TalkCatalogParamsSchema = closedObject({
   provider: Type.Optional(NonEmptyString),
   model: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
 });
 
 const TalkCatalogAudioFormatProperties = {
-  encoding: Type.Union([Type.Literal("pcm16"), Type.Literal("g711_ulaw")]),
+  encoding: stringLiteralUnion(["pcm16", "g711_ulaw"]),
   sampleRateHz: Type.Integer({ minimum: 1 }),
   channels: Type.Integer({ minimum: 1 }),
 };
@@ -384,9 +321,9 @@ export const TalkCatalogResultSchema = closedObject({
 });
 
 const BrowserRealtimeAudioContractSchema = closedObject({
-  inputEncoding: Type.Union([Type.Literal("pcm16"), Type.Literal("g711_ulaw")]),
+  inputEncoding: stringLiteralUnion(["pcm16", "g711_ulaw"]),
   inputSampleRateHz: Type.Integer({ minimum: 1 }),
-  outputEncoding: Type.Union([Type.Literal("pcm16"), Type.Literal("g711_ulaw")]),
+  outputEncoding: stringLiteralUnion(["pcm16", "g711_ulaw"]),
   outputSampleRateHz: Type.Integer({ minimum: 1 }),
 });
 
@@ -492,9 +429,7 @@ const TalkRealtimeConfigSchema = closedObject({
   prefixPaddingMs: Type.Optional(Type.Integer({ minimum: 0 })),
   reasoningEffort: Type.Optional(Type.String({ minLength: 1 })),
   brain: Type.Optional(TalkBrainSchema),
-  consultRouting: Type.Optional(
-    Type.Union([Type.Literal("provider-direct"), Type.Literal("force-agent-consult")]),
-  ),
+  consultRouting: Type.Optional(stringLiteralUnion(["provider-direct", "force-agent-consult"])),
 });
 
 const ResolvedTalkConfigSchema = closedObject({
@@ -645,13 +580,7 @@ export const ChannelsStatusResultSchema = closedObject({
       closedObject({
         channel: NonEmptyString,
         accountId: NonEmptyString,
-        kind: Type.Union([
-          Type.Literal("intent"),
-          Type.Literal("permissions"),
-          Type.Literal("config"),
-          Type.Literal("auth"),
-          Type.Literal("runtime"),
-        ]),
+        kind: stringLiteralUnion(["intent", "permissions", "config", "auth", "runtime"]),
         message: Type.String(),
         fix: Type.Optional(Type.String()),
       }),

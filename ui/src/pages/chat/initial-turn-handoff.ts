@@ -6,6 +6,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { setChatError } from "./chat-history-state.ts";
 import {
   keepVolatileQueuedMessage,
@@ -13,7 +14,7 @@ import {
   readQueuedMessageById,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import { captureChatConnectionOwner, waitForQueuedChatHistory } from "./chat-send-queue-state.ts";
+import { waitForQueuedChatHistory } from "./chat-send-queue-state.ts";
 
 const INITIAL_TURN_HANDOFF_TTL_MS = 60_000;
 

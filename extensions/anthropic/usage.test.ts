@@ -132,7 +132,8 @@ describe("Anthropic provider usage", () => {
         config: {},
         env: {},
         provider: "anthropic",
-        resolveApiKeyFromConfigAndStore: () => key,
+        resolveApiKeyFromConfigAndStore: () => undefined,
+        resolveApiKeyCandidatesFromConfigAndStore: async () => [key],
         resolveOAuthToken: async () => null,
       });
       expect(result).toEqual(accepted ? { token: key } : { handled: true });
@@ -144,7 +145,8 @@ describe("Anthropic provider usage", () => {
       config: {},
       env: {},
       provider: "anthropic",
-      resolveApiKeyFromConfigAndStore: () => "sk-ant-admin-profile",
+      resolveApiKeyFromConfigAndStore: () => undefined,
+      resolveApiKeyCandidatesFromConfigAndStore: async () => ["sk-ant-admin-profile"],
       resolveOAuthToken: async () => null,
     });
     expect(result).toEqual({

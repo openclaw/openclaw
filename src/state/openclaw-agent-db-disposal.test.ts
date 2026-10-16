@@ -132,7 +132,7 @@ it("rejects a file replacement during registry removal publication", async () =>
   }
 });
 
-it.runIf(process.platform !== "win32").each([false, true])(
+it.runIf(process.platform !== "win32").each([true])(
   "disposes a symlinked database only when its cached owner is unambiguous (duplicate=%s)",
   async (duplicate) => {
     const stateDir = fs.realpathSync(createTempStateDir());

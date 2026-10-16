@@ -1,7 +1,19 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
+
+type AdmissionPublisher = (publication: PluginSourceAdmissionPublication) => Promise<boolean>;
+const publisherContext = new AsyncLocalStorage<AdmissionPublisher>();
+
+/** Application workers delegate publication to the original host-owned state authority. */
+export function withPluginSourceAdmissionPublisher<T>(
+  publisher: AdmissionPublisher,
+  run: () => T,
+): T {
+  return publisherContext.run(publisher, run);
+}
 
 /** Deferred publication retains its original store and authority through settlement. */
 export function createPluginSourceAdmissionPublisher(
@@ -9,6 +21,10 @@ export function createPluginSourceAdmissionPublisher(
 ): ((publication: PluginSourceAdmissionPublication) => Promise<boolean>) | undefined {
   if (isArtifactPreservingStateRead()) {
     return undefined;
+  }
+  const delegated = publisherContext.getStore();
+  if (delegated) {
+    return delegated;
   }
   let context: ReturnType<typeof captureOpenClawStateWorkerContext>;
   try {

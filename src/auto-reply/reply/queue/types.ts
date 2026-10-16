@@ -7,8 +7,12 @@ import type {
   CurrentInboundPromptContext,
   RunEmbeddedAgentParams,
 } from "../../../agents/embedded-agent-runner/run/params.js";
+import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
-import type { ReplyDeliveryObserver } from "../../../agents/reply-completion.js";
+import type {
+  ReplyDeliveryFactsObserver,
+  ReplyDeliveryObserver,
+} from "../../../agents/reply-completion.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { ChannelAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../../config/sessions.js";
@@ -60,7 +64,9 @@ export type EnqueueFollowupRunOptions = {
   steerCandidate?: boolean;
 };
 
-export type FollowupQueueDisposition = "queue-cap" | "queue-cap-old" | "queue-cap-new";
+type FollowupQueueDisposition = Parameters<
+  NonNullable<GetReplyOptions["onFollowupQueueDisposition"]>
+>[0];
 
 export type QueuedFollowupReplyBatch = {
   kind: "queued-followup";
@@ -95,10 +101,12 @@ export class FollowupRunDeferredError extends Error {
 // Leaf contracts only: get-reply.types.ts imports this module.
 type FollowupRunObservers = Pick<
   GetReplyOptions,
-  "onAgentRunStart" | "onAgentRunTerminalOutcome" | "onModelSelected"
+  "onAgentRunStart" | "onPreparedAgentRunStart" | "onAgentRunTerminalOutcome" | "onModelSelected"
 > & {
+  awaitSessionDiffBaseline?: () => Promise<void>;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   resolveReplyDelivery?: ReplyDeliveryObserver;
+  resolveReplyDeliveryFacts?: ReplyDeliveryFactsObserver;
   onDeliberateSilentTerminalReply?: () => void;
 };
 
@@ -153,6 +161,8 @@ export type FollowupRun = {
   /** Turn-owned tool authority captured before queue ownership transfers. */
   toolsAllow?: string[];
   disableTools?: boolean;
+  forceRestartSafeTools?: boolean;
+  forceCodeModeTools?: boolean;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
   /** Pending same-turn acceptance while this item remains parked in FIFO order. */
@@ -161,6 +171,8 @@ export type FollowupRun = {
     predecessor: Promise<boolean>;
     settle: (accepted: boolean) => void;
   };
+  /** Internal Goal nudge; admission must still observe this exact active Goal. */
+  goalContinuation?: import("../goal-continuation.js").GoalContinuation;
   /** Internal marker for the one-shot stranded final recovery retry. */
   strandedReplyRetry?: boolean;
   /** This continuation owes last-resort feedback if it also stalls, including claimed input. */
@@ -223,6 +235,7 @@ export type FollowupRun = {
     | "authProfileId"
     | "authProfileIdSource"
     | "thinkLevel"
+    | "thinkingExplicit"
     | "fastMode"
     | "fastModeAutoOnSeconds"
     | "verboseLevel"
@@ -294,6 +307,26 @@ export type FollowupRun = {
     cliSessionBindingFacts?: CliSessionBindingFacts;
     skipProviderRuntimeHints?: boolean;
   };
+};
+
+export function bindReplyOperationQueueDisposition(
+  run: Pick<FollowupRun, "onQueueDisposition">,
+  state: ReplyOperationRunState | undefined,
+): void {
+  const observe = run.onQueueDisposition;
+  run.onQueueDisposition = (disposition) => {
+    observe?.(disposition);
+    if (state && (disposition !== "queue-cap-old" || state.admission?.status !== "accepted")) {
+      state.admission = { status: "skipped", reason: "queue-cap" };
+    }
+  };
+}
+
+/** Admission-owned image facts stay out of the public FollowupRun contract. */
+export type InternalFollowupRun = FollowupRun & {
+  currentTurnImagesPrepared?: true;
+  /** Fact indexes are relative to this run's media array. */
+  mediaImageLayout?: MediaImageLayout;
 };
 
 export function isFollowupRunAborted(

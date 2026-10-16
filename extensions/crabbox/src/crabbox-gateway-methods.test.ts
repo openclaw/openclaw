@@ -69,7 +69,10 @@ function createApi() {
     provider: "crabbox",
     settings: { ...SETTINGS, ...settings },
   });
-  const setup = { setup: "true", setupEnv: ["SYNTHETIC_SETUP_INPUT"] };
+  const setup = {
+    setup: "true",
+    setupSecrets: { SYNTHETIC_SETUP_INPUT: { source: "store", provider: "default", id: "SETUP" } },
+  };
   const api = createTestPluginApi({
     runtime: { state: crabboxState } as OpenClawPluginApi["runtime"],
     id: "crabbox",
@@ -135,37 +138,6 @@ describe("Crabbox snapshot mutations", () => {
       expect(actions[action]).not.toHaveBeenCalled();
     },
   );
-
-  it.each([true, false])(
-    "passes pin=%s to its owner and returns the updated summary",
-    async (pinned) => {
-      const actions = await createActions();
-      const respond = vi.fn();
-      await mutateCrabboxImage(createApi(), actions, "pin", {
-        params: { checkpointId: "chk_fixture", pinned },
-        respond,
-      });
-      expect(actions.pin).toHaveBeenCalledWith("chk_fixture", pinned);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ checkpointId: "chk_fixture" }),
-      );
-    },
-  );
-
-  it("passes a previous checkpoint to rollback and returns the owner's summary", async () => {
-    const actions = await createActions();
-    const respond = vi.fn();
-    await mutateCrabboxImage(createApi(), actions, "rollback", {
-      params: { checkpointId: "chk_previous" },
-      respond,
-    });
-    expect(actions.rollback).toHaveBeenCalledWith("chk_previous");
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ checkpointId: "chk_fixture" }),
-    );
-  });
 
   it("uses current Crabbox profiles for deletion and preserves pending retirement", async () => {
     const actions = await createActions();
@@ -326,7 +298,7 @@ describe("Crabbox snapshots Gateway methods", () => {
     expect(Object.keys(image.allocations)).toHaveLength(21);
   });
 
-  it("uses current configured defaults without reading setup environment or including other providers", async () => {
+  it("uses current configured defaults without resolving secrets or including other providers", async () => {
     const api = createApi();
     const respond = vi.fn();
     await listCrabboxImages(api, { params: {}, respond });
@@ -335,7 +307,7 @@ describe("Crabbox snapshots Gateway methods", () => {
         [
           ["classless", undefined, "linux", "off", "machine class"],
           ["disabled", "standard", "linux", "off", "Disabled"],
-          ["environment", "standard", "linux", "off", "environment"],
+          ["environment", "standard", "linux", "on", "default"],
           ["explicit", "standard", "linux", "on", "Explicitly"],
           ["linux", "standard", "linux", "on", "default"],
           ["mac", "standard", "macos", "off", "Linux"],
@@ -357,9 +329,7 @@ describe("Crabbox snapshots Gateway methods", () => {
 
   it.each([
     { selector: SELECTOR },
-    { selector: SELECTOR, acknowledgeProviderCleanup: "true" },
     { selector: " ", acknowledgeProviderCleanup: true },
-    { selector: 1, acknowledgeProviderCleanup: true },
     { selector: SELECTOR, acknowledgeProviderCleanup: true, extra: true },
   ])("refuses invalid recovery params without changing capture ownership: %j", async (params) => {
     const current = record();

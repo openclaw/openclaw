@@ -16,7 +16,7 @@ import { resolveSystemdServiceName } from "./systemd-service-files.js";
 type Scope = {
   active: boolean;
   pending: Set<Promise<unknown>>;
-  systemdRead?: { key: string; binding: Promise<SystemdServiceReadBinding | undefined> };
+  systemdRead?: Promise<SystemdServiceReadBinding | undefined>;
 };
 const scopes = new AsyncLocalStorage<Map<string, Scope>>();
 
@@ -33,21 +33,9 @@ export async function withSystemdServiceReadBinding<T>(
     throw expired();
   }
   const scope = scopes.getStore()?.get(resolveGatewayServiceOperationLockPath(env));
-  const key = JSON.stringify([
-    env.HOME,
-    env.OPENCLAW_PROFILE,
-    // Installed service metadata makes the shell's inferred unit explicit.
-    resolveSystemdServiceName(env),
-    env.OPENCLAW_STATE_DIR,
-    env.XDG_RUNTIME_DIR,
-    env.DBUS_SESSION_BUS_ADDRESS,
-  ]);
-  if (scope) {
-    if (!scope.active || (scope.systemdRead && scope.systemdRead.key !== key)) {
-      throw new Error("Original systemd read scope is closed or selects a different manager.");
-    }
-    scope.systemdRead ??= { key, binding: create() };
-    const retained = scope.systemdRead.binding;
+  if (scope?.active) {
+    scope.systemdRead ??= create();
+    const retained = scope.systemdRead;
     const work = Promise.resolve().then(async () => {
       const binding = await awaitWithinDeadline(
         () => retained,
@@ -56,9 +44,6 @@ export async function withSystemdServiceReadBinding<T>(
       );
       if (binding === ABSOLUTE_DEADLINE_EXPIRED) {
         throw expired();
-      }
-      if (!scope.active) {
-        throw new Error("Original systemd read scope has closed.");
       }
       binding?.verify();
       return await read(binding);
@@ -161,7 +146,7 @@ export async function withGatewayServiceOperationLock<T>(
         // Close admission atomically with the final empty-pending observation.
         scope.active = false;
         try {
-          const binding = await scope.systemdRead?.binding;
+          const binding = await scope.systemdRead;
           await binding?.close();
         } catch (error) {
           failures.push(error);

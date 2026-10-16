@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, it, vi } from "vitest";
 import { parseCLI, type CliOptions, type JsonTestResults } from "vitest/node";
+import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
 import type { VitestReportCapture } from "../../scripts/lib/vitest-report-capture.mts";
 import { canParallelizeVitestOutput } from "../../scripts/lib/vitest-report-owner.mts";
 import { isPidDefinitelyDead } from "../../src/shared/pid-alive.ts";
@@ -165,6 +166,33 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     },
   );
 
+  reportTest.for([undefined, "projects", "batch-cli"] as const)(
+    "classifies the final index write after assertion-red publication: entry=%s",
+    { timeout: 60000 },
+    async (entry, { expect, reports }) => {
+      const result = await reports.fixture(reports.make("oc-report-final-index-"))("failure", {
+        entry,
+        finalIndexFailure: true,
+      });
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.signal).toBeNull();
+      expect(result.stderr).toContain("owned final index write failure");
+      const published = json(result.output);
+      expect(inventory(published)).toEqual(
+        expected.map(([name, status]) => [name, name === "beta/one" ? "failed" : status]),
+      );
+      const attempted = json(path.join(result.reportSet!, "index.json.final-write-attempt"));
+      expect(attempted.complete).toBe(true);
+      expect(attempted.aggregate).toBe(result.output);
+      expect(attempted.merge).toMatchObject({ code: 1, signal: null });
+      const failedEntry = attempted.entries.find((attemptedEntry: { config: string }) =>
+        attemptedEntry.config.endsWith("test/vitest/vitest.agents-embedded-agent.config.ts"),
+      );
+      expect(failedEntry.attempts[0].outcome).toMatchObject({ code: 1, signal: null });
+      expect(json(path.join(result.reportSet!, "index.json")).complete).toBe(false);
+    },
+  );
+
   reportTest.for([
     "serial",
     "parallel",
@@ -244,7 +272,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     { timeout: 60000 },
     async ({ expect, reports }) => {
       const root = reports.make("oc-report-automatic-");
-      const result = await reports.fixture(root)("automatic");
+      const result = await reports.fixture(root)("automatic", { env: { CI: "1" } });
       expect(result.code, result.stderr).toBe(0);
       expect(result.stderr).toContain("2 exact-target plans with parallelism 2");
       expect(inventory(json(result.output))).toEqual(expected);
@@ -272,6 +300,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     async ({ expect, reports }) => {
       const root = reports.make("oc-report-config-output-");
       const result = await reports.fixture(root)("automatic", {
+        env: { CI: "1" },
         report: false,
         configOutput: true,
         nativeArgs: ["--reporter=dot", "--coverage.enabled=false"],
@@ -530,10 +559,15 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     },
   );
 
-  reportTest.for(["--outputFile.blob", "--outputFile.blob="])(
-    "preserves native no-tests refusal after %s",
+  reportTest.for([
+    { option: "--outputFile.blob", ci: false },
+    { option: "--outputFile.blob=", ci: false },
+    { option: "--outputFile.blob", ci: true },
+    { option: "--outputFile.blob=", ci: true },
+  ])(
+    "preserves native no-tests refusal after $option (CI=$ci)",
     { timeout: 60000 },
-    async (option, { expect, reports }) => {
+    async ({ option, ci }, { expect, reports }) => {
       const root = reports.make("oc-report-following-option-");
       const output = path.join(root, "reports", "result.json");
       const nativeArgs = [
@@ -551,6 +585,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         entry: "projects",
         report: false,
         nativeArgs,
+        env: ci ? { CI: "1" } : {},
       });
       const index = json(path.join(result.reportSet!, "index.json"));
       const attempt = index.entries[0].attempts[0];
@@ -560,23 +595,37 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       expect(capture.modules).toEqual([]);
       expect(capture.ended?.reason).toBe("failed");
       expect(attempt.outcome).toMatchObject({ code: 1, signal: null });
-      expect(result.code, result.stderr).toBe(1);
+      expect(result.code, result.stderr).toBe(ci ? 1 : 2);
       expect(result.signal).toBeNull();
-      expect(index.complete).toBe(false);
-      expect(index.entries[1].attempts).toEqual([]);
-      expect(fs.existsSync(output)).toBe(false);
+      expect(index.complete).toBe(ci);
+      if (ci) {
+        expect(index.entries[1].attempts).toHaveLength(1);
+        expect(index.entries[1].attempts[0].outcome).toMatchObject({ code: 1, signal: null });
+        expect(index).toMatchObject({ error: "", merge: { code: 1, signal: null } });
+        expect(json(output).numTotalTests).toBe(0);
+        expect(json(output).success).toBe(false);
+      } else {
+        expect(index.entries[1].attempts).toEqual([]);
+        expect(index.merge).toBeNull();
+        expect(fs.existsSync(output)).toBe(false);
+      }
     },
   );
 
-  reportTest.for(["failure", "batch-failure", "unhandled", "suite-error"] as const)(
+  reportTest.for(["failure", "fail-fast", "batch-failure", "unhandled", "suite-error"] as const)(
     "publishes complete evidence without erasing native failure: %s",
     { timeout: 60000 },
     async (mode, { expect, reports }) => {
-      const result = await reports.run(mode);
+      const result = await reports.fixture(reports.make("oc-report-complete-failure-"))(mode, {
+        env: mode === "fail-fast" ? { CI: "1" } : {},
+      });
       expect(result.code, result.stderr).toBe(1);
       const cases = expected.map((entry) => [...entry]);
       if (mode === "failure" || mode === "batch-failure") {
         cases[2]![1] = "failed";
+      }
+      if (mode === "fail-fast") {
+        cases[0]![1] = "failed";
       }
       if (mode === "suite-error") {
         cases.push(["broken suite body", "passed"]);
@@ -584,7 +633,8 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       expect(inventory(json(result.output))).toEqual(cases);
       const index = json(path.join(result.reportSet!, "index.json"));
       expect(index.complete).toBe(true);
-      expect(index.entries[1].attempts[0].outcome.code).toBe(1);
+      expect(index.entries[0].attempts[0].outcome.code).toBe(mode === "fail-fast" ? 1 : 0);
+      expect(index.entries[1].attempts[0].outcome.code).toBe(mode === "fail-fast" ? 0 : 1);
       if (mode === "suite-error") {
         const capture = json(`${index.entries[1].attempts[0].json}.capture.json`);
         expect(capture.ended).toMatchObject({ reason: "failed", failedModules: 1, suiteErrors: 1 });
@@ -611,7 +661,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     { timeout: 60000 },
     async ([mode, diagnostic], { expect, reports }) => {
       const result = await reports.run(mode);
-      expect(result.code, result.stderr).toBe(1);
+      expect(result.code, result.stderr).toBe(2);
       expect(result.stderr).toContain(diagnostic);
       expect(json(path.join(result.reportSet!, "index.json")).complete).toBe(false);
       expect(fs.readFileSync(result.output, "utf8")).toBe("old report");
@@ -629,7 +679,6 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     "publish-write",
     "identity",
     "tuple",
-    "fail-fast",
     "cancel",
     "batch-fail-fast",
     "batch-cancel",
@@ -638,7 +687,11 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     { timeout: 60000 },
     async (mode, { expect, reports }) => {
       const result = await reports.run(mode);
-      expect(result.code !== 0 || result.signal !== null, result.stderr).toBe(true);
+      if (mode === "cancel" || mode === "batch-cancel") {
+        expect(result.signal).toBe("SIGTERM");
+      } else {
+        expect(result.code, result.stderr).toBe(2);
+      }
       const index = json(path.join(result.reportSet!, "index.json"));
       const first = index.entries[0].attempts[0];
       const staged = path.join(result.reportSet!, "aggregate.json");
@@ -657,7 +710,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         );
         // The joined group may leave an unreaped Linux zombie, but no live worker.
         expect(isPidDefinitelyDead(events[0].pid)).toBe(true);
-      } else if (mode === "fail-fast" || mode === "batch-fail-fast") {
+      } else if (mode === "batch-fail-fast") {
         const report = json(first.json);
         expect(inventory(report)).toEqual([
           ["alpha/one", "failed"],
@@ -701,7 +754,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
           if (mode === "corrupt") {
             expect(fs.readFileSync(first.blob, "utf8")).toBe("owned corruption");
             expect(() => json(`${first.blob}.native-original`)).not.toThrow();
-            expect(result.stderr).toContain('"owned corruption" is not valid JSON');
+            expect(result.stderr).toContain("SyntaxError:");
           } else if (mode === "merge-failure") {
             expect(result.stderr).toContain("owned native merge failure");
           } else if (mode === "identity") {
@@ -730,7 +783,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       if (["missing", "corrupt", "merge-failure", "final-write", "identity"].includes(mode)) {
         expect(fs.readFileSync(result.output, "utf8")).toBe("old report");
       }
-      if (["fail-fast", "cancel", "batch-fail-fast", "batch-cancel"].includes(mode)) {
+      if (["cancel", "batch-fail-fast", "batch-cancel"].includes(mode)) {
         expect(index.entries[1].attempts).toHaveLength(0);
       }
     },
@@ -741,7 +794,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     { timeout: 60000 },
     async ({ expect, reports }) => {
       const result = await reports.run("overlap");
-      expect(result.code, result.stderr).toBe(1);
+      expect(result.code, result.stderr).toBe(2);
       const index = json(path.join(result.reportSet!, "index.json"));
       expect(index.complete).toBe(false);
       expect(index.error).toContain("overlapping task identities");
@@ -755,30 +808,47 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     },
   );
 
-  reportTest.for([
-    ["help", ["--help"], "help"],
-    ["short help", ["-h"], "help"],
-    ["native dash prefix", ["---help"], "help"],
-    ["false help", ["--help=false"], "tests"],
-    ["separate false help", ["--help", "false"], "tests"],
-    ["negated help", ["--no-help"], "tests"],
-    ["negated alias", ["--no-h"], "tests"],
-    ["help then negation", ["--help", "--no-help"], "tests"],
-    ["false alias precedence", ["--help=false", "-h"], "tests"],
-    ["long alias precedence", ["--help=false", "--h"], "tests"],
-    ["repeated false", ["--help=false", "--help=false"], "help"],
-    ["short group", ["-vh"], "help"],
-    ["unknown under help", ["--not-an-option", "--help"], "help"],
-    ["missing under help", ["--pool", "--help"], "help"],
-    ["unknown without help", ["--not-an-option", "--help=false"], "error"],
-    ["missing without help", ["--pool", "--no-help"], "error"],
-    ["named run version", ["--version"], "tests"],
-    ["negated version", ["--no-version"], "tests"],
-    ["wrapper consumes separators", ["--", "--help"], "help"],
-    ["list tags", ["--listTags"], "native-error"],
-    ["clear cache", ["--clearCache"], "idle"],
-    ["standalone", ["--standalone"], "native-error"],
-  ] as const)(
+  const nativeControlCases = [
+    ["help", ["--help"], "help", true],
+    ["short help", ["-h"], "help", false],
+    ["native dash prefix", ["---help"], "help", false],
+    ["false help", ["--help=false"], "tests", true],
+    ["separate false help", ["--help", "false"], "tests", false],
+    ["negated help", ["--no-help"], "tests", false],
+    ["negated alias", ["--no-h"], "tests", false],
+    ["help then negation", ["--help", "--no-help"], "tests", false],
+    ["false alias precedence", ["--help=false", "-h"], "tests", false],
+    ["long alias precedence", ["--help=false", "--h"], "tests", false],
+    ["repeated false", ["--help=false", "--help=false"], "help", false],
+    ["short group", ["-vh"], "help", false],
+    ["unknown under help", ["--not-an-option", "--help"], "help", true],
+    ["missing under help", ["--pool", "--help"], "help", false],
+    ["unknown without help", ["--not-an-option", "--help=false"], "error", true],
+    ["missing without help", ["--pool", "--no-help"], "error", true],
+    ["named run version", ["--version"], "tests", true],
+    ["negated version", ["--no-version"], "tests", false],
+    ["wrapper consumes separators", ["--", "--help"], "help", true],
+    ["list tags", ["--listTags"], "native-error", true],
+    ["clear cache", ["--clearCache"], "idle", true],
+    ["standalone", ["--standalone"], "native-error", true],
+  ] as const;
+
+  it.for(nativeControlCases)(
+    "classifies native report admission: %s",
+    ([, nativeArgs, kind], { expect }) => {
+      const execution = parseVitestExecutionArgs(["run", ...nativeArgs], parseCLI);
+      // Native -- preserves the following literal; the project wrapper's
+      // consumption of its leading separator is covered by the executable case.
+      expect(execution !== null).toBe(kind === "tests" || nativeArgs[0] === "--");
+      if (execution) {
+        expect(execution.filter).toEqual([]);
+      }
+    },
+  );
+
+  // Keep real child/report proof for each distinct outcome and entry-point rule;
+  // aliases and boolean precedence share the admission contract above.
+  reportTest.for(nativeControlCases.filter((entry) => entry[3]))(
     "leaves native control execution with the project child: %s",
     { timeout: 60000 },
     async ([, nativeArgs, kind], { expect, reports }) => {
@@ -922,7 +992,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       expect(modules.map((module: { name: string }) => module.name)).toEqual(["beta", "beta"]);
       expect(modules[0].root).not.toBe(modules[1].root);
       expect(modules[0].taskId).not.toBe(modules[1].taskId);
-      expect(result.code, result.stderr).toBe(1);
+      expect(result.code, result.stderr).toBe(2);
       expect(result.stderr).toContain('Project name "beta"');
       expect(result.stderr).toContain("is not unique");
       expect(index.complete).toBe(false);

@@ -1,5 +1,6 @@
 // Exercises restart-notice retries against the real SQLite outbound queue.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-sqlite.js";
 import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.test-support.js";
@@ -94,6 +95,7 @@ describe("restart sentinel notice recovery", () => {
     resetPluginRuntimeStateForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    resetConfigRuntimeState();
     envSnapshot?.restore();
     envSnapshot = undefined;
   });
@@ -191,6 +193,7 @@ describe("restart sentinel notice recovery", () => {
           ownerAllowFrom: destination === "no-owners" ? [] : ["matrix:@owner:example.org"],
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       const sessionKey = "agent:main:matrix:direct:contact";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },

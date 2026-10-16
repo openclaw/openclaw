@@ -6,8 +6,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import {
   dispatchCommittedSkillChangeBestEffort,
   hasCommittedSkillChangeHooks,
@@ -21,11 +21,10 @@ import {
   readWorkspaceSupportFile,
 } from "../lifecycle/workspace-skill-write.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
-import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { scanSkillFile, scanSupportFilePath } from "../security/skill-bundle-scan.js";
+import { recordWorkshopChange } from "./changes.js";
 import type { WorkshopActor, WorkshopChange } from "./changes.kernel.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
-import { withSkillLocks } from "./skill-locks.js";
 import {
   listVersions,
   pruneVersions,
@@ -36,6 +35,8 @@ import {
   type WorkshopChangeAction,
 } from "./skill-versions.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
+
+export { listWorkshopChanges } from "./changes.js";
 
 export type WorkshopMutationContext = {
   config: OpenClawConfig;
@@ -69,12 +70,13 @@ const ARCHIVE_DIR = ".archive";
 // The Agent Skills limit. Authoring guidance asks for ~160 bytes, but a hard 160 cap forced
 // lossy description rewrites whenever a review patched an older skill, and blocked restores.
 const MAX_DESCRIPTION_BYTES = 1024;
-const MAX_CHANGES_LIMIT = 500;
 // New names follow the Agent Skills limit. Earlier releases named learned skills with
 // normalizeSkillIndexName and no length cap, so existing skills are matched by charset and
 // the filesystem's 255-byte name limit only; otherwise they stay loaded but unmanageable.
 const NEW_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const EXISTING_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,254}$/;
+const skillLocks = new KeyedAsyncQueue();
+const log = createSubsystemLogger("skills/workshop");
 
 function emptyForMissingDirectory(error: unknown): never[] {
   if (hasErrnoCode(error, "ENOENT")) {
@@ -253,7 +255,7 @@ async function readRestorableVersion(
       }
       // Restored files must stay addressable by view/patch, which use the canonical path.
       if (canonical !== filePath) {
-        throw refuse(`${filePath} is not a canonical skill file path.`);
+        throw refuse(`${filePath} is not a valid skill file path.`);
       }
     }
     let content: Buffer;
@@ -309,7 +311,15 @@ async function requireLiveSkill(paths: SkillPaths, name: string): Promise<void> 
   );
 }
 
-/** Serializes one skill's mutation, then publishes the snapshot bump and change row. */
+/** Sorted acquisition keeps overlapping multi-skill mutations from deadlocking. */
+async function withSkillLocks<T>(keys: readonly string[], run: () => Promise<T>): Promise<T> {
+  const [first, ...rest] = [...new Set(keys)].toSorted((a, b) => a.localeCompare(b));
+  return first === undefined
+    ? await run()
+    : await skillLocks.enqueue(first, () => withSkillLocks(rest, run));
+}
+
+/** Serializes one skill's mutation, then refreshes discovery and records the change. */
 async function mutateSkill(
   ctx: WorkshopMutationContext,
   name: string,
@@ -336,10 +346,12 @@ async function mutateSkill(
     const { summary, versionId } = await apply({ ...paths, assertLive: () => ctx.assertLive?.() });
     const after = await snapshotArtifact();
     await pruneVersions(paths.versionsDir);
-    bumpSkillsSnapshotVersion({
-      reason: "workshop",
-      changedPath: path.join(paths.skillDir, SKILL_FILE),
-    });
+    try {
+      const { refreshSkillsDiscovery } = await import("../runtime/refresh.js");
+      await refreshSkillsDiscovery({ config: ctx.config, reason: "workshop" });
+    } catch (error) {
+      log.warn(`Skill changed, but discovery refresh failed: ${formatErrorMessage(error)}`);
+    }
     const change: WorkshopChange = {
       id: randomUUID(),
       agentId: ctx.agentId,
@@ -352,10 +364,7 @@ async function mutateSkill(
       ...(ctx.runId ? { runId: ctx.runId } : {}),
       createdAtMs: Date.now(),
     };
-    await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
-      type: "skills.workshop.changes.record",
-      input: change,
-    });
+    await recordWorkshopChange(change);
     if (before || after) {
       await dispatchCommittedSkillChangeBestEffort({
         action: !before ? "created" : after ? "updated" : "removed",
@@ -383,7 +392,7 @@ export async function listWorkshopSkills(
       continue;
     }
     const skillDir = path.join(skillsRoot, entry.name);
-    const content = await readWorkspaceSkillFile(path.join(skillDir, SKILL_FILE)).catch(() => null);
+    const content = await readWorkspaceSkillFile(path.join(skillDir, SKILL_FILE));
     if (content === null) {
       continue;
     }
@@ -498,7 +507,11 @@ export async function patchWorkshopSkill(
         `${file} does not exist in "${params.name}". Use action=write_file to add it.`,
       );
     }
-    const matches = current.split(params.oldText).length - 1;
+    const { oldText } = params;
+    let matches = 0;
+    for (let at = current.indexOf(oldText); at !== -1; at = current.indexOf(oldText, at + 1)) {
+      matches++;
+    }
     if (matches !== 1) {
       throw new WorkshopWriteError(
         matches === 0
@@ -656,6 +669,8 @@ export async function restoreWorkshopSkill(
         }
         throw error;
       }
+      // Only successful publication may discard the original live copy.
+      await fs.rm(previous, { recursive: true, force: true });
       const summary =
         params.summary ??
         (target.action === "archive"
@@ -666,22 +681,6 @@ export async function restoreWorkshopSkill(
       return { summary, versionId };
     } finally {
       await fs.rm(staging, { recursive: true, force: true });
-      await fs.rm(previous, { recursive: true, force: true });
     }
-  });
-}
-
-export async function listWorkshopChanges(
-  agentId: string,
-  options: { limit?: number; beforeMs?: number; runId?: string } = {},
-): Promise<WorkshopChange[]> {
-  return await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
-    type: "skills.workshop.changes.list",
-    input: {
-      agentId,
-      limit: Math.min(Math.max(Math.trunc(options.limit ?? 50), 1), MAX_CHANGES_LIMIT),
-      ...(options.beforeMs !== undefined ? { beforeMs: options.beforeMs } : {}),
-      ...(options.runId ? { runId: options.runId } : {}),
-    },
   });
 }

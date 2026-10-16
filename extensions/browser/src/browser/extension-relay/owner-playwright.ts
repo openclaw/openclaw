@@ -57,9 +57,7 @@ export async function connectRelayBrowser(
   if (reference) {
     operationConnections.set(reference, pending);
     void pending.catch(() => {
-      if (operationConnections.get(reference) === pending) {
-        operationConnections.delete(reference);
-      }
+      operationConnections.delete(reference);
     });
   }
   return await pending;

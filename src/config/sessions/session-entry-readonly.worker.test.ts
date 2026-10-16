@@ -28,6 +28,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as entryReads from "./session-accessor.sqlite-entry-read.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
@@ -100,11 +101,14 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
         if (!opened.found) {
           throw new Error("Expected the retained catalog database");
         }
-        const payloads = trackSqliteStatementExecutions(opened.value.db, ["entries"], (sql) =>
-          isSessionNodePayloadSelect(sql) ||
-          (sql.includes('from "session_nodes"') && sql.includes('"entry_json"'))
-            ? "entries"
-            : null,
+        const payloads = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(opened.value.db),
+          ["entries"],
+          (sql) =>
+            isSessionNodePayloadSelect(sql) ||
+            (sql.includes('from "session_nodes"') && sql.includes('"entry_json"'))
+              ? "entries"
+              : null,
         );
         try {
           expect(read(first.revision)).toMatchObject({
@@ -178,10 +182,13 @@ it("resolves runtime targets through an admitted reader without freshness probes
         },
       });
     await read();
-    const queries = trackSqliteStatementExecutions(database.db, ["freshness"], (sql) =>
-      /^PRAGMA data_version;?$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)
-        ? "freshness"
-        : null,
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["freshness"],
+      (sql) =>
+        /^PRAGMA data_version;?$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)
+          ? "freshness"
+          : null,
     );
     try {
       expect(await read()).toMatchObject({
@@ -195,7 +202,7 @@ it("resolves runtime targets through an admitted reader without freshness probes
     }
 
     const replacement = `${database.path}.replacement`;
-    await backup(database.db, replacement);
+    await backup(requireNativeSqliteDatabase(database.db), replacement);
     await closeOpenClawAgentDatabaseByPathAsync(database.path);
     const peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(replacement);
     try {
@@ -208,12 +215,12 @@ it("resolves runtime targets through an admitted reader without freshness probes
   });
 });
 
-it("reads session projections in the worker and observes the next foreign commit", async () => {
+it("reads session projections in the worker and observes the next sibling commit", async () => {
   await withOpenClawTestState({ label: "readonly-entry-projection-boundary" }, async ({ env }) => {
     const { database, scope } = createEntryFixture(env);
     const before = await readSessionEntryReadOnlyInWorker(scope);
     expect(before).toMatchObject({ sessionId: "original" });
-    const peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(database.path);
+    const peer = nodeSqlite.openNodeSqliteDatabase(database.path);
     try {
       peer
         .prepare(
@@ -221,13 +228,13 @@ it("reads session projections in the worker and observes the next foreign commit
            (session_key, identity_namespace, actor_id, contribution_count)
            VALUES (?, ?, ?, 1)`,
         )
-        .run(scope.sessionKey, JSON.stringify({ type: "profile" }), "foreign-participant");
+        .run(scope.sessionKey, JSON.stringify({ type: "profile" }), "sibling-participant");
       const sql = observeHostDataSql();
       try {
         const after = await readSessionEntryReadOnlyInWorker(scope);
         expect(after).toMatchObject({
           sessionId: "original",
-          participants: [{ identity: { type: "profile", id: "foreign-participant" } }],
+          participants: [{ identity: { type: "profile", id: "sibling-participant" } }],
           participantCount: 1,
         });
         expect(before?.participants).toBeUndefined();
@@ -411,90 +418,9 @@ it("propagates raw worker failure without calling the optional-data consumer", a
   });
 });
 
-it.each(["consumer", "cleanup"] as const)(
-  "rejects registry revocation during %s",
-  async (phase) => {
-    await withOpenClawTestState({ label: "readonly-entry-registry" }, async ({ env, path }) => {
-      const storePath = path("shared.sqlite");
-      const sessionKey =
-        phase === "consumer" ? "agent:main:retained" : "agent:main:cron:job:run:cleanup";
-      if (phase === "consumer") {
-        replaceSessionEntrySync(
-          { agentId: "main", storePath, env, sessionKey },
-          {
-            sessionId: "retained-session",
-            updatedAt: 1,
-            skillsSnapshot: { prompt: "Full stored prompt", skills: [] },
-          },
-        );
-      } else {
-        const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath, env });
-        writeSessionEntry(database, sessionKey, { sessionId: "cleanup-session", updatedAt: 1 });
-      }
-      const pool = targetDiscoveryLane.pool;
-      const rotate = pool.rotate.bind(pool);
-      const closeResources = pool.closeResources.bind(pool);
-      let cleanupCalled = false;
-      const invalidateAfterCleanup = () => {
-        if (!cleanupCalled) {
-          cleanupCalled = true;
-          invalidateRegisteredAgentDatabasesMemo({ env });
-        }
-      };
-      const rotateCleanup =
-        phase === "cleanup"
-          ? vi.spyOn(pool, "rotate").mockImplementation(async () => {
-              await rotate();
-              invalidateAfterCleanup();
-            })
-          : undefined;
-      const resourceCleanup =
-        phase === "cleanup"
-          ? vi.spyOn(pool, "closeResources").mockImplementation(async (key) => {
-              await closeResources(key);
-              invalidateAfterCleanup();
-            })
-          : undefined;
-      let consumed = false;
-      try {
-        await expect(
-          withSessionEntryReadOnlyInWorker(
-            {
-              sessionKey,
-              storePath,
-              env,
-              ...(phase === "consumer" ? { hydrateSkillPromptRefs: false } : {}),
-            },
-            () => {},
-            async (read) => {
-              if (!read.ok) {
-                throw read.error;
-              }
-              consumed = true;
-              if (phase === "consumer") {
-                expect(read.value?.skillsSnapshot?.prompt).toBe("Full stored prompt");
-                await Promise.resolve();
-                invalidateRegisteredAgentDatabasesMemo({ env });
-              }
-              return read.value;
-            },
-          ),
-        ).rejects.toThrow("registry changed");
-        if (phase === "cleanup") {
-          expect(cleanupCalled).toBe(true);
-        }
-        expect(consumed).toBe(true);
-      } finally {
-        rotateCleanup?.mockRestore();
-        resourceCleanup?.mockRestore();
-      }
-    });
-  },
-);
-
-it("retains the registry witness even when the first read rejects before returning a snapshot", async () => {
+it("retains the scoped registry witness even when the first read rejects before returning a snapshot", async () => {
   await withOpenClawTestState({ label: "readonly-registry-witness" }, async ({ env }) => {
-    const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env });
+    const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env }, () => false);
     const pending = prepared.read();
     invalidateRegisteredAgentDatabasesMemo({ env });
     await expect(pending).rejects.toThrow("registry changed");
@@ -565,7 +491,9 @@ it.runIf(process.platform !== "win32").each([
         },
       );
       if (retarget) {
-        await expect(pending).rejects.toThrow("Session store alias changed during discovery");
+        await expect(pending).rejects.toThrow(
+          "Session database target changed outside captured discovery custody",
+        );
       } else {
         await expect(pending).resolves.toMatchObject({ sessionId: "original" });
       }

@@ -5,10 +5,12 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MEMORY_CHUNKING_VERSION } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  requireNativeSqliteDatabase,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MemoryIndexDatabase } from "./memory/manager-database-context.js";
 import { readMemoryDatabaseRevision } from "./memory/manager-db-kernel.js";
 import { createManagerIndexFixture } from "./memory/manager-index.test-support.js";
 import { MEMORY_INDEX_PROVENANCE_VERSION } from "./memory/manager-reindex-state.js";
@@ -44,7 +46,7 @@ describe("memory_search index versions", () => {
     await manager.sync({ reason: "cli", force: true });
     await manager.close();
     await closeAllMemorySearchManagers();
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const row = db
       .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
       .get() as { value: string };
@@ -241,10 +243,16 @@ describe("memory_search index versions", () => {
         { status: 400 },
       );
       await expect(manager.sync({ reason: "cli", force: true })).rejects.toThrow("HTTP 400");
-      const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-      db.prepare(
-        "UPDATE memory_index_meta SET value = json_set(value, '$.provenanceVersion', ?) WHERE key = 'memory_index_meta_v1'",
-      ).run(MEMORY_INDEX_PROVENANCE_VERSION + 1);
+      const database = Reflect.get(manager, "publishedDatabase") as MemoryIndexDatabase;
+      const meta = database.facts.meta;
+      if (!meta) {
+        throw new Error("Expected the published index metadata");
+      }
+      await database.writeMetadata({
+        ...meta,
+        provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION + 1,
+      });
+      const db = database.db;
       const before = readMemoryDatabaseRevision(db);
       const chunks = db.prepare("SELECT * FROM memory_index_chunks ORDER BY id").all();
       const priorCalls = calls;

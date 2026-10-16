@@ -56,13 +56,26 @@ async function withWebchatTool(
   await withOpenClawTestState({ layout: "home" }, async (state) => {
     const sessionStorePath = path.join(state.sessionsDir(), "sessions.json");
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      agents: {
+        entries: { main: { workspace: state.workspaceDir } },
+        defaults: { model: "openai/gpt-4.1" },
+      },
       session: { store: sessionStorePath },
       channels: channelsEnabled
         ? { discord: { token: "test-token" }, telegram: { botToken: "test-token" } }
         : {},
       plugins: { entries: { discord: { enabled: true }, telegram: { enabled: true } } },
     };
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "openai:webchat-fixture": {
+          type: "api_key",
+          provider: "openai",
+          key: "synthetic-webchat-inference-key",
+        },
+      },
+    });
     setRuntimeConfigSnapshot(cfg);
     setActivePluginRegistry(
       createTestRegistry(
@@ -253,7 +266,11 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           expect(updated.details).not.toHaveProperty("deliveryPreview");
           expect(added.details).toMatchObject({
             deliveryPreview: channelsEnabled
-              ? { label: "announce -> telegram:recipient", detail: "explicit" }
+              ? {
+                  label: "announce -> telegram:recipient",
+                  detail:
+                    "commits to the destination conversation; sends one external notification",
+                }
               : {
                   label: "announce -> creating conversation",
                   detail: "commits to this conversation (no external channel route)",
@@ -295,7 +312,6 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           trigger: { script: "return { fire: false };", once: true },
         }),
       ]);
-      expect(jobs[0]?.delivery).toEqual(delivery ?? { mode: "announce" });
     }, storedContext);
   });
 

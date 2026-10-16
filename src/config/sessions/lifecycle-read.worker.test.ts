@@ -12,7 +12,7 @@ import { upsertSessionEntryCore } from "./session-accessor.entry.js";
 import {
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as transcriptReaders from "./session-transcript-execution-read.js";
 
 function scopeFor(state: OpenClawTestState) {

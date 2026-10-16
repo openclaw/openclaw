@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolvePromptBuildHookResult } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
@@ -41,7 +42,14 @@ describe("next-turn injection identity", () => {
       const cfg: OpenClawConfig = {
         agents: { entries: { main: {}, unrelated: {} } },
       };
-      const scope = { agentId: "main", sessionKey };
+      const scope = {
+        agentId: "main",
+        sessionKey,
+        storePath: resolveSessionStorePathCore(cfg.session?.store, {
+          agentId: "main",
+          env: state.env,
+        }),
+      };
       await expect(drainPluginNextTurnInjectionContext({ cfg, ...scope })).resolves.toMatchObject({
         queuedInjections: [],
       });
@@ -61,7 +69,14 @@ describe("next-turn injection identity", () => {
 
   it("validates only the selected injection row beside a noncanonical sibling", async () => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    const scope = { agentId: "main", sessionKey: "agent:main:healthy" };
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:healthy",
+      storePath: resolveSessionStorePathCore(cfg.session?.store, {
+        agentId: "main",
+        env: state.env,
+      }),
+    };
     const sibling = "agent:main:matrix:channel:!mixed:example.org";
     await replaceSessionEntry(scope, { sessionId: "healthy", updatedAt: 1 });
     await replaceSessionEntry(
@@ -170,7 +185,7 @@ describe("next-turn injection identity", () => {
           injection: { sessionKey, agentId: "ops", text: `ops ${sessionKey}` },
         });
       }
-      const selected = resolveSessionEntryAccessTarget(
+      const selected = await resolveSessionEntryAccessTarget(
         { cfg: activeCfg, sessionKey: "global" },
         { keyFormat: "agent-qualified" },
       );
@@ -237,7 +252,6 @@ describe("next-turn injection identity", () => {
           injection: { sessionKey: "global", agentId, text: agentId },
         });
       }
-      const qaBefore = loadSessionEntryReadOnly(scope("qa"));
       const betaBefore = loadSessionEntryReadOnly(scope("beta"));
       const literal = { ...scope("qa"), sessionKey: "agent:qa:global" };
       if (collision) {
@@ -248,15 +262,11 @@ describe("next-turn injection identity", () => {
         agentId: "qa",
         sessionKey: "global",
       });
-      if (collision) {
-        await expect(drain).rejects.toThrow("ambiguous stored identity");
-        expect(loadSessionEntryReadOnly(scope("qa"))).toEqual(qaBefore);
-        expect(loadSessionEntryReadOnly(literal)?.sessionId).toBe("separate-literal");
-      } else {
-        await expect(drain).resolves.toMatchObject({ prependContext: "qa" });
-        expect(loadSessionEntryReadOnly(scope("qa"))?.pluginNextTurnInjections).toBeUndefined();
-        expect(loadSessionEntryReadOnly(literal)).toBeUndefined();
-      }
+      await expect(drain).resolves.toMatchObject({ prependContext: "qa" });
+      expect(loadSessionEntryReadOnly(scope("qa"))?.pluginNextTurnInjections).toBeUndefined();
+      expect(loadSessionEntryReadOnly(literal)?.sessionId).toBe(
+        collision ? "separate-literal" : undefined,
+      );
       expect(loadSessionEntryReadOnly(scope("beta"))).toEqual(betaBefore);
     },
   );

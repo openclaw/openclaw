@@ -56,8 +56,11 @@ beforeEach(() => {
   expect(source.startsWith(`${root}${path.sep}`)).toBe(true);
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(source);
-  database.exec("PRAGMA user_version = 1;");
+  database.exec("PRAGMA journal_mode = WAL; PRAGMA user_version = 1;");
   database.close();
+  // An incomplete WAL family takes ordinary admission through private recovery.
+  expect(fs.existsSync(`${source}-wal`)).toBe(false);
+  expect(fs.existsSync(`${source}-shm`)).toBe(false);
   const snapshot = path.join(root, "snapshot");
   fs.mkdirSync(snapshot);
   const location = path.join(snapshot, "state.sqlite");
@@ -90,6 +93,28 @@ function runUpdate() {
     refuseUpdate: vi.fn(),
   });
 }
+
+it.each(["DELETE", "WAL"])(
+  "admits online update without acquiring an unrelated snapshot (%s)",
+  async (journalMode) => {
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(source);
+    try {
+      database.exec(`PRAGMA journal_mode = ${journalMode}; CREATE TABLE online_probe(value);`);
+      if (journalMode === "WAL") {
+        expect(fs.statSync(`${source}-wal`).size).toBeGreaterThan(32);
+        expect(fs.existsSync(`${source}-shm`)).toBe(true);
+      }
+      await expect(runUpdate()).resolves.toMatchObject({
+        packageSchemaPreflight: { incompatible: [], indeterminate: [] },
+      });
+      expect(snapshots.prepareSqliteReadOnlyLocation).not.toHaveBeenCalled();
+      expect(fs.existsSync(prepared.location)).toBe(true);
+    } finally {
+      database.close();
+    }
+  },
+);
 
 it.each(["reader", "removal", "rejection"] as const)(
   "refuses forward update admission after snapshot cleanup failure: %s",

@@ -210,6 +210,13 @@ export async function listClaudeSessionCatalog(params: {
   const query = parseGatewayQuery(params.query);
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
   const scanOptions = gatewayClaudeScanOptions(params.allowProcessHomeFallback);
+  const localHost: ClaudeSessionCatalogHost = {
+    hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
+    label: "Local Claude",
+    kind: "gateway",
+    connected: true,
+    sessions: [],
+  };
   const localHosts: Promise<ClaudeSessionCatalogHost>[] =
     (params.allowProcessHomeFallback !== false || scanOptions.configDir !== undefined) &&
     (!requested || requested.has(CLAUDE_LOCAL_SESSION_HOST_ID))
@@ -217,10 +224,7 @@ export async function listClaudeSessionCatalog(params: {
           (async () => {
             try {
               return {
-                hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
-                label: "Local Claude",
-                kind: "gateway",
-                connected: true,
+                ...localHost,
                 ...(await listLocalClaudeSessionPage(
                   {
                     limit: query.limitPerHost,
@@ -235,11 +239,7 @@ export async function listClaudeSessionCatalog(params: {
               };
             } catch {
               return {
-                hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
-                label: "Local Claude",
-                kind: "gateway",
-                connected: true,
-                sessions: [],
+                ...localHost,
                 error: {
                   code: "LOCAL_READ_FAILED",
                   message: "Local Claude sessions are unavailable",
@@ -317,6 +317,12 @@ export async function listClaudeSessionCatalog(params: {
         params.onHost?.(common);
         return common;
       }
+      const unavailable: ClaudeSessionCatalogHost = Object.assign({}, common, {
+        error: {
+          code: "NODE_INVOKE_FAILED",
+          message: "Paired node Claude sessions are unavailable",
+        },
+      });
       const eventualHost = Promise.resolve()
         .then(async () => {
           const raw = await params.runtime.nodes.invoke({
@@ -333,14 +339,7 @@ export async function listClaudeSessionCatalog(params: {
           });
           return Object.assign({}, common, parseCatalogPage(unwrapNodePayload(raw)));
         })
-        .catch((): ClaudeSessionCatalogHost =>
-          Object.assign({}, common, {
-            error: {
-              code: "NODE_INVOKE_FAILED",
-              message: "Paired node Claude sessions are unavailable",
-            },
-          }),
-        );
+        .catch(() => unavailable);
       // Retain publication through cold discovery without extending the fail-soft response.
       publishSessionCatalogHost(params, eventualHost);
       try {
@@ -348,12 +347,7 @@ export async function listClaudeSessionCatalog(params: {
           message: "paired node Claude session catalog timed out",
         });
       } catch {
-        return Object.assign({}, common, {
-          error: {
-            code: "NODE_INVOKE_FAILED",
-            message: "Paired node Claude sessions are unavailable",
-          },
-        });
+        return unavailable;
       }
     }),
   );

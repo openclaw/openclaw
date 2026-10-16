@@ -43,6 +43,7 @@ import {
 } from "./openai-request-reasoning.js";
 import { resolveOpenAIResponsesTextFormat } from "./openai-response-format.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
+import { clampMaxTokensToModel } from "./simple-options.js";
 
 type OpenAIResponsesStreamOptions = Pick<
   ResponsesStreamOptions,
@@ -129,7 +130,7 @@ export function applyCommonResponsesParams<TApi extends Api>(
   config?: { setDefaultReasoningOff?: boolean },
 ): void {
   if (options?.maxTokens) {
-    params.max_output_tokens = Math.max(options.maxTokens, 16);
+    params.max_output_tokens = clampMaxTokensToModel(model, Math.max(options.maxTokens, 16));
   }
 
   if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
@@ -172,14 +173,6 @@ export function applyCommonResponsesParams<TApi extends Api>(
   if (effort !== "none" && (options?.reasoningEffort || options?.reasoningSummary)) {
     params.reasoning.summary = options?.reasoningSummary || "auto";
     params.include = ["reasoning.encrypted_content"];
-  }
-}
-
-function cleanStreamingScratchBuffers(output: AssistantMessage): void {
-  for (const block of output.content) {
-    delete (block as { index?: number }).index;
-    // partialJson is only a streaming scratch buffer; never persist it.
-    delete (block as { partialJson?: string }).partialJson;
   }
 }
 
@@ -280,8 +273,8 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
           ? processStreamOptions.resolveServiceTier(responseTier, tier)
           : (responseTier ?? tier);
       },
-      onServiceTier: (responseTier) =>
-        responsesServiceTierObserver.observe(options, requestedTier, responseTier),
+      onServiceTier: (responseTier, response) =>
+        responsesServiceTierObserver.observe(options, requestedTier, responseTier, response),
       canRetryIdentityConflict: () => hasOnlyResponsesFunctionTools(admittedRequest),
       reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
         sessionId: options?.sessionId,
@@ -322,7 +315,6 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       output,
       signal: options?.signal,
       error,
-      cleanup: () => cleanStreamingScratchBuffers(output),
     });
   } finally {
     firstEventAbort?.dispose();

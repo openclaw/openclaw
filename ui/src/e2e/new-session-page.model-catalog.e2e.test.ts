@@ -59,9 +59,7 @@ suite.define(() => {
         await expect.poll(() => secondShortcut.count()).toBe(1);
         // Finish the picker's opening scale before recording its baseline. The top
         // transform origin keeps the anchor gap stable while box geometry still grows.
-        await picker
-          .locator(':scope > wa-popup[data-anchored-overlay] > [part~="popup"]')
-          .evaluate(finishElementAnimations);
+        await picker.locator(":scope > [data-anchored-overlay]").evaluate(finishElementAnimations);
         const menuGeometry = () =>
           page.evaluate(() => {
             const anchor = document.querySelector('[data-chat-model-select="true"]');
@@ -234,7 +232,11 @@ suite.define(() => {
         expect(await gateway.getRequests("models.list")).toHaveLength(reads + 1);
         await root.locator("#new-session-where-trigger").click();
         await expect
-          .poll(() => root.getByRole("button", { name: "sample-cloud", exact: true }).isDisabled())
+          .poll(() =>
+            root
+              .getByRole("button", { name: "sample-cloud Unavailable", exact: true })
+              .isDisabled(),
+          )
           .toBe(true);
         const selectionWrites = (await gateway.getRequests("users.prefs.set")).length;
         await gateway.resolveDeferred("models.list", {
@@ -700,18 +702,16 @@ suite.define(() => {
           await expect
             .poll(() => page.getByText("Models unavailable", { exact: true }).count())
             .toBeGreaterThan(0);
-          expect(await gateway.getRequests("models.list")).toHaveLength(2);
+          expect(await gateway.getRequests("models.list")).toHaveLength(1);
         }
         await gateway.setMethodResponse("models.list", { commands: [], models });
         if (startup) {
           await gateway.emitGatewayEvent("chat.metadata.changed", {});
-          await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(3);
+          await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
           await expect.poll(() => modelSelect.getAttribute("aria-disabled")).toBe("false");
         }
         await modelSelect.click();
-        await expect
-          .poll(async () => (await gateway.getRequests("models.list")).length)
-          .toBe(startup ? 3 : 2);
+        await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
         await expect
           .poll(() => page.locator("[data-chat-model-option]").count())
           .toBe(models.length);
@@ -722,7 +722,7 @@ suite.define(() => {
               page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').textContent(),
             )
             .toContain(recoveredModel.name);
-          expect(await gateway.getRequests("models.list")).toHaveLength(3);
+          expect(await gateway.getRequests("models.list")).toHaveLength(2);
           for (const request of await gateway.getRequests("models.list")) {
             expect(request.params).toEqual({ view: "configured", agentId: "main" });
           }
@@ -825,7 +825,7 @@ suite.define(() => {
             path.join(suite.artifactDir, "new-session-catalog-retry", "01-cli-agents-retry.png"),
             await takeControlUiViewportScreenshot(
               page,
-              page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+              page.locator(".chat-controls__model-picker > [data-anchored-overlay]"),
               [errorState],
             ),
           );
@@ -882,7 +882,7 @@ suite.define(() => {
             ),
             await takeControlUiViewportScreenshot(
               page,
-              page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+              page.locator(".chat-controls__model-picker > [data-anchored-overlay]"),
               [page.locator('[data-chat-model-target="anthropic"]')],
             ),
           );

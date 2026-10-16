@@ -1,6 +1,7 @@
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
@@ -71,11 +72,13 @@ describe("runEmbeddedAttempt tool boundaries", () => {
 
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(async () => {
     await cleanupTempPaths(tempPaths);
     vi.restoreAllMocks();
+    clearRuntimeConfigSnapshot();
   });
 
   it.each([
@@ -359,6 +362,13 @@ describe("runEmbeddedAttempt tool boundaries", () => {
     it("attributes awaited bundle work separately from synchronous catalog preparation", async () => {
       const bundleLspTools = await import("../../agent-bundle-lsp-runtime.js");
       const runtimeToolPolicy = await import("../../runtime-plan/tools.js");
+      const systemPromptReport = await import("../../system-prompt-report.js");
+      const { buildSystemPromptReport } = await vi.importActual<
+        typeof import("../../system-prompt-report.js")
+      >("../../system-prompt-report.js");
+      vi.spyOn(systemPromptReport, "buildSystemPromptReport").mockImplementation(
+        buildSystemPromptReport,
+      );
       const { log } = await import("../logger.js");
       let clock = Date.now();
       vi.spyOn(Date, "now").mockImplementation(() => clock);

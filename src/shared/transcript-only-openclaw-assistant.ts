@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { MODEL_FALLBACK_NOTICE_KIND } from "./model-fallback-notice.js";
 
 // Identifies OpenClaw-authored assistant rows that are transcript bookkeeping,
 // not provider model output. Some history surfaces keep gateway-injected rows
@@ -6,7 +7,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 export const OPENCLAW_TRANSCRIPT_ARTIFACT_API = "openclaw-transcript" as const;
 export const OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER = "openclaw" as const;
 export const OPENCLAW_DELIVERY_MIRROR_MODEL = "delivery-mirror" as const;
+export const SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND = "subagent-completion-direct" as const;
 export const CRON_DIRECT_DELIVERY_CONTEXT_KIND = "cron-direct-delivery-context" as const;
+/** Marker kind of a skill review notice; `skill-workshop-change-notice.ts` owns its shape. */
+export const SKILL_WORKSHOP_CHANGE_NOTICE_KIND = "skill-workshop-change" as const;
 const OPENCLAW_GATEWAY_INJECTED_MODEL = "gateway-injected" as const;
 
 const TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS = new Set<string>([
@@ -18,6 +22,9 @@ const OPENCLAW_DELIVERY_MIRROR_KINDS = new Set([
   "channel-final-suppressed",
   "message-tool-source-reply",
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
+  SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND,
+  SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
+  MODEL_FALLBACK_NOTICE_KIND,
 ]);
 
 function isOpenClawDeliveryMirrorMarker(value: unknown): boolean {
@@ -63,5 +70,14 @@ export function isOpenClawDeliveryMirrorAssistantMessage(message: unknown): bool
     entry?.role === "assistant" &&
     entry.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
     entry.model === OPENCLAW_DELIVERY_MIRROR_MODEL
+  );
+}
+
+export function isOpenClawSubagentCompletionMirrorAssistantMessage(message: unknown): boolean {
+  const entry = asOptionalRecord(message);
+  return (
+    isOpenClawDeliveryMirrorAssistantMessage(entry) &&
+    asOptionalRecord(entry?.openclawDeliveryMirror)?.kind ===
+      SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND
   );
 }

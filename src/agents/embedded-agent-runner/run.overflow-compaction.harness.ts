@@ -2,7 +2,7 @@
  * Test harness mocks for embedded-run overflow compaction coverage.
  */
 
-import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
+import { matchesContextOverflowMessage } from "@openclaw/ai/internal/shared";
 import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
@@ -431,7 +431,12 @@ function resetMockAgentHarness(): void {
       if (!assistant) {
         throw new Error("mocked settled-turn finalization returned no assistant message");
       }
-      return { assistant, ...(result.attemptUsage ? { usage: result.attemptUsage } : {}) };
+      return {
+        assistant,
+        assistantTranscriptOwned: result.assistantTranscriptOwned,
+        assistantTranscriptIdempotencyKey: result.assistantTranscriptIdempotencyKey,
+        ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
+      };
     },
   });
 }
@@ -883,11 +888,17 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     resolveModelAsync: mockedResolveModelAsync,
   }));
 
-  vi.doMock("../model-auth.js", () => ({
+  // mock-isolation: Overflow recovery uses fixture profiles and keys without host credential discovery.
+  vi.doMock("../model-auth.js", async () => ({
+    createRuntimeProviderAuthLookup: (await import("../model-auth-runtime.js"))
+      .createRuntimeProviderAuthLookup,
     applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
     ensureAuthProfileStore: mockedEnsureAuthProfileStore,
+    ensureAuthProfileStoreAsync: mockedEnsureAuthProfileStore,
     ensureAuthProfileStoreWithoutExternalProfiles:
+      mockedEnsureAuthProfileStoreWithoutExternalProfiles,
+    ensureAuthProfileStoreWithoutExternalProfilesAsync:
       mockedEnsureAuthProfileStoreWithoutExternalProfiles,
     getApiKeyForModelCore: mockedGetApiKeyForModel,
     hasUsableCustomProviderApiKey: mockedHasUsableCustomProviderApiKey,

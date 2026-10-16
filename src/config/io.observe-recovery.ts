@@ -3,8 +3,9 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { root } from "../infra/fs-safe.js";
+import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
 import {
-  appendConfigAuditRecordSync,
+  enqueueConfigAuditRecord,
   captureConfigAuditAppender,
   createConfigObserveAuditRecord,
 } from "./io.audit.js";
@@ -23,6 +24,7 @@ import {
   createConfigRecoveryStatEffect,
   createConfigBackupMissingEffect,
   createConfigBackupReadEffect,
+  commitRecoveryFileIfCurrent,
   type ConfigRecoveryEffect,
 } from "./io.observe-recovery-effects.js";
 import {
@@ -42,7 +44,7 @@ import { chmodConfigBestEffort, chmodConfigBestEffortSync } from "./io.write-saf
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
-import { resolveIsConfigReadOnly } from "./paths.js";
+import { resolveIsConfigReadOnly, resolveStateDir } from "./paths.js";
 import {
   collectPollutedSecretPlaceholders,
   isPluginLocalInvalidConfigSnapshot,
@@ -69,29 +71,6 @@ type ConfigReadRecoveryParams = {
 
 type ConfigReadRecoveryResult = Pick<ConfigRecoveryCandidate, "raw" | "parsed">;
 
-async function commitRecoveryFileIfCurrent(params: {
-  health: ReturnType<typeof captureConfigHealthStateStore>;
-  beforeCommit?: () => void;
-  write: (assertCurrent: () => void) => Promise<unknown>;
-}): Promise<boolean> {
-  let superseded: Error | undefined;
-  try {
-    await params.write(() => {
-      params.beforeCommit?.();
-      if (!params.health.isCurrent()) {
-        superseded = new Error("Config recovery observation was superseded");
-        throw superseded;
-      }
-    });
-    return true;
-  } catch (error) {
-    if (superseded && error === superseded) {
-      return false;
-    }
-    throw error;
-  }
-}
-
 function createRecoveryCommitEffect(params: {
   deps: ObserveRecoveryDeps;
   configPath: string;
@@ -101,7 +80,12 @@ function createRecoveryCommitEffect(params: {
   const options = {
     filePath: params.configPath,
     content: params.raw,
-    dirMode: 0o700,
+    dirMode:
+      readExistingStateRootMode(
+        path.dirname(params.configPath),
+        resolveStateDir(params.deps.env, params.deps.homedir),
+        params.deps.fs,
+      ) ?? 0o700,
     mode: 0o600,
     tempPrefix: path.basename(params.configPath),
     fileSystem: params.deps.fs,
@@ -443,6 +427,13 @@ function* planSuspiciousConfigRead(
       if (!(yield currentObservation)) {
         return { restored: false, error: undefined, superseded: true };
       }
+      if (clobberedPath === null) {
+        const error = new Error(
+          `Config backup recovery deferred: ${configPath}; original config snapshot could not be saved. Retry recovery.`,
+        );
+        deps.logger.warn(error.message);
+        return { restored: false, error };
+      }
       let restoredFromBackup = false;
       let restoreError: unknown;
       try {
@@ -500,7 +491,7 @@ function* planSuspiciousConfigRead(
         }),
       };
       yield {
-        sync: () => appendConfigAuditRecordSync(audit),
+        sync: () => enqueueConfigAuditRecord(audit),
         async: (_health, appendAudit) => appendAudit(audit.record),
       };
       if (restoredFromBackup) {
@@ -675,6 +666,12 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
     observedAt: now,
   });
   if (!health.isCurrent()) {
+    return false;
+  }
+  if (clobberedPath === null) {
+    deps.logger.warn(
+      `Config last-known-good recovery deferred: ${snapshot.path}; original config snapshot could not be saved. Retry recovery.`,
+    );
     return false;
   }
   if (recoveryCandidate.raw !== backupRaw) {

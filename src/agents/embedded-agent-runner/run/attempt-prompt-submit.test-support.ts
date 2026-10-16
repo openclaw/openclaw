@@ -1,11 +1,11 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { ImageContent } from "../../../llm/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { agentSessionQueuePromptContext } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { convertToLlm } from "../../sessions/messages.js";
-import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
+import { retainEmbeddedSessionPromptState } from "../session-prompt-state.js";
 
 export const sessionId = "attempt-prompt-submit-test";
 
@@ -50,7 +50,9 @@ export function createSession() {
 }
 
 export function createBaseInput() {
-  const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
+  const lease = retainEmbeddedSessionPromptState(sessionId);
+  onTestFinished(() => lease[Symbol.dispose]());
+  const sessionPromptState = lease.state;
   return {
     attempt: { sessionId },
     appendContext: "append context",

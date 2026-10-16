@@ -430,9 +430,9 @@ export function registerBrowserAgentSnapshotRoutes(
               ...snapshot,
             });
           const snapshotOptions = {
-            interactive: plan.interactive ?? undefined,
-            compact: plan.compact ?? undefined,
-            maxDepth: plan.depth ?? undefined,
+            interactive: plan.interactive,
+            compact: plan.compact,
+            maxDepth: plan.depth,
           };
           const deltaFamily: SnapshotDeltaFamily | undefined =
             plan.format === "ai"

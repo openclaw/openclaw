@@ -81,6 +81,8 @@ MiniMax M3 and M3.1 Flash Preview are preferred [Code Mode](/tools/code-mode) mo
     OAuth setups use the `minimax-portal` provider id. Model refs follow the form `minimax-portal/MiniMax-M3`.
     </Note>
 
+    OpenClaw refreshes expired OAuth access tokens at the regional MiniMax account endpoint that issued them. It refuses the refresh, and asks you to run `openclaw models auth login --provider minimax-portal` again, when the saved sign-in predates refresh support (it does not record its region) or when `models.providers.minimax-portal.baseUrl` now points to the other region.
+
   </Tab>
 
   <Tab title="API key">

@@ -12,18 +12,17 @@ import {
   classifyUnsupportedNodeCommand,
   formatUnsupportedNodeDiagnosticWarning,
   isNodeVersionAtLeast,
+  MINIMUM_BUN_VERSION,
   parseNodeReleaseVersion,
   type NodeReleaseVersion,
 } from "../../node-version.mjs";
-import type { RuntimeEnv } from "../runtime.js";
+import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 
 export { isSupportedOpenClawNodeVersion as isSupportedNodeVersion } from "../../node-version.mjs";
 
 type RuntimeKind = "bun" | "node" | "unknown";
-
-const MINIMUM_BUN_VERSION: NodeReleaseVersion = { major: 1, minor: 4, patch: 0 };
 
 const ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/i;
 
@@ -176,7 +175,10 @@ export async function assertSupportedRuntime(
   // Only startup callers with a pre-dotenv snapshot may select another runtime.
   if (details.kind === "node" && argv && recoveryEnv) {
     const { recoverNodeRuntime } = await import("../../node-runtime-recovery.mjs");
-    await recoverNodeRuntime({ env: recoveryEnv });
+    if (await recoverNodeRuntime({ env: recoveryEnv })) {
+      // The replacement finished; this unsupported parent must not continue startup.
+      throw new ExitError(Number(process.exitCode ?? 0));
+    }
   }
   if (
     details.kind === "node" &&
@@ -203,7 +205,9 @@ export async function assertSupportedRuntime(
           formatConsoleDiagnosticBlock({ level: "error", message: `${message}\n` }),
         );
       },
-      exit: (code) => process.exit(code),
+      exit: (code) => {
+        throw new ExitError(code);
+      },
     };
   }
 
@@ -220,7 +224,7 @@ export async function assertSupportedRuntime(
   }
   const requirement =
     details.kind === "bun"
-      ? "openclaw requires Bun 1.4 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release)."
+      ? "openclaw requires Bun 1.4.3 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release)."
       : (details.sqliteProbe && nodeRuntimeFailure(details.version, details.sqliteProbe)) ||
         "openclaw requires Node >=24.16.0 <25, or >=26.1.0.";
   const retryHint =

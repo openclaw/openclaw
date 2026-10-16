@@ -498,7 +498,7 @@ final class ControlChannel {
                     Remote mode uses an SSH tunnel—check the SSH target and that the tunnel is running.
                     """
                 }
-                return "Cannot reach gateway at \(endpoint); ensure the gateway is running."
+                return "Cannot reach gateway at \(endpoint); check that the gateway is running."
             case .networkConnectionLost:
                 return "Gateway connection dropped; gateway likely restarted—retry."
             case .timedOut:

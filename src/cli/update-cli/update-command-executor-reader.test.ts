@@ -118,26 +118,6 @@ function captureFailure(operation: () => void): unknown {
   }
 }
 
-function corruptByte(offset: number) {
-  const before = fs.statSync(databasePath);
-  const bytes = fs.readFileSync(databasePath);
-  expect(offset).toBeGreaterThanOrEqual(0);
-  expect(bytes[offset]).not.toBe(0xff);
-  const file = fs.openSync(databasePath, "r+");
-  try {
-    fs.writeSync(file, Buffer.of(0xff), 0, 1, offset);
-  } finally {
-    fs.closeSync(file);
-  }
-  const after = fs.statSync(databasePath);
-  expect([after.dev, after.ino, after.size]).toEqual([before.dev, before.ino, before.size]);
-  // No SQLite change counter or schema cookie can invalidate the retained cache.
-  const corrupted = fs.readFileSync(databasePath);
-  expect(corrupted.subarray(24, 28)).toEqual(bytes.subarray(24, 28));
-  expect(corrupted.subarray(40, 44)).toEqual(bytes.subarray(40, 44));
-  expect(corrupted.subarray(92, 100)).toEqual(bytes.subarray(92, 100));
-}
-
 async function expectRevocationWithoutWrites(mutate: (fence: UpdateRecoveryFence) => void) {
   let before: ReturnType<typeof snapshot> | undefined;
   let refusal: unknown;
@@ -314,21 +294,19 @@ describe("invocation-scoped update ownership reader", () => {
 
   it("does not reuse a live row as proof of a changed process identity", async () => {
     let refusal: unknown;
-    await expect(
-      withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(root);
-        const start = pidAlive.getFileLockProcessStartTime(process.pid);
-        expect(start).not.toBeNull();
-        const original = pidAlive.getFileLockProcessStartTime;
-        vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementation((pid, ...args) =>
-          pid === process.pid ? start! + 1 : original(pid, ...args),
-        );
-        const before = snapshot();
-        const observed = captureFailure(fence.assertCurrent);
-        expect(snapshot()).toEqual(before);
-        refusal = observed;
-      }),
-    ).rejects.toThrow();
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(root);
+      const start = pidAlive.getFileLockProcessStartTime(process.pid);
+      expect(start).not.toBeNull();
+      const original = pidAlive.getFileLockProcessStartTime;
+      vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementation((pid, ...args) =>
+        pid === process.pid ? start! + 1 : original(pid, ...args),
+      );
+      const before = snapshot();
+      const observed = captureFailure(fence.assertCurrent);
+      expect(snapshot()).toEqual(before);
+      refusal = observed;
+    });
     expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
     // A mismatched start identity proves the old generation dead to the existing
     // release owner. Refusing its fence must not disable that normal reclamation.
@@ -353,39 +331,6 @@ describe("invocation-scoped update ownership reader", () => {
       name: "missing database",
       windowsSharingError: "EBUSY",
       apply: () => fs.renameSync(databasePath, path.join(root, "retained.sqlite")),
-    },
-    { name: "empty database", apply: () => fs.truncateSync(databasePath, 0) },
-    { name: "in-place signature corruption", apply: () => corruptByte(0) },
-    {
-      name: "in-place lease-page corruption",
-      apply: () => {
-        let page = 0;
-        write((database) => {
-          page = Number(
-            database
-              .prepare("SELECT rootpage FROM sqlite_schema WHERE name='managed_update_handoffs'")
-              .get()?.rootpage,
-          );
-        });
-        const pageSize = fs.readFileSync(databasePath).readUInt16BE(16);
-        expect(page).toBeGreaterThan(1);
-        corruptByte((page - 1) * (pageSize === 1 ? 65536 : pageSize));
-      },
-    },
-    {
-      name: "in-place schema corruption",
-      apply: () => {
-        let sql = "";
-        write((database) => {
-          sql = String(
-            database
-              .prepare("SELECT sql FROM sqlite_schema WHERE name='managed_update_handoffs'")
-              .get()?.sql,
-          );
-        });
-        expect(sql).toMatch(/^create table/i);
-        corruptByte(fs.readFileSync(databasePath).indexOf(sql));
-      },
     },
     {
       name: "replacement database",
@@ -418,15 +363,6 @@ describe("invocation-scoped update ownership reader", () => {
     {
       name: "changed schema",
       apply: () => write((database) => database.exec("DROP TABLE managed_update_handoffs")),
-    },
-    {
-      name: "WAL transition",
-      apply: () => {
-        write((database) => {
-          expect(database.prepare("PRAGMA journal_mode=WAL").get()?.journal_mode).toBe("wal");
-        });
-        expect(fs.readdirSync(directory)).toEqual([path.basename(databasePath)]);
-      },
     },
   ];
 

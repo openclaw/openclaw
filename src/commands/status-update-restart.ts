@@ -32,11 +32,11 @@ function renderStatusReport(
     run.verification.rollbackOutcome?.status === "failed";
   // Rollback can rewrite `after` and verify the previous package. Those facts
   // cannot establish the candidate build, even when both versions are equal.
-  // A failed verification can record the old serving process; only a matching
-  // verification is evidence of the intended target when candidate identity is absent.
+  const recordedServingVersion = normalizeOptionalString(run.verification.runningVersion);
+  const recordedServingBuild = normalizeOptionalString(run.verification.runningBuildId);
   const verifiedVersion =
     !rollbackAttempted && run.verification.versionMatch === true
-      ? normalizeOptionalString(run.verification.runningVersion)
+      ? recordedServingVersion
       : undefined;
   const beforeVersion = normalizeOptionalString(run.before.version);
   const afterVersion = normalizeOptionalString(run.after.version);
@@ -52,15 +52,14 @@ function renderStatusReport(
   const afterIdentityAvailable =
     (!rollbackAttempted || afterIsDistinctTarget) &&
     resolveUpdateRunIdentity(run.verification, run.after).kind !== "unavailable";
+  // Recovery can verify the starting package without selecting an update target.
   const targetVersion =
-    explicitTargetVersion ?? (afterIdentityAvailable ? afterVersion : undefined) ?? verifiedVersion;
+    explicitTargetVersion ?? (afterIdentityAvailable ? afterVersion : undefined);
   const targetBuild =
     (afterIdentityAvailable && (!afterVersion || afterVersion === targetVersion)
       ? normalizeOptionalString(run.after.buildId)
       : undefined) ??
-    (verifiedVersion === targetVersion && verifiedVersion
-      ? normalizeOptionalString(run.verification.runningBuildId)
-      : undefined);
+    (verifiedVersion === targetVersion && verifiedVersion ? recordedServingBuild : undefined);
   const servingVersion = normalizeOptionalString(opts.gatewayServer?.version);
   const servingBuild = normalizeOptionalString(opts.gatewayServer?.buildId);
   const buildMismatch = Boolean(targetBuild && servingBuild && targetBuild !== servingBuild);
@@ -76,6 +75,24 @@ function renderStatusReport(
     !buildMismatch &&
     !targetIdentityUnavailable,
   );
+  // The installed package can already differ from a still-running Gateway.
+  // Only a saved serving observation establishes a change after a targetless failure.
+  const versionMovedOn = Boolean(
+    servingVersion && recordedServingVersion && servingVersion !== recordedServingVersion,
+  );
+  const supersededTargetless = Boolean(
+    observedFailure &&
+    run.verification.serviceRunning === true &&
+    !targetVersion &&
+    !normalizeOptionalString(run.target?.sha) &&
+    !normalizeOptionalString(run.target?.tag) &&
+    !rollbackAttempted &&
+    !afterVersion &&
+    !normalizeOptionalString(run.after.buildId) &&
+    !normalizeOptionalString(run.after.sha) &&
+    (versionMovedOn ||
+      (servingBuild && recordedServingBuild && servingBuild !== recordedServingBuild)),
+  );
   const message =
     run.status === "failed" && !reconciled
       ? run.steps
@@ -84,19 +101,27 @@ function renderStatusReport(
           .find((fact) => fact.message)?.message
       : undefined;
   let headline = message ? `${report.headline} ${message}` : report.headline;
-  const servingLabel = sanitizeTerminalText(servingVersion ?? "an unknown version").slice(0, 240);
-  const targetLabel = sanitizeTerminalText(targetVersion ?? "an unknown target").slice(0, 240);
+  const label = (value: string) => sanitizeTerminalText(value).slice(0, 240);
+  const servingLabel = label(servingVersion ?? "an unknown version");
+  const targetLabel = label(targetVersion ?? "an unknown target");
+  const reasonLabel = label(run.reason?.trim() || "unknown reason");
   if (historicalFailure) {
-    headline = `Last update run failed (${sanitizeTerminalText(run.reason?.trim() || "unknown reason").slice(0, 240)}) — Gateway is serving ${servingLabel}; run \`openclaw update\` to clear the record.`;
+    headline = `Last update run failed (${reasonLabel}) — Gateway is serving ${servingLabel}; run \`openclaw update\` to clear the record.`;
+  } else if (supersededTargetless) {
+    const [serving, recorded] = versionMovedOn
+      ? [servingLabel, label(recordedServingVersion ?? "")]
+      : [
+          `${servingLabel} (build ${label(servingBuild ?? "")})`,
+          `build ${label(recordedServingBuild ?? "")}`,
+        ];
+    headline = `Last update run failed (${reasonLabel}) — Gateway is now serving ${serving}; recorded serving identity was ${recorded}.`;
   } else if (observedFailure) {
     const current =
       (buildMismatch || targetIdentityUnavailable) && servingBuild
-        ? `${servingLabel} (build ${sanitizeTerminalText(servingBuild).slice(0, 240)})`
+        ? `${servingLabel} (build ${label(servingBuild)})`
         : servingLabel;
     const target =
-      buildMismatch && targetBuild
-        ? `${targetLabel} (build ${sanitizeTerminalText(targetBuild).slice(0, 240)})`
-        : targetLabel;
+      buildMismatch && targetBuild ? `${targetLabel} (build ${label(targetBuild)})` : targetLabel;
     const detail = !targetVersion
       ? `Gateway is serving ${current}; the update target is unknown`
       : !servingVersion
@@ -109,7 +134,7 @@ function renderStatusReport(
   return {
     ...report,
     reconciled,
-    historicalFailure,
+    historicalFailure: historicalFailure || supersededTargetless,
     headline,
   };
 }

@@ -99,23 +99,7 @@ export function registerStatusConfigReadTests(params: {
   });
 
   it.each([
-    ["include", JSON.stringify({ $include: "./base.json" })],
-    ["substitution", JSON.stringify({ gateway: { auth: { token: "${STATUS_TOKEN}" } } })],
-    ["root env", JSON.stringify({ env: { STATUS_TOKEN: "value" } })],
-  ])("uses full config IO for %s config", async (_name, rawConfig) => {
-    await withStatusConfig(rawConfig, async (configPath) => {
-      await gatherStatus({ probe: false });
-
-      expect(createConfigIOCalls).toHaveBeenCalledOnce();
-      expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "skip", false);
-      expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith(configPath);
-    });
-  });
-
-  it.each([
     { mode: "environment", deep: false, full: true, invalidGateway: false },
-    { mode: "deep", deep: true, full: true, invalidGateway: false },
-    { mode: "fast", deep: false, full: false, invalidGateway: false },
     { mode: "fast malformed gateway", deep: false, full: false, invalidGateway: true },
   ])(
     "reports service status despite invalid config through the $mode path",

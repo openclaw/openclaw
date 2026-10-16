@@ -12,6 +12,10 @@ import { createFileBackedSessionManagerForTest } from "../../test/helpers/sessio
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  attachRuntimePromptMediaFacts,
+  readRuntimePromptMediaFacts,
+} from "../media/media-facts.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -109,8 +113,10 @@ describe("guardSessionManager integration", () => {
     ]);
   });
 
-  it("correlates a suppressed user persist with its exact runtime message", () => {
-    const runtimeMessage = { role: "user", content: "already durable" } as AgentMessage;
+  it("publishes a suppressed user envelope while preserving runtime media facts", () => {
+    const runtimeMessage = attachRuntimePromptMediaFacts(makeUserMessage("already durable", 2), [
+      { path: "/workspace/current.mp4", contentType: "video/mp4", kind: "video" },
+    ]);
     const suppressed: Array<{ persisted: AgentMessage; runtime?: AgentMessage }> = [];
     const sm = guardSessionManager(SessionManager.inMemory(), {
       preparedUserTurnMessage: {
@@ -129,6 +135,15 @@ describe("guardSessionManager integration", () => {
     appendMessage(runtimeMessage);
 
     expect(sm.getEntries()).toEqual([]);
+    expect(runtimeMessage).toMatchObject({
+      content: "already durable",
+      timestamp: 1,
+      __openclaw: { senderName: "Alice" },
+    });
+    expect(readRuntimePromptMediaFacts(runtimeMessage)).toMatchObject([
+      { path: "/workspace/current.mp4", contentType: "video/mp4", kind: "video" },
+    ]);
+    expect(JSON.stringify(runtimeMessage)).not.toContain("current.mp4");
     expect(suppressed).toEqual([
       {
         persisted: expect.objectContaining({
@@ -330,7 +345,7 @@ describe("guardSessionManager integration", () => {
     expect(messages[1]).toMatchObject(prepared);
   });
 
-  it("skips plugin hooks while redacting every persisted transcript content field", () => {
+  it("skips plugin hooks while preserving every persisted transcript content field", () => {
     installWriteHook(() => ({
       message: makeAgentAssistantMessage({
         content: [{ type: "text", text: "changed by hook" }],
@@ -363,16 +378,18 @@ describe("guardSessionManager integration", () => {
 
     const messages = getMessages(sm);
 
-    const serialized = JSON.stringify(messages);
-
-    expect(serialized).not.toContain("the email is peter@dc.io");
-    expect(serialized).not.toContain("contact peter@dc.io");
-    expect(serialized).not.toContain("peter@dc.io\\n");
-    expect(serialized).not.toContain('"/tmp/peter@dc.io"');
-    expect(serialized).toContain('"thinking":"the email is peter@d***.io"');
-    expect(serialized).toContain('"text":"contact peter@d***.io"');
-    expect(serialized).toContain('"text":"peter@d***.io\\n"');
-    expect(serialized).toContain('"/tmp/peter@d***.io"');
+    expect(messages).toMatchObject([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "the email is peter@dc.io", thinkingSignature: "sig" },
+          { type: "text", text: "contact peter@dc.io" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: { path: "/tmp/peter@dc.io" } },
+        ],
+      },
+      { role: "toolResult", content: [{ type: "text", text: "peter@dc.io\n" }] },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain("changed by hook");
   });
 });
 

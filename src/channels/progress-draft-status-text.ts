@@ -1,6 +1,5 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { compactProgressText } from "../shared/text-truncate.js";
 import { type CodeRegion, findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";
@@ -115,11 +114,7 @@ export function formatReasoningProgressDisplayLine(text: string, maxChars: numbe
 }
 
 export function sanitizeProgressStatusText(text: string): string {
-  const cleaned = stripInlineDirectiveTagsForDelivery(text).text.trim();
-  if (!cleaned || isSilentCommentaryProgressText(cleaned)) {
-    return "";
-  }
-  return redactToolPayloadText(cleaned);
+  return stripInlineDirectiveTagsForDelivery(text).text.trim();
 }
 
 export function normalizeCommentaryProgressText(text: string): string {
@@ -133,11 +128,6 @@ export function normalizeCommentaryProgressText(text: string): string {
     .filter(Boolean)
     .map((line) => `_${line}_`)
     .join("\n");
-}
-
-function isSilentCommentaryProgressText(text: string): boolean {
-  const normalized = text.replace(/^[\s*_`~]+|[\s*_`~]+$/gu, "").trim();
-  return /^NO_REPLY$/iu.test(normalized);
 }
 
 function mergeReasoningProgressText(
@@ -204,7 +194,7 @@ export function resolveCommentaryLineId(commentary: {
     return `commentary:${commentary.itemId}`;
   }
   if (!commentary.normalized) {
-    // Sanitized to nothing (directive-only / NO_REPLY): no line to address, so
+    // Sanitized to nothing (directive-only): no line to address, so
     // it cannot retract the open one. Only an explicit itemId clears a line.
     return "";
   }
@@ -229,7 +219,7 @@ export function createReasoningProgressAccumulator() {
         return "";
       }
       rawText = mergeReasoningProgressText(rawText, text, options);
-      return redactToolPayloadText(normalizeReasoningProgressLine(rawText));
+      return normalizeReasoningProgressLine(rawText);
     },
   };
 }

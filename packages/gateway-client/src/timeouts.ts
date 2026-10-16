@@ -14,7 +14,7 @@ function isTestRuntimeEnv(env: NodeJS.ProcessEnv): boolean {
 /** Maximum delay Node timers can represent without overflow warnings. */
 export const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
 /** Default server-side window for gateway preauth handshakes. */
-export const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 15_000;
+export const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 30_000;
 
 /** Starts the browser-safe deadline that covers Gateway connect preparation and hello. */
 export function startGatewayConnectTimeout(onTimeout: () => void): ReturnType<typeof setTimeout> {

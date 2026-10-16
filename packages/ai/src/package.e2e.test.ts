@@ -18,7 +18,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const compatibility = {
   "@openclaw/ai/provider-types": {
-    values: ["PROVIDER_CONTEXT_HANDOFF", "resolveProviderContext"],
+    values: ["PROVIDER_CONTEXT_HANDOFF", "PROVIDER_MODEL_INPUT", "resolveProviderContext"],
     types: [
       "MediaContent",
       "ModelInputContent",
@@ -176,6 +176,10 @@ const compatibility = {
       "resolveOpenAIProjectedToolsStrictToolFlag",
       "stripUnsupportedSchemaKeywords",
       "projectRuntimeToolInputSchema",
+      "publishRuntimeToolInputSchema",
+      "getPublishedRuntimeToolInputSchema",
+      "prepareOpenAIFunctionTool",
+      "prepareAnthropicInputSchema",
     ],
     types: [
       "ToolSchemaModelCompat",

@@ -23,8 +23,11 @@ const targets = [
   "test",
   "skills",
   "config",
+  "cli-invocation.mjs",
+  "cli-parent-lifetime.mjs",
   "cli-root-options.mjs",
   "docker-entrypoint.mjs",
+  "gateway-prewarm.mjs",
   "gateway-run-argv.mjs",
   "gateway-shutdown-budget.mjs",
   "node-compile-cache.mjs",
@@ -38,6 +41,7 @@ const targets = [
   "tsdown.ai.config.ts",
   "tsdown.config.ts",
   "vitest.config.ts",
+  "worker-heap-flag.mjs",
 ];
 
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);

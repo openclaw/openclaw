@@ -17,6 +17,11 @@ export type ChannelIngressPressureHealth = {
   oldestReceivedAt: number;
 };
 
+export type ChannelIngressPressureSnapshot = {
+  pressure: ChannelIngressPressureHealth[];
+  nextClaimExpiryAtMs: number | null;
+};
+
 export type ChannelIngressReadCommand =
   | { type: "channelIngress.accounts"; input: { channelId: string } }
   | { type: "channelIngress.failedHealth"; input?: undefined }
@@ -45,5 +50,5 @@ export type ChannelIngressReadReply = {
 } & (
   | { type: "channelIngress.accounts"; result: string[] }
   | { type: "channelIngress.failedHealth"; result: ChannelIngressFailedHealth[] }
-  | { type: "channelIngress.pressureHealth"; result: ChannelIngressPressureHealth[] }
+  | { type: "channelIngress.pressureHealth"; result: ChannelIngressPressureSnapshot }
 );

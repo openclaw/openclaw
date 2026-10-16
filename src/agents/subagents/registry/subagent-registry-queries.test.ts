@@ -10,9 +10,7 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildSubagentRunReadIndexFromRuns,
   countActiveRunsForSessionFromRuns,
-  countPendingDescendantRunsFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
-  getSubagentRunByChildSessionKeyFromRuns,
   listRunsForRequesterFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
@@ -199,40 +197,6 @@ describe("subagent registry query regressions", () => {
     }
   });
 
-  it("selects the current child after the older run becomes stale", () => {
-    const now = Date.now();
-    const old = makeRun({
-      runId: "old",
-      generation: 1,
-      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-    });
-    const current = makeRun({
-      runId: "current",
-      childSessionKey: old.childSessionKey,
-      requesterSessionKey: "agent:main:new-parent",
-      generation: 1,
-      createdAt: now - 60_000,
-      endedAt: now - 1_000,
-      cleanupCompletedAt: now,
-    });
-    const runs = toRunMap([old, current]);
-    expect(getLatestSubagentRunByChildSessionKeyFromRuns(runs, old.childSessionKey)).toBe(current);
-    expect(getSubagentRunByChildSessionKeyFromRuns(runs, old.childSessionKey)).toBe(current);
-  });
-
-  it("excludes stale children from counts after the fresh child ends", () => {
-    const now = Date.now();
-    const stale = makeRun({ runId: "stale", createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1 });
-    const fresh = makeRun({
-      runId: "fresh",
-      createdAt: now - 60_000,
-      endedAt: now - 1_000,
-    });
-    const runs = toRunMap([stale, fresh]);
-    expect(countActiveRunsForSessionFromRuns(runs, fresh.requesterSessionKey)).toBe(0);
-    expect(countPendingDescendantRunsFromRuns(runs, fresh.requesterSessionKey)).toBe(1);
-  });
-
   it("counts collectors against the spawning owner and excludes them from announce admission", () => {
     const owner = "agent:main:telegram:default:direct:456";
     const entry = makeRun({
@@ -317,6 +281,27 @@ describe("subagent registry query regressions", () => {
     expect(index.countPendingDescendantRuns("parent")).toBe(1);
     expect(index.countPendingDescendantRuns("new-parent")).toBe(3);
   });
+
+  it.each([
+    { requesterSessionKey: "agent:main:main", requesterAgentId: undefined, matches: true },
+    { requesterSessionKey: "agent:main:main", requesterAgentId: "other", matches: false },
+    { requesterSessionKey: "global", requesterAgentId: undefined, matches: false },
+    { requesterSessionKey: "global", requesterAgentId: "main", matches: true },
+    { requesterSessionKey: "global", requesterAgentId: "other", matches: false },
+  ])(
+    "resolves requester ownership without backfill ($requesterSessionKey, $requesterAgentId)",
+    ({ requesterSessionKey, requesterAgentId, matches }) => {
+      const entry = makeRun({ runId: "legacy-requester", requesterSessionKey, requesterAgentId });
+      const before = structuredClone(entry);
+
+      expect(
+        listRunsForRequesterFromRuns(toRunMap([entry]), requesterSessionKey, {
+          requesterAgentId: "main",
+        }),
+      ).toEqual(matches ? [entry] : []);
+      expect(entry).toEqual(before);
+    },
+  );
 
   it("scopes direct children to the requester run window", () => {
     const parent = makeRun({ runId: "parent", createdAt: 200, startedAt: 200, endedAt: 260 });
@@ -430,20 +415,18 @@ describe("hasDescendantRunAwaitingSettleFromRuns", () => {
         batchCreatedAt,
       ),
     ).toBe(true);
-    expect(countPendingDescendantRunsFromRuns(runs, requester)).toBe(2);
-  });
-
-  it("settles suspended descendants independently of pending cleanup", () => {
-    const entry = makeRun({
-      runId: "child",
-      createdAt: 1_000,
-      endedAt: 8_000,
-      expectsCompletionMessage: true,
-      delivery: { status: "suspended", suspendedAt: 9_000 },
-    });
-    const runs = toRunMap([entry]);
-    expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester)).toBe(false);
-    expect(countPendingDescendantRunsFromRuns(runs, requester)).toBe(1);
-    expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester, entry.runId)).toBe(false);
+    expect(buildSubagentRunReadIndexFromRuns({ runs }).countPendingDescendantRuns(requester)).toBe(
+      2,
+    );
+    expect(
+      hasDescendantRunAwaitingSettleFromRuns(
+        runs,
+        requester,
+        descendant.runId,
+        undefined,
+        undefined,
+        batchCreatedAt,
+      ),
+    ).toBe(false);
   });
 });

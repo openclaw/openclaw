@@ -1,12 +1,18 @@
 // Render contract between the transcript projection and the per-session
-// virtualizer host owned by ChatTranscriptController.
-import type { ReactiveController, ReactiveControllerHost, TemplateResult } from "lit";
+// virtualizer host owned by the chat transcript owner.
+import type { JSX } from "@solidjs/web";
+import type { Virtualizer } from "@tanstack/virtual-core";
+import type { ApplicationContext } from "../../../app/context.ts";
+import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
+import type { PresentationValue } from "../../../lib/presentation.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition } from "../scroll.ts";
+import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
+import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
-import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import type { TranscriptContent, TranscriptRow } from "./chat-transcript-layout.ts";
 
 /** A reader-position restoration that is waiting for measurable transcript geometry. */
 export type ChatTranscriptPendingScrollOffset = {
@@ -18,6 +24,8 @@ export type ChatTranscriptPendingScrollOffset = {
 };
 
 export type TranscriptCallbacks = {
+  /** Sidebar commits originate on the pane element, separate from its state owner. */
+  geometryEventTarget?: HTMLElement;
   onViewportResize?: () => void;
   onReaderScroll?: (towardEnd?: boolean) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
@@ -25,7 +33,7 @@ export type TranscriptCallbacks = {
 };
 
 export const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
-export const CHAT_TRANSCRIPT_OVERSCAN = 6;
+export const CHAT_TRANSCRIPT_OVERSCAN = 2;
 // Initial virtual rows can correct their estimates for several frames. Observe
 // the range for ~200ms before accepting a saved offset that remains unreachable.
 export const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;
@@ -34,7 +42,7 @@ export const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;
 export const CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES = 60;
 
 export type TranscriptHeader = {
-  template: unknown;
+  props: ChatHistoryBoundaryProps;
   /** Fixed pixel height; becomes the virtualizer's scrollMargin so row offsets stay exact. */
   height: number;
 };
@@ -47,12 +55,14 @@ export type ChatTranscriptSession = {
   readonly scrollElementRef: (element?: Element) => void;
   render<T>(
     rows: readonly TranscriptRow<T>[],
-    renderRow: (row: TranscriptRow<T>) => unknown,
+    renderRow: (row: TranscriptRow<T>) => TranscriptContent,
     announcement: TranscriptAnnouncement | null,
     announce: boolean,
-    overlay?: unknown,
+    overlay?: JSX.Element,
     header?: TranscriptHeader | null,
-  ): TemplateResult;
+    presented?: PresentationValue,
+    applicationContext?: ApplicationContext,
+  ): HTMLDivElement;
   syncMessageRows(
     messageRowKeysById: ReadonlyMap<string, string>,
     messageRowsByKey: ReadonlyMap<string, string>,
@@ -68,46 +78,43 @@ export type ChatTranscriptSession = {
 /** Rows and lookup identities that must be promoted as one rendered projection. */
 export type TranscriptRenderSnapshot<T> = {
   rows: readonly TranscriptRow<T>[];
-  renderRow: (row: TranscriptRow<T>) => unknown;
+  renderRow: (row: TranscriptRow<T>) => TranscriptContent;
   announcement: TranscriptAnnouncement | null;
   announce: boolean;
-  overlay: unknown;
+  overlay: JSX.Element;
   header: TranscriptHeader | null;
   messageRows: ReadonlyMap<string, string>;
   renderKeyRows: ReadonlyMap<string, string>;
   entryKeys: ChatMessageEntryAnimations["projectedKeys"];
+  presented: PresentationValue;
+  applicationContext?: ApplicationContext;
 };
 
 /** Session-owned deferred measurements after width changes and smooth scrolling. */
-export class TranscriptPresentation implements ReactiveController {
-  private measureFrame: number | null = null;
+export function createTranscriptPresentation(
+  scrollElement: () => HTMLDivElement | null,
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  beforeMeasure: () => void,
+) {
+  const readConnectedRows = (): (() => boolean) | null => {
+    const apply = readConnectedTranscriptRows(scrollElement(), virtualizer);
+    return apply
+      ? () => {
+          beforeMeasure();
+          return apply();
+        }
+      : null;
+  };
 
-  constructor(
-    private readonly host: ReactiveControllerHost & {
-      readonly scrollElement: HTMLDivElement | null;
+  const presentation = {
+    measureRows: () => readConnectedRows()?.() ?? false,
+    queueRowMeasure() {
+      const element = scrollElement();
+      scheduleLayout(presentation, () =>
+        element === scrollElement() ? (readConnectedRows() ?? undefined) : undefined,
+      );
     },
-    private readonly measureConnectedRows: () => boolean,
-  ) {
-    host.addController(this);
-  }
-
-  queueRowMeasure(): void {
-    if (this.measureFrame !== null) {
-      return;
-    }
-    const element = this.host.scrollElement;
-    this.measureFrame = requestAnimationFrame(() => {
-      this.measureFrame = null;
-      if (element === this.host.scrollElement) {
-        this.measureConnectedRows();
-      }
-    });
-  }
-
-  hostDisconnected(): void {
-    if (this.measureFrame !== null) {
-      cancelAnimationFrame(this.measureFrame);
-      this.measureFrame = null;
-    }
-  }
+    disconnect: () => cancelLayout(presentation),
+  };
+  return presentation;
 }

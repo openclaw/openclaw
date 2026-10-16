@@ -1,8 +1,5 @@
 // Line tests cover setup surface plugin behavior.
-import {
-  createStartAccountContext,
-  installChannelDmPolicyContractSuite,
-} from "openclaw/plugin-sdk/channel-test-helpers";
+import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginSetupWizardConfigure,
@@ -66,18 +63,36 @@ describe("line setup wizard", () => {
     expect(result.cfg.channels?.line?.channelSecret).toBe("line-secret");
   });
 
-  installChannelDmPolicyContractSuite({
-    dmPolicy: lineSetupWizard.dmPolicy!,
-    cases: [
-      {
-        name: "LINE named accounts",
-        channel: "line",
-        accountId: "work",
-        accountConfig: { channelAccessToken: "token", channelSecret: "secret" },
-        inheritedAllowFrom: ["Uroot"],
-        defaultAccount: { rootAllowFrom: ["Uroot"] },
+  it("uses defaultAccount for policy reads and writes without changing root policy", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        line: {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          allowFrom: ["Uroot"],
+          accounts: {
+            work: {
+              channelAccessToken: "token",
+              channelSecret: "secret",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
       },
-    ],
+    };
+    const policy = lineSetupWizard.dmPolicy!;
+    expect(policy.getCurrent(cfg)).toBe("allowlist");
+    expect(policy.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.line.accounts.work.dmPolicy",
+      allowFromKey: "channels.line.accounts.work.allowFrom",
+    });
+    const next = policy.setPolicy(cfg, "open");
+    expect(next.channels?.line?.dmPolicy).toBe("disabled");
+    expect(next.channels?.line?.allowFrom).toEqual(["Uroot"]);
+    expect(next.channels?.line?.accounts?.work).toMatchObject({
+      dmPolicy: "open",
+      allowFrom: ["Uroot", "*"],
+    });
   });
 
   it("uses configured defaultAccount for omitted setup configured state", async () => {

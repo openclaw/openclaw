@@ -57,10 +57,12 @@ async function respondWithCanvasHtml(
     if (sandboxPort === undefined) {
       throw new Error(unavailableMessage);
     }
-    const configuredOrigin = context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
+    const ingress = client?.remoteControlUiIngress;
+    const configuredOrigin =
+      ingress?.sandboxOrigin ?? context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
     const result: CanvasDocumentViewResult = {
       html,
-      sandboxUrl,
+      sandboxUrl: ingress ? new URL(sandboxUrl, ingress.sandboxOrigin).href : sandboxUrl,
       sandboxPort,
       ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
     };

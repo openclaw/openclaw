@@ -63,7 +63,7 @@ uses the custom-plugin setting.
 ## Create a feature plugin
 
 Enable the [Custom plugin UI lab](/plugins/feature-plugins#enable-custom-plugin-ui) before opening the
-scaffold's browser views.
+generated plugin's browser views.
 
 ```bash
 openclaw plugins init draft-review --name "Draft Review" --type feature
@@ -74,7 +74,7 @@ npm run validate
 openclaw plugins install .
 ```
 
-The scaffold includes a draft-analysis operation, an agent tool, a native page,
+The starter plugin includes a draft-analysis operation, an agent tool, a native page,
 and a composer replacement. Open Draft Review from the Control UI sidebar, or
 open **Plugins → Advanced → Customize UI** and choose Draft composer. Choose Built-in to
 restore a view. Replacement selection belongs to the current browser runtime;
@@ -159,7 +159,7 @@ Navigation items can supply `actions` with an `id`, `label`, optional `icon` and
 right-click, **Shift+F10**, or the context-menu key on the focused link, including
 nested and pinned entries. Selecting an action closes the menu; **Escape** or an
 outside click dismisses it. Use `host.ui.isNavigationPinned(id)` to read a saved
-pin and `host.ui.unpinNavigation(id)` to remove it idempotently. Plugins choose
+pin and `host.ui.unpinNavigation(id)` to remove it; repeated calls have no additional effect. Plugins choose
 which actions to offer and own confirmation for destructive actions.
 
 For a dashboard widget, also register a backend
@@ -207,7 +207,7 @@ does not expose a separate headless chat service for a completely independent
 workspace.
 
 A composer replacement receives the current draft, admission state, disabled
-reason, and canonical `setDraft`, `send`, and optional `abort` operations. Use
+reason, and standard `setDraft`, `send`, and optional `abort` operations. Use
 these operations instead of issuing a raw chat RPC. `send()` resolves `true`
 when admitted, `false` when rejected, or `undefined` for a local command or no
 submission. Show rejected submissions rather than clearing the draft. Composer
@@ -315,6 +315,13 @@ under `dist/control-ui/<content-hash>/`, then publishes their paths in
 and assets usable. `plugins validate` and `plugins build --check` detect stale
 source, assets, or generated metadata.
 
+Host runtime builds keep the authored root manifest unchanged and publish their
+browser declaration in `dist/openclaw.plugin.json`. That generated declaration
+replaces only `controlUi`; config schemas and activation still come from the root
+manifest. Explicit `plugins build` publishes the root declaration and retires
+the previous generated pointer. Both layouts keep asset paths relative to the
+plugin root.
+
 ### Solid views
 
 Solid 2 is supported for native plugin views. Use a `.tsx` browser entry and
@@ -329,10 +336,10 @@ For typechecking, set `jsx: "preserve"` and `jsxImportSource: "@solidjs/web"`.
 The framework-neutral view contract stays the same:
 
 ```tsx
-/** @jsxImportSource @solidjs/web */
-import { createSignal } from "solid-js";
 import { render } from "@solidjs/web";
 import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";
+/** @jsxImportSource @solidjs/web */
+import { createSignal } from "solid-js";
 
 const mount: ControlUiView = (container, context) => {
   const [label, setLabel] = createSignal(context.props.label ?? "Ready");
@@ -350,12 +357,59 @@ Keep one renderer responsible for each container's children and dispose its root
 when the view ends. Solid 2 batches reactive writes; keep synchronous request
 authority and mutation guards with their existing owners.
 
+### Packaged Settings presentations
+
+A bundled presentation can render a host-owned Settings placement without
+activating the plugin's runtime UI. Memory Core uses this for the Memory overview,
+including when memory is off, another engine is selected, or the Gateway is offline.
+Declare the placement alongside the built entry:
+
+```json
+{
+  "controlUi": {
+    "entry": "dist/control-ui/<content-hash>/index.js",
+    "activation": "settings-only",
+    "settingsViews": [{ "section": "memory", "panel": "overview" }]
+  }
+}
+```
+
+The browser module exports `pluginId` and a `settingsViews` array of
+`ControlUiSettingsView` from `openclaw/plugin-sdk/control-ui`. Each view declares
+its `placement` and a `mount(container, context)` that returns `update(snapshot)`
+and `dispose()`. The current supported placement is the Memory overview; this
+contract does not register arbitrary Settings routes.
+
+The host supplies the selected Settings agent, engine availability, connection
+state, locale, shared Settings components, and bounded navigation. Authenticated
+operator RPC remains trusted native UI authority, bound to the mounted view's
+lifetime. Retained callbacks reject after that lifetime ends. The host keeps
+routing, agent selection, engine decisions, and config writes; the plugin owns
+its presentation and status requests. Only an explicit user action probes
+embedding readiness.
+
+The normal plugin builder preserves this declaration. The Control UI build
+loads it from the completed bundled distribution with the same package identity,
+asset revision, and immutable JavaScript/CSS generation. A Settings-only entry
+is excluded from runtime UI activation; existing `defineControlUiPlugin` entries
+keep their required `activate(host)` contract.
+
+Source-checkout `pnpm ui:build` and `pnpm ui:dev` prepare declared Settings
+presentations through the same plugin builder before reading that distribution.
+The dev server serves the validated generated JavaScript and CSS without runtime
+plugin activation. Restart the dev server after editing plugin presentation
+sources to rebuild their immutable generation.
+
 ### Bundle boundaries
 
 The build emits a JavaScript entry, optional CSS, and JavaScript chunks for lazy
 imports. The content hash covers the complete generation, including its chunks.
 CSS remains attached to the entry; loading a JavaScript chunk does not attach
-stylesheets. Embed other static assets in the bundle; arbitrary files are
+stylesheets. Authenticated bootstrap advertises the entry, stylesheets, and static
+JavaScript dependencies so the browser can preload them together before the
+Gateway connection completes. Activation still waits for the current catalog,
+asset grants, and all stylesheets; dynamic imports remain lazy.
+Embed other static assets in the bundle; arbitrary files are
 outside this build contract. Imports must be analyzable by esbuild: literal
 paths and supported glob imports work; unresolved dynamic imports, indirect
 `require` calls, and `require.resolve` are rejected. Import validation checks the

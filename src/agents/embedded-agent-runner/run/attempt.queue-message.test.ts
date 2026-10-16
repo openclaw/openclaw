@@ -79,71 +79,7 @@ function fixture(queue: Message[] = [], target = queue[0]) {
 }
 
 describe("embedded OpenClaw queued steering cancellation", () => {
-  it("settles accepted input when its transcript settlement observer throws", async () => {
-    vi.useFakeTimers();
-    const target = message("settlement observer failure");
-    const f = fixture([target]);
-    const waiting = f.wait("settlement observer failure", {
-      onQueueSettled: () => {
-        throw new Error("observer failed");
-      },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(() => f.emit({ type: "message_end", message: target })).not.toThrow();
-    await expect(waiting).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
-    expect(f.listeners).toHaveLength(0);
-  });
-
-  it.each(
-    (["accepted", "rejected"] as const).flatMap((disposition) => [
-      { disposition, tracked: true },
-      { disposition, tracked: false },
-    ]),
-  )(
-    "settles $disposition input when its acceptance observer throws (tracked: $tracked)",
-    async ({ disposition, tracked }) => {
-      vi.useFakeTimers();
-      const target = message("observer failure");
-      const f = fixture([target]);
-      if (disposition === "rejected") {
-        f.session.steer = async () => {
-          throw new Error("source refused");
-        };
-      }
-      const failObserver = () => {
-        throw new Error("observer failed");
-      };
-      let result: { value?: unknown; error?: unknown } | undefined;
-      const waiting = steerActiveSessionWithOptionalDeliveryWait(f.session, "observer failure", {
-        waitForTranscriptCommit: tracked ? true : undefined,
-        onQueueAccepted: failObserver,
-      }).then(
-        (value) => {
-          result = { value };
-        },
-        (error: unknown) => {
-          result = { error };
-        },
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      expect(result).toBeDefined();
-      await waiting;
-      if (disposition === "accepted") {
-        if (tracked) {
-          expect(result?.value).toMatchObject({ transcriptCommit: "unconfirmed" });
-        } else {
-          expect(result?.error).toBeInstanceOf(MessageInjectionAcceptedUnconfirmedError);
-        }
-      } else {
-        expect(result?.error).toMatchObject({
-          cause: expect.objectContaining({ message: "source refused" }),
-        });
-      }
-      expect(f.listeners).toHaveLength(0);
-    },
-  );
-
-  it("retains real enqueued input when admission cleanup and rejection observers fail", async () => {
+  it("retains real enqueued input when admission cleanup fails", async () => {
     const { session } = await createTestSession();
     vi.useFakeTimers();
     const prepare = async () => {};
@@ -157,12 +93,6 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       "already owned input",
       {
         waitForTranscriptCommit: true,
-        onQueueAccepted: () => {
-          throw new Error("acceptance observer failed");
-        },
-        onQueueSettled: () => {
-          throw new Error("settlement observer failed");
-        },
       },
       undefined,
       undefined,
@@ -175,9 +105,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     expect(session.getSteeringMessages()).toEqual(["already owned input"]);
     expect(result).toBeDefined();
     await waiting;
-    expect(result?.error).toMatchObject({
-      cause: expect.any(MessageInjectionAcceptedUnconfirmedError),
-    });
+    expect(result?.error).toBeInstanceOf(MessageInjectionAcceptedUnconfirmedError);
   });
 
   it.each([

@@ -86,6 +86,57 @@ it.each(["omitted by Windows", "omitted in backup"])(
 );
 
 it.each([
+  { kind: "same SID", account: "WIN-TEST\\operator", sid: "S-1-5-21-1-2-3-1001" },
+  { kind: "different SID", account: "WIN-TEST\\other-private", sid: "S-1-5-21-1-2-3-1002" },
+  { kind: "unresolvable", account: "WIN-TEST\\unknown-private", sid: undefined },
+])("audits a qualified logon account with $kind", async ({ kind, account, sid }) => {
+  const f = await fixture("win32");
+  const expectedSid = "S-1-5-21-1-2-3-1001";
+  const xml = buildScheduledTaskXml({
+    taskDescription: "OpenClaw Gateway",
+    taskUser: "operator",
+    launchPath: f.sourcePath,
+  })
+    .replace("<UserId>operator</UserId>", `<UserId>${account}</UserId>`)
+    .replace("<UserId>operator</UserId>", `<UserId>${expectedSid}</UserId>`);
+  f.setTask(xml);
+  const identity = {
+    code: 0,
+    stdout: `${expectedSid}\n`,
+    stderr: "",
+    termination: "exit" as const,
+  };
+  native.identity.mockResolvedValueOnce(identity).mockResolvedValue({
+    ...identity,
+    code: sid ? 0 : 1,
+    stdout: sid ? `${sid}\n` : "",
+    stderr: sid ? "" : `Cannot resolve ${account}`,
+  });
+  native.task.mockClear();
+
+  const result = await auditGatewayServiceConfig({
+    ...f,
+    env: { ...f.env, USERDOMAIN: "WORKGROUP" },
+    platform: "win32",
+  });
+
+  expect(result.definitionDriftError).toBeUndefined();
+  expect(result.definitionDrift ?? []).toEqual(
+    kind === "same SID"
+      ? []
+      : [
+          expect.objectContaining({
+            kind: "unknown-edit",
+            key: "Triggers.LogonTrigger.UserId",
+          }),
+        ],
+  );
+  expect(JSON.stringify(result)).not.toContain(account);
+  expect(f.task()).toBe(xml);
+  expect(native.task.mock.calls.every(([args]) => args[0] === "/Query")).toBe(true);
+});
+
+it.each([
   { kind: "legacy-wscript", key: "Actions.Exec.Command", classification: "outdated" },
   { kind: "password", key: "Principals.Principal.LogonType", classification: "unknown-edit" },
   { kind: "arguments", key: "Actions.Exec.Command", classification: "unknown-edit" },

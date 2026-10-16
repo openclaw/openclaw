@@ -7,16 +7,13 @@ import { configureProgramHelp } from "../cli/program/help.js";
 import { readBestEffortConfigSnapshot } from "../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
-  getRuntimeConfigSnapshotMetadata,
   setRuntimeConfigSnapshot,
-  setRuntimeConfigSourceSnapshotIfCurrent,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import {
   createPluginCliLoadSession,
   loadPluginCliDescriptors,
-  loadPluginCliRegistrationEntriesWithDefaults,
   resolvePluginCliRootOwnerIds,
 } from "./cli-registry-loader.js";
 import { registerPluginCliCommandsFromValidatedConfig } from "./cli.js";
@@ -30,7 +27,6 @@ import {
   writePlugin,
 } from "./loader.test-fixtures.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
-import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 
 afterEach(() => {
@@ -185,58 +181,6 @@ module.exports = { id: "unrelated-help", register(api) {
     },
   );
 
-  it("invalidates prepared facts and captured registrars at the metadata lifecycle boundary", async () => {
-    const root = fs.realpathSync(makePluginLoaderTempDir());
-    const plugin = writePlugin({
-      id: "lifetime-cli",
-      dir: path.join(root, "plugin"),
-      filename: "index.cjs",
-      registration: `api.registerCli(({program}) => program.command("prepared"), { descriptors: [{ name: "prepared", description: "Lifetime", hasSubcommands: false }] });`,
-    });
-    const cfg = { plugins: { load: { paths: [plugin.dir] }, allow: [plugin.id] } };
-    const env = {
-      HOME: root,
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    };
-    const session = createPluginCliLoadSession();
-    const params = { cfg, env, session, primaryCommand: "prepared" };
-    const entries = await loadPluginCliRegistrationEntriesWithDefaults(params);
-    expect(entries).toHaveLength(1);
-    fs.unlinkSync(path.join(plugin.dir, "openclaw.plugin.json"));
-    clearPluginMetadataLifecycleCaches();
-    const program = new Command();
-    await expect(entries[0]!.register(program)).rejects.toThrow(/plugin CLI preparation/i);
-    expect(program.commands).toEqual([]);
-    // A revision fences authority without changing this independent operation's package facts.
-    expect(await resolvePluginCliRootOwnerIds(params)).toEqual([plugin.id]);
-    expect(
-      await resolvePluginCliRootOwnerIds({ ...params, session: createPluginCliLoadSession() }),
-    ).toEqual([]);
-  });
-
-  it("does not return registrars from preparation invalidated during an await", async () => {
-    const root = fs.realpathSync(makePluginLoaderTempDir());
-    const plugin = writePlugin({
-      id: "pending-cli",
-      dir: path.join(root, "plugin"),
-      filename: "index.cjs",
-      registration: `api.registerCli(({program}) => program.command("prepared"), { commands: ["prepared"] });`,
-    });
-    const pending = loadPluginCliRegistrationEntriesWithDefaults({
-      cfg: { plugins: { load: { paths: [plugin.dir] }, allow: [plugin.id] } },
-      env: {
-        HOME: root,
-        OPENCLAW_STATE_DIR: path.join(root, "state"),
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
-      session: createPluginCliLoadSession(),
-      primaryCommand: "prepared",
-    });
-    clearPluginMetadataLifecycleCaches();
-    await expect(pending).rejects.toThrow(/plugin CLI preparation/i);
-  });
-
   it.each([
     { first: "beta", owner: "alpha" },
     { first: "beta", owner: undefined },
@@ -319,7 +263,7 @@ module.exports = { id: "unrelated-help", register(api) {
     },
   );
 
-  it.each(["process.env", "config", "source"] as const)(
+  it.each(["process.env", "config", "runtime"] as const)(
     "refreshes eligible owners and executable callbacks after in-place %s input changes",
     async (input) => {
       const root = fs.realpathSync(makePluginLoaderTempDir());
@@ -373,7 +317,7 @@ module.exports = { id: "unrelated-help", register(api) {
             plugins: { enabled: true },
             auth: { profiles: {} },
           };
-          setRuntimeConfigSnapshot(cfg, input === "source" ? { ...cfg } : cfg);
+          setRuntimeConfigSnapshot(cfg, cfg);
           const gateway = resolvePluginRuntimeLoadContext({ config: cfg });
           setCurrentPluginMetadataSnapshot(gateway.metadataSnapshot, {
             config: cfg,
@@ -390,15 +334,8 @@ module.exports = { id: "unrelated-help", register(api) {
                 ? { fixture: { provider: plugin.id, mode: "api_key" } }
                 : {};
             } else {
-              expect(
-                setRuntimeConfigSourceSnapshotIfCurrent({
-                  expectedRevision: getRuntimeConfigSnapshotMetadata()!.revision,
-                  sourceConfig: {
-                    ...cfg,
-                    plugins: { enabled: true, entries: { [plugin.id]: { enabled } } },
-                  },
-                }),
-              ).toBe(true);
+              cfg.plugins = { enabled: true, entries: { [plugin.id]: { enabled } } };
+              setRuntimeConfigSnapshot(cfg, cfg);
             }
             expect((await loadPluginCliDescriptors(params)).map((entry) => entry.name)).toEqual(
               enabled ? ["prepared"] : [],

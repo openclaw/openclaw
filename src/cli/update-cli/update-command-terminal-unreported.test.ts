@@ -74,14 +74,7 @@ it.each(["new-error", "pending-aggregate"] as const)(
       ],
       durationMs: 1,
     };
-    const primary = new UpdateCommandFailure(result, 1, "Package installation failed", {
-      automaticTriage: {
-        kind: "update",
-        phase: "global-install-failed",
-        error: "Permission denied",
-        gateway: "preserve",
-      },
-    });
+    const primary = new UpdateCommandFailure(result, 1, "Package installation failed");
     const pending = new UpdateCommandPendingRecoveryFailure(result);
     const settlementFailure = new AggregateError([pending], "Update executor cleanup failed", {
       cause: pending,
@@ -290,10 +283,18 @@ it.each(["lost-authority", "pending-publication", "completed-publication"] as co
           { onResult },
         ),
       ),
-    ).rejects.toMatchObject({ code: 1 });
+    ).rejects.toMatchObject({ code: condition === "completed-publication" ? 0 : 1 });
     expect(getUpdateRun(run.runId, { env })).toEqual(recorded);
     expect(onResult).not.toHaveBeenCalled();
     expect(mocks.action).not.toHaveBeenCalled();
     expect(mocks.diagnose).not.toHaveBeenCalled();
+    if (condition === "completed-publication") {
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Warning: Update succeeded, but result publication failed:"),
+      );
+      expect(defaultRuntime.error).not.toHaveBeenCalledWith(
+        expect.stringContaining("Update recovery remains pending"),
+      );
+    }
   },
 );

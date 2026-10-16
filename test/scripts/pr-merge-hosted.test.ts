@@ -141,19 +141,6 @@ describePosix("native hosted merge handoff", () => {
     expect(hosted).toBeGreaterThanOrEqual(0);
     expect(events.findIndex((event) => event.kind === "required-checks")).toBeGreaterThan(hosted);
     expect(events.some((event) => event.kind === "ci-watched")).toBe(false);
-    const reviewReads = events
-      .map((event, index) => ({ event, index }))
-      .filter(({ event }) => event.kind === "review-comments");
-    expect(reviewReads).toHaveLength(2);
-    expect(reviewReads[1]?.index).toBeLessThan(
-      events.findIndex(
-        (event) =>
-          event.kind === "gh" &&
-          event.args?.[0] === "api" &&
-          event.args.includes("graphql") &&
-          event.args.includes("--input"),
-      ),
-    );
     expect(
       events.some(
         (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
@@ -375,5 +362,113 @@ describePosix("native pending GitHub merge handoff", () => {
     expect(f.git(f.origin, "rev-parse", "main")).toBe(f.main);
     expect(f.git(f.origin, "rev-parse", "topic")).toBe(f.head);
     expect(existsSync(f.worktree)).toBe(true);
+  });
+});
+
+describePosix("native superseded-only UNSTABLE merge handoff", () => {
+  let f: ReturnType<typeof createMainRefreshFixture>;
+
+  function rollup(replacement: "SUCCESS" | "FAILURE" | null) {
+    function check(name: string, conclusion: string, run: number, workflow: number) {
+      return {
+        kind: "CheckRun" as const,
+        databaseId: run * 10,
+        name,
+        status: "COMPLETED",
+        conclusion,
+        checkSuite: {
+          databaseId: run * 100,
+          workflowRun: {
+            databaseId: run,
+            event: name === "dispatch" ? "pull_request_target" : "pull_request",
+            workflow: { databaseId: workflow },
+          },
+        },
+      };
+    }
+    const nodes = [check("CI", "SUCCESS", 1, 10), check("dispatch", "CANCELLED", 100, 20)];
+    if (replacement) {
+      nodes.push(check("dispatch", replacement, 200, 20));
+    }
+    return {
+      state: "FAILURE",
+      contexts: {
+        totalCount: nodes.length,
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes,
+      },
+    };
+  }
+
+  beforeAll(() => {
+    f = createMainRefreshFixture(tempDirs.make("openclaw-pr-merge-unstable-"));
+    delete f.env.OPENCLAW_TESTBOX;
+    f.env.OPENCLAW_PR_GATES_REMOTE = "github";
+    f.seedPreparedMerge();
+    writeFileSync(
+      join(f.local, "gates.env"),
+      `PR_NUMBER=42\nDOCS_ONLY=false\nCHANGELOG_REQUIRED=false\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
+    );
+    f.configure({
+      metadata: { ...f.metadata, mergeStateStatus: "UNSTABLE" },
+      requiredChecks: "pass",
+    });
+  });
+
+  it.each([
+    { fault: "unsuperseded cancellation", replacement: null, hostedCi: "scheduled" },
+    { fault: "failing replacement", replacement: "FAILURE", hostedCi: "scheduled" },
+    { fault: "unsuccessful ci.yml run", replacement: "SUCCESS", hostedCi: "missing" },
+  ] as const)("refuses $fault before intent or dispatch", ({ replacement, hostedCi }) => {
+    f.configure({ rollup: rollup(replacement), hostedCi });
+    const before = f.events().length;
+    const result = f.run(["merge-run", "42", "--auto-merge"]);
+    const output = result.stdout + result.stderr;
+    expect(result.status, output).toBe(1);
+    expect(output).toContain(
+      "auto-merge admission of MERGEABLE/UNSTABLE requires a GREEN CI watcher pass at the prepared head",
+    );
+    const events = f.events().slice(before);
+    expect(
+      events.some(
+        (event) =>
+          event.kind === "gh" &&
+          ((event.args?.[0] === "api" &&
+            event.args.includes("graphql") &&
+            event.args.includes("--input")) ||
+            (event.args?.[0] === "pr" && event.args[1] === "merge")),
+      ),
+    ).toBe(false);
+    expect(f.git(f.canonical, "for-each-ref", "--format=%(refname)", outcomeRef)).toBe("");
+    expect(f.git(f.origin, "rev-parse", "main")).toBe(f.main);
+  });
+
+  it("dispatches one immediate exact-head squash after the real watcher exits GREEN", () => {
+    f.configure({ rollup: rollup("SUCCESS"), hostedCi: "scheduled" });
+    const before = f.events().length;
+    const result = f.run(["merge-run", "42", "--auto-merge"]);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const events = f.events().slice(before);
+    expect(
+      events.filter(
+        (event) =>
+          event.kind === "gh" &&
+          event.args?.[0] === "api" &&
+          event.args.includes("graphql") &&
+          event.args.includes("--input"),
+      ),
+    ).toHaveLength(1);
+    expect(
+      events.some(
+        (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
+      ),
+    ).toBe(false);
+    expect(events.some((event) => event.kind === "ci-watched")).toBe(true);
+    expect(events.some((event) => event.kind === "rollup-read")).toBe(true);
+    expect(JSON.parse(f.git(f.canonical, "show", `${outcomeRef}:outcome.json`))).toMatchObject({
+      head: f.head,
+      route: "immediate",
+      phase: "complete",
+    });
   });
 });

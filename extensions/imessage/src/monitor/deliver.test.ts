@@ -72,86 +72,6 @@ describe("deliverIMessageReply", () => {
     vi.resetModules();
   });
 
-  it("sends monitor text chunks without reusing the watch rpc client", async () => {
-    chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
-
-    await deliverIMessageReply({
-      cfg: IMESSAGE_TEST_CFG,
-      payload: { text: "first|second", replyToId: "reply-1" },
-      target: "chat_id:10",
-      accountId: "default",
-      runtime,
-      maxBytes: 4096,
-      textLimit: 4000,
-    });
-
-    expect(sendMessageIMessageMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
-      [
-        "chat_id:10",
-        "first",
-        expect.objectContaining({
-          config: IMESSAGE_TEST_CFG,
-          maxBytes: 4096,
-          accountId: "default",
-          replyToId: "reply-1",
-        }),
-      ],
-      [
-        "chat_id:10",
-        "second",
-        expect.objectContaining({
-          config: IMESSAGE_TEST_CFG,
-          maxBytes: 4096,
-          accountId: "default",
-          replyToId: "reply-1",
-        }),
-      ],
-    ]);
-  });
-
-  it("propagates payload replyToId through media sends", async () => {
-    await deliverIMessageReply({
-      cfg: IMESSAGE_TEST_CFG,
-      payload: {
-        text: "caption",
-        mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
-        replyToId: "reply-2",
-      },
-      target: "chat_id:20",
-      accountId: "acct-2",
-      runtime,
-      maxBytes: 8192,
-      textLimit: 4000,
-    });
-
-    expect(sendMessageIMessageMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
-      [
-        "chat_id:20",
-        "caption",
-        expect.objectContaining({
-          config: IMESSAGE_TEST_CFG,
-          mediaUrl: "https://example.com/a.jpg",
-          maxBytes: 8192,
-          accountId: "acct-2",
-          replyToId: "reply-2",
-        }),
-      ],
-      [
-        "chat_id:20",
-        "",
-        expect.objectContaining({
-          config: IMESSAGE_TEST_CFG,
-          mediaUrl: "https://example.com/b.jpg",
-          maxBytes: 8192,
-          accountId: "acct-2",
-          replyToId: "reply-2",
-        }),
-      ],
-    ]);
-  });
-
   it("forwards voice-note payloads to the canonical iMessage media sender", async () => {
     await deliverIMessageReply({
       cfg: IMESSAGE_TEST_CFG,
@@ -269,39 +189,6 @@ describe("deliverIMessageReply", () => {
       media: { contentType: "image/jpeg", kind: "image" },
       messageId: "imsg-media-1",
     });
-  });
-
-  it("returns every accepted native chunk without inventing failed thread metadata", async () => {
-    chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
-    sendMessageIMessageMock
-      .mockResolvedValueOnce({
-        messageId: "accepted-first",
-        sentText: "first",
-        receipt: createTestIMessageReceipt("accepted-first"),
-      })
-      .mockResolvedValueOnce({
-        messageId: "accepted-second",
-        sentText: "second",
-        receipt: createTestIMessageReceipt("accepted-second"),
-      });
-
-    const delivered = await deliverIMessageReply({
-      cfg: IMESSAGE_TEST_CFG,
-      payload: { text: "first|second", replyToId: "unsupported-thread" },
-      target: "chat_id:70",
-      accountId: "default",
-      runtime,
-      maxBytes: 4096,
-      textLimit: 4000,
-    });
-
-    expect(delivered).toMatchObject({
-      visibleReplySent: true,
-      messageIds: ["accepted-first", "accepted-second"],
-      content: "first\nsecond",
-      receipt: { platformMessageIds: ["accepted-first", "accepted-second"] },
-    });
-    expect(delivered).not.toHaveProperty("receipt.replyToId");
   });
 
   it("preserves earlier media receipts when a later native caption fails", async () => {

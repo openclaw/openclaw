@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { observeCronJobWrites } from "../../../test/helpers/cron/runtime-mutation.js";
+import { observeCronJobCommits } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -15,7 +15,7 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { resolveCronMutationCommitGuard } from "./cron-caller-scope.js";
 
-it("revalidates a scheduled Gateway caller while its child reservation holds the SQLite writer", async () => {
+it("revalidates a scheduled Gateway caller after its child reservation commits without main-thread SQL", async () => {
   await withOpenClawTestState({ label: "cron-reservation-caller-authority" }, async (fixture) => {
     const now = Date.now();
     const storePath = fixture.statePath("cron", "jobs.json");
@@ -65,15 +65,15 @@ it("revalidates a scheduled Gateway caller while its child reservation holds the
     if (!commitGuard) {
       throw new Error("Scheduled Gateway caller did not retain its commit guard");
     }
-    let checkedWhileWriting = false;
+    let checkedAfterCommit = false;
     const sql = observeMainThreadSql();
     sql.calibrate();
-    const stopObserving = observeCronJobWrites(target.id, (written) => {
-      if (written.queuedAtMs !== undefined) {
+    const stopObserving = observeCronJobCommits(target.id, (committed) => {
+      if (committed.queuedAtMs !== undefined) {
         sql.clear();
         commitGuard();
         sql.expectIdle();
-        checkedWhileWriting = true;
+        checkedAfterCommit = true;
       }
     });
     try {
@@ -81,7 +81,7 @@ it("revalidates a scheduled Gateway caller while its child reservation holds the
         ok: true,
         ran: true,
       });
-      expect(checkedWhileWriting).toBe(true);
+      expect(checkedAfterCommit).toBe(true);
       expect(runner).toHaveBeenCalledOnce();
       admission.close();
       expect(commitGuard).toThrow("agent runtime authority is no longer active");

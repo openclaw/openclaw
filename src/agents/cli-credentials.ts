@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -76,6 +77,22 @@ export function resolveCodexCliHomePath(codexHome?: string, env: NodeJS.ProcessE
 function readCodexAuthMode(data: Record<string, unknown>): string {
   const authMode = typeof data.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
   return authMode || (typeof data.OPENAI_API_KEY === "string" ? "api_key" : "chatgpt");
+}
+
+/** Presence is only a discovery hint; Codex verifies the login without exporting its tokens. */
+export function hasCodexCliAuthFile(codexHome?: string): boolean {
+  try {
+    const file = fs.statSync(
+      path.join(resolveCodexCliHomePath(codexHome), CODEX_CLI_AUTH_FILENAME),
+    );
+    return file.isFile() && file.size > 0;
+  } catch (error) {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function readFileMtimeMs(filePath: string): number | null {

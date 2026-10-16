@@ -62,7 +62,7 @@ export async function writeNostrBusState(params: {
     version: STORE_VERSION,
     lastProcessedAt: params.lastProcessedAt,
     gatewayStartedAt: params.gatewayStartedAt,
-    recentEventIds: (params.recentEventIds ?? []).filter((x): x is string => typeof x === "string"),
+    recentEventIds: params.recentEventIds ?? [],
   };
   await openNostrBusStateStore(params.env).register(
     normalizeNostrStateAccountId(params.accountId),

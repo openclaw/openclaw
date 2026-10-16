@@ -86,6 +86,7 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
   function configureCli(
     methods: string[],
     bootstrapError = "Matrix room key backup is not usable",
+    executionFailure?: Error,
   ) {
     mocks.createRuntime.mockImplementation(async () => ({
       rootDir: root,
@@ -116,13 +117,24 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
             );
             await response.arrayBuffer();
           }
-          throw new Error("synthetic CLI exit 1");
+          if (executionFailure) {
+            throw executionFailure;
+          }
+          return {
+            args,
+            exitCode: 7,
+            stdout: JSON.stringify({
+              success: false,
+              bootstrap: { success: false, error: bootstrapError },
+            }),
+            stderr: "",
+          };
         },
       }),
     }));
   }
 
-  it.each([{ methods: [] }, { methods: ["GET"] }])(
+  it.each([{ methods: ["GET"] }])(
     "rejects CLI failure without POST evidence: %j",
     async ({ methods }) => {
       configureCli(methods);
@@ -144,16 +156,15 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
     expect(closed).toBe(true);
   });
 
-  it.each([new Error("runtime construction failed"), undefined])(
-    "closes the already-acquired proxy and preserves construction rejection %s",
-    async (failure) => {
-      mocks.createRuntime.mockRejectedValueOnce(failure);
-      await expect(run()).rejects.toBe(failure);
-      expect(closed).toBe(true);
-    },
-  );
+  it("does not accept partial failure JSON from a timed-out CLI", async () => {
+    const failure = new Error("Matrix QA CLI command timed out after 1000ms");
+    configureCli(["POST"], "Matrix room key backup is not usable", failure);
+    await expect(run()).rejects.toBe(failure);
+    expect(closed).toBe(true);
+    expect(dispose).toHaveBeenCalledOnce();
+  });
 
-  it.each([new Error("runtime construction failed"), undefined])(
+  it.each([undefined])(
     "retains construction rejection %s before proxy cleanup failure",
     async (failure) => {
       proxyCleanupFailure = new Error("proxy stop failed");

@@ -1,10 +1,14 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type Mock } from "vitest";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import * as sessionIdentity from "../config/sessions/session-accessor.sqlite-identity.js";
+import { redactSensitiveText } from "../logging/redact.js";
+import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { RespondFn } from "./server-methods/types.js";
 import { prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
+import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 type GoalChatScope = { agentId: string; sessionKey: string; sessionId: string; storePath: string };
@@ -39,6 +43,31 @@ export function readGoalChatUserMessages(scope: GoalChatScope) {
   });
 }
 
+export function expectGoalChatRetryResponses(
+  responses: readonly Mock<RespondFn>[],
+  runId: string,
+  goalId: string | undefined,
+) {
+  expect(
+    responses.some((response) => {
+      const [ok, result] = response.mock.calls[0]!;
+      return ok && isRecord(result) && result.status === "started";
+    }),
+  ).toBe(true);
+  for (const response of responses) {
+    const [ok, result, error] = response.mock.calls[0]!;
+    if (ok) {
+      if (isRecord(result) && result.status === "in_flight") {
+        expect(result).toEqual({ status: "in_flight", runId });
+      } else {
+        expect(result).toMatchObject({ status: "started", goalId });
+      }
+    } else {
+      expect(error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+    }
+  }
+}
+
 export function registerGoalChatRestartSettlementCase(fixture: {
   scope: () => GoalChatScope;
   createStorePath: () => string;
@@ -68,7 +97,20 @@ export function registerGoalChatRestartSettlementCase(fixture: {
       });
     try {
       const response = await fixture.send(request);
-      expect(rejected).toBe(true);
+      const failureDiagnostic = rejected
+        ? undefined
+        : redactSensitiveText(
+            JSON.stringify({
+              publicationCount: notification.mock.calls.length,
+              responses: response.mock.calls.map(([ok, result, error]) => ({
+                ok,
+                status: isRecord(result) ? result.status : undefined,
+                error: error && { code: error.code, message: error.message },
+              })),
+            }),
+            { mode: "tools" },
+          ).slice(0, 4_000);
+      expect(rejected, failureDiagnostic).toBe(true);
       expect(response.mock.calls[0]?.[0]).toBe(false);
       fixture.assertNoModelRun();
       expect(loadSessionEntry(fixture.scope())).toMatchObject({
@@ -83,4 +125,22 @@ export function registerGoalChatRestartSettlementCase(fixture: {
       notification.mockRestore();
     }
   });
+}
+
+export function installReplyDispatchHook(eligibleDispatchKinds?: readonly ["acp"]) {
+  const handler = vi.fn(async () => ({
+    handled: true,
+    queuedFinal: false,
+    counts: { tool: 0, block: 0, final: 0 },
+  }));
+  const registry = getTestPluginRegistry();
+  registry.typedHooks.push({
+    pluginId: "goal-dispatch-fixture",
+    hookName: "reply_dispatch",
+    handler,
+    ...(eligibleDispatchKinds ? { eligibleDispatchKinds } : {}),
+    source: "test",
+  });
+  initializeGlobalHookRunner(registry);
+  return handler;
 }

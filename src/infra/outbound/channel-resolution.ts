@@ -188,7 +188,6 @@ export function resolveOutboundChannelPlugin(
 async function resolveOutboundChannelPluginAsync(
   params: OutboundChannelResolutionParams & { assertCurrent?: () => void },
 ): Promise<ChannelPlugin | undefined> {
-  params.assertCurrent?.();
   const steps = resolveOutboundChannelPluginSteps(params);
   let step = steps.next();
   while (!step.done) {
@@ -196,7 +195,6 @@ async function resolveOutboundChannelPluginAsync(
       ...step.value,
       assertCurrent: params.assertCurrent,
     });
-    params.assertCurrent?.();
     step = steps.next(registry);
   }
   return step.value;

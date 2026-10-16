@@ -503,7 +503,7 @@ describe("loadOpenClawPlugins", () => {
     expect(loaded?.error).toBe(error);
     expectRegistryErrorDiagnostic({ registry, pluginId: id, message: error });
     expect(errors).toEqual([
-      `[plugins] ${id} ${error}; ensure plugin is loaded via bundled channel discovery, not legacy plugin loader`,
+      `[plugins] ${id} ${error}; check that plugin is loaded via bundled channel discovery, not legacy plugin loader`,
     ]);
   });
 

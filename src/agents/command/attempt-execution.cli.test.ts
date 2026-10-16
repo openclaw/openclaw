@@ -7,6 +7,10 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerGeneratedMediaTaskActivity } from "../../agents/media-generation-activity.js";
 import { persistAcpDispatchTranscript } from "../../auto-reply/reply/dispatch-acp-transcript.runtime.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   formatSqliteSessionFileMarker,
@@ -44,6 +48,7 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { buildCliRunResult } from "../cli-runner/cli-run-settlement.js";
 import { buildCliMcpGrantContext } from "../cli-runner/mcp-grant-context.js";
+import { prepareCliRunTerminalReply } from "../cli-runner/terminal-reply.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
 import { createCronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
@@ -76,27 +81,32 @@ import {
   saveTestAuthProfiles,
 } from "./attempt-execution.cli.test-support.js";
 import { runAgentAttempt as runAgentAttemptImpl } from "./attempt-execution.js";
+import { registerCommandReplyPolicyTests } from "./attempt-execution.reply-policy.test-support.js";
+import {
+  restrictedCompletionCases,
+  type RestrictedCompletion,
+} from "./attempt-execution.restricted-completion.test-fixtures.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import { resolveEmbeddedModelSelection } from "./model-selection.js";
 import { persistAcpTurnTranscript, persistCliTurnTranscript } from "./transcript-persistence.js";
 
-type TrustedHandoff = NonNullable<RunCliAgentParams["trustedInternalHandoff"]>;
-type RestrictedCompletion = {
-  name: string;
-  providerName?: string;
-  execHost?: "node";
-  seedChildLineage?: boolean;
-  forge?: (handoff: TrustedHandoff) => TrustedHandoff | undefined;
+const runAgentAttempt = (params: RunAgentAttemptOverrides) => {
+  const prepared = makeRunAgentAttemptParams(params);
+  setRuntimeConfigSnapshot(prepared.cfg);
+  return runAgentAttemptImpl(prepared);
 };
-
-const runAgentAttempt = (params: RunAgentAttemptOverrides) =>
-  runAgentAttemptImpl(makeRunAgentAttemptParams(params));
 
 const runCliAgentMock = vi.hoisted(() => vi.fn());
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
+const executePreparedCliRunMock = vi.hoisted(() => vi.fn());
 const hasClaudeSessionMock = vi.hoisted(() => vi.fn(() => false));
 vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
+}));
+
+vi.mock("../cli-runner/execute.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli-runner/execute.runtime.js")>()),
+  executePreparedCliRun: executePreparedCliRunMock,
 }));
 
 vi.mock("../cli-runner/cli-live-session-registry.js", () => ({
@@ -280,9 +290,11 @@ describe("CLI attempt execution", () => {
   beforeEach(async () => {
     homeEnvSnapshot = captureEnv(["HOME", "OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", suiteRoot);
+    setRuntimeConfigSnapshot({ session: { store: storePath } });
     tmpDir = await fixtureRoot.make();
     runCliAgentMock.mockReset();
     runEmbeddedAgentMock.mockReset();
+    executePreparedCliRunMock.mockReset();
     resetGeneratedMediaTaskActivityForTests();
     hasClaudeSessionMock.mockReset();
     hasClaudeSessionMock.mockReturnValue(false);
@@ -358,6 +370,7 @@ describe("CLI attempt execution", () => {
     resetCliAttemptFixtureDatabases(suiteRoot);
     await fs.rm(tmpDir, { recursive: true, force: true });
     await fs.rm(storePath, { force: true });
+    clearRuntimeConfigSnapshot();
     homeEnvSnapshot?.restore();
     homeEnvSnapshot = undefined;
   });
@@ -940,6 +953,7 @@ describe("CLI attempt execution", () => {
     const cliResult = buildCliRunResult({
       context,
       output,
+      preparedReply: prepareCliRunTerminalReply(context, output),
       effectiveCliSessionId: output.sessionId,
       bindingFlushOk: false,
       usedHistoryPrompt: false,
@@ -1085,6 +1099,7 @@ describe("CLI attempt execution", () => {
         return buildCliRunResult({
           context,
           output: { text: "partial reply", terminalInterruption: { reason } },
+          preparedReply: prepareCliRunTerminalReply(context, { text: "partial reply" }),
           effectiveCliSessionId: replacement ? successorCliSessionId : cliSessionId,
           bindingFlushOk: true,
           usedHistoryPrompt: false,
@@ -1519,7 +1534,7 @@ describe("CLI attempt execution", () => {
         sessionStore,
       });
     if (error) {
-      expect(run).toThrow(error);
+      await expect(run()).rejects.toThrow(error);
       expect(runCliAgentMock).not.toHaveBeenCalled();
     } else {
       await run();
@@ -2042,48 +2057,48 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it("routes canonical Anthropic models through the configured Claude CLI runtime", async () => {
-    const sessionKey = "agent:main:direct:canonical-claude-cli";
-    const sessionEntry = makeSessionEntry("openclaw-session-canonical-cli");
-    const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("canonical cli"));
-    const fallbackRuntimeState: NonNullable<RunAgentAttemptParams["fallbackRuntimeState"]> = {};
-    const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
-    const imageOrder = ["inline" as const];
+  it.each([undefined, "lightweight"] as const)(
+    "routes canonical Anthropic models through CLI with %s bootstrap context",
+    async (bootstrapContextMode) => {
+      const sessionKey = "agent:main:direct:canonical-claude-cli";
+      const sessionEntry = makeSessionEntry("openclaw-session-canonical-cli");
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("canonical cli"));
+      const fallbackRuntimeState: NonNullable<RunAgentAttemptParams["fallbackRuntimeState"]> = {};
+      const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
 
-    await runStoredAttempt({
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-7",
-      cfg: cliRuntimeConfig("anthropic/claude-opus-4-7", "claude-cli"),
-      sessionEntry,
-      sessionKey,
-      body: "route this",
-      isFallbackRetry: true,
-      runId: "run-canonical-claude-cli",
-      opts: { images, imageOrder },
-      messageChannel: "telegram",
-      sessionStore,
-      fallbackRuntimeState,
-    });
+      await runStoredAttempt({
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-7",
+        cfg: cliRuntimeConfig("anthropic/claude-opus-4-7", "claude-cli"),
+        sessionEntry,
+        sessionKey,
+        body: "route this",
+        isFallbackRetry: true,
+        opts: { images, imageOrder: ["inline"], bootstrapContextMode },
+        sessionStore: await seedSessionStore(sessionKey, sessionEntry),
+        fallbackRuntimeState,
+      });
 
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expectMockArgFields(runCliAgentMock, {
-      provider: "claude-cli",
-      model: "claude-opus-4-7",
-      imagePrompt: "route this",
-      images,
-      imageOrder,
-    });
-    expect(fallbackRuntimeState.originRuntime).toBe("cli");
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expectMockArgFields(runCliAgentMock, {
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        imagePrompt: "route this",
+        images,
+        imageOrder: ["inline"],
+        bootstrapContextMode,
+      });
+      expect(fallbackRuntimeState.originRuntime).toBe("cli");
 
-    const fallbackArg = await runOpenClawEmbeddedAttemptForTest({
-      runId: "run-canonical-claude-cli-fallback",
-      isFallbackRetry: true,
-      fallbackRuntimeState,
-      opts: { images },
-    });
-    expect(fallbackArg.images).toEqual(images);
-  });
+      const fallbackArg = await runOpenClawEmbeddedAttemptForTest({
+        isFallbackRetry: true,
+        fallbackRuntimeState,
+        opts: { images, bootstrapContextMode },
+      });
+      expect(fallbackArg.images).toEqual(images);
+      expect(fallbackArg.bootstrapContextMode).toBe(bootstrapContextMode);
+    },
+  );
 
   it("publishes logical cancellation before an embedded-to-CLI fallback starts", async () => {
     const sessionKey = "agent:main:direct:cli-lifecycle-handoff";
@@ -2122,54 +2137,14 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runCliAgentMock, { abortSignal: controller.signal });
   });
 
-  it.each(["openai", "claude-cli"])(
-    "applies %s inter-session reply policy to internal, direct, and group sessions",
-    async (providerOverride) => {
-      const selectedRunner = providerOverride === "openai" ? runEmbeddedAgentMock : runCliAgentMock;
-      for (const [
-        sessionKey,
-        messageChannel,
-        privateCompletion,
-        allowSilence,
-        sourceTool = "subagent_settle",
-      ] of [
-        ["agent:main:subagent:reply-required", "discord"],
-        ["agent:main:direct:reply-required", "webchat"],
-        ["agent:main:direct:private-reply-required", "telegram", true],
-        ["agent:main:telegram:direct:reply-required", "telegram"],
-        ["agent:main:telegram:group:optional", "telegram", undefined, true],
-        ["agent:main:telegram:direct:delegated", "telegram", undefined, false, "sessions_send"],
-        ["agent:main:telegram:group:delegated", "telegram", undefined, true, "sessions_send"],
-      ] as const) {
-        const sessionEntry = makeSessionEntry(`session-${messageChannel}`);
-        const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
-        selectedRunner.mockResolvedValueOnce({ meta: { durationMs: 1 } });
-
-        await runStoredAttempt({
-          providerOverride,
-          modelOverride: providerOverride === "openai" ? "gpt-5.4" : "opus",
-          sessionEntry,
-          sessionKey,
-          sessionStore,
-          messageChannel,
-          cfg: { surfaces: { telegram: { silentReply: { group: "allow" } } } },
-          opts: {
-            privateCompletion,
-            inputProvenance: { kind: "inter_session", sourceTool },
-          },
-        });
-
-        expectMockArgFields(
-          selectedRunner,
-          {
-            terminalReplyExpectation: allowSilence ? "optional" : "required",
-            silentReplyPromptMode: allowSilence ? undefined : "none",
-          },
-          selectedRunner.mock.calls.length - 1,
-        );
-      }
-    },
-  );
+  registerCommandReplyPolicyTests({
+    runStoredAttempt,
+    seedSessionStore,
+    runEmbeddedAgentMock,
+    runCliAgentMock,
+    executePreparedCliRunMock,
+    expectMockArgFields,
+  });
 
   it("suppresses live stream output for hidden internal runs", async () => {
     const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
@@ -2268,7 +2243,7 @@ describe("CLI attempt execution", () => {
     });
 
     expect(embeddedArg.suppressLiveStreamOutput).toBe(false);
-    expect(embeddedArg.terminalReplyExpectation).toBe("required");
+    expect(embeddedArg.terminalReplyExpectation).toBe("result-required");
     expect(embeddedArg.cronCreatorAuthorityCapability).toBe(capability);
     const callback = embeddedArg.onExecutionStarted;
     if (typeof callback !== "function") {
@@ -2338,16 +2313,7 @@ describe("CLI attempt execution", () => {
       });
     },
   );
-  it.each([
-    { name: "a non-Claude CLI runtime", providerName: "google-gemini-cli", execHost: undefined },
-    { name: "a node-hosted Claude CLI requester", providerName: "claude-cli", execHost: "node" },
-    { name: "a missing capability", seedChildLineage: true, forge: () => undefined },
-    {
-      name: "a capability without persisted child lineage",
-      seedChildLineage: false,
-      forge: (handoff: TrustedHandoff) => handoff,
-    },
-  ] satisfies RestrictedCompletion[])(
+  it.each(restrictedCompletionCases)(
     "restricts completion tools for $name",
     async ({
       providerName = "claude-cli",
@@ -2452,6 +2418,7 @@ describe("embedded attempt harness pinning", () => {
     closeAuthProfileReadPool({ kind: "root", rootPath: tmpDir });
     await cleanupSessionStateForTest({ stateDir: tmpDir });
     await fs.rm(tmpDir, { recursive: true, force: true });
+    clearRuntimeConfigSnapshot();
   });
 
   function runHarnessAttempt(

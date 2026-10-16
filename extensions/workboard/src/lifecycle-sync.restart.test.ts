@@ -187,7 +187,7 @@ describe("Workboard prepared launch restart recovery", () => {
           automation: { launch: { phase: "accepted", acceptedRunId: "accepted-run" } },
           attempts: [
             expect.objectContaining({
-              id: "accepted-run",
+              id: expect.any(String),
               status: "succeeded",
               runId: "accepted-run",
             }),
@@ -195,6 +195,7 @@ describe("Workboard prepared launch restart recovery", () => {
         },
       });
       expect(terminal?.metadata?.attempts).toHaveLength(1);
+      expect(terminal?.metadata?.attempts?.[0]?.id).toBe(accepted?.metadata?.attempts?.[0]?.id);
 
       await stopLifecycleSweep(lifecycle);
       lifecycle = undefined;
@@ -289,37 +290,46 @@ describe("Workboard prepared launch restart recovery", () => {
     }
   });
 
-  it("keeps a prepared launch running when the post-restart snapshot is incomplete", async () => {
-    const interrupted = await beginPreparedDispatch();
-    let lifecycle: Awaited<ReturnType<typeof startLifecycleSweep>> | undefined;
-    try {
-      lifecycle = await startLifecycleSweep({
-        store: interrupted.replacementStore,
-        sessions: [],
-        complete: false,
-      });
+  it.each(["incomplete", "ambiguous"] as const)(
+    "keeps a prepared launch running when the post-restart snapshot is %s",
+    async (snapshot) => {
+      const interrupted = await beginPreparedDispatch();
+      let lifecycle: Awaited<ReturnType<typeof startLifecycleSweep>> | undefined;
+      try {
+        lifecycle = await startLifecycleSweep({
+          store: interrupted.replacementStore,
+          sessions:
+            snapshot === "ambiguous"
+              ? [
+                  { key: `agent:alpha:${interrupted.prepared.sessionKey}`, status: "done" },
+                  { key: `agent:beta:${interrupted.prepared.sessionKey}`, status: "done" },
+                ]
+              : [],
+          complete: snapshot === "ambiguous",
+        });
 
-      lifecycle.service.onGatewayStart();
-      const readSessions = lifecycle.readSessions;
-      await vi.waitFor(() => expect(readSessions).toHaveBeenCalledOnce());
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-      await expect(interrupted.replacementStore.get(interrupted.card.id)).resolves.toMatchObject({
-        status: "running",
-        sessionKey: interrupted.prepared.sessionKey,
-        runId: interrupted.prepared.provisionalRunId,
-        metadata: {
-          claim: { ownerId: "workboard-dispatcher" },
-          automation: { launch: { phase: "prepared" } },
-        },
-      });
+        lifecycle.service.onGatewayStart();
+        const readSessions = lifecycle.readSessions;
+        await vi.waitFor(() => expect(readSessions).toHaveBeenCalledOnce());
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+        await expect(interrupted.replacementStore.get(interrupted.card.id)).resolves.toMatchObject({
+          status: "running",
+          sessionKey: interrupted.prepared.sessionKey,
+          runId: interrupted.prepared.provisionalRunId,
+          metadata: {
+            claim: { ownerId: "workboard-dispatcher" },
+            automation: { launch: { phase: "prepared" } },
+          },
+        });
 
-      await stopLifecycleSweep(lifecycle);
-      lifecycle = undefined;
-      await rejectInterruptedDispatch(interrupted);
-    } finally {
-      await cleanupInterruptedDispatch(interrupted, lifecycle);
-    }
-  });
+        await stopLifecycleSweep(lifecycle);
+        lifecycle = undefined;
+        await rejectInterruptedDispatch(interrupted);
+      } finally {
+        await cleanupInterruptedDispatch(interrupted, lifecycle);
+      }
+    },
+  );
 });

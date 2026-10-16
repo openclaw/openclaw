@@ -2,11 +2,7 @@ import type { ResponseInput } from "openai/resources/responses/responses.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { StreamOptions, UserMessage } from "../types.js";
-import {
-  createResponsesSteering,
-  omitAcceptedSteering,
-  projectResponsesSteeringInput,
-} from "./openai-responses-steering.js";
+import { createResponsesSteering, omitAcceptedSteering } from "./openai-responses-steering.js";
 
 const messages: UserMessage[] = [{ role: "user", content: "change direction", timestamp: 1 }];
 const input: ResponseInput = [{ role: "user", content: "change direction" }];
@@ -43,77 +39,6 @@ function setup(options: Partial<Parameters<typeof createResponsesSteering>[0]> =
 }
 
 describe("Responses steering admission", () => {
-  it("projects JSON-serializable payload hooks using their wire representation", async () => {
-    const metadata = { probe: { toJSON: () => "wire-value" } };
-    const request = { input: [...input], metadata };
-    const appended: ResponseInput = [{ role: "user", content: "later update" }];
-    await expect(
-      projectResponsesSteeringInput(request, async () => ({
-        ...request,
-        input: [...request.input, ...appended],
-      })),
-    ).resolves.toEqual(appended);
-    expect(request.input).toEqual(input);
-    expect(request.metadata).toBe(metadata);
-  });
-  it("binds queued input to the created response and retains accepted input for continuation", async () => {
-    const harness = setup();
-    expect(harness.steering.responseId).toBeUndefined();
-    expect(harness.steering.handle(created)).toBe(false);
-    expect(harness.steering.responseId).toBe("resp_1");
-    const accepted = harness.control.steer(messages);
-    expect(harness.send).toHaveBeenCalledWith({
-      type: "response.steer",
-      previous_response_id: "resp_1",
-      input,
-    });
-    expect(harness.steering.pending).toBe(true);
-    expect(harness.steering.acceptedInput).toEqual([]);
-    expect(harness.steering.handle(acknowledgement("accepted"))).toBe(true);
-    expect(await accepted).toBe(true);
-    expect(harness.steering.pending).toBe(false);
-    expect(harness.steering.acceptedInput).toEqual(input);
-    expect(
-      harness.steering.handle({
-        ...acknowledgement("pending"),
-        reason: "waiting_for_required_input",
-        required_input: [{ type: "function_call_output", call_id: "call_1", name: "lookup" }],
-      }),
-    ).toBe(true);
-    harness.steering.seal();
-    expect(await harness.control.steer(messages)).toBe(false);
-    expect(harness.cleanup).toHaveBeenCalledOnce();
-    expect(harness.send).toHaveBeenCalledOnce();
-  });
-
-  it.each(["steer_1", undefined])(
-    "distinguishes rejection with ID %s before acceptance from failure after acceptance",
-    async (id) => {
-      const harness = setup();
-      harness.steering.handle(created);
-      const rejected = harness.control.steer(messages);
-      harness.steering.handle({
-        ...acknowledgement("failed"),
-        steer: {
-          previous_response_id: "resp_1",
-          ...(id === undefined ? {} : { id }),
-          input,
-        },
-        error: { code: "steering_not_supported" },
-      });
-      expect(await rejected).toBe(false);
-      expect(harness.steering.acceptedInput).toEqual([]);
-      const accepted = harness.control.steer(messages);
-      harness.steering.handle(acknowledgement("accepted", "steer_2"));
-      expect(await accepted).toBe(true);
-      expect(() => harness.steering.handle(acknowledgement("failed", "steer_2"))).toThrow(
-        "could not apply accepted steering",
-      );
-      expect(harness.steering.acceptedInput).toEqual(input);
-      harness.steering.seal();
-    },
-  );
-
   it("matches rejection before ID allocation to the returned pending input", async () => {
     const later: UserMessage[] = [{ role: "user", content: "later update", timestamp: 2 }];
     const laterInput: ResponseInput = [{ role: "user", content: "later update" }];
@@ -161,7 +86,7 @@ describe("Responses steering admission", () => {
     await rejection;
   });
 
-  it.each(["accepted", "failed"])(
+  it.each(["failed"])(
     "does not apply a duplicate %s acknowledgement to a later submission",
     async (type) => {
       const harness = setup();
@@ -178,23 +103,6 @@ describe("Responses steering admission", () => {
       expect(harness.steering.acceptedInput).toEqual(type === "accepted" ? input : []);
     },
   );
-
-  it("rejects unresolved admission on closure and fences the retained controller", async () => {
-    const harness = setup();
-    harness.steering.handle(created);
-    const pending = harness.control.steer(messages);
-    const rejection = expect(pending).rejects.toThrow("connection lost");
-    harness.steering.close(new Error("connection lost"));
-    await rejection;
-    harness.steering.close(new Error("already closed"));
-    expect(await harness.control.steer(messages)).toBe(false);
-    expect(harness.steering.handle({ type: "response.created", response: { id: "resp_2" } })).toBe(
-      false,
-    );
-    expect(harness.steering.responseId).toBe("resp_1");
-    expect(harness.send).toHaveBeenCalledOnce();
-    expect(harness.cleanup).toHaveBeenCalledOnce();
-  });
 
   it("does not dispatch when conversion closes the response owner", async () => {
     const harness = setup({

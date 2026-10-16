@@ -32,7 +32,7 @@ Runtime behavior:
 - `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`.
 - `realtime.idleHangupMs` optionally ends an active call after neither side has produced speech for the configured positive number of milliseconds. The timer pauses while an agent consult is running and is disabled when unset.
 - On hosts with the shared context resolver, Voice Call always tells the realtime model that it speaks for an OpenClaw agent that may have other sessions and work. `realtime.agentContext.enabled` is default-off and controls the additional configured identity and profile-file context. Supported older hosts retain the [legacy context behavior](/plugins/voice-call/realtime-and-streaming#agent-voice-context).
-- `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns authorized snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true. The active memory plugin authorizes session-transcript hits; plugins without that capability fail closed for session hits while ordinary memory hits remain available.
+- `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns authorized snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true. The active memory plugin authorizes session-transcript hits; plugins without that capability cannot return session hits while ordinary memory hits remain available.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
 - `inboundPolicy` must not be `"disabled"` when `realtime.enabled` is true; `validateProviderConfig` rejects that combination.
 - Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, `per-call` for isolated calls, or `main` for the configured agent's main session).
@@ -51,7 +51,8 @@ call is active before acting.
 
 Voice Call uses the same Gateway-owned GPT-Live bridge as Discord and Talk.
 Select `gpt-live-1-codex` with `cove` to use the ChatGPT OAuth route; it tries
-the routed agent's OpenClaw ChatGPT profile first, then the configured Platform
+the routed agent's OpenClaw ChatGPT profile (an OAuth sign-in or a pasted
+ChatGPT access token) first, then the configured Platform
 key, API-key profile, and `OPENAI_API_KEY`. Select `gpt-live-1` with `marin` for
 the public Platform API route. Leaving the model unset preserves Voice Call's
 provider default.

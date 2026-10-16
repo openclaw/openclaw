@@ -3,7 +3,6 @@ import type {
   CreateGhosttyTerminalOptions,
   GhosttyTerminalController,
 } from "@openclaw/libterminal/browser";
-import type { ReactiveControllerHost } from "lit";
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import type { TerminalPanelTab } from "./terminal-panel-tabs.ts";
@@ -35,6 +34,14 @@ export type TerminalOperation = {
   cancelIntent?: () => void;
 };
 
+export type TerminalRestoreBatch = {
+  operation: TerminalOperation;
+  pending: Map<string, TerminalPanelSessionTab | undefined>;
+  userClosedTab: boolean;
+  input: { interacted: boolean; stop: () => void };
+  cancelIntent?: () => void;
+};
+
 export function resolveTerminalPanelOwnerSessionKey(
   sessionKey: string | null,
   catalog?: CatalogSessionKey,
@@ -61,7 +68,10 @@ export type TerminalPanelSessionControllerState = {
   error: TerminalPanelError | null;
 };
 
-export interface TerminalPanelSessionControllerHost extends ReactiveControllerHost {
+export interface TerminalPanelSessionControllerHost {
+  readonly updateComplete: Promise<unknown>;
+  readonly ownerDocument: Document;
+  requestUpdate(): void;
   readonly isConnected: boolean;
   readonly client: TerminalGatewayClient | null;
   readonly agentId: string | null;
@@ -77,6 +87,7 @@ export interface TerminalPanelSessionControllerHost extends ReactiveControllerHo
   readonly terminalPanelUploadController: TerminalPanelUploadController;
   createTerminalController(
     options: CreateGhosttyTerminalOptions,
+    shouldFocusOnOpen?: () => boolean,
   ): Promise<GhosttyTerminalController>;
   closeTerminalPanel(): void;
   findTerminalPanelViewport(): Element | null;

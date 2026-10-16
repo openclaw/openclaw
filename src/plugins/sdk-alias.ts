@@ -41,7 +41,8 @@ import {
   WORKSPACE_PACKAGE_ALIAS_ENTRIES,
   WORKSPACE_PACKAGE_EXPORT_DIRS,
   WORKSPACE_PACKAGE_ALIAS_NAMES,
-  ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS,
+  workspacePackageExportAliasEntries,
+  workspacePackageAliasCandidates,
 } from "./sdk-alias-workspace.js";
 
 type PluginSdkAliasCandidateKind = "dist" | "src";
@@ -244,18 +245,23 @@ function resolveTrustedOpenClawRootFromArgvHint(params: {
   return hasTrustedOpenClawRootIndicator({ packageRoot, packageJson }) ? packageRoot : null;
 }
 
-function findNearestPluginSdkPackageRoot(startDir: string): string | null {
+function* pluginSdkAncestorDirs(startDir: string): Generator<string> {
   let cursor = path.resolve(startDir);
   for (let i = 0; i < 12; i += 1) {
-    const subpaths = readPluginSdkSubpathsFromPackageRoot(cursor);
-    if (subpaths) {
-      return cursor;
-    }
+    yield cursor;
     const parent = path.dirname(cursor);
     if (parent === cursor) {
       break;
     }
     cursor = parent;
+  }
+}
+
+function findNearestPluginSdkPackageRoot(startDir: string): string | null {
+  for (const dir of pluginSdkAncestorDirs(startDir)) {
+    if (readPluginSdkSubpathsFromPackageRoot(dir)) {
+      return dir;
+    }
   }
   return null;
 }
@@ -299,14 +305,8 @@ function listAncestorPluginRuntimeModuleCandidates(params: {
     if (!start) {
       continue;
     }
-    let cursor = path.resolve(start);
-    for (let i = 0; i < 12; i += 1) {
-      candidates.push(...listPluginRuntimeModuleCandidates(cursor, params.orderedKinds));
-      const parent = path.dirname(cursor);
-      if (parent === cursor) {
-        break;
-      }
-      cursor = parent;
+    for (const dir of pluginSdkAncestorDirs(start)) {
+      candidates.push(...listPluginRuntimeModuleCandidates(dir, params.orderedKinds));
     }
   }
   return dedupeResolvedPaths(candidates);
@@ -447,31 +447,6 @@ const BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN = /^(?:api|runtime-api|test-a
 const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
   /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(\.{1,2}\/[^"']+)["']/g;
 
-function normalizePackageExportSubpath(exportKey: string): string | null {
-  if (exportKey === ".") {
-    return "";
-  }
-  if (!exportKey.startsWith("./")) {
-    return null;
-  }
-  const subpath = exportKey.slice(2);
-  return subpath && !subpath.includes("..") ? subpath : null;
-}
-
-function resolvePackageExportImportPath(value: unknown): string | null {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (!isRecord(value)) {
-    return null;
-  }
-  return typeof value.import === "string"
-    ? value.import
-    : typeof value.default === "string"
-      ? value.default
-      : null;
-}
-
 function listRootPackagedWorkspacePackageAliasEntries(params: {
   packageRoot: string;
   packageName: string;
@@ -526,27 +501,9 @@ export function listWorkspacePackageExportAliasEntries(params: {
   const packageJson = readPluginSdkPackageJson(
     path.join(params.packageRoot, "packages", params.packageDir),
   );
-  const entries: WorkspacePackageAliasEntry[] = [];
-  for (const [exportKey, value] of Object.entries(packageJson?.exports ?? {})) {
-    const subpath = normalizePackageExportSubpath(exportKey);
-    const importPath = resolvePackageExportImportPath(value);
-    if (subpath === null || !importPath?.startsWith("./dist/") || !importPath.endsWith(".mjs")) {
-      continue;
-    }
-    const distFile = importPath.slice("./dist/".length);
-    const srcFile = distFile.replace(/\.mjs$/u, ".ts");
-    entries.push({
-      packageName: params.packageName,
-      packageDir: params.packageDir,
-      subpath,
-      srcFile,
-      distFile,
-    });
-  }
+  const entries = workspacePackageExportAliasEntries({ ...params, exports: packageJson?.exports });
   const result =
-    entries.length > 0
-      ? entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath))
-      : listRootPackagedWorkspacePackageAliasEntries(params);
+    entries.length > 0 ? entries : listRootPackagedWorkspacePackageAliasEntries(params);
   cache.set(key, result);
   return result;
 }
@@ -751,22 +708,9 @@ function resolveWorkspacePackageAliasMap(
   for (const entry of workspacePackageAliasEntries) {
     const alias = entry.subpath ? `${entry.packageName}/${entry.subpath}` : entry.packageName;
     for (const kind of orderedKinds) {
-      const candidates =
-        kind === "dist"
-          ? [
-              ...(ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS.has(entry.packageDir)
-                ? [
-                    path.join(
-                      packageRoot,
-                      "dist",
-                      entry.packageDir,
-                      entry.distFile.replace(/\.mjs$/u, ".js"),
-                    ),
-                  ]
-                : []),
-              path.join(packageRoot, "packages", entry.packageDir, "dist", entry.distFile),
-            ]
-          : [path.join(packageRoot, "packages", entry.packageDir, "src", entry.srcFile)];
+      const candidates = workspacePackageAliasCandidates(entry, kind).map((candidate) =>
+        path.join(packageRoot, candidate),
+      );
       const candidate = candidates.find((candidatePath) => pluginCacheExistsSync(candidatePath));
       if (candidate) {
         aliasMap[alias] = normalizeJitiAliasTargetPath(candidate);
@@ -794,15 +738,9 @@ function isBundledPluginModulePath(params: {
 }
 
 function isOfficialInstalledPluginModulePath(params: { modulePath: string; packageName: string }) {
-  let cursor = path.dirname(path.resolve(params.modulePath));
-  for (let depth = 0; depth < 12; depth += 1) {
+  for (const cursor of pluginSdkAncestorDirs(path.dirname(path.resolve(params.modulePath)))) {
     const packageJson = readPluginSdkPackageJson(cursor);
     if (!packageJson) {
-      const parent = path.dirname(cursor);
-      if (parent === cursor) {
-        break;
-      }
-      cursor = parent;
       continue;
     }
     if (packageJson.name !== params.packageName) {

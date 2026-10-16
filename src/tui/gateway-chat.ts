@@ -34,7 +34,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { isRetryableGatewayStartupUnavailableError } from "../../packages/gateway-protocol/src/startup-unavailable.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
@@ -689,7 +689,7 @@ async function resolveBoundGatewayConnection(
 async function resolveGatewayConnection(
   opts: TuiGatewayConnectionOptions,
 ): Promise<ResolvedGatewayConnection> {
-  const config = getRuntimeConfig();
+  const config = await captureRuntimeConfigAsyncReader()();
   const env = process.env;
   const gatewayAuthMode = config.gateway?.auth?.mode;
   const isRemoteMode = config.gateway?.mode === "remote";
@@ -743,6 +743,16 @@ async function resolveGatewayConnection(
     bootstrap.authFailureReason === "Missing gateway auth token." ||
     bootstrap.authFailureReason === "Missing gateway auth password.";
   if (bootstrap.authFailureReason && (!missingSharedAuth || !hasStoredOriginAuth)) {
+    // A local Gateway pairs this CLI at startup; without one, a token hint misdirects.
+    if (missingSharedAuth && !hasExplicitGatewayTarget && activeLocalGatewayPort === undefined) {
+      throw new Error(
+        [
+          "No Gateway is running on this machine.",
+          "Fix: run `openclaw chat` to chat here without a Gateway, or start one with `openclaw gateway`.",
+          "To use a Gateway on another machine, run `openclaw tui <Gateway URL>` once with that Gateway's token or password, then approve the pairing request in its Control UI.",
+        ].join("\n"),
+      );
+    }
     throwGatewayAuthResolutionError(bootstrap.authFailureReason);
   }
   const edgeAuthHeaders = await resolveTuiEdgeAuthHeaders(config, bootstrap.url, env);

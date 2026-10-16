@@ -2,13 +2,14 @@ import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   loadTranscriptEvents,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { serializeGatewayFrame } from "../serialized-json.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
@@ -77,6 +78,7 @@ function messageIds(page: Record<string, unknown>) {
 describe("source-bound chat history page cursors", () => {
   it("walks both sides of a byte-limited anchor without gaps and rejects replaced transcripts", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const { read, send } = await seedHistory(
         Array.from({ length: 13 }, (_, index) => ({
           role: index % 2 === 0 ? "user" : "assistant",
@@ -153,6 +155,7 @@ describe("source-bound chat history page cursors", () => {
     "$direction advances through pages hidden by $hiddenBy with a one-message limit",
     async ({ direction, hiddenBy }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await captureRuntimeConfigAsyncReader()();
         const announcePair = hiddenBy === "stale announce pairs";
         const { read } = await seedHistory(
           [
@@ -196,6 +199,7 @@ describe("source-bound chat history page cursors", () => {
 
   it("stays in the retained reset interval after the live session advances", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const { read, send } = await seedHistory([
         { role: "user", content: "Retained start" },
         { role: "assistant", content: "Retained anchor" },
@@ -240,6 +244,7 @@ describe("source-bound chat history page cursors", () => {
 
   it("keeps recovery context when an older cursor excludes the successful boundary reply", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const { read } = await seedHistory([
         { role: "user", content: "Question" },
         {

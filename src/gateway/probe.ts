@@ -148,10 +148,6 @@ function noteDeviceRequiredProbeFailure(cacheKey: string, nowMs: number): void {
   existing.failures += 1;
 }
 
-export function getDeviceRequiredProbeCacheSizeForTest(): number {
-  return deviceRequiredProbeCache.size;
-}
-
 function emptyProbeAuth(): GatewayProbeAuthSummary {
   return {
     role: null,

@@ -1,17 +1,19 @@
-/**
- * Session listing keeps whole-store materialization, sharing refreshes, and
- * transcript projection work bounded at their owning storage boundaries.
- */
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as agentScope from "../agents/agent-scope.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as sessionEntryStatus from "../config/sessions/session-accessor.sqlite-status.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+/**
+ * Session listing keeps whole-store materialization, sharing refreshes, and
+ * transcript projection work bounded at their owning storage boundaries.
+ */
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -99,7 +101,7 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
     } else {
       sessionAccessor.replaceSessionEntrySync({ agentId, sessionKey, storePath }, entry);
     }
-    await sessionAccessor.replaceTranscriptEvents({ agentId, sessionId, sessionKey, storePath }, [
+    await replaceTranscriptEvents({ agentId, sessionId, sessionKey, storePath }, [
       { type: "session", version: 3, id: sessionId, cwd: "/tmp" },
       {
         type: "message",
@@ -234,9 +236,13 @@ test("sessions.list projects out prompt snapshots without changing full entry re
           )
           .run("agent:main:zz-malformed", "malformed", "{", Date.now());
       },
-      database.db,
+      requireNativeSqliteDatabase(database.db),
     );
-    reads = trackSqliteStatementExecutions(database.db, ["sessionStore"], () => "sessionStore");
+    reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["sessionStore"],
+      () => "sessionStore",
+    );
     decode.mockClear();
 
     const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS, {

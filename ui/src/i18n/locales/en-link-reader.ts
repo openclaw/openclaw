@@ -3,6 +3,7 @@ import { en } from "./en.ts";
 
 const enLinkReader = {
   linkReader: {
+    sessionRequired: "Open this link from its session to view the repository.",
     cachedPreview: "Cached details",
     previewAriaLabel: "Preview: {title}",
     newTab: "New reader tab",
@@ -61,8 +62,8 @@ const enLinkReader = {
       "No text diff available in this view. Open the original to inspect this file.",
     unavailableTitle: "Could not load item",
     previewUnavailable: "Could not load preview",
-    previewPullRequest: "PR #{number}",
-    previewIssue: "Issue #{number}",
+    previewPullRequest: "PR {reference}",
+    previewIssue: "Issue {reference}",
     unavailable: "Try again or open the original.",
     disconnected: "This reader is unavailable on this connection. Reconnect or open the original.",
     retry: "Retry",

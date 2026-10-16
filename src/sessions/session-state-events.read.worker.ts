@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { SESSION_WATCH_PROVENANCE_AMBIENT_GROUP } from "../state/session-watch-cursor-provenance.js";
@@ -9,9 +9,10 @@ import {
   normalizeOptionalSqliteNumber,
   rowToSessionStateEvent,
 } from "./session-state-events.kernel.js";
+import { isSessionStateWatchAddress } from "./session-state-events.watch-address.js";
 
 export function readSessionStateSequence(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
   agentId: string,
 ): number {
@@ -36,11 +37,13 @@ export const sessionStateReadOperations = {
         // Older admitted stores omit watcher_store_path until the first feature write.
         .selectAll()
         .whereRef("material_sequence", ">", "last_seen_sequence"),
-    ).rows.map((row) => ({
-      watcherSessionKey: row.watcher_session_key,
-      targetSessionKey: row.target_session_key,
-      watcherStorePath: row.watcher_store_path ?? null,
-    })),
+    )
+      .rows.map((row) => ({
+        watcherSessionKey: row.watcher_session_key,
+        targetSessionKey: row.target_session_key,
+        watcherStorePath: row.watcher_store_path ?? null,
+      }))
+      .filter(isSessionStateWatchAddress),
   }),
   "sessionState.ambientTargets": (input: { watcherSessionKey: string }, db) => ({
     type: "sessionState.ambientTargets" as const,
@@ -51,7 +54,14 @@ export const sessionStateReadOperations = {
         .select("target_session_key")
         .where("watcher_session_key", "=", input.watcherSessionKey)
         .where("provenance", "=", SESSION_WATCH_PROVENANCE_AMBIENT_GROUP),
-    ).rows.map((row) => row.target_session_key),
+    )
+      .rows.map((row) => row.target_session_key)
+      .filter((targetSessionKey) =>
+        isSessionStateWatchAddress({
+          watcherSessionKey: input.watcherSessionKey,
+          targetSessionKey,
+        }),
+      ),
   }),
   "sessionState.versions": (refs: ReadonlyArray<{ sessionKey: string; agentId: string }>, db) => {
     const keys = [...new Set(refs.map((ref) => ref.sessionKey).filter(Boolean))];
@@ -130,4 +140,4 @@ export const sessionStateReadOperations = {
         },
       };
     }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;

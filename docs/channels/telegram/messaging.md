@@ -13,8 +13,9 @@ How inbound and outbound Telegram messages are routed, previewed, acknowledged, 
 ## Runtime behavior
 
 - Telegram message handling runs inside the gateway process.
-- Routing is deterministic: Telegram inbound replies back to Telegram (the model does not pick channels).
+- Replies to Telegram messages go back to Telegram (the model does not pick channels).
 - Inbound messages normalize into the shared channel envelope with reply metadata, media placeholders, and persisted reply-chain context for replies the gateway has observed.
+- Dice rolls carry neither text nor a downloadable file. They fold into the message body as a one-line marker (`[Dice 🎲 = 4]`) instead of normalizing to an empty body and being dropped; the envelope supplies the sender as it does for any other message. Group mention policy is unchanged. A dice message has no text to mention the bot with, so in a mention-required group a bare roll follows the usual unmentioned path and is kept in the group history window when one is configured (`historyLimit: 0` disables that window). A roll sent as a reply to the bot counts as an implicit mention and starts a turn like any other reply.
 - Group sessions are isolated by group ID. Forum topics append `:topic:<threadId>`.
 - When the bot joins an allowed group or supergroup, it posts one introduction grounded in available room metadata: the group title, description, and pinned message. The Telegram Bot API cannot read group messages from before the bot joined, so introductions never claim to use prior chat history. Introductions are enabled by default, never run in private chats, and can be disabled with `channels.telegram.joinIntro: false` or overridden per account with `channels.telegram.accounts.<accountId>.joinIntro`. See [group join introductions](/channels#group-join-introductions) for once-per-room behavior and untrusted-content handling.
 - DM messages can carry `message_thread_id`; OpenClaw preserves it for replies. DM topic sessions split only when Telegram `getMe` reports `has_topics_enabled: true` for the bot; otherwise DMs stay on the flat session.
@@ -196,6 +197,8 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
     - `[[reply_to:<id>]]` — replies to a specific message ID
 
     `channels.telegram.replyToMode`: `off` (default), `first`, `all`.
+
+    With `first`, message-tool sends share one implicit reply target per turn; each admitted queued follow-up starts with a fresh target. Explicit replies are still honored. Final answers and streaming previews keep their own reply-target tracking.
 
     When reply threading is enabled and the original text/caption is available, OpenClaw adds a native quote excerpt automatically. Telegram caps native quote text at 1024 UTF-16 code units; longer messages are quoted from the start and fall back to a plain reply if Telegram rejects the quote.
 

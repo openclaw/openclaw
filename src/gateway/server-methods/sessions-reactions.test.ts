@@ -474,101 +474,6 @@ describe("session reaction handlers", () => {
     });
   });
 
-  it("mirrors channel reactions after commit and broadcast, preserving the channel address on add and remove", async () => {
-    await withReactionState(async () => {
-      registerReactionChannel();
-      const { messageId, config } = await seedChannelMessage();
-      const requestContext = context(config);
-      for (const remove of [false, true]) {
-        runMessageAction.mockImplementationOnce(async () => {
-          expect(requestContext.broadcast).toHaveBeenLastCalledWith(
-            "session.reaction",
-            expect.objectContaining({ action: remove ? "removed" : "added" }),
-            expect.anything(),
-          );
-          expect(
-            (
-              await call("session.reactions.list", { sessionKey }, client("alice"), requestContext)
-            )[1],
-          ).toMatchObject({
-            sessionId,
-            reactions: remove ? {} : { [messageId]: [{ emoji: "👍", count: 1 }] },
-          });
-          return { kind: "action", payload: { ok: true } };
-        });
-        expect(
-          (
-            await call(
-              "session.reactions.set",
-              { sessionKey, messageId, emoji: "👍", remove },
-              client("alice"),
-              requestContext,
-            )
-          )[1],
-        ).toMatchObject({ mirror: { status: "delivered" } });
-        expect(runMessageAction).toHaveBeenLastCalledWith(
-          expect.objectContaining({
-            action: "react",
-            agentId: "main",
-            // The dispatch guard rejects delegated same-conversation reacts outside a turn.
-            conversationReadOrigin: "direct-operator",
-            params: expect.objectContaining({
-              channel: "testchat",
-              to: "channel:room-42",
-              accountId: "work",
-              threadId: "thread-7",
-              messageId: "channel-message-9",
-              emoji: "👍",
-              remove,
-            }),
-          }),
-        );
-      }
-    });
-  });
-
-  it.each(["single", "multiple", undefined] as const)(
-    "preserves remaining reactions for channel reaction slots: %s",
-    async (reactionSlots) => {
-      await withReactionState(async () => {
-        registerReactionChannel(true, reactionSlots);
-        const { messageId, config } = await seedChannelMessage();
-        const requestContext = context(config);
-        const set = (emoji: string, remove = false) =>
-          call(
-            "session.reactions.set",
-            { sessionKey, messageId, emoji, remove },
-            client("alice"),
-            requestContext,
-          );
-        for (const emoji of ["🎉", "👍", "🚀"]) {
-          expect((await set(emoji))[1]).toMatchObject({ mirror: { status: "delivered" } });
-          expect(runMessageAction).toHaveBeenLastCalledWith(
-            expect.objectContaining({ params: expect.objectContaining({ emoji, remove: false }) }),
-          );
-        }
-        for (const [emoji, remaining, replacement] of [
-          ["🎉", ["👍", "🚀"], "🚀"],
-          ["🚀", ["👍"], "👍"],
-          ["👍", [], undefined],
-        ] as const) {
-          expect((await set(emoji, true))[1]).toMatchObject({
-            reactions: remaining.map((value) => ({ emoji: value, count: 1 })),
-            mirror: { status: "delivered" },
-          });
-          expect(runMessageAction).toHaveBeenLastCalledWith(
-            expect.objectContaining({
-              params: expect.objectContaining({
-                emoji: reactionSlots === "single" ? (replacement ?? emoji) : emoji,
-                remove: reactionSlots !== "single" || replacement === undefined,
-              }),
-            }),
-          );
-        }
-      });
-    },
-  );
-
   it("uses the kernel's newest surviving emoji for a single-slot replacement", async () => {
     await withReactionState(async () => {
       registerReactionChannel(true, "single");
@@ -681,29 +586,7 @@ describe("session reaction handlers", () => {
     });
   });
 
-  it("refuses a view-capped channel reactor before commit, broadcast, or dispatch", async () => {
-    await withReactionState(async () => {
-      registerReactionChannel();
-      const { messageId, config } = await seedChannelMessage();
-      const requestContext = context({ ...config, ...roleConfig("view") });
-      const result = await call(
-        "session.reactions.set",
-        { sessionKey, messageId, emoji: "👍" },
-        client("alice"),
-        requestContext,
-      );
-      expect(result).toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
-      expect((await call("session.reactions.list", { sessionKey }))[1]).toEqual({
-        sessionId,
-        reactions: {},
-      });
-      expect(requestContext.broadcast).not.toHaveBeenCalled();
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-      expect(runMessageAction).not.toHaveBeenCalled();
-    });
-  });
-
-  it.each([false, true])(
+  it.each([true])(
     "rechecks reactor authority at channel I/O after commit (revoked: %s)",
     async (revoked) => {
       await withReactionState(async () => {

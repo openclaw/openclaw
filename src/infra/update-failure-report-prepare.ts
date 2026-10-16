@@ -19,6 +19,7 @@ import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { VERSION } from "../version.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { prepareGithubIssue, type PreparedGithubIssue } from "./github-issue.js";
+import { PACKAGE_REFUSAL_CODES } from "./package-update-refusal.js";
 import { normalizeUpdateChannel } from "./update-channels.js";
 import { normalizeUpdateDoctorLintFindings } from "./update-doctor-lint.js";
 import {
@@ -299,12 +300,15 @@ async function renderBoundedDiagnostics(
       .filter(Boolean)
       .join("\n");
     const facts = normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env);
+    const refused = PACKAGE_REFUSAL_CODES.some((code) => facts.some((f) => f.code === code));
     const npm = facts.find(
       (fact) => (fact.check === "npm" || fact.check === "bun") && fact.npmErrorCode,
     );
-    const diagnostic = npm
-      ? [npm.npmErrorCode, npm.packageSpec].filter(Boolean).join(" ")
-      : redactPublicSupportDiagnosticLine(message, context);
+    const diagnostic = refused
+      ? "[redacted-diagnostic]"
+      : npm
+        ? [npm.npmErrorCode, npm.packageSpec].filter(Boolean).join(" ")
+        : redactPublicSupportDiagnosticLine(message, context);
     const exit = `exit ${step.exitCode ?? "unknown"}`;
     const publicDetail =
       diagnostic === "[redacted-diagnostic]"
@@ -329,7 +333,7 @@ async function renderBoundedDiagnostics(
               ...(fact.affectedKey
                 ? { affectedKey: redactPublicSupportConfigKey(fact.affectedKey) }
                 : {}),
-              ...(fact.message
+              ...(fact.message && !refused
                 ? {
                     message:
                       updatePreflightDetailMessage(fact.code) ??

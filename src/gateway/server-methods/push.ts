@@ -43,7 +43,6 @@ import {
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { resolveNodePushTransport } from "./node-push-transport.js";
@@ -95,40 +94,26 @@ function createWebPushRequestGuard(options: PushRequestOptions) {
       throw new Error("Web Push requester authority changed");
     }
   };
-  const assertCurrent = () => {
-    authority.assertCurrent();
+  const assertCurrent = (expectedProfile: string | undefined) => {
+    if (authority.family === "worker") {
+      authority.assertWorkerCurrent();
+    } else {
+      authority.assertCurrent();
+    }
     assertPolicyCurrent();
-    const currentReference = client?.authenticatedUserProfile?.profileId;
-    const currentProfileId = currentReference ? resolveUserProfileId(currentReference) : undefined;
-    const originalProfileId = profileReference ? resolveUserProfileId(profileReference) : undefined;
-    if (
-      (currentReference && !currentProfileId) ||
-      (profileReference && !originalProfileId) ||
-      currentProfileId !== originalProfileId
-    ) {
+    if (client?.authenticatedUserProfile?.profileId !== expectedProfile) {
       throw new Error("Web Push requester profile changed");
     }
-    return currentProfileId;
   };
   return {
     authority,
-    assertPolicyCurrent,
+    assertCurrent: () => assertCurrent(profileReference),
     prepareMutation: (): WebPushMutationGuard => {
-      assertCurrent();
-      if (authority.family === "native-compatibility") {
-        return { family: "native-compatibility", assertCurrent };
-      }
       const currentReference = client?.authenticatedUserProfile?.profileId;
       return {
         family: "worker",
         profiles: { original: profileReference ?? null, current: currentReference ?? null },
-        assertCurrent: () => {
-          authority.assertWorkerCurrent();
-          assertPolicyCurrent();
-          if (client?.authenticatedUserProfile?.profileId !== currentReference) {
-            throw new Error("Web Push requester profile changed");
-          }
-        },
+        assertCurrent: () => assertCurrent(currentReference),
         assertProfiles: (facts: WebPushMutationProfileFacts) => {
           authority.expectedProfileBinding?.assertMatchesResolvedProfile(
             facts.profileId ?? undefined,
@@ -162,17 +147,7 @@ function withAuthorizedWebPushSubscription<T>(
   const requester = createWebPushRequestGuard(options);
   const deviceId = normalizeOptionalString(client?.connect.device?.id);
   const profileReference = client?.authenticatedUserProfile?.profileId;
-  const assertRequesterCurrent = () => {
-    if (requester.authority.family === "worker") {
-      requester.authority.assertWorkerCurrent();
-    } else {
-      requester.authority.assertCurrent();
-    }
-    requester.assertPolicyCurrent();
-    if (client?.authenticatedUserProfile?.profileId !== profileReference) {
-      throw new Error("Web Push requester profile changed");
-    }
-  };
+  const assertRequesterCurrent = requester.assertCurrent;
   return withBoundWebPushSubscriptionByEndpoint({ endpoint }, async (subscription) => {
     if (!deviceId || !subscription || subscription.deviceId !== deviceId) {
       respondWebPushForbidden(respond, "subscription is not bound to this device");
@@ -219,7 +194,7 @@ function withAuthorizedWebPushSubscription<T>(
             endpoint,
             expectedDeviceId: subscription.deviceId,
             expectedUserProfileId: subscription.userProfileId,
-            guard: guard.family === "native-compatibility" ? { ...guard, assertCurrent } : guard,
+            guard,
           }).then((changed) => {
             if (!changed) {
               respondWebPushForbidden(respond, "subscription binding changed");

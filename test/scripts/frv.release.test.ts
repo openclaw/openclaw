@@ -8,6 +8,7 @@ import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import {
   buildReleaseStateArtifact,
+  readReleaseJobListing,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { validateParentManifest } from "../../scripts/release-ci-summary.mjs";
@@ -59,6 +60,58 @@ describe("FRV protected gh evidence reads", () => {
       expect(result.calls).toHaveLength(1);
     },
   );
+
+  it("rereads a job listing at a smaller page size after a GitHub 5xx", () => {
+    const result = runProtectedFrv(
+      "getAttemptJobs",
+      ["101", 2],
+      "actions/runs/101/attempts/2/jobs?per_page=50",
+      "large-page-502",
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([{ id: 1 }, { id: 2 }]);
+    expect(result.calls.map((call) => call[2])).toEqual([
+      `repos/${REPOSITORY}/actions/runs/101/attempts/2/jobs?per_page=100`,
+      `repos/${REPOSITORY}/actions/runs/101/attempts/2/jobs?per_page=50`,
+    ]);
+  });
+
+  it("fails closed when every job listing page size returns a 5xx", async () => {
+    const serverError = Object.assign(new Error("Command failed"), {
+      stderr: "gh: Server Error (HTTP 502)",
+    });
+    const pageSizes: number[] = [];
+    await expect(
+      readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
+        pageSizes.push(perPage);
+        expect(smallerPageFallback).toBe(perPage !== 30);
+        throw serverError;
+      }),
+    ).rejects.toBe(serverError);
+    expect(pageSizes).toEqual([100, 50, 30]);
+    const notFound = Object.assign(new Error("Command failed"), {
+      stderr: "gh: Not Found (HTTP 404)",
+    });
+    await expect(
+      readReleaseJobListing(async (perPage) => {
+        pageSizes.push(perPage);
+        throw notFound;
+      }),
+    ).rejects.toBe(notFound);
+    expect(pageSizes).toEqual([100, 50, 30, 100]);
+  });
+
+  it("reads the mutable release tip freshly even when watcher reads are cached", () => {
+    const result = runProtectedFrv(
+      "getRef",
+      ["refs/heads/release/candidate"],
+      "git/ref/heads/release/candidate",
+      "none",
+      true,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls).toHaveLength(1);
+  });
 
   it.each(["403", "429"] as const)(
     "retains a later-page %s throttle deadline without fast transport retries",
@@ -131,8 +184,10 @@ function runProtectedFrv(
     | "unrelated"
     | "transient-deadline"
     | "empty"
+    | "large-page-502"
     | "403"
     | "429" = "none",
+  cachedReads = false,
 ) {
   const root = mkdtempSync(join(tmpdir(), "frv-protected-"));
   const gh = join(root, "gh");
@@ -146,6 +201,10 @@ const fail = (message, code) => { console.error(message); process.exit(code); };
 const failure = ${JSON.stringify(failure)};
 if (failure === "protected") fail("protected refusal", 19);
 if (failure === "transient-deadline") fail("HTTP 502: transient fixture failure", 1);
+if (failure === "large-page-502" && args.some((arg) => arg.endsWith("/jobs?per_page=100"))) {
+  process.stdout.write("HTTP/2.0 502 Bad Gateway\\r\\n\\r\\n");
+  fail("gh: Server Error (HTTP 502)", 1);
+}
 if (args[0] !== "api" || !args.includes(${JSON.stringify(`repos/${REPOSITORY}/${endpoint}`)})) fail("unexpected request", 17);
 if (!args.some((arg, i) => ["-H", "--header"].includes(arg) && args[i+1] === "Cache-Control: max-age=0")) fail("missing live header", 18);
 if (${endpoint.endsWith("/logs")} && failure === "legacy-flag" && args.includes("--allow-escape-sequences")) fail("unknown flag: --allow-escape-sequences", 1);
@@ -188,7 +247,7 @@ if (${endpoint.includes("/jobs?")}) {
         };
       }
       try {
-        console.log(JSON.stringify(await createClient(${JSON.stringify(REPOSITORY)})[${JSON.stringify(method)}](...${JSON.stringify(args)})));
+        console.log(JSON.stringify(await createClient(${JSON.stringify(REPOSITORY)}, { cachedReads: ${cachedReads} })[${JSON.stringify(method)}](...${JSON.stringify(args)})));
       } catch (error) {
         console.error(throttled ? JSON.stringify({ retryAt: releaseGhRateLimitRetryAt(error), classification: classifyReleaseGhTransportError(error) }) : error.message);
         process.exitCode = typeof error.code === "number" ? error.code : 1;
@@ -483,7 +542,10 @@ async function runPublicationCli(
   responses[endpoint("actions/runs/77/jobs?filter=all&per_page=100")] = {
     jobs: [{ ...job("Diagnostic Drain"), run_attempt: fixture.root.run_attempt }],
   };
-  responses[endpoint("git/ref/heads/release/2026.9.9")] = { object: { sha: TARGET_SHA } };
+  responses[endpoint("git/ref/heads/release/2026.9.9")] = {
+    ref: "refs/heads/release/2026.9.9",
+    object: { type: "commit", sha: TARGET_SHA },
+  };
   await amend(responses, artifact);
   writeFileSync(join(directory, "responses.json"), JSON.stringify(responses));
   writeFileSync(join(directory, "legacy-plan.json"), JSON.stringify(fixture.executionPlan));
@@ -682,6 +744,12 @@ describe("publication status real CLI", () => {
       runAttempt: 1,
       conclusion: kind === "successful verification" ? "success" : "failure",
     });
+    expect(publication.release).toEqual({
+      version: "2026.9.9",
+      tag: "v2026.9.9",
+      distTag: "latest",
+      sourceSha: TARGET_SHA,
+    });
     expect(publication.surfaces.activation.operation.state).toBe("unknown");
     expect(value.children).toHaveLength(4);
     expect(result.calls.length).toBeGreaterThan(0);
@@ -734,6 +802,11 @@ describe("publication status real CLI", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("Publication observation (not release authorization)");
     expect(result.stdout).toContain("selected-attempt=2");
+    expect(result.stdout).toContain(
+      `release: version=2026.9.9 tag=v2026.9.9 dist-tag=latest source-sha=${TARGET_SHA} (producer diagnostic)`,
+    );
+    expect(result.stdout).toContain("pnpm release:stable 2026.9.9 --status");
+    expect(result.stdout).toContain("Website deployment is not observed here");
     expect(result.stdout).toContain(
       "pluginNpm: selection=unknown operation=unknown verification=failure",
     );
@@ -1294,6 +1367,7 @@ describe("publication status real CLI", () => {
       });
       expect(result.status, result.stdout).toBe(0);
       const surface = JSON.parse(result.stdout).publication.surfaces.nativeWindows;
+      expect(surface.target).toEqual({ tag: "v2026.9.9", sourceTag: "windows-v1" });
       expect(surface.children[0].recordedAttempt).toBeNull();
       expect(surface.children[0].status).toBe(native.status);
       expect(surface.children[0].conclusion).toBe(native.conclusion);
@@ -1311,6 +1385,139 @@ describe("publication status real CLI", () => {
       }
     },
   );
+
+  it.each([
+    ["unconfirmed", "dispatch-unconfirmed"],
+    ["awaiting", "awaiting-admission"],
+    ["admitted", "success"],
+    ["rejected", "failure"],
+    ["wrong-source", "success"],
+    ["foreign-request", "success"],
+    ["legacy-attempt", "request-attempt-unknown"],
+  ])("correlates the Linux builder through its owner admission (%s)", async (kind, operation) => {
+    const fixture = publicationFixture();
+    fixture.publisherJobs.push({
+      ...job(
+        "Request Linux assets after publication",
+        kind === "unconfirmed" ? "failure" : "success",
+      ),
+      id: 8810,
+      run_id: 88,
+      run_attempt: 1,
+      steps: [
+        {
+          number: 1,
+          name: "Retain Linux request evidence",
+          status: "completed",
+          conclusion: "success",
+        },
+      ],
+    });
+    const request = {
+      ...fixture.publisher,
+      id: 909,
+      workflow_id: 9090,
+      head_branch: "main",
+      head_sha: SHA,
+      created_at: "2026-08-02T00:00:00Z",
+      path: ".github/workflows/linux-app-release-request.yml",
+      run_attempt: 1,
+      display_title: "Linux App Release Request [v2026.8.2] desktop=false",
+      conclusion: "success",
+    };
+    const builder = {
+      ...request,
+      id: 910,
+      workflow_id: 9100,
+      event: "workflow_run",
+      path: ".github/workflows/linux-app-release.yml",
+      display_title: "Linux App Release request=909 attempt=1",
+      head_sha: kind === "rejected" ? "f".repeat(40) : SHA,
+      conclusion: kind === "rejected" ? "failure" : "success",
+    };
+    const result = await runPublicationCli(fixture, undefined, async (responses, artifact) => {
+      const tag = fixture.diagnostic.context.releaseTag!;
+      request.display_title = `Linux App Release Request [${tag}] desktop=false`;
+      await artifact(4, fixture.publisher, "linux-release-dispatch-88-1", "linux-dispatch.json", {
+        tag,
+        sourceSha: TARGET_SHA,
+        state: kind === "unconfirmed" ? "dispatch-unconfirmed" : "request-dispatched",
+        requestRunId: kind === "unconfirmed" ? undefined : "909",
+        requestRunAttempt: ["unconfirmed", "legacy-attempt"].includes(kind) ? undefined : "1",
+        workflowSha: kind === "unconfirmed" ? undefined : SHA,
+      });
+      if (kind === "unconfirmed") {
+        return;
+      }
+      responses[`repos/${REPOSITORY}/actions/runs/909`] = request;
+      responses[`repos/${REPOSITORY}/actions/runs/909/attempts/1`] = request;
+      responses[`repos/${REPOSITORY}/actions/workflows/9090`] = { id: 9090, path: request.path };
+      responses[
+        `repos/${REPOSITORY}/actions/workflows/linux-app-release.yml/runs?event=workflow_run&branch=main&created=%3E%3D2026-08-02T00%3A00%3A00Z&per_page=100&page=1`
+      ] = {
+        total_count: kind === "awaiting" ? 1 : 2,
+        workflow_runs: [
+          { ...builder, id: 999, display_title: "Linux App Release request=908 attempt=1" },
+          ...(kind === "awaiting" ? [] : [builder]),
+        ],
+      };
+      if (kind === "awaiting") {
+        return;
+      }
+      responses[`repos/${REPOSITORY}/actions/runs/910`] = builder;
+      responses[`repos/${REPOSITORY}/actions/workflows/9100`] = { id: 9100, path: builder.path };
+      await artifact(
+        5,
+        builder,
+        "linux-release-admission-909-1-910-1",
+        "linux-release-admission.json",
+        {
+          schemaVersion: 1,
+          repository: REPOSITORY,
+          request: {
+            runId: kind === "foreign-request" ? "908" : "909",
+            runAttempt: "1",
+            headSha: SHA,
+          },
+          builder: { runId: "910", runAttempt: "1", toolingSha: builder.head_sha },
+          tag: kind === "rejected" ? null : tag,
+          sourceSha:
+            kind === "rejected" ? null : kind === "wrong-source" ? "e".repeat(40) : TARGET_SHA,
+          admission: kind === "rejected" ? "rejected" : "admitted",
+        },
+      );
+      responses[`repos/${REPOSITORY}/actions/runs/910/attempts/1/jobs?per_page=100&page=1`] = {
+        total_count: 1,
+        jobs: [
+          {
+            ...job("Validate release tag", builder.conclusion),
+            id: 9101,
+            run_id: 910,
+            run_attempt: 1,
+            steps: [
+              {
+                number: 1,
+                name: "Retain Linux builder admission",
+                status: "completed",
+                conclusion: "success",
+              },
+            ],
+          },
+        ],
+      };
+    });
+    const surface = JSON.parse(result.stdout).publication.surfaces.nativeLinux;
+    const mismatch = ["wrong-source", "foreign-request"].includes(kind);
+    expect(result.status, result.stderr + result.stdout).toBe(mismatch ? 1 : 0);
+    expect(surface.operation.state).toBe(operation);
+    expect(surface.children.map((child: { runId: string }) => child.runId)).toEqual(
+      ["unconfirmed", "awaiting", "legacy-attempt"].includes(kind) ? [] : ["910"],
+    );
+    expect(surface.terminalMarker.state).toBe(
+      kind === "rejected" ? "rejected" : kind === "admitted" ? "admitted" : "unknown",
+    );
+    expect(surface.verification.state).toBe("unknown");
+  });
 
   it.each(["complete", "denied", "duplicate", "changed-total"])(
     "handles a second artifact page: %s",
@@ -1600,7 +1807,10 @@ describe("publication status real CLI", () => {
         (responses) => {
           responses[`repos/${REPOSITORY}/git/ref/heads/release/2026.9.9`] =
             tipState === "superseded"
-              ? { object: { sha: "d".repeat(40) } }
+              ? {
+                  ref: "refs/heads/release/2026.9.9",
+                  object: { type: "commit", sha: "d".repeat(40) },
+                }
               : { failure: "HTTP 403 Resource not accessible by integration" };
         },
       );

@@ -137,7 +137,10 @@ describe("gateway caller context wrapper", () => {
       {
         ...identity,
         sessionEventToolsAllow: ["read", "process"],
-        sessionEventSettings: { permissionMode: "workspace" },
+        sessionEventSettings: {
+          permissionMode: "workspace",
+          toolOverrides: { webSearch: false },
+        },
         assertToolAllowed: (name) => {
           if (name === "exec") {
             throw new Error("exec denied");
@@ -149,7 +152,10 @@ describe("gateway caller context wrapper", () => {
           {
             ...identity,
             sessionEventToolsAllow: ["read", "exec"],
-            sessionEventSettings: { permissionMode: "full" },
+            sessionEventSettings: {
+              permissionMode: "full",
+              toolOverrides: { mcpServers: { fixture: false } },
+            },
             assertToolAllowed: (name) => {
               if (name === "process") {
                 throw new Error("process denied");
@@ -160,7 +166,10 @@ describe("gateway caller context wrapper", () => {
             withGatewayToolCallerIdentity(identity, () => {
               const caller = getGatewayToolCallerIdentity();
               expect(caller?.sessionEventToolsAllow).toEqual(["read"]);
-              expect(caller?.sessionEventSettings).toEqual({ permissionMode: "workspace" });
+              expect(caller?.sessionEventSettings).toEqual({
+                permissionMode: "workspace",
+                toolOverrides: { webSearch: false, mcpServers: { fixture: false } },
+              });
               expect(() => caller?.assertToolAllowed?.("exec")).toThrow("exec denied");
               expect(() => caller?.assertToolAllowed?.("process")).toThrow("process denied");
               expect(() => caller?.assertToolAllowed?.("read")).not.toThrow();

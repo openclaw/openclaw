@@ -1,8 +1,8 @@
-import { render } from "lit";
 import { assert, describe, expect, it } from "vitest";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createBaseParams } from "./panels-tools-skills.test-support.ts";
-import { renderAgentTools } from "./panels-tools-skills.ts";
+import { AgentTools } from "./panels-tools-skills.tsx";
 
 installBrowserHistoryIsolation();
 
@@ -43,7 +43,7 @@ describe("agent tool access diagnostics (browser)", () => {
         },
       },
     });
-    render(renderAgentTools(params), container);
+    mountSolid(AgentTools, params, container);
 
     const card = container.querySelector<HTMLDetailsElement>("#agent-tool-exec");
     assert(card);
@@ -75,35 +75,34 @@ describe("agent tool access diagnostics (browser)", () => {
       source: "plugin" as const,
       defaultProfiles: [],
     };
-    render(
-      renderAgentTools(
-        createBaseParams({
-          toolsCatalogResult: {
-            agentId: "main",
-            profiles: [],
-            groups: [{ id: "terminal", label: "Terminal", source: "plugin", tools: [tool] }],
-          },
-          toolsEffectiveResult: {
-            agentId: "main",
-            profile: "full",
-            groups: [
-              {
-                id: "mcp",
-                label: "MCP tools",
-                source: "mcp",
-                tools: [
-                  {
-                    ...tool,
-                    source: "mcp",
-                    rawDescription: tool.description,
-                    deniedBySession: true,
-                  },
-                ],
-              },
-            ],
-          },
-        }),
-      ),
+    mountSolid(
+      AgentTools,
+      createBaseParams({
+        toolsCatalogResult: {
+          agentId: "main",
+          profiles: [],
+          groups: [{ id: "terminal", label: "Terminal", source: "plugin", tools: [tool] }],
+        },
+        toolsEffectiveResult: {
+          agentId: "main",
+          profile: "full",
+          groups: [
+            {
+              id: "mcp",
+              label: "MCP tools",
+              source: "mcp",
+              tools: [
+                {
+                  ...tool,
+                  source: "mcp",
+                  rawDescription: tool.description,
+                  deniedBySession: true,
+                },
+              ],
+            },
+          ],
+        },
+      }),
       container,
     );
     const card = container.querySelector("#agent-tool-terminal__run");

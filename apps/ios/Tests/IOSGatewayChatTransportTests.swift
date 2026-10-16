@@ -718,6 +718,70 @@ struct IOSGatewayChatTransportTests {
         }
     }
 
+    @Test @MainActor func `source context refreshes after invalidation and retires with its physical route`() async throws {
+        let recorder = RequestRecorder()
+        let socketSession = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0 else { return }
+                let data: Data = switch message {
+                case let .data(value): value
+                case let .string(value): Data(value.utf8)
+                @unknown default: throw URLError(.cannotParseResponse)
+                }
+                let request = try await recorder.record(data)
+                let path = sendIndex == 1 ? "/first" : "/second"
+                socket.emitReceiveSuccess(.data(Data(
+                    #"{"type":"res","id":"\#(request.id)","ok":true,"payload":{"runtimeConfig":{"gateway":{"controlUi":{"basePath":"\#(path)","automaticallyFetchFavicons":false}}}}}"#
+                        .utf8)))
+            }, receiveHook: { socket, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: socket.snapshotConnectRequestID() ?? "connect", methods: ["config.get"]))
+            })
+        })
+        let gateway = GatewayNodeSession()
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.allowStoredDeviceAuth = false
+        options.deviceAuthGatewayID = "source-resource-test"
+        let url = try #require(URL(string: "ws://source-resource-test.invalid"))
+        let config = GatewayConnectConfig(
+            url: url,
+            stableID: "source-resource-test",
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: options)
+        let loader = IOSSourceResourceLoader(gateway: gateway, connectionProvider: {
+            IOSMediaArtifactLoader.Connection(config: config, gatewayID: "source-resource-test", customHeaders: [:])
+        })
+        do {
+            try await gateway.connect(
+                url: url,
+                credentials: .init(),
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: socketSession),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            let route = try #require(await gateway.currentRoute())
+            let context = await loader.loadContext(ifCurrentRoute: route)
+            #expect(context?.basePath == "/first")
+            #expect(context?.automaticallyFetchFavicons == false)
+            #expect(await loader.loadContext(ifCurrentRoute: route) == context)
+            #expect(await recorder.all().count == 1)
+
+            await loader.invalidate()
+            #expect(await loader.loadContext(ifCurrentRoute: route)?.basePath == "/second")
+            await gateway.disconnect()
+            #expect(await loader.loadContext(ifCurrentRoute: route) == nil)
+            #expect(await loader.loadFavicon(host: "docs.example.com", ifCurrentRoute: route) == nil)
+            #expect(await recorder.all().map(\.method) == ["config.get", "config.get"])
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+    }
+
     @Test func `requests fail fast when gateway not connected`() async {
         let gateway = GatewayNodeSession()
         let transport = IOSGatewayChatTransport(gateway: gateway)

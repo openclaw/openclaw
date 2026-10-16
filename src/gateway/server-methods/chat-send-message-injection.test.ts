@@ -13,7 +13,6 @@ import {
   createReplyOperation,
   finalizeReplyMessageInjectionAttempt,
   replyRunRegistry,
-  type ReplyMessageInjectionAttempt,
   type ReplyMessageInjectionTarget,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -22,19 +21,16 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.message-injection.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import {
-  loadSessionEntry,
   recordSessionParticipant,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import {
-  loadSessionEntry as loadActualSessionEntry,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { logMessageProcessed } from "../../logging/diagnostic.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import type { ChatImageContent } from "../chat-attachments.js";
@@ -60,8 +56,8 @@ vi.mock(import("../../auto-reply/reply/reply-run-registry.js"), async (importOri
 vi.mock("../../auto-reply/reply/message-received-hooks.js", () => ({
   emitMessageReceivedHooks: vi.fn(),
 }));
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: vi.fn(() => null),
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
   updateSessionEntry: vi.fn(async () => undefined),
   recordSessionParticipant: vi.fn(async () => null),
 }));
@@ -83,8 +79,9 @@ vi.mock(import("../agent-turn/agent-job.js"), async (importOriginal) => ({
 vi.mock("../../auto-reply/reply/queue/settings-runtime.js", () => ({
   resolveQueueSettings: vi.fn(() => ({})),
 }));
+// mock-isolation: Injection fixtures provide owner authority without command-owner database admission.
 vi.mock("../../auto-reply/command-auth.js", () => ({
-  resolveCommandAuthorization: vi.fn(() => ({ senderIsOwner: true })),
+  resolveCommandAuthorizationAsync: vi.fn(() => ({ senderIsOwner: true })),
 }));
 vi.mock("../../auto-reply/reply/reply-tool-authority.js", () => ({
   resolveInboundReplyToolAuthorityOverlay: vi.fn(() => ({})),
@@ -107,7 +104,7 @@ function makeParams() {
       clientRunId: "run-1",
       entry: undefined,
       sessionKey: "agent:main:dashboard:s",
-      storePath: "/tmp/nowhere.json",
+      storePath: "",
     },
     startedAt: Date.now(),
     target: {} as ReplyMessageInjectionTarget,
@@ -125,7 +122,7 @@ function makeFailClosedEntry() {
   } as never;
 }
 
-function makeStarterParams(params?: { entry?: unknown; loadLatest?: unknown }) {
+function makeStarterParams(params?: { entry?: unknown }) {
   return {
     target: { runId: "run-1" } as ReplyMessageInjectionTarget,
     request: {
@@ -139,7 +136,7 @@ function makeStarterParams(params?: { entry?: unknown; loadLatest?: unknown }) {
       clientRunId: "run-1",
       entry: params?.entry as never,
       sessionKey: "agent:main:dashboard:s",
-      storePath: "/tmp/nowhere.json",
+      storePath: "",
     },
     turn: {
       ctx: { Provider: "dashboard", From: "user", To: "user", Body: "steer" },
@@ -177,6 +174,8 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
       aborted: false,
     });
     const params = makeParams();
+    const entry = Object.freeze({ sessionId: "session-1", updatedAt: 1 });
+    params.session.entry = entry;
     prepareSessionParticipantInput(params.ctx, { type: "profile", id: "profile-steerer" }, 42);
     await finalizeAcceptedChatSendMessageInjection(params);
     expect(recordSessionParticipant).toHaveBeenCalledOnce();
@@ -195,6 +194,8 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
       }),
     );
     expect(updateSessionEntry).toHaveBeenCalledOnce();
+    expect(entry.updatedAt).toBe(1);
+    expect(params.session.entry?.updatedAt).toBeGreaterThan(1);
   });
 
   it("reports indeterminate question input without claiming success or falling back", async () => {
@@ -229,7 +230,6 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     "terminal receipt",
     "active source tombstone",
     "unrelated tombstone",
-    "read failure",
     "caller revoked",
   ] as const)(
     "rechecks terminal admission after awaited projection: %s",
@@ -240,20 +240,8 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
         const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
         const scope = { agentId: "main", sessionKey, storePath };
         await upsertSessionEntryCore(scope, initial);
-        let unreadable = false;
         let callerCurrent = true;
         const refusal = new Error("caller authority revoked during projection");
-        const readEntry = vi.mocked(loadSessionEntry);
-        const originalRead = expectDefined(
-          readEntry.getMockImplementation(),
-          "mock session reader",
-        );
-        readEntry.mockImplementation((readScope) => {
-          if (unreadable) {
-            throw new Error("session receipt unavailable");
-          }
-          return loadActualSessionEntry(readScope);
-        });
         const entered = createDeferred();
         const resume = createDeferred();
         const params = makeStarterParams({ entry: initial });
@@ -300,6 +288,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
         vi.mocked(beginReplyMessageInjectionTarget).mockImplementationOnce(
           beginActualReplyMessageInjectionTarget,
         );
+        const sql = observeMainThreadSql();
         const starting = createChatSendMessageInjectionStarter(params)();
         const outcome = starting.then(
           (attempt) => ({ attempt }),
@@ -323,12 +312,11 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
                 change === "active source tombstone" ? "source-1" : "source-old",
               ],
             });
-          } else if (change === "read failure") {
-            unreadable = true;
           }
           callerCurrent = change !== "caller revoked";
           resume.resolve();
           const result = await outcome;
+          sql.expectIdle();
           if (change === "caller revoked") {
             expect(result).toEqual({ error: refusal });
             expect(queueMessage).not.toHaveBeenCalled();
@@ -350,57 +338,12 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
           if ("attempt" in result) {
             await result.attempt?.outcome;
           }
-          readEntry.mockImplementation(originalRead);
+          sql.restore();
           operation.complete();
         }
       });
     },
   );
-
-  it("rejects the injection before queueing when the latest persisted entry fail-closes terminal delivery", async () => {
-    // A terminal receipt committed after prepareChatSendSession captured its
-    // dispatch snapshot. The fence must revalidate at the injection-start
-    // boundary after policy preparation, before the target runtime queues
-    // the steer, so nothing is enqueued and the
-    // inbound falls back to follow-up dispatch (#128971).
-    vi.mocked(loadSessionEntry).mockReturnValueOnce({
-      sessionId: "session-1",
-      restartRecoveryDeliveryRunId: "recovery-1",
-      restartRecoveryDeliverySourceRunId: "source-1",
-      restartRecoveryDeliveryReceiptState: "delivered-terminal",
-      updatedAt: 2,
-    } as never);
-    const params = makeStarterParams();
-    params.session.clientRunId = "incoming-input";
-    params.target = {
-      ...expectDefined(params.target, "Expected a steering target"),
-      runId: "active-run",
-      sourceTurnId: "source-1",
-    };
-    const begin = createChatSendMessageInjectionStarter(params);
-
-    const attempt = await begin();
-
-    expect(attempt).toBeUndefined();
-    expect(loadSessionEntry).toHaveBeenCalledWith(
-      expect.objectContaining({ readConsistency: "latest" }),
-    );
-    expect(params.logGateway.warn).toHaveBeenCalledWith(
-      "chat steering rejected; falling back to follow-up dispatch",
-      {
-        reason: "delivered-terminal",
-        runId: "incoming-input",
-        activeRunId: "active-run",
-        sourceTurnId: "source-1",
-        sourceTurnIdOrigin: "active-run",
-        sessionKey: "agent:main:dashboard:s",
-        sessionId: "session-1",
-        sessionStatus: undefined,
-        recoveryRunId: "recovery-1",
-        recoverySourceTurnId: "source-1",
-      },
-    );
-  });
 
   it.each(["unbound", "current", "refused"] as const)(
     "composes captured terminal admission with %s authority",
@@ -420,13 +363,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
       const begin = createChatSendMessageInjectionStarter(params);
 
       if (authority === "refused") {
-        let thrown: unknown;
-        try {
-          await begin();
-        } catch (error) {
-          thrown = error;
-        }
-        expect(thrown).toBe(refusal);
+        await expect(begin()).rejects.toBe(refusal);
         expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
       } else {
         expect(await begin()).toBeUndefined();
@@ -435,118 +372,48 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     },
   );
 
-  it("follows the latest persisted entry over the stale captured snapshot", async () => {
-    // The captured snapshot fail-closed after dispatch, but the latest
-    // persisted entry is startable again (terminal intent cancelled): the
-    // fence must follow the latest state and allow the steer.
-    vi.mocked(loadSessionEntry).mockReturnValueOnce({
-      sessionId: "session-1",
-      updatedAt: 2,
-    } as never);
-    const queuedAttempt = {
-      acceptance: Promise.resolve(true),
-      outcome: Promise.resolve({ status: "accepted" }),
-    } as ReplyMessageInjectionAttempt;
-    vi.mocked(beginReplyMessageInjectionTarget).mockImplementationOnce(
-      async (_target, _text, options) => {
-        expect(options?.canAdmit?.()).toBe(true);
-        return queuedAttempt;
-      },
-    );
-    const params = makeStarterParams({ entry: makeFailClosedEntry() });
-    const begin = createChatSendMessageInjectionStarter(params);
-
-    const attempt = await begin();
-
-    expect(attempt).toBe(queuedAttempt);
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledOnce();
-  });
-
-  it("rejects steering when reloading a captured terminal entry fails", async () => {
-    vi.mocked(loadSessionEntry).mockImplementationOnce(() => {
-      throw new Error("store busy");
+  it("reads current terminal eligibility when the captured request snapshot is stale", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:initial-steering",
+        storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+      };
+      for (const blocked of [true, false]) {
+        await upsertSessionEntryCore(scope, {
+          sessionId: "session-1",
+          updatedAt: 1,
+          restartRecoveryDeliveryReceiptState: blocked ? "terminal-pending" : undefined,
+        });
+        const params = makeStarterParams({ entry: blocked ? undefined : makeFailClosedEntry() });
+        Object.assign(params.session, scope);
+        const attempt = await createChatSendMessageInjectionStarter(params)();
+        if (blocked) {
+          expect(attempt).toBeUndefined();
+          expect(params.logGateway.warn).toHaveBeenCalled();
+        } else {
+          await expect(attempt?.outcome).resolves.toMatchObject({ status: "accepted" });
+        }
+      }
     });
-    const params = makeStarterParams({ entry: makeFailClosedEntry() });
-    const begin = createChatSendMessageInjectionStarter(params);
-
-    const attempt = await begin();
-
-    expect(attempt).toBeUndefined();
-    expect(params.logGateway.warn).toHaveBeenCalled();
   });
 
-  it("queues the steer when the latest persisted entry is startable", async () => {
-    const queuedAttempt = {
-      acceptance: Promise.resolve(true),
-      outcome: Promise.resolve({ status: "accepted" }),
-    } as ReplyMessageInjectionAttempt;
-    vi.mocked(beginReplyMessageInjectionTarget).mockImplementationOnce(
-      async (_target, _text, options) => {
-        expect(options?.canAdmit?.()).toBe(true);
-        return queuedAttempt;
-      },
-    );
-    const params = makeStarterParams();
-    const begin = createChatSendMessageInjectionStarter(params);
+  it("falls back without queuing when durable terminal metadata is unreadable", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = await state.writeText(
+        "agents/main/agent/openclaw-agent.sqlite",
+        "unreadable session database",
+      );
+      const params = makeStarterParams({ entry: { sessionId: "session-1", updatedAt: 1 } });
+      params.session.storePath = storePath;
 
-    const attempt = await begin();
-
-    expect(attempt).toBe(queuedAttempt);
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledOnce();
-  });
-
-  it("queues the steer when the latest persisted entry holds only an unrelated historical tombstone", async () => {
-    // Terminal run ids are accumulated session history; a tombstone from a
-    // prior source must not fence the active source into follow-up mode.
-    vi.mocked(loadSessionEntry).mockReturnValueOnce({
-      sessionId: "session-1",
-      restartRecoveryTerminalRunIds: ["source-old"],
-      updatedAt: 2,
-    } as never);
-    const queuedAttempt = {
-      acceptance: Promise.resolve(true),
-      outcome: Promise.resolve({ status: "accepted" }),
-    } as ReplyMessageInjectionAttempt;
-    vi.mocked(beginReplyMessageInjectionTarget).mockImplementationOnce(
-      async (_target, _text, options) => {
-        expect(options?.canAdmit?.()).toBe(true);
-        return queuedAttempt;
-      },
-    );
-    const params = makeStarterParams({
-      entry: { sessionId: "session-1", updatedAt: 1 } as never,
+      await expect(createChatSendMessageInjectionStarter(params)()).resolves.toBeUndefined();
+      expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
+      expect(params.logGateway.warn).toHaveBeenCalledWith(
+        "chat steering rejected; falling back to follow-up dispatch",
+        expect.objectContaining({ reason: "terminal-delivery-unavailable" }),
+      );
     });
-    params.target = {
-      ...expectDefined(params.target, "injection target"),
-      sourceTurnId: "source-1",
-    };
-    const begin = createChatSendMessageInjectionStarter(params);
-
-    const attempt = await begin();
-
-    expect(attempt).toBe(queuedAttempt);
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledOnce();
-  });
-
-  it("rejects before queueing when the latest persisted entry tombstones the active source turn", async () => {
-    // The active source turn itself is tombstoned: the steered terminal send
-    // would resolve to already-delivered, so the fence must reject.
-    vi.mocked(loadSessionEntry).mockReturnValueOnce({
-      sessionId: "session-1",
-      restartRecoveryTerminalRunIds: ["source-1"],
-      updatedAt: 2,
-    } as never);
-    const params = makeStarterParams();
-    params.target = {
-      ...expectDefined(params.target, "injection target"),
-      sourceTurnId: "source-1",
-    };
-    const begin = createChatSendMessageInjectionStarter(params);
-
-    const attempt = await begin();
-
-    expect(attempt).toBeUndefined();
-    expect(params.logGateway.warn).toHaveBeenCalled();
   });
 });
 
@@ -644,16 +511,10 @@ describe("gateway steer contract after the injection-start fence", () => {
     // follow-up dispatch — and zero runtime queueMessage calls, instead of
     // the old post-enqueue rejection (steer already queued + fallback
     // second dispatch = inbound double delivery).
-    vi.mocked(loadSessionEntry).mockReturnValueOnce({
-      sessionId: "session-1",
-      restartRecoveryDeliveryRunId: "recovery-1",
-      restartRecoveryDeliverySourceRunId: "source-1",
-      restartRecoveryDeliveryReceiptState: "terminal-pending",
-      restartRecoveryDeliveryToolCallId: "message-call-1",
-      updatedAt: 2,
-    } as never);
     const dispatchFollowup = vi.fn();
-    const begin = createChatSendMessageInjectionStarter(makeStarterParams());
+    const begin = createChatSendMessageInjectionStarter(
+      makeStarterParams({ entry: makeFailClosedEntry() }),
+    );
 
     const attempt = await begin();
     if (attempt) {
@@ -710,7 +571,7 @@ describe("createChatSendMessageInjectionStarter", () => {
         cfg: {},
         entry: undefined,
         sessionKey,
-        storePath: "/tmp/nowhere.json",
+        storePath: "",
         clientRunId: "active-run",
       },
       turn: {
@@ -729,21 +590,22 @@ describe("createChatSendMessageInjectionStarter", () => {
     };
   }
 
-  it("rejects steering when the latest session entry cannot be read", async () => {
-    const params = makeSteerStarterParams({ body: "follow up after the terminal reply" });
-    params.session.entry = {
-      sessionId: "steer-test-session",
-      updatedAt: 1,
-      restartRecoveryDeliveryRunId: "active-recovery",
-      restartRecoveryDeliverySourceRunId: "active-source",
-    };
-    const start = createChatSendMessageInjectionStarter(params);
-    vi.mocked(loadSessionEntry).mockImplementationOnce(() => {
-      throw new Error("session database read failed");
-    });
-
-    expect(await start()).toBeUndefined();
-  });
+  async function expectSteer(
+    params: Parameters<typeof createChatSendMessageInjectionStarter>[0],
+    text: string,
+    options: Record<string, unknown> = { isInboundUserMessage: true },
+  ) {
+    const originalContext = structuredClone(params.turn.ctx);
+    const attempt = await createChatSendMessageInjectionStarter(params)();
+    await expect(attempt?.acceptance).resolves.toBe(true);
+    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledOnce();
+    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
+      params.target,
+      text,
+      expect.objectContaining(options),
+    );
+    expect(params.turn.ctx).toEqual(originalContext);
+  }
 
   it.each([
     {
@@ -773,17 +635,7 @@ describe("createChatSendMessageInjectionStarter", () => {
       ],
       documentContext: { status: "rendered", text: documentText, images: [] },
     });
-    const durableContext = structuredClone(params.turn.ctx);
-
-    await createChatSendMessageInjectionStarter(params)();
-
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledOnce();
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
-      params.target,
-      expectedText,
-      expect.objectContaining({ isInboundUserMessage: true }),
-    );
-    expect(params.turn.ctx).toEqual(durableContext);
+    await expectSteer(params, expectedText);
   });
 
   it("keeps the attachment note when document rendering fails", async () => {
@@ -792,16 +644,10 @@ describe("createChatSendMessageInjectionStarter", () => {
       media: [{ path: "media://inbound/note.txt", contentType: "text/plain" }],
       documentContext: { status: "failed" },
     });
-    const originalContext = structuredClone(params.turn.ctx);
-
-    await createChatSendMessageInjectionStarter(params)();
-
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
-      params.target,
+    await expectSteer(
+      params,
       "[media attached: media://inbound/note.txt (text/plain)]\n\nread the attachment",
-      expect.objectContaining({ isInboundUserMessage: true }),
     );
-    expect(params.turn.ctx).toEqual(originalContext);
   });
 
   it("keeps the base text untouched when no document context was rendered", async () => {
@@ -837,25 +683,20 @@ describe("createChatSendMessageInjectionStarter", () => {
         ],
       },
     });
-    const durableContext = structuredClone(params.turn.ctx);
-
-    await createChatSendMessageInjectionStarter(params)();
-
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
-      expect.anything(),
+    await expectSteer(
+      params,
       "[media attached: 2 files]\n" +
         "[media attached 1/2: media://inbound/photo.png (image/png)]\n" +
         "[media attached 2/2: media://inbound/scan.pdf (application/pdf)]\n\n" +
         "see attached\n\n[PDF content rendered to images]",
-      expect.objectContaining({
+      {
         images: [
           { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
           { type: "image", data: "page-1", mimeType: "image/png", sourceIndex: 1 },
           { type: "image", data: "page-2", mimeType: "image/png", sourceIndex: 1 },
         ],
-      }),
+      },
     );
-    expect(params.turn.ctx).toEqual(durableContext);
   });
 
   it("injects extracted page images when the steer carries no inbound images", async () => {

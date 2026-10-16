@@ -2,7 +2,7 @@
 // implements only the CLI/service boundary; no host service is installed.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -22,7 +22,14 @@ if (args[0] === "gateway" && args[1] === "install") {
   assert.ok(process.execPath.startsWith(path.join(prefix, "tools/desktop-runtime/")));
   const manifest = JSON.parse(readFileSync(path.join(path.dirname(process.execPath), "../manifest.json")));
   assert.equal(spawnSync(process.execPath, ["--revision"], { encoding: "utf8" }).stdout.trim(), manifest.revision);
-  writeFileSync(installed, JSON.stringify({ bun: process.execPath }));
+  appendFileSync("fixture-runtime-install-attempts", "install\n");
+  const failure = path.join(homedir(), "fixture-install-failure");
+  if (existsSync(failure)) {
+    console.error(readFileSync(failure, "utf8"));
+    process.exit(1);
+  }
+  writeFileSync(path.join(prefix, "openclaw.json"), JSON.stringify({ gateway: { mode: "local" } }));
+  writeFileSync(installed, JSON.stringify({ bun: process.execPath, entry: process.argv[1] }));
   reply({ ok: true });
 } else if (args[0] === "gateway" && args[1] === "status" && args.includes("--deep")) {
   assert.deepEqual(args.slice(0, 4), ["gateway", "status", "--deep", "--json"]);

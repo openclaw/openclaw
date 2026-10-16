@@ -31,7 +31,6 @@ import {
 } from "../../agents/openai-model-routes.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -357,7 +356,7 @@ export async function loadModelsProviderData(
   for (const modelConfig of [cfg.agents?.defaults?.model, cfg.agents?.defaults?.imageModel]) {
     if (typeof modelConfig === "string") {
       addRawModelRef(modelConfig);
-    } else if (modelConfig && typeof modelConfig === "object") {
+    } else if (modelConfig) {
       addRawModelRef(modelConfig.primary);
       for (const fallback of modelConfig.fallbacks ?? []) {
         addRawModelRef(fallback);
@@ -444,11 +443,6 @@ export async function loadModelsProviderData(
       }
     }
     runtimeChoicesByProvider.set(provider, [...providerChoices.values()]);
-  }
-
-  // Auth and visibility cross awaits. Retired owners must restart the whole projection.
-  if (!owner.isCurrent()) {
-    throw new PreparedModelRuntimePublicationSupersededError("model browse owner was superseded");
   }
 
   return {

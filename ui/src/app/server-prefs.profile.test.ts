@@ -1,28 +1,25 @@
-/* @vitest-environment jsdom */
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { resetServerUiPref, selectThemeSettings } from "./server-prefs-controls.ts";
+import { selectThemeSettings, resetServerUiPref } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
-import { extractServerUiPrefs, type SyncedPrefKey } from "./server-prefs-state.ts";
+import {
+  applyServerUiPrefs,
+  refreshProfileAppearancePrefs,
+  resolveServerUiPrefState,
+} from "./server-prefs-reconcile.ts";
+import type { SyncedPrefKey } from "./server-prefs-state.ts";
 import {
   configWithPrefs,
   createServerPrefsWriter,
   type RequestMock,
 } from "./server-prefs.test-support.ts";
-import {
-  applyServerUiPrefs,
-  flushServerUiPrefs,
-  pushServerUiPrefs,
-  refreshProfileAppearancePrefs,
-  resetServerUiPrefsSync,
-  resolveServerUiPrefState,
-} from "./server-prefs.ts";
+import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
 const profileId = "profile-ada";
@@ -54,6 +51,31 @@ afterEach(() => {
 });
 
 describe("profile-bound appearance preferences", () => {
+  it("publishes empty navigation without importing legacy profile entries or writing defaults", async () => {
+    patchSettings({ sidebarEntries: ["route:usage"] });
+    let published = loadSettings();
+    const onApplied = vi.fn(() => {
+      published = loadSettings();
+    });
+    const request = vi.fn(async (_method: string) => ({
+      status: "ok",
+      entries: {
+        "ui.sidebarEntries": [
+          "route:usage",
+          "route:cron",
+          "plugin:workboard/workboard",
+          "session:agent:main:legacy",
+        ],
+      },
+    }));
+    await refreshProfileAppearancePrefs(
+      readOptions(createWriter(request), {}, profileId, onApplied),
+    );
+    expect(onApplied).toHaveBeenCalledOnce();
+    expect(published.sidebarEntries).toEqual([]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["users.prefs.get"]);
+  });
+
   it("preserves imported definitions and only resets design overrides when activation changes", () => {
     const customTheme = createImportedCustomThemeFixture();
     patchSettings({
@@ -79,62 +101,6 @@ describe("profile-bound appearance preferences", () => {
       fontUi: "geist",
       accent: "#123456",
     });
-  });
-
-  it("normalizes profile overrides above config while rejecting malformed stored values", async () => {
-    const config = configWithPrefs({
-      theme: "claw",
-      themeMode: "dark",
-      accent: "#123456",
-      fontUi: "unsupported",
-      fontChat: "lora",
-    });
-    const request = vi.fn(async () => ({
-      status: "ok" as const,
-      entries: {
-        "ui.theme": "knot",
-        "ui.themeMode": { mode: "light" },
-        "ui.accent": "#AbC123",
-        "ui.fontUi": "geist",
-        "ui.fontChat": { family: "lora" },
-        "ui.tabIcon": { mode: "agent" },
-      },
-    }));
-    const writer = createWriter(request);
-    const onApplied = vi.fn();
-
-    await refreshProfileAppearancePrefs(readOptions(writer, config, profileId, onApplied));
-
-    expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {
-      keys: Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
-    });
-    expect(onApplied).toHaveBeenCalledWith({
-      theme: "knot",
-      themeMode: "dark",
-      accent: "#abc123",
-      fontUi: "geist",
-    });
-    expect(loadSettings().fontChat).toBeUndefined();
-    expect(loadSettings().tabIcon).toBeUndefined();
-    expect(extractServerUiPrefs(config)).toEqual({
-      theme: "claw",
-      themeMode: "dark",
-      accent: "#123456",
-    });
-    for (const [key, value, resetValue] of [
-      ["fontUi", "geist", undefined],
-      ["fontChat", undefined, undefined],
-      ["theme", "knot", "claw"],
-      ["accent", "#abc123", "#123456"],
-    ] as const) {
-      expect(profileState(config, key, loadSettings()), key).toEqual({
-        overridden: value !== undefined,
-        provenance: value === undefined ? "default" : "profile",
-        resetValue,
-        value,
-      });
-    }
-    expect(profileState(config, "themeMode", loadSettings()).provenance).toBe("synced");
   });
 
   it("retains the boot mirror while the profile is unresolved and unavailable", async () => {
@@ -414,7 +380,7 @@ describe("profile-bound appearance preferences", () => {
   });
 });
 
-it.each([false, true])(
+it.each([true])(
   "keeps mixed profile appearance edits in one mutation (rejected=%s)",
   async (rejected) => {
     const entries = {

@@ -207,12 +207,10 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
             })
           : undefined))
       : undefined;
-  const preparedInstallRecords =
-    currentMetadataSnapshot &&
-    (options.manifestRegistry === undefined ||
-      options.manifestRegistry === currentMetadataSnapshot.manifestRegistry)
-      ? extractPluginInstallRecordsFromInstalledPluginIndex(currentMetadataSnapshot.index)
-      : undefined;
+  // Manifest projections select plugins; the prepared inventory still owns their install ledger.
+  const preparedInstallRecords = currentMetadataSnapshot
+    ? extractPluginInstallRecordsFromInstalledPluginIndex(currentMetadataSnapshot.index)
+    : undefined;
   const installRecords = {
     ...(options.installRecords ??
       preparedInstallRecords ??

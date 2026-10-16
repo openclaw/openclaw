@@ -5,7 +5,6 @@ import {
   type WorkerTranscriptMessage,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
-import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import { type WorkerConnection, WorkerConnectionInterruptedError } from "./worker-connection.js";
 import type { TranscriptResponseError } from "./worker-rpc-client-shared.js";
 import { fenceForOwnershipError, isTerminalConnection } from "./worker-rpc-client-shared.js";
@@ -55,8 +54,7 @@ export class WorkerTranscriptCommitClient {
   }
 
   commit(messages: readonly WorkerTranscriptMessage[]): Promise<WorkerTranscriptCommitResult> {
-    const snapshot = structuredClone(messages);
-    const operation = this.queue.then(() => this.commitBatches(snapshot));
+    const operation = this.queue.then(() => this.commitBatches(messages));
     this.queue = operation.then(
       () => undefined,
       () => undefined,
@@ -90,9 +88,6 @@ export class WorkerTranscriptCommitClient {
   ): WorkerTranscriptMessage[] {
     let batch: WorkerTranscriptMessage[] = [];
     for (const message of messages.slice(0, WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES)) {
-      if (!isWorkerTranscriptMessageFrameSafe(message)) {
-        throw new Error("worker transcript message exceeds the protocol payload limit");
-      }
       const candidate = [...batch, message];
       const frame: WorkerTranscriptCommitRequestFrame = {
         type: "req",

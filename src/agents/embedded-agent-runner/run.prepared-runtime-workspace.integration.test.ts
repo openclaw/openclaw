@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createAssistantMessageEventStream, type Context } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -163,6 +164,7 @@ module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
         async () => {
           await resetPreparedModelRuntimeSnapshotsForTest();
           clearPluginMetadataLifecycleCaches();
+          setRuntimeConfigSnapshot(config);
           const results: Array<PromiseSettledResult<Awaited<ReturnType<typeof runEmbeddedAgent>>>> =
             [];
           try {

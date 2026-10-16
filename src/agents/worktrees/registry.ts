@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { withStateDatabaseSchemaMaintenance } from "../../infra/state-database-maintenance.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
-  withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
 import { tableExists, tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -52,11 +51,11 @@ type WorktreeRegistryDatabase = Pick<
   "worktrees" | "worktree_provisioned_file_chunks" | "state_leases"
 >;
 
-function dbFor(env: NodeJS.ProcessEnv): DatabaseSync {
+function dbFor(env: NodeJS.ProcessEnv): EngineConnection {
   return openOpenClawStateDatabase({ env }).db;
 }
 
-function kyselyFor(db: DatabaseSync) {
+function kyselyFor(db: EngineConnection) {
   return getNodeSqliteKysely<WorktreeRegistryDatabase>(db);
 }
 
@@ -94,9 +93,9 @@ export function listLegacyRegistryWorktreesForMigration(
 function readRegistry<T>(
   env: NodeJS.ProcessEnv,
   behavior: { artifactPreservingReadOnly?: boolean },
-  read: (db: DatabaseSync) => T,
+  read: (db: EngineConnection) => T,
 ): T | undefined {
-  const operation = ({ db }: { db: DatabaseSync }) =>
+  const operation = ({ db }: { db: EngineConnection }) =>
     tableExists(db, "worktrees") ? read(db) : undefined;
   return behavior.artifactPreservingReadOnly
     ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(operation, { env })
@@ -105,7 +104,7 @@ function readRegistry<T>(
 
 // Doctor/startup planning may release schema custody before these native business writes.
 function runRegistryMigration(
-  write: (db: DatabaseSync) => number,
+  write: (db: EngineConnection) => number,
   { env }: { env: NodeJS.ProcessEnv },
 ): number {
   return withStateDatabaseSchemaMaintenance(
@@ -310,15 +309,4 @@ export function assertWorktreeRemovalAvailable(
       "Worktree removal is in progress; retry after cleanup settles",
     );
   }
-}
-
-export function hasLiveWorktreeRunLeaseRow(env: NodeJS.ProcessEnv, worktreeId: string): boolean {
-  return (
-    withExistingOpenClawStateDatabaseCurrentReadOnly(
-      ({ db }) =>
-        collectLiveRunLeases(db, kyselyFor(db), worktreeRunLeaseScope(worktreeId), false).livePids
-          .length > 0,
-      { env },
-    ) ?? false
-  );
 }

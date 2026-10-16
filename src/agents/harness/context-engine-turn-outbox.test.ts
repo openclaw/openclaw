@@ -4,13 +4,17 @@ import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeSqliteReadSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptMessage,
-  replaceTranscriptEvents,
+  resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import type {
   TranscriptTurnAdmission,
@@ -22,9 +26,9 @@ import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
   completedTurnMessageAnchor,
@@ -42,13 +46,15 @@ import {
 } from "./context-engine-turn-attempt.js";
 import { openContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox-store.js";
 import {
-  acceptContextEngineTurnIntent,
   drainContextEngineTurnOutbox,
+  isRetryableContextEngineTurnReadFailure,
+} from "./context-engine-turn-outbox.js";
+import {
+  acceptContextEngineTurnIntent,
   enqueueContextEngineTurnCommit,
   enqueueContextEngineTurnIntent,
-  isRetryableContextEngineTurnReadFailure,
   recoverContextEngineTurnOutbox,
-} from "./context-engine-turn-outbox.js";
+} from "./context-engine-turn-outbox.kernel.worker.js";
 import { bindSqliteWorkerBackend } from "./context-engine-turn-outbox.worker.js";
 
 const tempDirs: string[] = [];
@@ -321,7 +327,7 @@ describe("context-engine turn outbox", () => {
       if (failure === "missing-state") {
         database.db
           .prepare(
-            "UPDATE context_engine_turn_outbox SET payload_json = '{}' WHERE advancement_key = ?",
+            "UPDATE context_engine_turn_outbox SET payload_json = '{}', payload_state = NULL WHERE advancement_key = ?",
           )
           .run(payload.boundary.admission.logicalTurnId);
       }
@@ -373,7 +379,7 @@ describe("context-engine turn outbox", () => {
   it.each(["accepted", "admission-only"] as const)(
     "recovers %s prior work before recording the next dispatch",
     async (state) => {
-      const accepted = state === "accepted";
+      const accepted = state !== "admission-only";
       const {
         target,
         current: admitted,
@@ -460,6 +466,10 @@ describe("context-engine turn outbox", () => {
           database.db.prepare("SELECT advancement_key FROM context_engine_turn_outbox").all(),
         ).toHaveLength(0);
         expect(commitTurn.mock.calls[0]?.[0]).not.toHaveProperty("prePromptMessageCount");
+        expect(commitTurn.mock.calls[0]?.[0].runtimeSettings).toMatchObject({
+          model: { provider: "anthropic", resolved: "claude-sonnet-4-6" },
+          limits: { promptTokenBudget: 180_000 },
+        });
         recorder.markRuntimePersisted(currentMessage, currentAdmission);
         // The dispatch wait settles admission in the agent database worker.
         expect(recorder.hasRuntimePersistencePending()).toBe(true);
@@ -501,12 +511,27 @@ describe("context-engine turn outbox", () => {
       engineId: "test",
       isHeartbeat: false,
     });
+    const storedState = () =>
+      database.db
+        .prepare("SELECT payload_state FROM context_engine_turn_outbox WHERE advancement_key = ?")
+        .get(payload.boundary.admission.logicalTurnId)?.payload_state;
+    const sequence = () =>
+      database.db
+        .prepare(
+          "SELECT enqueue_sequence FROM context_engine_turn_outbox WHERE advancement_key = ?",
+        )
+        .get(payload.boundary.admission.logicalTurnId)?.enqueue_sequence;
+    const admittedSequence = sequence();
+    expect(admittedSequence).toBe(1);
+    expect(storedState()).toBe("admitted");
     acceptContextEngineTurnIntent({
       boundary: payload.boundary,
       database,
       engineId: "test",
       isHeartbeat: false,
     });
+    expect(storedState()).toBe("accepted");
+    expect(sequence()).toBe(admittedSequence);
     const warn = vi.fn();
 
     recoverContextEngineTurnOutbox({
@@ -515,6 +540,8 @@ describe("context-engine turn outbox", () => {
       sessionId: payload.boundary.admission.sessionId,
       warn,
     });
+    expect(storedState()).toBe("blocked");
+    expect(sequence()).toBe(admittedSequence);
 
     const queued = database.db
       .prepare("SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?")
@@ -545,13 +572,16 @@ describe("context-engine turn outbox", () => {
       ...payload.boundary.admission,
       logicalTurnId: "session-a:current",
     };
+    const runWarn = vi.fn();
 
     await drainPendingContextEngineTurnsBeforeRun({
       admission: currentAdmission,
       lease,
-      warn,
+      warn: runWarn,
     });
 
+    // The terminal marker was reported when it was blocked; later runs stay quiet.
+    expect(runWarn).not.toHaveBeenCalled();
     expect(engine.commitTurn).toHaveBeenCalledOnce();
     expect(engine.commitTurn).toHaveBeenCalledWith(
       expect.objectContaining({ advancementKey: "session-a:later-ready" }),
@@ -625,6 +655,13 @@ describe("context-engine turn outbox", () => {
       "session-a:z-first",
       "session-b:1",
     ]);
+    expect(
+      database.db
+        .prepare(
+          "SELECT enqueue_sequence, attempt_count FROM context_engine_turn_outbox WHERE advancement_key = 'session-a:z-first'",
+        )
+        .get(),
+    ).toEqual({ enqueue_sequence: 1, attempt_count: 1 });
     failFirstTurn = false;
 
     await drainContextEngineTurnOutbox({
@@ -731,6 +768,53 @@ describe("context-engine turn outbox", () => {
     );
   });
 
+  it("preserves an unbound incognito namespace under a symlinked state directory", () => {
+    const stateDir = createStateDir();
+    const alias = path.join(createStateDir(), "state");
+    fs.symlinkSync(fs.realpathSync(stateDir), alias, "junction");
+    const storePath = path.join(
+      alias,
+      "agents",
+      "main",
+      "agent",
+      "incognito-openclaw-agent.sqlite",
+    );
+    expect(
+      resolveSessionTranscriptDatabasePath({
+        agentId: "main",
+        sessionId: "unbound-incognito",
+        sessionKey: "agent:main:dashboard:incognito-unbound",
+        storePath,
+      }),
+    ).toBe(storePath);
+  });
+
+  it("admits a runtime transcript through a symlinked state directory", async () => {
+    const { stateDir, target, admission, database } = await createTranscript("symlink-turn");
+    const alias = path.join(createStateDir(), "state");
+    fs.symlinkSync(fs.realpathSync(stateDir), alias, "junction");
+    const currentMessage = { role: "user" as const, content: "current", timestamp: 1_000 };
+    const recorder = createUserTurnTranscriptRecorder({
+      message: currentMessage,
+      target: async () => undefined,
+    });
+    const lease = createLease(createEngine(async () => ({ status: "committed" })));
+    await drainPendingContextEngineTurnsBeforeRun({
+      admission: undefined,
+      lease,
+      recorder,
+      sessionTarget: { ...target, storePath: path.join(alias, "sessions.json") },
+    });
+
+    recorder.markRuntimePersisted(currentMessage, admission);
+    await expect(recorder.waitForRuntimePersistence()).resolves.toBeUndefined();
+    expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+    const queued = database.db
+      .prepare("SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?")
+      .get(admission.logicalTurnId) as { payload_json: string } | undefined;
+    expect(JSON.parse(queued?.payload_json ?? "{}")).toMatchObject({ state: "admitted" });
+  });
+
   it("queues a runtime admission reported inside a session write lane behind that lane", async () => {
     const { stateDir, target, admission, database } = await createTranscript("lane-turn");
     const currentMessage = { role: "user" as const, content: "current", timestamp: 1_000 };
@@ -766,29 +850,22 @@ describe("context-engine turn outbox", () => {
       { agentId: otherDatabase.agentId, path: otherDatabase.path },
       () => undefined,
     );
-    const databaseAccess = vi.spyOn(agentDatabase, "withOpenClawAgentDatabaseRuntime");
-    const accessesToTarget = () =>
-      databaseAccess.mock.calls.filter(([options]) => options.path === database.path);
     try {
-      // Observe the real database entry: worker I/O alone can delay even a reentrant write.
-      const accessesInsideLane = await runOpenClawAgentWriteAdmission(
+      await runOpenClawAgentWriteAdmission(
         { agentId: database.agentId, path: database.path },
         () => {
           recorder.markRuntimePersisted(currentMessage, admission);
-          return accessesToTarget().length;
+          expect(recorder.hasRuntimePersistencePending()).toBe(true);
         },
       );
       await recorder.waitForRuntimePersistence();
 
-      expect(accessesInsideLane).toBe(0);
-      expect(accessesToTarget()).toHaveLength(1);
       expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
       const queued = database.db
         .prepare("SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?")
         .get(admission.logicalTurnId) as { payload_json: string } | undefined;
       expect(JSON.parse(queued?.payload_json ?? "{}")).toMatchObject({ state: "admitted" });
     } finally {
-      databaseAccess.mockRestore();
       releaseOther.resolve();
       await Promise.all([otherWrite, otherQueuedWrite]);
     }
@@ -809,6 +886,51 @@ describe("context-engine turn outbox", () => {
 
     expect(recorder.hasRuntimePersistencePending()).toBe(true);
     await expect(recorder.waitForRuntimePersistence()).rejects.toThrow("admission write failed");
+  });
+
+  it("prepares from the recovery snapshot and observes completed rows without a second read", () => {
+    const database = createDatabase();
+    const payload = createPayload({
+      advancementKey: "snapshot-turn",
+      databasePath: database.path,
+      sequence: 1,
+      sessionId: "snapshot-session",
+    });
+    const backend = bindSqliteWorkerBackend(undefined, {
+      databasePath: database.path,
+      database: database.db,
+      admit: () => undefined,
+    });
+    const command = {
+      type: "prepareRun" as const,
+      input: { engineId: "test", sessionId: "snapshot-session", isHeartbeat: false },
+    };
+    enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
+    const queries: string[] = [];
+    const statements = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["outbox"],
+      (sql) => {
+        if (!/^select/i.test(sql) || !sql.includes("context_engine_turn_outbox")) {
+          return null;
+        }
+        queries.push(sql);
+        return "outbox";
+      },
+    );
+    try {
+      expect(backend.execute(command)).toEqual({ warnings: [], pending: true, admitted: false });
+      expect(statements.counts.outbox).toBe(1);
+      backend.execute({ type: "complete", input: { advancementKey: "snapshot-turn" } });
+      expect(backend.execute(command)).toEqual({ warnings: [], pending: false, admitted: false });
+      expect(statements.counts.outbox).toBe(2);
+      expect(backend.execute({ type: "hasPending", input: command.input })).toBe(false);
+      expect(statements.counts.outbox).toBe(3);
+      expect(queries.some((query) => query.includes("payload_state"))).toBe(true);
+      expect(queries.every((query) => !query.includes("json_extract"))).toBe(true);
+    } finally {
+      statements.restore();
+    }
   });
 
   it("reuses admitted outbox schema across worker commands without DDL or catalog reads", async () => {

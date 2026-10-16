@@ -3,6 +3,7 @@ import path from "node:path";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
+import { requireNativeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { observeMemoryForgetWorker } from "./memory-forget-fault.test-support.js";
@@ -26,7 +27,9 @@ describe("memory forget worker settlement", () => {
 
   async function seedSelectedMemory(withOrigins: boolean) {
     await seedMemoryForgetSession("target");
-    const { db } = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
+    const db = requireNativeSqliteDatabase(
+      sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db,
+    );
     if (withOrigins) {
       await recordMemoryEntryOrigins({
         agentId: "main",
@@ -151,20 +154,19 @@ describe("memory forget worker settlement", () => {
       const requests: string[] = [];
       let transactions = 0;
       let refused = false;
-      const sources: Array<Parameters<typeof sqliteRuntime.openOpenClawAgentSqliteWorkerStore>[1]> =
-        [];
-      const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
+      const paths: Array<string | undefined> = [];
+      const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
       const observer = vi
-        .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore")
+        .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
         .mockImplementation((options, source, worker) => {
           if (
-            source !== state.db ||
+            options.path !== state.db.location() ||
             worker.moduleUrl.href !==
               resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins).href
           ) {
             return open(options, source, worker);
           }
-          sources.push(source);
+          paths.push(options.path);
           return open(options, source, {
             ...worker,
             assertAdmission(request) {
@@ -200,8 +202,7 @@ describe("memory forget worker settlement", () => {
         } else {
           await expect(forgetMemoryEntries(state.params)).rejects.toThrow(originalError.message);
         }
-        expect(sources).toHaveLength(1);
-        expect(sources[0] === state.db).toBe(true);
+        expect(paths).toEqual([state.db.location()]);
         expect(refused).toBe(true);
         expect(requests).toEqual(
           refusal === "schema commit"

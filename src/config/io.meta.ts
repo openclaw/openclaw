@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
+import { writeConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 // Maintains config metadata fields written alongside user config.
 import { VERSION } from "../version.js";
 import { getConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
@@ -63,6 +64,7 @@ export function stampConfigWriteMetadata(
   cfg: OpenClawConfig,
   version: string = VERSION,
   previousConfig?: unknown,
+  env: NodeJS.ProcessEnv = process.env,
 ): OpenClawConfig {
   const migrationStamped =
     previousConfig === undefined
@@ -71,6 +73,18 @@ export function stampConfigWriteMetadata(
           materializeModelPolicyAllowlist(cfg, previousConfig).config,
           previousConfig,
         ).config;
+  if (resolveUpdateRehearsalRoot(env)) {
+    // Released drivers compare this copy before activation. Keep real migrations,
+    // but leave writer-only stamps for the subsequent live config write.
+    const { meta: beforeMeta, ...before } = cfg;
+    const { meta: afterMeta, ...after } = migrationStamped;
+    const removedMarker =
+      (beforeMeta?.migrations?.modelPolicyAllowlist &&
+        !afterMeta?.migrations?.modelPolicyAllowlist) ||
+      (beforeMeta?.migrations?.utilityModelSeparation &&
+        !afterMeta?.migrations?.utilityModelSeparation);
+    return !removedMarker && isDeepStrictEqual(before, after) ? cfg : migrationStamped;
+  }
   return {
     ...migrationStamped,
     meta: {
@@ -81,6 +95,8 @@ export function stampConfigWriteMetadata(
 }
 
 /** Persist machine-owned metadata only after the matching config file commit succeeds. */
-export function recordConfigWriteMetadata(now: string = new Date().toISOString()): void {
-  writeConfigMachineState("config.lastTouchedAt", now);
+export async function recordConfigWriteMetadata(
+  now: string = new Date().toISOString(),
+): Promise<void> {
+  await writeConfigMachineStateAsync("config.lastTouchedAt", now);
 }

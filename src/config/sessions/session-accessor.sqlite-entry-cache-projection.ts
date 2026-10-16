@@ -20,6 +20,7 @@ import {
 } from "./session-accessor.sqlite-participant-projection.js";
 import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
 import type { ValidatedSessionMetadata } from "./session-canonical-key.js";
+import type { SessionEntrySnapshot } from "./session-entry-snapshots.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionEntryCacheTables = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
@@ -42,7 +43,9 @@ export function loadSessionEntrySnapshot(
   if (!metadata) {
     for (const row of iterateSqliteQuerySync(
       database.db,
-      selectSessionEntryRows(database, projection).select("updated_at").orderBy("session_key"),
+      selectSessionEntryRows(database, projection)
+        .select(["current_session_id", "updated_at"])
+        .orderBy("session_key"),
     )) {
       keys.push(row.session_key);
       const entry = parseSessionEntryJson(row, projection);
@@ -93,11 +96,46 @@ export function readSessionEntrySideMetadata(
   };
 }
 
+export function projectSessionEntryCacheMetadata(
+  entry: SessionEntry,
+  sideMetadata: SessionEntrySideMetadata,
+): SessionEntry {
+  const projected = { ...entry, ...sideMetadata };
+  for (const field of ["owner", "participants", "participantCount"] as const) {
+    if (sideMetadata[field] === undefined) {
+      delete projected[field];
+    }
+  }
+  return freezeJsonSnapshot(projected);
+}
+
 export function projectSessionEntryCacheUpdate(
   entryJson: string,
-  sideMetadata: SessionEntrySideMetadata | undefined,
+  sideMetadata: SessionEntrySideMetadata,
+  snapshotEntry?: SessionEntry,
+  snapshots?: readonly SessionEntrySnapshot[],
 ): SessionEntry | undefined {
   // The writer supplies its persisted bytes; the cache owns the decoded metadata graph.
   const parsedEntry = parseSessionEntryJson({ entry_json: entryJson }, "list");
-  return parsedEntry ? freezeJsonSnapshot({ ...parsedEntry, ...sideMetadata }) : undefined;
+  if (parsedEntry && snapshotEntry) {
+    // Changed snapshots reuse persisted bytes; unchanged snapshots are already decoded.
+    const cold =
+      snapshots !== undefined
+        ? Object.fromEntries(
+            snapshots.map(({ field, valueJson }) => [field, JSON.parse(valueJson)]),
+          )
+        : structuredClone({
+            ...(snapshotEntry.sessionDiffBaseline !== undefined
+              ? { sessionDiffBaseline: snapshotEntry.sessionDiffBaseline }
+              : {}),
+            ...(snapshotEntry.skillsSnapshot !== undefined
+              ? { skillsSnapshot: snapshotEntry.skillsSnapshot }
+              : {}),
+            ...(snapshotEntry.systemPromptReport !== undefined
+              ? { systemPromptReport: snapshotEntry.systemPromptReport }
+              : {}),
+          });
+    Object.assign(parsedEntry, cold);
+  }
+  return parsedEntry ? projectSessionEntryCacheMetadata(parsedEntry, sideMetadata) : undefined;
 }

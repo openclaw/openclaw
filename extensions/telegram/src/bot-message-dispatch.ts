@@ -254,16 +254,13 @@ export const dispatchTelegramMessage = async (
     runtime,
     replyToMode,
     telegramCfg,
-    telegramDeps: injectedTelegramDeps,
     retryDispatchErrors = false,
     suppressFailureFallback = false,
     turnAdoptionLifecycle,
   } = dispatchParams;
   const dispatchStartedAt = Date.now();
   const dispatchContext = await resolveDispatchTelegramContext({ context });
-  const telegramDeps =
-    injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
-  const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
+  const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg });
   const isRoomEvent = dispatchContext.ctxPayload.InboundEventKind === "room_event";
   const status = createTelegramDispatchStatus({ context: dispatchContext });
   const richMessagesParams = {
@@ -273,7 +270,7 @@ export const dispatchTelegramMessage = async (
   };
   const richMessages = resolveTelegramRichMessages(richMessagesParams);
   const tableMode = resolveTelegramTableMode(richMessagesParams);
-  const resolvedReasoningLevel = resolveTelegramReasoningLevel({
+  const resolvedReasoningLevel = await resolveTelegramReasoningLevel({
     cfg,
     sessionKey: dispatchContext.ctxPayload.SessionKey,
     agentId: dispatchContext.route.agentId,
@@ -304,7 +301,6 @@ export const dispatchTelegramMessage = async (
     richMessages,
     statusReactionController: status.controller,
     tableMode,
-    telegramDeps,
   };
   const draftState = createDraftState(turnConfig);
   const progressState = createProgressState(turnConfig, draftState, () => turn);
@@ -332,8 +328,9 @@ export const dispatchTelegramMessage = async (
     try {
       const sessionKey = dispatchContext.ctxPayload.SessionKey;
       if (sessionKey) {
-        isFirstTurnInSession = !loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
-          .entry?.systemSent;
+        isFirstTurnInSession = !(
+          await loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
+        ).entry?.systemSent;
       } else {
         logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
       }

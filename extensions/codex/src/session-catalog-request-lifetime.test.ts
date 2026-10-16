@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./app-server/client.js";
 import { threadStartResult } from "./app-server/codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
+import type { CodexPluginConfig } from "./app-server/config.js";
 import type { CodexThreadListParams } from "./app-server/protocol.js";
 import { getCurrentSharedClientEntry } from "./app-server/shared-client-lifecycle.js";
 import {
@@ -94,7 +95,7 @@ async function createCatalogHarness(agentDir: string, resources: CatalogResource
       authToken: "synthetic-catalog-lifetime-token",
       requestTimeoutMs: REQUEST_TIMEOUT_MS,
     },
-  };
+  } satisfies CodexPluginConfig;
   let now = 1_000;
   const newFactory = (requestTimeoutMs = REQUEST_TIMEOUT_MS, state?: CodexCatalogState) => {
     const created = createCodexSessionCatalogControl({
@@ -495,70 +496,6 @@ describe("resident catalog hydration request lifetime", () => {
     } finally {
       writeAllowed.resolve();
       await factory.stop();
-    }
-  });
-
-  it.each([false, true])("bounds same-home retirement waits (expired: %s)", async (expired) => {
-    const { state, writeStarted, writeAllowed } = blockedState("retired-prefix");
-    const control = h.newFactory(REQUEST_TIMEOUT_MS, state).forRequest("main");
-    const first = observeHydration(control.initialize());
-    const prefix = await h.frame(0);
-    prefix.transport.send({
-      id: prefix.id,
-      result: { ...page("retired-prefix"), nextCursor: "old-tail" },
-    });
-    await writeStarted.promise;
-    const retired = await h.frame(1);
-    let retiredReplied = false;
-    try {
-      h.replaceConfig();
-      const delivered = vi.fn();
-      const listed = control.listPage({}).then((result) => {
-        delivered(result);
-        return result;
-      });
-      const rejected = vi.fn();
-      void listed.catch(rejected);
-      await nextTurn();
-      expect(delivered).not.toHaveBeenCalled();
-      expect(state.entries).toHaveBeenCalledOnce();
-      if (expired) {
-        await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
-        expect(rejected).toHaveBeenCalledWith(
-          expect.objectContaining({ code: "APP_SERVER_UNAVAILABLE" }),
-        );
-        expect(state.entries).toHaveBeenCalledOnce();
-      }
-      writeAllowed.resolve();
-      await nextTurn();
-      expect(delivered).not.toHaveBeenCalled();
-      const current = observeHydration(control.initialize());
-      h.reply(await h.frame(2), "current-thread");
-      await current;
-      if (expired) {
-        expect(delivered).not.toHaveBeenCalled();
-      } else {
-        expect((await listed).sessions).toMatchObject([{ threadId: "current-thread" }]);
-      }
-      const beforeRetiredReply = await state.entries();
-      expect(
-        beforeRetiredReply.flatMap(({ value }) =>
-          value.kind === "row" ? [value.row.threadId] : [],
-        ),
-      ).toEqual(["current-thread"]);
-      h.reply(retired, "stale-thread");
-      retiredReplied = true;
-      await expect(first).rejects.toThrow(
-        expired ? /thread\/list timed out/ : /closed|configuration changed/,
-      );
-      expect(await state.entries()).toEqual(beforeRetiredReply);
-      expect((await control.listPage({})).sessions).toMatchObject([{ threadId: "current-thread" }]);
-    } finally {
-      writeAllowed.resolve();
-      if (!retiredReplied) {
-        h.reply(retired, "stale-thread");
-      }
-      await first.catch(() => undefined);
     }
   });
 

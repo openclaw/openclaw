@@ -10,7 +10,10 @@ import type {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { assignOptionalNumberAttrs } from "./service-attributes.js";
-import { normalizeOtelErrorMessage } from "./service-content-normalization.js";
+import {
+  normalizeOtelContentValue,
+  normalizeOtelErrorMessage,
+} from "./service-content-normalization.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import type { SessionRecoveryDiagnosticEvent, TalkDiagnosticEvent } from "./service-types.js";
 
@@ -305,6 +308,18 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       const redactedError = normalizeOtelErrorMessage(privateData.errorMessage);
       if (redactedError) {
         spanAttrs["openclaw.error"] = redactedError;
+      }
+      const inputValue = runtime.captureContent
+        ? normalizeOtelContentValue(privateData.messageContent?.userPrompt)
+        : undefined;
+      if (inputValue) {
+        spanAttrs["input.value"] = inputValue;
+      }
+      const outputValue = runtime.captureContent
+        ? normalizeOtelContentValue(privateData.messageContent?.finalResponse)
+        : undefined;
+      if (outputValue) {
+        spanAttrs["output.value"] = outputValue;
       }
       const trustedTrace = runtime.trustedTraceContext(evt, metadata);
       const trackedSpan = trustedTrace?.spanId

@@ -10,6 +10,11 @@ OpenClaw remembers things by writing plain Markdown files in your agent's
 workspace (default `~/.openclaw/workspace`). The model only remembers what gets
 saved to disk; there is no hidden state.
 
+Workspace `USER.md` and `MEMORY.md` context does not require a memory search
+plugin to implement provenance classification. When that optional capability is
+missing, OpenClaw uses its workspace provenance records. Files recorded as
+untrusted and remote files without a valid read-source identity remain excluded.
+
 ## How it works
 
 Your agent has four memory-related files:
@@ -144,6 +149,26 @@ Use [scheduled tasks](/automation/cron-jobs) for exact reminders, timed checks,
 and recurring work. Memory can still summarize the durable context around that
 work.
 
+## PostgreSQL memory search
+
+The built-in `memory-core` plugin can index and search a PostgreSQL agent database.
+SQLite remains the default. PostgreSQL memory search is experimental: text ranking
+is engine-local, so result ordering and scores can differ from SQLite. Hybrid
+search retains the same vector/text weights.
+
+Install `unaccent` in the selected PostgreSQL database for full text, `pg_trgm`
+when using the trigram tokenizer, and `vector` for semantic search. For keyword-only
+search, explicitly set `memory.search.provider: "none"` (or the agent override).
+This mode needs no `vector` extension and appears in memory status as provider
+`none`, search mode `fts-only`. A vector request without the capability fails with
+`DATABASE_SEARCH_CAPABILITY_UNAVAILABLE` and an actionable next step.
+
+Forgetting removes indexed text and vectors together with their source rows.
+`openclaw memory reset` clears derived memory data while preserving memory files,
+sessions, and the admitted search schema; run `openclaw memory index` to rebuild.
+See [Database engines](/reference/database-engines#search-on-postgresql) for setup,
+permissions, storage diagnostics, and PostgreSQL limitations.
+
 ## Memory tools
 
 The agent has three tools for working with memory:
@@ -155,6 +180,11 @@ The agent has three tools for working with memory:
   standing intents. Time-based reminders continue to use scheduled tasks.
 
 All three tools are provided by the active memory plugin (default: `memory-core`).
+
+The agent can answer directly when the conversation, bootstrap files, or supplied
+recall fully answers the question. It uses memory tools to retrieve missing facts
+when that context is absent or only answers part of the question. Partial, stale,
+or unavailable recall still requires disclosure.
 
 When session indexing is enabled, `memory_search` can also return session
 transcript hits. Their `sessions/...jsonl` paths are search references, not files
@@ -208,7 +238,7 @@ auto-capture, and local Ollama embedding support. Plugin install.
 
 If you want durable memory to behave more like a maintained knowledge base
 than raw notes, use the bundled `memory-wiki` plugin. It compiles durable
-knowledge into a wiki vault with deterministic page structure, structured
+knowledge into a wiki vault with fixed page structure, structured
 claims and evidence, contradiction and freshness tracking, generated
 dashboards, compiled digests, and wiki-native tools (`wiki_status`,
 `wiki_search`, `wiki_get`, `wiki_apply`, `wiki_lint`).
@@ -237,6 +267,10 @@ OpenClaw resolves when the flush runs from that host config and the active
 context window. The selected memory provider supplies the prompts and
 persistence target or tools. It inherits host timing unless it deliberately
 overrides an optional timing field.
+
+When a model server omits usage data, OpenClaw estimates context pressure from
+the active conversation so the memory checkpoint can still run. These estimates
+do not replace provider-reported token usage in session status.
 
 The flush uses a private copy of the conversation, so its housekeeping messages
 never appear in later user turns, even if interrupted. Its writes to memory
@@ -302,7 +336,7 @@ owner or agent-derived items into long-term memory (`MEMORY.md`):
 - **Thresholded**: promotions must pass score, recall-frequency, and
   query-diversity gates.
 - **Consolidated**: a tool-free completion selects merges and supersessions
-  after the deterministic gate. The memory writer composes the result from
+  after the rule-based check. The memory writer composes the result from
   validated source evidence; invalid or unavailable decisions use append-only fallback.
 - **Taint gated**: untrusted and system-derived candidates never enter the
   consolidation prompt or durable promotion path.
@@ -329,7 +363,7 @@ The dreaming system has two related review lanes:
 Dreaming JSON journals from before July 2026 are no longer imported. The
 migration check leaves `memory/.dreams/daily-ingestion.json`, `session-ingestion.json`,
 `short-term-recall.json`, and `phase-signals.json` untouched. Existing SQLite
-state remains authoritative. If Doctor cannot establish canonical state,
+state remains authoritative. If Doctor cannot establish valid stored state,
 restore a backup from a July 2026 or newer release. An empty ingestion store
 without a previous migration acknowledgement is indistinguishable from
 unmigrated state; after verifying its SQLite state, back up and move the retired

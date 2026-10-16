@@ -167,7 +167,7 @@ async function resolveCliProgramArguments(params: {
   if (!params.runtimePath?.trim()) {
     throw new Error(
       params.runtime === "bun"
-        ? "No supported Bun runtime was selected for the daemon. Install Bun 1.4 or newer with WAL-reset-safe node:sqlite, then retry."
+        ? "No supported Bun runtime was selected for the daemon. Install Bun 1.4.3 or newer with WAL-reset-safe node:sqlite, then retry."
         : `No supported Node runtime was selected for the daemon. Install Node ${SUPPORTED_NODE_VERSIONS}, then retry.`,
     );
   }
@@ -225,6 +225,7 @@ export async function resolveGatewayProgramArguments(params: {
 }
 
 export async function resolveNodeProgramArguments(params: {
+  cliEntrypoint?: string;
   host: string;
   port: number;
   contextPath?: string;

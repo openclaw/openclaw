@@ -5,6 +5,7 @@ import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionCommunicationPolicySchema } from "./sessions-communication.js";
 import {
+  SessionDeviceFolderSchema,
   SessionPermissionModeSchema,
   SessionRepositorySourceSchema,
   SessionToolOverridesSchema,
@@ -100,6 +101,7 @@ export const SessionsCreateParamsSchema = closedObject({
   ),
   /** Remote-owned source; create, dispatch, then send the initial turn. */
   repository: Type.Optional(SessionRepositorySourceSchema),
+  deviceFolder: Type.Optional(SessionDeviceFolderSchema),
   worktree: Type.Optional(Type.Boolean()),
   worktreeSource: Type.Optional(
     Type.Literal("empty", {

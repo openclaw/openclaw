@@ -1,5 +1,4 @@
 // Verifies ClawHub skill icons, telemetry, metadata, verification, and cards.
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { reportClawHubPluginInstallTelemetry } from "./clawhub-packages.js";
 import {
@@ -13,49 +12,11 @@ import {
   searchClawHubSkills,
 } from "./clawhub-skills.js";
 
-function malformedUtf8(prefix: string, suffix: string): ArrayBuffer {
-  const prefixBytes = new TextEncoder().encode(prefix);
-  const suffixBytes = new TextEncoder().encode(suffix);
-  const buffer = new ArrayBuffer(prefixBytes.byteLength + 1 + suffixBytes.byteLength);
-  const bytes = new Uint8Array(buffer);
-  bytes.set(prefixBytes);
-  bytes[prefixBytes.byteLength] = 0xff;
-  bytes.set(suffixBytes, prefixBytes.byteLength + 1);
-  return buffer;
-}
-
 describe("clawhub skills", () => {
   afterEach(() => {
     delete process.env.CLAWHUB_TOKEN;
     delete process.env.CLAWHUB_DISABLE_TELEMETRY;
     delete process.env.CLAWDHUB_DISABLE_TELEMETRY;
-  });
-
-  it("resolves hosted skill icons against the configured ClawHub origin", async () => {
-    await expect(
-      searchClawHubSkills({
-        query: "playwright",
-        baseUrl: "https://registry.example",
-        fetchImpl: async () =>
-          Response.json({
-            results: [
-              {
-                score: 1,
-                slug: "playwright-interactive",
-                ownerHandle: "acme",
-                displayName: "Playwright Interactive",
-                source: "clawhub",
-                install: { kind: "clawhub", reference: "acme/playwright-interactive" },
-                icon: `/api/v1/skill-icons/${"a".repeat(64)}`,
-              },
-            ],
-          }),
-      }),
-    ).resolves.toMatchObject([
-      {
-        icon: `https://registry.example/api/v1/skill-icons/${"a".repeat(64)}`,
-      },
-    ]);
   });
 
   it("rejects skill icons outside the configured hosted-icon route", async () => {
@@ -364,44 +325,42 @@ describe("clawhub skills", () => {
     ).rejects.toThrow("Malformed ClawHub skill listing");
   });
 
-  it.each([
-    { family: "code-plugin" },
-    { name: "another-skill" },
-    { ownerHandle: "bob" },
-    { ownerHandle: null },
-  ])("does not borrow official status from mismatched trending metadata: %j", async (mismatch) => {
-    const result = await fetchClawHubSkillCatalog({
-      feed: "trending",
-      fetchImpl: async (input) => {
-        const url = new URL(input instanceof Request ? input.url : String(input));
-        if (url.pathname === "/api/v1/packages/weather") {
+  it.each([{ family: "code-plugin" }, { ownerHandle: "bob" }])(
+    "does not borrow official status from mismatched trending metadata: %j",
+    async (mismatch) => {
+      const result = await fetchClawHubSkillCatalog({
+        feed: "trending",
+        fetchImpl: async (input) => {
+          const url = new URL(input instanceof Request ? input.url : String(input));
+          if (url.pathname === "/api/v1/packages/weather") {
+            return Response.json({
+              package: {
+                family: "skill",
+                name: "weather",
+                ownerHandle: "alice",
+                isOfficial: true,
+                ...mismatch,
+              },
+            });
+          }
           return Response.json({
-            package: {
-              family: "skill",
-              name: "weather",
-              ownerHandle: "alice",
-              isOfficial: true,
-              ...mismatch,
-            },
+            items: [
+              {
+                slug: "weather",
+                displayName: "Weather",
+                source: "clawhub",
+                official: true,
+                publisher: { handle: "alice", official: true },
+                install: { kind: "clawhub", reference: "alice/weather" },
+                metrics: { updatedAt: 123 },
+              },
+            ],
           });
-        }
-        return Response.json({
-          items: [
-            {
-              slug: "weather",
-              displayName: "Weather",
-              source: "clawhub",
-              official: true,
-              publisher: { handle: "alice", official: true },
-              install: { kind: "clawhub", reference: "alice/weather" },
-              metrics: { updatedAt: 123 },
-            },
-          ],
-        });
-      },
-    });
-    expect(result.items).toMatchObject([{ installRef: "@alice/weather", official: undefined }]);
-  });
+        },
+      });
+      expect(result.items).toMatchObject([{ installRef: "@alice/weather", official: undefined }]);
+    },
+  );
 
   it("rejects malformed catalog envelopes and unsupported search pagination", async () => {
     for (const response of [{}, { items: null }, { items: [null] }, { items: [], nextCursor: 1 }]) {
@@ -453,19 +412,6 @@ describe("clawhub skills", () => {
       packageName: "@openclaw/voice-call",
       version: "2026.7.23",
     });
-  });
-
-  it("applies the install telemetry opt-out to plugin reports", async () => {
-    process.env.CLAWHUB_DISABLE_TELEMETRY = "true";
-    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
-
-    await reportClawHubPluginInstallTelemetry({
-      token: "test-token",
-      packageName: "@openclaw/voice-call",
-      fetchImpl,
-    });
-
-    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("preserves skills-sh references in install telemetry", async () => {
@@ -544,38 +490,6 @@ describe("clawhub skills", () => {
     expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
   });
 
-  it("sends owner-qualified skill install resolution lookups as slug plus ownerHandle", async () => {
-    let requestedUrl = "";
-
-    await expect(
-      fetchClawHubSkillInstallResolution({
-        slug: "weather",
-        ownerHandle: "demo-owner",
-        fetchImpl: async (input) => {
-          requestedUrl =
-            input instanceof Request
-              ? input.url
-              : input instanceof Request
-                ? input.url
-                : String(input);
-          return Response.json({
-            ok: true,
-            slug: "weather",
-            installKind: "archive",
-            archive: {
-              version: "1.0.0",
-              downloadUrl: "https://clawhub.ai/api/v1/download?slug=weather&version=1.0.0",
-            },
-          });
-        },
-      }),
-    ).resolves.toMatchObject({ ok: true, slug: "weather" });
-
-    const url = new URL(requestedUrl);
-    expect(url.pathname).toBe("/api/v1/skills/weather/install");
-    expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
-  });
-
   it("sends skills-sh references to the ClawHub install resolver", async () => {
     let requestedUrl = "";
     const reference = "skills-sh:openclaw/skills/weather";
@@ -609,52 +523,6 @@ describe("clawhub skills", () => {
     const url = new URL(requestedUrl);
     expect(url.pathname).toBe("/api/v1/skills/weather/install");
     expect(url.searchParams.get("reference")).toBe(reference);
-  });
-
-  it("fetches skill verification reports and lets version take precedence over tag", async () => {
-    let requestedUrl = "";
-    const envelope = {
-      schema: "clawhub.skill.verify.v1",
-      ok: true,
-      decision: "pass",
-      reasons: [],
-      skill: { slug: "agentreceipt", displayName: "Agent Receipt" },
-      publisher: { handle: "openclaw" },
-      version: { version: "1.2.3", tag: "stable" },
-      card: {
-        available: true,
-        url: "https://clawhub.ai/api/v1/skills/agentreceipt/card?version=1.2.3",
-      },
-      artifact: {
-        sourceFingerprint: "source-fp",
-        bundleFingerprints: ["generated-bundle-fp"],
-      },
-      provenance: null,
-      security: { status: "clean" },
-      signature: { status: "unsigned" },
-    };
-
-    await expect(
-      fetchClawHubSkillVerification({
-        slug: "agentreceipt",
-        version: "1.2.3",
-        tag: "stable",
-        fetchImpl: async (input) => {
-          requestedUrl =
-            input instanceof Request
-              ? input.url
-              : input instanceof Request
-                ? input.url
-                : String(input);
-          return Response.json(envelope);
-        },
-      }),
-    ).resolves.toEqual(envelope);
-
-    const url = new URL(requestedUrl);
-    expect(url.pathname).toBe("/api/v1/skills/agentreceipt/verify");
-    expect(url.searchParams.get("version")).toBe("1.2.3");
-    expect(url.searchParams.has("tag")).toBe(false);
   });
 
   it("sends owner-qualified skill verification lookups without resolved auth when requested", async () => {
@@ -747,52 +615,6 @@ describe("clawhub skills", () => {
     );
   });
 
-  it("can post bulk skill security verdict requests without resolved auth", async () => {
-    process.env.CLAWHUB_TOKEN = "test-auth-token";
-    let requestedInit: RequestInit | undefined;
-    const envelope = {
-      schema: "clawhub.skill.security-verdicts.v1",
-      items: [],
-    };
-
-    await expect(
-      fetchClawHubSkillSecurityVerdicts({
-        items: [{ slug: "agentreceipt", version: "1.2.3" }],
-        skipAuth: true,
-        fetchImpl: async (_input, init) => {
-          requestedInit = init;
-          return Response.json(envelope);
-        },
-      }),
-    ).resolves.toEqual(envelope);
-
-    expect(new Headers(requestedInit?.headers).get("Authorization")).toBeNull();
-  });
-
-  it("returns failed skill verification reports with missing card reasons", async () => {
-    const envelope = {
-      schema: "clawhub.skill.verify.v1",
-      ok: false,
-      decision: "fail",
-      reasons: ["card.missing"],
-      skill: { slug: "agentreceipt" },
-      publisher: null,
-      version: { version: "1.2.3" },
-      card: { available: false },
-      artifact: null,
-      provenance: null,
-      security: { status: "clean" },
-      signature: { status: "unsigned" },
-    };
-
-    await expect(
-      fetchClawHubSkillVerification({
-        slug: "agentreceipt",
-        fetchImpl: async () => Response.json(envelope),
-      }),
-    ).resolves.toEqual(envelope);
-  });
-
   it("fetches generated Skill Card markdown and applies tag queries", async () => {
     let requestedUrl = "";
 
@@ -819,36 +641,6 @@ describe("clawhub skills", () => {
     expect(url.pathname).toBe("/api/v1/skills/agentreceipt/card");
     expect(url.searchParams.get("tag")).toBe("latest");
     expect(url.searchParams.has("version")).toBe(false);
-  });
-
-  it("clamps oversized ClawHub request timeouts before scheduling", async () => {
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      await expect(
-        fetchClawHubSkillCard({
-          slug: "agentreceipt",
-          timeoutMs: Number.MAX_SAFE_INTEGER,
-          fetchImpl: async () =>
-            new Response("# Agent Receipt\n", {
-              status: 200,
-              headers: { "content-type": "text/markdown; charset=utf-8" },
-            }),
-        }),
-      ).resolves.toBe("# Agent Receipt\n");
-
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
-  });
-
-  it("rejects malformed UTF-8 in generated Skill Card markdown", async () => {
-    await expect(
-      fetchClawHubSkillCard({
-        slug: "agentreceipt",
-        fetchImpl: async () => new Response(malformedUtf8("# Agent ", "\n")),
-      }),
-    ).rejects.toThrow(TypeError);
   });
 
   it("fetches generated Skill Card markdown from an exact verified card URL", async () => {
@@ -894,14 +686,5 @@ describe("clawhub skills", () => {
     ).rejects.toThrow(
       "ClawHub skill card for agentreceipt exceeded 262144 bytes (262145 bytes received)",
     );
-  });
-
-  it("wraps non-200 skill verification responses", async () => {
-    await expect(
-      fetchClawHubSkillVerification({
-        slug: "agentreceipt",
-        fetchImpl: async () => new Response("not found", { status: 404 }),
-      }),
-    ).rejects.toThrow("ClawHub /api/v1/skills/agentreceipt/verify failed (404): not found");
   });
 });

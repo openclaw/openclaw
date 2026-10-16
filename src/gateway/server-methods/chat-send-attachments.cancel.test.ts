@@ -9,6 +9,7 @@ import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import * as staging from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunById } from "../chat-abort.js";
@@ -25,6 +26,7 @@ it.each([
   { canTransfer: true, stopped: true },
 ])("routes chat uploads: %j", async ({ canTransfer, stopped }) => {
   await withOpenClawTestState({ label: "remote-chat-attachment" }, async (state) => {
+    await loadOrCreateProcessDeviceIdentityAsync();
     const cfg = {
       agents: {
         ownership: "explicit",
@@ -195,6 +197,7 @@ it.each([
   const { pdf, interruption, stageError, outcome } = testCase;
   const preparation = "preparation" in testCase ? testCase.preparation : "stage";
   await withOpenClawTestState({ label: "gateway-attachment-cancellation" }, async (state) => {
+    await loadOrCreateProcessDeviceIdentityAsync();
     const cfg = {
       agents: {
         ownership: "explicit",

@@ -1,6 +1,6 @@
 // Discord tests cover gateway plugin plugin behavior.
 import { EventEmitter } from "node:events";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 import { fetchDiscordGatewayInfoWithTimeout } from "./gateway-metadata.js";
@@ -62,16 +62,20 @@ vi.mock("../internal/gateway.js", () => ({
   GatewayPlugin,
 }));
 
+const webSocketConstructor = vi.hoisted(() => vi.fn());
+vi.mock("../internal/ws-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../internal/ws-runtime.js")>()),
+  WebSocket: webSocketConstructor,
+}));
+
 const captureHost = vi.hoisted(() => ({
-  available: true,
   capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureWsEventAsync>(),
 }));
 
-vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
   captureHttpExchangeAsync: vi.fn().mockResolvedValue(undefined),
-  get captureWsEventAsync() {
-    return captureHost.available ? captureHost.capture : undefined;
-  },
+  captureWsEventAsync: captureHost.capture,
   resolveEffectiveDebugProxyUrl: () => undefined,
   resolveDebugProxySettings: () => ({ enabled: false }),
 }));
@@ -97,24 +101,18 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   beforeEach(() => {
-    captureHost.available = true;
     captureHost.capture.mockReset().mockResolvedValue(undefined);
   });
 
-  afterEach(() => {
-    captureHost.available = true;
-  });
-
   function createPlugin(
-    testing?: NonNullable<Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]>,
+    socket?: EventEmitter,
     discordConfig: Parameters<typeof createDiscordGatewayPlugin>[0]["discordConfig"] = {},
     runtime: Parameters<typeof createDiscordGatewayPlugin>[0]["runtime"] = createRuntimeSpies(),
   ) {
-    return createDiscordGatewayPlugin({
-      discordConfig,
-      runtime,
-      ...(testing ? { testing } : {}),
+    webSocketConstructor.mockImplementation(function () {
+      return socket;
     });
+    return createDiscordGatewayPlugin({ discordConfig, runtime });
   }
 
   it("omits MessageContent only when explicitly disabled", () => {
@@ -217,22 +215,15 @@ describe("createDiscordGatewayPlugin", () => {
     );
   });
 
-  it.each(["absent", "present", "rejected"] as const)(
-    "emits transport activity with %s optional async capture",
+  it.each(["present", "rejected"] as const)(
+    "emits transport activity with %s async capture",
     (capability) => {
-      captureHost.available = capability !== "absent";
       if (capability === "rejected") {
         captureHost.capture.mockRejectedValue(new Error("capture write failed"));
       }
       const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
       const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-      const plugin = createPlugin({
-        webSocketCtor: function WebSocketCtor() {
-          return socket;
-        } as unknown as NonNullable<
-          Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
-        >["webSocketCtor"],
-      });
+      const plugin = createPlugin(socket);
       const activitySpy = vi.fn();
       (
         plugin as unknown as {
@@ -251,24 +242,20 @@ describe("createDiscordGatewayPlugin", () => {
         expect(activitySpy).toHaveBeenCalledWith({ at: 1_700_000_000_000 });
         createdSocket.emit("error", new Error("socket failure"));
         createdSocket.emit("close", 1000, Buffer.alloc(0));
-        if (capability === "absent") {
-          expect(captureHost.capture).not.toHaveBeenCalled();
-        } else {
-          expect(captureHost.capture.mock.calls.map(([event]) => event.kind)).toEqual([
-            "ws-open",
-            "ws-frame",
-            "error",
-            "ws-close",
-          ]);
-          expect(captureHost.capture).toHaveBeenCalledWith(
-            expect.objectContaining({
-              url: "wss://gateway.discord.gg",
-              direction: "inbound",
-              payload: Buffer.from("{}"),
-              meta: { subsystem: "discord-gateway" },
-            }),
-          );
-        }
+        expect(captureHost.capture.mock.calls.map(([event]) => event.kind)).toEqual([
+          "ws-open",
+          "ws-frame",
+          "error",
+          "ws-close",
+        ]);
+        expect(captureHost.capture).toHaveBeenCalledWith(
+          expect.objectContaining({
+            url: "wss://gateway.discord.gg",
+            direction: "inbound",
+            payload: Buffer.from("{}"),
+            meta: { subsystem: "discord-gateway" },
+          }),
+        );
       } finally {
         dateNowSpy.mockRestore();
       }
@@ -278,13 +265,7 @@ describe("createDiscordGatewayPlugin", () => {
   it("ignores messages from stale gateway sockets", () => {
     const staleSocket = new EventEmitter() as EventEmitter & { binaryType?: string };
     const currentSocket = new EventEmitter();
-    const plugin = createPlugin({
-      webSocketCtor: function WebSocketCtor() {
-        return staleSocket;
-      } as unknown as NonNullable<
-        Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
-      >["webSocketCtor"],
-    });
+    const plugin = createPlugin(staleSocket);
     const activitySpy = vi.fn();
     (
       plugin as unknown as {
@@ -306,17 +287,7 @@ describe("createDiscordGatewayPlugin", () => {
   it("logs Discord gateway websocket error and abnormal close details", () => {
     const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
     const runtime = createRuntimeSpies();
-    const plugin = createPlugin(
-      {
-        webSocketCtor: function WebSocketCtor() {
-          return socket;
-        } as unknown as NonNullable<
-          Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
-        >["webSocketCtor"],
-      },
-      {},
-      runtime,
-    );
+    const plugin = createPlugin(socket, {}, runtime);
     const createdSocket = (
       plugin as unknown as { createWebSocket: (url: string) => typeof socket }
     ).createWebSocket("wss://gateway.discord.gg");
@@ -340,17 +311,7 @@ describe("createDiscordGatewayPlugin", () => {
   it("keeps gateway close reason logs UTF-16 safe", () => {
     const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
     const runtime = createRuntimeSpies();
-    const plugin = createPlugin(
-      {
-        webSocketCtor: function WebSocketCtor() {
-          return socket;
-        } as unknown as NonNullable<
-          Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
-        >["webSocketCtor"],
-      },
-      {},
-      runtime,
-    );
+    const plugin = createPlugin(socket, {}, runtime);
     const createdSocket = (
       plugin as unknown as { createWebSocket: (url: string) => typeof socket }
     ).createWebSocket("wss://gateway.discord.gg");

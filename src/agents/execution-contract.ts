@@ -24,7 +24,7 @@ export function isStrictAgenticSupportedProviderModel(params: {
   if (provider !== "openai" && provider !== "mock-openai") {
     return false;
   }
-  const modelId = typeof params.modelId === "string" ? params.modelId : "";
+  const modelId = params.modelId ?? "";
   const bareModelId = stripProviderPrefix(modelId);
   return STRICT_AGENTIC_MODEL_ID_PATTERN.test(bareModelId);
 }

@@ -1,8 +1,11 @@
 import type { MSTeamsHtmlAttachmentSummary, MSTeamsInboundMedia } from "../attachments.js";
 import { formatUnknownError } from "../errors.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
-import type { MSTeamsRequestDeadline } from "../request-timeout.js";
-import { withMSTeamsRequestDeadline } from "../request-timeout.js";
+import {
+  createMSTeamsInboundMediaDeadline,
+  type MSTeamsRequestDeadline,
+  withMSTeamsRequestDeadline,
+} from "../request-timeout.js";
 import type { MSTeamsDebounceEntry } from "./inbound-facts.js";
 import {
   mergeMSTeamsMediaFacts,
@@ -20,13 +23,12 @@ export async function prepareMSTeamsInboundContent(params: {
   conversationId: string;
   conversationMessageId?: string;
   teamAadGroupId?: string;
-  resolveTeamAadGroupId: () => Promise<string | undefined>;
+  resolveTeamAadGroupId: (deadline: MSTeamsRequestDeadline) => Promise<string | undefined>;
   mediaMaxBytes: number;
   tokenProvider: MSTeamsMessageHandlerDeps["tokenProvider"];
   mediaAllowHosts?: Parameters<typeof resolveMSTeamsInboundMedia>[0]["allowHosts"];
   mediaAuthAllowHosts?: Parameters<typeof resolveMSTeamsInboundMedia>[0]["authAllowHosts"];
   graphMediaFallback?: boolean;
-  deadline: MSTeamsRequestDeadline;
   log: MSTeamsMessageHandlerDeps["log"];
 }) {
   const activity = params.entry.context.activity;
@@ -43,9 +45,12 @@ export async function prepareMSTeamsInboundContent(params: {
   }
 
   let mediaList: MSTeamsInboundMedia[] = [];
+  // Media is message content with its own transfer budget, separate from
+  // optional enrichment, so slow Bot Framework downloads still reach the agent.
+  const deadline = createMSTeamsInboundMediaDeadline();
   try {
     mediaList = await withMSTeamsRequestDeadline({
-      deadline: params.deadline,
+      deadline,
       label: "MS Teams inbound media",
       work: () =>
         resolveMSTeamsInboundMedia({
@@ -60,7 +65,7 @@ export async function prepareMSTeamsInboundContent(params: {
           conversationId: params.conversationId,
           conversationMessageId: params.conversationMessageId,
           teamAadGroupId: params.teamAadGroupId,
-          resolveTeamAadGroupId: params.resolveTeamAadGroupId,
+          resolveTeamAadGroupId: () => params.resolveTeamAadGroupId(deadline),
           serviceUrl: activity.serviceUrl,
           activity: {
             id: activity.id,
@@ -68,7 +73,7 @@ export async function prepareMSTeamsInboundContent(params: {
             channelData: activity.channelData,
           },
           log: params.log,
-          deadline: params.deadline,
+          deadline,
         }),
     });
   } catch (err) {

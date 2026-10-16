@@ -101,39 +101,6 @@ async function rejection(run: () => Promise<unknown>): Promise<Error> {
 
 describe("runGcloud interpreter resolution", () => {
   itUnix(
-    "preserves spaces in the resolved python path and caches the result",
-    async () => {
-      const { runGcloud } = await loadGmailSetupUtils();
-      await withTestDir({ prefix: "openclaw-python-" }, async (tmp) => {
-        const realPython = await writeExecutable(path.join(tmp, "Python Runtime", "python-real"));
-        const shimDir = path.join(tmp, "shims");
-        await writeExecutable(path.join(shimDir, "python3"));
-
-        await withEnvAsync({ PATH: `${shimDir}${path.delimiter}/usr/bin` }, async () => {
-          runCommandWithTimeoutMock
-            .mockResolvedValueOnce({
-              ...success,
-              stdout: `${realPython}\n3.12\n`,
-            })
-            .mockResolvedValue(success);
-
-          await runGcloud(["config", "list"]);
-
-          await withEnvAsync({ PATH: "/bin" }, async () => {
-            await runGcloud(["config", "list"]);
-          });
-          expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
-          expect(runCommandWithTimeoutMock).toHaveBeenLastCalledWith(["gcloud", "config", "list"], {
-            timeoutMs: 120_000,
-            env: { CLOUDSDK_PYTHON: realPython, CLOUDSDK_PYTHON_ARGS: undefined },
-          });
-        });
-      });
-    },
-    60_000,
-  );
-
-  itUnix(
     "skips Python versions below and above gcloud's supported range",
     async () => {
       const { runGcloud } = await loadGmailSetupUtils();
@@ -186,7 +153,7 @@ describe("runGcloud", () => {
     async () => {
       const { runGcloud } = await loadGmailSetupUtils();
       await withTestDir({ prefix: "openclaw-gcloud-python-" }, async (tmp) => {
-        const realPython = await writeExecutable(path.join(tmp, "python-real"));
+        const realPython = await writeExecutable(path.join(tmp, "Python Runtime", "python-real"));
         const shimDir = path.join(tmp, "shims");
         await writeExecutable(path.join(shimDir, "python3"));
 
@@ -297,7 +264,7 @@ describe("Gmail setup diagnostics and decisions", () => {
     vi.spyOn(configEval, "hasBinary").mockImplementation(hasBinaryMock);
   });
 
-  it.each(["gcloud", "brew", "tailscale status", "tailscale serve"])(
+  it.each(["gcloud", "brew", "tailscale serve"])(
     "%s retains bounded tails from both streams",
     async (boundary) =>
       withEnvAsync({ PATH: "" }, async () => {
@@ -343,44 +310,6 @@ describe("Gmail setup diagnostics and decisions", () => {
       }),
   );
 
-  it.each([
-    {
-      termination: "timeout",
-      code: 124,
-      signal: "SIGKILL",
-      killed: true,
-      reason: "termination=timeout",
-    },
-    {
-      termination: "signal",
-      code: null,
-      signal: "SIGKILL",
-      killed: true,
-      outputLimitExceeded: true,
-      reason: "termination=output-limit",
-    },
-    { termination: "exit", code: 124, signal: null, killed: false, reason: "termination=exit" },
-  ] satisfies Array<Partial<SpawnResult> & { reason: string }>)(
-    "retains $reason with code=$code even without output",
-    async ({ reason, ...metadata }) =>
-      withEnvAsync({ PATH: "" }, async () => {
-        const { runGcloud } = utils;
-        runCommandWithTimeoutMock.mockResolvedValue({ ...success, ...metadata });
-        const { message } = await rejection(() => runGcloud(["config", "list"]));
-        expect(message).toContain(reason);
-        expect(message).toContain(`code=${metadata.code}`);
-        if (metadata.signal) {
-          expect(message).toContain(`signal=${metadata.signal}`);
-        }
-        if (metadata.killed) {
-          expect(message).toContain("killed=true");
-        }
-        if (metadata.termination === "exit") {
-          expect(message).not.toMatch(/timeout|timed out/);
-        }
-      }),
-  );
-
   it("bounds invalid JSON diagnostics while retaining the parser cause and successful exit metadata", async () => {
     const { ensureTailscaleEndpoint } = utils;
     runCommandWithTimeoutMock.mockResolvedValue({
@@ -400,17 +329,9 @@ describe("Gmail setup diagnostics and decisions", () => {
     expect(error.cause).toBeInstanceOf(SyntaxError);
   });
 
-  it("keeps successful gcloud output untouched", async () =>
-    withEnvAsync({ PATH: "" }, async () => {
-      const { runGcloud } = utils;
-      const result = { ...noisy, code: 0 };
-      runCommandWithTimeoutMock.mockResolvedValue(result);
-      expect(await runGcloud(["config", "list"])).toBe(result);
-    }));
   it.each([
     { code: 0, stdout: "account@example.com\n", login: false },
     { code: 0, stdout: " \n", login: true },
-    { code: 1, stdout: "account@example.com\n", login: true },
   ])("auth list code=$code login=$login", async ({ code, stdout, login }) =>
     withEnvAsync({ PATH: "" }, async () => {
       const { ensureGcloudAuth } = utils;

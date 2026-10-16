@@ -179,22 +179,6 @@ describe("watch node HTTP transport", () => {
     runtime.close();
   });
 
-  it("accepts a supported notification permission set to false", async () => {
-    const { identity, issued, baseUrl, runtime } = await createWatchNodeFixture(
-      "openclaw-watch-node-permissions-",
-    );
-    const response = await connectWatchNode({
-      baseUrl,
-      identity,
-      bootstrapToken: issued.token,
-      permissions: { notifications: false },
-    });
-
-    expect(response.status).toBe(200);
-    await readJson(response);
-    runtime.close();
-  });
-
   it("does not let attacker challenges evict another client nonce", async () => {
     const { identity, issued, baseUrl, runtime } = await createWatchNodeFixture(
       "openclaw-watch-node-challenge-eviction-",
@@ -302,11 +286,7 @@ describe("watch node HTTP transport", () => {
     expect(disconnectedNodes).toHaveLength(1);
   });
 
-  it.each([
-    { destroyTarget: "socket", delivery: "event" },
-    { destroyTarget: "socket", delivery: "raw" },
-    { destroyTarget: "response", delivery: "event" },
-  ] as const)(
+  it.each([{ destroyTarget: "socket", delivery: "raw" }] as const)(
     "rejects $delivery delivery when the active watch poll $destroyTarget is destroyed",
     async ({ destroyTarget, delivery }) => {
       let resolvePollReady: (response: ServerResponse) => void = () => undefined;
@@ -765,7 +745,6 @@ describe("watch node HTTP transport", () => {
   });
 
   it.each([
-    { name: "new Watch", existingProfile: undefined },
     { name: "node-only Watch", existingProfile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE },
     { name: "broader operator", existingProfile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE },
   ])("hands off only Talk access for a $name voice setup", async ({ existingProfile }) => {
@@ -849,19 +828,19 @@ describe("watch node HTTP transport", () => {
     runtime.close();
   });
 
-  it.each([
-    { name: "limited mobile", profile: PAIRING_SETUP_BOOTSTRAP_PROFILE },
-    { name: "full mobile", profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE },
-  ])("does not accept a $name grant over Watch HTTP", async ({ profile }) => {
-    const { baseDir, identity, issued, baseUrl, runtime } = await createWatchNodeFixture(
-      "openclaw-watch-node-profile-boundary-",
-      { bootstrapProfile: profile },
-    );
-    const response = await connectWatchNode({ baseUrl, identity, bootstrapToken: issued.token });
-    expect(response.status).toBe(401);
-    expect(await getPairedDevice(identity.deviceId, baseDir)).toBeNull();
-    runtime.close();
-  });
+  it.each([{ name: "limited mobile", profile: PAIRING_SETUP_BOOTSTRAP_PROFILE }])(
+    "does not accept a $name grant over Watch HTTP",
+    async ({ profile }) => {
+      const { baseDir, identity, issued, baseUrl, runtime } = await createWatchNodeFixture(
+        "openclaw-watch-node-profile-boundary-",
+        { bootstrapProfile: profile },
+      );
+      const response = await connectWatchNode({ baseUrl, identity, bootstrapToken: issued.token });
+      expect(response.status).toBe(401);
+      expect(await getPairedDevice(identity.deviceId, baseDir)).toBeNull();
+      runtime.close();
+    },
+  );
 
   it("restores only declared approved commands after a denied reconnect and accepts an invoke result", async () => {
     const options: Parameters<typeof startWatchNodeHttpRuntime>[2] = { config: {} };

@@ -118,6 +118,10 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
             }
           });
           observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
+            // Opening a PostgreSQL source may commit schema admission without an auth handoff.
+            if (isRecord(facts) && Object.keys(facts).length === 0) {
+              return;
+            }
             if (!isRecord(facts) || typeof facts.relocated !== "boolean") {
               throw new Error("Shared auth bootstrap returned an invalid commit receipt");
             }

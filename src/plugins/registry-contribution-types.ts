@@ -6,6 +6,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import type {
   LegacyMemoryReadResult,
+  MemoryCliSearchParams,
+  MemoryCliSearchResult,
   MemoryOriginClass,
   MemoryReadResult,
   MemorySearchManager,
@@ -267,6 +269,8 @@ export type RegisteredMemorySearchManager = Omit<MemorySearchManager, "readFile"
 type MemoryRuntimeBackendConfig = { backend: "builtin" };
 
 export type MemoryPluginRuntime = {
+  /** CLI search and recall recording run under the same plugin instance. */
+  searchForCli?(params: MemoryCliSearchParams): Promise<MemoryCliSearchResult>;
   getMemorySearchManager(params: {
     cfg: OpenClawConfig;
     agentId: string;

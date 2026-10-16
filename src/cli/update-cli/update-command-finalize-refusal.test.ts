@@ -10,6 +10,7 @@ import {
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
 import * as ports from "../../infra/ports-inspect.js";
 import * as updateCheck from "../../infra/update-check.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import {
   adoptUpdateRun,
@@ -19,12 +20,13 @@ import {
   listUpdateRuns,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime, ExitError } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as utils from "../../utils.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
 import * as shared from "./shared.js";
 import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
+import { updateFinalizeCommand } from "./update-command-finalize.js";
 import * as freshDoctor from "./update-command-fresh-doctor.js";
 import { validConfigSnapshot } from "./update-command-lifecycle.test-support.js";
 import * as plugins from "./update-command-plugins.js";
@@ -231,10 +233,12 @@ it.each([true, false])(
   async (json) => {
     vi.stubEnv("OPENCLAW_PROFILE", "repair-test");
     const nextAction =
-      "Stop the Gateway through its service owner, stop other OpenClaw processes using this state, then rerun `openclaw --profile repair-test update repair`.";
+      "Stop the Gateway through its service owner (`openclaw --profile repair-test gateway stop --force` for the managed service), stop other OpenClaw processes using this state, then rerun `openclaw --profile repair-test update repair`.";
     const old = createUpdateRun({ trigger: "cli" });
     const history = finishUpdateRun(old.runId, { status: "failed", reason: "abandoned" });
-    await updateRepairCommand({ json, yes: true, deferCompletionCache: true });
+    await expect(
+      updateRepairCommand({ json, yes: true, deferCompletionCache: true }),
+    ).rejects.toEqual(new ExitError(2));
     expect(native.events).toEqual([
       "running-holder",
       "stop-verified",
@@ -281,6 +285,38 @@ it.each([true, false])(
     expect(getUpdateRun(old.runId)).toEqual(history);
     expect(readDeferredPluginMigrations()).toEqual([pending]);
     expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
+    expect(plugins.updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["coordinator-contention", "admission-unavailable"] as const)(
+  "keeps deferred finalization successful for an inherited update driver (%s)",
+  async (reason) => {
+    const run = createUpdateRun({ trigger: "cli" });
+    adoptUpdateRun(run.runId);
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+    vi.mocked(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(
+      new DoctorMaintenanceRefusalError("Synthetic maintenance contention", {
+        kind: "deferred",
+        reason,
+      }),
+    );
+
+    await expect(
+      updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
+    ).resolves.toBeUndefined();
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "warning",
+        nextAction: expect.stringContaining("openclaw update repair"),
+        postUpdate: { doctor: { status: "warning", warnings: expect.any(Array) } },
+      }),
+    );
+    expect(verifyUpdateFailureRecovery).not.toHaveBeenCalled();
+    expect(getUpdateRun(run.runId)?.verification.rollbackOutcome).toBeUndefined();
+    expect(getUpdateRun(run.runId)?.status).toBe("running");
+    expect(readDeferredPluginMigrations()).toEqual([pending]);
     expect(plugins.updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
   },
 );

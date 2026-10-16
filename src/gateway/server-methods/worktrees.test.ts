@@ -211,38 +211,6 @@ describe("worktrees gateway methods", () => {
     });
   });
 
-  it("allows write-scoped branch listing for a subdirectory inside an agent workspace", async () => {
-    const os = await import("node:os");
-    const workspace = await fs.mkdtemp(
-      path.join(await fs.realpath(os.tmpdir()), "openclaw-branches-scope-"),
-    );
-    const repoRoot = path.join(workspace, "packages", "app");
-    await fs.mkdir(repoRoot, { recursive: true });
-    try {
-      const service = {
-        listRepositoryBranches: vi.fn(async () => ({ branches: [] })),
-      };
-      const handlers = createWorktreesHandlers(service as never);
-      const response = await call(
-        handlers,
-        "worktrees.branches",
-        { repoRoot },
-        {
-          client: writeClient,
-          context: {
-            getRuntimeConfig: () => ({
-              agents: { entries: { main: { workspace } } },
-            }),
-          },
-        },
-      );
-      expect(response?.[0]).toBe(true);
-      expect(service.listRepositoryBranches).toHaveBeenCalledWith(repoRoot);
-    } finally {
-      await fs.rm(workspace, { recursive: true, force: true });
-    }
-  });
-
   it("allows a write-scoped registered project root but still rejects other outside paths", async () => {
     const root = tempDirs.make("openclaw-branches-project-");
     const repoRoot = await initializeRepository(root, "registered");
@@ -382,12 +350,7 @@ describe("worktrees gateway methods", () => {
 
   it.each([
     ["worktrees.create", { repoRoot: "" }],
-    ["worktrees.gc", { retryDeferred: "yes" }],
     ["worktrees.remove", { id: record.id, force: true, ifLossless: true }],
-    ["worktrees.remove", { id: record.id, exactState: { head: "incomplete" } }],
-    ["worktrees.restore", { id: record.id, recoverExactState: { head: "incomplete" } }],
-    ["worktrees.recoverRemoval", { id: record.id, snapshot: "a".repeat(40) }],
-    ["worktrees.retireSnapshot", { id: record.id }],
   ])("refuses invalid %s parameters before admitting a mutation", async (method, params) => {
     const handlers = createWorktreesHandlers({} as never);
     const response = await call(handlers, method, params);

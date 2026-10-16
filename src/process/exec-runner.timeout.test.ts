@@ -1,6 +1,7 @@
 import { ChildProcess } from "node:child_process";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { materializeManagedWorktree } from "../agents/worktrees/checkout-materialize.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
 import { runExec } from "./exec.js";
@@ -86,6 +87,54 @@ describe("command deadline event ordering", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it.each(["complete", "idle", "cancel"] as const)(
+    "keeps checkout progress alive beyond five minutes and settles on %s",
+    async (outcome) => {
+      const command = createCommand();
+      const abort = new AbortController();
+      const result = materializeManagedWorktree(
+        { destination: "/fixture", commit: "HEAD" },
+        { timeoutMs: 300_000, signal: abort.signal, killProcessTree: true },
+      );
+      await vi.advanceTimersByTimeAsync(240_000);
+      command.child.stderr.emit("data", Buffer.from("Updating files: 20%\r"));
+      await vi.advanceTimersByTimeAsync(240_000);
+      command.child.stderr.emit("data", Buffer.from("Updating files: 40%\r"));
+      expect(command.kill).not.toHaveBeenCalled();
+      if (outcome === "complete") {
+        command.exit(0);
+      } else if (outcome === "cancel") {
+        abort.abort();
+      } else {
+        await vi.advanceTimersByTimeAsync(300_001);
+      }
+      await vi.runAllTimersAsync();
+      await expect(result).resolves.toMatchObject({
+        termination:
+          outcome === "complete" ? "exit" : outcome === "cancel" ? "signal" : "no-output-timeout",
+        killed: outcome !== "complete",
+      });
+      expect(spawnMock.mock.calls[0]?.[0]).toEqual(
+        expect.arrayContaining(["read-tree", "--verbose", "-u", "HEAD"]),
+      );
+    },
+  );
+
+  it("preserves the provisioning owner's absolute checkout deadline despite progress", async () => {
+    const command = createCommand();
+    const result = materializeManagedWorktree(
+      { destination: "/fixture", commit: "HEAD", executionTimeoutMs: 600_000 },
+      { killProcessTree: true },
+    );
+    await vi.advanceTimersByTimeAsync(540_000);
+    expect(command.kill).not.toHaveBeenCalled();
+    command.child.stderr.emit("data", Buffer.from("Updating files: 20%\r"));
+    await vi.advanceTimersByTimeAsync(60_001);
+    await vi.runAllTimersAsync();
+    await expect(result).resolves.toMatchObject({ termination: "timeout", killed: true });
+    expect(command.kill).toHaveBeenCalledOnce();
   });
 
   it.each([

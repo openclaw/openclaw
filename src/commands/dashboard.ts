@@ -1,7 +1,9 @@
+import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { openUrlPrivately } from "../infra/browser-handoff.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { isRemoteEnvironment } from "../infra/remote-env.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { defaultRuntime, ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   hasVerifiedControlUiLoopbackAlias,
   issueControlUiBrowserHandoff,
@@ -9,7 +11,7 @@ import {
   waitForControlUiDocument,
 } from "./control-ui-handoff.js";
 import { ensureDashboardGatewayReady } from "./gateway-readiness.js";
-import { detectBrowserOpenSupport, formatControlUiSshHint, openUrl } from "./onboard-helpers.js";
+import { detectBrowserOpenSupport, formatControlUiSshHint } from "./onboard-helpers.js";
 
 type DashboardOptions = {
   json?: boolean;
@@ -53,7 +55,7 @@ async function ensureDashboardTargetReady(params: {
 }
 
 function dashboardJsonFailure(runtime: RuntimeEnv, reason: string): void {
-  writeRuntimeJson(runtime, { ok: false, reason }, 0);
+  writeRuntimeJson(runtime, { ...formatCliJsonFailure(reason), reason }, 0);
   runtime.exit(1);
 }
 
@@ -107,6 +109,9 @@ async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
       0,
     );
   } catch (err) {
+    if (err instanceof ExitError) {
+      throw err;
+    }
     const reason = err instanceof Error ? err.message : String(err);
     dashboardJsonFailure(runtime, reason || "Dashboard target resolution failed.");
   }
@@ -193,7 +198,11 @@ export async function dashboardCommand(
   if (!options.noOpen) {
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
-      opened = await openUrl(browserUrl);
+      // The handoff URL carries the one-time pairing credential in its
+      // fragment. Open it through a private file handoff so the credential
+      // never appears in a browser-opener process argument, where another
+      // OS user could read it from /proc on default procfs hosts.
+      opened = await openUrlPrivately(browserUrl);
     }
     if (!browserSupport.ok || (!opened && !copied && isRemoteEnvironment())) {
       hint = formatControlUiSshHint({

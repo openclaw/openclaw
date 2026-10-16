@@ -13,7 +13,7 @@ lands in **one rolling conversation**: the main session. Ask something on your
 phone, follow up from your laptop, and the agent has the same context in both
 places. There is one brain, and this is where it thinks.
 
-Under the hood the main session is an ordinary session with the canonical key
+Under the hood the main session is an ordinary session with the standard key
 `agent:<agentId>:main` (for example `agent:main:main`). The suffix is fixed;
 custom `session.mainKey` values are ignored. What makes it special
 is that the default DM scope collapses all direct messages into it, and that

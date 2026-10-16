@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
@@ -87,6 +86,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     });
     expect(echoHas).toHaveBeenCalledTimes(1);
     expect(logVerbose).toHaveBeenCalledWith(expect.stringContaining("id=42"));
+    expect(logVerbose.mock.calls.flat().join("\n")).not.toContain("Reasoning:");
   });
 
   it("matches attachment-only echoes by structured media fact", async () => {
@@ -195,7 +195,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
-  it("sanitizes reflected duplicate previews before logging", async () => {
+  it("logs reflected duplicate drops without message content", async () => {
     const selfChatCache = createSelfChatCache();
     const logVerbose = vi.fn();
     const createdAt = "2026-03-02T20:58:10.649Z";
@@ -217,7 +217,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       logVerbose,
     });
 
-    await resolveDecision({
+    const reflection = await resolveDecision({
       message: {
         id: 9802,
         sender: "+15555550123",
@@ -231,9 +231,9 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       logVerbose,
     });
 
-    expect(logVerbose).toHaveBeenCalledWith(
-      `imessage: dropping self-chat reflected duplicate: "${sanitizeTerminalText(bodyText)}"`,
-    );
+    expect(reflection).toEqual({ kind: "drop", reason: "self-chat echo" });
+    expect(logVerbose).toHaveBeenCalledWith("imessage: dropping self-chat reflected duplicate");
+    expect(logVerbose.mock.calls.flat().join("\n")).not.toContain("line-1");
   });
 
   it("returns a reaction decision for tapbacks on bot-authored messages by default", async () => {

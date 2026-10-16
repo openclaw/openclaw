@@ -179,7 +179,7 @@ describe("runSystemAgentTurn", () => {
       mode: "api-key" as const,
     };
     const authDeps = {
-      loadAuthProfileStoreForRuntime: vi.fn(() => ({
+      loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => ({
         version: 1,
         profiles: {
           "openai:p2": { type: "api_key", provider: "openai", key: "test-key" },

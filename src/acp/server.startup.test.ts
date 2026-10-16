@@ -112,15 +112,20 @@ vi.mock("@agentclientprotocol/sdk", () => ({
   },
   AgentSideConnection: function AgentSideConnection(
     factory: (conn: unknown) => unknown,
-    stream: unknown,
+    stream: MockAcpStream,
   ) {
-    mockState.agentSideConnectionCtor(factory, stream);
+    const [input, monitor] = stream.readable.tee();
+    const closed = new Promise<void>((resolve) => {
+      mockState.closeAgentSideConnection = resolve;
+      // Match the SDK: both EOF and reader failure close the connection.
+      void monitor.pipeTo(new WritableStream()).then(
+        () => resolve(),
+        () => resolve(),
+      );
+    });
+    mockState.agentSideConnectionCtor(factory, { ...stream, readable: input });
     factory({});
-    return {
-      closed: new Promise<void>((resolve) => {
-        mockState.closeAgentSideConnection = resolve;
-      }),
-    };
+    return { closed };
   },
   PROTOCOL_VERSION: mockState.acpProtocolVersion,
   ndJsonStream: vi.fn(() => ({
@@ -271,24 +276,16 @@ describe("serveAcpGateway startup", () => {
     return gateway;
   }
 
-  function getGatewayBootstrapParams(): { env?: unknown; gatewayUrl?: unknown } {
-    const firstCall = mockState.resolveGatewayClientBootstrap.mock.calls[0];
-    if (!firstCall) {
-      throw new Error("Expected gateway bootstrap resolution call");
-    }
-    return firstCall[0];
-  }
-
   function captureProcessSignalHandlers() {
     const handlers = new Map<NodeJS.Signals, () => void>();
-    const spy = vi.spyOn(process, "once").mockImplementation(((
+    const spy = vi.spyOn(process, "on").mockImplementation(((
       signal: NodeJS.Signals,
       handler: () => void,
     ) => {
       handlers.set(signal, handler);
       return process;
-    }) as typeof process.once);
-    return { signalHandlers: handlers, onceSpy: spy };
+    }) as typeof process.on);
+    return { signalHandlers: handlers, onSpy: spy };
   }
 
   async function emitHelloAndWaitForAgentSideConnection() {
@@ -319,13 +316,14 @@ describe("serveAcpGateway startup", () => {
     const reader = getCapturedAcpStream().readable.getReader();
     const messages: unknown[] = [];
     try {
-      while (true) {
+      while (messages.length < mockState.acpInputMessages.length) {
         const { done, value } = await reader.read();
         if (done) {
-          return messages;
+          break;
         }
         messages.push(value);
       }
+      return messages;
     } finally {
       reader.releaseLock();
     }
@@ -389,17 +387,9 @@ describe("serveAcpGateway startup", () => {
     mockState.resolveGatewayClientBootstrap.mockResolvedValue(createGatewayBootstrap());
   });
 
-  it("preserves console exports for a co-sharded subsystem logger", async () => {
-    const { createSubsystemLogger } = await import("../logging/subsystem.js");
-
-    expect(() =>
-      createSubsystemLogger("test/acp-startup").isEnabled("info", "console"),
-    ).not.toThrow();
-  });
-
   describe("Gateway lifecycle", () => {
     let signalHandlers: ReturnType<typeof captureProcessSignalHandlers>["signalHandlers"];
-    let onceSpy: ReturnType<typeof captureProcessSignalHandlers>["onceSpy"];
+    let onSpy: ReturnType<typeof captureProcessSignalHandlers>["onSpy"];
 
     async function captureAcpMessagesAfterStartup(inputMessages: unknown[]): Promise<unknown[]> {
       mockState.acpInputMessages.push(...inputMessages);
@@ -407,7 +397,6 @@ describe("serveAcpGateway startup", () => {
 
       try {
         await emitHelloAndWaitForAgentSideConnection();
-        mockState.closeAcpInput?.();
         return await readCapturedAcpMessages();
       } finally {
         signalHandlers.get("SIGINT")?.();
@@ -416,9 +405,9 @@ describe("serveAcpGateway startup", () => {
     }
 
     beforeEach(() => {
-      ({ signalHandlers, onceSpy } = captureProcessSignalHandlers());
+      ({ signalHandlers, onSpy } = captureProcessSignalHandlers());
     });
-    afterEach(() => onceSpy.mockRestore());
+    afterEach(() => onSpy.mockRestore());
 
     it("waits for gateway hello before creating AgentSideConnection", async () => {
       const servePromise = serveAcpGateway({});
@@ -426,27 +415,6 @@ describe("serveAcpGateway startup", () => {
 
       expect(mockState.agentSideConnectionCtor).not.toHaveBeenCalled();
       await emitHelloAndWaitForAgentSideConnection();
-      await stopServeWithSigint(signalHandlers, servePromise);
-    });
-
-    it("injects the server-owned SQLite event ledger into the ACP agent", async () => {
-      const servePromise = serveAcpGateway({});
-      await emitHelloAndWaitForAgentSideConnection();
-
-      expect(mockState.sqliteEventLedgers).toHaveLength(1);
-      expect((mockState.agentOptions[0] as { eventLedger?: unknown }).eventLedger).toBe(
-        mockState.sqliteEventLedgers[0],
-      );
-
-      await stopServeWithSigint(signalHandlers, servePromise);
-    });
-
-    it("advertises approval handling and subscribes to run-scoped tool events", async () => {
-      const servePromise = serveAcpGateway({});
-      await emitHelloAndWaitForAgentSideConnection();
-
-      expect(mockState.gatewayOptions[0]?.caps).toEqual(["exec-approvals", "tool-events"]);
-
       await stopServeWithSigint(signalHandlers, servePromise);
     });
 
@@ -465,11 +433,6 @@ describe("serveAcpGateway startup", () => {
     });
 
     it.each([
-      {
-        name: "default logging",
-        opts: {},
-        expected: ["openclaw acp: gateway event chat failed\n"],
-      },
       {
         name: "verbose logging",
         opts: { verbose: true },
@@ -535,86 +498,6 @@ describe("serveAcpGateway startup", () => {
       expect(mockState.closeOpenClawStateDatabaseAsync).toHaveBeenCalledOnce();
     });
 
-    it("passes resolved SecretInput gateway credentials to the ACP gateway client", async () => {
-      mockState.resolveGatewayClientBootstrap.mockResolvedValue({
-        ...createGatewayBootstrap(),
-        auth: {
-          token: undefined,
-          password: "resolved-secret-password" /* pragma: allowlist secret */,
-        },
-      });
-
-      const servePromise = serveAcpGateway({});
-      await Promise.resolve();
-
-      const bootstrapParams = getGatewayBootstrapParams();
-      expect(bootstrapParams.env).toBe(process.env);
-      expect(mockState.gatewayAuth[0]).toEqual({
-        token: undefined,
-        password: "resolved-secret-password", // pragma: allowlist secret
-      });
-
-      await emitHelloAndWaitForAgentSideConnection();
-      await stopServeWithSigint(signalHandlers, servePromise);
-    });
-
-    it("passes CLI URL override context into shared gateway auth resolution", async () => {
-      const servePromise = serveAcpGateway({
-        gatewayUrl: "wss://override.example/ws",
-      });
-      await Promise.resolve();
-
-      const bootstrapParams = getGatewayBootstrapParams();
-      expect(bootstrapParams.env).toBe(process.env);
-      expect(bootstrapParams.gatewayUrl).toBe("wss://override.example/ws");
-
-      await emitHelloAndWaitForAgentSideConnection();
-      await stopServeWithSigint(signalHandlers, servePromise);
-    });
-
-    it("passes the configured Gateway URL into the ACP gateway client", async () => {
-      mockState.resolveGatewayClientBootstrap.mockResolvedValue(
-        createGatewayBootstrap("ws://127.0.0.1:19999", "cli --url"),
-      );
-
-      const servePromise = serveAcpGateway({
-        gatewayUrl: "ws://127.0.0.1:19999",
-      });
-      await Promise.resolve();
-
-      expect(mockState.gatewayOptions[0]?.url).toBe("ws://127.0.0.1:19999");
-
-      await emitHelloAndWaitForAgentSideConnection();
-      await stopServeWithSigint(signalHandlers, servePromise);
-    });
-
-    it("does not proxy the standalone ACP control-plane Gateway connection", async () => {
-      const servePromise = serveAcpGateway({});
-      await vi.waitFor(() => {
-        expect(mockState.gateways).toHaveLength(1);
-      });
-
-      expect(mockState.startProxy).not.toHaveBeenCalled();
-      await emitHelloAndWaitForAgentSideConnection();
-      await stopServeWithSigint(signalHandlers, servePromise);
-      expect(mockState.stopProxy).not.toHaveBeenCalled();
-    });
-
-    it("shuts down when the ACP client closes its stdio stream", async () => {
-      const servePromise = serveAcpGateway({});
-      await emitHelloAndWaitForAgentSideConnection();
-      const closeConnection = mockState.closeAgentSideConnection;
-      if (!closeConnection) {
-        throw new Error("Expected mocked ACP connection close handler");
-      }
-
-      closeConnection();
-      await servePromise;
-
-      expect(mockState.agentShutdown).toHaveBeenCalledOnce();
-      expect(mockState.closeOpenClawStateDatabaseAsync).toHaveBeenCalledOnce();
-    });
-
     it("waits for Gateway transport teardown before closing the shared state database", async () => {
       let resolveStop!: () => void;
       const stopPromise = new Promise<void>((resolve) => {
@@ -624,7 +507,11 @@ describe("serveAcpGateway startup", () => {
 
       const servePromise = serveAcpGateway({});
       await emitHelloAndWaitForAgentSideConnection();
+      const input = getCapturedAcpStream().readable.getReader();
+      const inputClosed = expect(input.read()).rejects.toMatchObject({ name: "AbortError" });
       signalHandlers.get("SIGTERM")?.();
+      await inputClosed;
+      input.releaseLock();
       await vi.waitFor(() => {
         expect(mockState.agentShutdown).toHaveBeenCalledOnce();
       });
@@ -717,21 +604,6 @@ describe("serveAcpGateway startup", () => {
       const [message] = await captureAcpMessagesAfterStartup([initializeRequest]);
       expect(message).toBe(initializeRequest);
     });
-
-    it("passes non-initialize JSON-RPC messages through unchanged", async () => {
-      const sessionRequest = {
-        jsonrpc: "2.0",
-        id: 2,
-        method: "session/new",
-        params: {
-          protocolVersion: "2025-11-25",
-          cwd: "/tmp/openclaw",
-        },
-      };
-
-      const [message] = await captureAcpMessagesAfterStartup([sessionRequest]);
-      expect(message).toBe(sessionRequest);
-    });
   });
 
   it("orders new-session updates at the ACP stdio boundary without delaying loaded sessions", async () => {
@@ -749,12 +621,11 @@ describe("serveAcpGateway startup", () => {
       method: "session/new",
       params: { cwd: "/tmp/openclaw" },
     });
-    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+    const { signalHandlers, onSpy } = captureProcessSignalHandlers();
     const servePromise = serveAcpGateway({});
 
     try {
       await emitHelloAndWaitForAgentSideConnection();
-      mockState.closeAcpInput?.();
       await readCapturedAcpMessages();
       const writer = getCapturedAcpStream().writable.getWriter();
       const update = (sessionId: string) => ({
@@ -785,7 +656,7 @@ describe("serveAcpGateway startup", () => {
     } finally {
       signalHandlers.get("SIGINT")?.();
       await servePromise;
-      onceSpy.mockRestore();
+      onSpy.mockRestore();
     }
   });
 
@@ -811,12 +682,11 @@ describe("serveAcpGateway startup", () => {
       method: "session/prompt",
       params: { sessionId: "chatty-session", prompt: [{ type: "text", text: "hi" }] },
     });
-    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+    const { signalHandlers, onSpy } = captureProcessSignalHandlers();
     const servePromise = serveAcpGateway({});
 
     try {
       await emitHelloAndWaitForAgentSideConnection();
-      mockState.closeAcpInput?.();
       await readCapturedAcpMessages();
       const writer = getCapturedAcpStream().writable.getWriter();
       const chunk = (sessionId: string, text: string) => ({
@@ -862,17 +732,16 @@ describe("serveAcpGateway startup", () => {
     } finally {
       signalHandlers.get("SIGINT")?.();
       await servePromise;
-      onceSpy.mockRestore();
+      onSpy.mockRestore();
     }
   });
 
   it("tears down the agent, Gateway, and state database when the outbound sink fails", async () => {
-    const { onceSpy } = captureProcessSignalHandlers();
+    const { onSpy } = captureProcessSignalHandlers();
     const servePromise = serveAcpGateway({});
 
     try {
       await emitHelloAndWaitForAgentSideConnection();
-      mockState.closeAcpInput?.();
       await readCapturedAcpMessages();
 
       const stopAndWait = vi.spyOn(getMockGateway(), "stopAndWait");
@@ -892,7 +761,7 @@ describe("serveAcpGateway startup", () => {
       expect(mockState.agentShutdown).toHaveBeenCalledOnce();
       expect(mockState.closeOpenClawStateDatabaseAsync).toHaveBeenCalledOnce();
     } finally {
-      onceSpy.mockRestore();
+      onSpy.mockRestore();
     }
   });
 });

@@ -1,11 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createQueueCase } from "./queue.case.test-support.js";
-import {
-  completeFollowupRunLifecycle,
-  FollowupRunDeferredError,
-  getFollowupQueueDepth,
-} from "./queue.js";
+import { completeFollowupRunLifecycle, getFollowupQueueDepth } from "./queue.js";
 import { createQueueTestRun as createRun } from "./queue.test-helpers.js";
 import { prepareStaleFollowupDrainRetirement } from "./queue/drain.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
@@ -170,42 +166,5 @@ describe("followup queue in-flight ownership", () => {
     } finally {
       releaseZombie.resolve();
     }
-  });
-
-  it("rejects stale retirement after the same source enters a new drain generation", async () => {
-    const q = queueCase({ dropPolicy: "old" });
-    const firstEntered = createDeferred();
-    const secondEntered = createDeferred();
-    const releaseFirst = createDeferred();
-    const releaseSecond = createDeferred();
-    const run = createRun({ prompt: "retry-same-source" });
-    let attempts = 0;
-    try {
-      q.add(run);
-      q.start(async () => {
-        attempts += 1;
-        if (attempts === 1) {
-          firstEntered.resolve();
-          await releaseFirst.promise;
-          throw new FollowupRunDeferredError();
-        }
-        secondEntered.resolve();
-        await releaseSecond.promise;
-      });
-      await firstEntered.promise;
-      const queue = getExistingFollowupQueue(q.key);
-      const retireFirstGeneration = prepareStaleFollowupDrainRetirement(q.key);
-      releaseFirst.resolve();
-      await secondEntered.promise;
-      retireFirstGeneration?.();
-      expect(getExistingFollowupQueue(q.key)).toBe(queue);
-      expect(run.queueAbortSignal?.aborted).toBe(false);
-      expect(attempts).toBe(2);
-    } finally {
-      releaseFirst.resolve();
-      releaseSecond.resolve();
-    }
-    await vi.waitFor(() => expect(getExistingFollowupQueue(q.key)).toBeUndefined());
-    expect(attempts).toBe(2);
   });
 });

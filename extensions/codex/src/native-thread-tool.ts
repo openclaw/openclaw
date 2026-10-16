@@ -6,7 +6,7 @@ import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-ru
 import type { AnyAgentTool, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { readStringParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import type { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
+import type { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   asBoolean,
   asOptionalRecord,
@@ -170,12 +170,11 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       const storePath = agentId
         ? options.runtime.agent.session.resolveStorePath(config?.session?.store, { agentId })
         : undefined;
-      let prepared: Awaited<ReturnType<typeof captureSessionEntryCurrentCheck>> | undefined;
+      let prepared: Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsync>> | undefined;
       const currentSession = () => {
         if (!sessionKey) {
           return undefined;
         }
-        prepared?.assertCurrent();
         const entry = prepared?.entry;
         const sessionId = context.sessionId?.trim() || entry?.sessionId?.trim();
         if (!sessionId) {
@@ -183,8 +182,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         }
         return {
           sessionId,
-          // Lock policy loads later; keep the session fields observed at admission.
-          entry: entry ? { ...entry } : undefined,
+          entry,
         };
       };
 
@@ -215,11 +213,11 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         );
       }
       const run = async (archiveThreadId?: string) => {
-        const { captureSessionEntryCurrentCheck } =
+        const { captureSessionEntryCurrentCheckAsync, composeSessionEntryCommitGuards } =
           await import("openclaw/plugin-sdk/session-binding-runtime");
         prepared =
           sessionKey && agentId
-            ? await captureSessionEntryCurrentCheck({
+            ? await captureSessionEntryCurrentCheckAsync({
                 agentId,
                 sessionKey,
                 storePath,
@@ -227,6 +225,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                 errorMessage: "Codex native thread ownership changed; retry the request.",
               })
             : undefined;
+        using _ = { [Symbol.dispose]: () => prepared?.release() };
         options.context.assertInvocationCurrent?.();
         const archiveSession = archiveThreadId ? currentSession() : undefined;
         if (archiveThreadId && !archiveSession) {
@@ -259,7 +258,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           const session = currentSession();
           const identity = session ? currentIdentity(session.sessionId) : undefined;
           const readBinding = () => (identity ? options.bindingStore.read(identity) : undefined);
-          const binding = readBinding();
+          const binding = identity ? await options.bindingStore.readAsync(identity) : undefined;
           const selection = codexBindingConnectionSelection(binding);
           const assertCurrent = () => {
             options.context.assertInvocationCurrent?.();
@@ -268,8 +267,6 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
               runtimeConfig() !== base.config ||
               !isDeepStrictEqual(options.getPluginConfig(), admissionConfig) ||
               current?.sessionId !== session?.sessionId ||
-              current?.entry?.sessionId !== session?.entry?.sessionId ||
-              isModelSelectionLocked(current?.entry) !== isModelSelectionLocked(session?.entry) ||
               !isDeepStrictEqual(codexBindingConnectionSelection(readBinding()), selection)
             ) {
               throw new Error("Codex native thread ownership changed; retry the request.");
@@ -281,7 +278,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           ) {
             const connection = await resolveCodexBindingAppServerConnection({
               binding,
-              pluginConfig: admissionConfig,
+              pluginConfig: admissionPlugin,
               config: base.config,
               agentDir: base.agentDir,
               assertCurrent,
@@ -293,6 +290,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                 ? connection.clientAuthProfileId
                 : null,
               assertCurrent,
+              assertCurrentAsync: prepared?.assertCurrent,
             };
           }
           if (supervision?.enabled !== true) {
@@ -301,16 +299,17 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           return {
             ...base,
             startOptions: resolveCodexSupervisionAppServerRuntimeOptions({
-              pluginConfig: admissionConfig,
+              pluginConfig: admissionPlugin,
             }).start,
             authProfileId: null,
             assertCurrent,
+            assertCurrentAsync: prepared?.assertCurrent,
           };
         };
         const scopedRequest = async <M extends CodexControlMethod & CodexAppServerRequestMethod>(
           method: M,
           requestParams: CodexAppServerRequestParams<M>,
-        ) => request(admissionConfig, method, requestParams, await requestOptions());
+        ) => request(admissionPlugin, method, requestParams, await requestOptions());
         if (action === "list") {
           const cursor = readStringParam(params, "cursor");
           const searchTerm = readStringParam(params, "search");
@@ -357,10 +356,12 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         }
 
         const session = archiveAdmission?.session ?? currentSession();
-        const binding = currentBinding(session);
+        const binding = session
+          ? await options.bindingStore.readAsync(currentIdentity(session.sessionId))
+          : undefined;
         if (archiveAdmission) {
           const { identity, session: admittedSession } = archiveAdmission;
-          const archivedBinding = currentBinding(admittedSession);
+          const archivedBinding = binding;
           if (archivedBinding?.threadId === threadId) {
             // Clearing the binding detaches the harness-owned Codex thread. The session lock keeps
             // both that thread and App Server-selected model routing fixed.
@@ -399,7 +400,10 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                 kind: "clear",
                 threadId,
               },
-              options.context.assertInvocationCurrent,
+              composeSessionEntryCommitGuards([
+                options.context.assertInvocationCurrent,
+                prepared?.source,
+              ]),
             );
           }
           return jsonResult({ action, threadId });
@@ -433,7 +437,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           // Codex can snapshot an active source as interrupted. Attached forks require a known-safe
           // local status and the exact source identity before App Server may create that snapshot.
           const current = await request(
-            admissionConfig,
+            admissionPlugin,
             CODEX_CONTROL_METHODS.readThread,
             { threadId, includeTurns: false },
             forkOptions,
@@ -441,12 +445,12 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           assertThreadIdle(current, threadId, "fork");
         }
         const response = await request(
-          admissionConfig,
+          admissionPlugin,
           CODEX_CONTROL_METHODS.forkThread,
           { threadId, threadSource: "user", excludeTurns: true },
           {
             ...forkOptions,
-            onResponse: async (value, client, { assertCurrent }) => {
+            onResponse: async (value, client, { assertCurrent, assertCurrentAsync, source }) => {
               if (!isJsonObject(value) || !isJsonObject(value.thread)) {
                 await closeCodexStartupClientBestEffort(client);
                 throw new Error("Codex app-server returned an invalid thread/fork response");
@@ -465,14 +469,13 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
               let retained = false;
               let attached = false;
               try {
+                await assertCurrentAsync?.();
                 assertCurrent();
                 if (attach && session) {
                   const identity = currentIdentity(session.sessionId);
                   await options.bindingStore.withLease(identity, async () => {
+                    await assertCurrentAsync?.();
                     assertCurrent();
-                    if (currentSession()?.entry?.sessionId !== session.sessionId) {
-                      throw new Error("Codex native thread ownership changed; retry the request.");
-                    }
                     assertCodexBindingMayBeReplaced(
                       currentBinding(session),
                       "attaching a different native fork",
@@ -497,7 +500,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                     attached = await options.bindingStore.mutate(
                       identity,
                       { kind: "set", binding: nextBinding },
-                      assertCurrent,
+                      composeSessionEntryCommitGuards([assertCurrent, source, prepared?.source]),
                     );
                     if (!attached) {
                       throw new Error(

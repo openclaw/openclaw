@@ -28,3 +28,8 @@ export type AsyncDebugProxyCaptureStore = {
   purgeAll(): Promise<CaptureDeleteResult>;
   close(): Promise<void>;
 };
+
+export type AsyncDebugProxyCaptureWriter = Pick<
+  AsyncDebugProxyCaptureStore,
+  "isClosed" | "upsertSession" | "endSession" | "recordEvent" | "recordEventWithPayload" | "close"
+>;

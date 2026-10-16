@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
-import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  requireNativeSqliteDatabase,
+  openOpenClawAgentDatabase,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import type { EmbeddingProvider } from "./embeddings.js";
@@ -41,7 +44,7 @@ describe("memory index", () => {
     await manager.sync({ reason: "test" });
     // Seed the candidate boundary directly; indexing 201 files adds no coverage
     // of the score completion between keyword and vector retrieval.
-    const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const insert = db.prepare(
       "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, 'memory/noise.md', 'memory', ?, ?, ?, 'mock-embed', ?, ?, 1)",
     );
@@ -96,7 +99,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -197,8 +200,13 @@ describe("memory index", () => {
   it("keeps the strict threshold for semantic-only hits with active projects", async () => {
     const manager = await getPersistentManager(createCfg({ minScore: 0.35 }));
     expect(manager.status().fts?.available).toBe(true);
+    await fs.writeFile(path.join(fixture.paths.memory, "2026-01-12.md"), "Beta unrelated detail.");
     await fs.writeFile(path.join(fixture.paths.memory, "current.md"), "Alpha current detail.");
-    await fs.writeFile(path.join(fixture.paths.memory, "2000-01-01.md"), "Alpha archive detail.");
+    // Low relevance, not age, must keep this semantic match below the threshold.
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2000-01-01.md"),
+      "Alpha beta beta beta beta archive detail.",
+    );
     await manager.sync({ reason: "test" });
 
     // The fixture embeds the alpha substring, while FTS requires the complete alphabet token.
@@ -212,7 +220,7 @@ describe("memory index", () => {
         expect.arrayContaining([
           expect.objectContaining({
             path: "memory/2000-01-01.md",
-            vectorScore: 1,
+            vectorScore: expect.closeTo(1 / Math.sqrt(17), 5),
             textScore: 0,
           }),
         ]),
@@ -257,7 +265,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -370,7 +378,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -441,7 +449,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -496,7 +504,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -537,7 +545,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -629,7 +637,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -675,7 +683,7 @@ describe("memory index", () => {
     });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }

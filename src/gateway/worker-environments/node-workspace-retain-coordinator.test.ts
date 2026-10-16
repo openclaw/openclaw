@@ -11,7 +11,11 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "../node-registry-private.js";
+import { NodeRegistry } from "../node-registry.js";
+import { makeClient, registerNodeSession } from "../node-registry.test-helpers.js";
 import { createNodeWorkspaceRetainCoordinator } from "./node-workspace-retain-coordinator.js";
+import { WorkerPlacementInventoryChangedError } from "./placement-inventory-changed-error.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
 
@@ -103,7 +107,7 @@ function createHarness(
     pendingResults?: Awaited<
       ReturnType<WorkerSessionPlacementStore["listPendingWorkspaceResultsAsync"]>
     >;
-    assertPreparedResultCurrent?: () => void;
+    prepareResultAuthority?: () => () => void;
     results?: Array<{
       applied: boolean;
       deleted: number;
@@ -118,6 +122,7 @@ function createHarness(
       typeof createNodeWorkspaceRetainCoordinator
     >[0]["additionalManifestRefs"];
     invokeError?: string;
+    beforeDispatch?: () => void;
     onInvoke?: (index: number) => void;
   } = {},
 ) {
@@ -152,7 +157,16 @@ function createHarness(
     getBundleStatus: () => currentBundleStatus,
     acceptBundleStatus,
     isCurrent: () => true,
-    invoke,
+    async invoke(request) {
+      params.beforeDispatch?.();
+      if (
+        (request.authorizeDispatch && !(await request.authorizeDispatch())) ||
+        !request.isDispatchAuthorized()
+      ) {
+        return { ok: false, error: { code: "APPROVAL_AUTHORITY_CLOSED" } };
+      }
+      return invoke(request);
+    },
   };
   const warn = vi.fn();
   const rows = () =>
@@ -168,6 +182,7 @@ function createHarness(
     }),
     prepareRuntimeRefresh: async (sessionId) => {
       const captured = structuredClone(rows().find((row) => row.sessionId === sessionId));
+      const assertPreparedResultCurrent = params.prepareResultAuthority?.();
       return {
         placement: captured,
         pendingResult: structuredClone(
@@ -175,14 +190,14 @@ function createHarness(
         ),
         move: undefined,
         assertCurrent: () => {
-          params.assertPreparedResultCurrent?.();
+          assertPreparedResultCurrent?.();
           if (
             !isDeepStrictEqual(
               captured,
               rows().find((row) => row.sessionId === sessionId),
             )
           ) {
-            throw new Error("Placement authority changed");
+            throw new WorkerPlacementInventoryChangedError(new Set([sessionId]));
           }
         },
         release: () => {},
@@ -200,10 +215,75 @@ function createHarness(
     warn,
   });
   coordinator.bindTransport(transport);
-  return { coordinator, invoke, warn, acceptBundleStatus };
+  return { coordinator, invoke, warn, acceptBundleStatus, placements };
 }
 
 describe("node workspace retain coordinator", () => {
+  it("accepts bundle status when placement metadata changes after node dispatch", async () => {
+    const bundleHash = "c".repeat(64);
+    const placements = [placement()];
+    const { coordinator } = createHarness({
+      placements,
+      bundleRetention: {
+        currentBuild: async () => ({ bundleHash, openclawVersion: "2026.8.10" }),
+        isEnvironmentOwnedNode: () => false,
+      },
+    });
+    const { nodeRegistry, nodeWorkerSupervisorTransport } = createNodeRegistryRuntime(
+      () => new NodeRegistry(),
+    );
+    const dispatched = createDeferredCore<string>();
+    const client = makeClient("connection-1", "node-1", [], { clientId: "node-host" });
+    vi.spyOn(client.socket, "send").mockImplementation((data: unknown) => {
+      if (typeof data !== "string") {
+        return;
+      }
+      const frame = JSON.parse(data) as { event?: string; payload?: { id: string } };
+      if (frame.event === "node.invoke.request" && frame.payload) {
+        dispatched.resolve(frame.payload.id);
+      }
+    });
+    registerNodeSession(nodeRegistry, client, { pairingGeneration: "generation-1" });
+    updateNodeRunnerInventory({
+      registry: nodeRegistry,
+      nodeId: "node-1",
+      connId: "connection-1",
+      declaration: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: node.workerHost,
+      },
+    });
+    coordinator.bindTransport(nodeWorkerSupervisorTransport);
+    const publishing = coordinator.start();
+    try {
+      const id = await dispatched.promise;
+      placements[0] = placement({ updatedAtMs: 3 });
+      expect(
+        nodeRegistry.handleInvokeResult({
+          id,
+          nodeId: "node-1",
+          connId: "connection-1",
+          ok: true,
+          payloadJSON: JSON.stringify({
+            applied: true,
+            deleted: 0,
+            hasMore: false,
+            bundleStatus: { bundleHash, status: "installed" },
+          }),
+        }),
+      ).toBe(true);
+      await publishing;
+      expect(nodeWorkerSupervisorTransport.getBundleStatus?.("node-1")).toEqual({
+        bundleHash,
+        status: { status: "installed", version: "2026.8.10" },
+      });
+    } finally {
+      await coordinator.stop();
+      nodeRegistry.unregister("connection-1");
+      await publishing;
+    }
+  });
+
   it("publishes the complete durable retain snapshot for a connected device", async () => {
     const { coordinator, invoke } = createHarness({
       environments: [
@@ -269,13 +349,9 @@ describe("node workspace retain coordinator", () => {
     await coordinator.stop();
   });
 
-  it("accepts a validated installed bundle status with the Gateway-owned version", async () => {
+  it("does not request another bundle inspection after accepting its installed status", async () => {
     const bundleHash = "b".repeat(64);
     const { coordinator, invoke, acceptBundleStatus } = createHarness({
-      currentBundleStatus: {
-        bundleHash,
-        status: { status: "installed", version: "2026.8.9" },
-      },
       environments: [
         environment({
           bootstrapReceipt: receipt(bundleHash),
@@ -299,6 +375,10 @@ describe("node workspace retain coordinator", () => {
       bundleHash,
       status: { status: "installed", version: "2026.8.9" },
     });
+    await coordinator.schedule(node.nodeId);
+    expect(invoke.mock.calls[1]?.[0].params).toMatchObject({ bundleHashes: [bundleHash] });
+    expect(invoke.mock.calls[1]?.[0].params).not.toHaveProperty("bundleStatusHash");
+    expect(acceptBundleStatus).toHaveBeenCalledOnce();
     await coordinator.stop();
   });
 
@@ -323,6 +403,12 @@ describe("node workspace retain coordinator", () => {
           hasMore: false,
           bundleStatus: { bundleHash, status: "missing" },
         },
+        {
+          applied: true,
+          deleted: 0,
+          hasMore: false,
+          bundleStatus: { bundleHash, status: "installed" },
+        },
       ],
     });
 
@@ -334,6 +420,12 @@ describe("node workspace retain coordinator", () => {
     expect(acceptBundleStatus).toHaveBeenCalledWith(node, {
       bundleHash,
       status: { status: "missing" },
+    });
+    await coordinator.schedule(node.nodeId);
+    expect(invoke.mock.calls[2]?.[0].params).toMatchObject({ bundleStatusHash: bundleHash });
+    expect(acceptBundleStatus).toHaveBeenLastCalledWith(node, {
+      bundleHash,
+      status: { status: "installed", version: "2026.8.9" },
     });
     await coordinator.stop();
   });
@@ -358,52 +450,6 @@ describe("node workspace retain coordinator", () => {
 
     expect(acceptBundleStatus).toHaveBeenCalledWith(node, undefined);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("maintenance unavailable"));
-    await coordinator.stop();
-  });
-
-  it("clears status when a newer environment becomes authoritative during cleanup", async () => {
-    const bundleHash = "b".repeat(64);
-    const environments = [
-      environment({
-        bootstrapReceipt: receipt(bundleHash),
-      }),
-    ];
-    const { coordinator, acceptBundleStatus } = createHarness({
-      environments,
-      results: [
-        {
-          applied: true,
-          deleted: 1,
-          hasMore: true,
-          bundleStatus: { bundleHash, status: "installed" },
-        },
-        {
-          applied: true,
-          deleted: 0,
-          hasMore: false,
-          bundleStatus: { bundleHash, status: "installed" },
-        },
-      ],
-      onInvoke: (index) => {
-        if (index !== 0) {
-          return;
-        }
-        environments.splice(
-          0,
-          1,
-          environment({
-            environmentId: "environment-new",
-            createdAtMs: 3,
-            bootstrapReceipt: receipt("c".repeat(64), "2026.8.10"),
-          }),
-        );
-      },
-    });
-
-    await coordinator.start();
-
-    expect(acceptBundleStatus).toHaveBeenCalledTimes(1);
-    expect(acceptBundleStatus).toHaveBeenCalledWith(node, undefined);
     await coordinator.stop();
   });
 
@@ -688,7 +734,8 @@ describe("node workspace retain coordinator", () => {
     const options = {
       placements,
       node: { ...node, connId: "connection-1" },
-      additionalManifestRefs: async () => () => [baseManifest],
+      additionalManifestRefs: async () =>
+        Object.assign(() => [baseManifest], { [Symbol.dispose]: () => {} }),
     };
     const { coordinator, invoke } = createHarness(options);
     try {
@@ -714,77 +761,151 @@ describe("node workspace retain coordinator", () => {
     }
   });
 
-  it.each(["current", "placement", "environment", "session", "pending", "result"] as const)(
-    "rechecks %s ownership after repository manifest preparation",
-    async (change) => {
-      const baseManifest = `sha256:${"1".repeat(64)}`;
-      const placements = [placement()];
-      const environments = [environment()];
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const assertPreparedResultCurrent = vi.fn();
-      let sessionCurrent = true;
-      const { coordinator, invoke } = createHarness({
-        placements,
-        environments,
-        assertPreparedResultCurrent,
-        additionalManifestRefs: async () => {
-          entered.resolve();
-          await release.promise;
-          return () => (sessionCurrent ? [baseManifest] : null);
-        },
-      });
-      const startup = coordinator.start();
+  it.each(["initial placement read", "inventory read"] as const)(
+    "retries the complete retention preparation after a stale %s",
+    async (phase) => {
+      const rows = [placement()];
+      const nextManifest = `sha256:${"c".repeat(64)}`;
+      const { coordinator, invoke, warn, placements } = createHarness({ placements: rows });
+      const prepare = vi.spyOn(placements, "prepareRuntimeRefresh");
+      if (phase === "initial placement read") {
+        prepare.mockRejectedValueOnce(
+          new WorkerPlacementInventoryChangedError(new Set(["session-1"])),
+        );
+      } else {
+        const inventory = placements.prepareMaintenancePlacements;
+        vi.spyOn(placements, "prepareMaintenancePlacements").mockImplementationOnce(async () => {
+          const snapshot = await inventory();
+          rows[0] = placement({ workspaceBaseManifestRef: nextManifest });
+          return snapshot;
+        });
+      }
       try {
-        await entered.promise;
-        expect(invoke).not.toHaveBeenCalled();
-        if (change === "placement") {
-          placements[0] = placement({ generation: 4 });
-        } else if (change === "environment") {
-          environments[0] = environment({ ownerEpoch: 8 });
-        } else if (change === "session") {
-          sessionCurrent = false;
-        } else if (change === "result") {
-          assertPreparedResultCurrent.mockImplementation(() => {
-            throw new Error("Prepared workspace result custody changed");
-          });
-        } else if (change === "pending") {
-          placements[0] = placement({
-            turnClaim: {
-              owner: "worker",
-              claimId: "claim",
-              runId: "run",
-              generation: 3,
-              ownerEpoch: 7,
-            },
-          });
-        }
-        release.resolve();
-        await startup;
-        if (change === "placement" || change === "pending" || change === "result") {
-          expect(invoke).not.toHaveBeenCalled();
-          return;
-        }
+        await coordinator.start();
         expect(invoke).toHaveBeenCalledOnce();
         expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
-          retain: [
-            expect.objectContaining({
-              manifestRefs:
-                change === "current" ? [baseManifest, `sha256:${"a".repeat(64)}`] : null,
-            }),
-          ],
+          retain: [expect.objectContaining({ manifestRefs: [rows[0]!.workspaceBaseManifestRef] })],
         });
-        if (change === "current") {
-          sessionCurrent = false;
-          expect(invoke.mock.calls[0]?.[0].isDispatchAuthorized?.()).toBe(false);
-        }
+        expect(warn).not.toHaveBeenCalled();
       } finally {
-        release.resolve();
-        await startup;
         await coordinator.stop();
       }
     },
   );
+
+  it("does not retry a typed placement failure after invoking retention", async () => {
+    const { coordinator, invoke, warn } = createHarness({
+      onInvoke: () => {
+        throw new WorkerPlacementInventoryChangedError(new Set(["session-1"]));
+      },
+    });
+    try {
+      await coordinator.start();
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      await coordinator.stop();
+    }
+  });
+
+  it.each([
+    "current",
+    "placement",
+    "environment",
+    "session",
+    "pending",
+    "result",
+    "late-pending",
+  ] as const)("rechecks %s ownership after repository manifest preparation", async (change) => {
+    const baseManifest = `sha256:${"1".repeat(64)}`;
+    const placements = [placement()];
+    const environments = [environment()];
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let resultRevision = 0;
+    let sessionCurrent = true;
+    const { coordinator, invoke, warn } = createHarness({
+      placements,
+      environments,
+      prepareResultAuthority: () => {
+        const capturedRevision = resultRevision;
+        return () => {
+          if (capturedRevision !== resultRevision) {
+            throw new WorkerPlacementInventoryChangedError(new Set(["session-1"]));
+          }
+        };
+      },
+      beforeDispatch: () => {
+        if (change === "late-pending") {
+          // Both snapshots would retain every manifest, but revoked custody cannot dispatch.
+          placements[0] = { ...placements[0]!, updatedAtMs: 3 };
+        }
+      },
+      additionalManifestRefs: async () => {
+        entered.resolve();
+        await release.promise;
+        return Object.assign(() => (sessionCurrent ? [baseManifest] : null), {
+          [Symbol.dispose]: () => {},
+        });
+      },
+    });
+    const startup = coordinator.start();
+    try {
+      await entered.promise;
+      expect(invoke).not.toHaveBeenCalled();
+      if (change === "placement") {
+        placements[0] = placement({ generation: 4 });
+      } else if (change === "environment") {
+        environments[0] = environment({ ownerEpoch: 8 });
+      } else if (change === "session") {
+        sessionCurrent = false;
+      } else if (change === "result") {
+        resultRevision += 1;
+      } else if (change === "pending" || change === "late-pending") {
+        placements[0] = placement({
+          turnClaim: {
+            owner: "worker",
+            claimId: "claim",
+            runId: "run",
+            generation: 3,
+            ownerEpoch: 7,
+          },
+        });
+      }
+      release.resolve();
+      await startup;
+      if (change === "late-pending") {
+        expect(invoke).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("APPROVAL_AUTHORITY_CLOSED"));
+        return;
+      }
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
+        retain: [
+          expect.objectContaining({
+            manifestRefs: ["current", "placement", "result"].includes(change)
+              ? [baseManifest, `sha256:${"a".repeat(64)}`]
+              : null,
+          }),
+        ],
+      });
+      if (change === "placement") {
+        await coordinator.schedule("node-1");
+        expect(invoke).toHaveBeenCalledTimes(2);
+        expect(invoke.mock.calls[1]?.[0].params).toMatchObject({
+          retain: [
+            expect.objectContaining({
+              manifestRefs: [baseManifest, `sha256:${"a".repeat(64)}`],
+            }),
+          ],
+        });
+      }
+    } finally {
+      release.resolve();
+      await startup;
+      await coordinator.stop();
+    }
+  });
 
   it("retains the current build without installing it or keeping unreferenced older builds", async () => {
     const artifact = {

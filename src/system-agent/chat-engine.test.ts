@@ -8,6 +8,7 @@ import type { PreparedModelRuntimePluginGeneration } from "../agents/prepared-mo
 import type { SystemAgentSession } from "./agent-turn.js";
 import type { SystemAgentTurnDeps } from "./agent-turn.test-support.js";
 import {
+  operationMocks,
   createSystemAgentVerifiedInferenceTestFixture,
   fakeOverviewLoader,
   useTempStateDir,
@@ -152,7 +153,7 @@ describe("SystemAgentChatEngine facade", () => {
     } satisfies OpenClawConfig;
     const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
     let currentConfig = baseConfig as OpenClawConfig;
-    const runConfigSet = vi.fn(async () => {});
+    const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
     const engine = new SystemAgentChatEngine({
       verifiedInference,
       classifyApproval: async () => {
@@ -161,7 +162,6 @@ describe("SystemAgentChatEngine facade", () => {
       },
       deps: {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
-        runConfigSet,
       },
     });
     engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
@@ -174,7 +174,7 @@ describe("SystemAgentChatEngine facade", () => {
 
   it("rejects a setup write without a verified inference binding", async () => {
     useTempStateDir();
-    const applySetup = vi.fn(async () => ({
+    const applySetup = operationMocks.applySetup.mockImplementation(async () => ({
       configPath: "/tmp/openclaw.json",
       configHashBefore: null,
       configHashAfter: "after",
@@ -189,7 +189,6 @@ describe("SystemAgentChatEngine facade", () => {
           surface: "cli",
           runAgentTurn: async () => null,
           deps: {
-            applySetup,
             loadOverview: fakeOverviewLoader(),
           },
         } as unknown as SystemAgentChatEngineOptions),

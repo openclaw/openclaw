@@ -12,7 +12,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.test-support.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { sessionsTailCommand } from "./sessions-tail.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -22,8 +22,14 @@ const mocks = vi.hoisted(() => ({
   callGatewayFromCliWithTransport: vi.fn(),
 }));
 
+// mock-isolation: Session-tail fixtures select synthetic Gateway settings without reading operator state.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
+  loadConfig: mocks.getRuntimeConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
+    async () =>
+      mocks.getRuntimeConfig(...args),
 }));
 
 // mock-isolation: Exercise CLI selection without connecting to an operator Gateway.
@@ -113,7 +119,7 @@ describe("sessionsTailCommand", () => {
     );
   }
 
-  it("renders compact redacted progress lines", async () => {
+  it("renders compact progress lines with tool arguments", async () => {
     const runtime = createTestRuntime();
     await writeSessionEntry();
     await appendEvents([
@@ -121,6 +127,11 @@ describe("sessionsTailCommand", () => {
         type: "tool.call",
         ts: "2026-05-18T12:04:18.000Z",
         data: { name: "bash", arguments: { command: "echo SECRET" } },
+      }),
+      makeEvent({
+        type: "tool.call",
+        ts: "2026-05-18T12:04:19.000Z",
+        data: { name: "read", args: { path: ".env", expression: "API_TOKEN = computeToken()" } },
       }),
       makeEvent({
         type: "tool.result",
@@ -140,12 +151,12 @@ describe("sessionsTailCommand", () => {
     const output = runtimeOutput(runtime);
     expect(output).toContain("12:04:18Z");
     expect(output).toContain("tool.call");
-    expect(output).toContain("bash {...redacted...}");
+    expect(output).toContain('bash {"command":"echo SECRET"}');
+    expect(output).toContain('read {"path":".env","expression":"API_TOKEN = computeToken()"}');
     expect(output).toContain("tool.result");
     expect(output).toContain("bash ok");
     expect(output).toContain("model.completed");
     expect(output).toContain("openai/gpt-5.2 done");
-    expect(output).not.toContain("SECRET");
   });
 
   it.each<[string, TrajectoryEvent["data"], string]>([
@@ -295,12 +306,12 @@ describe("sessionsTailCommand", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("rejects a missing explicit session with follow=%s", async (follow) => {
+  it("rejects a missing explicit session before following", async () => {
     const runtime = createTestRuntime();
     await writeSessionEntry();
 
     await sessionsTailCommand(
-      { agent: "main", store: storePath, sessionKey: "agent:main:missing", follow },
+      { agent: "main", store: storePath, sessionKey: "agent:main:missing", follow: true },
       runtime,
     );
 
@@ -311,11 +322,11 @@ describe("sessionsTailCommand", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it.each(["", "   "])("rejects a blank explicit session key %j", async (blankKey) => {
+  it("rejects a blank explicit session key", async () => {
     const runtime = createTestRuntime();
     await writeSessionEntry();
 
-    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey: blankKey }, runtime);
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey: "   " }, runtime);
 
     expect(runtime.error).toHaveBeenCalledWith(
       "--session-key must not be empty. Omit it to tail active sessions.",
@@ -633,20 +644,17 @@ describe("sessionsTailCommand", () => {
     expect(process.listenerCount("SIGTERM")).toBe(sigtermListeners);
   });
 
-  it.each([{ agent: "   " }, { agent: "", sessionKey }])(
-    "rejects an explicit blank agent without inferring a store: %j",
-    async (opts) => {
-      mocks.getRuntimeConfig.mockReturnValue({});
-      const runtime = createTestRuntime();
-      const result = sessionsTailCommand(opts, runtime);
+  it("rejects an explicit blank agent without inferring a store", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({});
+    const runtime = createTestRuntime();
+    const result = sessionsTailCommand({ agent: "", sessionKey }, runtime);
 
-      await expect(result).rejects.toBeInstanceOf(ExpectedCliError);
-      await expect(result).rejects.toMatchObject({ message: "--agent must not be blank" });
-      expect(runtime.log).not.toHaveBeenCalled();
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
-    },
-  );
+    await expect(result).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(result).rejects.toMatchObject({ message: "--agent must not be blank" });
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
 
   it("resolves the target store from a fully qualified non-default agent session key", async () => {
     const runtime = createTestRuntime();

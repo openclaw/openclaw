@@ -83,6 +83,10 @@ export async function executeSystemAgentOperation(
   runtime: RuntimeEnv,
   opts: ExecuteOptions = {},
 ): Promise<SystemAgentOperationResult> {
+  const apply = (
+    auditOperation: string,
+    run: Parameters<typeof applyPersistentOperation>[0]["run"],
+  ) => applyPersistentOperation({ auditOperation, operation, runtime, opts, run });
   switch (operation.kind) {
     case "none":
       runtime.log(operation.message);
@@ -137,24 +141,14 @@ export async function executeSystemAgentOperation(
     }
     case "plugin-list": {
       const boundedRuntime = boundedPluginReadRuntime(runtime);
-      const runPluginsList =
-        opts.deps?.runPluginsList ??
-        (async (pluginRuntime: RuntimeEnv) => {
-          const { runPluginsListCommand } = await import("../cli/plugins-list-command.js");
-          await runPluginsListCommand({}, pluginRuntime);
-        });
-      await runPluginsList(boundedRuntime);
+      const { runPluginsListCommand } = await import("../cli/plugins-list-command.js");
+      await runPluginsListCommand({}, boundedRuntime);
       return { applied: false };
     }
     case "plugin-search": {
       const boundedRuntime = boundedPluginReadRuntime(runtime);
-      const runPluginsSearch =
-        opts.deps?.runPluginsSearch ??
-        (async (query: string, pluginRuntime: RuntimeEnv) => {
-          const { runPluginsSearchCommand } = await import("../cli/plugins-search-command.js");
-          await runPluginsSearchCommand(query, {}, pluginRuntime);
-        });
-      await runPluginsSearch(operation.query, boundedRuntime);
+      const { runPluginsSearchCommand } = await import("../cli/plugins-search-command.js");
+      await runPluginsSearchCommand(operation.query, {}, boundedRuntime);
       return { applied: false };
     }
     case "audit":
@@ -248,7 +242,7 @@ export async function executeSystemAgentOperation(
       // Use the same discovery as channel setup (bundled plugins + trusted
       // catalog), so the listing matches what `connect <channel>` can configure
       // even before any plugin registry is active.
-      const { resolved } = await resolveChannelSetupState(opts.deps);
+      const { resolved } = await resolveChannelSetupState();
       const entries = resolved.entries.toSorted((a, b) => a.id.localeCompare(b.id));
       runtime.log(
         [
@@ -263,9 +257,7 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     }
     case "channel-info": {
-      const { cfg, installedPlugins, resolved, isConfigured } = await resolveChannelSetupState(
-        opts.deps,
-      );
+      const { cfg, installedPlugins, resolved, isConfigured } = await resolveChannelSetupState();
       const channel = operation.channel.toLowerCase();
       const entry = resolved.entries.find((candidate) => candidate.id === channel);
       if (!entry) {
@@ -341,34 +333,24 @@ export async function executeSystemAgentOperation(
     case "setup":
       return await executeSetup(operation, runtime, opts);
     case "config-unset":
-      return await applyPersistentOperation({
-        auditOperation: "config.unset",
-        operation,
-        runtime,
-        opts,
-        run: async (ctx) => {
-          const runConfigUnset =
-            ctx.deps?.runConfigUnset ?? (await import("../cli/config-cli.js")).runConfigUnset;
-          await ctx.commit(() =>
-            runConfigUnset({
-              path: operation.path,
-              runtime: createNoExitRuntime(ctx.runtime),
-              ...(ctx.assertPersistentApply
-                ? { beforePersistentApply: ctx.assertPersistentApply }
-                : {}),
-            }),
-          );
-          return { summary: `Removed config ${operation.path}`, details: { path: operation.path } };
-        },
+      return await apply("config.unset", async (ctx) => {
+        const { runConfigUnset } = await import("../cli/config-cli.js");
+        await ctx.commit(() =>
+          runConfigUnset({
+            path: operation.path,
+            runtime: createNoExitRuntime(ctx.runtime),
+            ...(ctx.assertPersistentApply
+              ? { beforePersistentApply: ctx.assertPersistentApply }
+              : {}),
+          }),
+        );
+        return { summary: `Removed config ${operation.path}`, details: { path: operation.path } };
       });
     case "config-set":
     case "config-set-ref":
-      return await applyPersistentOperation({
-        auditOperation: operation.kind === "config-set" ? "config.set" : "config.setRef",
-        operation,
-        runtime,
-        opts,
-        run: async (ctx) => {
+      return await apply(
+        operation.kind === "config-set" ? "config.set" : "config.setRef",
+        async (ctx) => {
           const { storeEntry, storeProvider } = await runConfigSetOperation({ operation, ctx });
           if (operation.kind === "config-set") {
             return { summary: `Set config ${operation.path}`, details: { path: operation.path } };
@@ -385,7 +367,7 @@ export async function executeSystemAgentOperation(
             },
           };
         },
-      });
+      );
     case "plugin-install":
       return await executePluginInstall(operation, runtime, opts);
     case "plugin-activate-artifact": {
@@ -401,45 +383,29 @@ export async function executeSystemAgentOperation(
         runtime.log(message);
         return { applied: false, message };
       }
-      const result = await applyPersistentOperation({
-        auditOperation: "plugin.uninstall",
-        operation,
-        runtime,
-        opts,
-        run: async (ctx) => {
-          const runPluginUninstall =
-            ctx.deps?.runPluginUninstall ??
-            (async (
-              pluginId: string,
-              pluginRuntime: RuntimeEnv,
-              options?: { beforePersistentApply?: () => void },
-            ) => {
-              const { runPluginUninstallCommand } =
-                await import("../cli/plugins-uninstall-command.js");
-              await runPluginUninstallCommand([pluginId], options, pluginRuntime);
-            });
-          // A concurrent config write can retarget the default route between
-          // the pre-approval check and this commit; re-verify before the
-          // command's asynchronous preparation starts.
-          if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
-            throw new Error(
-              `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Removing it has to happen with OpenClaw stopped: run \`openclaw plugins uninstall ${operation.pluginId}\` on the machine running it.`,
-            );
-          }
-          await ctx.commit(() =>
-            runPluginUninstall(
-              operation.pluginId,
-              createNoExitRuntime(ctx.runtime),
-              ctx.assertPersistentApply
-                ? { beforePersistentApply: ctx.assertPersistentApply }
-                : undefined,
-            ),
+      const result = await apply("plugin.uninstall", async (ctx) => {
+        const { runPluginUninstallCommand } = await import("../cli/plugins-uninstall-command.js");
+        // A concurrent config write can retarget the default route between
+        // the pre-approval check and this commit; re-verify before the
+        // command's asynchronous preparation starts.
+        if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
+          throw new Error(
+            `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Removing it has to happen with OpenClaw stopped: run \`openclaw plugins uninstall ${operation.pluginId}\` on the machine running it.`,
           );
-          return {
-            summary: `Uninstalled plugin ${operation.pluginId}`,
-            details: { pluginId: operation.pluginId },
-          };
-        },
+        }
+        await ctx.commit(() =>
+          runPluginUninstallCommand(
+            [operation.pluginId],
+            ctx.assertPersistentApply
+              ? { beforePersistentApply: ctx.assertPersistentApply }
+              : undefined,
+            createNoExitRuntime(ctx.runtime),
+          ),
+        );
+        return {
+          summary: `Uninstalled plugin ${operation.pluginId}`,
+          details: { pluginId: operation.pluginId },
+        };
       });
       if (result.applied) {
         runtime.log("Restart the Gateway to apply plugin changes.");
@@ -457,100 +423,86 @@ export async function executeSystemAgentOperation(
           "OpenClaw cannot save an explicit per-agent model until that new route can be live-tested. Retry without `model`; the new agent inherits the verified default, then use `set_default_model` with agentId to live-test and save its own model.",
         );
       }
-      return await applyPersistentOperation({
-        auditOperation: "agents.create",
-        operation,
-        runtime,
-        opts,
-        run: async (ctx) => {
-          const createAgentForOperation =
-            ctx.deps?.createAgent ?? (await import("../agents/agent-create.js")).createAgent;
-          const { createAgentIdentityConfig } = await import("../agents/identity-file.js");
-          const result = await ctx.commit(() =>
-            createAgentForOperation({
-              entry: {
-                id: operation.agentId,
-                ...(operation.name
-                  ? {
-                      name: operation.name,
-                      identity: createAgentIdentityConfig({ name: operation.name }),
-                    }
-                  : {}),
-              },
-              ...(operation.role ? { role: operation.role } : {}),
-              ...(operation.purpose ? { purpose: operation.purpose } : {}),
-              ...(operation.workspace ? { workspace: operation.workspace } : {}),
-              ...(ctx.assertPersistentApply
-                ? { beforePersistentApply: ctx.assertPersistentApply }
+      return await apply("agents.create", async (ctx) => {
+        const { createAgent } = await import("../agents/agent-create.js");
+        const { createAgentIdentityConfig } = await import("../agents/identity-file.js");
+        const result = await ctx.commit(() =>
+          createAgent({
+            entry: {
+              id: operation.agentId,
+              ...(operation.name
+                ? {
+                    name: operation.name,
+                    identity: createAgentIdentityConfig({ name: operation.name }),
+                  }
                 : {}),
-              provenance: {
-                createdVia: "agent",
-                creatorAgentId: operation.requesterAgentId ?? SYSTEM_AGENT_ID,
-              },
-            }),
-          );
-          if (result.status === "error") {
-            throw new Error(result.message);
-          }
-          const name =
-            result.config.agents?.entries?.[result.agentId]?.identity?.name ?? result.name;
-          ctx.runtime.log(
-            `Created agent ${name} (${result.agentId}). It now appears in the Agents home and the agent switcher; select it to start chatting.`,
-          );
-          return {
-            summary: `Created agent ${result.agentId}`,
-            bootstrapPending: result.bootstrapPending,
-            agentId: result.agentId,
-            details: {
-              agentId: result.agentId,
-              workspace: result.workspace,
             },
-          };
-        },
+            ...(operation.role ? { role: operation.role } : {}),
+            ...(operation.purpose ? { purpose: operation.purpose } : {}),
+            ...(operation.workspace ? { workspace: operation.workspace } : {}),
+            ...(ctx.assertPersistentApply
+              ? { beforePersistentApply: ctx.assertPersistentApply }
+              : {}),
+            provenance: {
+              createdVia: "agent",
+              creatorAgentId: operation.requesterAgentId ?? SYSTEM_AGENT_ID,
+            },
+          }),
+        );
+        if (result.status === "error") {
+          throw new Error(result.message);
+        }
+        const name = result.config.agents?.entries?.[result.agentId]?.identity?.name ?? result.name;
+        ctx.runtime.log(
+          `Created agent ${name} (${result.agentId}). It now appears in the Agents home and the agent switcher; select it to start chatting.`,
+        );
+        return {
+          summary: `Created agent ${result.agentId}`,
+          bootstrapPending: result.bootstrapPending,
+          agentId: result.agentId,
+          details: {
+            agentId: result.agentId,
+            workspace: result.workspace,
+          },
+        };
       });
     }
     case "create-team":
-      return await applyPersistentOperation({
-        auditOperation: "agents.createTeam",
-        operation,
-        runtime,
-        opts,
-        run: async (ctx) => {
-          const { createAgentTeam } = await import("../agents/agent-team.js");
-          const result = await ctx.commit(() =>
-            createAgentTeam({
-              coordinator: operation.coordinatorId,
-              prefix: operation.prefix,
-              workspaceRoot: operation.workspaceRoot,
-              beforePersistentApply: ctx.assertPersistentApply,
-              provenance: {
-                createdVia: "agent",
-                creatorAgentId: opts.requesterAgentId ?? SYSTEM_AGENT_ID,
-              },
-            }),
-          );
-          if (result.status === "error") {
-            if (result.retainedAgents?.length) {
-              const summary = `Team creation incomplete. ${result.message}`;
-              ctx.runtime.error(
-                `${summary} Retained agents appear in the Agents home and the agent switcher. Resolve the failure before creating the missing agents.`,
-              );
-              return {
-                summary,
-                details: { retainedAgentIds: result.retainedAgents.map(({ agentId }) => agentId) },
-              };
-            }
-            throw new Error(result.message);
+      return await apply("agents.createTeam", async (ctx) => {
+        const { createAgentTeam } = await import("../agents/agent-team.js");
+        const result = await ctx.commit(() =>
+          createAgentTeam({
+            coordinator: operation.coordinatorId,
+            prefix: operation.prefix,
+            workspaceRoot: operation.workspaceRoot,
+            beforePersistentApply: ctx.assertPersistentApply,
+            provenance: {
+              createdVia: "agent",
+              creatorAgentId: opts.requesterAgentId ?? SYSTEM_AGENT_ID,
+            },
+          }),
+        );
+        if (result.status === "error") {
+          if (result.retainedAgents?.length) {
+            const summary = `Team creation incomplete. ${result.message}`;
+            ctx.runtime.error(
+              `${summary} Retained agents appear in the Agents home and the agent switcher. Resolve the failure before creating the missing agents.`,
+            );
+            return {
+              summary,
+              details: { retainedAgentIds: result.retainedAgents.map(({ agentId }) => agentId) },
+            };
           }
-          ctx.runtime.log(
-            `Created team: ${result.agents.map(({ agentId }) => agentId).join(", ")}. Select chief of staff ${result.coordinatorId} in the Agents home or the agent switcher to start chatting; all four agents now appear there.`,
-          );
-          return {
-            summary: `Created team with chief of staff ${result.coordinatorId}`,
-            agentId: result.coordinatorId,
-            bootstrapPending: false,
-          };
-        },
+          throw new Error(result.message);
+        }
+        ctx.runtime.log(
+          `Created team: ${result.agents.map(({ agentId }) => agentId).join(", ")}. Select chief of staff ${result.coordinatorId} in the Agents home or the agent switcher to start chatting; all four agents now appear there.`,
+        );
+        return {
+          summary: `Created team with chief of staff ${result.coordinatorId}`,
+          agentId: result.coordinatorId,
+          bootstrapPending: false,
+        };
       });
     case "doctor": {
       const { runDoctorProcess } = await import("../commands/doctor.js");
@@ -580,55 +532,43 @@ export async function executeSystemAgentOperation(
     case "gateway-start":
     case "gateway-stop":
     case "gateway-restart":
-      return await applyPersistentOperation({
-        auditOperation: operation.kind.replace("-", "."),
-        operation,
-        runtime,
-        opts,
-        run: async (ctx) => {
-          const action =
-            operation.kind === "gateway-start"
-              ? "start"
-              : operation.kind === "gateway-stop"
-                ? "stop"
-                : "restart";
-          if (ctx.deps?.setupSurface === "gateway") {
-            const host = ctx.deps.gatewayHostLifecycle;
-            if (!host) {
-              throw new Error(
-                "Gateway host lifecycle is unavailable. Use the service manager on the Gateway host.",
-              );
-            }
-            const result = await host.request(action, () => ctx.assertPersistentApply?.());
-            if (!result.ok) {
-              throw new Error(result.error);
-            }
-            const summary =
-              result.value.outcome === "already-running"
-                ? "Gateway already running"
-                : `Scheduled Gateway ${action}`;
-            ctx.runtime.log(summary);
-            return { summary };
+      return await apply(operation.kind.replace("-", "."), async (ctx) => {
+        const action =
+          operation.kind === "gateway-start"
+            ? "start"
+            : operation.kind === "gateway-stop"
+              ? "stop"
+              : "restart";
+        if (ctx.deps?.setupSurface === "gateway") {
+          const host = ctx.deps.gatewayHostLifecycle;
+          if (!host) {
+            throw new Error(
+              "Gateway host lifecycle is unavailable. Use the service manager on the Gateway host.",
+            );
           }
-          const run =
+          const result = await host.request(action, () => ctx.assertPersistentApply?.());
+          if (!result.ok) {
+            throw new Error(result.error);
+          }
+          const summary =
+            result.value.outcome === "already-running"
+              ? "Gateway already running"
+              : `Scheduled Gateway ${action}`;
+          ctx.runtime.log(summary);
+          return { summary };
+        }
+        const result = await ctx.commit(() => runGatewayLifecycle(action));
+        if (result === false) {
+          throw new Error("Gateway restart did not complete");
+        }
+        return {
+          summary:
             action === "start"
-              ? ctx.deps?.runGatewayStart
+              ? "Started Gateway"
               : action === "stop"
-                ? ctx.deps?.runGatewayStop
-                : ctx.deps?.runGatewayRestart;
-          const result = await ctx.commit(run ?? (() => runGatewayLifecycle(action)));
-          if (result === false) {
-            throw new Error("Gateway restart did not complete");
-          }
-          return {
-            summary:
-              action === "start"
-                ? "Started Gateway"
-                : action === "stop"
-                  ? "Stopped Gateway"
-                  : "Restarted Gateway",
-          };
-        },
+                ? "Stopped Gateway"
+                : "Restarted Gateway",
+        };
       });
     case "open-tui": {
       const overview = await loadOverviewForOperation(opts.deps);
@@ -643,7 +583,7 @@ export async function executeSystemAgentOperation(
         return { applied: false, message: setupNotice };
       }
       const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
-      const runTui = opts.deps?.runTui ?? (await import("../tui/tui.js")).runTui;
+      const { runTui } = await import("../tui/tui.js");
       // A reachable Gateway owns the state lock, so embedded mode would fail during hatch.
       // Keep embedded mode only as the no-Gateway fallback for standalone sessions.
       const useEmbeddedTui = !overview.gateway.reachable;

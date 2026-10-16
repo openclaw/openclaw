@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
@@ -18,12 +17,19 @@ import {
   renderAttachmentHarness,
   renderSettledPastedTextAttachment,
 } from "./chat-attachment-picker.test-support.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { createChatProps, createPasteEvent, requireElement } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import {
+  createChatProps,
+  createPasteEvent,
+  disposeChatView,
+  renderChatPropsInto,
+  requireElement,
+} from "./chat-view.test-helpers.ts";
+import type { ChatProps } from "./chat-view.tsx";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
-import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 
 const payloads: ChatAttachment[] = [];
 
@@ -35,19 +41,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]>) {
-  const container = document.createElement("div");
-  render(
-    renderChat(
-      createChatProps({
-        ...overrides,
-        onAttachmentsChange: (attachments) => {
-          payloads.push(...attachments);
-          overrides.onAttachmentsChange?.(attachments);
-        },
-      }),
-    ),
+function renderChatView(overrides: Partial<ChatProps>) {
+  const container = createComposerContainer();
+  renderChatPropsInto(
     container,
+    createChatProps({
+      ...overrides,
+      onAttachmentsChange: (attachments) => {
+        payloads.push(...attachments);
+        overrides.onAttachmentsChange?.(attachments);
+      },
+    }),
   );
   return container;
 }
@@ -267,7 +271,7 @@ describe("chat attachment reading", () => {
 
   it("waits for an in-flight clipboard attachment before accepting an immediate send", async () => {
     const readers = deferFileReaders();
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     const file = new File(["attachment proof"], "proof.png", { type: "image/png" });
     const draft = "Send the attachment with this message";
     let attachments: ChatAttachment[] = [];
@@ -276,32 +280,30 @@ describe("chat attachment reading", () => {
     });
     const redraw = () => {
       const readSignal = reads.readSignal;
-      render(
-        renderChat(
-          createChatProps({
-            attachments,
-            draft,
-            getAttachments: () => attachments,
-            getDraft: () => draft,
-            getPendingAttachmentReads: () => reads.pendingReads,
-            onAttachmentsChange: (next) => {
-              attachments = next;
-            },
-            onPendingReadsChange: (delta) => reads.updatePending(readSignal, delta),
-            onSend,
-            attachmentReads: reads,
-            pendingAttachmentReads: reads.pendingReads,
-            readSignal,
-          }),
-        ),
+      renderChatPropsInto(
         container,
+        createChatProps({
+          attachments,
+          draft,
+          getAttachments: () => attachments,
+          getDraft: () => draft,
+          getPendingAttachmentReads: () => reads.pendingReads,
+          onAttachmentsChange: (next) => {
+            attachments = next;
+          },
+          onPendingReadsChange: (delta) => reads.updatePending(readSignal, delta),
+          onSend,
+          attachmentReads: reads,
+          pendingAttachmentReads: reads.pendingReads,
+          readSignal,
+        }),
       );
     };
     const reads = new ChatAttachmentReadLifecycle(redraw);
     onTestFinished(() => {
       reads.abortReads();
       releaseChatAttachmentPayloads(attachments);
-      render(null, container);
+      disposeChatView(container);
     });
     redraw();
 
@@ -330,6 +332,13 @@ describe("chat attachment reading", () => {
     expect(onSend).not.toHaveBeenCalled();
 
     const reader = expectDefined(readers[0], "deferred attachment reader");
+    reader.dispatchEvent(
+      new ProgressEvent("progress", { lengthComputable: true, loaded: 1, total: 2 }),
+    );
+    expect(container.querySelector(".chat-attachment-thumb")).toBe(pendingTile);
+    expect(
+      pendingTile?.querySelector<HTMLElement>(".chat-attachment-loading > span")?.style.transform,
+    ).toBe("scaleX(0.5)");
     Object.defineProperty(reader, "result", {
       configurable: true,
       value: `data:image/png;base64,${btoa("attachment proof")}`,

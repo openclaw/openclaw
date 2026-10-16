@@ -89,28 +89,6 @@ describe("buildCodexMcpServersConfig", () => {
     });
   });
 
-  it("preserves Codex-specific MCP approval mode metadata", () => {
-    expect(
-      buildCodexMcpServersConfig({
-        mcpServers: {
-          search: {
-            url: "https://mcp.example.com/mcp",
-            supportsParallelToolCalls: false,
-            codex: {
-              defaultToolsApprovalMode: "prompt",
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      search: {
-        url: "https://mcp.example.com/mcp",
-        supports_parallel_tool_calls: false,
-        default_tools_approval_mode: "prompt",
-      },
-    });
-  });
-
   it("keeps native timeout projection within OpenClaw timer bounds", () => {
     expect(
       buildCodexMcpServersConfig({
@@ -173,16 +151,6 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
     expect(revoked.fingerprint).not.toBe(granted.fingerprint);
   });
 
-  it("forwards a prepared manifest registry to bundle loading", async () => {
-    const manifestRegistry = { plugins: [] };
-
-    await loadCodexBundleMcpThreadConfigCore({ workspaceDir: "/workspace", manifestRegistry });
-
-    expect(mocks.loadCalls).toEqual([
-      expect.objectContaining({ workspaceDir: "/workspace", manifestRegistry }),
-    ]);
-  });
-
   it("prepares Agent Plugins data dirs before projecting Codex thread config", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-agent-mcp-"));
     tempDirs.push(tempDir);
@@ -195,6 +163,7 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
           weather: {
             command: "node",
             env: { PLUGIN_DATA: dataDir },
+            supportsParallelToolCalls: false,
             codex: { defaultToolsApprovalMode: "prompt" },
           },
           broken: { command: "node", env: { PLUGIN_DATA: collisionPath } },
@@ -215,7 +184,11 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
     const loaded = await loadCodexBundleMcpThreadConfigCore({ workspaceDir: "/workspace" });
 
     expect((await fs.stat(dataDir)).isDirectory()).toBe(true);
-    expect(loaded.configPatch?.mcp_servers.weather).toMatchObject({ command: "node" });
+    expect(loaded.configPatch?.mcp_servers.weather).toMatchObject({
+      command: "node",
+      supports_parallel_tool_calls: false,
+      default_tools_approval_mode: "prompt",
+    });
     expect(loaded.configPatch?.mcp_servers.broken).toBeUndefined();
     expect(loaded.diagnostics).toEqual([
       expect.objectContaining({
@@ -356,31 +329,6 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
     });
   });
 
-  it("leaves user mcp.servers to the Codex user MCP projection path", async () => {
-    // User MCP config is projected elsewhere; this loader only injects bundled
-    // MCP servers so the same server does not appear twice in Codex.
-    const loaded = await loadCodexBundleMcpThreadConfigCore({
-      workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          servers: {
-            search: {
-              transport: "streamable-http",
-              url: "https://mcp.example.com/mcp",
-            },
-          },
-        },
-      },
-      toolsEnabled: true,
-    });
-
-    expect(loaded.configPatch).toBeUndefined();
-    expect(loaded.fingerprint).toBeUndefined();
-    expect(loaded.evaluated).toBe(true);
-    expect(loaded.staticServerNames).toEqual(["search"]);
-    expect(loaded.userStaticServerNames).toEqual(["search"]);
-  });
-
   it("returns an evaluated empty MCP config when no bundle MCP runtime is needed", async () => {
     const cfg = {
       mcp: {
@@ -410,18 +358,6 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       expect(loaded.evaluated).toBe(true);
       expect(loaded.staticServerNames).toEqual([]);
     }
-  });
-
-  it("omits the config patch when no MCP servers are configured", async () => {
-    const loaded = await loadCodexBundleMcpThreadConfigCore({
-      workspaceDir: "/workspace",
-      cfg: {},
-      toolsEnabled: true,
-    });
-
-    expect(loaded.configPatch).toBeUndefined();
-    expect(loaded.fingerprint).toBeUndefined();
-    expect(loaded.evaluated).toBe(true);
   });
 
   it("excludes requester-scoped servers from projection and fingerprint", async () => {

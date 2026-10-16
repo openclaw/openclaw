@@ -6,6 +6,10 @@ import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import * as pidAlive from "../../shared/pid-alive.js";
@@ -30,10 +34,9 @@ import {
   abortWorktreeRemoval,
   acquireWorktreeRunLease,
   claimWorktreeRemoval,
-  hasLiveWorktreeRunLease,
   resolveWorktreeForPath,
 } from "./run-lease.js";
-import { testing as runLeaseTesting } from "./run-lease.test-support.js";
+import { hasLiveWorktreeRunLease, testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -62,6 +65,7 @@ describe("worktree run lease", () => {
       vi.useRealTimers();
       await closeOpenClawStateDatabaseAsync();
       vi.restoreAllMocks();
+      resetConfigRuntimeState();
       runLeaseTesting.resetForTest();
       vi.unstubAllEnvs();
       closeOpenClawStateDatabaseForTest();
@@ -88,6 +92,7 @@ describe("worktree run lease", () => {
     await fs.cp(templateRepo, repo, { recursive: true });
     repo = await fs.realpath(repo);
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "openclaw-state") };
+    setRuntimeConfigSnapshot({}, {});
     service = new ManagedWorktreeService({ env });
   });
 

@@ -3,6 +3,29 @@ import { describe, expect, it } from "vitest";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 
 describe("progress draft item labels", () => {
+  it.each([false, true])("renders plain notes as literal prose (rich=%s)", (richMessages) => {
+    for (const label of [undefined, "Working"]) {
+      const note = "**Check** <queue> & `jobs` https://example.test";
+      const preview = renderTelegramProgressDraftPreview(
+        { label, statusHeadline: note, statusHeadlineFormat: "plain", lines: [] },
+        { richMessages, toolProgress: true, maxLines: 8, maxLineChars: 120 },
+      );
+      expect(preview.linkPreview).toBe(false);
+      if (richMessages) {
+        expect(preview.richMessage).toMatchObject({
+          skip_entity_detection: true,
+          blocks: [
+            ...(label ? [{ type: "paragraph", text: { type: "bold", text: label } }] : []),
+            { type: "paragraph", text: label ? note : { type: "bold", text: note } },
+          ],
+        });
+      } else {
+        const escaped = "**Check** &lt;queue&gt; &amp; `jobs` https://example.test";
+        expect(preview.text).toBe(label ? `<b>Working</b><br>${escaped}` : `<b>${escaped}</b>`);
+      }
+    }
+  });
+
   it.each([false, true])(
     "renders authored preambles without internal titles (rich=%s)",
     (richMessages) => {

@@ -4,6 +4,7 @@ export * from "./schema/session-processes.js";
 export * from "./schema/sessions-provider-review.js";
 export * from "./schema/human-mentions.js";
 export * from "./schema/presence.js";
+export * from "./schema/claws.js";
 export * from "./public-schema-push.js";
 export * from "./public-schema-users.js";
 export * from "./public-schema-plugins.js";
@@ -185,6 +186,8 @@ export {
   SessionFilePreviewKindSchema,
   SessionFileRelevanceSchema,
   SessionsFilesGetParamsSchema,
+  SessionsFilesDownloadParamsSchema,
+  SessionsFilesDownloadResultSchema,
   SessionsFilesGetResultSchema,
   SessionsFilesAssetsParamsSchema,
   SessionsFilesAssetsResultSchema,
@@ -364,6 +367,9 @@ export {
   SystemChangeSourceSchema,
   SystemChangesListParamsSchema,
   SystemChangesListResultSchema,
+  SystemAgentSetupAutoParamsSchema,
+  SystemAgentSetupAutoCandidateSchema,
+  SystemAgentSetupAutoResultSchema,
   SystemAgentSetupDetectParamsSchema,
   SystemAgentSetupDetectResultSchema,
   SystemAgentSetupVerifyParamsSchema,
@@ -374,6 +380,8 @@ export {
   SystemAgentSetupActivateStartResultSchema,
   SystemAgentSetupAuthStartParamsSchema,
   SystemAgentSetupAuthStartResultSchema,
+  SystemAgentSetupRuntimeStartParamsSchema,
+  SystemAgentSetupRuntimeStartResultSchema,
   WizardStartParamsSchema,
   McpAuthLoginParamsSchema,
   WizardNextParamsSchema,
@@ -518,6 +526,8 @@ export {
   SkillsWorkshopArchiveParamsSchema,
   SkillsWorkshopRestoreParamsSchema,
   SkillsWorkshopChangeResultSchema,
+  SkillsWorkshopUndoParamsSchema,
+  SkillsWorkshopUndoResultSchema,
   SkillsSecurityVerdictsParamsSchema,
   SkillsSecurityVerdictsResultSchema,
   SkillsSkillCardParamsSchema,
@@ -617,6 +627,8 @@ export {
   ChatInjectParamsSchema,
   ChatToolTitlesParamsSchema,
   ChatToolTitlesResultSchema,
+  ChatPredictParamsSchema,
+  ChatPredictResultSchema,
   UpdateRunParamsSchema,
   UpdateRunRecordSchema,
   UpdateRunResultSchema,
@@ -628,6 +640,8 @@ export {
   TickEventSchema,
   ShutdownEventSchema,
   ProjectRecentSchema,
+  ProjectsCheckoutOptionsParamsSchema,
+  ProjectsCheckoutOptionsResultSchema,
   ProjectsListParamsSchema,
   ProjectsListResultSchema,
   ProjectsRegisterParamsSchema,

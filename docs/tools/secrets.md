@@ -13,7 +13,7 @@ writes it straight into the shared secret store. The value never appears in the
 chat, the session transcript, the tool result, or the model's context — the
 agent receives only entry metadata and its store SecretRef.
 
-The tool is available in primary agent sessions, not just the canonical main
+The tool is available in primary agent sessions, not just the main
 conversation. Subagent and ACP worker sessions do not receive it.
 
 It is enabled by default and governed by the normal tool policy — there is no
@@ -52,6 +52,8 @@ value must enter the store, it arrives through the human prompt, the
 ## Answering a request
 
 The web Control UI docks the prompt above the composer with a masked input.
+Use the eye button to show or hide what you typed before submitting. The value
+starts hidden for each question, and revealing it does not send it to the agent.
 The prompt always shows who is asking (agent and session), the entry name, the
 agent's stated reason, and an editable list of allowed hosts, so you have the
 final say on where the credential may be used. If the name already exists, the

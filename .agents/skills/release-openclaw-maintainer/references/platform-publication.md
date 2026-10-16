@@ -82,11 +82,8 @@ builder and verify the AppImage, `.deb`, signed `latest.json`, and
 A successful request is reused even if its independent builder later fails;
 recover the builder rather than expecting a core publication retry to rebuild it.
 
-The website resolves desktop download assets at build time. After Linux assets
-publish, rebuild `openclaw.ai` through its existing deployment owner and verify
-the deployed Apps card shows the intended version and both download URLs resolve
-to that tag's assets. Published GitHub assets alone do not complete the website
-download handoff.
+After Linux assets publish, complete the [website download handoff](#website).
+Published GitHub assets alone do not complete the website's build-time links.
 
 For independent recovery, dispatch `Linux App Release Request` from `main` with
 the same `tag`. A default Linux-only retry reuses verified complete assets;
@@ -101,6 +98,30 @@ advances the fixed `linux-stable` canonical manifest only forward, and mirrors
 it to the current latest release. Asset completeness and unfinished channel
 publication are separate: retrying complete public assets verifies and reuses
 their bytes and identities, then completes only the remaining metadata work.
+When Windows companion publication is enabled (see below), the signed Windows
+updater manifest exists only in the building run until published, so a publication interrupted before `latest-windows.json` recovers by
+rerunning that run's publish job (it passes its signed inputs and refuses any
+byte mismatch); a fresh request reuses public bytes and cannot recreate it.
+
+The immutable publication's asset inventory stays strict for the AppImage,
+`.deb`, and `SHA256SUMS.linux-app.txt`. A non-Linux companion it records (the
+Windows `.exe` or desktop-test macOS bundles) may be withdrawn by deleting the
+release asset; status and stable closeout then report it as
+`withdrawnCompanionAssets` while the immutable checksum file keeps its row. A
+companion that is still present must match its recorded id, size, and digest.
+
+Windows Tauri companion publication is temporarily disabled by
+`WINDOWS_COMPANION_RELEASE: "false"` in `.github/workflows/linux-app-release.yml`:
+release tags were shipping unplanned Windows installers from sources without
+Windows local Gateway support. Until it is deliberately re-enabled, regular
+releases build, sign, and publish only the AppImage, `.deb`, and
+`SHA256SUMS.linux-app.txt` (a 3-asset Linux publication). Expect no
+`OpenClaw-<version>-windows-x86_64.exe`, `latest-windows.json`, or
+`windows-stable` update; treat any as unplanned and withdraw it. Opt-in
+desktop-test requests still attach their test Windows installer but publish
+no `windows-stable` channel. Re-enable by setting the switch to `"true"` in a
+reviewed `main` PR before dispatching the request. This switch does not
+affect the Windows Hub lane below.
 
 An authorized Linux publication creates the `linux-stable` control release as
 prerelease/non-latest when absent; ordinary PR validation never initializes it.
@@ -157,3 +178,32 @@ verify a `latest` redirect before relying on it.
 Pin the train before tagging under [preparation](preparation.md). Approval,
 build and publication remain independent; record a skipped or failed Android
 child without masking npm/GitHub results.
+
+## Website
+
+`openclaw/openclaw.ai` owns deployment and build-time companion download links.
+After macOS, Linux, or Windows assets publish, use its existing **Companion
+Downloads (deployed)** workflow, not an empty commit or a direct Vercel CLI deploy:
+
+```bash
+gh workflow run companion-downloads-deployed.yml --repo openclaw/openclaw.ai --ref main
+```
+
+This is a deployment-capable operation: use it only under release/deployment
+authority. The operator needs GitHub permission to dispatch that site's workflow.
+The project owner separately configures a production `main` Vercel Deploy Hook
+and stores its URL as the site's `VERCEL_COMPANION_DEPLOY_HOOK` repository secret.
+The workflow uses that credential; the operator does not need a Vercel CLI token.
+A CLI permission denial therefore does not establish that this route is unavailable.
+Follow the site's [deployment instructions](https://github.com/openclaw/openclaw.ai#companion-downloads)
+for setup and read-only download checks; never print or copy the hook URL into a PR.
+
+The workflow skips deployment when production is already current. Otherwise it
+requests one rebuild and verifies both `/` and `/install/`, the expected site
+source SHA in `/site-release.json`, and the real download responses. Record the
+workflow run and its terminal result, not just dispatch acknowledgement. Preview
+and deployment-status checks remain read-only.
+
+Missing-hook failures require project-owner setup, not broader CLI privileges.
+If a requested deployment times out or site `main` advances, inspect its outcome
+before retrying. Do not republish the apps or edit website content to trigger a build.

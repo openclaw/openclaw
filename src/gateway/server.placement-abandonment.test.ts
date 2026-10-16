@@ -9,6 +9,7 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,7 +20,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 import * as nodeTunnel from "./worker-environments/node-worker-tunnel.js";
@@ -239,6 +240,8 @@ it.for(cases)(
       };
       if (!persisted) {
         await start();
+      } else {
+        await captureRuntimeConfigAsyncReader()();
       }
       const { sessionId, sessionKey, agentId } = REQUEST;
       const worktreeId = "abandonment-worktree";
@@ -331,7 +334,7 @@ it.for(cases)(
       expect(placements.get(sessionId)).toMatchObject({ state: "local", turnClaim: null });
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.validateTurnClaim(claim)).toBe(false);
-      expect(placements.getPlacementMove(sessionId)).toBeUndefined();
+      expect(await placements.getPlacementMoveAsync(sessionId)).toBeUndefined();
       const environments = await createWorkerEnvironmentStore({ database });
       const retainedCleanup = environments.get(environmentId);
       expect(retainedCleanup).toMatchObject({
@@ -389,9 +392,9 @@ it.for(cases)(
       expect(deleted.deleted).toBe(true);
       expect(deleted.archived).toHaveLength(1);
       expect(readSessionArchiveContentSync(deleted.archived[0]!)).toContain(reply);
-      expect(loadGatewaySessionEntryReadOnly(sessionKey).entry).toBeUndefined();
+      expect((await loadGatewaySessionEntryReadOnlyAsync(sessionKey)).entry).toBeUndefined();
       expect(placements.get(sessionId)).toBeUndefined();
-      expect(placements.getPlacementMove(sessionId)).toBeUndefined();
+      expect(await placements.getPlacementMoveAsync(sessionId)).toBeUndefined();
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(environments.get(environmentId)).toEqual(retainedCleanup);
       expect(offlineNodeLookup).toHaveBeenCalledWith("offline-device");

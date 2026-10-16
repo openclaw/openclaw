@@ -7,6 +7,7 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
+import { resolveFeishuSenderName } from "./bot-sender-name.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { createConfiguredFeishuClient } from "./configured-client.js";
@@ -272,9 +273,22 @@ export async function getMessageFeishu(params: {
 
     const parsedItem = parseFeishuMessageItem(item, messageId);
     if (parsedItem.contentType === "merge_forward" && responseItems) {
+      const account = resolveFeishuRuntimeAccount({ cfg, accountId });
       return {
         ...parsedItem,
-        content: parseMergeForwardContent(responseItems),
+        content: await parseMergeForwardContent(
+          responseItems,
+          (account.config.resolveSenderNames ?? true)
+            ? async (senderId) =>
+                (
+                  await resolveFeishuSenderName({
+                    account,
+                    senderId,
+                    log: (...args) => logVerbose(args.map(String).join(" ")),
+                  })
+                ).name
+            : undefined,
+        ),
       };
     }
     return parsedItem;
@@ -446,7 +460,7 @@ export async function editMessageFeishu(params: {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  const hasText = typeof text === "string" && text.trim().length > 0;
+  const hasText = Boolean(text?.trim());
   const hasCard = Boolean(card);
   if (hasText === hasCard) {
     throw new Error("Feishu edit requires exactly one of text or card.");

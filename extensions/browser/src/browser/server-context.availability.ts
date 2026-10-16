@@ -42,7 +42,7 @@ import {
   beginProfileTransition,
   enqueueProfileStart,
   getProfileLifecycle,
-  isProfileGenerationCurrent,
+  isProfileOperationCurrent,
   isProfileRestartRequiredError,
   isWithinProfileOperationLease,
   ProfileRestartRequiredError,
@@ -63,7 +63,6 @@ type AvailabilityDeps = {
   profile: ResolvedBrowserProfile;
   state: () => BrowserServerState;
   runtime: ProfileRuntimeState;
-  configRevision: number;
 };
 
 type AvailabilityOps = Pick<
@@ -136,7 +135,6 @@ export function createProfileAvailability({
   profile,
   state,
   runtime,
-  configRevision,
 }: AvailabilityDeps): AvailabilityOps {
   const actor = getProfileLifecycle(runtime);
   const redactedProfileCdpUrl = redactCdpUrl(profile.cdpUrl) ?? profile.cdpUrl;
@@ -297,13 +295,12 @@ export function createProfileAvailability({
     }
   };
 
-  const adoptRunning = (running: RunningChrome, generation: number, signal: AbortSignal): void => {
+  const adoptRunning = (running: RunningChrome, signal: AbortSignal): void => {
     if (
-      !isProfileGenerationCurrent({
+      !isProfileOperationCurrent({
         state: state(),
         runtime,
-        configRevision,
-        generation,
+        signal,
       })
     ) {
       signal.throwIfAborted();
@@ -446,7 +443,6 @@ export function createProfileAvailability({
 
   const ensureBrowserAvailableOnce = async (
     signal: AbortSignal,
-    generation: number,
     options?: BrowserEnsureOptions,
   ): Promise<void> => {
     signal.throwIfAborted();
@@ -538,7 +534,7 @@ export function createProfileAvailability({
       }
       try {
         await waitForCdpReadyAfterLaunch(signal, launched);
-        adoptRunning(launched, generation, signal);
+        adoptRunning(launched, signal);
         runtime.managedLaunchFailure = undefined;
       } catch (err) {
         await stopExactRunning(launched);
@@ -596,9 +592,8 @@ export function createProfileAvailability({
       await withProfileOperationLease({
         state: state(),
         runtime,
-        configRevision,
         signal: options?.signal,
-        run: async (signal) => await ensureBrowserAvailableOnce(signal, actor.generation, options),
+        run: async (signal) => await ensureBrowserAvailableOnce(signal, options),
       });
       return;
     }
@@ -609,11 +604,10 @@ export function createProfileAvailability({
         await enqueueProfileStart({
           state: state(),
           runtime,
-          configRevision,
           key,
           signal: options?.signal,
-          run: async (signal, generation) => {
-            await ensureBrowserAvailableOnce(signal, generation, options);
+          run: async (signal) => {
+            await ensureBrowserAvailableOnce(signal, options);
           },
         });
         return;
@@ -622,7 +616,7 @@ export function createProfileAvailability({
           throw err;
         }
         // A route may already hold an ordinary lease. Let its wrapper release
-        // and retry so a restart never waits on its own generation lease.
+        // and retry so a restart never waits on its own settlement lease.
         if (isWithinProfileOperationLease(runtime)) {
           throw err;
         }
@@ -637,7 +631,7 @@ export function createProfileAvailability({
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {
     const current = state();
-    assertProfileLifecycleContext({ state: current, runtime, configRevision });
+    assertProfileLifecycleContext({ state: current, runtime });
     runtime.managedLaunchFailure = undefined;
     const result = await beginProfileTransition({
       state: current,

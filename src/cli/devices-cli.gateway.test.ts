@@ -3,17 +3,24 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { resetConfigRuntimeState } from "../config/config.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import { authorizeOperatorScopesForMethod } from "../gateway/method-scopes.js";
 import { deviceHandlers } from "../gateway/server-methods/devices.js";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
+import { GatewayTransportError } from "../gateway/transport-error.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import {
   revokeDeviceToken,
   rotateDeviceToken,
   verifyDeviceToken,
 } from "../infra/device-pairing-tokens.js";
-import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
+import {
+  getPairedDevice,
+  getPendingDevicePairing,
+  requestDevicePairing,
+} from "../infra/device-pairing.js";
+import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -25,6 +32,12 @@ const transport = vi.hoisted(() => ({
       (scopes: string[], method: string, params: Record<string, unknown>) => Promise<unknown>
     >(),
   runtime: { log: vi.fn(), error: vi.fn(), writeJson: vi.fn(), exit: vi.fn() },
+  activeOwner: vi.fn<() => Promise<GatewayLockIdentity | undefined>>(),
+}));
+
+vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
+  readActiveGatewayLockIdentity: transport.activeOwner,
 }));
 
 vi.mock("../config/gateway-dispatch-config.js", () => ({
@@ -75,10 +88,12 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
   vi.clearAllMocks();
+  transport.activeOwner.mockResolvedValue(undefined);
   vi.stubEnv("OPENCLAW_STATE_DIR", await roots.make());
 });
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  resetConfigRuntimeState();
   vi.unstubAllEnvs();
 });
 afterAll(async () => {
@@ -272,3 +287,65 @@ it("does not attempt rotation when listing fails", async () => {
   expect(transport.request.mock.calls.map(([, method]) => method)).toEqual(["device.pair.list"]);
   expect(transport.runtime.writeJson).not.toHaveBeenCalled();
 });
+
+it.each(["live", "offline", "uncertain"] as const)(
+  "approval fallback preserves %s Gateway ownership",
+  async (mode) => {
+    const pending = await requestDevicePairing({
+      deviceId: "bootstrap-device",
+      publicKey: "bootstrap-public-key",
+      role: "operator",
+      scopes: ["operator.read"],
+    });
+    const requestId = pending.request.requestId;
+    // Discovery is the external-process seam; admission and SQLite writes are real.
+    transport.activeOwner.mockResolvedValue(
+      mode === "live"
+        ? {
+            pid: process.pid + 1,
+            port: 18789,
+            ownerId: "external-gateway",
+            createdAt: "2026-10-09T00:00:00.000Z",
+          }
+        : undefined,
+    );
+    transport.request.mockRejectedValue(
+      mode === "live"
+        ? new Error(`device pairing required (requestId: ${requestId})`)
+        : new GatewayTransportError({
+            kind: "closed",
+            connectionDetails: {
+              url: "ws://127.0.0.1:18789",
+              urlSource: "local loopback",
+              message: "",
+            },
+            message: "Gateway not reachable",
+            ...(mode === "uncertain" ? { requestDispatched: true } : {}),
+          }),
+    );
+    const program = new Command();
+    registerDevicesCli(program);
+    const approval = program.parseAsync(["devices", "approve", requestId, "--json"], {
+      from: "user",
+    });
+    if (mode === "offline") {
+      await approval;
+      expect(await getPendingDevicePairing(requestId)).toBeNull();
+      expect(await getPairedDevice("bootstrap-device")).toMatchObject({
+        scopes: ["operator.read"],
+      });
+      expect(transport.runtime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ requestId }),
+      );
+    } else {
+      await expect(approval).rejects.toThrow(
+        mode === "live" ? "stop the Gateway" : "Gateway not reachable",
+      );
+      expect(await getPendingDevicePairing(requestId)).toMatchObject({
+        deviceId: "bootstrap-device",
+      });
+      expect(await getPairedDevice("bootstrap-device")).toBeNull();
+      expect(transport.runtime.writeJson).not.toHaveBeenCalled();
+    }
+  },
+);

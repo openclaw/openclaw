@@ -6,7 +6,7 @@ import {
 
 export async function assertFutureConfigActionAllowed(action: string): Promise<void> {
   const { readConfigFileSnapshot } = await import("../config/io.runtime.js");
-  const block = await readConfigFileSnapshot()
+  const block = await readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" })
     .then((snapshot) => resolveFutureConfigActionBlock({ action, snapshot }))
     .catch(() => null);
   if (block) {

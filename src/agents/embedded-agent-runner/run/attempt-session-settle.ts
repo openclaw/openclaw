@@ -71,33 +71,32 @@ export type EmbeddedAttemptSessionResources = {
 };
 
 /** Keep retained review callbacks outside the attempt's tool-execution closure scope. */
-export function createEmbeddedAttemptSessionResources(
-  config: EmbeddedRunAttemptParams["config"],
-  signal: AbortSignal,
-) {
-  const resources: EmbeddedAttemptSessionResources = {
+export function createEmbeddedAttemptSessionResources(signal: AbortSignal) {
+  let resources: EmbeddedAttemptSessionResources = {
     trajectoryRecorder: null,
     buildAbortSettlePromise: () => null,
   };
-  let live: EmbeddedAttemptSessionResources | undefined = resources;
   return {
-    resources,
+    get resources() {
+      return resources;
+    },
     reviewTranscript: () => {
-      if (!live?.session || signal.aborted) {
+      if (!resources.session || signal.aborted) {
         return undefined;
       }
       return buildExecAutoReviewTranscript({
-        config,
-        messages: live.session.messages,
+        messages: resources.session.messages,
         userTurnOrigins: new Map(
-          live
+          resources
             .getUserTranscriptContexts?.()
             ?.map(({ runtimeMessage, transcriptMessage }) => [runtimeMessage, transcriptMessage]),
         ),
       });
     },
-    releaseReview: () => {
-      live = undefined;
+    takeForCleanup: () => {
+      const released = resources;
+      resources = { trajectoryRecorder: null, buildAbortSettlePromise: () => null };
+      return released;
     },
   };
 }
@@ -111,7 +110,10 @@ type CleanupEmbeddedAttemptSessionInput = EmbeddedAttemptSessionResources & {
   trajectoryEndRecorded: boolean;
   deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
   emitDiagnosticRunCompleted?: EmitDiagnosticRunCompleted;
-  state: Pick<EmbeddedAttemptExecutionState, "terminal" | "beforeAgentRunBlockedBy">;
+  state: Pick<
+    EmbeddedAttemptExecutionState,
+    "terminal" | "beforeAgentRunBlockedBy" | "diagnosticFinalResponse"
+  >;
 };
 
 export async function cleanupEmbeddedAttemptSessionPhase(
@@ -144,12 +146,20 @@ export async function cleanupEmbeddedAttemptSessionPhase(
       input.trajectoryRecorder.recordEvent("session.ended", sessionEndData);
     }
   }
-  await flushEmbeddedAttemptTrajectoryRecorder({
-    runId: attempt.runId,
-    sessionId: attempt.sessionId,
-    log,
-    trajectoryRecorder: input.trajectoryRecorder,
-  });
+  if (
+    !input.deferredLifecycleOwner ||
+    input.state.terminal.kind !== "ok" ||
+    input.state.terminal.settlementWarning ||
+    attempt.abortSignal?.aborted ||
+    input.state.beforeAgentRunBlockedBy !== undefined
+  ) {
+    await flushEmbeddedAttemptTrajectoryRecorder({
+      runId: attempt.runId,
+      sessionId: attempt.sessionId,
+      log,
+      trajectoryRecorder: input.trajectoryRecorder,
+    });
+  }
 
   // Agent retries can report idle before retried tools finish; waiting before
   // the flush prevents synthetic missing-tool results (#8643). Teardown keeps
@@ -206,7 +216,11 @@ export async function cleanupEmbeddedAttemptSessionPhase(
             ? "aborted"
             : "completed",
     cleanupError ?? finalState.promptError,
-    beforeAgentRunBlocked ? { blockedBy: input.state.beforeAgentRunBlockedBy } : undefined,
+    beforeAgentRunBlocked
+      ? { blockedBy: input.state.beforeAgentRunBlockedBy }
+      : input.state.diagnosticFinalResponse
+        ? { finalResponse: input.state.diagnosticFinalResponse }
+        : undefined,
   );
 
   if (cleanupError) {

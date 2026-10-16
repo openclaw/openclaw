@@ -21,6 +21,7 @@ import {
   resolveSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
 } from "./auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreSnapshotCore,
@@ -274,6 +275,7 @@ it.each([false, true])("prepares scoped model auth and labels (env-only=%s)", as
       let lease: Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>> | undefined;
       try {
         if (envOnly) {
+          prepareSharedAuthStoreOwnershipForNative(state.env);
           setRuntimeAuthProfileStoreSnapshot(
             {
               version: 1,

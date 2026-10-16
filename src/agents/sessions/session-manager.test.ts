@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { serialize } from "node:v8";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
@@ -17,10 +16,10 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   readTranscriptRawDelta,
-  replaceTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -129,48 +128,6 @@ describe("SessionManager.open", () => {
     ]);
     expect(SessionManager.open(target, dir).getEntries()).toEqual(manager.getEntries());
     expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
-  });
-
-  it("opens SQLite markers without creating marker-named files and persists assistant replies", async () => {
-    const { dir, scope } = createScope("sqlite-session");
-    const marker = formatSqliteSessionFileMarker(scope);
-    await upsertSessionEntryCore(scope, {
-      sessionFile: marker,
-      sessionId: scope.sessionId,
-      updatedAt: 10,
-    });
-    await appendTranscriptMessage(scope, {
-      cwd: dir,
-      message: { role: "user", content: "question" },
-    });
-    const manager = openMarker(marker, scope.sessionKey, dir);
-    expect(manager.buildSessionContext().messages).toMatchObject([
-      { content: "question", role: "user" },
-    ]);
-    const assistantId = manager.appendMessage(buildAssistantMessage("answer"));
-    const thinkingId = await manager.appendThinkingLevelChange("high");
-    const modelId = await manager.appendModelChange("openai", "gpt-5.5");
-    const compactionId = manager.appendCompaction("summary", "assistant-1", 42);
-    const resetId = manager.appendResetBoundary("new", assistantId);
-    expect(manager.getBoundaryCount()).toBe(2);
-    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(loadTranscriptEvents(scope)).resolves.toMatchObject([
-      { type: "session" },
-      { type: "message", message: { content: "question", role: "user" } },
-      {
-        type: "message",
-        id: assistantId,
-        parentId: expect.any(String),
-        message: { content: [{ type: "text", text: "answer" }], role: "assistant" },
-      },
-      { type: "thinking_level_change", id: thinkingId, thinkingLevel: "high" },
-      { type: "model_change", id: modelId, modelId: "gpt-5.5", provider: "openai" },
-      { type: "compaction", id: compactionId, firstKeptEntryId: "assistant-1", summary: "summary" },
-      { type: "reset", id: resetId, firstKeptEntryId: assistantId, reason: "new" },
-    ]);
-    expect(openMarker(marker, scope.sessionKey, dir).getEntries()).toEqual(manager.getEntries());
   });
 
   it("does not overwrite a rebound session row when the first append seeds its header", async () => {
@@ -314,16 +271,6 @@ describe("SessionManager.open", () => {
       kind: "reset",
       reason: "generation_mismatch",
     });
-  });
-
-  it("reads the latest normalized name even off the selected branch", () => {
-    const manager = SessionManager.inMemory();
-    expect(manager.getSessionName()).toBeUndefined();
-    const root = manager.appendMessage({ role: "user", content: "root", timestamp: 1 });
-    manager.appendSessionInfo("old name");
-    manager.appendSessionInfo("  first\nsecond\r\nthird  ");
-    manager.branch(root);
-    expect(manager.getSessionName()).toBe("first second third");
   });
 
   it("rejects persistence after the session target rebounds", async () => {

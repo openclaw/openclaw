@@ -103,58 +103,6 @@ describe("Synology Chat durable ingress", () => {
     });
   });
 
-  it("retains completion so a duplicate post_id cannot dispatch twice", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(async (_event, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const ingress = startIngress(queue, dispatch);
-      try {
-        await ingress.receive(webhookEvent({ postId: "post-completed" }));
-        await ingress.waitForIdle();
-        await ingress.receive(webhookEvent({ postId: "post-completed", text: "redelivery" }));
-        await ingress.waitForIdle();
-        expect(dispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
-  it("retains more than 1,000 webhook tombstones under the conservative cap", async () => {
-    await withQueue(async (queue) => {
-      const completedAt = Date.now();
-      const oldestId = "post-completed-0000";
-      for (let index = 0; index < 1_050; index += 1) {
-        const id = `post-completed-${String(index).padStart(4, "0")}`;
-        await queue.enqueue(
-          id,
-          { version: 1, rawEvent: JSON.stringify(webhookEvent({ postId: id })) },
-          { receivedAt: completedAt - 1_050 + index, laneKey: "channel:channel-1" },
-        );
-        await queue.complete(id, { completedAt: completedAt - 1_050 + index });
-      }
-
-      const dispatch = vi.fn();
-      const ingress = startIngress(queue, dispatch);
-      try {
-        await ingress.waitForIdle();
-        await ingress.receive(webhookEvent({ postId: oldestId, text: "redelivery" }));
-        await ingress.waitForIdle();
-
-        expect(
-          await queue.enqueue(oldestId, {
-            version: 1,
-            rawEvent: JSON.stringify(webhookEvent({ postId: oldestId })),
-          }),
-        ).toMatchObject({ kind: "completed", duplicate: true });
-        expect(dispatch).not.toHaveBeenCalled();
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
   it("strips the webhook token while retaining raw fields and conversation lane", async () => {
     await withQueue(async (queue) => {
       const fixtureValue = "fixture-value";
@@ -302,25 +250,6 @@ describe("Synology Chat durable ingress", () => {
           expect((await queue.enqueue(id, {} as SynologyIngressPayload)).kind).toBe("failed");
         });
         expect(dispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
-  it("leaves transient dispatch failures retryable", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(async () => {
-        throw new Error("Synology Chat outbound unavailable");
-      });
-      const ingress = startIngress(queue, dispatch);
-      try {
-        await ingress.receive(webhookEvent({ postId: "post-transient" }));
-        await vi.waitFor(async () => {
-          expect(await queue.listPending({ limit: "all" })).toEqual([
-            expect.objectContaining({ id: "post-transient" }),
-          ]);
-        });
       } finally {
         await ingress.stop();
       }

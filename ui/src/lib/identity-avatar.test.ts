@@ -89,9 +89,8 @@ describe("resolveAvatar gateway origin trust", () => {
           url: `${uiOrigin}${resourceBasePath}/api/users/p1/avatar?v=2`,
         });
       }
-      expect(resolveAvatar({ id: "p1", identity: { type: "profile", id: "p1" } })).toEqual({
-        kind: "profile",
-        url: `${uiOrigin}${resourceBasePath}/api/users/p1/avatar`,
+      expect(resolveAvatar({ id: "p1", identity: { type: "profile", id: "p1" } })).toMatchObject({
+        kind: "initials",
       });
       for (const profileAvatarUrl of [
         `${basePath}/avatar/research?v=3`,
@@ -228,17 +227,14 @@ describe("resolveAvatar profile-id senders", () => {
     },
   );
 
-  it("resolves the derived route against the gateway origin", () => {
+  it("keeps profiles without an advertised avatar on initials", () => {
     setAvatarGatewayOrigin("wss://gw.example.com/ws");
     expect(
       resolveAvatar({
         id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
         identity: { type: "profile", id: "c3e32452-0467-47e5-aafa-233cd5dae29f" },
       }),
-    ).toEqual({
-      kind: "profile",
-      url: "https://gw.example.com/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar",
-    });
+    ).toMatchObject({ kind: "initials" });
   });
 
   it.each([undefined, "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar"])(
@@ -260,10 +256,10 @@ describe("resolveAvatar profile-id senders", () => {
         identity: { type: "profile", id: "person" },
         profileAvatarUrl: "/avatar/research",
       }),
-    ).toEqual({ kind: "profile", url: "/api/users/person/avatar" });
+    ).toMatchObject({ kind: "initials" });
   });
 
-  it("prefers an explicit trusted route over the derived one", () => {
+  it("uses an explicit trusted revisioned route", () => {
     expect(
       resolveAvatar({
         id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
@@ -331,9 +327,13 @@ describe("authenticated profile avatar cache", () => {
       vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:profile-uploaded");
 
       const missing = resolveAvatarImageUrl("/api/users/profile-ada/avatar");
+      expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar")).toBe(missing);
       await expect(missing).resolves.toBeNull();
       clock.mockReturnValue(59_999);
-      expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar")).toBe(missing);
+      expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar")).toBeNull();
+      expect(
+        resolveAvatarImageUrl("/api/users/profile-ada/avatar", "/api/users/profile-ada/avatar"),
+      ).toBeNull();
       expect(fetchAvatar).toHaveBeenCalledOnce();
 
       clock.mockReturnValue(60_000);
@@ -420,7 +420,7 @@ describe("authenticated profile avatar cache", () => {
       Promise.resolve(resolveAvatarImageUrl(`/api/users/profile-${index}/avatar`)),
     );
     expect(await Promise.all(pending)).toEqual(Array.from({ length: 130 }, () => null));
-    expect(resolveAvatarImageUrl("/api/users/profile-129/avatar")).toBe(pending[129]);
+    expect(resolveAvatarImageUrl("/api/users/profile-129/avatar")).toBeNull();
     expect(fetchAvatar).toHaveBeenCalledTimes(130);
 
     await expect(resolveAvatarImageUrl("/api/users/profile-0/avatar")).resolves.toBeNull();

@@ -449,10 +449,56 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
   });
 
   it.for([
-    ["accepts the March listening marker", "listening on", true, "legacy-ready-log-ok", 0],
-    ["rejects a closed legacy ready listener", "ready", false, "legacy-ready-log-ok", 1],
-    ["rejects the March marker in strict mode", "listening on", true, "strict", 1],
-  ] as const)("%s", async ([_label, marker, listening, mode, expectedStatus], { signal }) => {
+    [
+      "accepts the current listener marker",
+      "http server listening",
+      true,
+      "strict",
+      200,
+      '{"ready":true}',
+      0,
+    ],
+    [
+      "accepts the March listening marker",
+      "listening on",
+      true,
+      "legacy-ready-log-ok",
+      503,
+      "{}",
+      0,
+    ],
+    ["rejects a closed legacy ready listener", "ready", false, "legacy-ready-log-ok", 503, "{}", 1],
+    ["rejects the March marker in strict mode", "listening on", true, "strict", 200, "{}", 1],
+    [
+      "accepts modern readiness without a ready marker",
+      "starting",
+      true,
+      "strict",
+      200,
+      '{"ready":true}',
+      0,
+    ],
+    ["rejects a generic response after a ready marker", "ready", true, "strict", 200, "{}", 1],
+    [
+      "rejects unready JSON despite HTTP success",
+      "starting",
+      true,
+      "strict",
+      200,
+      '{"ready":false}',
+      1,
+    ],
+    [
+      "rejects ready JSON despite HTTP failure",
+      "starting",
+      true,
+      "strict",
+      503,
+      '{"ready":true}',
+      1,
+    ],
+  ] as const)("%s", async (row, { signal }) => {
+    const [_label, marker, listening, mode, statusCode, body, expectedStatus] = row;
     const tempDir = tempDirs.make("openclaw-e2e-readyz-legacy-");
     const logPath = path.join(tempDir, "gateway.log");
     const portPath = path.join(tempDir, "port.txt");
@@ -463,11 +509,10 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       [
         "const fs = require('node:fs');",
         "const http = require('node:http');",
-        "const [logPath, portPath, marker, listening, mode] = process.argv.slice(2);",
+        "const [logPath, portPath, marker, listening, statusCode, body] = process.argv.slice(2);",
         "const server = http.createServer((_request, response) => {",
-        // A working endpoint must not let strict mode accept the historical marker.
-        "  response.writeHead(mode === 'strict' ? 200 : 503);",
-        "  response.end('{}');",
+        "  response.writeHead(Number(statusCode));",
+        "  response.end(body);",
         "});",
         "server.listen(0, '127.0.0.1', () => {",
         "  const port = server.address().port;",
@@ -488,12 +533,14 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       portPath,
       marker,
       String(listening),
-      mode,
+      String(statusCode),
+      body,
     ]);
     try {
       await withinTest(fixture.ready, signal);
       const result = runBashWithHelper(
         [
+          "sleep() { :; }",
           `port="$(cat ${shellQuote(portPath)})"`,
           `if openclaw_e2e_wait_gateway_ready "${fixture.child.pid}" ${shellQuote(logPath)} 2 "$port" ${shellQuote(mode)}; then`,
           `  printf '0' >${shellQuote(resultPath)}`,

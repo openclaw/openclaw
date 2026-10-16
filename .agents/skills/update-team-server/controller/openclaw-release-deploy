@@ -33,13 +33,13 @@ root_uid="${OPENCLAW_TEAM_ROOT_UID:-0}"
 root_gid="${OPENCLAW_TEAM_ROOT_GID:-0}"
 ancestor_boundary="${OPENCLAW_TEAM_ANCESTOR_BOUNDARY:-/}"
 fetch_budget="${OPENCLAW_TEAM_FETCH_BUDGET:-180}"
-# Cloning the multi-GB mirror is single-threaded CPU work and starves under host load.
+# Candidate checkout has its own budget, independent of the upstream fetch.
 clone_budget="${OPENCLAW_TEAM_CLONE_BUDGET:-600}"
 # Mirror operations must never run a foreground auto-gc inside a bounded step.
 mirror_git_config=(-c gc.auto=0 -c maintenance.auto=false)
 build_budget="${OPENCLAW_TEAM_BUILD_BUDGET:-2400}"
 verification_budget="${OPENCLAW_TEAM_VERIFICATION_BUDGET:-600}"
-drain_budget="${OPENCLAW_TEAM_DRAIN_BUDGET:-600}"
+drain_budget="${OPENCLAW_TEAM_DRAIN_BUDGET:-30}"
 drain_poll_interval="${OPENCLAW_TEAM_DRAIN_POLL_INTERVAL:-5}"
 official_origin=https://github.com/openclaw/openclaw.git
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -57,9 +57,7 @@ bus_address="unix:path=$runtime_dir/bus"
 mode=deploy
 declare +x allow_cpu_degraded=0
 interrupt_after_drain=0
-skip_migration_rehearsal=0
 offline_doctor_repair=0
-accept_partial_nocow=0
 capture_startup_profile=0
 arm_steady_profile=0
 profile_keep_arm=0
@@ -79,7 +77,6 @@ frozen_predecessor_pid=""
 frozen_predecessor_start=""
 frozen_process_instance=""
 frozen_release_binding=""
-rehearsal_snapshot_label=""
 handoff_peer=""
 handoff_target_sha=""
 handoff_stop_only=0
@@ -90,10 +87,8 @@ rollback_armed=0
 predecessor_stopped=0
 restart_failed=0
 held_suspension=""
-suspension_request=""
 suspension_cleanup_only=0
 suspension_handoff_started=0
-suspension_prearm_renewal_attempted=0
 suspension_expiry=""
 suspension_state=""
 suspension_active_count=0
@@ -105,12 +100,11 @@ suspension_generation=""
 suspension_instance=""
 suspension_blockers=""
 suspension_write_custody=unknown
-custody_wait_budget=60
+custody_wait_budget=5
 # explicit operator waiver for terminal-persistence holders that never settle (dead runs).
 waive_terminal_persistence=0
 terminal_persistence_waiver_armed=0
 custody_wait_interval=2
-last_suspension_prepare=0
 previous_release=""
 previous_info=""
 candidate_release=""
@@ -132,7 +126,6 @@ operator_expected_pid=""
 operator_expected_generation=""
 operator_receipt_open=0
 operator_restart_verified=0
-abandon_rehearsal_sha=""
 start_stopped_current=0
 stopped_expected_boot=""
 stopped_expected_invocation=""
@@ -141,10 +134,8 @@ stopped_start_attempted=0
 stopped_timer_attempted=0
 stopped_verified=0
 stopped_receipt_open=0
-migration_evidence=""
-migration_release_proof=""
+native_update_root=""
 migration_guard=""
-migration_recovered=0
 worker_config_recovered=0
 worker_config_token=""
 worker_expected_config_hash=""
@@ -414,7 +405,8 @@ run_gateway_node() {
 	fi
 	if ((drain_deadline > 0)); then
 		remaining=$((drain_deadline - SECONDS))
-		((remaining > 0)) || return 1
+		# Expiry before dispatch is the same budget exhaustion as bounded's timeout.
+		((remaining > 0)) || return 124
 		if ((remaining < rpc_budget)); then
 			rpc_budget="$remaining"
 		fi
@@ -452,6 +444,14 @@ try {
     process.stderr.write(`MARKER_ADMISSION_PENDING agent=${String(error.details.agentId)}\n`);
     process.stdout.write("RETRYABLE_ADMISSION_PENDING");
     process.exitCode = 76;
+  } else if (method === "agent" && isGatewayTransportError(error) && error.kind === "timeout") {
+    process.stderr.write("MARKER_DISPATCH_TIMEOUT reconciliation=same-idempotency-key\n");
+    process.stdout.write("RETRYABLE_DISPATCH_TIMEOUT");
+    process.exitCode = 77;
+  } else if (method === "system.info" && isGatewayTransportError(error) &&
+    (error.kind === "timeout" || [undefined, 1006, 1012].includes(error.code))) {
+    process.stdout.write("RETRYABLE_READINESS_TRANSPORT");
+    process.exitCode = 78;
   } else {
     // Only a read of an acknowledged run may recover transport uncertainty.
     if (method !== "agent.wait" || !isGatewayTransportError(error) ||
@@ -606,7 +606,8 @@ assert_single_listener() {
 	LISTENER_SNAPSHOT="$listing" EXPECTED_PID="$expected_pid" EXPECTED_PORT="$gateway_port" \
 		"$node_bin" -e '
 const lines = (process.env.LISTENER_SNAPSHOT ?? "").split("\n").filter(Boolean);
-if (lines.length < 1 || lines.length > 2) process.exit(2);
+if (!lines.length) process.exit(75);
+if (lines.length > 2) process.exit(2);
 const families = new Set();
 for (const line of lines) {
   const address = line.match(new RegExp("(?:^|\\s)(127\\.0\\.0\\.1|\\[::1\\]):" + process.env.EXPECTED_PORT + "(?:\\s|$)"))?.[1];
@@ -754,41 +755,23 @@ retain_suspension_cleanup_offer() {
 
 request_suspension() {
 	local release="$1" request="$2" response parsed offered_lease offered_expiry _terminal_blocked
-	local failure_code failure_category failure_stage=initial
-	local expected_id="${held_suspension:-}" prior_expiry="${suspension_expiry:-}"
-	((suspension_cleanup_only == 0)) || { fail 'suspension offer is cleanup-only, not continued authority'; return 1; }
-	((suspension_handoff_started == 0)) || { fail 'cannot renew an attempted suspension handoff'; return 1; }
+	local failure_code failure_category
+	[[ -z "$held_suspension" ]] || { fail 'cannot replace an owned suspension'; return 1; }
 	if response="$(run_gateway "$release" gateway call gateway.suspend.prepare \
 		--params "$request" --json --timeout 30000)"; then
 		:
 	else
 		failure_code=$?
-		[[ -z "$expected_id" ]] || failure_stage=renewal
-		if [[ -n "$expected_id" ]]; then
-			suspension_cleanup_only=1
-			retain_suspension_cleanup_offer "$response"
-			printf 'SUSPENSION_RENEWAL_UNCERTAIN expected=%s cleanup=exact-observed-only\n' "$expected_id" >&2
-		fi
 		failure_category="$(proof_json suspension-prepare-failure "$response" "$failure_code" 2>/dev/null)" || failure_category=unclassified
-		printf 'SUSPENSION_PREPARE_FAILED stage=%s exit=%s category=%s\n' \
-			"$failure_stage" "$failure_code" "$failure_category" >&2
-		printf 'DEFERRED renewable preserve-only drain preparation unavailable or conflicting\n'
+		printf 'SUSPENSION_PREPARE_FAILED stage=initial exit=%s category=%s\n' \
+			"$failure_code" "$failure_category" >&2
+		printf 'DEFERRED preserve-only drain preparation unavailable or conflicting\n'
 		return 75
 	fi
-	last_suspension_prepare="$SECONDS"
-	[[ -z "$expected_id" ]] || suspension_cleanup_only=1
-	# An offered lease remains cleanup-only until the complete response and any
-	# renewal identity/expiry binding pass. A raced replacement never grants stop.
+	# An offered lease remains cleanup-only until its complete response passes.
 	retain_suspension_cleanup_offer "$response"
-	if [[ -n "$expected_id" ]]; then
-		if ! parsed="$(proof_json suspension-prepare "$response" "$expected_id" "$prior_expiry")"; then
-			printf 'SUSPENSION_RENEWAL_UNCERTAIN expected=%s cleanup=exact-observed-only\n' "$expected_id" >&2
-			printf 'DEFERRED renewable preserve-only drain lease changed, regressed, or expired blockers=%s\n' \
-				"$suspension_blockers"
-			return 75
-		fi
-	elif ! parsed="$(proof_json suspension-prepare "$response")"; then
-		printf 'DEFERRED renewable preserve-only drain lease malformed or expired\n'
+	if ! parsed="$(proof_json suspension-prepare "$response")"; then
+		printf 'DEFERRED preserve-only drain lease malformed or expired\n'
 		return 75
 	fi
 	read -r suspension_state offered_lease offered_expiry suspension_active_count suspension_retry_after_ms _terminal_blocked suspension_blockers suspension_write_custody <<<"$parsed"
@@ -803,16 +786,19 @@ request_suspension() {
 }
 
 poll_suspension() {
-	local release="$1" response params parsed observed_expiry _terminal_blocked rpc_exit
+	local release="$1" response params parsed observed_expiry _terminal_blocked rpc_exit category
+	local timeout_ms=5000 rpc_budget=5
 	params="$(proof suspension-lease-params "$held_suspension")" || {
 		printf 'SUSPENSION_POLL_FAILED stage=params method=gateway.suspend.status exit=%s\n' "$?" >&2
 		return 1
 	}
-	response="$(run_gateway "$release" gateway call gateway.suspend.status \
-		--params "$params" --json --timeout 30000)" || {
+	response="$(OPENCLAW_TEAM_RPC_BUDGET="$rpc_budget" run_gateway "$release" gateway call gateway.suspend.status \
+		--params "$params" --json --timeout "$timeout_ms")" || {
 		rpc_exit=$?
+		category="$(proof_json suspension-poll-failure "$response" "$rpc_exit" 2>/dev/null)" || category=fatal
 		printf 'SUSPENSION_POLL_FAILED stage=rpc method=gateway.suspend.status exit=%s\n' "$rpc_exit" >&2
-		return "$rpc_exit"
+		[[ "$category" != retry ]] || return 76
+		return 1
 	}
 	parsed="$(proof_json suspension-status "$response" "$held_suspension" "$suspension_expiry")" || {
 		printf 'SUSPENSION_POLL_FAILED stage=proof method=gateway.suspend.status exit=%s\n' "$?" >&2
@@ -827,10 +813,14 @@ poll_suspension() {
 
 prepare_suspension() {
 	local release="$1" request request_id now_ms remaining_ms
-	local remaining_budget sleep_seconds renewal_wait retry_seconds poll_exit
+	local remaining_budget sleep_seconds retry_seconds poll_exit
 	if [[ ! "$drain_budget" =~ ^[1-9][0-9]*$ ]] || ((drain_budget > 3600)); then
 		fail 'preserve-only drain budget must be between 1 and 3600 seconds'
 		return 1
+	fi
+	if ((drain_budget > 30)); then
+		printf 'DRAIN_BUDGET_CAPPED requested=%s effective=30\n' "$drain_budget" >&2
+		drain_budget=30
 	fi
 	if [[ ! "$drain_poll_interval" =~ ^[1-9][0-9]*$ ]] || ((drain_poll_interval > 300)); then
 		fail 'preserve-only drain status poll interval must be between 1 and 300 seconds'
@@ -838,15 +828,14 @@ prepare_suspension() {
 	fi
 	suspension_release="$release"
 	((suspension_handoff_started == 0)) || [[ -z "$held_suspension" ]] || {
-		fail 'cannot prepare or renew an attempted suspension handoff'; return 1;
+		fail 'cannot prepare during an attempted suspension handoff'; return 1;
 	}
 	if [[ -z "$held_suspension" ]]; then
-		suspension_handoff_started=0; suspension_prearm_renewal_attempted=0; suspension_cleanup_only=0
+		suspension_handoff_started=0; suspension_cleanup_only=0
 	fi
 	drain_budget_elapsed=0
 	request_id="team-release-$$-$(date -u +%Y%m%dT%H%M%SZ)"
 	request="$(proof suspension-prepare-params "$request_id")" || return 1
-	suspension_request="$request"
 	drain_deadline=$((SECONDS + drain_budget))
 	if ! request_suspension "$release" "$request"; then
 		return 75
@@ -867,34 +856,14 @@ prepare_suspension() {
 		now_ms="$(proof suspension-now)" || return 1
 		remaining_ms=$((suspension_expiry - now_ms))
 		if ((remaining_ms <= 5000)); then
-			printf 'DEFERRED preserve-only Gateway drain lease expired before renewal blockers=%s\n' \
+			printf 'DEFERRED preserve-only Gateway drain lease expired before cutover blockers=%s\n' \
 				"$suspension_blockers"
 			return 75
-		fi
-		if ((remaining_ms <= 30000)); then
-			renewal_wait=$((3 - (SECONDS - last_suspension_prepare)))
-			if ((renewal_wait > 0)); then
-				if ((renewal_wait >= remaining_budget || remaining_ms <= (renewal_wait + 5) * 1000)); then
-					printf 'DEFERRED preserve-only Gateway drain cannot safely renew before its deadline blockers=%s\n' \
-						"$suspension_blockers"
-					return 75
-				fi
-				sleep "$renewal_wait"
-				continue
-			fi
-			if ! request_suspension "$release" "$request"; then
-				return 75
-			fi
-			continue
 		fi
 		retry_seconds=$(((suspension_retry_after_ms + 999) / 1000))
 		sleep_seconds="$drain_poll_interval"
 		if ((retry_seconds > sleep_seconds)); then
 			sleep_seconds="$retry_seconds"
-		fi
-		renewal_wait=$(((remaining_ms - 30000 + 999) / 1000))
-		if ((renewal_wait < sleep_seconds)); then
-			sleep_seconds="$renewal_wait"
 		fi
 		if ((sleep_seconds > remaining_budget)); then
 			sleep_seconds="$remaining_budget"
@@ -905,29 +874,35 @@ prepare_suspension() {
 		if ((SECONDS >= drain_deadline)); then
 			continue
 		fi
-		if poll_suspension "$release"; then
-			:
-		else
-			poll_exit=$?
-			# A deadline-owned timeout enters the same fresh lease/generation check as
-			# expiry between polls. Other failed observations never authorize interruption.
-			if ((poll_exit == 124 && SECONDS >= drain_deadline)); then continue; fi
-			if ((SECONDS >= drain_deadline)); then
-				printf 'DEFERRED preserve-only Gateway drain exceeded its %s-second budget blockers=%s\n' \
-					"$drain_budget" "$suspension_blockers"
-			else
+		retry_seconds=1
+		while true; do
+			if poll_suspension "$release"; then break; else poll_exit=$?; fi
+			if ((poll_exit != 76)); then
 				printf 'DEFERRED preserve-only Gateway drain status changed, expired, or became unavailable blockers=%s\n' \
 					"$suspension_blockers"
+				return 75
 			fi
-			return 75
-		fi
+			# Failed reads grant no authority. Deadline expiry still needs fresh lease,
+			# generation, and write-custody proof before any authorized interruption.
+			remaining_budget=$((drain_deadline - SECONDS))
+			((remaining_budget > 0)) || break
+			sleep_seconds="$retry_seconds"
+			if ((sleep_seconds > remaining_budget)); then sleep_seconds="$remaining_budget"; fi
+			printf 'SUSPENSION_POLL_RETRY backoffSeconds=%s remainingSeconds=%s\n' "$sleep_seconds" "$remaining_budget" >&2
+			sleep "$sleep_seconds"
+			((SECONDS < drain_deadline)) || break
+			now_ms="$(proof suspension-now)" || return 1
+			# Leave time for exact-lease cleanup; the drain lease cannot be renewed.
+			((suspension_expiry - now_ms > 5000)) || break
+			if ((retry_seconds < 4)); then retry_seconds=$((retry_seconds * 2)); fi
+		done
 	done
-	drain_deadline=0
+	custody_wait_deadline=$((drain_deadline + custody_wait_budget))
+	drain_deadline="$custody_wait_deadline"
 	if [[ "$suspension_state" != READY ]]; then
 		# Write custody is transient (a protected final chat write in flight), so a single
 		# refusal on custody alone wastes the whole prepared release. Re-poll for a bounded
 		# window while the only refusal is held custody; every other refusal stays final.
-		custody_wait_deadline=$((SECONDS + custody_wait_budget))
 		until check_suspension; do
 			if [[ "$suspension_state" == DRAINING && "$suspension_write_custody" == held ]] &&
 				{ [[ ",$suspension_blockers," != *,terminal-persistence:* ]] || ((${waive_terminal_persistence:-0})); } &&
@@ -955,6 +930,7 @@ prepare_suspension() {
 			return 75
 		done
 	fi
+	drain_deadline=0
 	if [[ "$suspension_state" == DRAINING ]]; then
 		printf 'INTERRUPTING authorized after %s-second graceful drain activeCount=%s blockers=%s custody=%s\n' \
 			"$drain_budget" "$suspension_active_count" "$suspension_blockers" "$suspension_write_custody"
@@ -999,24 +975,6 @@ arm_suspension_handoff() {
 	# Arming does not renew the lease. A refused or uncertain arm is resumed by the existing exit owner.
 	assert_protected_identity && assert_policy && check_suspension || return 1
 	printf 'HANDOFF_ARMED lease=%s expiresAtMs=%s pid=%s\n' "$held_suspension" "$suspension_expiry" "$suspension_pid"
-}
-
-renew_suspension_before_handoff() {
-	local now_ms
-	[[ -n "$held_suspension" && -n "$suspension_request" ]] &&
-		((suspension_handoff_started == 0 && suspension_prearm_renewal_attempted == 0)) || {
-		fail 'pre-arm renewal requires the original unarmed suspension request'; return 1;
-	}
-	recheck_generation "$suspension_scope" "$suspension_pid" "$suspension_generation" || return 1
-	now_ms="$(proof suspension-now)" || return 1
-	((suspension_expiry > now_ms)) || { fail 'pre-arm renewal refuses an expired original suspension'; return 1; }
-	suspension_prearm_renewal_attempted=1
-	request_suspension "$suspension_release" "$suspension_request" || return 1
-	if ! recheck_generation "$suspension_scope" "$suspension_pid" "$suspension_generation"; then
-		suspension_cleanup_only=1
-		printf 'SUSPENSION_RENEWAL_UNCERTAIN stage=generation lease=%s expiresAtMs=%s cleanup=exact-observed-only\n' "$held_suspension" "$suspension_expiry" >&2
-		return 1
-	fi
 }
 
 resume_suspension() {
@@ -1131,9 +1089,10 @@ read_probe() {
 	local endpoint="$1" remaining response
 	remaining=$((verification_deadline - SECONDS))
 	((remaining > 0)) || return 1
+	if [[ -n "${2:-}" ]] && ((remaining > $2)); then remaining="$2"; fi
 	response="$(bounded "$remaining" "$curl_bin" --silent --show-error \
 		--connect-timeout "$remaining" --max-time "$remaining" --write-out $'\n%{http_code}' \
-		"http://127.0.0.1:$gateway_port/$endpoint")" || return 1
+		"http://127.0.0.1:$gateway_port/$endpoint")" || return "$?"
 	[[ "$response" == *$'\n'* ]] || return 1
 	probe_body="${response%$'\n'*}"
 	probe_status="${response##*$'\n'}"
@@ -1165,13 +1124,21 @@ verification_step() {
 verify_convergence() {
 	local release="$1" expected_info="$2" scope="${3:-system}" expected_build channels gateway_json
 	local observed_process health_json health_status startup_json startup_status ready_json ready_status
-	local convergence_state channel_state timeout_ms verification_result_started
+	local convergence_state channel_state timeout_ms verification_result_started listener_exit
 	local -a probe_args channel_args
 	cpu_degraded_waived=0
 	profile_convergence=""
 	expected_build="$(INFO_JSON="$expected_info" verification_step convergence.expected-build "$node_bin" -e 'process.stdout.write(JSON.parse(process.env.INFO_JSON).buildId)')" || return 1
 	verification_step convergence.release proof validate-release "$release" "$(basename "$release")" "$root_uid" sealed >/dev/null || return 1
-	verification_step convergence.generation capture_generation "$scope" || return 1
+	verification_step convergence.generation capture_service_generation "$scope" || return 1
+	if assert_single_listener "$service_pid"; then :; else
+		listener_exit=$?
+		# An empty socket table is normal while this bound generation starts.
+		((listener_exit == 75)) && return 75
+		verification_failure convergence.generation "$listener_exit" "$SECONDS" invalid-listener
+		fail 'Gateway does not own one exact loopback listener'
+		return 1
+	fi
 	verified_pid="$service_pid"
 	verified_generation="$service_generation"
 	if [[ "$scope" == system ]]; then
@@ -1228,6 +1195,10 @@ process.stdout.write(processInfo.processInstanceId);
 		;;
 	*) verification_failure convergence.channel-result 0 "$verification_result_started" unexpected-result; return 1 ;;
 	esac
+	timeout_ms=$(((verification_deadline - SECONDS) * 1000))
+	verification_step convergence.sessions-budget test "$timeout_ms" -gt 0 || return 1
+	verification_step convergence.sessions-list run_gateway "$release" gateway call sessions.list \
+		--params '{"limit":1}' --json --timeout "$timeout_ms" >/dev/null || return 1
 	verification_step convergence.protected-state assert_protected_identity || return 1
 	verification_step convergence.policy assert_policy || return 1
 	verification_step convergence.scheduler assert_scheduler_owner "$release" || return 1
@@ -1240,9 +1211,56 @@ process.stdout.write(processInfo.processInstanceId);
 	return 0
 }
 
+wait_for_marker_readiness() {
+	local release="$1" scope="$2" startup_json startup_status readiness_state
+	local remaining timeout_ms observed_process pause probe_exit
+	while :; do
+		verification_step marker.readiness-generation recheck_generation "$scope" "$verified_pid" "$verified_generation" || return 1
+		remaining=$((verification_deadline - SECONDS))
+		verification_step marker.readiness-budget test "$remaining" -gt 0 || return 1
+		readiness_state=RECOVERING
+		probe_exit=0
+		verification_step marker.startupz read_probe startupz 10 || probe_exit=$?
+		if ((probe_exit == 0)); then
+			startup_json="$probe_body"; startup_status="$probe_status"
+			verification_step marker.readyz read_probe readyz 10 || probe_exit=$?
+			if ((probe_exit == 0)); then
+				readiness_state="$(verification_step marker.readiness proof marker-readiness "$startup_json" "$startup_status" "$probe_body" "$probe_status")" || return 1
+			fi
+		fi
+		# curl connection/timeout and the outer process deadline report no snapshot.
+		if ((probe_exit != 0)); then
+			[[ "$probe_exit" == 7 || "$probe_exit" == 28 || "$probe_exit" == 124 ]] || return "$probe_exit"
+		fi
+		case "$readiness_state" in
+		READY)
+			timeout_ms=$(((verification_deadline - SECONDS) * 1000)); ((timeout_ms <= 10000)) || timeout_ms=10000
+			verification_step marker.readiness-rpc-budget test "$timeout_ms" -gt 0 || return 1
+			probe_exit=0
+			observed_process="$(verification_step marker.readiness-rpc run_marker_rpc "$release" system.info '{}' "$timeout_ms")" || probe_exit=$?
+			if ((probe_exit == 0)); then
+				PROCESS_JSON="$observed_process" EXPECTED_PID="$verified_pid" EXPECTED_INSTANCE="$verified_instance" verification_step marker.readiness-process "$node_bin" -e '
+const p=JSON.parse(process.env.PROCESS_JSON);
+if(p.pid!==Number(process.env.EXPECTED_PID)||p.processInstanceId!==process.env.EXPECTED_INSTANCE)process.exit(2);
+' || return 1
+				verification_step marker.readiness-generation-after recheck_generation "$scope" "$verified_pid" "$verified_generation" || return 1
+				return 0
+			fi
+			[[ "$probe_exit" == 78 && "$observed_process" == RETRYABLE_READINESS_TRANSPORT ]] || return "$probe_exit"
+			;;
+		RECOVERING) ;;
+		*) return 1 ;;
+		esac
+		remaining=$((verification_deadline - SECONDS))
+		verification_step marker.readiness-pause-budget test "$remaining" -gt 0 || return 1
+		pause=3; ((pause <= remaining)) || pause="$remaining"
+		verification_step marker.readiness-pause bounded "$remaining" sleep "$pause" || return 1
+	done
+}
+
 verify_marker() {
 	local release="$1" scope="${2:-system}"
-	local marker session approvals_before approvals_after reply expected_model payload run_id terminal_state
+	local marker session approvals_before approvals_after reply payload run_id terminal_state marker_policy
 	local observed_process timeout_ms remaining observation_pause observation_pause_ms observation_exit
 	# Logical entries may retire while their exact transcript generation stays preserved.
 	printf '%s' "$session_witness" | verification_step marker.session-preservation proof session-preservation-verify "$release" "$release" "$state_database" >/dev/null || return 1
@@ -1253,10 +1271,18 @@ verify_marker() {
 		fail 'verification session already has approval history'
 		return 1
 	}
+	marker_policy="$(verification_step marker.model-policy run_gateway_node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [release, raw] = process.argv.slice(1), policy = JSON.parse(raw);
+const { splitTrailingAuthProfile } = await import(pathToFileURL(`${release}/dist/plugin-sdk/model-ref-parse.js`).href);
+process.stdout.write(JSON.stringify({model:splitTrailingAuthProfile(policy.model).model,
+  fallbacks:policy.fallbacks.map(value=>splitTrailingAuthProfile(value).model)}));
+' "$release" "$policy_identity")" || return 1
+	wait_for_marker_readiness "$release" "$scope" || return 1
 	remaining=$((verification_deadline - SECONDS))
 	verification_step marker.run-budget test "$remaining" -gt 0 || return 1
 	# Native ACK plus same-run observations keep proof independent of one long-lived
-	# response socket. Never redispatch a run when acknowledgment or observation fails.
+	# response socket; the native idempotency key also reconciles a lost ACK.
 	payload="$(MARKER="$marker" SESSION="$session" REMAINING="$remaining" "$node_bin" -e '
 const session=process.env.SESSION,agentId=JSON.parse(process.env.OPENCLAW_TEAM_OPERATOR_PROFILE).modelAgent;
 process.stdout.write(JSON.stringify({agentId,sessionId:session,
@@ -1264,29 +1290,33 @@ process.stdout.write(JSON.stringify({agentId,sessionId:session,
   message:`Output only this exact string, byte-for-byte, with no prefix or suffix: ${process.env.MARKER}`,
   timeout:Number(process.env.REMAINING),idempotencyKey:require("node:crypto").randomUUID()}));
 ')" || return 1
-	# Readiness probes can pass while startup still inspects an agent store (the listener
-	# serves before store validation). That refusal is pre-dispatch, so the identical
-	# payload is re-sent until the agent admits it or the verification budget ends.
+	# Native idempotency owns uncertain dispatch: reconcile only with the identical
+	# payload and live readiness, never mint another run or renew this deadline.
 	while :; do
 		timeout_ms=$((remaining * 1000)); ((timeout_ms <= 60000)) || timeout_ms=60000
 		observation_exit=0
 		reply="$(verification_step marker.run run_marker_rpc "$release" agent "$payload" "$timeout_ms")" || observation_exit=$?
 		((observation_exit == 0)) && break
-		[[ "$observation_exit" == 76 && "$reply" == RETRYABLE_ADMISSION_PENDING ]] || return "$observation_exit"
+		{ [[ "$observation_exit" == 76 && "$reply" == RETRYABLE_ADMISSION_PENDING ]] ||
+			[[ "$observation_exit" == 77 && "$reply" == RETRYABLE_DISPATCH_TIMEOUT ]]; } || return "$observation_exit"
 		verification_step marker.admission-generation recheck_generation "$scope" "$verified_pid" "$verified_generation" || return 1
-		printf 'MARKER_ADMISSION_RETRY same-payload=required same-generation=required\n' >&2
+		printf 'MARKER_ADMISSION_RETRY same-payload=required same-generation=required exit=%s\n' "$observation_exit" >&2
 		remaining=$((verification_deadline - SECONDS))
 		verification_step marker.admission-budget test "$remaining" -gt 3 || return 1
 		verification_step marker.admission-pause bounded "$remaining" sleep 3 || return 1
+		wait_for_marker_readiness "$release" "$scope" || return 1
 		remaining=$((verification_deadline - SECONDS))
 	done
-	run_id="$(REPLY_JSON="$reply" SESSION="$session" verification_step marker.accepted "$node_bin" -e '
+	run_id="$(REPLY_JSON="$reply" REQUEST_JSON="$payload" SESSION="$session" verification_step marker.accepted "$node_bin" -e '
 const reply=JSON.parse(process.env.REPLY_JSON),agentId=JSON.parse(process.env.OPENCLAW_TEAM_OPERATOR_PROFILE).modelAgent;
-if(reply.status!=="accepted"||typeof reply.runId!=="string"||!reply.runId.trim()||reply.agentId!==agentId||
-  reply.sessionKey!==`agent:${agentId}:explicit:${process.env.SESSION.toLowerCase()}`)process.exit(2);
+if(reply.runId!==JSON.parse(process.env.REQUEST_JSON).idempotencyKey)process.exit(2);
+// Native replay can acknowledge an in-flight reservation or return its terminal cache.
+if(!["accepted","in_flight","ok"].includes(reply.status)||
+  (reply.agentId!==undefined&&reply.agentId!==agentId)||
+  (reply.sessionKey!==undefined&&reply.sessionKey!==`agent:${agentId}:explicit:${process.env.SESSION.toLowerCase()}`)||
+  (reply.status==="accepted"&&(reply.agentId!==agentId||reply.sessionKey===undefined)))process.exit(2);
 process.stdout.write(reply.runId);
 ')" || return 1
-	expected_model="$(POLICY_JSON="$policy_identity" verification_step marker.expected-model "$node_bin" -e 'process.stdout.write(JSON.parse(process.env.POLICY_JSON).model)')" || return 1
 	while :; do
 		verification_step marker.wait-generation recheck_generation "$scope" "$verified_pid" "$verified_generation" || return 1
 		remaining=$((verification_deadline - SECONDS))
@@ -1303,8 +1333,8 @@ process.stdout.write(reply.runId);
 			[[ "$observation_exit" == 75 && "$reply" == RETRYABLE_OBSERVATION_TRANSPORT ]] || return "$observation_exit"
 			printf 'MARKER_OBSERVATION_RETRY same-run=required same-generation=required\n' >&2
 		else
-			terminal_state="$(REPLY_JSON="$reply" RUN_ID="$run_id" SESSION="$session" EXPECTED_REPLY="$marker" EXPECTED_MODEL="$expected_model" verification_step marker.reply-check "$node_bin" -e '
-const r=JSON.parse(process.env.REPLY_JSON), receipt=r.terminalReceipt;
+			terminal_state="$(REPLY_JSON="$reply" RUN_ID="$run_id" SESSION="$session" EXPECTED_REPLY="$marker" POLICY_JSON="$marker_policy" verification_step marker.reply-check "$node_bin" -e '
+const r=JSON.parse(process.env.REPLY_JSON), receipt=r.terminalReceipt, policy=JSON.parse(process.env.POLICY_JSON);
 // A length stop can omit the visible truncation notice from terminalReply.
 if(r.runId!==process.env.RUN_ID||r.error||r.pendingError===true||
   (r.stopReason!==undefined&&r.stopReason!=="stop"))process.exit(2);
@@ -1314,7 +1344,8 @@ if((r.status==="pending"||r.status==="timeout")&&!r.endedAt&&!receipt&&!r.termin
   if(r.status!=="ok"||r.pendingError===true||r.terminalReply?.disposition!=="visible"||
     r.terminalReply.text!==process.env.EXPECTED_REPLY||receipt?.runId!==process.env.RUN_ID||
     receipt.sessionId!==process.env.SESSION||typeof receipt.turnId!=="string"||!receipt.turnId.trim()||
-    receipt.terminalDisposition!=="visible"||receipt.effective?.provider+"/"+receipt.effective?.model!==process.env.EXPECTED_MODEL)process.exit(2);
+    receipt.terminalDisposition!=="visible"||receipt.requested?.provider+"/"+receipt.requested?.model!==policy.model||
+    ![policy.model,...policy.fallbacks].includes(receipt.effective?.provider+"/"+receipt.effective?.model))process.exit(2);
   process.stdout.write("VERIFIED");
 }
 ')" || return 1
@@ -1358,7 +1389,7 @@ load_journal_witness() {
 }
 
 wait_for_live() {
-	local release="$1" expected_info="$2" scope="${3:-system}" sleep_seconds verification_deadline
+	local release="$1" expected_info="$2" scope="${3:-system}" sleep_seconds verification_deadline convergence_exit listener_wait_logged=0
 	local verification_owned_pid="${4:-}" verification_owned_generation="${5:-}" verification_owned_scope="$scope"
 	local +x cpu_degraded_waived=0
 	# Descriptor-less legacy recovery and no-journal checks can prove only fresh current state.
@@ -1381,6 +1412,12 @@ wait_for_live() {
 					"$(basename "$release")" "$verified_pid" "$verified_generation" "$scope" >&2
 			fi
 			return 0
+		else
+			convergence_exit=$?
+			if ((convergence_exit == 75 && listener_wait_logged == 0)); then
+				printf 'VERIFICATION_WAITING stage=convergence.listener outcome=not-bound\n' >&2
+				listener_wait_logged=1
+			fi
 		fi
 		sleep_seconds="${OPENCLAW_TEAM_RETRY_SECONDS:-2}"
 		((SECONDS < verification_deadline)) || break
@@ -1413,58 +1450,15 @@ migration_install_guard() {
 	migration_native_guard
 }
 
-migration_check_guard() {
-	migration_native_guard || return 1
-	[[ -z "$migration_evidence" ]] || proof migration-check "$journal_file" "$serving_root" "$migration_evidence" >/dev/null
-}
-
 migration_check_existing_guard() {
 	local asset="$ancestor_boundary/etc/systemd/system/openclaw-gateway.service.d/zz-openclaw-agent-schema-migration.conf"
 	if [[ -e "$asset" || -L "$asset" ]]; then
 		migration_guard="$(proof migration-guard-descriptor "$serving_root")" || return 1
 		migration_native_guard || return 1
-		proof migration-permit-present "$serving_root" >/dev/null || return 1
+		if [[ ! -e "$journal_file" ]] || ! proof journal-field "$journal_file" nativeUpdate.backupRoot >/dev/null 2>&1; then
+			proof migration-permit-present "$serving_root" >/dev/null || return 1
+		fi
 	fi
-}
-
-migration_stop_contract() {
-	local stop_budget
-	stop_budget="$(system_systemctl show openclaw-gateway.service --property=TimeoutStopUSec --value)" || return 1
-	[[ "$(system_systemctl show openclaw-gateway.service --property=KillMode --value)" == control-group &&
-		"$(system_systemctl show openclaw-gateway.service --property=SendSIGKILL --value)" == yes &&
-		"$stop_budget" =~ ^[1-9][0-9]*(us|ms|s|min)([[:space:]].*)?$ ]] || {
-		fail 'agent migration requires bounded exact control-group shutdown'
-		return 1
-	}
-}
-
-migration_assert_inputs() {
-	local phase
-	if [[ "${migration_kind:-}" == config-codex-turn-idle || "${migration_nocow:-0}" == 1 ]]; then
-		phase="$(proof migration-status "$journal_file" "$serving_root")" || return 1
-	fi
-	if [[ "${phase:-}" == doctor-started && "${migration_nocow:-0}" == 1 ]]; then
-		proof offline-doctor-inputs "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-		assert_policy
-		return
-	fi
-	if [[ "${phase:-}" == doctor-started ]]; then
-		# Atomic replacement is still fenced. Original evidence guards policy and bytes;
-		# neither ordinary identity nor policy is rebound until stores verify.
-		proof migration-config-recovery-check "$journal_file" "$serving_root" "$migration_evidence" >/dev/null
-		return
-	fi
-	assert_protected_identity || return 1
-	assert_policy
-}
-
-migration_rebind_config_guards() {
-	local verified_policy
-	verified_policy="$(proof migration-config-policy "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	protected_identity="$(proof journal-field "$journal_file" protectedPaths)" || return 1
-	policy_identity="$verified_policy"
-	assert_protected_identity || return 1
-	assert_policy
 }
 
 stopped_system_owners() {
@@ -1637,408 +1631,6 @@ process.stdout.write(JSON.stringify({ system, user, ancestors, groups, config })
 ' "$ancestor_boundary" "$proc_root" "$original_pid" "$serving_root" "$runtime_home" "$gateway_port" "$root_uid" "$root_gid"
 }
 
-migration_assert_stopped() {
-	migration_check_guard || return 1
-	stopped_system_owners || return 1
-	migration_assert_inputs
-}
-
-migration_capture_record() {
-	local process_json instance current_sha previous_sha system_enabled user_enabled system_active user_active
-	capture_generation system || return 1
-	process_json="$(run_gateway "$previous_release" gateway call system.info --params '{}' --json --timeout 30000)" || return 1
-	instance="$(PROCESS_JSON="$process_json" EXPECTED_PID="$service_pid" "$node_bin" -e '
-const p=JSON.parse(process.env.PROCESS_JSON); if(p.pid!==Number(process.env.EXPECTED_PID)||typeof p.processInstanceId!=="string"||!p.processInstanceId)process.exit(2); process.stdout.write(p.processInstanceId);
-')" || return 1
-	assert_frozen_predecessor "$instance" || return 1
-	current_sha="$(basename "$(read_pointer "$current_link")")" || return 1
-	[[ "$current_sha" == "$(basename "$previous_release")" ]] || return 1
-	previous_sha=absent
-	if [[ -L "$previous_link" ]]; then previous_sha="$(basename "$(read_pointer "$previous_link")")" || return 1; fi
-	system_enabled="$(system_unit_state)"; user_enabled="$(user_unit_state)"
-	system_active="$(system_state)"; user_active="$(user_state)"
-	PREVIOUS_INFO="$previous_info" CANDIDATE_INFO="$candidate_info" PROTECTED_PATHS="$protected_identity" CONFIG_MIGRATION_KIND="${migration_kind:-none}" OFFLINE_DOCTOR="$offline_doctor_repair" GATEWAY_RUNTIME="$gateway_runtime_snapshot" \
-		CURRENT_SHA="$current_sha" PREVIOUS_SHA="$previous_sha" PID="$service_pid" GENERATION="$service_generation" INSTANCE="$instance" \
-		SYSTEM_ENABLED="$system_enabled" USER_ENABLED="$user_enabled" SYSTEM_ACTIVE="$system_active" USER_ACTIVE="$user_active" \
-		"$node_bin" -e '
-const e=process.env; process.stdout.write(JSON.stringify({version:1,phase:"AGENT_REHEARSAL",topology:"system",gatewayRuntime:JSON.parse(e.GATEWAY_RUNTIME),predecessor:JSON.parse(e.PREVIOUS_INFO),candidate:JSON.parse(e.CANDIDATE_INFO),...(e.OFFLINE_DOCTOR==="1"?{offlineDoctor:true}:{}),...(e.CONFIG_MIGRATION_KIND==="config-codex-turn-idle"?{configMigration:{kind:e.CONFIG_MIGRATION_KIND}}:{}),process:{pid:Number(e.PID),generation:e.GENERATION,instance:e.INSTANCE},services:{system:{unitFileState:e.SYSTEM_ENABLED,activeState:e.SYSTEM_ACTIVE},user:{unitFileState:e.USER_ENABLED,activeState:e.USER_ACTIVE}},protectedPaths:JSON.parse(e.PROTECTED_PATHS),pointerTopology:{current:{present:true,sha:e.CURRENT_SHA},previous:{present:e.PREVIOUS_SHA!=="absent",sha:e.PREVIOUS_SHA==="absent"?null:e.PREVIOUS_SHA}},suspension:null}));
-'
-}
-
-migration_prepare_live() {
-	local process_json instance
-	# Audit sealed trees before starting the short native lease. The library binds
-	# these facts to this controller and lock, then rereads mutable inputs at use.
-	migration_release_proof="$(proof migration-live-preflight "$journal_file" "$serving_root" "$migration_evidence" "$$")" || return 1
-	# Rehearsal carries no mutation authority: take a fresh native lease and OS generation now.
-	capture_generation system || return 1
-	suspension_scope=system; suspension_release="$previous_release"
-	suspension_pid="$service_pid"; suspension_generation="$service_generation"
-	process_json="$(run_gateway "$previous_release" gateway call system.info --params '{}' --json --timeout 30000)" || return 1
-	instance="$(PROCESS_JSON="$process_json" EXPECTED_PID="$service_pid" "$node_bin" -e '
-const p=JSON.parse(process.env.PROCESS_JSON); if(p.pid!==Number(process.env.EXPECTED_PID)||typeof p.processInstanceId!=="string"||!p.processInstanceId)process.exit(2); process.stdout.write(p.processInstanceId);
-')" || return 1
-	assert_frozen_predecessor "$instance" || return 1
-	suspension_instance="$instance"
-	prepare_suspension "$previous_release" || return 1
-	check_suspension || return 1
-	migration_check_guard || return 1
-	migration_record_suspension
-}
-
-migration_record_suspension() {
-	local transition
-	((suspension_cleanup_only == 0)) || { fail 'cannot journal a cleanup-only suspension as migration authority'; return 1; }
-	transition="$(PID="$suspension_pid" GENERATION="$suspension_generation" INSTANCE="$suspension_instance" \
-		LEASE="$held_suspension" EXPIRY="$suspension_expiry" LEASE_STATE="$suspension_state" RELEASE_PROOF="$migration_release_proof" "$node_bin" -e '
-const e=process.env; process.stdout.write(JSON.stringify({phase:"prepared",process:{pid:Number(e.PID),generation:e.GENERATION,instance:e.INSTANCE},suspension:{id:e.LEASE,expiresAtMs:Number(e.EXPIRY),status:e.LEASE_STATE.toLowerCase(),terminalPolicy:"preserve"},releaseProof:JSON.parse(e.RELEASE_PROOF)}));
-')" || return 1
-	migration_evidence="$(printf '%s' "$transition" | proof migration-transition "$journal_file" "$serving_root" "$migration_evidence" @stdin "$$")" || return 1
-}
-
-migration_select_candidate() {
-	local phase current previous original_previous
-	phase="$(proof journal-field "$journal_file" phase)" || return 1
-	current="$(read_pointer "$current_link")" || return 1
-	previous=absent
-	if [[ -L "$previous_link" ]]; then previous="$(read_pointer "$previous_link")" || return 1; fi
-	if [[ "$(proof migration-status "$journal_file" "$serving_root")" != prepared ]]; then
-		[[ "$current" == "$candidate_release" && "$previous" == "$previous_release" ]] || return 1
-		return 0
-	fi
-	original_previous="$(proof journal-field "$journal_file" pointerTopology.previous.sha)" || return 1
-	[[ "$current" == "$previous_release" || "$current" == "$candidate_release" ]] || return 1
-	[[ "$previous" == "$previous_release" || "$previous" == "$releases_root/$original_previous" ||
-		("$original_previous" == null && "$previous" == absent) ]] || return 1
-	if [[ "$phase" == A_PREPARED || "$phase" == B_PREVIOUS_PUBLISHED ]]; then
-		if [[ "$previous" != "$previous_release" ]]; then
-			migration_check_guard || return 1
-			atomic_pointer "$previous_release" "$previous_link" || return 1
-		fi
-		if [[ "$current" == "$previous_release" ]]; then
-			migration_evidence="$(proof migration-advance-activation "$journal_file" "$serving_root" "$migration_evidence" B_PREVIOUS_PUBLISHED)" || return 1
-			migration_check_guard || return 1
-			atomic_pointer "$candidate_release" "$current_link" || return 1
-		fi
-	fi
-	migration_evidence="$(proof migration-advance-activation "$journal_file" "$serving_root" "$migration_evidence" C_CURRENT_SELECTED)" || return 1
-}
-
-recover_live_migration_candidate() {
-	local request snapshot receipt instance live_pid live_generation live_instance migration_kind migration_label migration_nocow
-	local migration_session_proof nocow_summary
-	[[ "$mode" == recover && "$reconcile_stopped" == 0 ]] || { fail 'live candidate reconciliation requires explicit live recovery'; return 1; }
-	operator_check_lock held || return 1
-	migration_evidence="$(proof migration-load "$journal_file" "$serving_root")" || return 1
-	previous_release="$releases_root/$(proof journal-field "$journal_file" predecessor.sha)" || return 1
-	candidate_release="$releases_root/$(proof journal-field "$journal_file" candidate.sha)" || return 1
-	candidate_info="$(proof validate-release "$candidate_release" "$(basename "$candidate_release")" "$root_uid" sealed)" || return 1
-	migration_guard="$(proof migration-guard-descriptor "$serving_root")" || return 1
-	migration_check_guard || return 1
-	if [[ -n "$reconcile_config_hash" ]]; then
-		[[ "$operator_expected_sha" == "$(basename "$candidate_release")" ]] || { fail 'config reconciliation requires the exact selected candidate'; return 1; }
-		recheck_generation system "$operator_expected_pid" "$operator_expected_generation" || return 1
-		instance="$(read_process_instance "$candidate_release" "$operator_expected_pid")" || return 1
-		request="$("$node_bin" -e 'const [candidate,pid,generation,instance,configSha256,journalSha256,runtimeUid]=process.argv.slice(1);process.stdout.write(JSON.stringify({candidate,process:{pid:Number(pid),generation,instance},configSha256,journalSha256,runtimeUid:Number(runtimeUid)}))' \
-			"$operator_expected_sha" "$operator_expected_pid" "$operator_expected_generation" "$instance" "$reconcile_config_hash" "$reconcile_journal_hash" "$runtime_uid")" || return 1
-		snapshot="$(proof migration-reconcile-snapshot "$journal_file" "$serving_root" "$migration_evidence" "$request")" || return 1
-		recheck_generation system "$operator_expected_pid" "$operator_expected_generation" || return 1
-		[[ "$(read_process_instance "$candidate_release" "$operator_expected_pid")" == "$instance" ]] || return 1
-		migration_check_guard || return 1
-		migration_evidence="$(proof migration-reconcile-commit "$journal_file" "$serving_root" "$migration_evidence" "$snapshot")" || return 1
-		printf 'RECOVERY_CONFIG_RECONCILED config_sha256=%s journal_sha256=%s original-journal=retained-in-reconciliation restart=0\n' "$reconcile_config_hash" "$reconcile_journal_hash"
-	fi
-	receipt="$(proof migration-reconcile-check "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	read -r live_pid live_generation live_instance < <(printf '%s' "$receipt" | "$node_bin" -e 'const r=JSON.parse(require("node:fs").readFileSync(0,"utf8"));console.log(r.process.pid,r.process.generation,r.process.instance)')
-	recheck_generation system "$live_pid" "$live_generation" || return 1
-	[[ "$(read_process_instance "$candidate_release" "$live_pid")" == "$live_instance" ]] || return 1
-	protected_identity="$(proof journal-field "$journal_file" protectedPaths)" || return 1
-	policy_identity="$(proof policy "$config_file")" || return 1
-	session_witness="$(proof migration-original-witness "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	migration_session_proof="$(proof migration-session-proof "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	if ! wait_for_live "$candidate_release" "$candidate_info" system "$live_pid" "$live_generation"; then
-		fail 'live selected candidate verification failed; journal and evidence retained, no service action performed'
-		return 1
-	fi
-	proof migration-reconcile-check "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-	migration_check_guard || return 1
-	recheck_generation system "$live_pid" "$live_generation" || return 1
-	[[ "$(read_process_instance "$candidate_release" "$live_pid")" == "$live_instance" ]] || return 1
-	assert_protected_identity || return 1
-	assert_policy || return 1
-	verified_markers record "$(basename "$candidate_release")" || return 1
-	migration_kind="$(proof migration-record-kind "$journal_file" "$serving_root")" || return 1
-	migration_nocow="$(proof migration-record-nocow "$journal_file" "$serving_root")" || return 1
-	migration_label="${migration_kind%-*}-to-${migration_kind##*-}"
-	if [[ "$migration_nocow" == 1 ]]; then migration_label="${migration_kind}+nocow"; fi
-	nocow_summary="$(proof migration-nocow-summary "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	proof migration-finish "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-	migration_evidence=""
-	printf 'SUCCESS sha=%s action=deploy migration=%s previous=%s session-proof=%s%s APPROVAL_DELTA=0\n' \
-		"$(basename "$candidate_release")" "$migration_label" "$(basename "$previous_release")" "$migration_session_proof" "$nocow_summary"
-}
-
-recover_agent_schema_migration() {
-	local migration_phase old_pid old_generation runtime_gid doctor_stage doctor_log migration_kind migration_label migration_session_proof migration_nocow
-	local warm_preflight rehearsal_inputs rehearsal_status verified_evidence doctor_exit=0
-	local nocow_summary=""
-	migration_evidence="$(proof migration-load "$journal_file" "$serving_root")" || return 1
-	previous_release="$releases_root/$(proof journal-field "$journal_file" predecessor.sha)" || return 1
-	candidate_release="$releases_root/$(proof journal-field "$journal_file" candidate.sha)" || return 1
-	previous_info="$(proof validate-release "$previous_release" "$(basename "$previous_release")" "$root_uid" sealed)" || return 1
-	candidate_info="$(proof validate-release "$candidate_release" "$(basename "$candidate_release")" "$root_uid" sealed)" || return 1
-	migration_kind="$(proof migration-record-kind "$journal_file" "$serving_root")" || return 1
-	migration_nocow="$(proof migration-record-nocow "$journal_file" "$serving_root")" || return 1
-	migration_label="${migration_kind%-*}-to-${migration_kind##*-}"
-	[[ "$migration_kind" != config-codex-turn-idle ]] || migration_label="$migration_kind"
-	if [[ "$migration_nocow" == 1 && "$migration_kind" != offline-doctor ]]; then migration_label="${migration_kind}+nocow"; fi
-	migration_phase="$(proof migration-status "$journal_file" "$serving_root")" || return 1
-	if ((${accept_partial_nocow:-0})); then
-		[[ "$mode" == recover && "$migration_nocow" == 1 && "$migration_phase" == doctor-started ]] || {
-			fail '--accept-partial-nocow is not applicable: requires a doctor-started NOCOW recovery'; return 1;
-		}
-	fi
-	# A new copied proof may bind authored config only while the original process
-	# still serves, before cold work. The library publishes under this owner's lock.
-	if [[ "$migration_kind" != offline-doctor && ("$migration_phase" == rehearsal || "$migration_phase" == prepared) && "$(system_state)" == active ]]; then
-		warm_preflight="$(MIGRATION_EVIDENCE="$migration_evidence" "$node_bin" -e '
-const r=JSON.parse(process.env.MIGRATION_EVIDENCE).record;
-process.stdout.write(r && ["AGENT_REHEARSAL","A_PREPARED"].includes(r.phase) && r.agentMigration.artifacts.preflight ? "yes" : "no");
-')" || return 1
-		if [[ "$warm_preflight" == yes ]]; then
-			old_pid="$(proof journal-field "$journal_file" process.pid)" || return 1
-			old_generation="$(proof journal-field "$journal_file" process.generation)" || return 1
-			recheck_generation system "$old_pid" "$old_generation" || return 1
-			rehearsal_inputs="$(proof migration-rehearsal-inputs "$journal_file" "$serving_root" "$migration_evidence" "$runtime_uid")" || return 1
-			rehearsal_status="$(REHEARSAL_INPUTS="$rehearsal_inputs" "$node_bin" -e 'process.stdout.write(JSON.parse(process.env.REHEARSAL_INPUTS).status)')" || return 1
-			[[ "$rehearsal_status" == current || "$rehearsal_status" == warm-config-refresh-required ]] || {
-				fail 'migration rehearsal inspector returned an unknown state'; return 1;
-			}
-			if [[ "$rehearsal_status" == warm-config-refresh-required ]]; then
-				runtime_gid="$(id -g openclaw)" || return 1
-				migration_evidence="$(proof migration-rehearse "$journal_file" "$serving_root" "$migration_evidence" \
-					"$config_file" "$state_database" "$runtime_home" "$runtime_uid" "$runtime_gid" "$build_budget")" || return 1
-				recheck_generation system "$old_pid" "$old_generation" || return 1
-				proof migration-preflight-check "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-				policy_identity="$(proof policy "$config_file")" || return 1
-				printf 'REHEARSAL_REFRESHED candidate=%s prior-evidence=retained\n' "$(basename "$candidate_release")"
-			fi
-		fi
-	fi
-	protected_identity="$(proof journal-field "$journal_file" protectedPaths)" || return 1
-	if [[ "$migration_nocow" == 1 && "$migration_phase" == doctor-started ]]; then
-		proof offline-doctor-inputs "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-	elif [[ "$migration_kind" == config-codex-turn-idle ]]; then
-		proof migration-config-recovery-check "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-	else
-		assert_protected_identity || return 1
-	fi
-	if [[ "$migration_kind" == config-codex-turn-idle &&
-		"$(proof migration-status "$journal_file" "$serving_root")" == stores-verified ]]; then
-		migration_rebind_config_guards || return 1
-	else
-		migration_assert_inputs || return 1
-	fi
-	# Recovery never installs or recreates the permanent condition or a lost permit.
-	migration_guard="$(proof migration-guard-descriptor "$serving_root")" || return 1
-	migration_check_guard || return 1
-	migration_phase="$(proof migration-status "$journal_file" "$serving_root")" || return 1
-	nocow_summary="$(proof migration-nocow-summary "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	if [[ "$migration_kind" == offline-doctor && -z "$nocow_summary" && "${accept_partial_nocow:-0}" == 0 && ("$migration_phase" == recovering-predecessor || ("$mode" == recover && ("$migration_phase" == doctor-started || "$migration_phase" == prepared))) ]]; then
-		recover_offline_doctor_predecessor
-		return $?
-	fi
-	if [[ "$migration_kind" == offline-doctor && "$migration_phase" == doctor-started && -z "$nocow_summary" && "${accept_partial_nocow:-0}" == 0 ]]; then
-		fail 'offline Doctor already attempted; use explicit --recover, never repeat Doctor'
-		return 1
-	fi
-	if [[ "$migration_nocow" == 1 && "$migration_phase" == doctor-started && "$mode" != recover ]]; then
-		fail 'migration NOCOW Doctor requires explicit --recover; recovery is forward-only'
-		return 1
-	fi
-	if [[ "$migration_phase" == rehearsal ]]; then
-		proof migration-permit-present "$serving_root" >/dev/null || return 1
-		proof release-capacity activate "$candidate_release" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2 || return 1
-		if [[ "$migration_nocow" == 1 ]]; then
-			migration_evidence="$(proof offline-doctor-preflight "$journal_file" "$serving_root" "$migration_evidence" "$config_file" "$state_database")" || return 1
-		fi
-		if [[ "$migration_kind" == offline-doctor ]]; then
-			: # Its explicit cold-only preflight is already bound above.
-		elif ((skip_migration_rehearsal)); then
-			migration_evidence="$(proof migration-waive-rehearsal "$journal_file" "$serving_root" "$migration_evidence" \
-				"$config_file" "$state_database")" || return 1
-			printf 'REHEARSAL_WAIVED candidate=%s scope=warm-copy-only authority=explicit-operator\n' "$(basename "$candidate_release")"
-		else
-			runtime_gid="$(id -g openclaw)" || return 1
-			migration_evidence="$(proof migration-rehearse "$journal_file" "$serving_root" "$migration_evidence" \
-				"$config_file" "$state_database" "$runtime_home" "$runtime_uid" "$runtime_gid" "$build_budget")" || return 1
-		fi
-		migration_prepare_live || return 1
-		migration_phase=prepared
-	fi
-	if [[ "$migration_phase" != stores-verified ]]; then
-		old_pid="$(proof journal-field "$journal_file" process.pid)" || return 1
-		old_generation="$(proof journal-field "$journal_file" process.generation)" || return 1
-		if [[ "$(system_state)" == active ]]; then
-			[[ "$migration_phase" == prepared ]] || { fail 'unexpected writer during one-way agent migration'; return 1; }
-			recheck_generation system "$old_pid" "$old_generation" || return 1
-			if [[ -z "$held_suspension" ]]; then migration_prepare_live || return 1; fi
-			migration_stop_contract || return 1
-			proof migration-live-check "$journal_file" "$serving_root" "$migration_evidence" "$migration_release_proof" "$$" >/dev/null || return 1
-			# Once stopped or Doctor-started, recovery must finish forward using original evidence.
-			proof release-capacity activate "$candidate_release" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2 || return 1
-			renew_suspension_before_handoff || return 1
-			migration_record_suspension || return 1
-			check_suspension || return 1
-			arm_suspension_handoff || return 1
-			migration_check_guard || return 1
-			proof migration-permit-revoke "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-			check_suspension || return 1
-			# Revoke, then settle every admitted start job while current still selects the predecessor.
-			bounded 180 "$systemctl_bin" stop openclaw-gateway.service || return 1
-			held_suspension=""; predecessor_stopped=1
-		fi
-		if [[ "$migration_phase" == prepared ]]; then
-			proof migration-permit-revoke "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-		fi
-		proof migration-permit-absent "$serving_root" >/dev/null || return 1
-		migration_assert_stopped || return 1
-		[[ ! -e "$proc_root/$old_pid" || "$(process_generation "$old_pid")" != "$old_generation" ]] || return 1
-		migration_select_candidate || return 1
-		if [[ "$migration_phase" == prepared ]]; then
-			migration_evidence="$(proof migration-cold-backup "$journal_file" "$serving_root" "$migration_evidence" "$config_file" "$state_database" "$proc_root")" || return 1
-			migration_assert_stopped || return 1
-			migration_evidence="$(printf '%s' '{"phase":"doctor-started"}' | proof migration-transition "$journal_file" "$serving_root" "$migration_evidence" @stdin)" || return 1
-		fi
-		nocow_summary="$(proof migration-nocow-summary "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-		if ((${accept_partial_nocow:-0})) || [[ -n "$nocow_summary" ]]; then
-			migration_evidence="$(proof offline-doctor-accept-partial "$journal_file" "$serving_root" "$migration_evidence" "$proc_root")" || return 1
-			nocow_summary="$(proof migration-nocow-summary "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-			printf 'NOCOW_PARTIAL_ACCEPTED%s\n' "$nocow_summary"
-		else
-		if [[ "$migration_nocow" == 1 ]]; then
-			# Reuse the original capture on forward recovery; never recapture migrated data.
-			migration_evidence="$(proof offline-doctor-capture "$journal_file" "$serving_root" "$migration_evidence" "$proc_root")" || return 1
-		fi
-		migration_assert_stopped || return 1
-		proof migration-writers-stopped "$journal_file" "$serving_root" "$migration_evidence" "$proc_root" >/dev/null || return 1
-		printf 'MIGRATING migration=%s candidate=%s recovery=forward-only\n' "$migration_label" "$(basename "$candidate_release")"
-		doctor_stage="$(proof journal-field "$journal_file" agentMigration.stage)" || return 1
-		doctor_log="$serving_root/journal/$doctor_stage/doctor-$(date -u +%Y%m%dT%H%M%SZ)-$$" || return 1
-		if [[ "$migration_kind" == config-codex-turn-idle ]]; then
-			migration_evidence="$(proof migration-config-apply "$journal_file" "$serving_root" "$migration_evidence" "$proc_root")" || return 1
-		else
-		if [[ "$migration_nocow" == 1 ]]; then
-			migration_evidence="$(proof offline-doctor-intent "$journal_file" "$serving_root" "$migration_evidence" "$doctor_log" "$proc_root")" || return 1
-			doctor_log="$(proof offline-doctor-log "$journal_file" "$serving_root" "$migration_evidence" "$proc_root")" || return 1
-		fi
-		# The candidate's Doctor defers the btrfs NOCOW store rewrite during managed updates
-		# unless the updater requests it; only the explicit +nocow transaction asks for it.
-		local doctor_nocow_env=()
-		if [[ "$migration_nocow" == 1 ]]; then doctor_nocow_env=(OPENCLAW_DOCTOR_SQLITE_NOCOW_REPAIR=1); fi
-		(umask 077; set -o noclobber
-			if [[ "$migration_nocow" == 1 ]]; then
-				exec >>"$doctor_log.stdout" 2>>"$doctor_log.stderr" || exit 1
-			else
-				exec >"$doctor_log.stdout" 2>"$doctor_log.stderr" || exit 1
-			fi
-			bounded "$build_budget" "$runuser_bin" -u openclaw -- env -i \
-				HOME="$runtime_home" OPENCLAW_HOME="$runtime_home" OPENCLAW_STATE_DIR="$(dirname "$config_file")" \
-				OPENCLAW_CONFIG_PATH="$config_file" OPENCLAW_SUPERVISOR_MODE=external OPENCLAW_SERVICE_REPAIR_POLICY=external \
-				OPENCLAW_UPDATE_IN_PROGRESS=1 "${doctor_nocow_env[@]}" \
-				OPENCLAW_SYSTEMD_UNIT=openclaw-gateway.service PATH=/usr/bin:/bin TMPDIR=/tmp \
-				XDG_CONFIG_HOME="$runtime_home/.config" XDG_CACHE_HOME="$runtime_home/.cache" NODE_DISABLE_COMPILE_CACHE=1 \
-				"$node_bin" --no-warnings "$candidate_release/dist/index.js" doctor --repair --non-interactive --no-workspace-suggestions) || doctor_exit=$?
-		if [[ "$migration_nocow" == 1 ]]; then
-			stopped_system_owners || return 1
-			migration_native_guard || return 1
-			if verified_evidence="$(proof offline-doctor-verify "$journal_file" "$serving_root" "$migration_evidence" "$doctor_exit" "$proc_root")"; then
-				migration_evidence="$verified_evidence"
-			else
-				migration_evidence="$(proof migration-load "$journal_file" "$serving_root")" || return 1
-				return 1
-			fi
-		elif ((doctor_exit != 0)); then return 1; fi
-		fi
-		fi
-		migration_assert_stopped || return 1
-		proof migration-writers-stopped "$journal_file" "$serving_root" "$migration_evidence" "$proc_root" >/dev/null || return 1
-		if verified_evidence="$(proof migration-verify-stores "$journal_file" "$serving_root" "$migration_evidence" "$config_file" "$state_database")"; then
-			migration_evidence="$verified_evidence"
-		else
-			migration_evidence="$(proof migration-load "$journal_file" "$serving_root")" || return 1
-			return 1
-		fi
-		protected_identity="$(proof journal-field "$journal_file" protectedPaths)" || return 1
-		if [[ "$migration_kind" == config-codex-turn-idle ]]; then migration_rebind_config_guards || return 1; fi
-	fi
-	# Reuse the bound pre-Doctor witness and report whether native code had already
-	# advanced the schema before this owner's cold capture.
-	session_witness="$(proof migration-original-witness "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	[[ -n "$session_witness" ]] || return 1
-	migration_session_proof="$(proof migration-session-proof "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	migration_check_guard || return 1
-	if [[ "$(system_state)" != active ]]; then
-		migration_assert_stopped || return 1
-		proof migration-permit-publish "$journal_file" "$serving_root" "$migration_evidence" "$proc_root" >/dev/null || return 1
-		migration_check_guard || return 1
-		system_systemctl start openclaw-gateway.service || return 1
-	else
-		proof migration-permit-present "$serving_root" >/dev/null || return 1
-	fi
-	# A native condition skip exits0; Type=simple also does not prove exec/listener readiness.
-	capture_service_generation system || return 1
-	old_pid="$service_pid"; old_generation="$service_generation"
-	wait_for_live "$candidate_release" "$candidate_info" system || return 1
-	proof migration-check "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-	recheck_generation system "$old_pid" "$old_generation" || return 1
-	assert_protected_identity || return 1
-	assert_policy || return 1
-	verified_markers record "$(basename "$candidate_release")" || return 1
-	nocow_summary="$(proof migration-nocow-summary "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	proof migration-finish "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-	migration_evidence=""
-	cleanup_releases || return 1
-	printf 'SUCCESS sha=%s action=deploy migration=%s previous=%s session-proof=%s%s APPROVAL_DELTA=0\n' \
-	  "$(basename "$candidate_release")" "$migration_label" "$(basename "$previous_release")" "$migration_session_proof" "$nocow_summary"
-}
-
-recover_offline_doctor_predecessor() {
-	local phase recovered_pid recovered_generation
-	[[ "$mode" == recover ]] || { fail 'offline Doctor rollback requires explicit --recover'; return 1; }
-	phase="$(proof migration-status "$journal_file" "$serving_root")" || return 1
-	if [[ "$phase" == prepared ]]; then
-		migration_assert_stopped || return 1
-		migration_evidence="$(printf '%s' '{"phase":"doctor-started"}' | proof migration-transition "$journal_file" "$serving_root" "$migration_evidence" @stdin)" || return 1
-		phase=doctor-started
-	fi
-	if [[ "$phase" == doctor-started ]]; then
-		migration_assert_stopped || return 1
-		migration_evidence="$(proof offline-doctor-recover "$journal_file" "$serving_root" "$migration_evidence" "$proc_root")" || return 1
-	fi
-	proof offline-recovery-position "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-	protected_identity="$(proof journal-field "$journal_file" protectedPaths)" || return 1
-	session_witness="$(proof migration-original-witness "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	if [[ "$(system_state)" != active ]]; then
-		migration_assert_stopped || return 1
-		proof compatibility "$candidate_release" "$previous_release" "$state_database" >/dev/null || return 1
-		restore_pointer_topology || return 1
-		migration_assert_stopped || return 1
-		proof offline-recovery-permit "$journal_file" "$serving_root" "$migration_evidence" "$proc_root" >/dev/null || return 1
-		system_systemctl start openclaw-gateway.service || return 1
-	fi
-	capture_service_generation system || return 1
-	recovered_pid="$service_pid"; recovered_generation="$service_generation"
-	[[ "$(read_pointer "$current_link")" == "$previous_release" && "$(realpath "$proc_root/$recovered_pid/cwd")" == "$previous_release" ]] || return 1
-	proof migration-permit-present "$serving_root" >/dev/null || return 1
-	wait_for_live "$previous_release" "$previous_info" system "$recovered_pid" "$recovered_generation" || return 1
-	assert_protected_identity && assert_policy || return 1
-	recheck_generation system "$recovered_pid" "$recovered_generation" || return 1
-	proof offline-recovery-finish "$journal_file" "$serving_root" "$migration_evidence" "$proc_root" >/dev/null || return 1
-	migration_evidence=""
-	printf 'RECOVERED action=restored-offline-doctor-predecessor sha=%s backups=retained APPROVAL_DELTA=0\n' "$(basename "$previous_release")"
-}
-
 install_migration_guard_current() {
 	[[ ! -e "$journal_file" && ! -L "$journal_file" ]] || { fail 'native guard bootstrap refuses a pending journal'; return 1; }
 	local release
@@ -2057,25 +1649,6 @@ install_migration_guard_current() {
 	assert_policy || return 1
 	proof migration-permit-present "$serving_root" >/dev/null || return 1
 	printf 'MIGRATION_GUARD_INSTALLED sha=%s restart=0 native-condition=positive-path-exists\n' "$operator_expected_sha"
-}
-
-activate_agent_schema_migration() {
-	local record
-	assert_protected_identity || return 1
-	assert_policy || return 1
-	capture_generation system || return 1
-	operator_expected_sha="$(basename "$previous_release")"
-	operator_expected_pid="$service_pid"; operator_expected_generation="$service_generation"
-	if ((offline_doctor_repair)); then
-		migration_guard="$(proof migration-guard-descriptor "$serving_root")" || return 1
-		migration_check_guard || return 1
-		proof migration-permit-present "$serving_root" >/dev/null || return 1
-	else
-		install_migration_guard_current || return 1
-	fi
-	record="$(migration_capture_record)" || return 1
-	migration_evidence="$(printf '%s' "$record" | proof migration-create "$serving_root" @stdin)" || return 1
-	recover_agent_schema_migration
 }
 
 bind_successor_generation() {
@@ -2106,18 +1679,45 @@ prepare_rollback_suspension() {
 	fail 'rollback successor could not be safely fenced; refusing restart and retaining evidence'
 }
 
+native_update_permit() {
+	stopped_system_owners || return 1
+	session_witness_record="$(proof journal-read "$journal_file")" || return 1
+	proof journal-native-permit "$journal_file" "$session_witness_record" "$1" >/dev/null
+}
+
+finish_native_update() {
+	[[ -n "$native_update_root" ]] || return 0
+	run_gateway "$candidate_release" update finish --backup-root "$native_update_root" ||
+		printf 'WARNING native update backup cleanup remains pending: %s\n' "$native_update_root" >&2
+}
+
+native_update() {
+	local action="$1" migration_budget
+	# A 37 GiB crossing can take 39 minutes before its backup; keep slow disks in budget.
+	migration_budget=$((build_budget < 7200 ? 7200 : build_budget))
+	session_witness_record="$(proof journal-read "$journal_file")" || return 1
+	stopped_system_owners || return 1
+	if [[ "$action" == restore ]]; then
+		proof journal-native-permit "$journal_file" "$session_witness_record" revoke >/dev/null || return 1
+	fi
+	bounded "$migration_budget" "$runuser_bin" -u openclaw -- env \
+		HOME="$runtime_home" OPENCLAW_HOME="$runtime_home" \
+		OPENCLAW_CONFIG_PATH="$config_file" OPENCLAW_STATE_DIR="$(dirname "$(dirname "$state_database")")" \
+		OPENCLAW_SUPERVISOR_MODE=external OPENCLAW_SERVICE_REPAIR_POLICY=external \
+		OPENCLAW_UPDATE_IN_PROGRESS=1 OPENCLAW_DOCTOR_SQLITE_NOCOW_REPAIR="$offline_doctor_repair" \
+		OPENCLAW_SYSTEMD_UNIT=openclaw-gateway.service \
+		"$node_bin" "$candidate_release/dist/index.js" update "$action" --backup-root "$native_update_root" || return 1
+	stopped_system_owners || return 1
+	session_witness_record="$(proof journal-native-state "$journal_file" "$session_witness_record" "$config_file" "$state_database")" || return 1
+	protected_identity="$(proof journal-field "$journal_file" protectedPaths)" || return 1
+	load_journal_witness
+}
+
 rollback_activation() {
 	local exit_code="$1" predecessor_sha candidate_sha topology expected_pid expected_generation rollback_owner
 	local failure_code="$1" rollback_pid="" rollback_generation=""
 	((failure_code != 0)) || failure_code=1
 	((rollback_armed)) || return "$exit_code"
-	local migration_phase
-	migration_phase="$(proof migration-status "$journal_file" "$serving_root")" || { rollback_armed=0; return "$failure_code"; }
-	if [[ "$migration_phase" != none ]]; then
-		rollback_armed=0
-		fail 'agent schema migration is forward-only; journal, backups, and boot fence retained'
-		return "$failure_code"
-	fi
 	rollback_armed=0
 	load_journal_witness || return "$failure_code"
 	verification_deadline=0
@@ -2127,15 +1727,17 @@ rollback_activation() {
 	if [[ "$candidate_sha" != "$predecessor_sha" ]]; then
 		record_failed "$candidate_sha" || return "$failure_code"
 	fi
-	if ! proof compatibility "$candidate_release" "$previous_release" "$state_database" >/dev/null; then
-		proof journal-phase "$journal_file" ROLLBACK_FAILED "$session_witness_record" >/dev/null || true
-		fail 'rollback compatibility cannot be proved; candidate remains selected and evidence is retained'
-		return "$failure_code"
-	fi
-	# Changed system-deployment policy cannot converge by polling the previous runtime.
-	if ! assert_protected_identity || { [[ "$topology" == system ]] && ! assert_policy; }; then
-		proof journal-phase "$journal_file" ROLLBACK_FAILED "$session_witness_record" >/dev/null || true
-		return "$failure_code"
+	if [[ -z "$native_update_root" || ! -f "$native_update_root.receipt.json" ]]; then
+		if ! proof compatibility "$candidate_release" "$previous_release" "$state_database" >/dev/null; then
+			proof journal-phase "$journal_file" ROLLBACK_FAILED "$session_witness_record" >/dev/null || true
+			fail 'rollback compatibility cannot be proved; candidate remains selected and evidence is retained'
+			return "$failure_code"
+		fi
+		# Changed system-deployment policy cannot converge by polling the previous runtime.
+		if ! assert_protected_identity || { [[ "$topology" == system ]] && ! assert_policy; }; then
+			proof journal-phase "$journal_file" ROLLBACK_FAILED "$session_witness_record" >/dev/null || true
+			return "$failure_code"
+		fi
 	fi
 	if [[ "$topology" == migration-user ]]; then
 		if ! restore_migration_topology; then
@@ -2171,7 +1773,26 @@ rollback_activation() {
 				return 1
 			fi
 		fi
+		if [[ -n "$native_update_root" && -f "$native_update_root.receipt.json" ]]; then
+			if [[ "$rollback_owner" == running ]]; then
+				assert_policy && check_suspension && arm_suspension_handoff || return "$failure_code"
+				system_systemctl stop openclaw-gateway.service || return "$failure_code"
+				held_suspension=""
+				predecessor_is_stopped "$expected_pid" || return "$failure_code"
+				rollback_owner=stopped
+			fi
+			native_update restore || {
+				proof journal-phase "$journal_file" ROLLBACK_FAILED "$session_witness_record" >/dev/null || true
+				fail 'native update restoration failed; Gateway remains stopped with recovery evidence retained'
+				return "$failure_code"
+			}
+			proof compatibility "$candidate_release" "$previous_release" "$state_database" >/dev/null &&
+				assert_protected_identity && assert_policy || return "$failure_code"
+		fi
 		restore_pointer_topology || return "$failure_code"
+		if [[ -n "$native_update_root" && "$rollback_owner" != untouched ]]; then
+			native_update_permit publish || return "$failure_code"
+		fi
 		if [[ "$rollback_owner" == untouched ]]; then
 			resume_suspension || return 1
 			if [[ "$mode" != runtime ]]; then
@@ -2293,9 +1914,9 @@ restore_pointer_topology() {
 
 on_exit() {
 	local exit_code=$? cleanup_exit
-	if [[ -n "$abandon_rehearsal_sha" || "$mode" == prepare-release || "$mode" == snapshot-rehearsal || "$mode" == continue-frozen ]]; then exit "$exit_code"; fi
+	if [[ "$mode" == prepare-release || "$mode" == continue-frozen ]]; then exit "$exit_code"; fi
 	# Admission failure or a lost journal receipt carries no profile cleanup authority.
-	if [[ -n "$frozen_target_sha" && -z "$migration_evidence" && -z "$held_suspension" ]] && ((rollback_armed == 0)); then exit "$exit_code"; fi
+	if [[ -n "$frozen_target_sha" && -z "$held_suspension" ]] && ((rollback_armed == 0)); then exit "$exit_code"; fi
 	if [[ "$mode" == handoff-source ]]; then
 		trap - EXIT
 		if [[ -n "$held_suspension" ]]; then resume_suspension || exit_code=1; fi
@@ -2325,18 +1946,6 @@ on_exit() {
 	if [[ "$mode" == operator-restart ]] && ((operator_receipt_open && !operator_restart_verified)); then
 		((exit_code != 0)) || exit_code=1
 		operator_receipt failed "$exit_code" || true
-	fi
-	if ((exit_code != 0)) && [[ -n "$migration_evidence" && -e "$journal_file" ]]; then
-		local migration_phase
-		migration_phase="$(proof migration-status "$journal_file" "$serving_root")" || migration_phase=unknown
-		if [[ "$migration_phase" == doctor-started || "$migration_phase" == stores-verified ]]; then
-			record_failed "$(basename "$candidate_release")" || exit_code=1
-			if [[ "$(proof migration-record-kind "$journal_file" "$serving_root")" == offline-doctor ]]; then
-				printf 'OFFLINE_DOCTOR_RETAINED recovery=explicit-verified-owner phase=%s\n' "$migration_phase" >&2
-			else
-				printf 'MIGRATION_RETAINED recovery=forward-only phase=%s\n' "$migration_phase" >&2
-			fi
-		fi
 	fi
 	if ((rollback_armed)); then
 		rollback_activation "$exit_code" || exit_code=$?
@@ -2681,26 +2290,6 @@ recovery_jobs_settled() {
 	done
 }
 
-abandon_rehearsal() {
-	local evidence snapshot instance admitted_instance retired
-	operator_check_lock held
-	evidence="$(proof migration-abandon-evidence "$journal_file" "$serving_root" "$abandon_rehearsal_sha")"
-	previous_release="$releases_root/$(printf '%s' "$evidence" | "$node_bin" -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0,"utf8")).record.predecessor.sha)')"
-	load_gateway_runtime
-	capture_generation system
-	migration_guard="$(proof migration-guard-descriptor "$serving_root")"
-	migration_native_guard
-	instance="$(read_process_instance "$previous_release" "$service_pid")"
-	snapshot="$(proof migration-abandon-snapshot "$journal_file" "$serving_root" "$abandon_rehearsal_sha" "$$" "$instance" "$evidence")"
-	capture_generation system
-	migration_native_guard
-	admitted_instance="$(read_process_instance "$previous_release" "$service_pid")"
-	[[ "$instance" == "$admitted_instance" ]] || fail 'rehearsal abandonment Gateway process instance changed'
-	operator_check_lock held
-	retired="$(proof migration-abandon "$journal_file" "$serving_root" "$abandon_rehearsal_sha" "$$" "$admitted_instance" "$snapshot")"
-	printf 'ABANDONED sha=%s action=abandon-rehearsal restart=0 retained=%s\n' "$abandon_rehearsal_sha" "$retired"
-}
-
 recover_journal() {
 	local phase predecessor_sha candidate_sha current_sha topology expected_pid expected_generation
 	local observed_system observed_user recovery_record evidence recovery_position recovery_release recovery_info recovery_label
@@ -2716,25 +2305,10 @@ recover_journal() {
 		[[ "$phase" != C_CURRENT_SELECTED || "$(proof gateway-runtime changing "$serving_root")" == no ]] || return 1
 	fi
 	worker_phase="$(proof worker-config pending "$serving_root")" || return 1
-	if ((${accept_partial_nocow:-0})); then
-		[[ "$worker_phase" == none && "$(proof migration-status "$journal_file" "$serving_root")" == doctor-started ]] || {
-			fail '--accept-partial-nocow is not applicable to this recovery'; return 1;
-		}
-	fi
 	if [[ "$worker_phase" != none ]]; then
 		[[ -z "$reconcile_config_hash" ]] || { fail 'config reconciliation refuses a worker config journal'; return 1; }
 		recover_worker_config || return $?
 		worker_config_recovered=1
-		return 0
-	fi
-	migration_phase="$(proof migration-status "$journal_file" "$serving_root")" || return 1
-	if [[ "$migration_phase" != none ]]; then
-		if [[ -n "$reconcile_config_hash" ]] || proof journal-field "$journal_file" agentMigration.artifacts.reconciliation >/dev/null 2>&1; then
-			recover_live_migration_candidate || return $?
-		else
-			recover_agent_schema_migration || return $?
-		fi
-		migration_recovered=1
 		return 0
 	fi
 	migration_check_existing_guard || return 1
@@ -2760,12 +2334,35 @@ recover_journal() {
 	previous_info="$(proof validate-release "$previous_release" "$predecessor_sha" "$root_uid" sealed)"
 	candidate_info="$(proof validate-release "$candidate_release" "$candidate_sha" "$root_uid" sealed)"
 	protected_identity="$(proof journal-field "$journal_file" protectedPaths)"
-	if [[ -z "$reconcile_config_hash" ]]; then assert_protected_identity; fi
+	native_update_root="$(proof journal-field "$journal_file" nativeUpdate.backupRoot 2>/dev/null || true)"
+	[[ "$native_update_root" != null ]] || native_update_root=""
 	policy_identity="$(proof policy "$config_file")"
 	current_sha=absent
 	if [[ -L "$current_link" ]]; then
 		current_sha="$(basename "$(read_pointer "$current_link")")"
 	fi
+	if [[ -n "$native_update_root" ]]; then
+		# A migrated candidate may already be serving new writes; verify before restoring its backup.
+		if [[ "$mode" == recover && "$current_sha" == "$candidate_sha" && "$candidate_sha" != "$predecessor_sha" ]] &&
+			bind_successor_generation &&
+			[[ "$suspension_pid:$suspension_generation" != "$expected_pid:$expected_generation" &&
+				"$(realpath "$proc_root/$suspension_pid/cwd")" == "$candidate_release" ]] &&
+			wait_for_live "$candidate_release" "$candidate_info" system "$suspension_pid" "$suspension_generation"; then
+			recheck_generation system "$suspension_pid" "$suspension_generation" || return 1
+			[[ "$(read_pointer "$current_link")" == "$candidate_release" ]] || return 1
+			verified_markers record "$candidate_sha" || return 1
+			proof unlink-exact "$journal_file" "$root_uid" "$session_witness_record" || return 1
+			printf 'RECOVERED phase=%s action=verified-migrated-candidate-forward session-proof=%s\n' "$phase" "$session_proof"
+			return 0
+		fi
+		predecessor_stopped=1
+		if ! predecessor_is_stopped "$expected_pid"; then bind_successor_generation || return 1; fi
+		rollback_armed=1
+		rollback_activation 0
+		return $?
+	fi
+	if [[ -z "$reconcile_config_hash" ]]; then assert_protected_identity; fi
+	policy_identity="$(proof policy "$config_file")"
 	if [[ "$(proof gateway-runtime changing "$serving_root")" == yes ]]; then
 		# File publication and daemon-reload are separate commits. Reconcile only
 		# a journal-authorized command after all earlier manager jobs have settled.
@@ -3058,6 +2655,7 @@ prepare_release() {
 	if [[ -e "$releases_root/$requested_sha" ]]; then
 		# An already sealed release needs validation, never resealing or activation.
 		prepared_info="$(proof validate-release "$releases_root/$requested_sha" "$requested_sha" "$root_uid" sealed)" || return 1
+		prewarm_release "$releases_root/$requested_sha"
 	else
 		prepared_info="$(publish_release "$requested_sha" "$mirror")"
 	fi
@@ -3123,32 +2721,14 @@ continue_frozen_release() {
 }
 
 activate_prepared_release() {
-	migration_kind="$(proof migration-kind "$previous_info" "$candidate_info" "$config_file")"
-	if ((offline_doctor_repair)); then
-		if [[ "$migration_kind" == none ]]; then migration_kind=offline-doctor; fi
+	# The candidate update owner decides whether the installed databases can migrate.
+	native_update_root=""
+	if [[ "$(proof migration-kind "$previous_info" "$candidate_info")" != none || "$offline_doctor_repair" == 1 ]]; then
+		native_update_root="$runtime_home/.openclaw-update/update-$(basename "$candidate_release")-$("$node_bin" -e 'process.stdout.write(require("node:crypto").randomUUID())')/native"
+		((capture_startup_profile + arm_steady_profile == 0)) || fail 'startup profiling cannot accompany a native state update'
 	fi
-	if [[ -n "$frozen_target_sha" && "$migration_kind" != none && "$migration_kind" != state-17-18 && "$migration_kind" != state-18-19 && "$migration_kind" != state-19-20 && "$migration_kind" != agent-23-24 && "$migration_kind" != agent-24-25 && "$migration_kind" != offline-doctor ]]; then
-		fail 'frozen continuation requires unchanged schemas or a qualified state17/agent23 to18/23, state18/agent23 to19/23, state19/agent23 to19/24, state19/agent24 to20/24, or state20/agent24 to20/25 edge'
-	fi
-	# The selector supplies facts. The existing deployment owner creates the journal
-	# and retains its normal suspension, Doctor and forward-recovery responsibilities.
 	if [[ "$mode" == continue-frozen ]]; then mode=deploy; fi
-	if [[ "$migration_kind" != none ]]; then
-		((capture_startup_profile + arm_steady_profile == 0)) || fail 'startup profiling cannot accompany a storage or configuration migration'
-		activate_agent_schema_migration
-	else
-		activate_release system
-	fi
-}
-
-snapshot_for_rehearsal() {
-	local release
-	[[ ! -e "$journal_file" && ! -L "$journal_file" ]] || fail 'rehearsal snapshot refuses a pending activation journal'
-	release="$(read_pointer "$current_link")" || return 1
-	bounded "${OPENCLAW_TEAM_SNAPSHOT_BUDGET:-7200}" "$node_bin" --no-warnings "$release_lib" snapshot-for-rehearsal \
-		"$serving_root" "$release" "$config_file" "$state_database" "$rehearsal_snapshot_label"
-	[[ ! -e "$journal_file" && ! -L "$journal_file" && "$(read_pointer "$current_link")" == "$release" ]] ||
-		fail 'serving release or activation state changed during rehearsal snapshot'
+	activate_release system
 }
 
 handoff_source() {
@@ -3328,10 +2908,17 @@ cleanup_candidate_failure() {
 	if [[ -n "${candidate_build_identity:-}" && -e "$candidate_build_path" ]]; then
 		clean_candidate "$candidate_build_path" "$work_root" "$deploy_file_uid" "$deploy_gid" "$candidate_build_identity" || exit_code=1
 	fi
-	if [[ -n "${candidate_cache_identity:-}" && -e "$candidate_cache_path" ]]; then
-		clean_candidate "$candidate_cache_path" "$build_home/cache" "$deploy_file_uid" "$deploy_gid" "$candidate_cache_identity" || exit_code=1
-	fi
 	exit "$exit_code"
+}
+
+prewarm_release() {
+	local release="$1"
+	# The final filenames and runtime UID must match the cutover boot's cache keys.
+	if [[ -f "$release/dist/gateway-prewarm.js" ]]; then
+		bounded 120 "$runuser_bin" -u openclaw -- env -i HOME="$runtime_home" PATH=/usr/bin:/bin \
+			"$gateway_runtime_bin" "$release/gateway-prewarm.mjs" >&2 ||
+			printf 'WARNING compile-cache prewarm failed; the Gateway will compile on startup\n' >&2
+	fi
 }
 
 publish_release() (
@@ -3341,29 +2928,27 @@ publish_release() (
 	local published="$releases_root/$target_sha" origin_after published_info
 	candidate_build_path="$build_directory"
 	candidate_staging_path="$staging"
-	candidate_cache_path="$build_home/cache/$target_sha.$$"
 	candidate_build_identity=""
 	candidate_staging_identity=""
-	candidate_cache_identity=""
 	if [[ -e "$published" ]]; then
 		published_info="$(proof validate-release "$published" "$target_sha" "$root_uid" sealed)"
 		proof release-capacity activate "$published" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2
-		bounded 120 "$node_bin" --no-warnings "$release_lib" seal-tree "$published"
+		prewarm_release "$published"
 		printf '%s\n' "$published_info"
 		return 0
 	fi
-	[[ ! -e "$build_directory" && ! -e "$staging" && ! -e "$candidate_cache_path" && ! -L "$candidate_cache_path" ]] || fail 'candidate path already exists'
+	[[ ! -e "$build_directory" && ! -e "$staging" ]] || fail 'candidate path already exists'
 	proof release-capacity build "$reference_release" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2
 	trap 'cleanup_candidate_failure "$?"' EXIT
 	run_build mkdir -m 0700 -- "$build_directory"
 	candidate_build_identity="$(proof stat-identity "$build_directory")"
-	run_build mkdir -m 0700 -- "$candidate_cache_path"
-	candidate_cache_identity="$(proof stat-identity "$candidate_cache_path")"
-	local cache_environment=(env "PNPM_CONFIG_STORE_DIR=$candidate_cache_path/store" "PNPM_HOME=$candidate_cache_path/pnpm" "XDG_CACHE_HOME=$candidate_cache_path/metadata")
-	bounded_build "$clone_budget" git "${mirror_git_config[@]}" clone --no-local --no-hardlinks --no-checkout \
-		"file://$mirror" "$build_directory" >&2
+	# pnpm owns content integrity and pruning; imports must never share writable store inodes.
+	local cache_environment=(env "PNPM_CONFIG_STORE_DIR=$build_home/cache/store" "BUILD_ALL_CACHE_ROOT=$build_home/cache/build-artifacts" PNPM_CONFIG_PACKAGE_IMPORT_METHOD=clone-or-copy PNPM_CONFIG_VERIFY_STORE_INTEGRITY=true)
+	run_build git init "$build_directory" >&2
+	bounded_build "$clone_budget" git "${mirror_git_config[@]}" -C "$build_directory" fetch --depth=1 --no-tags \
+		"file://$mirror" "$target_sha" >&2
 	bounded_build "$clone_budget" git "${mirror_git_config[@]}" -C "$build_directory" checkout --detach "$target_sha" >&2
-	run_build git -C "$build_directory" remote set-url origin "$official_origin" >&2
+	run_build git -C "$build_directory" remote add origin "$official_origin" >&2
 	origin_after="$(run_build git -C "$build_directory" remote get-url origin)"
 	[[ "$origin_after" == "$official_origin" &&
 		"$(run_build git -C "$build_directory" rev-parse HEAD)" == "$target_sha" &&
@@ -3371,19 +2956,16 @@ publish_release() (
 		! -e "$build_directory/.git/objects/info/alternates" ]] ||
 		fail 'candidate is not a standalone clone of the frozen official SHA'
 	bounded_build "$build_budget" "${cache_environment[@]}" pnpm -C "$build_directory" install --frozen-lockfile >&2
-	bounded_build "$build_budget" "${cache_environment[@]}" env NODE_OPTIONS=--max-old-space-size=24576 \
+	bounded_build "$build_budget" "${cache_environment[@]}" env NODE_OPTIONS=--max-old-space-size=24576 OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 \
 		pnpm -C "$build_directory" build >&2
 	proof validate-release "$build_directory" "$target_sha" "$root_uid" candidate >/dev/null
-	# Every runtime symlink is release-local; installed hardlinks/reflinks survive cache unlink.
-	clean_candidate "$candidate_cache_path" "$build_home/cache" "$deploy_file_uid" "$deploy_gid" "$candidate_cache_identity"
-	candidate_cache_identity=""
 	proof release-capacity stage "$build_directory" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2
 	install -d -m 0700 "$staging"
 	candidate_staging_identity="$(proof stat-identity "$staging")"
-	cp -a "$build_directory/." "$staging"
+	cp -a --reflink=auto "$build_directory/." "$staging"
 	chown -hR "$root_uid:$root_uid" "$staging"
 	proof manifest "$staging" "$target_sha" "$root_uid" "$frozen_main" >/dev/null
-	bounded 120 "$node_bin" --no-warnings "$release_lib" seal-tree "$staging"
+	"$node_bin" --no-warnings "$release_lib" seal-tree "$staging" 8>&- 9>&-
 	proof validate-release "$staging" "$target_sha" "$root_uid" sealed >/dev/null
 	[[ "$(proof stat-identity "$staging" | cut -d' ' -f1)" == "$(proof stat-identity "$releases_root" | cut -d' ' -f1)" ]] ||
 		fail 'candidate publication crosses filesystem devices'
@@ -3395,6 +2977,7 @@ publish_release() (
 	candidate_build_identity=""
 	trap - EXIT
 	proof release-capacity activate "$published" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2
+	prewarm_release "$published"
 	printf '%s\n' "$published_info"
 )
 
@@ -3494,22 +3077,32 @@ activate_release() {
 	assert_protected_identity
 	assert_policy
 	assert_scheduler_owner "$previous_release"
-	run_gateway "$candidate_release" config validate >/dev/null
+	if [[ -n "${native_update_root:-}" ]]; then
+		migration_install_guard || return 1
+	else
+		run_gateway "$candidate_release" config validate >/dev/null
+	fi
 	session_witness="$(proof session-preservation-witness "$previous_release" "$candidate_release" "$state_database")"
 	# Bind before suspension fences ordinary RPCs; frozen continuation must keep
 	# its admitted predecessor through the ordinary activation owner.
 	old_instance="$(read_process_instance "$previous_release" "$old_pid")"
 	assert_frozen_predecessor "$old_instance"
+	# Sealed release audits belong before admission closes; the deployment lock
+	# excludes other pointer writers while the Gateway cannot modify these trees.
+	if [[ -L "$current_link" ]]; then
+		prior_current_sha="$(read_pointer "$current_link")" || return 1
+		prior_current_sha="${prior_current_sha##*/}"
+	fi
+	if [[ -L "$previous_link" ]]; then
+		prior_previous_sha="$(read_pointer "$previous_link")" || return 1
+		prior_previous_sha="${prior_previous_sha##*/}"
+	fi
 	suspension_instance="$old_instance"
 	if prepare_suspension "$previous_release"; then
 		:
 	else
 		suspension_result=$?
 		return "$suspension_result"
-	fi
-	if ! check_suspension; then
-		printf 'DEFERRED preserved Gateway suspension changed before activation\n'
-		return 75
 	fi
 	assert_protected_identity
 	assert_policy
@@ -3519,13 +3112,12 @@ activate_release() {
 		printf 'DEFERRED preserved Gateway suspension expired during compatibility proof\n'
 		return 75
 	fi
-	if [[ -L "$current_link" ]]; then
-		prior_current_sha="$(basename "$(read_pointer "$current_link")")"
-		[[ "$prior_current_sha" == "$predecessor_sha" ]] ||
+	if [[ "$prior_current_sha" != absent || -L "$current_link" ]]; then
+		[[ "$prior_current_sha" == "$predecessor_sha" && -L "$current_link" &&
+			"$(realpath "$current_link")" == "$previous_release" ]] || {
 			fail 'current release changed before journal publication'
-	fi
-	if [[ -L "$previous_link" ]]; then
-		prior_previous_sha="$(basename "$(read_pointer "$previous_link")")"
+			return 1
+		}
 	fi
 	set -- "$journal_file" "$previous_info" "$candidate_info" "$topology" \
 		"$old_pid" "$old_generation" "$old_instance" "$protected_identity" \
@@ -3533,7 +3125,7 @@ activate_release() {
 		"$prior_system_enabled" "$prior_system_active" "$prior_user_enabled" "$prior_user_active" \
 		"$held_suspension" "$suspension_expiry" "$suspension_state"
 	if [[ "$topology" == system ]]; then
-		printf '%s' "$session_witness" | proof journal-create "$@" @stdin "$runtime_target" >/dev/null
+		printf '%s' "$session_witness" | proof journal-create "$@" @stdin "$runtime_target" "${native_update_root:-}" >/dev/null
 	else
 		proof journal-create "$@" >/dev/null
 	fi
@@ -3574,6 +3166,12 @@ activate_release() {
 		predecessor_is_stopped "$old_pid" || return 1
 		assert_protected_identity
 		assert_policy
+		if [[ -n "${native_update_root:-}" ]]; then
+			install -d -m 0700 -o "$runtime_uid" -g "$(id -g openclaw)" "$(dirname "$native_update_root")"
+			native_update_permit revoke || return 1
+			native_update migrate || return 1
+			assert_policy || return 1
+		fi
 	fi
 	if [[ "$mode" == runtime ]]; then
 		rollback_armed=1
@@ -3584,6 +3182,7 @@ activate_release() {
 		atomic_pointer "$candidate_release" "$current_link"
 	fi
 	proof journal-phase "$journal_file" C_CURRENT_SELECTED "$session_witness_record" >/dev/null
+	if [[ -n "${native_update_root:-}" ]]; then native_update_permit publish || return 1; fi
 	rollback_armed=1
 	if [[ "$topology" == migration-user ]]; then
 		proof journal-phase "$journal_file" MIGRATION_SWITCHING "$session_witness_record" >/dev/null
@@ -3648,6 +3247,7 @@ activate_release() {
 	rollback_armed=0
 	if [[ "$mode" == deploy ]]; then verified_markers record "$candidate_sha"; fi
 	proof unlink-exact "$journal_file" "$root_uid" "$session_witness_record"
+	if [[ -n "${native_update_root:-}" ]]; then finish_native_update; fi
 	if [[ "$mode" != runtime ]]; then cleanup_releases; fi
 	printf 'SUCCESS sha=%s action=%s previous=%s APPROVAL_DELTA=0\n' \
 		"$candidate_sha" "$mode" "$predecessor_sha"
@@ -4174,11 +3774,6 @@ while (($#)); do
 		mode=handoff-source; operator_expected_sha="$2"; operator_expected_pid="$3"; operator_expected_generation="$4"
 		handoff_peer="$5"; handoff_target_sha="$6"; shift 5
 		;;
-	--snapshot-for-rehearsal)
-		[[ "$mode" == deploy && $# -ge 2 && -z "$requested_sha" && "$2" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$ ]] || fail 'rehearsal snapshot requires one fresh label'
-		mode=snapshot-rehearsal; rehearsal_snapshot_label="$2"
-		shift
-		;;
 	--prepare-release)
 		[[ "$mode" == deploy && $# -ge 2 && -z "$requested_sha" && "$2" =~ ^[a-f0-9]{40}$ ]] || fail 'release preparation requires one exact official SHA'
 		mode=prepare-release; requested_sha="$2"
@@ -4216,11 +3811,6 @@ while (($#)); do
 		[[ "$mode" == deploy ]] || fail 'recovery mode cannot be combined with another action'
 		mode=recover
 		;;
-	--abandon-rehearsal)
-		[[ -z "$abandon_rehearsal_sha" && $# -ge 2 && "$2" =~ ^[a-f0-9]{40}$ ]] || fail '--abandon-rehearsal requires one candidate SHA'
-		abandon_rehearsal_sha="$2"
-		shift
-		;;
 	--start-stopped-current)
 		((start_stopped_current == 0)) && [[ $# -ge 6 ]] || fail 'stopped current recovery requires SHA BOOT_ID LAST_EXEC_PID LAST_EXEC_START_US LAST_INVOCATION'
 		start_stopped_current=1
@@ -4253,14 +3843,6 @@ while (($#)); do
 		((offline_doctor_repair == 0)) || fail 'offline Doctor may be selected only once'
 		offline_doctor_repair=1
 		;;
-	--accept-partial-nocow)
-		((accept_partial_nocow == 0)) || fail 'partial NOCOW acceptance may be selected only once'
-		accept_partial_nocow=1
-		;;
-	--skip-migration-rehearsal)
-		((skip_migration_rehearsal == 0)) || fail 'rehearsal waiver may be selected only once'
-		skip_migration_rehearsal=1
-		;;
 	--arm-steady-profile)
 		((arm_steady_profile == 0)) || fail 'steady profiling may be armed only once'
 		arm_steady_profile=1
@@ -4281,26 +3863,10 @@ while (($#)); do
 		# only meaningful with --interrupt-after-drain; receipted as TERMINAL_PERSISTENCE_WAIVED.
 		waive_terminal_persistence=1
 		;;
-	*) fail 'usage: openclaw-release-deploy [--continue-frozen-release TARGET_SHA MANIFEST_SHA256 CURRENT_SHA PID START|--prepare-release OFFICIAL_SHA|--switch-runtime node|bun BINARY SHA256|--migrate|--recover [--abandon-rehearsal CANDIDATE_SHA|--accept-partial-nocow]|--cleanup] [--reconcile-config SHA PID START CONFIG_SHA256 JOURNAL_SHA256|--reconcile-stopped-predecessor SHA CONFIG_SHA256 JOURNAL_SHA256] [--repair-worker-bootstrap SHA PID START CONFIG_SHA256 OLD_SETUP_SHA256] [--sha OFFICIAL_MAIN_SHA] [--interrupt-after-drain] [--skip-migration-rehearsal] [--offline-doctor-repair] [--allow-cpu-degraded] [--capture-startup-profile|--arm-steady-profile] [--capture-steady-profile OPERATION SHA PID START]' ;;
+	*) fail 'usage: openclaw-release-deploy [--continue-frozen-release TARGET_SHA MANIFEST_SHA256 CURRENT_SHA PID START|--prepare-release OFFICIAL_SHA|--switch-runtime node|bun BINARY SHA256|--migrate|--recover|--cleanup] [--reconcile-config SHA PID START CONFIG_SHA256 JOURNAL_SHA256|--reconcile-stopped-predecessor SHA CONFIG_SHA256 JOURNAL_SHA256] [--repair-worker-bootstrap SHA PID START CONFIG_SHA256 OLD_SETUP_SHA256] [--sha OFFICIAL_MAIN_SHA] [--interrupt-after-drain] [--offline-doctor-repair] [--allow-cpu-degraded] [--capture-startup-profile|--arm-steady-profile] [--capture-steady-profile OPERATION SHA PID START]' ;;
 	esac
 	shift
 done
-
-if ((accept_partial_nocow)); then
-	[[ "$mode" == recover && -z "$requested_sha" && -z "$reconcile_config_hash" && -z "$abandon_rehearsal_sha" &&
-		"$start_stopped_current" == 0 && "$offline_doctor_repair" == 0 && "$skip_migration_rehearsal" == 0 &&
-		"$interrupt_after_drain" == 0 && "$capture_startup_profile" == 0 && "$arm_steady_profile" == 0 ]] ||
-		fail '--accept-partial-nocow requires --recover and allows only --allow-cpu-degraded'
-fi
-
-if [[ -n "$abandon_rehearsal_sha" ]]; then
-	[[ "$mode" == recover && "$abandon_rehearsal_sha" =~ ^[a-f0-9]{40}$ &&
-		-z "$requested_sha" && -z "$reconcile_config_hash" && "$start_stopped_current" == 0 &&
-		"$offline_doctor_repair" == 0 && "$skip_migration_rehearsal" == 0 && "$interrupt_after_drain" == 0 &&
-		"$allow_cpu_degraded" == 0 && "$capture_startup_profile" == 0 && "$arm_steady_profile" == 0 ]] ||
-		fail '--abandon-rehearsal requires --recover and an exact candidate SHA without another action'
-	operator_check_lock before
-fi
 
 if [[ "$mode" == continue-frozen ]]; then
 	[[ -z "$requested_sha" && -z "$reconcile_config_hash" && "$start_stopped_current" == 0 &&
@@ -4310,8 +3876,6 @@ if [[ "$mode" == continue-frozen ]]; then
 		fail 'frozen continuation requires exact candidate, manifest and predecessor bindings without another action'
 	operator_check_lock before
 fi
-
-[[ "$mode" != snapshot-rehearsal || -z "$requested_sha" ]] || fail 'rehearsal snapshot cannot be combined with --sha'
 
 if ((start_stopped_current)); then
 	[[ "$mode" == recover && -z "$requested_sha" && -z "$reconcile_config_hash" &&
@@ -4330,19 +3894,17 @@ if [[ -n "$reconcile_config_hash" ]]; then
 fi
 
 ((offline_doctor_repair == 0)) || [[ ("$mode" == deploy || "$mode" == continue-frozen) && "$interrupt_after_drain" == 1 &&
-  "$capture_startup_profile" == 0 && "$arm_steady_profile" == 0 && "$skip_migration_rehearsal" == 0 ]] ||
-  fail '--offline-doctor-repair requires a fenced system deployment with --interrupt-after-drain, without profiling or rehearsal waiver'
+  "$capture_startup_profile" == 0 && "$arm_steady_profile" == 0 ]] ||
+  fail '--offline-doctor-repair requires a fenced system deployment with --interrupt-after-drain, without profiling'
 
 ((capture_startup_profile + arm_steady_profile <= 1)) || fail 'select only one profiling mode'
-((capture_startup_profile + arm_steady_profile == 0)) || [[ "$mode" == deploy && "$skip_migration_rehearsal" == 0 ]] ||
+((capture_startup_profile + arm_steady_profile == 0)) || [[ "$mode" == deploy ]] ||
 	fail 'startup profiling is only valid for an ordinary deployment without migration'
 
 ((allow_cpu_degraded == 0)) || [[ "$mode" == deploy || "$mode" == continue-frozen || "$mode" == recover || "$mode" == runtime || "$mode" == handoff-source || "$mode" == handoff-activate ]] ||
 	fail '--allow-cpu-degraded is only valid for deployment, runtime switching, recovery, or handoff'
 ((interrupt_after_drain == 0)) || [[ "$mode" == deploy || "$mode" == continue-frozen || "$mode" == worker-config || "$mode" == runtime || "$mode" == handoff-source ]] ||
 	fail '--interrupt-after-drain is only valid for deployment, runtime switching, worker config repair, or source handoff'
-((skip_migration_rehearsal == 0)) || [[ "$mode" == deploy ]] ||
-	fail '--skip-migration-rehearsal is only valid for the canonical system deployment'
 
 if [[ "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == handoff-source ]]; then
 	[[ -z "$requested_sha" && "$operator_expected_sha" =~ ^[a-f0-9]{40}$ &&
@@ -4368,27 +3930,31 @@ fi
 
 exec 9>"$lock_file"
 flock -n 9 || {
-		if [[ -n "$abandon_rehearsal_sha" || "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == runtime || "$mode" == prepare-release || "$mode" == continue-frozen || "$mode" == snapshot-rehearsal || "$mode" == handoff-* || -n "$reconcile_config_hash" || "$start_stopped_current" == 1 ]]; then
+	if [[ "$mode" == deploy ]]; then
+		# Maintenance joins its descendants under this same lock; let it settle.
+		printf 'DEPLOY_LOCK_WAIT waiting up to 180 seconds for deployment or maintenance\n'
+		flock -w 180 -E 75 9 || {
+			lock_exit=$?
+			printf 'DEPLOY_LOCK_UNAVAILABLE exit=%s; retry after the current owner finishes\n' "$lock_exit" >&2
+			exit "$lock_exit"
+		}
+	elif [[ "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == runtime || "$mode" == prepare-release || "$mode" == continue-frozen || "$mode" == handoff-* || -n "$reconcile_config_hash" || "$start_stopped_current" == 1 ]]; then
 		fail 'bound maintenance action refused: canonical deployment lock is busy'
 		exit 1
+	else
+		printf 'SKIP another release deployment is running\n'
+		exit 0
 	fi
-	printf 'SKIP another release deployment is running\n'
-	exit 0
 }
 proof maintenance-idle "$ancestor_boundary" >/dev/null ||
 	fail 'scheduled maintenance has not settled; deployment admission refused'
 if [[ -n "$reconcile_config_hash" ]]; then operator_check_lock held; fi
-if [[ -z "$abandon_rehearsal_sha" && "$mode" != handoff-* && ( -e "$journal_file" || -L "$journal_file" ) ]]; then
+if [[ "$mode" != handoff-* && ( -e "$journal_file" || -L "$journal_file" ) ]]; then
 	handoff_pending="$(proof host-handoff status "$serving_root")"
 	[[ "$handoff_pending" != SOURCE_* && "$handoff_pending" != TARGET_* ]] ||
 		fail 'cross-host handoff is retained; resume its matching --handoff action, never ordinary deployment or rollback'
 fi
 trap on_exit EXIT
-
-if [[ -n "$abandon_rehearsal_sha" ]]; then
-	abandon_rehearsal
-	exit 0
-fi
 
 if [[ "$mode" == steady-profile ]]; then
 	operator_check_lock held
@@ -4422,10 +3988,6 @@ if [[ "$mode" == handoff-* ]]; then
 fi
 if [[ "$mode" == prepare-release ]]; then
 	prepare_release
-	exit 0
-fi
-if [[ "$mode" == snapshot-rehearsal ]]; then
-	snapshot_for_rehearsal
 	exit 0
 fi
 if [[ "$mode" == continue-frozen ]]; then
@@ -4496,7 +4058,7 @@ if [[ "$mode" == cleanup ]]; then
 	exit 0
 fi
 recover_journal
-((migration_recovered == 0 && worker_config_recovered == 0)) || exit 0
+((worker_config_recovered == 0)) || exit 0
 
 assert_protected_identity
 assert_policy

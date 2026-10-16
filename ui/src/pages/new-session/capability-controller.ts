@@ -1,17 +1,19 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
 import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
-import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.ts";
+import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.types.ts";
 import {
   ComposerSkillCatalog,
   composerWebSearchBaseEnabled,
 } from "../chat/composer-capability-catalog.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 
-export class NewSessionCapabilityController {
+/** Synchronous tool intent survives renderer changes and is read directly at submission. */
+export class NewSessionCapabilities {
   private readonly skillCatalog: ComposerSkillCatalog;
   private toolOverridesValue: SessionToolOverrides | null = null;
   constructor(
@@ -39,12 +41,6 @@ export class NewSessionCapabilityController {
     this.toolOverridesValue = null;
   }
 
-  restoreToolOverrides(toolOverrides: SessionToolOverrides | null | undefined) {
-    if (toolOverrides !== undefined) {
-      this.setToolOverrides(toolOverrides);
-    }
-  }
-
   canStartAsDraft(context: ApplicationContext | undefined): boolean {
     const policy = context?.gateway.snapshot.hello?.policy;
     return (
@@ -66,7 +62,7 @@ export class NewSessionCapabilityController {
     }
     this.skillCatalog.synchronize(gateway.client, gateway.connectionEpoch);
     const config = context.runtimeConfig.state;
-    const runtimeConfig = config.configSnapshot?.runtimeConfig ?? null;
+    const runtimeConfig = currentDisplayRuntimeConfig(config);
     const gatewayAvailable = gateway.connected && Boolean(gateway.client);
     const access = readGatewayOperatorAccess(context.gateway.snapshot);
     const mutationBlockedReason = !gatewayAvailable

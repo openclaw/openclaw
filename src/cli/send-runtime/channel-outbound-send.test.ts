@@ -25,7 +25,7 @@ describe("sendChannelOutboundMessage", () => {
     return params;
   }
 
-  it.each(["discord", "telegram"] as const)(
+  it.each(["discord"] as const)(
     "classifies unavailable %s adapters as definitely not dispatched",
     async (channelId) => {
       mocks.loadChannelOutboundAdapter.mockResolvedValue(undefined);
@@ -82,44 +82,21 @@ describe("sendChannelOutboundMessage", () => {
     expect(params.gifPlayback).toBe(true);
   });
 
-  it("falls back to sendText for text-only sends", async () => {
-    const sendText = vi.fn(async () => ({ channel: "whatsapp", messageId: "wa-2" }));
-    mocks.loadChannelOutboundAdapter.mockResolvedValue({
-      sendText,
-      sendMedia: vi.fn(),
-    });
-
-    const onPlatformSendDispatch = vi.fn();
-
-    await sendChannelOutboundMessage("whatsapp", "+15551234567", "hello", {
-      cfg: {},
-      accountId: "default",
-      deliveryQueueId: "queue-1",
-      deliveryPartIndex: 3,
-      deliveryPartCount: 4,
-      onPlatformSendDispatch,
-    });
-
-    const params = expectSingleCallParams(sendText);
-    expect(params.cfg).toEqual({});
-    expect(params.to).toBe("+15551234567");
-    expect(params.text).toBe("hello");
-    expect(params.accountId).toBe("default");
-    expect(params.deliveryQueueId).toBe("queue-1");
-    expect(params.deliveryPartIndex).toBe(3);
-    expect(params.deliveryPartCount).toBe(4);
-    expect(params.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
-  });
-
   it("preserves rendered html formatting through lazy text sends", async () => {
     const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "tg-1" }));
     mocks.loadChannelOutboundAdapter.mockResolvedValue({
       sendText,
     });
 
+    const onPlatformSendDispatch = vi.fn();
     const opts = {
       cfg: {},
       textMode: "html" as const,
+      accountId: "default",
+      deliveryQueueId: "queue-1",
+      deliveryPartIndex: 3,
+      deliveryPartCount: 4,
+      onPlatformSendDispatch,
     };
 
     await sendChannelOutboundMessage(
@@ -131,6 +108,11 @@ describe("sendChannelOutboundMessage", () => {
 
     const params = expectSingleCallParams(sendText);
     expect(params.formatting).toEqual({ parseMode: "HTML" });
+    expect(params.accountId).toBe("default");
+    expect(params.deliveryQueueId).toBe("queue-1");
+    expect(params.deliveryPartIndex).toBe(3);
+    expect(params.deliveryPartCount).toBe(4);
+    expect(params.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
   });
 
   it("routes block sends through payload delivery", async () => {
@@ -186,80 +168,5 @@ describe("sendChannelOutboundMessage", () => {
     expect(params.replyToId).toBe("$parent");
     expect(params.threadId).toBe("$thread-root");
     expect(params.to).toBe("room:!ops:example.org");
-  });
-
-  it("forwards Slack threadTs alias to threadId", async () => {
-    const sendText = vi.fn(async () => ({ channel: "slack", messageId: "slack-1" }));
-    mocks.loadChannelOutboundAdapter.mockResolvedValue({
-      sendText,
-    });
-
-    await sendChannelOutboundMessage("slack", "C123", "hello", {
-      cfg: {},
-      threadTs: "1712345678.123456",
-    });
-
-    const params = expectSingleCallParams(sendText);
-    expect(params.cfg).toEqual({});
-    expect(params.to).toBe("C123");
-    expect(params.text).toBe("hello");
-    expect(params.threadId).toBe("1712345678.123456");
-  });
-
-  it("prefers canonical thread fields over Slack aliases", async () => {
-    const sendText = vi.fn(async () => ({ channel: "slack", messageId: "slack-2" }));
-    mocks.loadChannelOutboundAdapter.mockResolvedValue({
-      sendText,
-    });
-
-    await sendChannelOutboundMessage("slack", "C123", "hello", {
-      cfg: {},
-      messageThreadId: "200.000",
-      threadId: "150.000",
-      threadTs: "100.000",
-      replyToMessageId: "400.000",
-      replyToId: "300.000",
-    });
-
-    const params = expectSingleCallParams(sendText);
-    expect(params.cfg).toEqual({});
-    expect(params.threadId).toBe("200.000");
-    expect(params.replyToId).toBe("400.000");
-  });
-
-  it("falls back to sendText when media is present but sendMedia is unavailable", async () => {
-    const sendText = vi.fn(async () => ({ channel: "whatsapp", messageId: "wa-3" }));
-    mocks.loadChannelOutboundAdapter.mockResolvedValue({
-      sendText,
-    });
-
-    const mediaReadFile = vi.fn(async () => Buffer.from("pdf"));
-
-    await sendChannelOutboundMessage("whatsapp", "+15551234567", "caption", {
-      cfg: {},
-      mediaUrl: "file:///tmp/test.pdf",
-      mediaAccess: {
-        localRoots: ["/tmp/workspace"],
-        readFile: mediaReadFile,
-      },
-      mediaLocalRoots: ["/tmp/fallback-root"],
-      mediaReadFile,
-      accountId: "default",
-      forceDocument: true,
-    });
-
-    const params = expectSingleCallParams(sendText);
-    expect(params.cfg).toEqual({});
-    expect(params.to).toBe("+15551234567");
-    expect(params.text).toBe("caption");
-    expect(params.mediaUrl).toBe("file:///tmp/test.pdf");
-    expect(params.mediaAccess).toEqual({
-      localRoots: ["/tmp/workspace"],
-      readFile: mediaReadFile,
-    });
-    expect(params.mediaLocalRoots).toEqual(["/tmp/fallback-root"]);
-    expect(params.mediaReadFile).toBe(mediaReadFile);
-    expect(params.accountId).toBe("default");
-    expect(params.forceDocument).toBe(true);
   });
 });

@@ -1,8 +1,6 @@
-import type { ReactiveControllerHost } from "lit";
-
 /** Requests publish into their display owner; completed payloads are never cached here. */
 export function createUsageRequest<Args, Value>(
-  host: Pick<ReactiveControllerHost, "requestUpdate">,
+  notify: () => void,
   options: {
     task: (args: Args, options: { signal: AbortSignal }) => Promise<Value>;
     onComplete: (value: Value) => void;
@@ -10,18 +8,18 @@ export function createUsageRequest<Args, Value>(
   },
 ) {
   let active: AbortController | null = null;
-  const settle = (request: AbortController, notify: () => void) => {
+  const settle = (request: AbortController, publish: () => void) => {
     if (active !== request) {
       return;
     }
     // Completion may immediately start a successor through the refresh policy.
     active = null;
     try {
-      notify();
+      publish();
     } catch {
       // Completion notifications retain the former Task's error isolation.
     } finally {
-      host.requestUpdate();
+      notify();
     }
   };
   return {
@@ -32,14 +30,14 @@ export function createUsageRequest<Args, Value>(
       const previous = active;
       active = null;
       previous?.abort();
-      host.requestUpdate();
+      notify();
     },
     async run(args: Args): Promise<void> {
       const previous = active;
       const request = new AbortController();
       active = request;
       previous?.abort();
-      host.requestUpdate();
+      notify();
       let value: Value;
       try {
         value = await options.task(args, { signal: request.signal });

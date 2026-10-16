@@ -9,7 +9,7 @@ import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gate
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
-import { completeWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
+import { parseWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import type { NodeWorkerWorkspaceExecInput } from "../worker/node-workspace-protocol.js";
 import {
   buildWorkerProcessTurn,
@@ -245,7 +245,12 @@ describe("node worker environment lifetime", () => {
       const encodePoll = () =>
         serializeWorkerProcessInput(
           buildWorkerProcessTurn(
-            completeWorkerLaunchDescriptor(poll.descriptor, TEST_WORKER_ENDPOINT),
+            parseWorkerLaunchDescriptor({
+              ...poll.descriptor,
+              connectionEndpoint: TEST_WORKER_ENDPOINT,
+            }),
+            false,
+            true,
           ),
         );
       poll.descriptor.assignment.systemPrompt += "x".repeat(
@@ -645,8 +650,7 @@ describe("node worker environment stop after failed initialization", () => {
   it.runIf(process.platform === "linux" || process.platform === "darwin")(
     "settles native recovery without publishing capacity until the unrelated container recovers",
     async () => {
-      const cleanupMode =
-        process.platform === "linux" && !process.versions.bun ? "linux-subreaper" : "owned-anchor";
+      const cleanupMode = process.platform === "linux" ? "linux-subreaper" : "owned-anchor";
       const capacities: Array<{ total: number; available: number }> = [];
       const root = tempDirs.make("node-worker-stop-initialization-");
       const fixture = createNodeWorkerContainerFixture(root, fileLockModule, {

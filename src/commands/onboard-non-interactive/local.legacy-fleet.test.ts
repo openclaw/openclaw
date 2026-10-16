@@ -3,13 +3,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { upsertAuthProfile } from "../../agents/auth-profiles/profiles.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store-runtime.js";
+import { upsertAuthProfileAsync } from "../../agents/auth-profiles/profiles.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../agents/auth-profiles/store-runtime.js";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { runDoctorConfigPreflight } from "../doctor-config-preflight.js";
 import {
   applyOnboardingPrimaryModel,
@@ -33,10 +36,11 @@ vi.mock("./local/auth-choice.js", () => ({
 
 import { runNonInteractiveSetup } from "../onboard-non-interactive.js";
 
-afterEach(() => {
+afterEach(async () => {
   vi.resetAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   resetConfigRuntimeState();
 });
 
@@ -171,7 +175,7 @@ describe("local setup fleet owner persistence", () => {
             target: OnboardingAgentTarget;
           }) => {
             expect(target).toEqual({ agentId: "beta", agentDir, workspaceDir: workspace });
-            upsertAuthProfile({
+            await upsertAuthProfileAsync({
               agentDir: target.agentDir,
               profileId,
               credential: { type: "api_key", provider: "fixture", key: "synthetic-setup-key" },
@@ -210,8 +214,9 @@ describe("local setup fleet owner persistence", () => {
             runtime,
             expect.objectContaining({ agentId: "beta", skipBootstrap: true }),
           );
-          closeOpenClawAgentDatabasesForTest();
-          closeOpenClawStateDatabaseForTest();
+          await closeOpenClawAgentDatabasesAsync(stateDir);
+          closeOpenClawAgentDatabasesForTest(stateDir);
+          await closeStateDatabaseForTest();
           resetConfigRuntimeState();
           const reopened = await readConfigFileSnapshot();
           expect(reopened.valid, JSON.stringify(reopened.issues)).toBe(true);
@@ -251,12 +256,14 @@ describe("local setup fleet owner persistence", () => {
             expect(persisted.agents.defaults.systemAgent).toEqual({ agentId: "beta" });
           }
           expect(
-            loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId],
+            (await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir)).profiles[profileId],
           ).toMatchObject({ provider: "fixture" });
           for (const nonOwner of ["alpha", "ignored"]) {
             expect(
-              loadAuthProfileStoreWithoutExternalProfiles(
-                path.join(stateDir, "agents", nonOwner, "agent"),
+              (
+                await loadAuthProfileStoreWithoutExternalProfilesAsync(
+                  path.join(stateDir, "agents", nonOwner, "agent"),
+                )
               ).profiles[profileId],
               `credentials must not be stored for ${nonOwner}`,
             ).toBeUndefined();

@@ -29,7 +29,11 @@ const SESSION = {
 };
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
-it.each(["reopening the store", "reconciling an unchanged host"] as const)(
+it.each([
+  "reopening the store",
+  "reconciling an unchanged host",
+  "revoking an absent credential",
+] as const)(
   "keeps session lists resident when %s changes no environment rows",
   async (operation) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -72,13 +76,15 @@ it.each(["reopening the store", "reconciling an unchanged host"] as const)(
       const environment = store.get(environmentId);
       if (operation === "reopening the store") {
         await createWorkerEnvironmentStore({ database, now: () => 1_000 });
-      } else {
+      } else if (operation === "reconciling an unchanged host") {
         await store.reconcileSharedHost({
           environmentId,
           state: "bootstrapping",
           leaseId: "lease-unchanged",
           sharedHost: false,
         });
+      } else {
+        await store.revokeEnvironmentCredential(environmentId);
       }
       expect(store.get(environmentId)).toEqual(environment);
       expect(projection.dirtyRowCount).toBe(0);
@@ -120,13 +126,17 @@ describe("worker store session change publications", () => {
       }
     });
     try {
-      await store.createIntent({
-        environmentId: "worker-1",
-        providerId: "fake-provider",
-        profileId: "test-profile",
-        profileSnapshot: { settings: { region: "test" }, lifetime: { idleMinutes: 10 } },
-        provisionOperationId: "provision:worker-1",
-      });
+      await store.createSessionAttachmentIntent(
+        {
+          ...SESSION,
+          environmentId: "worker-1",
+          providerId: "fake-provider",
+          profileId: "test-profile",
+          profileSnapshot: { settings: { region: "test" }, lifetime: { idleMinutes: 10 } },
+          provisionOperationId: "provision:worker-1",
+        },
+        () => {},
+      );
       expect(transactions).toEqual([false]);
       database.db.exec(`CREATE TRIGGER reject_environment_error
         AFTER UPDATE OF last_error ON worker_environments
@@ -137,10 +147,19 @@ describe("worker store session change publications", () => {
       database.db.exec("DROP TRIGGER reject_environment_error");
       expect(transactions).toEqual([false]);
       expect(store.get("worker-1")?.lastError).toBeNull();
+      await store.closeSessionAttachment(SESSION.sessionId);
+      expect(transactions).toEqual([false, false]);
+      await store.closeSessionAttachment(SESSION.sessionId);
+      expect(transactions).toEqual([false, false]);
       await store.transition({ environmentId: "worker-1", from: "requested", to: "failed" });
       expect(await store.pruneTerminalEnvironments({ nowMs: 8 * DAY_MS })).toBe(1);
-      expect(transactions).toEqual([false, false, false]);
-      expect(committedStates).toEqual([{ state: "requested" }, { state: "failed" }, undefined]);
+      expect(transactions).toEqual([false, false, false, false]);
+      expect(committedStates).toEqual([
+        { state: "requested" },
+        { state: "requested" },
+        { state: "failed" },
+        undefined,
+      ]);
     } finally {
       unsubscribe();
     }

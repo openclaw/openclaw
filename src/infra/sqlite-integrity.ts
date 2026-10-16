@@ -1,36 +1,14 @@
-import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
 import {
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
-
-/** SQLite recovers committed WAL frames; these checks do not scan table or index contents. */
-export function sqliteWalAdmissionRefusal(
-  database: DatabaseSync,
-  pathname: string,
-): string | undefined {
-  let probe = "wal-sidecars";
-  try {
-    const journal = fs.statSync(`${pathname}-journal`, { throwIfNoEntry: false });
-    if (journal && journal.size > 0) {
-      return "rollback-journal-present";
-    }
-    // Admission has already read the schema through SQLite's recovered header.
-    probe = "journal-mode";
-    if (database.prepare("PRAGMA journal_mode").get()?.journal_mode !== "wal") {
-      return "journal-mode-not-wal";
-    }
-    return undefined;
-  } catch {
-    return `${probe}-failed`;
-  }
-}
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
@@ -218,6 +196,9 @@ export function assertSqliteIntegrity(
 ): SqliteIntegrityChecks {
   const integrityCheck = runSqliteCheck(database, databaseLabel, check);
   runSqliteForeignKeyCheck(database, databaseLabel);
+  if (check === "integrity_check") {
+    recordSqliteDatabaseIntegrity(database);
+  }
   return { integrityCheck };
 }
 

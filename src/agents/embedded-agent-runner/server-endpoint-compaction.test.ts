@@ -16,6 +16,7 @@ vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
 
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { testing } from "../openai-transport-stream.test-support.js";
+import { log } from "./logger.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 
 const model = {
@@ -107,6 +108,7 @@ describe("attemptServerEndpointCompaction", () => {
     { trigger: "manual", throws: false, model },
     { trigger: "manual", throws: true, model },
     { trigger: "budget", throws: false, model },
+    { trigger: "manual", throws: false, model: openAIModel },
     { trigger: "budget", throws: false, model: openAIModel },
   ] as const)(
     "reports a committed $model.provider $trigger rewrite without fallback when observer throws=$throws",
@@ -219,37 +221,90 @@ describe("attemptServerEndpointCompaction", () => {
     expect(requestAborted).toBe(true);
   });
 
-  it("leaves the durable transcript intact when policy would redact the canonical window", async () => {
+  const redactSecrets = { logging: { redactPatterns: ["NORTH-SECRET-\\d+"] } };
+
+  it.each([
+    { source: "user message", systemPrompt: "system", userText: "token NORTH-SECRET-17" },
+    // xAI has no instructions field, so its compact input carries the system prompt.
+    { source: "system prompt", systemPrompt: "session NORTH-SECRET-17", userText: "remember" },
+  ])(
+    "compacts source text verbatim when its $source contains a configured pattern",
+    async (testCase) => {
+      const warn = vi.spyOn(log, "warn").mockClear();
+      const session = createSession(model, undefined, testCase.userText);
+      const onUsage = vi.fn();
+      requestPreparedCompactionMock.mockResolvedValueOnce(createCompactionResponse(model));
+      const { result } = attempt({
+        sessionManager: session.sessionManager,
+        context: { systemPrompt: testCase.systemPrompt, messages: session.messages },
+        config: redactSecrets,
+        onUsage,
+      });
+
+      await expect(result).resolves.toBeDefined();
+      expect(requestPreparedCompactionMock).toHaveBeenCalledOnce();
+      expect(onUsage).toHaveBeenCalledOnce();
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("compacts through instructions when only the OpenAI system prompt holds a secret", async () => {
+    const session = createSession(openAIModel);
+    requestPreparedCompactionMock.mockResolvedValueOnce(createCompactionResponse(openAIModel));
+    const onCompactionCommitted = vi.fn();
+    const { result } = attempt({
+      model: openAIModel,
+      sessionManager: session.sessionManager,
+      context: { systemPrompt: "session NORTH-SECRET-17", messages: session.messages },
+      config: redactSecrets,
+      onCompactionCommitted,
+    });
+
+    await expect(result).resolves.toBeDefined();
+    expect(requestPreparedCompactionMock).toHaveBeenCalledOnce();
+    expect(onCompactionCommitted).toHaveBeenCalledOnce();
+  });
+
+  it("preserves secret-shaped source text in returned compaction windows", async () => {
+    const warn = vi.spyOn(log, "warn").mockClear();
     const session = createSession();
-    const before = structuredClone(session.sessionManager.getBranch());
+    const response = createCompactionResponse();
+    response.output[0] = {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "remember NORTH-SECRET-17" }],
+    };
+    requestPreparedCompactionMock.mockResolvedValueOnce(response);
     const onUsage = vi.fn();
     const onCompactionCommitted = vi.fn();
-    const request = {
+    const { result } = attempt({
       sessionManager: session.sessionManager,
       context: { systemPrompt: "system", messages: session.messages },
-      config: { logging: { redactPatterns: ["remember copper"] } },
+      config: redactSecrets,
       onUsage,
       onCompactionCommitted,
-    };
-    const { result } = attempt(request);
+    });
 
-    await expect(result).resolves.toBeUndefined();
-    expect(onUsage).toHaveBeenCalledOnce();
+    await expect(result).resolves.toBeDefined();
     expect(onUsage).toHaveBeenCalledWith({
       input_tokens: 1_000,
       output_tokens: 200,
       dropped_message_count: 1,
     });
-    expect(session.sessionManager.getBranch()).toEqual(before);
-    expect(onCompactionCommitted).not.toHaveBeenCalled();
+    expect(JSON.stringify(session.sessionManager.getBranch())).toContain("NORTH-SECRET-17");
+    expect(onCompactionCommitted).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
   });
 
-  it("does not call the endpoint during overflow recovery", async () => {
-    const { result } = attempt({ trigger: "overflow" });
+  it.each([model, openAIModel])(
+    "does not call the $provider endpoint during overflow recovery",
+    async (requestModel) => {
+      const { result } = attempt({ trigger: "overflow", model: requestModel });
 
-    await expect(result).resolves.toBeUndefined();
-    expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
-  });
+      await expect(result).resolves.toBeUndefined();
+      expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("leaves a missing canonical checkpoint window to client budget compaction", async () => {
     const owner: Pick<AssistantMessage, "providerReplay"> = {};
@@ -349,12 +404,18 @@ describe("attemptServerEndpointCompaction", () => {
     });
   });
 
-  it("preserves custom instructions by falling back to client compaction", async () => {
-    const { result } = attempt({ customInstructions: "Retain the security caveats." });
+  it.each([model, openAIModel])(
+    "preserves $provider custom instructions by falling back to client compaction",
+    async (requestModel) => {
+      const { result } = attempt({
+        model: requestModel,
+        customInstructions: "Retain the security caveats.",
+      });
 
-    await expect(result).resolves.toBeUndefined();
-    expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
-  });
+      await expect(result).resolves.toBeUndefined();
+      expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not compact transcript entries that remain after the checkpoint owner", async () => {
     const messages = createSession().messages.concat(makeUserMessage("trailing turn", 3));

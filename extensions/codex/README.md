@@ -26,7 +26,7 @@ Local discovery reads native provenance from plain or compressed rollouts. A fai
 
 With `appServer.remoteWorkspaceRoot`, OpenClaw maps workspace-relative paths to the remote root. Local filesystem-root workspaces, including `/` and Windows drive roots, follow the same mapping.
 
-A supervised OpenClaw Chat cannot be deleted while its model-selection lock protects the native binding. Before native archive, OpenClaw checks the exact target and every non-archived spawned descendant reported by Codex; any active OpenClaw binding blocks the operation. Descendant pagination errors, cycles, and safety-limit exhaustion also fail closed. Codex still does not expose a conditional archive operation or cross-process runner lease, so the confirmation covers unknown native clients and the race between the status read and archive request.
+A supervised OpenClaw Chat cannot be deleted while its model-selection lock protects the native binding. Before native archive, OpenClaw checks the exact target and every non-archived spawned descendant reported by Codex; any active OpenClaw binding blocks the operation. Descendant pagination errors, cycles, and safety-limit exhaustion also block archive. Codex still does not expose a conditional archive operation or cross-process runner lease, so the confirmation covers unknown native clients and the race between the status read and archive request.
 
 Disabling or uninstalling the plugin leaves supervised Chats locked and unavailable rather than rerouting them. Reinstall or re-enable the same plugin and restart the Gateway to resume those Chats.
 
@@ -34,9 +34,9 @@ These shell commands differ from the in-chat `/codex` runtime commands. In parti
 
 Native Codex plugin catalogs are discoverable with `/codex plugins available`, including repository marketplaces declared in `.agents/plugins/marketplace.json` in the bound workspace. An owner or `operator.admin` can install and authorize an exact plugin with `/codex plugins install <plugin>@<marketplace>`. The owner-scoped `codex_plugins` agent tool only reads marketplace metadata; installation and policy changes stay on authenticated `/codex` management commands. Explicitly installing a plugin trusts its skills, apps, MCP servers, and hooks.
 
-Cached app inventory diagnostics reflect the current refresh or invalidation. Failures from superseded requests remain logged without replacing that newer status.
+Catalog and app-inventory refreshes are best effort while settings, installed plugins, or desktop artifacts change. An in-flight read can publish its captured metadata; a later refresh, cache expiry, or restart picks up the change. Normal parallel refreshes retain unrelated apps, while authorization is checked separately when work executes. An app-server or desktop replacement during an operation may return an error instead of automatically replaying the operation.
 
-For a supervised branch, Codex App Server selects the snapshot fork's model and provider from its current native configuration. OpenClaw starts the canonical harness thread with exactly that returned pair. Codex persists the canonical thread's native selection, and later resumes preserve it because OpenClaw omits model and provider overrides. OpenClaw cannot substitute its outer runtime, model, or fallback. The returned initial pair can differ from the source's last recorded model.
+For a supervised branch, Codex App Server selects the snapshot fork's model and provider from its current native configuration. OpenClaw starts the OpenClaw harness thread with exactly that returned pair. Codex persists the harness thread's native selection, and later resumes preserve it because OpenClaw omits model and provider overrides. OpenClaw cannot substitute its outer runtime, model, or fallback. The returned initial pair can differ from the source's last recorded model.
 
 The visible-history mirror keeps at most 200 user or assistant messages, 512 KiB total, and 64 KiB per message. Image inputs become `[Image attachment]`; image data and local paths are not copied.
 
@@ -45,5 +45,12 @@ When assembled context bootstraps a Codex thread, redacted tool payloads retain 
 Settled-turn finalization uses the same configured Codex App Server transport as the supervised conversation. Remote websocket App Server configurations stay on their configured transport. Managed user-home stdio launches running inside an Agent home, and not through the proxy launcher, use a private stdio side turn for native-tool isolation. The bounded finalizer preserves the selected model, provider, and native authorization returned by Codex, and rejects native tool evidence outside the finalization contract. It may mirror a final answer after completed tool work; it does not diagnose why a model omitted a visible final message.
 
 When settled-turn recovery rejects history, the `codex settled-turn finalization context capture failed` warning includes a stable `reason`, such as `item_limit`, `byte_limit`, `field_limit`, `unsupported_user_image`, or `snapshot_invalidated`. Unknown failures use `history_read_failed`. The warning excludes transcript content and exception text. Rejected history remains unavailable for finalization, and completed actions are never replayed.
+
+The `codex_app_server.item` agent-event stream includes native item lifecycle events
+and raw function, custom/code-mode, local-shell, and tool-search call receipts.
+Calls publish `phase: "started"` and recorded outputs publish `phase: "completed"`,
+correlated by `itemId` (the native `call_id`). Raw receipt events carry only phase,
+item ID, and type, not arguments or results. An outer code-mode call remains open
+even when its child command items have completed.
 
 See the [Codex harness](https://docs.openclaw.ai/plugins/codex-harness) and [Codex supervision](https://docs.openclaw.ai/plugins/codex-supervision) guides.

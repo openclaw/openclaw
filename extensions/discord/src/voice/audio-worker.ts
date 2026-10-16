@@ -250,7 +250,7 @@ export class DiscordAudioWorker {
         break;
       }
       case "output-audio":
-        this.outputs.get(command.id)?.appendAdmitted(Buffer.from(command.audio), command.audible);
+        this.outputs.get(command.id)?.append(Buffer.from(command.audio), command.audible);
         break;
       case "output-mark":
         this.outputs
@@ -356,7 +356,6 @@ export class DiscordAudioWorker {
       sdk: this.sdk,
       reason,
       expirySeconds,
-      onVerbose: (message) => this.post({ type: "log", level: "verbose", message }),
       onWarn: (message) => this.post({ type: "log", level: "warn", message }),
     });
   }
@@ -516,7 +515,6 @@ export class DiscordAudioWorker {
           }
         },
         onError,
-        onVerbose: (message) => this.post({ type: "log", level: "verbose", message }),
         onWarn: (message) => this.post({ type: "log", level: "warn", message }),
       });
     } finally {

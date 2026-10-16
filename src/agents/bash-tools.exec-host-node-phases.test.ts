@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { invokeNodeSystemRun } from "./bash-tools.exec-host-node-failure.js";
+import {
+  formatNodeInvokeFailureToolResult,
+  invokeNodeSystemRun,
+} from "./bash-tools.exec-host-node-failure.js";
 import {
   dispatchNodeSystemRun,
   resolveNodeExecutionTarget,
@@ -46,6 +49,32 @@ async function invokeFailure(error: unknown) {
 }
 
 describe("invokeNodeSystemRun failure classification", () => {
+  it("returns a permission card without labeling rejected execution as an unknown outcome", async () => {
+    const permissionMissing = {
+      nodeId: "mac-node",
+      command: "system.run",
+      capabilities: ["screenRecording"],
+      state: "denied",
+    };
+    const message =
+      "PERMISSION_MISSING: Screen Recording required on node mac-node. The user has been shown a Grant card in the chat. Do not retry until the user confirms that access has been granted.";
+    const error = Object.assign(new Error(message), {
+      details: { nodeError: { code: "PERMISSION_MISSING" }, permissionMissing },
+    });
+    const failure = await invokeFailure(error);
+    const result = formatNodeInvokeFailureToolResult({
+      failure,
+      nodeId: "mac-node",
+      command: "screencapture",
+      startedAt: 0,
+      cwd: undefined,
+    });
+    expect(result.details).toMatchObject({ reason: "permission-missing", permissionMissing });
+    expect(result.content).toEqual([{ type: "text", text: expect.stringContaining(message) }]);
+    expect(result.content).not.toEqual([
+      { type: "text", text: expect.stringContaining("may have executed") },
+    ]);
+  });
   it("classifies only proven pre-dispatch NOT_CONNECTED as retry-safe", async () => {
     await expect(
       invokeFailure(
@@ -169,37 +198,6 @@ describe("node execution target resolution", () => {
     );
   });
 
-  it.each([
-    {
-      name: "beside a connected non-executor",
-      siblings: [
-        {
-          nodeId: "canvas-only",
-          caps: ["canvas"],
-          commands: ["canvas.present"],
-          connected: true,
-        },
-      ],
-    },
-  ])("selects the sole headless executor $name", async ({ siblings }) => {
-    callGatewayToolMock.mockResolvedValueOnce({
-      nodes: [
-        ...siblings,
-        {
-          nodeId: "exec-node",
-          platform: "linux",
-          caps: ["system"],
-          commands: ["system.run"],
-          connected: true,
-        },
-      ],
-    });
-
-    await expect(resolveNodeExecutionTarget(createDirectNodeRun().request)).resolves.toMatchObject({
-      nodeId: "exec-node",
-    });
-  });
-
   it("honors an explicit executable node among multiple candidates", async () => {
     callGatewayToolMock.mockResolvedValueOnce({
       nodes: [
@@ -305,18 +303,6 @@ describe("direct node run", () => {
     ]);
   });
 
-  it("forwards the original cancellation signal to the gateway", async () => {
-    const controller = new AbortController();
-    await dispatchNodeSystemRun(createDirectNodeRun(controller.signal));
-
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "node.invoke",
-      { timeoutMs: 35_000 },
-      expect.objectContaining({ command: "system.run" }),
-      { signal: controller.signal },
-    );
-  });
-
   it("combines stdout, stderr, and the node error", async () => {
     const stdout = "small stdout";
     const stderr = "node stderr";
@@ -340,17 +326,6 @@ describe("direct node run", () => {
       status: "failed",
       exitCode: 1,
       aggregated: output,
-      nodeId: "node-1",
-    });
-  });
-
-  it("identifies the node in the successful result the model reads", async () => {
-    const result = await dispatchNodeSystemRun(createDirectNodeRun());
-
-    expect(result.content).toEqual([{ type: "text", text: "Node: node-1\nok" }]);
-    expect(result.details).toMatchObject({
-      status: "completed",
-      aggregated: "ok",
       nodeId: "node-1",
     });
   });

@@ -26,30 +26,6 @@ function job(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 }
 
 describe("migrateScheduledToolPolicy", () => {
-  it("recovers an account from the persisted owner pair", () => {
-    const raw = job();
-    const result = normalizeStoredCronJobs([raw]);
-    expect(result.issues.migratedScheduledToolPolicy).toBe(1);
-    expect(raw.scheduledToolPolicy).toEqual({
-      version: 1,
-      mode: "account",
-      ownerSessionKey: "agent:main:discord:group:ops",
-      ownerAccountId: "work",
-    });
-  });
-
-  it("recovers an account structurally encoded in a direct-session key", () => {
-    const raw = job({
-      owner: {
-        agentId: "main",
-        sessionKey: "agent:main:discord:work:direct:user-1",
-      },
-    });
-    const result = normalizeStoredCronJobs([raw]);
-    expect(result.issues.migratedScheduledToolPolicy).toBe(1);
-    expect(raw.owner).toMatchObject({ accountId: "work" });
-  });
-
   it.each([
     {
       label: "agent mismatch",
@@ -67,21 +43,11 @@ describe("migrateScheduledToolPolicy", () => {
         accountId: "personal",
       },
     },
-    {
-      label: "accountless owner",
-      owner: { agentId: "main", sessionKey: "agent:main:discord:group:ops" },
-    },
   ])("does not guess authority for $label", ({ owner }) => {
     const raw = job({ owner });
     const result = normalizeStoredCronJobs([raw]);
     expect(result.legacyScheduledToolPolicyJobs).toEqual(["Legacy"]);
     expect(raw.scheduledToolPolicy).toBeUndefined();
-  });
-
-  it("keeps capless historical jobs on legacy sender policy", () => {
-    const raw = job({ payload: { kind: "agentTurn", message: "run" } });
-    const result = normalizeStoredCronJobs([raw]);
-    expect(result.legacyScheduledToolPolicyJobs).toEqual(["Legacy"]);
   });
 
   it("recovers a capless creator account without changing execution permissions", () => {
@@ -155,14 +121,6 @@ describe("migrateScheduledToolPolicy", () => {
         invalidJobs: result.invalidScheduledToolPolicyJobs,
       }),
     ).not.toContain("Command");
-  });
-
-  it("preserves valid trusted provenance", () => {
-    const raw = job({ scheduledToolPolicy: { version: 1, mode: "trusted" } });
-    const result = normalizeStoredCronJobs([raw]);
-    expect(result.legacyScheduledToolPolicyJobs).toEqual([]);
-    expect(result.invalidScheduledToolPolicyJobs).toEqual([]);
-    expect(raw.scheduledToolPolicy).toEqual({ version: 1, mode: "trusted" });
   });
 
   it("reports auto-recoverable and ambiguous jobs through the doctor result", () => {

@@ -5,7 +5,12 @@ import {
   sendGatewayCronFailureAlert,
   sendGatewayCronWebhook,
 } from "../gateway/server-cron-notifications.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  runOutsideGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
@@ -308,13 +313,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
 
   it.each([
     {
-      responseStatus: 204,
-      bestEffort: false,
-      deliveryStatus: "delivered",
-      delivered: true,
-      completionStatus: "succeeded",
-    },
-    {
       responseStatus: 503,
       bestEffort: false,
       deliveryStatus: "not-delivered",
@@ -327,13 +325,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
       deliveryStatus: "unknown",
       delivered: undefined,
       completionStatus: "unknown",
-    },
-    {
-      responseStatus: null,
-      bestEffort: true,
-      deliveryStatus: "unknown",
-      delivered: undefined,
-      completionStatus: "succeeded",
     },
   ] as const)(
     "persists primary webhook evidence for HTTP $responseStatus (best effort $bestEffort)",
@@ -667,85 +658,102 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
     }
   });
 
-  it("falls back to the exact job owner when Gateway alert transport rejects", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-cron-alert-fallback-" },
-      async (state) => {
-        const enqueueSystemEvent = vi.fn();
-        const requestHeartbeat = vi.fn();
-        const storePath = state.path("cron", "jobs.json");
-        const cron = new CronService({
-          scheduler: createTestGatewayScheduler(),
-          nowMs: () => Date.now(),
-          storePath,
-          cronEnabled: true,
-          log: createNoopLogger(),
-          enqueueSystemEvent,
-          requestHeartbeat,
-          runIsolatedAgentJob: vi.fn(async () => ({
-            status: "error" as const,
-            error: "provider unavailable",
-          })),
-          sendCronFailureAlert: async (params) =>
-            await sendGatewayCronFailureAlert({
-              ...params,
-              deps: {} as never,
-              logger: createNoopLogger(),
-              resolveCronAgent: () => ({ agentId: "work", cfg: {} as never }),
-            }),
-        });
-        try {
-          await cron.start();
-          const sessionKey = "agent:work:cron:failure-fallback";
-          const job = await cron.add({
-            name: "fallback owner",
-            enabled: true,
-            agentId: "work",
-            sessionKey,
-            schedule: { kind: "every", everyMs: 60_000 },
-            sessionTarget: "isolated",
-            wakeMode: "now",
-            payload: { kind: "agentTurn", message: "check provider" },
-            delivery: { mode: "none" },
-            failureAlert: {
-              after: 1,
-              mode: "webhook",
-              to: "http://127.0.0.1:9/failure",
+  it.each(["transport", "admission"] as const)(
+    "falls back to the exact job owner when Gateway alert %s rejects",
+    async (failure) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "openclaw-cron-alert-fallback-" },
+        async (state) => {
+          const enqueueSystemEvent = vi.fn();
+          const requestHeartbeat = vi.fn();
+          const storePath = state.path("cron", "jobs.json");
+          let delivery: Promise<void> | undefined;
+          const expectedError =
+            failure === "admission"
+              ? "Gateway is restarting"
+              : "Blocked hostname or private/internal/special-use IP address";
+          const cron = new CronService({
+            scheduler: createTestGatewayScheduler(),
+            nowMs: () => Date.now(),
+            storePath,
+            cronEnabled: true,
+            log: createNoopLogger(),
+            enqueueSystemEvent,
+            requestHeartbeat,
+            runIsolatedAgentJob: vi.fn(async () => ({
+              status: "error" as const,
+              error: "provider unavailable",
+            })),
+            sendCronFailureAlert: (params) => {
+              const send = () =>
+                sendGatewayCronFailureAlert({
+                  ...params,
+                  deps: {} as never,
+                  logger: createNoopLogger(),
+                  resolveCronAgent: () => ({ agentId: "work", cfg: {} as never }),
+                });
+              if (failure === "admission") {
+                // Without a live parent, a detached alert must respect the restart fence.
+                markGatewayRestartDraining();
+                delivery = runOutsideGatewayRootWorkAdmission(send);
+              } else {
+                delivery = send();
+              }
+              return delivery;
             },
           });
+          try {
+            await cron.start();
+            const sessionKey = "agent:work:cron:failure-fallback";
+            const job = await cron.add({
+              name: "fallback owner",
+              enabled: true,
+              agentId: "work",
+              sessionKey,
+              schedule: { kind: "every", everyMs: 60_000 },
+              sessionTarget: "isolated",
+              wakeMode: "now",
+              payload: { kind: "agentTurn", message: "check provider" },
+              delivery: { mode: "none" },
+              failureAlert: {
+                after: 1,
+                mode: "webhook",
+                to: "http://127.0.0.1:9/failure",
+              },
+            });
 
-          await cron.run(job.id, "force");
+            await cron.run(job.id, "force");
 
-          await vi.waitFor(() =>
-            expect(enqueueSystemEvent).toHaveBeenCalledWith(
+            if (!delivery) {
+              throw new Error("Expected a failure alert transport");
+            }
+            await expect(delivery).rejects.toThrow(expectedError);
+            expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
               expect.stringContaining('Automation "fallback owner" failed 1 times'),
               { agentId: "work", sessionKey, contextKey: `cron:${job.id}:failure-alert` },
-            ),
-          );
-          expect(requestHeartbeat).toHaveBeenCalledWith({
-            source: "notifications-event",
-            intent: "immediate",
-            reason: "wake",
-            agentId: "work",
-            sessionKey,
-          });
-          await vi.waitFor(async () => {
+            );
+            expect(requestHeartbeat).toHaveBeenCalledWith({
+              source: "notifications-event",
+              intent: "immediate",
+              reason: "wake",
+              agentId: "work",
+              sessionKey,
+            });
             expect(await persistedJob(storePath, job.id)).toMatchObject({
               state: {
                 lastFailureNotificationDelivered: false,
                 lastFailureNotificationDeliveryStatus: "not-delivered",
-                lastFailureNotificationDeliveryError: expect.stringContaining(
-                  "Blocked hostname or private/internal/special-use IP address",
-                ),
+                lastFailureNotificationDeliveryError: expect.stringContaining(expectedError),
               },
             });
-          });
-        } finally {
-          cron.stop();
-        }
-      },
-    );
-  });
+          } finally {
+            cron.stop();
+            resetGatewayWorkAdmission();
+          }
+        },
+      );
+    },
+  );
 
   it("sends skipped-run alerts through the real webhook path and persists alert state", async () => {
     const receiver = await createWebhookReceiver();

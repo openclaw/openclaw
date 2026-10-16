@@ -1,8 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { SessionCapability } from "../lib/sessions/session-capability.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
@@ -102,14 +102,14 @@ suite.define(() => {
           expect(patches).toEqual([]);
 
           // Keep the browser object: provenance follows its identity across cache invalidation.
-          await using sampledSession = await page.evaluateHandle(async (sessionKey) => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: { sessions: SessionCapability } };
-            };
-            return (
-              await app.runtime.context.sessions.describe({ key: sessionKey, agentId: "main" })
-            ).session;
-          }, original.key);
+          await using application = await getControlUiContextHandle(page);
+          await using sampledSession = await application.evaluateHandle(
+            async (context, sessionKey) => {
+              return (await context.sessions.describe({ key: sessionKey, agentId: "main" }))
+                .session;
+            },
+            original.key,
+          );
           expect(await sampledSession.evaluate((session) => session?.label)).toBe(original.label);
           const rosterMatch = { includeGlobal: true };
           await gateway.deferNext("sessions.list", rosterMatch);
@@ -134,11 +134,8 @@ suite.define(() => {
           if (invalidateMetadata) {
             await gateway.emitGatewayEvent("chat.metadata.changed", {});
           }
-          await page.evaluate((session) => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: { sessions: SessionCapability } };
-            };
-            app.runtime.context.sessions.captureReconcile()(session ?? undefined);
+          await application.evaluate((context, session) => {
+            context.sessions.captureReconcile()(session ?? undefined);
           }, sampledSession);
           await gateway.resolveDeferred("sessions.list");
           await expect.poll(() => title.textContent()).toContain(finalTitle);

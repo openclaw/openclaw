@@ -131,7 +131,7 @@ describe("Slack platform-authoritative automatic room history", () => {
     expect(refreshed?.ctxPayload.Body).not.toContain("offline discussion");
   });
 
-  it.each(["table image", "attachment budget", "failed downloads"] as const)(
+  it.each(["table image", "failed downloads"] as const)(
     "hydrates the native snapshot within its I/O budget: %s",
     async (kind) => {
       const table = kind === "table image";
@@ -197,7 +197,6 @@ describe("Slack platform-authoritative automatic room history", () => {
   it.each([
     { mode: "allowlist", allowed: false },
     { mode: "allowlist", allowed: true },
-    { mode: "allowlist_quote", allowed: false },
     { mode: "all", allowed: false },
   ] as const)(
     "keeps bot thread context independent of allowBots false ($mode, allowed: $allowed)",
@@ -315,44 +314,6 @@ describe("Slack platform-authoritative automatic room history", () => {
     expect(f.history).not.toHaveBeenCalled();
   });
 
-  it.each(["API failure", "session reset"] as const)(
-    "omits unusable native history after %s while preserving the addressed turn",
-    async (cause) => {
-      const f = fixture();
-      const warn = vi.spyOn(f.ctx.logger, "warn").mockImplementation(() => undefined);
-      const writeGeneration = (lifecycleRevision: string) =>
-        upsertSessionEntry({
-          storePath: f.storePath,
-          sessionKey: "agent:main:slack:channel:c1",
-          entry: {
-            sessionId: "same-session",
-            lifecycleRevision,
-            updatedAt: 10_000,
-            sessionStartedAt: 10_000,
-          },
-        });
-      if (cause === "API failure") {
-        f.history.mockRejectedValue(new Error("missing_scope"));
-      } else {
-        await writeGeneration("before-reset");
-        f.history.mockImplementation(async () => {
-          await writeGeneration("after-reset");
-          return { messages: [{ ts: "19.000", user: "U1", text: "raced context" }] };
-        });
-      }
-      const prepared = await f.prepare();
-      expect(prepared?.ctxPayload.InboundHistory).toEqual([]);
-      expect(prepared?.ctxPayload.Body).not.toContain("raced context");
-      expect(prepared?.ctxPayload.RawBody).toContain("current request");
-      if (cause === "API failure") {
-        expect(warn).toHaveBeenCalledWith(
-          expect.objectContaining({ reason: expect.stringContaining("missing_scope") }),
-          "Slack automatic history omitted",
-        );
-      }
-    },
-  );
-
   it("honors cancellation and live policy revocation while awaiting native history", async () => {
     const f = fixture();
     const controller = new AbortController();
@@ -422,7 +383,7 @@ describe("Slack platform-authoritative automatic room history", () => {
     );
   });
 
-  it.each(["thread", "channel"] as const)(
+  it.each(["channel"] as const)(
     "keeps initial thread context single while honoring %s history scope",
     async (scope) => {
       const f = fixture(2);

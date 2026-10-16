@@ -10,11 +10,25 @@ This page covers day-to-day secrets operation: the supported credential surface,
 
 ## Supported credential surface
 
-Canonical supported and unsupported credentials are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
+Supported and unsupported credentials are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 
 <Note>
 Runtime-minted or rotating credentials and OAuth refresh material are intentionally excluded from read-only SecretRef resolution.
 </Note>
+
+Config secret-target lookup follows config ownership. Core owns roots other than
+`channels` and `plugins`; plugin manifest secret inputs are relative to
+`plugins.entries.<plugin-id>.config`. Channel secret contracts can describe
+credentials under `channels` and their own plugin config schema, including
+contracts shared by multiple channel owners. They do not extend core config schemas.
+
+Secret-target lookup for ordinary core config paths does not discover plugin
+metadata. An explicit plugin config path tries that plugin's manifest targets,
+then its channel contract on a miss.
+Channel lookups try the channel contract first, then use broader discovery on a
+miss so external owners can extend even bundled channel IDs. Audit and
+configuration still include disabled plugins; runtime activation keeps its
+existing enablement rules.
 
 ## Required behavior and precedence
 
@@ -30,7 +44,7 @@ Warning and audit signals:
 - `STORE_PLAINTEXT_RESIDUE` (audit finding when a stored name still has an equivalent plaintext config value)
 - `PLACEHOLDER_VALUE` (audit error when a resolved credential or store entry contains a known redaction placeholder; counted as unresolved)
 
-Google Chat `serviceAccount` accepts inline JSON or a SecretRef. Doctor moves the retired sibling `serviceAccountRef` into this canonical field when it is unset.
+Google Chat `serviceAccount` accepts inline JSON or a SecretRef. Doctor moves the retired sibling `serviceAccountRef` into this current field when it is unset.
 
 ## Activation triggers
 
@@ -92,7 +106,7 @@ Command paths can opt into supported SecretRef resolution via a gateway snapshot
   </Tab>
 </Tabs>
 
-Agent turns using the matching prepared Gateway snapshot do not re-resolve every model and tool credential at turn startup. A configured-unavailable provider therefore does not block a turn using a healthy provider. Selecting the unavailable provider still fails closed before environment or auth-profile fallback, and explicitly targeted channel/account credentials remain strict.
+Agent turns using the matching prepared Gateway snapshot do not re-resolve every model and tool credential at turn startup. A configured-unavailable provider therefore does not block a turn using a healthy provider. Selecting the unavailable provider still stops with an error before environment or auth-profile fallback, and explicitly targeted channel/account credentials remain strict.
 
 Standalone agent commands without config-ref preparation and calls with a different config retain strict command-scoped resolution. A local non-delivery agent command does not resolve unrelated channel or Gateway credentials.
 

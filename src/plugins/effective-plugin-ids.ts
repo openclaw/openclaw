@@ -12,6 +12,7 @@ import {
   listExplicitConfiguredChannelIdsForConfig,
   loadGatewayStartupPluginPlan,
   resolveConfiguredChannelPluginIds,
+  resolveConfiguredChannelPluginIdsAsync,
 } from "./channel-plugin-ids.js";
 import {
   normalizePluginsConfig,
@@ -106,7 +107,7 @@ function addBundledChannelOwnerPluginIds(params: {
 }
 
 /** Lists plugin ids that are effectively enabled for a config/discovery context. */
-export function resolveEffectivePluginIds(params: {
+type ResolveEffectivePluginIdsParams = {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;
@@ -114,10 +115,15 @@ export function resolveEffectivePluginIds(params: {
   /** Prepared metadata for this invocation. Without it every lookup below rebuilds
    * the registry, so callers that already hold a snapshot must pass it. */
   metadataSnapshot?: PluginMetadataSnapshot;
-}): string[] {
-  // Effective ids are a whole-config question. A plugin-scoped snapshot only carries
-  // its own manifests, and a bundled-plugins-dir override rewrites the discovery env,
-  // so neither can answer it — those callers keep re-deriving.
+};
+
+export function resolveEffectivePluginIds(params: ResolveEffectivePluginIdsParams): string[] {
+  return resolveEffectivePluginIdsWithChannels(params);
+}
+
+export async function resolveEffectivePluginIdsAsync(
+  params: ResolveEffectivePluginIdsParams,
+): Promise<string[]> {
   const prepared =
     params.bundledPluginsDir || params.metadataSnapshot?.pluginIds
       ? undefined
@@ -128,6 +134,39 @@ export function resolveEffectivePluginIds(params: {
     ...(prepared ? { manifestRegistry: prepared.manifestRegistry } : {}),
     ...(prepared?.discovery ? { discovery: prepared.discovery } : {}),
   });
+  const configuredPluginIds = await resolveConfiguredChannelPluginIdsAsync({
+    config: autoEnabled.config,
+    activationSourceConfig: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    manifestRecords: prepared?.plugins,
+    discovery: prepared?.discovery,
+  });
+  return resolveEffectivePluginIdsWithChannels(params, { autoEnabled, configuredPluginIds });
+}
+
+function resolveEffectivePluginIdsWithChannels(
+  params: ResolveEffectivePluginIdsParams,
+  preparedChannels?: {
+    autoEnabled: ReturnType<typeof applyPluginAutoEnable>;
+    configuredPluginIds: string[];
+  },
+): string[] {
+  // Effective ids are a whole-config question. A plugin-scoped snapshot only carries
+  // its own manifests, and a bundled-plugins-dir override rewrites the discovery env,
+  // so neither can answer it — those callers keep re-deriving.
+  const prepared =
+    params.bundledPluginsDir || params.metadataSnapshot?.pluginIds
+      ? undefined
+      : params.metadataSnapshot;
+  const autoEnabled =
+    preparedChannels?.autoEnabled ??
+    applyPluginAutoEnable({
+      config: params.config,
+      env: params.env,
+      ...(prepared ? { manifestRegistry: prepared.manifestRegistry } : {}),
+      ...(prepared?.discovery ? { discovery: prepared.discovery } : {}),
+    });
   const effectiveConfig = autoEnabled.config;
   const plugins = normalizePluginsConfig(effectiveConfig.plugins);
   const ids = new Set(plugins.enabled ? plugins.allow : []);
@@ -159,14 +198,17 @@ export function resolveEffectivePluginIds(params: {
     params.env,
     prepared?.discovery,
   );
-  for (const pluginId of resolveConfiguredChannelPluginIds({
-    config: effectiveConfig,
-    activationSourceConfig: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    manifestRecords: prepared?.plugins,
-    discovery: prepared?.discovery,
-  })) {
+  const configuredPluginIds =
+    preparedChannels?.configuredPluginIds ??
+    resolveConfiguredChannelPluginIds({
+      config: effectiveConfig,
+      activationSourceConfig: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      manifestRecords: prepared?.plugins,
+      discovery: prepared?.discovery,
+    });
+  for (const pluginId of configuredPluginIds) {
     ids.add(pluginId);
   }
   addBundledChannelOwnerPluginIds({

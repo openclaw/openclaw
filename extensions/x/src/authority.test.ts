@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerXAllowlistMethods } from "./admin.js";
 import { openXAllowlist } from "./allowlist.js";
 import { createXApiClient } from "./api.js";
+import { xPlugin } from "./channel.js";
 import {
   client,
   config,
@@ -17,6 +18,7 @@ import {
 } from "./test-support/monitor-fixture.js";
 import { createQueue } from "./test-support/monitor.js";
 import { createXTestSpend } from "./test-support/spend.js";
+import { openXWorkOrigins } from "./work-origin.js";
 
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
@@ -90,6 +92,101 @@ async function administrator(test: ReturnType<typeof fixture>) {
 }
 
 describe("X stored allowlist authority", () => {
+  it.each(
+    (["origin", "unrelated conversation", "wrong account", "revoked at fetch"] as const).flatMap(
+      (scenario) => (["action", "outbound"] as const).map((route) => ({ scenario, route })),
+    ),
+  )(
+    "enforces work-origin authority before POST: $scenario via $route",
+    async ({ scenario, route }) => {
+      const target = scenario === "unrelated conversation" ? "502" : "501";
+      const mention = {
+        ...post(target, "30"),
+        conversation_id: scenario === "unrelated conversation" ? "600" : "500",
+        // Both accounts are recipients so the wrong-account case reaches the origin restriction.
+        entities: {
+          mentions: [
+            { id: "100", username: "roboclawbot" },
+            { id: "101", username: "other_bot" },
+          ],
+        },
+      };
+      const test = fixture({ posts: [mention], cfg: accountsConfig });
+      const remove = await administrator(test);
+      const sessionKey = "agent:maintainer:work:origin";
+      await openXWorkOrigins(test.runtime).registerIfAbsent(sessionKey, {
+        accountId: "default",
+        postId: "501",
+        postUrl: "https://x.com/stored_maintainer/status/501",
+        authorHandle: "stored_maintainer",
+        conversationId: "500",
+        senderTier: "maintainer",
+      });
+      const posts: unknown[] = [];
+      const api = createXApiClient({
+        spend: createXTestSpend(),
+        clientId: "synthetic-client",
+        clientSecret: "synthetic-secret",
+        refreshToken: "synthetic-refresh",
+        saveRefreshToken: async () => {},
+        fetch: async (url, init) => {
+          if (url.endsWith("/oauth2/token")) {
+            return Response.json({ access_token: "synthetic-access" });
+          }
+          const request = new URL(url);
+          expect(request.pathname).toBe("/2/tweets");
+          if (init?.method !== "POST") {
+            expect(request.searchParams.get("ids")).toBe(target);
+            return Response.json(page([mention]));
+          }
+          posts.push(await new Response(init.body).json());
+          return Response.json({ data: { id: "901" } });
+        },
+      });
+      if (scenario === "revoked at fetch") {
+        const reply = api.reply.bind(api);
+        vi.spyOn(api, "reply").mockImplementation((params) =>
+          reply({
+            ...params,
+            assertActive: async () => {
+              const assertCurrent = await params.assertActive?.();
+              await remove();
+              return assertCurrent;
+            },
+          }),
+        );
+      }
+      client.getXApi.mockResolvedValue(api);
+      const accountId = scenario === "wrong account" ? "second" : "default";
+      const delivery =
+        route === "action"
+          ? xPlugin.actions!.handleAction!({
+              channel: "x",
+              action: "send",
+              cfg: accountsConfig,
+              accountId,
+              sessionKey,
+              params: { to: `x:${target}`, message: "Fixed." },
+            })
+          : xPlugin.outbound!.sendText!({
+              cfg: accountsConfig,
+              accountId,
+              sessionKey,
+              to: `x:${target}`,
+              text: "Fixed.",
+            });
+      if (scenario === "origin") {
+        await expect(delivery).resolves.toBeDefined();
+        expect(posts).toEqual([{ text: "Fixed.", reply: { in_reply_to_tweet_id: "501" } }]);
+      } else {
+        await expect(delivery).rejects.toThrow(
+          scenario === "revoked at fetch" ? "allowlist changed" : "only to its origin post",
+        );
+        expect(posts).toEqual([]);
+      }
+    },
+  );
+
   it.each(["thread", "binding", "unrelated account"] as const)(
     "settles the mention once after removal during %s admission",
     async (phase) => {

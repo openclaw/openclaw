@@ -28,7 +28,7 @@ function createFixture(
     explicitRelease?: boolean;
     ending?: "eof" | "error" | "blocked";
     initialState?: "empty" | "error" | "chunk";
-    projectionFailure?: "result" | "config-model" | "audioStream" | "release";
+    projectionFailure?: "result" | "config-model";
     holdRelease?: boolean;
     invalidMetadata?: boolean;
     releaseFailure?: boolean;
@@ -101,7 +101,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           if (state.options.ending === "error") { controller.error(new Error("native read failure")); return; }
           controller.close();
         },
-        async cancel() { canceled = true; record("cancel"); if (state.options.explicitRelease === false || state.options.projectionFailure === "release") state.aborted.resolve(); await state.aborted.promise; }
+        async cancel() { canceled = true; record("cancel"); if (state.options.explicitRelease === false) state.aborted.resolve(); await state.aborted.promise; }
       }, { highWaterMark: 0 });
       let cleanup;
       const release = () => cleanup ??= (async () => {
@@ -111,15 +111,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       if (state.options.projectionFailure === "config-model") {
         Object.defineProperty(request.providerConfig, "modelId", { get() { throw new Error("native config projection failure"); } });
       }
-      if (["audioStream", "release"].includes(state.options.projectionFailure)) {
-        state.work.push(state.trackAsyncWork(async () => { await state.aborted.promise; record("capture-tail"); }));
-        state.started.resolve();
-      }
       return {
-        get audioStream() { if (state.options.projectionFailure === "audioStream") throw new Error("native audioStream projection failure"); return audioStream; },
+        audioStream,
         get outputFormat() { record("metadata"); if (state.options.projectionFailure === "result") throw new Error("native result projection failure"); return "pcm"; },
         fileExtension: state.options.invalidMetadata ? "" : ".pcm", voiceCompatible: false,
-        get release() { if (state.options.projectionFailure === "release") throw new Error("native release projection failure"); return state.options.explicitRelease === false ? undefined : release; },
+        release: state.options.explicitRelease === false ? undefined : release,
       };
     }
   });
@@ -419,37 +415,6 @@ describe("streaming speech registration ownership", () => {
       expectClosed(fixture);
     });
   });
-  it.each([
-    { projectionFailure: "audioStream", releaseFailure: false },
-    { projectionFailure: "audioStream", releaseFailure: true },
-    { projectionFailure: "release", releaseFailure: false },
-  ] as const)(
-    "uses the other cleanup field when $projectionFailure fails (cleanup rejects: $releaseFailure)",
-    async ({ projectionFailure, releaseFailure }) => {
-      const fixture = createFixture({ projectionFailure, releaseFailure });
-      await fixture.runTest(async () => {
-        const pending = fixture.run();
-        try {
-          await fixture.state.started.promise;
-          await nextTurn();
-          expect(
-            fixture.state.events.some(
-              (event) =>
-                event.phase === (projectionFailure === "audioStream" ? "release" : "cancel"),
-            ),
-          ).toBe(true);
-          const result = await pending;
-          expect(result.success).toBe(false);
-          expect(result.error).toContain(`native ${projectionFailure} projection failure`);
-          expect(fixture.state.events.some((event) => event.phase === "capture-tail")).toBe(true);
-          expectClosed(fixture);
-        } finally {
-          fixture.state.aborted.resolve();
-          await pending;
-        }
-      });
-    },
-  );
   it.each(["empty", "error", "chunk"] as const)(
     "finishes a no-release source in initial state %s without an extra EOF read",
     async (initialState) => {

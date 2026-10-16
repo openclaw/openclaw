@@ -321,6 +321,7 @@ describe("setupSkills", () => {
       expect.arrayContaining([expect.objectContaining({ value: "repo-helper" })]),
     );
     expect(mocks.installSkill).not.toHaveBeenCalled();
+    expect(mocks.resolveInstallerKindReadiness).not.toHaveBeenCalled();
     expect(notes.find((note) => note.title === "Homebrew recommended")).toBeUndefined();
     expect(notes.find((note) => note.title === "Manual skill prerequisites")).toBeUndefined();
   });
@@ -363,6 +364,10 @@ describe("setupSkills", () => {
         expect.arrayContaining([expect.objectContaining({ value: "repo-helper" })]),
       );
       expect(mocks.installSkill).not.toHaveBeenCalled();
+      expect(mocks.resolveInstallerKindReadiness.mock.calls).toEqual([["uv"]]);
+      expect(mocks.resolveInstallerKindReadiness.mock.invocationCallOrder[0]).toBeGreaterThan(
+        vi.mocked(prompter.multiselect).mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
       expect(notes.find((note) => note.title === "Manual skill prerequisites")?.message).toContain(
         "uv: nano-pdf",
       );

@@ -90,10 +90,13 @@ suite.define(() => {
           await card.waitFor({ state: "attached" });
           expect(await panel.isVisible()).toBe(false);
           expect(await page.locator('[data-progress-card-placement="composer"]').count()).toBe(0);
-          await openChatDetails(page);
-          await expect.poll(() => card.getAttribute("open")).toBe("");
+          if (!mobile) {
+            await openChatDetails(page);
+            await expect.poll(() => card.getAttribute("open")).toBe("");
+          }
           await waitForProgressThreadIdle(thread);
-          // Transcript input cannot collapse a Details-owned disclosure.
+          // Mobile Details covers the transcript; scroll it before opening the overlay.
+          // On desktop, transcript input cannot collapse the adjacent disclosure.
           const bounds = expectDefined(await thread.boundingBox(), "transcript bounds");
           await page.mouse.move(bounds.x + 8, bounds.y + bounds.height / 2);
           await page.mouse.wheel(0, -640);
@@ -101,6 +104,10 @@ suite.define(() => {
             .poll(() => thread.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop))
             .toBeGreaterThan(200);
           await waitForProgressThreadIdle(thread);
+          if (mobile) {
+            await openChatDetails(page);
+            await expect.poll(() => card.getAttribute("open")).toBe("");
+          }
           expect(await card.getAttribute("open")).toBe("");
           await card.locator("summary").click();
           await expect.poll(() => card.getAttribute("open")).toBeNull();

@@ -10,7 +10,7 @@ import {
 import type { SessionCatalogProvider } from "../../../src/plugins/session-catalog.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 declare global {
@@ -149,13 +149,8 @@ suite.define(() => {
             });
           }
           expect(await row.getAttribute("data-session-key")).toBe(catalogSessionKey);
-          await page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: {
-                context: { gateway: { snapshot: { client: GatewayBrowserClient | null } } };
-              };
-            };
-            const client = app.runtime.context.gateway.snapshot.client;
+          await evaluateControlUiContext(page, (context) => {
+            const client = context.gateway.snapshot.client;
             if (!client) {
               throw new Error("Control UI Gateway client is unavailable");
             }

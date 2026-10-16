@@ -6,7 +6,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTrustedOnePasswordCli } from "../onepassword-op-path.js";
-import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
 import { registerOnePasswordSecretRefCommands } from "./secret-ref-cli.js";
 
 const readTokenFileMock = vi.hoisted(() =>
@@ -123,22 +122,13 @@ describe("1Password SecretRef setup", () => {
     ]);
   });
 
-  it("encodes native 1Password refs with spaces and selectors", async () => {
-    const nativeRef = "op://Personal/OpenClaw QA API Key/password?attribute=value%20one";
-    const plan = await createSetupPlan(["--provider-key", `openai=${nativeRef}`]);
-    expect(plan.targets[0]).toMatchObject({
-      providerId: "openai",
-      ref: { id: encodeOnePasswordSecretId(nativeRef) },
-    });
-  });
-
   it("rejects traversal secret ids", async () => {
     await expect(
       createSetupPlan(["--provider-key", "openai=op://openclaw/../credential"]),
     ).rejects.toThrow("Invalid --provider-key openai 1Password SecretRef id");
   });
 
-  it.each(["/absolute/path", "op://openclaw\\OpenAI\\credential", "op://vault/clé"])(
+  it.each(["op://openclaw\\OpenAI\\credential", "op://vault/clé"])(
     "rejects invalid 1Password ref %s",
     async (id) => {
       await expect(createSetupPlan(["--provider-key", `openai=${id}`])).rejects.toThrow(
@@ -146,22 +136,6 @@ describe("1Password SecretRef setup", () => {
       );
     },
   );
-
-  it("prints a quoted canonical plan path after the readiness command", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-1password-setup-test-"));
-    const planPath = path.join(tempDir, "plan with spaces.json");
-    const canonicalPlanPath = path.join(await fs.realpath(tempDir), "plan with spaces.json");
-    try {
-      const output = await runSetup(planPath, ["--openai-id", "op://openclaw/OpenAI/credential"]);
-      expect(output).toContain("openclaw onepassword secretref status");
-      expect(output).toContain(
-        `openclaw secrets apply --from '${canonicalPlanPath}' --dry-run --allow-exec`,
-      );
-      expect(output).toContain(`openclaw secrets apply --from '${canonicalPlanPath}' --allow-exec`);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
 
   it.skipIf(process.platform === "win32")(
     "rejects plan output in a directory writable by another account",

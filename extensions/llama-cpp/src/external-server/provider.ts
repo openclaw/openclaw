@@ -41,6 +41,7 @@ export async function discoverLlamaServerProvider(
         baseUrl: configured?.baseUrl,
         apiKey,
         headers,
+        allowPrivateNetwork: configured?.request?.allowPrivateNetwork,
       });
       if (discovery.kind !== "success") {
         if (!configured && !apiKey && !headers) {
@@ -77,6 +78,7 @@ export async function prepareLlamaServerDynamicModel(
     baseUrl: ctx.providerConfig?.baseUrl,
     apiKey: hasLlamaServerAuthorizationHeader(headers) ? undefined : apiKey,
     headers,
+    allowPrivateNetwork: ctx.providerConfig?.request?.allowPrivateNetwork,
   });
   const model =
     discovery.kind === "success"

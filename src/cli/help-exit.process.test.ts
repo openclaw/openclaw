@@ -36,7 +36,6 @@ const LAZY_GROUP_HELP_CASES = [
   { group: "clawbot", usageCommand: "clawbot", registry: "subcli" },
   { group: "daemon", usageCommand: "daemon", registry: "subcli" },
   { group: "hooks", usageCommand: "hooks", registry: "subcli" },
-  { group: "infer", usageCommand: "infer|capability", registry: "subcli" },
   { group: "migrate", usageCommand: "migrate", registry: "core" },
   { group: "node", usageCommand: "node", registry: "subcli" },
   { group: "security", usageCommand: "security", registry: "subcli" },
@@ -61,7 +60,7 @@ async function createHelpProcessFixture(config?: Record<string, unknown>) {
   const stateDir = path.join(root, "state");
   const configPath = path.join(stateDir, "openclaw.json");
   const tlsImportGuardPath = path.join(root, "forbid-tls-import.mjs");
-  const keepAlivePath = path.join(root, "keep-alive.mjs");
+  const naturalExitGuardPath = path.join(root, "forbid-forced-exit.mjs");
   const failRunMainImportPath = path.join(root, "fail-run-main-import.mjs");
   await fs.mkdir(stateDir, { recursive: true });
   await fs.writeFile(
@@ -81,7 +80,10 @@ registerHooks({
 });
 `,
   );
-  await fs.writeFile(keepAlivePath, "setInterval(() => {}, 60_000);\n");
+  await fs.writeFile(
+    naturalExitGuardPath,
+    'process.exit = () => { throw new Error("unexpected forced process exit"); };\n',
+  );
   await fs.writeFile(
     failRunMainImportPath,
     `import { registerHooks } from "node:module";
@@ -100,7 +102,7 @@ registerHooks({
     stateDir,
     configPath,
     tlsImportGuardPath,
-    keepAlivePath,
+    naturalExitGuardPath,
     failRunMainImportPath,
   };
 }
@@ -111,7 +113,7 @@ async function runCliProcess(params: {
   config?: Record<string, unknown>;
   env?: NodeJS.ProcessEnv;
   forbidTlsImport?: boolean;
-  keepAlive?: boolean;
+  forbidForcedExit?: boolean;
   failRunMainImport?: boolean;
   allowRespawn?: boolean;
   stateEnv?: (stateDir: string) => Record<string, string>;
@@ -142,7 +144,9 @@ async function runCliProcess(params: {
       ...(params.forbidTlsImport
         ? ["--import", pathToFileURL(fixture.tlsImportGuardPath).href]
         : []),
-      ...(params.keepAlive ? ["--import", pathToFileURL(fixture.keepAlivePath).href] : []),
+      ...(params.forbidForcedExit
+        ? ["--import", pathToFileURL(fixture.naturalExitGuardPath).href]
+        : []),
       ...(params.failRunMainImport
         ? ["--import", pathToFileURL(fixture.failRunMainImportPath).href]
         : []),
@@ -207,7 +211,7 @@ describe("CLI help process exit", () => {
       args: ["--help"],
       config: { logging: { consoleStyle: "json", level: "silent" } },
       forbidTlsImport: true,
-      keepAlive: true,
+      forbidForcedExit: true,
       env: { NODE_USE_SYSTEM_CA: "0" },
     });
 
@@ -216,11 +220,11 @@ describe("CLI help process exit", () => {
     expect(() => parseJsonLines(result.stdout)).toThrow();
   });
 
-  it("exits after plugin-sensitive root help with a retained runtime handle", async () => {
+  it("exits naturally after plugin-sensitive root help", async () => {
     const result = await runCliProcess({
       args: ["--help"],
       config: { plugins: { enabled: false } },
-      keepAlive: true,
+      forbidForcedExit: true,
       env: { NODE_USE_SYSTEM_CA: "0" },
     });
 
@@ -234,7 +238,7 @@ describe("CLI help process exit", () => {
     const result = await runCliProcess({
       args: ["backup", "--help"],
       entry: preparedCliEntry,
-      keepAlive: true,
+      forbidForcedExit: true,
     });
 
     expect(result.stderr).toBe("");
@@ -246,7 +250,7 @@ describe("CLI help process exit", () => {
       entry: preparedCliEntry,
       config: { logging: { consoleStyle: "json", level: "silent" } },
       env: { OPENCLAW_GATEWAY_STARTUP_TRACE: "1", NODE_USE_SYSTEM_CA: "0" },
-      keepAlive: true,
+      forbidForcedExit: true,
     });
 
     expect(parseJsonLines(result.stderr)).toEqual(

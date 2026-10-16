@@ -357,7 +357,9 @@ class SessionDiffContentTest {
               ?.text
               ?.toString(),
           )
+          assertEquals("OpenClaw text", clipboard.primaryClipDescription?.label?.toString())
           assertEquals("Text copied", ShadowToast.getTextOfLatestToast())
+          assertEquals(android.widget.Toast.LENGTH_SHORT, ShadowToast.getLatestToast().duration)
         }
         composeRule.onNodeWithText("Copy").assertDoesNotExist()
         line.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))

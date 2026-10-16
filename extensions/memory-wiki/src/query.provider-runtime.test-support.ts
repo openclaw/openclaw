@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { MemoryReadResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import type { MemoryWikiPluginConfig, ResolvedMemoryWikiConfig } from "./config.js";
@@ -17,17 +16,6 @@ type ProviderRecordTestParams = {
   createAppConfig: () => OpenClawConfig;
   getActiveMemoryProviderMock: Mock;
   getActiveMemorySearchManagerMock: Mock;
-  createMemoryManager: (overrides: {
-    searchResults?: Array<{
-      path: string;
-      startLine: number;
-      endLine: number;
-      score: number;
-      snippet: string;
-      source: "memory" | "sessions";
-    }>;
-    readResult?: MemoryReadResult;
-  }) => { search: Mock; readFile: Mock };
   /** Selects a slot owner that registers the provider-neutral runtime. */
   useNativeProvider: () => void;
   searchMemoryWiki: typeof searchMemoryWiki;
@@ -52,68 +40,6 @@ export function registerProviderRecordQueryTests(params: ProviderRecordTestParam
       );
       return config;
     }
-
-    it("returns legacy hits exactly as the manager produced them", async () => {
-      const config = await createAlphaVault();
-      const manager = params.createMemoryManager({
-        searchResults: [
-          {
-            path: "MEMORY.md",
-            startLine: 1,
-            endLine: 2,
-            score: 0.91,
-            snippet: "alpha launch. <!-- trigger: alpha launch -->",
-            source: "memory",
-          },
-        ],
-      });
-      params.getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-
-      const results = await params.searchMemoryWiki({
-        config,
-        appConfig: params.createAppConfig(),
-        query: "alpha",
-        maxResults: 5,
-      });
-
-      expect(params.getActiveMemoryProviderMock).not.toHaveBeenCalled();
-      expect(manager.search).toHaveBeenCalledWith("alpha", { maxResults: 5 });
-      expect(JSON.stringify(results.find((result) => result.corpus === "memory"))).toBe(
-        JSON.stringify({
-          corpus: "memory",
-          path: "MEMORY.md",
-          title: "MEMORY",
-          kind: "memory",
-          score: 0.91,
-          snippet: "alpha launch. <!-- trigger: alpha launch -->",
-          startLine: 1,
-          endLine: 2,
-          memorySource: "memory",
-          searchMode: "auto",
-        }),
-      );
-    });
-
-    it("resolves a reference-shaped lookup as a path for a legacy owner", async () => {
-      const { config } = await params.createQueryVault({
-        initialize: true,
-        config: { search: { backend: "shared", corpus: "memory" } },
-      });
-      const manager = params.createMemoryManager({
-        readResult: { status: "not_found", text: "", path: "memory-ref" },
-      });
-      params.getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-      const lookup = `memory-ref:${encodeURIComponent(JSON.stringify({ providerId: "other", id: "x" }))}`;
-
-      await expect(
-        params.getMemoryWikiPage({
-          config,
-          appConfig: params.createAppConfig(),
-          lookup: `${lookup}%ZZ`,
-        }),
-      ).resolves.toBeNull();
-      expect(params.getActiveMemoryProviderMock).not.toHaveBeenCalled();
-    });
 
     it.each([
       ["legacy manager", false],

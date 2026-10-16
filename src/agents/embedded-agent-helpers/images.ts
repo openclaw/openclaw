@@ -9,15 +9,16 @@ import { stripThoughtSignatures } from "./bootstrap.js";
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 const EMPTY_CONTENT_PLACEHOLDER = "[empty content omitted]";
 
-function dropEmptyTextBlocks<T>(content: T[]): T[] {
+function dropEmptyTextBlocks<T>(content: T[], preserveSignedText = false): T[] {
   return content.filter((block) => {
-    const rec = block as { type?: unknown; text?: unknown };
+    const rec = block as { type?: unknown; text?: unknown; textSignature?: unknown };
     return (
       !block ||
       typeof block !== "object" ||
       rec.type !== "text" ||
       typeof rec.text !== "string" ||
-      rec.text.trim().length > 0
+      rec.text.trim().length > 0 ||
+      (preserveSignedText && typeof rec.textSignature === "string" && rec.textSignature.length > 0)
     );
   });
 }
@@ -92,7 +93,9 @@ export async function sanitizeSessionMessagesImages(
             ? content // Keep signatures for Antigravity Claude
             : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
         const finalContent = (await sanitizeImages(
-          dropEmptyTextBlocks(strippedContent) as unknown as ContentBlock[],
+          // A signed empty Responses message still occupies an ordered provider input item.
+          // Dropping it rewrites the cached prefix ahead of subsequent encrypted reasoning.
+          dropEmptyTextBlocks(strippedContent, true) as unknown as ContentBlock[],
         )) as unknown as typeof assistantMsg.content;
         if (finalContent.length > 0 || assistantMsg.providerReplay) {
           out.push(replaceCompactionReplayOwnerContent(assistantMsg, finalContent));

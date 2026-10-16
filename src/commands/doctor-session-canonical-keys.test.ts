@@ -8,12 +8,15 @@ import {
   listCanonicalSessionRepairFacts,
   loadCanonicalSessionRepairEntries,
 } from "../config/sessions/session-accessor.js";
+import { readStoredCanonicalSessionMainKey } from "../config/sessions/session-canonical-key.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import {
   readSessionProgressCard,
   writeSessionProgressCard,
 } from "../session-cards/progress-card-store.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -53,6 +56,35 @@ function createMainStoreFixture(stateDir: string, mainKey?: string) {
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 describe("doctor canonical session-key repair", () => {
+  it("keeps an unchanged main-key contract read-only and persists a changed key", async () => {
+    await withStateDirEnv("openclaw-doctor-main-key-noop-", async ({ stateDir }) => {
+      const { cfg, env, storePath } = createMainStoreFixture(stateDir);
+      replaceSessionEntrySync(
+        { agentId: "main", env, storePath, sessionKey: "agent:main:conversation" },
+        { sessionId: "conversation", updatedAt: 1 },
+      );
+      const database = openSessionDatabase("main", env, storePath);
+      const options = { agentId: "main", env, path: database.path };
+      closeOpenClawAgentDatabasesForTest();
+      expect(readSqliteDatabaseCleanClose(options.path)).toBe(true);
+
+      expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
+        foundGroups: 0,
+        repairedGroups: 0,
+      });
+      expect(readSqliteDatabaseCleanClose(options.path)).toBe(true);
+
+      await repairCanonicalSessionKeys({
+        apply: true,
+        cfg: { ...cfg, session: { ...cfg.session, mainKey: "work" } },
+        env,
+      });
+      expect(withOpenClawAgentDatabaseReadOnly(readStoredCanonicalSessionMainKey, options)).toEqual(
+        { found: true, value: "work" },
+      );
+    });
+  });
+
   it("restores a delivery-proven lowercased Matrix room alias", async () => {
     const fixture = {
       canonicalKey: "agent:main:matrix:channel:!MixedCase:example.org",

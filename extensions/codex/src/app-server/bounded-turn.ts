@@ -13,7 +13,7 @@ import {
 import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-types.js";
 import { assertCodexPrivateHookIsolation } from "./bounded-hook-policy.js";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import type { CodexUsageProjection } from "./event-projector-usage.js";
@@ -35,10 +35,7 @@ import type {
 } from "./protocol.js";
 import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
-import {
-  isCodexAppServerStartSelectionChangedError,
-  type createIsolatedCodexAppServerClient,
-} from "./shared-client.js";
+import type { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import {
   assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
@@ -70,7 +67,7 @@ const CODEX_SETTLED_FINALIZER_THREAD_CONFIG: JsonObject = {
 };
 
 export type CodexBoundedTurnOptions = {
-  pluginConfig?: unknown;
+  pluginConfig?: CodexPluginConfig;
   clientFactory?: typeof createIsolatedCodexAppServerClient;
 };
 
@@ -88,7 +85,10 @@ type CodexBoundedTurnModelSelection = { mode: "required"; id: string } | { mode:
 class CodexBoundedTurnTimeoutError extends Error {
   override name = "TimeoutError";
 
-  constructor(taskLabel: string, timeoutMs: number) {
+  constructor(
+    taskLabel: string,
+    readonly timeoutMs: number,
+  ) {
     const bound = timeoutMs % 1_000 === 0 ? `${timeoutMs / 1_000}s` : `${timeoutMs}ms`;
     super(`codex app-server ${taskLabel} turn timed out after ${bound}`);
   }
@@ -157,13 +157,10 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   params: CodexBoundedTurnParams,
   appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
   workspace: { codexHome?: string; cwd: string },
-  selectionAttempt = 0,
-  timing?: { deadline: number; timeoutMs: number },
 ): Promise<CodexBoundedTurnResult> {
-  const totalTimeoutMs = timing?.timeoutMs ?? resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
+  const totalTimeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
   const timeoutError = new CodexBoundedTurnTimeoutError(params.taskLabel, totalTimeoutMs);
-  // Startup and selection retries share an elapsed budget, not a wall-clock deadline.
-  const deadline = timing?.deadline ?? performance.now() + totalTimeoutMs;
+  const deadline = performance.now() + totalTimeoutMs;
   const timeoutMs = deadline - performance.now();
   if (timeoutMs <= 0) {
     throw timeoutError;
@@ -410,13 +407,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         timeoutError,
       );
     }
-    if (
-      !ownsClient ||
-      !isCodexAppServerStartSelectionChangedError(error) ||
-      selectionAttempt !== 0
-    ) {
-      throw codexPrewriteRejectionCause(error);
-    }
+    throw codexPrewriteRejectionCause(error);
   } finally {
     clearTimeout(timeout);
     params.signal?.removeEventListener("abort", abortFromCaller);
@@ -425,13 +416,6 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       await closeCodexStartupClientBestEffort(client);
     }
   }
-  return await runBoundedCodexAppServerTurnInWorkspace(
-    params,
-    appServer,
-    workspace,
-    selectionAttempt + 1,
-    { deadline, timeoutMs: totalTimeoutMs },
-  );
 }
 
 function resolveBoundedThreadConfig(

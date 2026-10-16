@@ -82,8 +82,11 @@ export async function ensureCodexSandboxExecServerEnvironment(params: {
   if (processAuthority && !("node" in execServer)) {
     const authorities = (execServer.processAuthorities ??= new Map());
     if (!authorities.has(processAuthority.authPath)) {
-      authorities.set(processAuthority.authPath, processAuthority);
-      params.client.addCloseHandler(() => authorities.delete(processAuthority.authPath));
+      const unsubscribe = params.client.addCloseHandler(() => {
+        unsubscribe();
+        authorities.delete(processAuthority.authPath);
+      });
+      authorities.set(processAuthority.authPath, { authority: processAuthority, unsubscribe });
     }
   }
   const environmentId = nodeLease
@@ -329,7 +332,11 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
       handleNodeConnection(execServer, socket, requestUrl);
       return;
     }
-    handleConnection(execServer, socket, execServer.processAuthorities?.get(requestUrl.pathname));
+    handleConnection(
+      execServer,
+      socket,
+      execServer.processAuthorities?.get(requestUrl.pathname)?.authority,
+    );
   });
   embeddedAgentLog.info("codex sandbox exec-server started", {
     environmentId,

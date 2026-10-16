@@ -27,6 +27,7 @@ type PricingCase = {
   pricing?: ModelDefinitionConfig["cost"];
   recordedCost?: CostBreakdown;
   topLevelUsage?: boolean;
+  usageUnavailable?: true;
   expectedCost: number | undefined;
   expectedBreakdown?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 };
@@ -50,6 +51,19 @@ describe("session usage reporting pricing", () => {
       pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       recordedCost: { total: 0 },
       expectedCost: 0,
+    },
+    {
+      name: "interrupted usage with zero pricing and placeholder cost",
+      pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      recordedCost: { total: 0 },
+      usageUnavailable: true,
+      expectedCost: undefined,
+    },
+    {
+      name: "interrupted usage with an interim billed amount",
+      recordedCost: { total: 0.001, totalOrigin: "provider-billed" },
+      usageUnavailable: true,
+      expectedCost: undefined,
     },
     {
       // The recorded call owns its estimate; a later catalog cannot recover its service tier.
@@ -98,6 +112,7 @@ describe("session usage reporting pricing", () => {
       output: 500,
       cacheRead: 200,
       totalTokens: 1_700,
+      ...(testCase.usageUnavailable ? { usageReport: { state: "unavailable" } } : {}),
       ...(testCase.recordedCost ? { cost: testCase.recordedCost } : {}),
     };
     const entries = [
@@ -158,7 +173,7 @@ describe("session usage reporting pricing", () => {
           timestamp,
           role: "assistant",
           content: "Answer\n[Tool: lookup]",
-          tokens: 1_700,
+          tokens: testCase.usageUnavailable ? undefined : 1_700,
           cost: testCase.expectedCost,
         },
         expect.objectContaining({
@@ -168,7 +183,16 @@ describe("session usage reporting pricing", () => {
       ]);
 
       const summary = await loadSessionCostSummary(params);
-      expect(summary?.totalTokens).toBe(1_700);
+      expect(summary?.totalTokens).toBe(testCase.usageUnavailable ? 0 : 1_700);
+      const expectedReport = testCase.usageUnavailable ? { state: "unavailable" } : undefined;
+      expect(summary?.usageReport).toEqual(expectedReport);
+      expect(summary?.dailyBreakdown?.[0]?.usageReport).toEqual(expectedReport);
+      expect(summary?.modelUsage?.[0]?.totals.usageReport).toEqual(expectedReport);
+      expect(summary?.dailyModelUsage?.[0]?.usageReport).toEqual(expectedReport);
+      expect(
+        summary?.utcQuarterHourTokenUsage?.find((bucket) => bucket.quarterIndex === 48)
+          ?.usageReport,
+      ).toEqual(expectedReport);
       expect(summary?.totalCost).toBeCloseTo(testCase.expectedCost ?? 0, 8);
       expect(summary?.inputCost).toBeCloseTo(testCase.expectedBreakdown?.input ?? 0, 8);
       expect(summary?.outputCost).toBeCloseTo(testCase.expectedBreakdown?.output ?? 0, 8);
@@ -177,9 +201,14 @@ describe("session usage reporting pricing", () => {
       expect(summary?.missingCostEntries).toBe(testCase.expectedCost === undefined ? 1 : 0);
 
       const series = await loadSessionUsageTimeSeries(params);
-      expect(series?.points).toHaveLength(1);
-      expect(series?.points[0]?.totalTokens).toBe(1_700);
-      expect(series?.points[0]?.cost).toBeCloseTo(testCase.expectedCost ?? 0, 8);
+      expect(series?.usageReport).toEqual(expectedReport);
+      if (testCase.usageUnavailable) {
+        expect(series?.points).toEqual([]);
+      } else {
+        expect(series?.points).toHaveLength(1);
+        expect(series?.points[0]?.totalTokens).toBe(1_700);
+        expect(series?.points[0]?.cost).toBeCloseTo(testCase.expectedCost ?? 0, 8);
+      }
     });
   });
 });

@@ -2,8 +2,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  pauseVirtualClock,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -86,10 +91,10 @@ suite.define(() => {
       await page.getByText("resumed", { exact: true }).waitFor();
       expect(await page.locator(".log-message").allTextContents()).toEqual(["initial", "resumed"]);
 
-      await page.evaluate(() => {
-        document.querySelector("openclaw-logs-page")!.remove();
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
+      await evaluateControlUiContext(page, (context) => context.navigate("about"));
+      await waitForControlUiRoute(page, { routeId: "about" });
+      await page.locator("openclaw-logs-page").waitFor({ state: "detached" });
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
       await page.clock.runFor(2_000);
       expect(await gateway.getRequests("logs.tail")).toHaveLength(reads + 1);
     });
@@ -172,19 +177,13 @@ suite.define(() => {
         await page.locator(".log-row", { hasText: "log line 201" }).waitFor();
 
         const stream = page.locator(".log-stream");
-        const autoFollow = page.locator("wa-switch.settings-toggle").filter({
-          hasText: "Auto-follow",
-        });
+        const autoFollow = page.getByRole("switch", { name: "Auto-follow", exact: true });
         await expect
           .poll(() => stream.evaluate((element) => element.scrollHeight - element.clientHeight))
           .toBeGreaterThan(0);
-        await expect
-          .poll(() => autoFollow.evaluate((element) => Reflect.get(element, "checked")))
-          .toBe(true);
+        await expect.poll(() => autoFollow.isChecked()).toBe(true);
         await autoFollow.click();
-        await expect
-          .poll(() => autoFollow.evaluate((element) => Reflect.get(element, "checked")))
-          .toBe(false);
+        await expect.poll(() => autoFollow.isChecked()).toBe(false);
         await stream.evaluate((element) => {
           element.scrollTop = 0;
           element.dispatchEvent(new Event("scroll"));
@@ -192,9 +191,7 @@ suite.define(() => {
         await expect.poll(() => stream.evaluate((element) => element.scrollTop)).toBe(0);
 
         await autoFollow.click();
-        await expect
-          .poll(() => autoFollow.evaluate((element) => Reflect.get(element, "checked")))
-          .toBe(true);
+        await expect.poll(() => autoFollow.isChecked()).toBe(true);
 
         await expect
           .poll(() =>

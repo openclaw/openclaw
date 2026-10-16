@@ -5,7 +5,8 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
-import "../../components/app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
+import "../../components/app-sidebar.tsx";
 
 function projectCatalog(
   sessions: Array<Pick<SessionCatalogSession, "threadId"> & Partial<SessionCatalogSession>>,
@@ -55,7 +56,7 @@ describe("AppSidebar project session activity", () => {
       },
     ]);
     sidebar.sessionData.requestSessionDataUpdate();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     const customGroup = sidebar.querySelector<HTMLButtonElement>(
       '[data-session-catalog-project="custom:repo"]',
@@ -111,7 +112,7 @@ describe("AppSidebar project session activity", () => {
       },
     ]);
     sidebar.sessionData.requestSessionDataUpdate();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     const person = sidebar.querySelector<HTMLButtonElement>(
       '[data-session-catalog-project="person:profile:profile-ada"]',
@@ -139,7 +140,7 @@ describe("AppSidebar project session activity", () => {
     const setCatalog = async (orderedSessions: typeof sessions) => {
       sidebar.sessionData.sessionCatalogs = projectCatalog(orderedSessions);
       sidebar.sessionData.requestSessionDataUpdate();
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
     };
     await setCatalog(sessions);
 
@@ -177,7 +178,7 @@ describe("AppSidebar project session activity", () => {
       },
     ]);
     sidebar.sessionData.requestSessionDataUpdate();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     const project = sidebar.querySelector(
       '[data-session-catalog-project="project:/work/openclaw"]',

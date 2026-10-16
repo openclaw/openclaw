@@ -11,8 +11,10 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { createSandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
+import { createMediaGenerateProviderListActionResult } from "./media-generate-tool-actions-shared.js";
 import {
   hasGenerationToolAvailability,
+  hasGenerationToolAvailabilityAsync,
   isCapabilityProviderConfigured,
   loadMediaToolReferences,
   resolveGenerateAction,
@@ -256,12 +258,14 @@ describe("resolveMediaToolReferenceAccess", () => {
 });
 
 describe("resolveCapabilityModelConfigForTool", () => {
-  it("uses explicit model config for selection and availability without loading providers", () => {
+  it("uses explicit model config for selection and availability without loading providers", async () => {
     const providers = vi.fn(() => {
       throw new Error("runtime provider list should not run for explicit model config");
     });
     const modelConfig = { primary: "qwen/wan2.6-t2v" };
-    expect(resolveCapabilityModelConfigForTool({ modelConfig, providers })).toEqual(modelConfig);
+    expect(await resolveCapabilityModelConfigForTool({ modelConfig, providers })).toEqual(
+      modelConfig,
+    );
     expect(
       hasGenerationToolAvailability({
         providerKey: "imageGenerationProviders",
@@ -272,9 +276,9 @@ describe("resolveCapabilityModelConfigForTool", () => {
     expect(providers).not.toHaveBeenCalled();
   });
 
-  it("orders auto-detected provider defaults by canonical aliases", () => {
+  it("orders async provider defaults by canonical aliases without synchronous credentials", async () => {
     expect(
-      resolveCapabilityModelConfigForTool({
+      await resolveCapabilityModelConfigForTool({
         cfg: {
           agents: { defaults: { model: { primary: "media-alias/gpt-5.5" } } },
         },
@@ -282,13 +286,19 @@ describe("resolveCapabilityModelConfigForTool", () => {
           {
             id: "fal",
             defaultModel: "fal-ai/minimax/video-01-live",
-            isConfigured: () => true,
+            isConfigured: () => {
+              throw new Error("sync credentials must not run");
+            },
+            isConfiguredAsync: async () => true,
           },
           {
             id: "openai",
             aliases: ["media-alias"],
             defaultModel: "sora-2",
-            isConfigured: () => true,
+            isConfigured: () => {
+              throw new Error("sync credentials must not run");
+            },
+            isConfiguredAsync: async () => true,
           },
         ],
       }),
@@ -333,15 +343,48 @@ describe("hasGenerationToolAvailability", () => {
         },
       },
     },
-  ])("honors $name", ({ cfg, isConfigured, authStore, expected }) => {
+  ])("honors $name", async ({ cfg, isConfigured, authStore, expected }) => {
     const provider = { id: "local-image", defaultModel: "workflow", isConfigured };
     const params = { cfg, authStore, providers: [provider] };
     expect(
       hasGenerationToolAvailability({ ...params, providerKey: "imageGenerationProviders" }),
     ).toBe(expected);
+    expect(
+      await hasGenerationToolAvailabilityAsync({
+        ...params,
+        providerKey: "imageGenerationProviders",
+      }),
+    ).toBe(expected);
     if (cfg && isConfigured) {
       expect(isCapabilityProviderConfigured({ ...params, provider })).toBe(false);
-      expect(resolveCapabilityModelConfigForTool(params)).toBeNull();
+      expect(await resolveCapabilityModelConfigForTool(params)).toBeNull();
     }
+  });
+});
+
+describe("generation provider list availability", () => {
+  it("awaits provider readiness and reports an unavailable async provider accurately", async () => {
+    const isConfigured = vi.fn(() => {
+      throw new Error("sync credentials must not run");
+    });
+    const result = await createMediaGenerateProviderListActionResult({
+      kind: "image_generation",
+      emptyText: "none",
+      providers: [
+        {
+          id: "async-images",
+          capabilities: {},
+          isConfigured,
+          isConfiguredAsync: async () => false,
+        },
+      ],
+      listModes: () => ["generate"],
+      summarizeCapabilities: () => "",
+    });
+    expect(result.details.providers).toEqual([
+      expect.objectContaining({ id: "async-images", configured: false }),
+    ]);
+    expect(result.content[0]?.text).toContain("configured: no");
+    expect(isConfigured).not.toHaveBeenCalled();
   });
 });

@@ -57,7 +57,6 @@ export function setCurrentPluginMetadataSnapshotState(
   setCurrentManifestModelIdNormalizationPolicies(
     snapshot ? modelIdNormalizationPolicies : undefined,
   );
-  state.revision = Symbol("plugin-metadata-snapshot");
 }
 
 /** Clears the snapshot, its identity cache, and process-wide model normalization. */
@@ -101,6 +100,5 @@ export function getCurrentPluginMetadataSnapshotState() {
     defaultDiscoveryCompatible: state.defaultDiscoveryCompatible,
     compatiblePolicyHashes: state.compatiblePolicyHashes,
     compatibleConfigFingerprints: state.compatibleConfigFingerprints,
-    revision: state.revision,
   };
 }

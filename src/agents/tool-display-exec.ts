@@ -1,7 +1,6 @@
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import {
   binaryName,
@@ -207,11 +206,8 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
     }
     const side = bin === "head" ? "first" : "last";
     const unit = lines === "1" ? "line" : "lines";
-    if (lines && target) {
-      return `show ${side} ${lines} ${unit} of ${target}`;
-    }
     if (lines) {
-      return `show ${side} ${lines} ${unit}`;
+      return `show ${side} ${lines} ${unit}${target ? ` of ${target}` : ""}`;
     }
     if (target) {
       return `show ${target}`;
@@ -227,15 +223,10 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
 
     if (script) {
       const compact = (stripOuterQuotes(script) ?? script).replace(/\s+/g, "");
-      const range = compact.match(/^([0-9]+),([0-9]+)p$/);
+      const range = compact.match(/^([0-9]+)(?:,([0-9]+))?p$/);
       if (range) {
-        return target
-          ? `print lines ${range[1]}-${range[2]} from ${target}`
-          : `print lines ${range[1]}-${range[2]}`;
-      }
-      const single = compact.match(/^([0-9]+)p$/);
-      if (single) {
-        return target ? `print line ${single[1]} from ${target}` : `print line ${single[1]}`;
+        const selection = range[2] ? `lines ${range[1]}-${range[2]}` : `line ${range[1]}`;
+        return `print ${selection}${target ? ` from ${target}` : ""}`;
       }
     }
 
@@ -535,12 +526,10 @@ function isGenericSummary(summary: string): boolean {
 }
 
 function compactRawCommand(raw: string, maxLength = 120): string {
-  const oneLine = redactToolPayloadText(
-    raw
-      .replace(/\s*\n\s*/g, " ")
-      .replace(/\s{2,}/g, " ")
-      .trim(),
-  );
+  const oneLine = raw
+    .replace(/\s*\n\s*/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
   if (oneLine.length <= maxLength) {
     return oneLine;
   }
@@ -550,14 +539,14 @@ function compactRawCommand(raw: string, maxLength = 120): string {
 
 export type ToolDetailMode = "explain" | "raw";
 
-/** Treat agent-authored titles as bounded, redacted display text, never an outcome. */
+/** Treat agent-authored titles as bounded display text, never an outcome. */
 export function resolveExecTitle(args: unknown): string | undefined {
   const title = asRecord(args)?.title;
   if (typeof title !== "string") {
     return undefined;
   }
   const text = sanitizeTerminalText(title.replace(/\s+/gu, " ")).trim();
-  return sliceUtf16Safe(redactToolPayloadText(text), 0, 120) || undefined;
+  return sliceUtf16Safe(text, 0, 120) || undefined;
 }
 
 /** Native Codex cells retain their freeform source under input. */

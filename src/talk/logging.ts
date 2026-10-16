@@ -13,7 +13,7 @@ const OMITTED_TALK_LOG_EVENT_TYPES = new Set<TalkEventType>([
   "tool.progress",
 ]);
 
-const TALK_LOGGER_BINDINGS = Object.freeze({ subsystem: "talk" });
+const TALK_LOGGER_BINDINGS = { subsystem: "talk" };
 
 /**
  * Emits Talk logs best-effort so logging failures never break realtime audio handling.
@@ -35,7 +35,7 @@ export function recordTalkLogEvent(event: TalkEvent): void {
   if (event.provider) {
     attributes.talkProvider = event.provider;
   }
-  if (typeof event.final === "boolean") {
+  if (event.final !== undefined) {
     attributes.talkFinal = event.final;
   }
 
@@ -52,11 +52,7 @@ export function recordTalkLogEvent(event: TalkEvent): void {
   const message = `talk event ${event.type}`;
   try {
     const logger = getChildLogger(TALK_LOGGER_BINDINGS);
-    if (level === "warn") {
-      logger.warn(attributes, message);
-      return;
-    }
-    logger.info(attributes, message);
+    logger[level](attributes, message);
   } catch {
     // logging must never block the realtime Talk path
   }

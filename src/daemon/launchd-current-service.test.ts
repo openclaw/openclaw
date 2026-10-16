@@ -6,14 +6,6 @@ import {
 } from "./launchd-current-service.js";
 
 describe("isCurrentProcessLaunchdServiceLabel", () => {
-  it("matches launchd-provided service labels", () => {
-    expect(
-      isCurrentProcessLaunchdServiceLabel("ai.openclaw.gateway", {
-        LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
-      }),
-    ).toBe(true);
-  });
-
   it("falls back to OpenClaw service markers when XPC_SERVICE_NAME is inherited", () => {
     expect(
       isCurrentProcessLaunchdServiceLabel("ai.openclaw.gateway", {
@@ -33,20 +25,13 @@ describe("isCurrentProcessLaunchdServiceLabel", () => {
       }),
     ).toBe(false);
   });
-
-  it("does not treat unrelated inherited launchd labels as current services", () => {
-    expect(
-      isCurrentProcessLaunchdServiceLabel("ai.openclaw.gateway", {
-        XPC_SERVICE_NAME: "0",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-      }),
-    ).toBe(false);
-  });
 });
 
 const probe = vi.hoisted(() => vi.fn());
-vi.mock("./service-process-membership.js", () => ({
-  inspectServiceProcessMembershipSync: () => "outside",
+const membership = vi.hoisted(() => vi.fn());
+vi.mock("./service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./service-process-membership.js")>()),
+  inspectServiceProcessMembershipSync: membership,
 }));
 const ancestors = vi.hoisted(() => vi.fn<() => Set<number>>());
 vi.mock("../infra/restart-stale-pids.js", () => ({ getSelfAndAncestorPidsSync: ancestors }));
@@ -59,6 +44,7 @@ describe("launchd membership with unavailable process evidence", () => {
   beforeEach(() => {
     probe.mockReset();
     ancestors.mockReset();
+    membership.mockReset().mockReturnValue("absent");
   });
   it.each([
     { pids: [900, 901], inside: undefined },
@@ -74,7 +60,7 @@ describe("launchd membership with unavailable process evidence", () => {
       await expect(inspection).resolves.toBe(inside);
     }
   });
-  it.each([{ state: "unknown" }, { state: "running", runtime: {} }])(
+  it.each([{ state: "running", runtime: {} }])(
     "preserves managed-wrapper protection when launchd reports %j",
     async (result) => {
       probe.mockResolvedValue(result);

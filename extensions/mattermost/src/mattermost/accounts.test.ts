@@ -113,6 +113,7 @@ describe("Mattermost account SecretRef inspection", () => {
       botToken: undefined,
       botTokenSource: "config",
       botTokenStatus: "configured_unavailable",
+      configured: true,
     });
   });
 });

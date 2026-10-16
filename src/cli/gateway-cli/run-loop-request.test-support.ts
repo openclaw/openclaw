@@ -175,11 +175,15 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
       try {
         captureSignal("SIGTERM")();
         await vi.advanceTimersByTimeAsync(budget.timeoutMs);
-        await expect(exited).resolves.toBe(1);
+        expect(runtime.exit).not.toHaveBeenCalled();
         consumed.resolve({ reason: "gateway.restart" });
         await vi.advanceTimersByTimeAsync(0);
+        await expect(exited).resolves.toBe(1);
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-        expect(close).not.toHaveBeenCalled();
+        expect(close).toHaveBeenCalledExactlyOnceWith({
+          retainSharedState: true,
+          reason: "gateway stopping",
+        });
         expect(start).toHaveBeenCalledOnce();
       } finally {
         consumed.resolve(null);
@@ -218,6 +222,9 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         await vi.advanceTimersByTimeAsync(budget.timeoutMs - consumedMs - 1);
         expect(runtime.exit).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
+        expect(runtime.exit).not.toHaveBeenCalled();
+        closing.resolve();
+        await vi.advanceTimersByTimeAsync(0);
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
         await expect(exited).resolves.toBe(0);
       } finally {

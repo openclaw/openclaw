@@ -34,14 +34,10 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
   getGlobalHookRunner: getGlobalHookRunnerMock,
 }));
 
-vi.mock("./messenger.js", () => ({
-  buildConversationReference: vi.fn((ref) => ref),
+vi.mock("./messenger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./messenger.js")>()),
   renderReplyPayloadsToMessages: renderReplyPayloadsToMessagesMock,
   sendMSTeamsMessages: sendMSTeamsMessagesMock,
-}));
-
-vi.mock("./revoked-context.js", () => ({
-  withRevokedProxyFallback: async ({ run }: { run: () => Promise<unknown> }) => await run(),
 }));
 
 import { createMSTeamsReplyDispatcher } from "./reply-dispatcher.js";
@@ -96,7 +92,11 @@ describe("createMSTeamsReplyDispatcher", () => {
   function createDispatcher(
     conversationType = "personal",
     msteamsConfig: Record<string, unknown> = {},
-    extraParams: { onSentMessageIds?: (ids: string[]) => void } = {},
+    extraParams: {
+      accountId?: string;
+      cfg?: Parameters<typeof createMSTeamsReplyDispatcher>[0]["cfg"];
+      onSentMessageIds?: (ids: string[]) => void;
+    } = {},
   ) {
     const contextSendActivity = vi.fn(async () => ({ id: "activity-1" }));
     lastContextSendActivity = contextSendActivity;
@@ -107,10 +107,10 @@ describe("createMSTeamsReplyDispatcher", () => {
     const streamMock = conversationType === "personal" ? createStreamMock() : undefined;
     lastStreamMock = streamMock;
     const dispatcher = createMSTeamsReplyDispatcher({
-      cfg: { channels: { msteams: msteamsConfig } } as never,
+      cfg: extraParams.cfg ?? { channels: { msteams: msteamsConfig } },
+      accountId: extraParams.accountId,
       agentId: "agent",
       sessionKey: "agent:main:main",
-      runtime: { error: vi.fn() } as never,
       log: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() } as never,
       app: { send: vi.fn(async () => ({})) } as never,
       conversationRef: {
@@ -551,6 +551,23 @@ describe("createMSTeamsReplyDispatcher", () => {
     });
   });
 
+  it.each(["NO_REPLY", '{"text":"NO_REPLY"}', "No response is needed."])(
+    "streams prepared literal text and settles its final: %s",
+    async (text) => {
+      const teams = createDispatcher("personal");
+      const stream = getStreamMock();
+      teams.replyOptions.onPartialReply?.({ text });
+      expect(stream.emit).toHaveBeenCalledWith(text);
+      stream.acknowledge(text);
+      const result = await teams.delivery.deliver({ text }, { kind: "final" });
+      await teams.dispatcherOptions.onSettled?.();
+      await expect(result?.finalization).resolves.toMatchObject({
+        visibleReplySent: true,
+        content: text,
+      });
+    },
+  );
+
   it("preserves both progress finals through real dispatcher settlement", async () => {
     renderReplyPayloadsToMessagesMock.mockImplementation((payloads) =>
       payloads.flatMap((payload) => (payload.text ? [{ text: payload.text }] : [])),
@@ -672,22 +689,6 @@ describe("createMSTeamsReplyDispatcher", () => {
   });
 
   it.each([
-    {
-      name: "attached media",
-      payloads: [
-        {
-          text: "provider final",
-          mediaUrl: "https://example.test/must-not-send.png",
-        },
-      ],
-    },
-    {
-      name: "media after text",
-      payloads: [
-        { text: "provider final" },
-        { mediaUrl: "https://example.test/must-not-send.png" },
-      ],
-    },
     {
       name: "media before text",
       payloads: [

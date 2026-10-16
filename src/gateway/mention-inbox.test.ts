@@ -5,6 +5,7 @@ import { validateMentionsListResult } from "../../packages/gateway-protocol/src/
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -12,17 +13,19 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   linkEmail,
   setDisplayName,
   setUserProfileRole,
 } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import * as mentionStore from "./mention-inbox-store.js";
+import type { MentionStoreSource } from "./mention-inbox-store.js";
 import {
   readMentionStoreSnapshot,
   writeMentionStoreChanges,
-  type MentionStoreSource,
-} from "./mention-inbox-store.js";
+} from "./mention-inbox-store.worker.js";
 import * as mentionWorker from "./mention-inbox-worker.js";
 import {
   SESSION_KEY,
@@ -53,6 +56,46 @@ function holdMentionRead() {
 }
 
 describe("temporary human mention Inbox", () => {
+  it("recovers the same authenticated reader after the profile catalog becomes ready", async () => {
+    await withInbox(
+      async (f) => {
+        expect(await f.call("mentions.list", {})).toMatchObject({
+          ok: false,
+          error: { code: "UNAVAILABLE" },
+        });
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        expect(await f.call("mentions.list", {})).toMatchObject({
+          ok: true,
+          payload: { items: [] },
+        });
+        await f.post();
+        expect((await read(f.inbox, f.bobClient)).items).toHaveLength(1);
+      },
+      {},
+      { retainProfileCatalog: false },
+    );
+  });
+
+  it("dismisses an absent mention while an unrelated session is published", async () => {
+    await withInbox(async (f) => {
+      await f.post("retained");
+      const before = (await read(f.inbox, f.bobClient)).items;
+      const commit = mentionWorker.commitMentionChanges;
+      vi.spyOn(mentionWorker, "commitMentionChanges").mockImplementationOnce(async (...args) => {
+        await f.setSession({ displayName: "Unrelated conversation" }, "agent:main:unrelated");
+        return commit(...args);
+      });
+
+      expect(await f.call("mentions.dismiss", { ids: ["synthetic-absent-mention"] })).toMatchObject(
+        {
+          ok: true,
+          payload: { items: before },
+        },
+      );
+      expect((await read(f.openInbox("after-no-op"), f.bobClient)).items).toEqual(before);
+    });
+  });
+
   it("merges a foreign dismissal between snapshot and mutation while keeping queued input FIFO", async () => {
     await withInbox(async (f) => {
       await f.post("original");
@@ -114,6 +157,11 @@ describe("temporary human mention Inbox", () => {
         const commitChanges = mentionWorker.commitMentionChanges;
         const committed = createDeferred();
         const release = createDeferred();
+        const readHead = mentionStore.getMentionStoreHeadAdmission;
+        let staleHead: mentionStore.MentionStoreHead | undefined;
+        const head = vi
+          .spyOn(mentionStore, "getMentionStoreHeadAdmission")
+          .mockImplementation((databasePath) => staleHead ?? readHead(databasePath));
         const spy = vi
           .spyOn(mentionWorker, "commitMentionChanges")
           .mockImplementationOnce(async (...args) => {
@@ -121,6 +169,8 @@ describe("temporary human mention Inbox", () => {
             committed.resolve();
             await release.promise;
             if (lost) {
+              // Native commit can outlive its worker's last head publication.
+              staleHead = { ...args[1].expectedHead };
               throw new SqliteWorkerError("synthetic lost Mention Inbox reply", "outcome-unknown");
             }
             return result;
@@ -133,10 +183,16 @@ describe("temporary human mention Inbox", () => {
           release.resolve();
           await pending;
           expect(f.push).toHaveBeenCalledTimes(lost ? 0 : 1);
+          const snapshots = vi.spyOn(mentionWorker, "readMentionSnapshot");
           expect((await read(f.inbox, f.bobClient)).items.map((item) => item.messageId)).toEqual([
             "message-awaiting-receipt",
             "message-original",
           ]);
+          if (lost) {
+            expect(snapshots.mock.calls[0]?.[1]).toBe(-1);
+          }
+          staleHead = undefined;
+          snapshots.mockRestore();
           expect(
             spy.mock.calls.filter(([, mutation]) =>
               mutation.changes.some(
@@ -150,6 +206,7 @@ describe("temporary human mention Inbox", () => {
           release.resolve();
           await pending;
           spy.mockRestore();
+          head.mockRestore();
         }
       });
     },
@@ -249,45 +306,61 @@ describe("temporary human mention Inbox", () => {
     });
   });
 
-  it("retries failed refresh before an already armed distant expiry", async () => {
-    await withInbox(async (f) => {
-      await f.post("distant-expiry");
-      const snapshot = readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db)!;
-      const { db } = openOpenClawStateDatabase();
-      const headKey = "notifications.mentions.head";
-      const saved = db
-        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-        .get(headKey)?.value_json;
-      if (typeof saved !== "string") {
-        throw new Error("Expected persisted Mention Inbox head JSON");
-      }
-      db.prepare("UPDATE config_machine_state SET value_json = '{}' WHERE state_key = ?").run(
-        headKey,
-      );
-      try {
+  it("backs off background failures without delaying foreground reads or recovery", async () => {
+    const logs = createWarnLogCapture("mention-refresh");
+    try {
+      await withInbox(async (f) => {
+        await f.post("distant-expiry");
+        const snapshot = readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db)!;
+        const reads = vi.spyOn(mentionWorker, "readMentionSnapshot");
+        const fail = () =>
+          reads.mockRejectedValueOnce(
+            new SqliteWorkerError(
+              "synthetic snapshot unavailable at /synthetic/state.sqlite",
+              "unavailable",
+            ),
+          );
+        fail();
         await f.inbox.invalidateAsync();
-      } finally {
-        db.prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?").run(
-          saved,
-          headKey,
+        const warning = await logs.findText("Unable to refresh the mention Inbox");
+        expect(warning).toMatch(
+          /phase=maintenance error=SqliteWorkerError code=unavailable elapsedMs=\d+ retryAfterMs=60000/,
         );
-      }
-      runOpenClawStateWriteTransaction(({ db: writer }) =>
-        writeMentionStoreChanges(
-          writer,
-          snapshot.head,
-          new Map([[snapshot.sources[0]!.key, undefined]]),
-        ),
-      );
-      f.broadcast.mockClear();
-      await f.clock.advanceBy(60_000);
-      expect(f.broadcast).toHaveBeenCalledWith(
-        "mentions.changed",
-        { gatewayInstanceId: "mention-gateway", revision: 2 },
-        new Set([f.bobClient.connId]),
-      );
-      expect((await read(f.inbox, f.bobClient)).items).toEqual([]);
-    });
+        expect(warning).toContain("synthetic snapshot unavailable at /synthetic/state.sqlite");
+        // Publication storms must not bypass the owner's pending retry.
+        const attempts = reads.mock.calls.length;
+        await Promise.all(Array.from({ length: 10 }, () => f.inbox.invalidateAsync()));
+        expect(reads.mock.calls).toHaveLength(attempts);
+        expect((await read(f.inbox, f.bobClient)).items).toHaveLength(1);
+        fail();
+        await f.clock.advanceBy(60_000);
+        const retryAttempts = reads.mock.calls.length;
+        await f.clock.advanceBy(60_000);
+        await f.inbox.invalidateAsync();
+        expect(reads.mock.calls).toHaveLength(retryAttempts);
+        runOpenClawStateWriteTransaction(({ db: writer }) =>
+          writeMentionStoreChanges(
+            writer,
+            snapshot.head,
+            new Map([[snapshot.sources[0]!.key, undefined]]),
+          ),
+        );
+        f.broadcast.mockClear();
+        await f.clock.advanceBy(60_000);
+        expect(f.broadcast).toHaveBeenCalledWith(
+          "mentions.changed",
+          { gatewayInstanceId: "mention-gateway", revision: 2 },
+          new Set([f.bobClient.connId]),
+        );
+        expect((await read(f.inbox, f.bobClient)).items).toEqual([]);
+        // Success resets the next failure to the initial one-minute delay.
+        fail();
+        await f.inbox.invalidateAsync();
+        expect(f.clock.armedAtMs).toBe(f.clock.clock.now() + 60_000);
+      });
+    } finally {
+      logs.cleanup();
+    }
   });
 
   it("retains original ids, order, and expiry across Gateway restart without replaying push", async () => {
@@ -487,7 +560,9 @@ describe("temporary human mention Inbox", () => {
                 return statement.sourceSQL;
               }),
             )
-            .filter((query) => /config_machine_state/i.test(query)),
+            .filter((query) =>
+              /config_machine_state|\bselect\b[\s\S]*\bsession_nodes\b/i.test(query),
+            ),
         ).toEqual([]);
       } finally {
         for (const spy of sql) {
@@ -546,6 +621,10 @@ describe("temporary human mention Inbox", () => {
       expect(f.broadcast.mock.calls.some((call) => call[2].has("bob-one"))).toBe(false);
       await f.post();
       const visible = await read(f.inbox, f.bobClient);
+      await f.setSession({ displayName: "Updated design review" });
+      expect((await read(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
+        "Updated design review",
+      );
       await f.setSession({ visibility: "draft" });
       await f.inbox.invalidateAsync();
       const hidden = await read(f.inbox, f.bobClient);

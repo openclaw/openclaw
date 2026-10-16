@@ -24,20 +24,20 @@ struct TalkModeGatewayConfigState {
 
 enum TalkModeGatewayConfigParser {
     static func parse(
-        snapshot: ConfigSnapshot,
-        defaultProvider: String,
+        snapshot: ConfigSnapshot? = nil,
+        defaultProvider: String = "elevenlabs",
         defaultModelIdFallback: String,
         defaultSilenceTimeoutMs: Int,
         envVoice: String?,
         sagVoice: String?,
         envApiKey: String?) -> TalkModeGatewayConfigState
     {
-        let talk = snapshot.config?["talk"]?.dictionaryValue
+        let talk = snapshot?.config?["talk"]?.dictionaryValue
         let common = TalkConfigSnapshot(
             talk, defaultProvider: defaultProvider, defaultSilenceTimeoutMs: defaultSilenceTimeoutMs)
         let activeProvider = common.activeProvider
         let activeConfig = common.providerConfig
-        let ui = snapshot.config?["ui"]?.dictionaryValue
+        let ui = snapshot?.config?["ui"]?.dictionaryValue
         let seamColorHex = ui?["seamColor"]?.stringValue?.nonEmpty
         let voice = activeConfig?["voiceId"]?.stringValue
         let resolvedModel = activeConfig?["modelId"]?.stringValue?.nonEmpty
@@ -66,29 +66,5 @@ enum TalkModeGatewayConfigParser {
             referenceAudioPath: activeConfig?["referenceAudioPath"]?.stringValue?.nonEmpty,
             referenceText: activeConfig?["referenceText"]?.stringValue?.nonEmpty,
             seamColorHex: seamColorHex)
-    }
-
-    static func fallback(
-        defaultModelIdFallback: String,
-        defaultSilenceTimeoutMs: Int,
-        envVoice: String?,
-        sagVoice: String?,
-        envApiKey: String?) -> TalkModeGatewayConfigState
-    {
-        let resolvedVoice =
-            (envVoice?.isEmpty == false ? envVoice : nil) ??
-            (sagVoice?.isEmpty == false ? sagVoice : nil)
-        let resolvedApiKey = envApiKey?.isEmpty == false ? envApiKey : nil
-
-        return TalkModeGatewayConfigState(
-            snapshot: TalkConfigSnapshot(
-                nil, defaultProvider: "elevenlabs", defaultSilenceTimeoutMs: defaultSilenceTimeoutMs),
-            voiceId: resolvedVoice,
-            modelId: defaultModelIdFallback,
-            outputFormat: nil,
-            apiKey: resolvedApiKey,
-            referenceAudioPath: nil,
-            referenceText: nil,
-            seamColorHex: nil)
     }
 }

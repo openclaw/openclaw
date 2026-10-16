@@ -14,7 +14,6 @@ import type { AgentItemEventData } from "../infra/agent-activity-events.js";
 import type { AssistantMessage, ThinkingContent } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
-import type { StreamDirectiveCodePrefix } from "../utils/directive-tags.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { BlockChunkMetadata, EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import type { LiveEditDiffProgressState } from "./embedded-agent-live-edit-diff.js";
@@ -24,6 +23,7 @@ import type {
 } from "./embedded-agent-messaging.types.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
+import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
 import type {
   BlockReplyChunking,
@@ -80,6 +80,26 @@ export type AssistantStreamData = {
   itemId?: string;
 };
 
+export type StreamingReplyResolver = (params: {
+  evtType: "text_delta" | "text_start" | "text_end";
+  next: string;
+  previousText: string;
+  previousCleaned: string;
+  visibleDelta: string;
+  appendDelta: string | null;
+  parsedStreamDirectives: ReplyDirectiveParseResult | null;
+  previousAudioDirectiveCount: number;
+  rawDirectiveSource?: string;
+  rawDirectiveDelta?: string;
+}) => {
+  text: string;
+  delta: string;
+  replace: boolean;
+  hasText: boolean;
+  replyDirectives: ReplyDirectiveParseResult | null;
+  audioDirectiveCount: number;
+};
+
 /** Incremental tag and Markdown parsing state, owned by one stream lane. */
 export type StreamBlockState = {
   thinking: boolean;
@@ -107,25 +127,18 @@ export type EmbeddedAgentSubscribeState = {
     finalMessageStart: number;
     lastAssistant: AssistantMessage;
     keptAnswer?: CompletedAssistantAnswer;
+    sourceReplyDeliveryState?: ReplyDeliveryState;
   }>;
   /** Latest response-ending answer to the current input. */
   inputAnswer?: CompletedAssistantAnswer;
   /** That answer while the latest assistant message added no reply of its own: the turn's reply. */
   keptAnswer?: CompletedAssistantAnswer;
-  toolMetas: Array<{
-    toolName?: string;
-    toolCallId?: string;
-    parentToolCallId?: string;
-    activity?: AgentItemEventData;
-    meta?: string;
-    replaySafe?: boolean;
-    isError?: boolean;
-    terminate?: boolean;
-    asyncStarted?: boolean;
-    asyncTaskRunId?: string;
-    asyncTaskId?: string;
-    codeModeSuspended?: boolean;
-  }>;
+  toolMetas: Array<
+    EmbeddedRunAttemptResult["toolMetas"][number] & {
+      parentToolCallId?: string;
+      activity?: AgentItemEventData;
+    }
+  >;
   acceptedSessionSpawns: AcceptedSessionSpawn[];
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
@@ -168,6 +181,7 @@ export type EmbeddedAgentSubscribeState = {
    * would publish reasoning/commentary bytes as assistant text.
    */
   deltaBufferIsCommentary: boolean;
+  nextCommentaryAt?: number;
   /** Whether timeout settlement committed visible text for this message. */
   hasFlushedPartialText: boolean;
   partialBlockState: StreamBlockState & { inlineCode: InlineCodeState };
@@ -179,7 +193,7 @@ export type EmbeddedAgentSubscribeState = {
     projection?: {
       kind: "raw" | "delivery" | "final";
       projector: ReturnType<typeof createAssistantVisibleStreamText>;
-      directiveCodePrefix?: StreamDirectiveCodePrefix;
+      resolveReply: StreamingReplyResolver;
     };
   };
   lastStreamedReasoning?: string;
@@ -292,6 +306,7 @@ export type EmbeddedAgentSubscribeContext = {
     text: string,
     options?: { final?: boolean },
   ) => ReplyDirectiveParseResult | null;
+  getPartialReplySourceText: () => string;
   resetPartialReplyDirectives: () => void;
   resetAssistantMessageState: (nextAssistantTextBaseline: number) => void;
   resetForCompactionRetry: () => void;

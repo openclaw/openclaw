@@ -15,7 +15,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => (
 
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
-  listUsableProviderAuthProfileIds: () => ({ agentDir: "", profileIds: [] }),
+  listUsableProviderAuthProfileIdsAsync: async () => ({ agentDir: "", profileIds: [] }),
 }));
 
 function createAuthSearchTool(webSearch?: { apiKey: string }) {

@@ -94,7 +94,7 @@ describe("meeting runtime probes", () => {
     });
   });
 
-  it.each([false, true])("honors shouldWaitForListening when it returns %s", async (shouldWait) => {
+  it.each([true])("honors shouldWaitForListening when it returns %s", async (shouldWait) => {
     const session: Session = { id: "listen-policy", chrome: { launched: true, health: {} } };
     const refreshCaptionHealth = vi.fn(async () => {
       session.chrome!.health = {
@@ -110,11 +110,7 @@ describe("meeting runtime probes", () => {
       timeoutMs: 100,
     });
 
-    if (shouldWait) {
-      expect(refreshCaptionHealth).toHaveBeenCalledOnce();
-    } else {
-      expect(refreshCaptionHealth).not.toHaveBeenCalled();
-    }
+    expect(refreshCaptionHealth).toHaveBeenCalledOnce();
   });
 
   it("uses the per-request speech verification timeout", async () => {
@@ -163,27 +159,6 @@ describe("meeting runtime probes", () => {
 
       expect(result.speechOutputVerified).toBe(expected);
     }
-  });
-
-  it("bounds a blocked caption refresh by the listening timeout", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const session: Session = { id: "listen-blocked", chrome: { launched: true, health: {} } };
-    const refreshCaptionHealth = vi.fn(
-      (_session: Session, _timeoutMs?: number) => new Promise<void>(() => {}),
-    );
-    const probes = createProbes();
-
-    const pending = probes.testListening(createContext({ session, refreshCaptionHealth }), {
-      url: URL,
-      mode: "transcribe",
-      timeoutMs: 300,
-    });
-    await vi.advanceTimersByTimeAsync(350);
-
-    await expect(pending).resolves.toMatchObject({ listenTimedOut: true });
-    expect(refreshCaptionHealth).toHaveBeenCalledWith(session, 300);
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("returns caption progress and manual action before the deadline", async () => {

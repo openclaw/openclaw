@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
+import { resolveCliExecutionAuthProfileId } from "../cli-execution-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import * as modelPlans from "../models-config.plan.js";
 import * as catalogCredentials from "../plugin-model-catalog-credentials.js";
@@ -10,11 +14,18 @@ import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { withAuthProfileTestState } from "./profile-mutations.test-support.js";
 import { removeAuthProfilesAcrossOwnerStores } from "./profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
-import * as storeRuntime from "./store-runtime.js";
 import {
+  inspectPersistedAuthProfileStateRaw,
+  inspectPersistedAuthProfileStoreRaw,
+  resolveAuthProfileDatabasePath,
+  writePersistedAuthProfileStateRaw,
+} from "./sqlite.js";
+import {
+  loadAuthProfileStoreForRuntimeAsync,
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "./store-runtime.js";
+import * as storeUpdate from "./store-update.js";
 
 afterEach(() => clearRuntimeAuthProfileStoreSnapshots());
 
@@ -100,9 +111,13 @@ describe("auth profile catalog credential removal", () => {
         const scrub = catalogCredentials.removePersistedPluginModelCatalogCredentials;
         const publishHeldRefresh = async () => {
           release.resolve();
-          await refresh;
+          const result = await refresh;
           const persisted =
             catalogs.loadPersistedPluginModelCatalogsReadOnly(agentDir)[0]?.contents;
+          expect(result.publishedSource?.modelsJsonContents).toBe('{"providers":{}}\n');
+          expect(result.publishedSource?.pluginCatalogs).toEqual([
+            { pluginId: "fixture", contents: persisted },
+          ]);
           if (window === "before-delete") {
             expect(persisted).toContain(key);
           } else {
@@ -184,10 +199,10 @@ describe("auth profile catalog credential removal", () => {
             }),
           },
         });
-        const save = storeRuntime.saveAuthProfileStoreIfPersistenceSnapshotMatches;
+        const update = storeUpdate.runAuthProfileStoreUpdate;
         const saving = vi
-          .spyOn(storeRuntime, "saveAuthProfileStoreIfPersistenceSnapshotMatches")
-          .mockImplementation((params) => {
+          .spyOn(storeUpdate, "runAuthProfileStoreUpdate")
+          .mockImplementation(async (params) => {
             if (params.agentDir !== child) {
               expect(loadPersistedAuthProfileStore(child)?.profiles[profileId]).toBeUndefined();
               if (exit === "failure") {
@@ -195,7 +210,7 @@ describe("auth profile catalog credential removal", () => {
               }
               throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
             }
-            return save(params);
+            return update(params);
           });
         try {
           const removing = removeAuthProfilesAcrossOwnerStores({
@@ -218,4 +233,151 @@ describe("auth profile catalog credential removal", () => {
       });
     },
   );
+
+  it("restores an absent credential cell and exact state after catalog cleanup fails", async () => {
+    await withAuthProfileTestState("openclaw-auth-absent-rollback-", async ({ agentDirFor }) => {
+      const agentDir = agentDirFor("state-only");
+      const profileId = "fixture:selected";
+      const state = {
+        version: AUTH_STORE_VERSION,
+        order: { fixture: [profileId, "fixture:retained"] },
+        lastGood: { fixture: profileId },
+        usageStats: { [profileId]: { lastUsed: 1 }, "fixture:retained": { lastUsed: 2 } },
+        extensionState: "preserve raw state during compensation",
+      };
+      writePersistedAuthProfileStateRaw(state, agentDir);
+      expect(inspectPersistedAuthProfileStoreRaw(agentDir)).toEqual({
+        status: "missing",
+        reason: "row",
+      });
+      let removedState: ReturnType<typeof inspectPersistedAuthProfileStateRaw> | undefined;
+      const cleanup = vi
+        .spyOn(catalogCredentials, "removePersistedPluginModelCatalogCredentials")
+        .mockImplementationOnce(async () => {
+          removedState = inspectPersistedAuthProfileStateRaw(agentDir);
+          throw new Error("synthetic catalog cleanup failure");
+        });
+      try {
+        await expect(
+          removeAuthProfilesAcrossOwnerStores({ agentDir, profileIds: [profileId] }),
+        ).rejects.toThrow("saved credentials were restored");
+        expect(cleanup).toHaveBeenCalledOnce();
+        expect(removedState).toMatchObject({
+          status: "readable",
+          raw: { order: { fixture: ["fixture:retained"] } },
+        });
+        expect(JSON.stringify(removedState)).not.toContain(profileId);
+        expect(inspectPersistedAuthProfileStoreRaw(agentDir)).toEqual({
+          status: "missing",
+          reason: "row",
+        });
+        expect(inspectPersistedAuthProfileStateRaw(agentDir)).toEqual({
+          status: "readable",
+          raw: state,
+        });
+      } finally {
+        cleanup.mockRestore();
+      }
+    });
+  });
+
+  it("revokes a retained credential and the next CLI inference after logout commits", async () => {
+    await withAuthProfileTestState("openclaw-auth-cli-logout-", async ({ agentDirFor }) => {
+      const agentDir = agentDirFor("inference");
+      const profileId = "claude-cli:work";
+      const credential = createApiKeyCredential("claude-cli", "synthetic-cli-credential");
+      saveAuthProfileStore(
+        { version: AUTH_STORE_VERSION, profiles: { [profileId]: credential } },
+        agentDir,
+      );
+      const resolveProfile = () =>
+        resolveCliExecutionAuthProfileId({
+          cliExecutionProvider: "claude-cli",
+          authProfileProvider: "claude-cli",
+          config: {},
+          agentDir,
+          selected: { authProfileId: profileId, authProfileIdSource: "user" },
+        });
+      await expect(resolveProfile()).resolves.toBe(profileId);
+      const databasePath = resolveAuthProfileDatabasePath(agentDir);
+      const identity = inspectDatabasePathIdentitySync(databasePath);
+      if (!identity) {
+        throw new Error("Missing fixture database identity");
+      }
+      const authority = captureAuthProfileCredentialAuthority(
+        captureOpenClawStateWorkerContext(),
+        { identity: `${identity.key}:${identity.birthtime ?? ""}`, databasePath },
+        profileId,
+      );
+      expect(authority.readCurrentCredential()).toEqual(credential);
+
+      await expect(
+        removeAuthProfilesAcrossOwnerStores({ agentDir, profileIds: [profileId] }),
+      ).resolves.toBe(true);
+
+      expect(authority.readCurrentCredential()).toBeUndefined();
+      await expect(resolveProfile()).rejects.toThrow(
+        `No credentials found for profile "${profileId}"`,
+      );
+    });
+  });
+
+  it("preserves newer credentials and selection when failed cleanup compensates logout", async () => {
+    await withAuthProfileTestState("openclaw-auth-newer-rollback-", async ({ agentDirFor }) => {
+      const agentDir = agentDirFor("inference");
+      const profileId = "claude-cli:work";
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [profileId]: createApiKeyCredential("claude-cli", "synthetic-original-credential"),
+          },
+        },
+        agentDir,
+      );
+      const resolveProfile = () =>
+        resolveCliExecutionAuthProfileId({
+          cliExecutionProvider: "claude-cli",
+          authProfileProvider: "claude-cli",
+          config: {},
+          agentDir,
+          selected: { authProfileId: profileId, authProfileIdSource: "user" },
+        });
+      await expect(resolveProfile()).resolves.toBe(profileId);
+      const newerStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          [profileId]: createApiKeyCredential("claude-cli", "synthetic-replacement-credential"),
+          "claude-cli:unrelated": createApiKeyCredential("claude-cli", "synthetic-unrelated-key"),
+        },
+        order: { "claude-cli": ["claude-cli:unrelated", profileId] },
+        lastGood: { "claude-cli": "claude-cli:unrelated" },
+      };
+      let removalObserved = false;
+      const cleanup = vi
+        .spyOn(catalogCredentials, "removePersistedPluginModelCatalogCredentials")
+        .mockImplementationOnce(async () => {
+          removalObserved =
+            loadPersistedAuthProfileStore(agentDir)?.profiles[profileId] === undefined;
+          saveAuthProfileStore(newerStore, agentDir);
+          throw new Error("synthetic catalog cleanup failure");
+        });
+      try {
+        await expect(
+          removeAuthProfilesAcrossOwnerStores({ agentDir, profileIds: [profileId] }),
+        ).rejects.toThrow("concurrent auth changes prevented full restoration");
+        expect(removalObserved).toBe(true);
+        expect(loadPersistedAuthProfileStore(agentDir)).toEqual(newerStore);
+        await expect(
+          loadAuthProfileStoreForRuntimeAsync(agentDir, {
+            readOnly: true,
+            allowKeychainPrompt: false,
+          }),
+        ).resolves.toMatchObject(newerStore);
+        await expect(resolveProfile()).resolves.toBe(profileId);
+      } finally {
+        cleanup.mockRestore();
+      }
+    });
+  });
 });

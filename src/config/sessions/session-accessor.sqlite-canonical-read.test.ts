@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
@@ -12,8 +12,10 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   assignSessionOwner,
   listSessionEntriesReadOnly,
@@ -37,8 +39,11 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     closeOpenClawAgentDatabasesForTest();
     await closeStateDatabaseForTest();
     cleanup();
+    clearRuntimeConfigSnapshot();
   }),
 );
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
 
 describe("canonical SQLite metadata reads", () => {
   it("omits saved prompts from metadata reads and transcript batches", async () => {
@@ -81,8 +86,10 @@ describe("canonical SQLite metadata reads", () => {
     delete expected.skillsSnapshot;
     delete expected.systemPromptReport;
     const database = openOpenClawAgentDatabase(scope);
-    const queries = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
-      /from\s+"session_nodes"/i.test(sql) ? "entries" : null,
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["entries"],
+      (sql) => (/from\s+"session_nodes"/i.test(sql) ? "entries" : null),
     );
     try {
       expect(loadSessionEntryReadOnly({ ...scope, projection: "list" })).toEqual(expected);
@@ -235,6 +242,7 @@ describe("current session ID entry reads", () => {
 
 it("preserves delivery JSON semantics, retained windows, and invalid-row failures", async () => {
   await withOpenClawTestState({ label: "narrow-delivery" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const scope = { agentId: "main", env: state.env };
     const delivery = normalizeSessionDeliveryState({
       context: {
@@ -329,7 +337,8 @@ describe("exact SQLite session batch availability", () => {
         agentId: "main",
         env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-exact-unavailable-") },
       };
-      const { db, path: databasePath } = openOpenClawAgentDatabase(scope);
+      const { db: connection, path: databasePath } = openOpenClawAgentDatabase(scope);
+      const db = requireNativeSqliteDatabase(connection);
       clearNodeSqliteKyselyCacheForDatabase(db);
       const prepare = db.prepare.bind(db);
       const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {

@@ -15,8 +15,8 @@ pairing prompt.
 Each X conversation is a group thread identified by its `conversation_id`.
 The agent receives the triggering mention together with available ancestors,
 conversation posts, and quoted posts. The original mention remains the
-user-visible message. DMs, original posts, likes, follows, and media uploads are
-not supported.
+user-visible message. Replies can include native images, GIFs, and MP4 videos.
+DMs, original posts, likes, and follows are not supported.
 
 ## Setup
 
@@ -28,7 +28,8 @@ openclaw plugins install --link ./extensions/x
 ```
 
 Use an X confidential OAuth2 application and authorize the bot account with
-`tweet.read tweet.write users.read offline.access`. Keep its client ID, client
+`tweet.read tweet.write users.read offline.access media.write`. Existing text-only
+connections must be reauthorized with `media.write` before uploading attachments. Keep its client ID, client
 secret, and user-context refresh token. The plugin refreshes access tokens with
 HTTP Basic client authentication. An optional, separate app-only bearer token
 enables the Activity API.
@@ -86,7 +87,7 @@ shared root default `channels.x.autoPublishWorkSessions`) to publish fresh,
 isolated visible work sessions spawned directly by admitted maintainer mentions.
 Guest mentions remain limited to hidden helpers and cannot publish work sessions.
 This is **off by default**. It exposes that child's conversation to anonymous readers
-at the same canonical `/chat` link; it does not change Team collaboration rights.
+at the same `/chat` link; it does not change Team collaboration rights.
 Only enable it for an agent whose work is intended to be public.
 
 Publication requires a configured **app-only** `bearerToken`. Before admission,
@@ -110,6 +111,95 @@ it does not downgrade to a transport that loses the invocation's authority.
 
 Manual publication remains governed by the existing creator/administrator
 sharing controls. No X identity is promoted to a Team profile or administrator.
+
+## Work sessions and replies
+
+Visible work sessions started by verified X mentions retain the triggering post's
+URL, author handle, and sender tier. The session's system instructions include
+that origin and require manual approval before replying to X. This applies
+whether or not automatic public sharing is enabled.
+
+Visible descendants retain the same origin and approval instructions, including
+when the work is delegated through a hidden helper. They cannot widen the X reply
+target beyond the original conversation.
+
+When the session has a finding, fix, PR, or a clear "can't reproduce" result, it
+drafts a reply of at most 280 characters and asks whether to post it. Tell the
+session explicitly to post the draft; after approval, the visible session uses
+tool `message` with `action: "send"`,
+`channel: "x"`, the origin post URL as `target`, the recorded `accountId`, and
+the approved reply as `message`. Without an answer, it reminds you once in
+its final summary. The send adapter restricts work sessions to their origin post
+or another bot mention in the same X conversation. The host does not yet expose
+user-turn provenance to this adapter, so the approval rule is enforced through
+the session's instructions rather than a user-turn check at send time.
+
+The X front-door agent continues to receive incoming mentions in the original
+conversation session. Maintainer turns include bounded references to recent
+visible work sessions previously started by that front door for the same X
+account and conversation. References contain only a native session key and the
+origin post URL, not work-session titles or transcripts. Deleted, archived,
+incognito, draft, and inaccessible sessions are omitted. Guest turns never
+receive these references.
+
+Before starting new work, the agent should distinguish a continuation from an
+unrelated task in the same thread. Continuations use available, authorized
+session tools; a reference is not a message delivery or an access grant. If the
+current tool policy does not provide a continuation tool, the agent must not
+claim it resumed work or start a duplicate as a workaround. Normal failure
+reporting applies. This context does not automatically route follow-ups, change
+session visibility, or waive manual approval for X replies.
+
+## Reply outcomes and failures
+
+Automatic replies to mentions are posted only when the agent declares success.
+The channel's delivery rules ask the agent to start each reply with
+`[[x_success]]` or `[[x_failure]]`; the tag is removed before posting. Replies
+tagged `[[x_failure]]`, untagged replies, and host error replies are withheld
+from X. `NO_REPLY` and empty replies are dropped. If a model omits the tag on a
+successful answer, that answer is withheld rather than posted.
+
+Without a failure route, withheld replies are discarded and logged as
+`reply withheld post=<id> reason=<failure|error|unclassified> route=none`. With
+`failureRoute`, OpenClaw sends a notice through the target channel's normal
+outbound delivery: the mention's post URL, the author's handle, and a redacted
+summary of at most 500 characters. Delivery is best-effort; a failed notice is
+logged with its result and never falls back to X.
+
+```json5
+{
+  channels: {
+    x: {
+      failureRoute: { channel: "discord", to: "channel:<channelId>" },
+    },
+  },
+}
+```
+
+Set `failureRoute.accountId` to choose an account on the route channel. The
+route cannot target `x`. Message-tool posts from work sessions stay manual: a
+`[[x_success]]` tag is removed and a draft tagged `[[x_failure]]` is refused.
+
+## Native proof attachments
+
+Use the shared `message` tool with `action: "send"`, `channel: "x"`, the approved
+reply text, the target post URL, and `media` set to an inspected local file or HTTPS
+media URL. Native attachments are preferable to sign-in-only proof links when the
+image or video helps explain the result. Work-session approval and origin restrictions
+still apply; guest replies remain text-only.
+
+The connector accepts up to four JPEG, PNG, or WebP images (5 MiB each), or one GIF
+(15 MiB) or MP4 video (100 MiB). It does not mix videos/GIFs with other attachments.
+The video cap bounds Gateway buffering; it is not X's account upload ceiling.
+Use H.264 video and AAC-LC audio; X validates the remaining encoding and account
+limits. See [X media requirements](https://docs.x.com/x-api/media/quickstart/best-practices).
+
+Local files use the host's approved media roots and file-reader policy; remote
+URLs use the shared guarded downloader. The connector uploads in chunks and waits
+for X processing before creating the reply. Attachments go on the first post if a
+long caption is split into a thread. A failed upload never falls back to a text-only
+post or a local-file link. A 403 on upload may require reconnecting the bot's OAuth
+account with `media.write`; an app-only bearer token is not sufficient.
 
 ## Manage the allowlist
 
@@ -272,11 +362,9 @@ send messages, or inspect unrelated sessions. The optional `guests.tools.allow`
 can narrow the five default tools; an empty array disables all tools.
 `guests.tools.deny` takes precedence. Neither setting can add stronger tools.
 
-Hidden helpers require a host that advertises enforcement of these restrictions.
-Older hosts keep the `read` and `ls` defaults, even when they report the same
-OpenClaw version. The X replies settings page shows upgrade guidance when helper
-support is missing. Explicitly selecting only helper tools on an older host
-disables all guest tools; it does not restore the default read tools.
+The bundled X plugin uses the current host's enforcement of these restrictions.
+Core authorizes hidden helpers and preserves the guest's restricted tool surface
+and repository root.
 
 Each guest mention gets a separate channel session and the quoted X thread
 context. It does not reuse a maintainer's conversation history, permission mode,
@@ -439,7 +527,7 @@ per post; each URL counts as 23 characters. The last chunk receives
 empty string to disable the signature.
 
 When a maintainer turn starts a visible work session, its first session URL is appended
-to the reply unless the text already contains that URL. The canonical link is
+to the reply unless the text already contains that URL. The session link is
 publicly readable only when the creation receipt confirms publication; otherwise
 it is labeled "Work session (sign-in required)." Both use X's URL-containing
 reply price.
@@ -452,7 +540,7 @@ openclaw message send --channel x --target x:1234567890123456789 --message "Repl
 ```
 
 The target must satisfy X's reply eligibility: its author mentioned or quoted
-the app account. Sending media or creating an original post is unsupported.
+the app account. Creating an original post is unsupported.
 
 <a id="costs" />
 
@@ -569,6 +657,7 @@ These fields work at `channels.x` and on individual account entries unless noted
 | `costLimits.monthlyUsd`             | `1000`                  | Maximum estimated X API spend per billing cycle; `0` blocks paid calls.           |
 | `costLimits.cycleStartDay`          | `1`                     | UTC billing-cycle start day of the month, from 1 to 28.                           |
 | `replySignature`                    | `🤖 automated reply`    | Added to the last reply chunk; up to 140 characters, empty disables it.           |
+| `failureRoute`                      | Unset (discard)         | `{ channel, to, accountId? }` notice target for replies withheld from X.          |
 | `accounts`                          | Unset                   | Named account overrides; channel root only.                                       |
 | `defaultAccount`                    | `default`               | Account selected when none is specified; channel root only.                       |
 

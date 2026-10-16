@@ -31,6 +31,7 @@ export async function projectDaemonRuntimeStatus(params: {
   const env = params.env ?? process.env;
   const { command, loadState, inspectionFailed, inspectionReason } = params.state;
   const runtimeIntent = await inspectServiceRuntimeIntent({
+    kind: "gateway",
     service: params.service,
     command,
     env,

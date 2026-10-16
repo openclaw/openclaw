@@ -22,6 +22,7 @@ describe("guided onboarding post-inference steps", () => {
   function setupPostInferenceDeps(params: {
     prompter: WizardPrompter;
     runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
+    runMemorySetupFlow?: GuidedOnboardingDeps["runMemorySetupFlow"];
     runAppRecommendations?: GuidedOnboardingDeps["runAppRecommendations"];
   }) {
     return setupDeps({
@@ -117,6 +118,36 @@ describe("guided onboarding post-inference steps", () => {
     );
   });
 
+  it("offers memory setup after inference and local setup, before handoff", async () => {
+    const runMemorySetupFlow = vi.fn(async (config: OpenClawConfig) => ({
+      ...config,
+      memory: { search: { provider: "openai", model: "text-embedding-3-small" } },
+    }));
+    const deps = setupPostInferenceDeps({
+      prompter: createWizardPrompter(),
+      runMemorySetupFlow,
+    });
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+    expect(localOnboarding.persisted.config?.memory?.search).toMatchObject({
+      provider: "openai",
+      model: "text-embedding-3-small",
+    });
+    expect(runMemorySetupFlow).toHaveBeenCalledWith(
+      expect.objectContaining({ gateway: { mode: "local" } }),
+      expect.anything(),
+      expect.objectContaining({ agentDir: expect.any(String) }),
+    );
+    expect(vi.mocked(deps.activate).mock.invocationCallOrder[0]).toBeLessThan(
+      runMemorySetupFlow.mock.invocationCallOrder[0]!,
+    );
+    expect(vi.mocked(deps.applySetup).mock.invocationCallOrder[0]).toBeLessThan(
+      runMemorySetupFlow.mock.invocationCallOrder[0]!,
+    );
+    expect(runMemorySetupFlow.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(deps.runBrowserHandoff!).mock.invocationCallOrder[0]!,
+    );
+  });
+
   it("waits for recommendation persistence and propagates failure before browser handoff", async () => {
     const commitStarted = createDeferred();
     const commit = createDeferred();
@@ -130,7 +161,7 @@ describe("guided onboarding post-inference steps", () => {
     const deps = setupDeps({
       prompter: createWizardPrompter(),
       runAppRecommendations: async ({ config }) => ({ config, commitResult }),
-      runBrowserHandoff: vi.fn(async () => ({ handedOff: true as const })),
+      runBrowserHandoff: vi.fn(async () => true),
     });
     const outcome = runGuidedOnboarding(
       { acceptRisk: true, workspace: "/tmp/work" },

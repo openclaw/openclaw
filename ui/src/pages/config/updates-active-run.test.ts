@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { beforeEach, describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
@@ -8,14 +7,14 @@ import {
   createUpdatesViewDom,
   createUpdatesViewProps as createProps,
 } from "./updates.test-support.ts";
-import { renderUpdates } from "./updates.ts";
 
-let container: HTMLDivElement;
+let container: ReturnType<typeof createUpdatesViewDom>["container"];
+let mountUpdates: ReturnType<typeof createUpdatesViewDom>["mountUpdates"];
 let row: ReturnType<typeof createUpdatesViewDom>["row"];
 
 beforeEach(async () => {
   await i18n.setLocale("en");
-  ({ container, row } = createUpdatesViewDom());
+  ({ container, row, mountUpdates } = createUpdatesViewDom());
 });
 
 describe("running update status", () => {
@@ -67,7 +66,7 @@ describe("running update status", () => {
           update.updateRun = createUpdateRunFixture({ origin: { campaignId: scenario } });
         }
       }
-      render(renderUpdates(createProps({ updateBusy: true, update })), container);
+      mountUpdates(createProps({ updateBusy: true, update }));
       expect(row("Status").textContent).toContain("Updating · Staging");
       if (scenario === "read error") {
         expect(row("Status").textContent).toContain("update.runs.get timed out");

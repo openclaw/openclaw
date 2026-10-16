@@ -1,5 +1,10 @@
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { flush } from "solid-js";
 import { afterEach, beforeEach, onTestFinished, vi } from "vitest";
-import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
+import type { AgentsListResult } from "../api/types.ts";
+import type { ApplicationGateway } from "../app/context.ts";
+import { storeSidebarSessionOwnerFilter } from "../components/app-sidebar-session-types.ts";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { disposeSidebarContextLifecycles } from "./app-sidebar-context-lifecycle.ts";
 import { settleLitElements } from "./lit-settle.ts";
 import { createStorageMock } from "./storage.ts";
@@ -7,12 +12,75 @@ import { createStorageMock } from "./storage.ts";
 export function setupSidebarTest() {
   let originalLocalStorage: PropertyDescriptor | undefined;
   let layoutGlobals: Array<[string, PropertyDescriptor | undefined]>;
+  let frameChannel: MessageChannel | undefined;
 
   beforeEach(() => {
-    layoutGlobals = ["matchMedia", "ResizeObserver", "IntersectionObserver"].map((name) => [
-      name,
-      Object.getOwnPropertyDescriptor(globalThis, name),
-    ]);
+    layoutGlobals = [
+      "matchMedia",
+      "ResizeObserver",
+      "IntersectionObserver",
+      "requestAnimationFrame",
+      "cancelAnimationFrame",
+    ].map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);
+    // JSDOM has no paint cycle. Settle ordinary frames in microtasks, but yield
+    // recursive frames so overlay positioning cannot starve the test runner.
+    if (!("__vitest_browser__" in globalThis)) {
+      // Fake clocks must leave this fixture's frame scheduler in place.
+      vi.setConfig({
+        fakeTimers: {
+          // jsdom can retire its native frame timer after the fake clock is installed.
+          shouldClearNativeTimers: true,
+          toFake: [
+            "setTimeout",
+            "clearTimeout",
+            "setInterval",
+            "clearInterval",
+            "Date",
+            "performance",
+          ],
+        },
+      });
+      let nextFrame = 0;
+      let inFrame = false;
+      const frames = new Map<number, FrameRequestCallback>();
+      const channel = new MessageChannel();
+      frameChannel = channel;
+      const runFrame = (id: number) => {
+        const callback = frames.get(id);
+        if (callback) {
+          frames.delete(id);
+          inFrame = true;
+          try {
+            callback(performance.now());
+          } finally {
+            inFrame = false;
+          }
+        }
+      };
+      channel.port1.addEventListener("message", (event: MessageEvent<number>) =>
+        runFrame(event.data),
+      );
+      channel.port1.start();
+      Object.defineProperty(globalThis, "requestAnimationFrame", {
+        configurable: true,
+        writable: true,
+        value: (callback: FrameRequestCallback) => {
+          const id = ++nextFrame;
+          frames.set(id, callback);
+          if (inFrame) {
+            channel.port2.postMessage(id);
+          } else {
+            queueMicrotask(() => runFrame(id));
+          }
+          return id;
+        },
+      });
+      Object.defineProperty(globalThis, "cancelAnimationFrame", {
+        configurable: true,
+        writable: true,
+        value: (id: number) => frames.delete(id),
+      });
+    }
     // JSDOM has no media queries or layout observation. Real browser tests keep
     // their native implementations and own the layout and motion assertions.
     if (typeof matchMedia === "undefined") {
@@ -61,18 +129,30 @@ export function setupSidebarTest() {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+    vi.resetConfig();
+    const sidebars = document.body.querySelectorAll<AppSidebarElement>("openclaw-app-sidebar");
+    // Open native menus keep scheduling frames while imports settle.
+    for (const sidebar of sidebars) {
+      // Lazy shell fixtures can retain an unupgraded sidebar tag.
+      if (sidebar.matches(":defined")) {
+        sidebar.dismissTransientMenus();
+      }
+    }
     await vi.dynamicImportSettled();
     // Removing a prompt's DOM does not settle its promise or release its reentrancy guard.
     for (const modal of document.body.querySelectorAll("openclaw-modal-dialog")) {
       modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
     }
     await vi.dynamicImportSettled();
-    const sidebars =
-      document.body.querySelectorAll<AppSidebarSessionNavigationElement>("openclaw-app-sidebar");
     document.body.replaceChildren();
+    await Promise.resolve();
+    flush();
     disposeSidebarContextLifecycles();
     // Disconnection queues Lit updates; finish them before retiring the DOM globals.
     await settleLitElements(sidebars);
+    frameChannel?.port1.close();
+    frameChannel?.port2.close();
+    frameChannel = undefined;
     for (const [name, descriptor] of layoutGlobals) {
       if (descriptor) {
         Object.defineProperty(globalThis, name, descriptor);
@@ -101,3 +181,37 @@ export function focusSidebarPersonWithKeyboard(target: HTMLElement): void {
   onTestFinished(() => keyboardFocus.mockRestore());
   target.focus();
 }
+
+/** Select a view through its actual fixed rail control. */
+export async function selectSidebarView(
+  sidebar: HTMLElement & Pick<AppSidebarElement, "updateComplete">,
+  view: "pages" | "sessions" | "online",
+): Promise<void> {
+  const button = sidebar.querySelector<HTMLButtonElement>(`[data-navigation-view="${view}"]`);
+  if (!button) {
+    throw new Error(`Expected sidebar ${view} control`);
+  }
+  button.click();
+  await sidebar.updateComplete;
+}
+
+// General sidebar cases exercise all rows; default-owner regressions mount directly.
+export function seedSidebarEveryonePreference(gateway: ApplicationGateway): void {
+  const selfUserId = gateway.snapshot.selfUser?.id;
+  if (!selfUserId) {
+    return;
+  }
+  const gatewayUrl = gateway.connection.gatewayUrl;
+  const key = `openclaw.control.sidebarSessionOwnerFilter.v1:${gatewayOriginScope(gatewayUrl)}:${encodeURIComponent(selfUserId)}`;
+  if (localStorage.getItem(key) === null) {
+    storeSidebarSessionOwnerFilter(gatewayUrl, selfUserId, { ownerId: null, involvingMe: false });
+  }
+}
+
+export const manyAgents = (count: number) =>
+  ({
+    defaultId: "agent-1",
+    mainKey: "main",
+    scope: "per-sender",
+    agents: Array.from({ length: count }, (_, index) => ({ id: `agent-${index + 1}` })),
+  }) as AgentsListResult;

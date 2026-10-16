@@ -15,6 +15,10 @@ import type { ChatRunStartupState } from "./chat-run-startup.ts";
 
 export type ChatReasoning = {
   runId: string;
+  items: ChatReasoningItem[];
+};
+
+type ChatReasoningItem = {
   itemId: string;
   text: string;
   startedAt: number;
@@ -51,7 +55,7 @@ export type ToolStreamEntry = {
   message: Record<string, unknown>;
 };
 
-export type RunOutputUsage = { outputTokens: number; seq: number };
+export type RunOutputUsage = { outputTokens: number | null; seq: number };
 
 export type ProviderPolicyNotice = {
   runId: string;

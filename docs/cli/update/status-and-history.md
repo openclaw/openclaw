@@ -17,6 +17,21 @@ While an update is active, the table shows its phase instead of advertising anot
 update, and the final line points to `openclaw update status`. JSON still includes
 registry/Git `availability` separately from `activeRun`.
 
+Status inspection has a 30-second overall limit, extended when `--timeout <seconds>`
+requests a longer check. Shorter check timeouts do not shorten local history inspection.
+If an inspection stalls or fails, status returns the facts already available
+and names the unavailable sections. JSON includes these diagnostics in
+`inspectionErrors` with `section` and `message` fields. An unavailable section
+does not mean that no update, history, or migration exists. Shared-state reads
+run asynchronously so a blocked snapshot does not freeze the command.
+A fresh profile without Gateway credentials can report a `channels` inspection
+error while still returning update availability and empty recovery history.
+
+When a package publication journal no longer matches its installation, status
+names the changed parent, control directory, or journal bindings with their
+recorded and current `dev:ino` values. It identifies device-number-only changes
+and directs you to `openclaw update repair` for verified recovery.
+
 Git availability checks, including the Gateway's background check after startup,
 refresh only the selected upstream. They do not import other remote branches or
 tags, prune existing refs, or change shallow-history boundaries. A fresh detached
@@ -51,6 +66,12 @@ It describes the preferred selection for the observed configured channel, not ca
 An explicit update invocation can select a different target or install method.
 Older installed status commands cannot acquire this observation from candidate code.
 
+Root-owned, protected immutable layouts managed by an external deployment owner
+report a host-managed installation even without native adoption. Startup status
+does not run Git discovery or enable automatic updates for these layouts. Use the
+deployment owner to update them; native preparation and activation still require
+explicit adoption after the previous updater has stopped.
+
 For adopted immutable installations, the installation projection includes
 `activationEnabled` only when explicitly enabled. `activation` reports a
 retained operation's `operationId`, `phase`, `previousSha`, and `candidateSha`,
@@ -84,8 +105,19 @@ including when an older updater did not record those warnings in its run history
 During an active update, let that update finish before following plugin repair
 advice. Existing plugin data and settings are kept until the upgrade completes.
 JSON exposes these messages as `migrationWarnings`; they clear when the plugin migration
-completes. If migration state cannot be read, `migrationWarningsError` reports
+completes. This check also works after a direct Git/source or package-manager upgrade
+with no update run. Run `openclaw doctor --fix` after those upgrades; normal commands
+and Gateway startup do not inspect or apply deferred plugin migrations. If migration state cannot be read, `migrationWarningsError` reports
 that failure while availability and run history remain visible.
+
+The final update summary reconciles plugin migration warnings with the pending
+ledger after the last repair pass. Completed obligations leave the final summary
+and persisted warning steps; pending obligations keep their retry command.
+If the ledger cannot be read, the summary retains the warnings. Messages already
+printed during an earlier phase can remain in the terminal scrollback.
+Repeated warnings appear once in the final report. If update Doctor deferred
+agent database path repair to preserve the rollback inventory, its warning points
+to `openclaw doctor --fix` without telling you to wait for the completed update.
 
 When the Gateway is reachable, status also reads its recorded channel warnings
 without checking channel services. JSON exposes these as `channelIssues`. This
@@ -333,6 +365,11 @@ campaign independently of checkout discovery. Installation details can arrive
 later; reading status does not start scheduling or clear an active campaign. If
 the update channel cannot be resolved, `schedule` remains absent rather than
 claiming the scheduler is idle.
+
+A recent cached check can skip another registry lookup, but still publishes the
+installation details already discovered at startup. A current package install
+therefore shows **Up to date** in Settings → Updates even when automatic updates
+are off. Missing installation details do not imply that the install is current.
 
 When a history request needs a read-only snapshot, the Gateway prepares it
 asynchronously so other requests can continue. The snapshot preserves the source

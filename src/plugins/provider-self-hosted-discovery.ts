@@ -1,7 +1,10 @@
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
+import { resolveProviderTransportSsrFPolicy } from "../agents/provider-network-policy.js";
+import { resolveProviderRequestPolicyConfig } from "../agents/provider-request-config.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
@@ -10,9 +13,9 @@ import {
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { recordLiveServingContextLimit } from "./provider-catalog-expiry.js";
 
 const log = createSubsystemLogger("plugins/self-hosted-provider-discovery");
 
@@ -90,7 +93,7 @@ function buildSelfHostedDiscoveryHeaders(params: {
 
 async function fetchSelfHostedDiscoveryJson(params: {
   url: string;
-  origin: string;
+  requestPolicy: ReturnType<typeof resolveProviderRequestPolicyConfig>;
   apiKey?: string;
   headers?: Record<string, string>;
   acceptJson?: boolean;
@@ -104,7 +107,7 @@ async function fetchSelfHostedDiscoveryJson(params: {
     guarded = await fetchWithSsrFGuard({
       url: params.url,
       init: { headers: buildSelfHostedDiscoveryHeaders(params) },
-      policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.origin),
+      policy: resolveProviderTransportSsrFPolicy({ ...params.requestPolicy, url: params.url }),
       timeoutMs: params.timeoutMs,
       signal: params.signal,
       auditContext: "self-hosted-provider-discovery",
@@ -170,9 +173,13 @@ async function discoverOpenAICompatibleModelRows(
   const inferredServerBaseUrl = inferenceBaseUrl.replace(/\/v1$/u, "");
   const serverBaseUrl = (params.serverBaseUrl ?? inferredServerBaseUrl).replace(/\/+$/, "");
   const timeoutMs = params.timeoutMs ?? 5_000;
+  const requestPolicy = resolveProviderRequestPolicyConfig({
+    baseUrl: inferenceBaseUrl,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+  });
   const request = {
     ...params,
-    origin: new URL(serverBaseUrl).origin,
+    requestPolicy,
     timeoutMs,
     acceptJson: params.modelsPathOrder === "server-first",
     readBody: true,
@@ -288,6 +295,7 @@ async function discoverOpenAICompatibleModelRows(
 
 type OpenAICompatibleLocalModelsParams = {
   baseUrl: string;
+  allowPrivateNetwork?: boolean;
   serverBaseUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;
@@ -357,6 +365,21 @@ export async function discoverOpenAICompatibleLocalModels(
     if (!modelId) {
       return [];
     }
+    // max_model_len describes the serving instance, not the model training window.
+    // Do not promote defaults, generic metadata, or malformed values to live ceilings.
+    const servingTokens = model.max_model_len;
+    if (
+      typeof servingTokens === "number" &&
+      Number.isSafeInteger(servingTokens) &&
+      servingTokens > 0
+    ) {
+      recordLiveServingContextLimit({
+        id: modelId,
+        api: "openai-completions",
+        baseUrl: params.baseUrl,
+        tokens: servingTokens,
+      });
+    }
     const meta = asOptionalRecord(model.meta);
     const parentId = normalizeOptionalString(model.parent);
     const parentContextWindow =
@@ -364,10 +387,18 @@ export async function discoverOpenAICompatibleLocalModels(
     const generationSettings = asOptionalRecord(props?.default_generation_settings);
     const runtimeContextTokens =
       readPositiveInteger(generationSettings?.n_ctx) ?? readPositiveInteger(props?.n_ctx);
+    const parameterCount = asPositiveSafeInteger(model.parameterCount);
     const modelConfig: ModelDefinitionConfig = {
       id: modelId,
-      name: modelId,
-      reasoning: /r1|reasoning|think|reason/i.test(modelId),
+      name:
+        normalizeOptionalString(model.display_name) ??
+        normalizeOptionalString(model.displayName) ??
+        normalizeOptionalString(model.name) ??
+        modelId,
+      ...(parameterCount !== undefined ? { parameterCount } : {}),
+      reasoning: /r1|reason|think|deepseek[-_]?v4|nemotron-3[-_](?:nano|super|ultra)\b/i.test(
+        modelId,
+      ),
       input: ["text"],
       cost: SELF_HOSTED_DEFAULT_COST,
       contextWindow:

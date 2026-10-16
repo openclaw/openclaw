@@ -8,7 +8,6 @@ import {
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
   DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
   SESSION_BACKFILL_REWIND_NAMESPACE,
-  SHORT_TERM_LOCK_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
   writeMemoryCoreWorkspaceEntry,
@@ -118,7 +117,6 @@ it.each([
     const firstFailureIssued = createDeferred<void>();
     const failure = new Error("write unavailable");
     let failureSelected = false;
-    let lockReleaseStarted = false;
     const beforeMutation = async (namespace: string) => {
       if (namespace === scenario.failingNamespace && !failureSelected) {
         failureSelected = true;
@@ -136,12 +134,6 @@ it.each([
       const store = createPluginStateKeyedStoreForTests<T>("memory-core", options);
       return {
         ...store,
-        async compareAndApply(...args: Parameters<typeof store.compareAndApply>) {
-          if (options.namespace === SHORT_TERM_LOCK_NAMESPACE && args[2].operation === "delete") {
-            lockReleaseStarted = true;
-          }
-          return await store.compareAndApply(...args);
-        },
         async register(...args: Parameters<typeof store.register>) {
           if (scenario.mutation === "register") {
             await beforeMutation(options.namespace);
@@ -169,7 +161,6 @@ it.each([
     vi.useFakeTimers();
     try {
       await vi.advanceTimersByTimeAsync(0);
-      expect(lockReleaseStarted).toBe(false);
       expect(rollbackSettled).toBe(false);
       expect(nextWriterEntered).toBe(false);
     } finally {

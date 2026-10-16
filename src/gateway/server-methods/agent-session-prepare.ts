@@ -7,29 +7,23 @@ import {
   resolveChannelResetConfig,
   resolveSessionResetPolicy,
   resolveSessionResetType,
-  type SessionEntry,
 } from "../../config/sessions.js";
-import { hasSessionTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
-import {
-  resolveSqliteScope,
-  toDatabaseOptions,
-} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import {
-  resolveOpenClawAgentSqlitePath,
-  withOpenClawAgentDatabaseRuntime,
-} from "../../state/openclaw-agent-db.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   respondDeletedAgentSession,
   resolveAgentSessionWorkStartError,
   type RestoredCronContinuation,
 } from "../agent-turn/agent-handler-helpers.js";
+import {
+  takeInProcessFreshChildSession,
+  type FreshChildSession,
+} from "../in-process-session-run.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import { evaluateAgentSessionReuse } from "./agent-session-patch.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -62,47 +56,40 @@ export async function prepareAgentSession(params: PrepareAgentSessionParams) {
     return undefined;
   }
   const requestedAgentId = requestedSessionAgent.agentId;
-  const selected = loadSessionEntry(params.requestedSessionKey, {
-    agentId: requestedAgentId,
-    clone: false,
-  });
-  if (!selected.entry?.sessionId) {
-    return prepareAdmittedAgentSession(params, selected, requestedAgentId);
-  }
-  const databaseForSession = (session: typeof selected) =>
-    toDatabaseOptions(
-      resolveSqliteScope({
-        agentId: parseAgentSessionKey(session.canonicalKey)?.agentId ?? requestedAgentId,
-        sessionKey: session.canonicalKey,
-        storePath: session.storePath,
-      }),
+  const freshChild = takeInProcessFreshChildSession(params.request);
+  if (freshChild) {
+    return prepareAdmittedAgentSession(
+      params,
+      {
+        cfg: params.cfg,
+        storePath: freshChild.storePath,
+        entry: freshChild.entry,
+        canonicalKey: params.requestedSessionKey,
+        storeKeys: [params.requestedSessionKey],
+        legacyKey: undefined,
+      },
+      freshChild.agentId,
+      freshChild,
     );
-  return withOpenClawAgentDatabaseRuntime(
-    databaseForSession(selected),
-    (opened) => {
-      params.assertCurrent?.();
-      const current = loadSessionEntry(params.requestedSessionKey, {
-        agentId: requestedAgentId,
-        clone: false,
-      });
-      const currentDatabase = databaseForSession(current);
-      if (
-        current.canonicalKey !== selected.canonicalKey ||
-        currentDatabase.agentId !== opened.agentId ||
-        resolveOpenClawAgentSqlitePath(currentDatabase) !== opened.path
-      ) {
-        throw new Error("Session database target changed while preparing; retry the request.");
-      }
-      return prepareAdmittedAgentSession(params, current, requestedAgentId);
-    },
-    params.assertCurrent,
-  );
+  }
+  const selected = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: params.cfg,
+    key: params.requestedSessionKey,
+    agentId: requestedAgentId,
+    excludeInternalEffects: true,
+    assertActive: params.assertCurrent,
+  });
+  return prepareAdmittedAgentSession(params, selected, requestedAgentId);
 }
 
 async function prepareAdmittedAgentSession(
   params: PrepareAgentSessionParams,
-  selected: ReturnType<typeof loadSessionEntry>,
+  selected: Pick<
+    Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
+    "cfg" | "storePath" | "entry" | "canonicalKey" | "legacyKey" | "storeKeys"
+  >,
   requestedAgentId: string,
+  freshChild?: FreshChildSession,
 ) {
   const { cfg, storePath, entry, canonicalKey, legacyKey, storeKeys } = selected;
   const canonicalSessionAgentId = parseAgentSessionKey(canonicalKey)?.agentId ?? requestedAgentId;
@@ -225,38 +212,28 @@ async function prepareAdmittedAgentSession(
   const isSystemGatewayRun =
     effectiveBootstrapContextRunKind === "cron" || effectiveBootstrapContextRunKind === "heartbeat";
   const visibleRequest = !isSystemGatewayRun && !params.request.internalEvents?.length;
-  const failedSessionTranscriptMissing = (candidateEntry: SessionEntry | undefined): boolean => {
-    if (candidateEntry?.status !== "failed" || !candidateEntry.sessionId?.trim()) {
-      return false;
-    }
-    try {
-      return !hasSessionTranscriptEventsSync({
-        agentId: canonicalSessionAgentId,
-        sessionId: candidateEntry.sessionId,
-        sessionKey: canonicalKey,
-        storePath,
-        sessionEntry: candidateEntry,
-      });
-    } catch {
-      return true;
-    }
-  };
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: canonicalSessionAgentId });
-  const reuse = await evaluateAgentSessionReuse({
-    freshEntry: entry,
-    cfg,
-    sessionAgentId: canonicalSessionAgentId,
-    canonicalSessionKey: canonicalKey,
-    storePath,
-    expectedExistingSessionId: params.expectedExistingSessionId,
-    hasRestoredCronContinuation: restoredCronContinuationIdentity !== undefined,
-    resetPolicy,
-    now,
-    requestedSessionId: params.requestedSessionId,
-    isSystemGatewayRun,
-    visibleRequest,
-    failedSessionTranscriptMissing,
-  });
+  const reuse = freshChild
+    ? {
+        sessionId: freshChild.entry.sessionId,
+        isNewSession: false,
+        usableRequestedSessionId: undefined,
+        freshness: { fresh: true },
+      }
+    : await evaluateAgentSessionReuse({
+        freshEntry: entry,
+        cfg,
+        sessionAgentId: canonicalSessionAgentId,
+        canonicalSessionKey: canonicalKey,
+        storePath,
+        expectedExistingSessionId: params.expectedExistingSessionId,
+        hasRestoredCronContinuation: restoredCronContinuationIdentity !== undefined,
+        resetPolicy,
+        now,
+        requestedSessionId: params.requestedSessionId,
+        isSystemGatewayRun,
+        visibleRequest,
+      });
   params.assertCurrent?.();
   const sessionId = reuse.sessionId ?? randomUUID();
   return {
@@ -281,6 +258,6 @@ async function prepareAdmittedAgentSession(
     sessionPersistedBeforeGatewayAdmission: entry !== undefined,
     effectiveBootstrapContextRunKind,
     restoredCronContinuationIdentity,
-    failedSessionTranscriptMissing,
+    freshChild: freshChild !== undefined,
   };
 }

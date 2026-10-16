@@ -4,6 +4,7 @@ import type {
   NativeBrowserState,
   NativeBrowserTab,
 } from "../../../app/native-browser-bridge.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../../test-helpers/storage.ts";
 import {
   createBrowserClient,
@@ -11,7 +12,7 @@ import {
   stubScreenshotMedia,
   TestBrowserPanelHost,
 } from "../browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "../browser-panel-controller.ts";
+import type { BrowserPanel } from "../browser-panel-owner.ts";
 import "../browser-panel.ts";
 
 export const nativeTab = (
@@ -81,7 +82,8 @@ export function fakeNativeBrowser(tabs: NativeBrowserTab[] = [], legacy = false)
 }
 
 export function setupNativeBrowserPanelTests() {
-  const controllers: BrowserPanelController[] = [];
+  const controllers: BrowserPanel[] = [];
+  const cleanups: (() => void)[] = [];
   let hit: Element | null;
   let frames: Map<number, FrameRequestCallback>;
   let nextFrame: number;
@@ -131,10 +133,15 @@ export function setupNativeBrowserPanelTests() {
     const host = new TestBrowserPanelHost(client);
     host.sessionKey = sessionKey;
     document.body.append(host.renderRoot);
-    hit = host.renderRoot.querySelector(".bp-stage");
-    const controller = new BrowserPanelController(host);
+    const stage = host.renderRoot.querySelector<HTMLElement>(".bp-stage")!;
+    hit = stage;
+    const controller = host.createPanel();
+    cleanups.push(controller.native.presentation.mountStage(stage));
     controllers.push(controller);
-    controller.hostConnected();
+    const stopNative = controller.native.mount();
+    if (stopNative) {
+      cleanups.push(stopNative);
+    }
     return { controller, host, request };
   }
 
@@ -163,8 +170,11 @@ export function setupNativeBrowserPanelTests() {
   });
 
   afterEach(() => {
+    for (const cleanup of cleanups.splice(0)) {
+      cleanup();
+    }
     for (const controller of controllers.splice(0)) {
-      controller.hostDisconnected();
+      controller.suspendView();
     }
     document.body.replaceChildren();
     vi.useRealTimers();
@@ -189,7 +199,7 @@ export async function mountSessionPanel(sessionKey: string) {
   panel.remoteAvailable = false;
   panel.embedded = true;
   panel.presented = true;
-  document.body.append(panel);
+  mountSolid(() => panel);
   await panel.updateComplete;
   return panel;
 }

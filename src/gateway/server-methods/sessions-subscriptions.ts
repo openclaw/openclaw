@@ -13,7 +13,7 @@ import { SessionMutationAuthorizationChangedError } from "../session-mutation-au
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
-import { canAccessApprovalSession } from "./approval-record-lookup.js";
+import { prepareApprovalSessionAccess } from "./approval-record-lookup.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import { sessionsListHandler } from "./sessions-read.js";
@@ -127,13 +127,13 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       }
       const { agentId: requestedAgentId, sessionKey: canonicalKey } = requestedAgent.value;
       const subscriptionKey = resolveSessionSubscriptionKey(canonicalKey, requestedAgentId);
-      let read: ReturnType<typeof retainSessionScopedRead>;
+      let read: Awaited<ReturnType<typeof retainSessionScopedRead>>;
       let prepared: PreparedSessionApprovalReplay | undefined;
       let approvalReplay;
       try {
         mark?.("retainedReadAdmission");
         sessionMutationAuthorization?.assertCurrent();
-        read = retainSessionScopedRead(options, canonicalKey, requestedAgentId, {
+        read = await retainSessionScopedRead(options, canonicalKey, requestedAgentId, {
           // Activity and labels may change while approvals load without revoking access.
           allowMetadataChanges: true,
           requireMaterialized:
@@ -158,15 +158,20 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
             );
           try {
             if (includeApprovals) {
-              mark?.("replayPreparation");
-              prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
+              using sessionAccess = await prepareApprovalSessionAccess({
+                client,
+                getCfg: context.getRuntimeConfig,
+                sources: [{ sessionKey: canonicalKey, agentId: requestedAgentId }],
+              });
               read?.assertCurrent();
               sessionMutationAuthorization?.assertCurrent();
+              mark?.("replayPreparation");
+              prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
               if (prepared && !prepared.isCurrent()) {
-                prepared.release();
-                prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
                 read?.assertCurrent();
                 sessionMutationAuthorization?.assertCurrent();
+                prepared.release();
+                prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
               }
               if (prepared && !prepared.isCurrent()) {
                 throw new Error("session approval replay changed during preparation");
@@ -180,9 +185,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
                 signal?.aborted ||
                 hasCurrentClientAuthority?.() === false ||
                 !canReviewOperatorApproval(client) ||
-                !canAccessApprovalSession({
-                  cfg: context.getRuntimeConfig(),
-                  client,
+                !sessionAccess.canAccess({
                   sessionKey: canonicalKey,
                   agentId: requestedAgentId,
                 })

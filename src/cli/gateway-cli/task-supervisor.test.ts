@@ -16,7 +16,6 @@ const { spawn, log, flushLogger, bindWindowsTaskLauncher } = vi.hoisted(() => ({
   bindWindowsTaskLauncher: vi.fn(),
 }));
 
-vi.mock("koffi", () => ({ default: {} }));
 vi.mock("../../process/supervisor/service-child-windows-task-launcher.js", () => ({
   bindWindowsTaskLauncher,
 }));
@@ -92,7 +91,7 @@ describe("Windows Gateway task supervisor", () => {
       const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
       await runWindowsGatewayTaskSupervisor();
       expect(spawn).toHaveBeenCalledOnce();
-      expect(bindWindowsTaskLauncher).toHaveBeenCalledExactlyOnceWith(expect.anything(), launcher);
+      expect(bindWindowsTaskLauncher).toHaveBeenCalledExactlyOnceWith(launcher);
     },
   );
 
@@ -158,8 +157,13 @@ describe("Windows Gateway task supervisor", () => {
       return {
         cancel: vi.fn(),
         wait: async () => result,
-        waitForExtinction: async () => {},
+        waitForExtinction: async () => {
+          expect(process.exitCode).toBeUndefined();
+        },
       };
+    });
+    flushLogger.mockImplementationOnce(async () => {
+      expect(process.exitCode).toBeUndefined();
     });
 
     const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
@@ -205,17 +209,6 @@ describe("Windows Gateway task supervisor", () => {
     expect(stderr.length).toBeLessThanOrEqual(8192);
     expect(stderr).not.toContain("old stderr diagnostic");
     expect(JSON.stringify(log.error.mock.calls)).not.toContain("unretained stdout");
-  });
-
-  it("records a spawn failure and fails the task", async () => {
-    spawn.mockRejectedValue(new Error("synthetic Job Object spawn failure"));
-
-    const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
-    await runWindowsGatewayTaskSupervisor();
-
-    expect(process.exitCode).toBe(1);
-    expect(JSON.stringify(log.error.mock.calls)).toContain("synthetic Job Object spawn failure");
-    expect(flushLogger).toHaveBeenCalledOnce();
   });
 
   it("preserves the child diagnostic when its tree cleanup fails", async () => {

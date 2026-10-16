@@ -52,7 +52,6 @@ async function queryBuzzRoomHistoryPage(params: {
       }
     },
     result: () => ({ events, overLimit }),
-    checkAbortAfterSubscribe: true,
   });
 }
 

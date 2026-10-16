@@ -25,7 +25,10 @@ For switching channels, see [Release channels](/install/development-channels).
 Extended-stable includes the Gateway, official npm plugins, and Docker images.
 It does not include native apps or ClawHub publication, and it does not change
 the regular stable channel. Its GitHub release is not marked Latest. A monthly
-line retires when `main` advances into the next month.
+line retires when `main` advances into the next month. Maintain only one
+extended-stable line: the trailing completed month relative to `main`'s version;
+older `.33+` lines are retired. Publishing a retired line requires an explicit
+maintainer decision; never bypass the release guards.
 
 ## Version naming
 
@@ -85,6 +88,22 @@ install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwis
 varies by profile and selected operating systems. Check the release's recorded
 coverage: skipped or deferred checks are not passes.
 
+The default stable/full live-provider coverage includes the blocking `live-cache`
+suite; beta includes it when repo/live coverage is selected. Its assertions
+require serialized prompt-prefix stability and provider cache reuse through
+Anthropic Messages and OpenAI Responses, plus OpenRouter when its credential is
+available. Live agent scenarios exercise instruction refresh, activated prompt
+hooks, and persisted prompt-projection rehydration while forcing full-history
+requests through a cold provider transport. This is not a Gateway process-restart
+or retained HTTP continuation check. Focused verification uses
+`rerun_group=live-e2e` and `live_suite_filter=live-cache`; the cross-OS `provider`
+and `mode` inputs do not narrow these cache checks. Offline coverage also compares
+requests across authenticated Gateway chat, a spawned child's private completion, an
+in-process server stop/start, and subsequent authenticated chat in the same
+persisted session. It does not restart the OS process. Deterministic admitted-agent and Gateway
+regressions supply separate evidence from successful live-provider measurements; see
+[Prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage).
+
 For selected official npm plugins, Full Release Validation packs and qualifies
 the exact tarballs intended for publication and records their immutable artifact
 descriptors. Publication consumes those same bytes. Unpacked source fixtures do
@@ -108,6 +127,46 @@ reason to wait, re-cut, or pause.
 See [Full release validation](/reference/full-release-validation) for coverage
 by profile and how to interpret the results.
 
+### Operator capabilities
+
+Repository write access, organization membership, branch-policy reads, CI bypass,
+release environment approval, and production deployment are separate capabilities.
+An unavailable [prior-CI exception](/reference/scripts/prior-ci) is not a blanket
+release blocker or proof that environment approval is unavailable. Conversely,
+repository MAINTAIN access or CI-bypass authority does not authorize an environment
+approval or production deployment.
+
+The candidate checklist reports pending environment approvals for its authenticated
+caller. It prints an approval command only when GitHub reports that caller can
+approve; otherwise an eligible environment reviewer must act. An unavailable
+approval-status read is reported as unknown, not as no pending approval, and does
+not stop validation monitoring. Public release evidence can still use its existing
+anonymous rate-limit fallback; caller-specific approval reads cannot.
+
+### Plugin SDK evidence transport
+
+SDK comparison reports and release evidence use the
+`openclaw.plugin-sdk-api-encoded/v1` JSON envelope with `encoding: "gzip+base64"`
+and a `data` string. The transport preserves the complete logical report,
+comparison digests, and channel-specific acknowledgement. The Markdown summary
+remains directly readable. The shared `decodePluginSdkApiArtifact` function in
+`scripts/plugin-sdk-api-release-evidence.mjs` decodes the JSON envelope for inspection.
+
+The envelope is limited to 16 MiB of serialized JSON; expansion is limited to
+64 MiB per decode, including all concatenated gzip members. This is not a
+process-wide memory budget: compressed buffers, decoded text, parsed objects,
+and concurrent consumers can coexist. Existing archive, file, and manifest size
+limits still apply independently. Compression does not replace immutable artifact
+hashes, producer identity, full diff validation, or acknowledgement checks.
+
+Upgrade the producer and trusted qualification/publication readers together in
+the selected tooling cut before generating new evidence. Older frozen readers
+reject the envelope; moving `main` does not upgrade a frozen workflow. New readers
+still accept historical unencoded receipts. Regenerate and qualify evidence with
+the coordinated tooling cut; never rewrite an existing authenticated receipt or
+reuse its digest for different bytes. This tooling change does not authorize a
+release dispatch or publication.
+
 ### Frozen qualification identity
 
 New candidate qualification records three separate identities:
@@ -119,12 +178,25 @@ New candidate qualification records three separate identities:
   main revision or protected publication tag. P may differ from C/Q; C/Q does not
   need to be an ancestor of P. Trust in P does not replace qualification of C.
 
-The canonical SHA-pinned helper first asks P to record the reviewed operator
+The standard SHA-pinned helper first asks P to record the reviewed operator
 attestation, complete normalized inputs, and data-only frozen Q coverage in an
 immutable admission artifact. Only then does that same helper dispatch Full
 Release Validation from an immutable `release-ci/*` ref at Q. A publication
 `release-publish/*` tag belongs to P, never to Q merely to make validation run.
 Admission is not a successful test result or publication approval.
+
+`pnpm release:candidate --workflow-sha <P>` pins helper and publication tooling,
+not the qualification harness. Stable `npm-stable-v1` and admitted stable/full
+qualification already include mock-provider package Telegram proof. The helper
+reuses that authenticated proof for the exact FRV-qualified package, without a
+Telegram waiver; `npm-beta-v1` remains deferred, never passed. Separately packed
+historical packages and explicitly selected live-provider Telegram checks need
+their own proof at C. A supplemental check uses only the original retained
+`release-ci/*` ref verified at Q=C, with `harness_ref` pinned to that SHA; missing
+or moved refs require newly bound candidate evidence, never a fallback to main.
+Supplemental run IDs stay in the candidate evidence bundle, not the publisher's
+optional postpublish diagnostic input. Local Parallels qualification likewise
+uses C's harness and dependencies from the validated candidate checkout.
 
 A candidate missing the required qualification contracts needs a deliberate
 backport. The helper does not silently use future-main checks or import

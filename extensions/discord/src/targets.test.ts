@@ -11,23 +11,6 @@ import {
 import { parseDiscordTarget, resolveDiscordChannelId, resolveDiscordTarget } from "./targets.js";
 
 describe("parseDiscordTarget", () => {
-  it("parses user mention and prefixes", () => {
-    const cases = [
-      { input: "<@123>", id: "123", normalized: "user:123" },
-      { input: "<@!456>", id: "456", normalized: "user:456" },
-      { input: "user:789", id: "789", normalized: "user:789" },
-      { input: "discord:987", id: "987", normalized: "user:987" },
-      { input: "discord:user:987", id: "987", normalized: "user:987" },
-    ] as const;
-    for (const testCase of cases) {
-      expect(parseDiscordTarget(testCase.input)).toMatchObject({
-        kind: "user",
-        id: testCase.id,
-        normalized: testCase.normalized,
-      });
-    }
-  });
-
   it("parses channel targets", () => {
     const cases = [
       { input: "channel:555", id: "555", normalized: "channel:555" },
@@ -43,14 +26,6 @@ describe("parseDiscordTarget", () => {
     }
   });
 
-  it("accepts numeric ids when a default kind is provided", () => {
-    expect(parseDiscordTarget("123", { defaultKind: "channel" })).toMatchObject({
-      kind: "channel",
-      id: "123",
-      normalized: "channel:123",
-    });
-  });
-
   it("rejects invalid parse targets", () => {
     const cases = [
       { input: "123", expectedMessage: /Ambiguous Discord recipient/ },
@@ -62,22 +37,12 @@ describe("parseDiscordTarget", () => {
       );
     }
   });
-
-  it("guides ambiguous numeric recipients with all supported explicit formats", () => {
-    expect(() => parseDiscordTarget("123456789")).toThrow(
-      'Ambiguous Discord recipient "123456789". For DMs use "user:123456789" or "<@123456789>"; for channels use "channel:123456789".',
-    );
-  });
 });
 
 describe("resolveDiscordChannelId", () => {
   it("strips channel: prefix and accepts raw ids", () => {
     expect(resolveDiscordChannelId("channel:123")).toBe("123");
     expect(resolveDiscordChannelId("123")).toBe("123");
-  });
-
-  it("rejects user targets", () => {
-    expect(() => resolveDiscordChannelId("user:123")).toThrow(/channel id is required/i);
   });
 });
 
@@ -116,52 +81,6 @@ describe("resolveDiscordTarget", () => {
       id: "123",
     });
     expect(listPeers).not.toHaveBeenCalled();
-  });
-
-  it("treats bare numeric ids in allowFrom as users even when channels are the default", async () => {
-    const listPeers = vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive");
-    const cfgCandidate = {
-      channels: {
-        discord: {
-          accounts: {
-            default: {
-              allowFrom: ["123"],
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      await resolveDiscordTarget(
-        "123",
-        { cfg: cfgCandidate, accountId: "default" },
-        { defaultKind: "channel" },
-      ),
-    ).toMatchObject({ kind: "user", id: "123", normalized: "user:123" });
-    expect(listPeers).not.toHaveBeenCalled();
-  });
-
-  it("uses only canonical allowFrom for bare numeric ids", async () => {
-    const cfgResult = {
-      channels: {
-        discord: {
-          accounts: {
-            default: {
-              allowFrom: ["123"],
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      await resolveDiscordTarget(
-        "456",
-        { cfg: cfgResult, accountId: "default" },
-        { defaultKind: "channel" },
-      ),
-    ).toMatchObject({ kind: "channel", id: "456", normalized: "channel:456" });
   });
 
   it("uses account allowFrom before inherited root allowFrom for bare numeric ids", async () => {

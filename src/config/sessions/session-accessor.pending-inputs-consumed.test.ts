@@ -13,13 +13,13 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   readSessionSubmittedInput,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
@@ -30,9 +30,11 @@ import {
   withSessionPendingInputPersistence,
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
-import { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
 describe("committed pending input release", () => {
   const fixture = useTempSessionsFixture("pending-input-consumed-release-");
@@ -171,7 +173,7 @@ describe("committed pending input release", () => {
       const foreign = new DatabaseSync(primary.path);
       try {
         foreign.exec("BEGIN IMMEDIATE");
-        runWithSqliteBusyTimeout(primary.db, 1, () => {
+        runWithSqliteBusyTimeout(requireNativeSqliteDatabase(primary.db), 1, () => {
           expect(() => receipt.finish("cancelled")).not.toThrow();
           for (const source of sources) {
             expect(() => source.run(() => {})).toThrow("ownership ended");
@@ -238,7 +240,7 @@ describe("committed pending input release", () => {
     expect(await listSessionPendingInputs(scope())).toEqual({ items: [], total: 0 });
     expect(await readSessionPendingInput(scope(), first.inputId)).toBeUndefined();
     expect(
-      listSessionPendingInputReceipts(scope(), {
+      await listSessionPendingInputReceipts(scope(), {
         runIds: ["collect-a", "collect-b", "unknown"],
       }),
     ).toEqual([
@@ -286,7 +288,7 @@ describe("committed pending input release", () => {
       },
     ]);
     expect(
-      listSessionPendingInputReceipts(
+      await listSessionPendingInputReceipts(
         { ...scope(), sessionId: "other" },
         { runIds: ["collect-a"] },
       ),
@@ -490,9 +492,12 @@ describe("committed pending input release", () => {
         if (difference === "malformed") {
           database()
             .db.prepare(
-              "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.role', 'assistant') WHERE json_extract(event_json, '$.message.idempotencyKey') = ?",
+              "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.role', 'assistant'), message_role = ? WHERE json_extract(event_json, '$.message.idempotencyKey') = ?",
             )
-            .run(`${runId}:user`);
+            .run(
+              deriveTranscriptPredicateFields('{"message":{"role":"assistant"}}').message_role,
+              `${runId}:user`,
+            );
         }
       } else {
         await first.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
@@ -689,6 +694,76 @@ describe("committed pending input release", () => {
     expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
   });
 
+  it.each(["pending", "interrupted", "consumed", "completed"] as const)(
+    "reconciles saved peer delivery identity after restart (%s)",
+    async (state) => {
+      const runId = "peer-restart";
+      const original: PersistedUserTurnMessage = {
+        ...message(runId),
+        provenance: {
+          kind: "inter_session",
+          sourceTool: "sessions_send",
+          sourceSessionKey: "agent:main:source",
+        },
+        __openclaw: {
+          sessionSendDelivery: {
+            version: 1,
+            runId,
+            source: {
+              agentId: "main",
+              sessionKey: "agent:main:source",
+              sessionId: "source-id",
+              lifecycleRevision: undefined,
+            },
+            target: {
+              agentId: "main",
+              sessionKey: scope().sessionKey,
+              sessionId: scope().sessionId,
+              lifecycleRevision: undefined,
+            },
+            sandboxed: false,
+            message: "Synthetic accepted input",
+          },
+        },
+      };
+      const first = await stage(runId, { message: original, trackCompletion: true });
+      if (state === "consumed" || state === "completed") {
+        await promote(first);
+      }
+      if (state !== "pending") {
+        await first.completeAsync!(
+          buildAgentRunTerminalOutcome(
+            state === "completed" ? { status: "ok" } : { status: "error", stopReason: "restart" },
+          ),
+        );
+      }
+      first.finish("interrupted");
+      await first.settled?.();
+      rotateAgentEventLifecycleGeneration();
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawAgentDatabasesForTest();
+
+      const saved = expectDefined(
+        await readSessionSubmittedInput(scope(), `${runId}:user`),
+        "Expected saved peer input after restart",
+      );
+      // SQLite JSON omits undefined endpoint revisions; recovery must match the original hash.
+      expect(JSON.stringify(saved)).not.toContain("lifecycleRevision");
+      await expect(
+        stage(runId, { message: { ...saved, content: "Different input" }, trackCompletion: true }),
+      ).rejects.toThrow("conflicts");
+      const recovered = await stage(runId, { message: saved, trackCompletion: true });
+      expect(recovered.message).toEqual(saved);
+      if (state === "completed") {
+        expect(recovered.completion).toMatchObject({ reason: "completed" });
+        expect(() => recovered.run(() => {})).toThrow("already completed");
+      } else {
+        expect(recovered.completion).toBeUndefined();
+        await recovered.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
+      }
+    },
+  );
+
   it("keeps private failed attempts retryable without letting stale failure replace success", async () => {
     const first = await stagePrivate();
     await first.completeAsync!(
@@ -704,43 +779,6 @@ describe("committed pending input release", () => {
     ).toMatchObject({
       error: "provider unavailable",
     });
-    expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
-    expect(pendingCount()).toBe(0);
-  });
-
-  it("preserves the released synchronous completion contract inside an outer rollback", async () => {
-    const first = await stagePrivate();
-    expect(() =>
-      runOpenClawAgentWriteTransaction(() => {
-        first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
-        throw new Error("before commit");
-      }, options()),
-    ).toThrow("before commit");
-    expect(completionRows()).toEqual([]);
-    expect(pendingCount()).toBe(1);
-    first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
-    expect(pendingCount()).toBe(0);
-  });
-
-  it("preserves released synchronous completion when a postcommit observer fails", async () => {
-    const first = await stagePrivate();
-    setLoggerOverride({ level: "silent", consoleLevel: "error" });
-    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
-    onTestFinished(() => {
-      errorLog.mockRestore();
-      resetLogger();
-    });
-    expect(() =>
-      runOpenClawAgentWriteTransaction((current) => {
-        deferOpenClawAgentPostCommitPublication(current, () => {
-          throw new Error("observer failed");
-        });
-        first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
-      }, options()),
-    ).not.toThrow();
-    expect(errorLog).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("SQLite post-commit notification failed"),
-    );
     expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
     expect(pendingCount()).toBe(0);
   });

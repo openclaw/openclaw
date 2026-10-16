@@ -195,9 +195,7 @@ async function reapOpenAcpxProcessLeases(params: {
     if (pending) {
       legacyWrapperRoots.add(lease.wrapperRoot);
     }
-    assertCurrent?.();
     await params.leaseStore.markState(lease.leaseId, "closing");
-    assertCurrent?.();
     const result = pending
       ? await cleanupOpenClawOwnedAcpxPendingLease({
           leaseId: lease.leaseId,
@@ -225,7 +223,6 @@ async function reapOpenAcpxProcessLeases(params: {
           result.skippedReason === "unverified-root" ||
           (lease.sessionKey === ACPX_PROBE_LEASE_SESSION_KEY &&
             result.skippedReason === "missing-root")));
-    assertCurrent?.();
     await params.leaseStore.markState(
       lease.leaseId,
       retryableEvidenceFailure ? "open" : result.terminatedPids.length > 0 ? "closed" : "lost",
@@ -235,7 +232,6 @@ async function reapOpenAcpxProcessLeases(params: {
   // proves this Gateway had an uncertain spawn. Keep aggregate results wholly
   // separate from the state transition of any specific lease.
   for (const wrapperRoot of legacyWrapperRoots) {
-    assertCurrent?.();
     const legacyResult = await reapStaleOpenClawOwnedAcpxOrphans({
       wrapperRoot,
       assertCurrent,
@@ -275,7 +271,6 @@ export function createAcpxRuntimeService(
     assertCurrent();
     recoveryPromise ??= measureAcpxStartup(ctx, "process-leases.reap", async () => {
       const result = await recover(assertCurrent);
-      assertCurrent();
       if (result.terminatedPids.length > 0) {
         ctx.logger.info(
           `reaped ${result.terminatedPids.length} stale OpenClaw-owned ACPX processes`,
@@ -283,7 +278,6 @@ export function createAcpxRuntimeService(
       }
     });
     await recoveryPromise;
-    assertCurrent();
   };
 
   return {
@@ -382,8 +376,6 @@ export function createAcpxRuntimeService(
         return;
       }
 
-      lifecycleRevision += 1;
-      const currentRevision = lifecycleRevision;
       try {
         const timeoutSeconds = pluginConfig.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS;
         const doctorReport = await measureAcpxStartup(ctx, "probe.availability", () =>
@@ -398,9 +390,6 @@ export function createAcpxRuntimeService(
             { ref: false },
           ),
         );
-        if (currentRevision !== lifecycleRevision) {
-          return;
-        }
         if (doctorReport.ok) {
           ctx.startupTrace?.detail?.("probe.result", [["healthyCount", 1]]);
           ctx.logger.info("embedded acpx runtime backend ready");
@@ -411,9 +400,6 @@ export function createAcpxRuntimeService(
           `embedded acpx runtime backend check failed: ${formatDoctorFailureMessage(doctorReport)}`,
         );
       } catch (err) {
-        if (currentRevision !== lifecycleRevision) {
-          return;
-        }
         ctx.startupTrace?.detail?.("probe.result", [["healthyCount", 0]]);
         ctx.logger.warn(`embedded acpx runtime setup failed: ${formatErrorMessage(err)}`);
       }

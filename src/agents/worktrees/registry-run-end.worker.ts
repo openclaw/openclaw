@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import type { Selectable } from "kysely";
 import {
@@ -6,6 +5,7 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
@@ -43,7 +43,20 @@ import type {
   WorktreeRegistryPredicate,
 } from "./types.js";
 
-const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, "worktrees" | "state_leases">>(db);
+const query = (db: EngineConnection) =>
+  getNodeSqliteKysely<Pick<DB, "worktrees" | "state_leases">>(db);
+
+const BINDING_FIELDS = [
+  "path",
+  "repoRoot",
+  "repoFingerprint",
+  "branch",
+  "ownerKind",
+  "ownerId",
+  "createdAt",
+  "lastActiveAt",
+  "removedAt",
+] as const;
 
 export type WorktreeRegistryPatch = Partial<
   Pick<ManagedWorktreeRecord, "lastActiveAt" | "removedAt" | "runEndCleanup" | "snapshotRef">
@@ -54,7 +67,7 @@ export type WorktreeRegistryPatch = Partial<
 };
 
 export function insertRegistryWorktreeInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   {
     record,
     provisionedPaths,
@@ -98,7 +111,7 @@ export function insertRegistryWorktreeInDatabase(
 }
 
 export function updateRegistryWorktreeInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: {
     id: string;
     patch: WorktreeRegistryPatch;
@@ -150,7 +163,7 @@ export type WorktreeRunEndInput<T> = {
   predicates?: readonly WorktreeRegistryPredicate[];
 };
 
-function assertRemovalToken(db: DatabaseSync, id: string, token: string) {
+function assertRemovalToken(db: EngineConnection, id: string, token: string) {
   const row = executeSqliteQuerySync(
     db,
     query(db)
@@ -167,7 +180,7 @@ function assertRemovalToken(db: DatabaseSync, id: string, token: string) {
   }
 }
 
-function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate) {
+function assertPredicate(db: EngineConnection, predicate: WorktreeRegistryPredicate) {
   if (predicate.kind === "snapshot-retirement") {
     return assertSnapshotRetirementInDatabase(db, predicate.record);
   }
@@ -231,22 +244,13 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
       }
       return;
     case "binding":
+    case "exact-snapshot":
       if (
         !current ||
-        (
-          [
-            "path",
-            "repoRoot",
-            "repoFingerprint",
-            "branch",
-            "baseRef",
-            "ownerKind",
-            "ownerId",
-            "createdAt",
-            "lastActiveAt",
-            "removedAt",
-          ] as const
-        ).some((key) => current[key] !== predicate.record[key])
+        BINDING_FIELDS.some((key) => current[key] !== predicate.record[key]) ||
+        (predicate.kind === "binding"
+          ? current.baseRef !== predicate.record.baseRef
+          : current.snapshotRef !== predicate.record.snapshotRef)
       ) {
         throw registryAuthorityChanged(predicate.kind);
       }
@@ -261,25 +265,6 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         throw registryAuthorityChanged(predicate.kind);
       }
       return;
-    case "exact-snapshot": {
-      const record = predicate.record;
-      if (
-        !current ||
-        current.ownerKind !== record.ownerKind ||
-        current.ownerId !== record.ownerId ||
-        current.createdAt !== record.createdAt ||
-        current.lastActiveAt !== record.lastActiveAt ||
-        current.removedAt !== record.removedAt ||
-        current.path !== record.path ||
-        current.repoRoot !== record.repoRoot ||
-        current.repoFingerprint !== record.repoFingerprint ||
-        current.branch !== record.branch ||
-        current.snapshotRef !== record.snapshotRef
-      ) {
-        throw registryAuthorityChanged(predicate.kind);
-      }
-      return;
-    }
     case "exact-owner": {
       const record = predicate.record;
       if (
@@ -333,7 +318,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
 }
 
 export function assertWorktreeRegistryPredicates(
-  db: DatabaseSync,
+  db: EngineConnection,
   predicates: readonly WorktreeRegistryPredicate[] = [],
 ): void {
   for (const predicate of predicates) {
@@ -343,7 +328,7 @@ export function assertWorktreeRegistryPredicates(
 
 /** Git equality cannot release provisioned bytes or a live lifecycle's recovery custody. */
 function assertSnapshotRetirementInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   observed: ManagedWorktreeRecord,
   reapStaleLeases = false,
 ): void {
@@ -386,7 +371,7 @@ function assertSnapshotRetirementInDatabase(
 }
 
 export function deleteRegistryWorktreeInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: { id: string; removalToken?: string; expectedRetired?: ManagedWorktreeRecord },
 ): void {
   if (input.expectedRetired) {
@@ -413,7 +398,11 @@ export function deleteRegistryWorktreeInDatabase(
 
 export function worktreeRunEndMutation<Input>(
   operationLabel: string,
-  mutate: (db: DatabaseSync, input: Input, leases?: readonly OpenClawStateLeaseIdentity[]) => void,
+  mutate: (
+    db: EngineConnection,
+    input: Input,
+    leases?: readonly OpenClawStateLeaseIdentity[],
+  ) => void,
 ) {
   return (input: WorktreeRunEndInput<Input>, context: WorkerOperationContext): void => {
     const database = context.open();
@@ -458,7 +447,7 @@ export type WorktreeRemovalRowInput = {
   retiredRemoval?: true;
 };
 export function claimWorktreeRemovalInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: WorktreeRemovalRowInput,
 ): void {
   const k = query(db);
@@ -528,7 +517,7 @@ export type WorktreeRemovalFinalization = {
   token?: string;
 };
 export function finalizeWorktreeRemovalInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: WorktreeRemovalFinalization,
 ): void {
   const record = getRegistryWorktreeInDatabase(db, input.worktreeId);
@@ -553,7 +542,7 @@ export function finalizeWorktreeRemovalInDatabase(
 }
 
 export function abortWorktreeRemovalInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: { worktreeId: string; token: string },
 ): void {
   const removed = executeSqliteQuerySync(

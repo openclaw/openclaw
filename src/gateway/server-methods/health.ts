@@ -1,4 +1,3 @@
-import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { getPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
@@ -24,11 +23,8 @@ function cachedLifecycleDiffersFromRuntime(
   cached: ChannelHealthSummary | undefined,
   runtime: ChannelAccountSnapshot,
 ): boolean {
-  return (
-    cached === undefined ||
-    (["running", "connected", "lifecycle"] as const).some(
-      (key) => runtime[key] !== undefined && cached[key] !== runtime[key],
-    )
+  return (["running", "connected", "lifecycle"] as const).some(
+    (key) => runtime[key] !== undefined && cached?.[key] !== runtime[key],
   );
 }
 
@@ -46,22 +42,11 @@ function cachedHealthDiffersFromRuntime(
         return false;
       }
       const cachedAccounts = cached.channels[channelId]?.accounts;
-      return (
-        Object.keys(cachedAccounts ?? {}).some(
-          (accountId) => !Object.hasOwn(accounts, accountId),
-        ) ||
-        Object.entries(accounts).some(
-          ([accountId, snapshot]) =>
-            snapshot && cachedLifecycleDiffersFromRuntime(cachedAccounts?.[accountId], snapshot),
-        )
+      return Object.entries(accounts).some(
+        ([accountId, snapshot]) =>
+          snapshot && cachedLifecycleDiffersFromRuntime(cachedAccounts?.[accountId], snapshot),
       );
-    }) ||
-    // Hot-unloaded plugins vanish from both runtime maps before cached health expires.
-    Object.keys(cached.channels).some(
-      (channelId) =>
-        !Object.hasOwn(runtime.channels, channelId) &&
-        !Object.hasOwn(runtime.channelAccounts, channelId),
-    )
+    })
   );
 }
 
@@ -84,11 +69,11 @@ export const healthHandlers: GatewayRequestHandlers = {
         cachedDiffersFromRuntime = true;
       }
     }
+    // Topology changes and clock rollback use ordinary cache expiry or an explicit probe.
     if (
       !wantsProbe &&
       cached &&
       !cachedDiffersFromRuntime &&
-      !isFutureDateTimestampMs(cached.ts, { nowMs: now }) &&
       now - cached.ts < HEALTH_REFRESH_INTERVAL_MS
     ) {
       const getEventLoopHealth = context.getEventLoopHealth;

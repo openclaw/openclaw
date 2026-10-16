@@ -35,7 +35,6 @@ import {
   FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
   FEISHU_WEBHOOK_MAX_BODY_BYTES,
   feishuWebhookRateLimiter,
-  readFeishuBotIdentityRevision,
   recordWebhookStatus,
   wsClients,
 } from "./monitor.state.js";
@@ -563,7 +562,7 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
   const rawPath = account.config.webhookPath ?? DEFAULT_FEISHU_WEBHOOK_PATH;
   if (normalizeFeishuWebhookPath(rawPath) !== rawPath) {
     throw new Error(
-      `Feishu account "${accountId}" webhookPath must be a canonical HTTP request path; ` +
+      `Feishu account "${accountId}" webhookPath must be a normalized HTTP request path; ` +
         'run "openclaw doctor --fix" to repair it',
     );
   }
@@ -601,7 +600,6 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
     }
     cleanupStarted = true;
     stopped.abort();
-    const identityRevision = readFeishuBotIdentityRevision(accountId);
     pendingDrain = (async () => {
       const pendingResponses = registration.target.pendingResponses;
       if (pendingResponses.size > 0) {
@@ -614,9 +612,8 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
           }
         }
       }
-      // A successor can publish identity before registering its route during the drain.
+      // Registered successors retain identity; startup overlapping this drain is best effort.
       if (
-        readFeishuBotIdentityRevision(accountId) === identityRevision &&
         ![...webhookTargets.values()].some((targets) =>
           targets.some(
             (target) =>

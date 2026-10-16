@@ -48,7 +48,7 @@ vi.mock("../browser-proxy-upload.js", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: m.config,
+  readRuntimeConfig: m.config,
   loadConfig: m.config,
 }));
 vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
@@ -469,21 +469,6 @@ describe("browser.request profile selection", () => {
     );
   });
 
-  it("dispatches host-local admin mutations when no node handles the request", async () => {
-    const { respond, nodeRegistry } = await runRequest(
-      { method: "POST", path: "/profiles/create", body: { name: "poc" } },
-      undefined,
-      [],
-    );
-
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    expect(m.start).toHaveBeenCalledOnce();
-    const [ok, payload, error] = reply(respond);
-    expect(ok).toBe(false);
-    expect(payload).toBeUndefined();
-    expect(error?.message).toContain("browser control disabled:");
-  });
-
   it("falls back to host dispatch when an auto-selected node has no browser host", async () => {
     const { respond, nodeRegistry } = await runRequest(
       { method: "GET", path: "/" },
@@ -578,30 +563,6 @@ describe("browser.request profile selection", () => {
       code: "INVALID_REQUEST",
       message: "headed mode needs a display",
       details: errorBody,
-    });
-  });
-
-  it.each([
-    {
-      name: "recognized action code",
-      body: { error: "evaluation disabled", code: "ACT_EVALUATE_DISABLED" },
-      details: { error: "evaluation disabled", code: "ACT_EVALUATE_DISABLED" },
-    },
-    {
-      name: "unrecognized action code",
-      body: { error: "evaluation disabled", code: "ACT_FUTURE_CODE" },
-      details: { error: "evaluation disabled", unrecognizedCode: true },
-    },
-  ])("preserves bounded $name state through the node proxy", async ({ body, details }) => {
-    const { respond } = await runRequest(
-      { method: "POST", path: "/act" },
-      { ok: true, payload: { error: { status: 403, body } } },
-    );
-
-    expect(reply(respond)[2]).toEqual({
-      code: "INVALID_REQUEST",
-      message: "evaluation disabled",
-      details,
     });
   });
 

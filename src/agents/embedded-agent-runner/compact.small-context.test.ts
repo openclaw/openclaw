@@ -50,6 +50,62 @@ beforeEach(async () => {
   compactEndpoint.mockReset();
 });
 
+it("summarizes with the model window instead of a smaller session token budget", async () => {
+  const { guardSessionManager } = await import("../session-tool-result-guard-wrapper.js");
+  const { createAgentSession } = await import("../sessions/sdk.js");
+  const { resolveEmbeddedAgentStream } = await import("./stream-resolution.js");
+  const model = { ...testModel, contextWindow: 32_768, maxTokens: 1_024 };
+  const manager = SessionManager.inMemory(prepared.workspaceDir);
+  for (let turn = 0; turn < 8; turn++) {
+    manager.appendMessage({
+      role: "user",
+      content: `Remember code word copper. Document ${turn}. ${"older context ".repeat(200)}`,
+      timestamp: turn * 2 + 1,
+    });
+    manager.appendMessage(createAssistant(model, [{ type: "text", text: "ACK" }]));
+  }
+  const settingsManager = SettingsManager.inMemory({
+    compaction: { enabled: false, keepRecentTokens: 300, reserveTokens: 1_024 },
+    retry: { enabled: false },
+  });
+  resolveContextWindowInfoMock.mockReturnValue({ tokens: model.contextWindow });
+  resolveModelMock.mockImplementation(() => ({ ...createCompactHooksResolvedModel(), model }));
+  limitHistoryTurnsMock.mockImplementation((messages) => messages);
+  vi.mocked(guardSessionManager).mockReturnValue(manager);
+  vi.mocked(createAgentSession).mockImplementation((options) =>
+    createTestSession({ model: options.model, sessionManager: manager, settingsManager }),
+  );
+  const summary = "The code word is copper. Eight source documents were acknowledged.";
+  const summaryStream = vi.fn((activeModel: Model) =>
+    createAssistantResultStream(createAssistant(activeModel, [{ type: "text", text: summary }])),
+  );
+  vi.mocked(resolveEmbeddedAgentStream).mockReturnValue({
+    streamFn: summaryStream,
+    strategy: "session-custom",
+  });
+
+  const result = await compact({
+    agentId: "main",
+    sessionId: prepared.sessionId,
+    sessionKey,
+    sessionFile: sessionKey,
+    sessionTarget: { agentId: "main", sessionId: prepared.sessionId, sessionKey, storePath },
+    workspaceDir: prepared.workspaceDir,
+    config: {},
+    provider: model.provider,
+    model: model.id,
+    trigger: "manual",
+    force: true,
+    tokenBudget: 512,
+  });
+
+  expect(result, result.reason).toMatchObject({ ok: true, compacted: true });
+  expect(manager.buildSessionContext().messages[0]).toMatchObject({
+    role: "compactionSummary",
+    summary: expect.stringContaining(summary),
+  });
+});
+
 it("reclaims retained source turns when the endpoint cannot fit a small foreground window", async () => {
   const { guardSessionManager } = await import("../session-tool-result-guard-wrapper.js");
   const { createAgentSession } = await import("../sessions/sdk.js");
@@ -172,12 +228,14 @@ it("reclaims retained source turns when the endpoint cannot fit a small foregrou
     },
   };
 
-  // Manual compaction is the control: the exact original history is compactable.
+  // Focused manual compaction is the client control: the exact original history is compactable.
   const manual = await compact({
     ...args,
     trigger: "manual",
+    customInstructions: "Preserve the code word.",
   });
   expect(manual, manual.reason).toMatchObject({ ok: true, compacted: true });
+  expect(compactEndpoint).not.toHaveBeenCalled();
   expect(summaryStream).toHaveBeenCalled();
   manager = SessionManager.fromEntries([manager.getHeader(), ...original], prepared.workspaceDir);
   vi.mocked(guardSessionManager).mockReturnValue(manager);

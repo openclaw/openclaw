@@ -19,6 +19,7 @@ import { readMemoryUsage } from "./diagnostic-memory-bundle.js";
 import {
   assignOptionalFields,
   readObject,
+  readOptionalNumber,
   readOptionalPositiveInteger,
   readRequiredNumber,
 } from "./diagnostic-stability-readers.js";
@@ -236,13 +237,6 @@ function readTimestampMs(value: unknown, label: string): number {
     throw new Error(`Invalid stability bundle: ${label} must be a valid timestamp`);
   }
   return timestamp;
-}
-
-function readOptionalNumber(value: unknown, label: string): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  return readRequiredNumber(value, label);
 }
 
 function readRequiredString(value: unknown, label: string): string {
@@ -559,6 +553,7 @@ function readStabilityEventRecord(
       "pairedToolName",
       "provider",
       "model",
+      "failureKind",
     ],
     readOptionalCodeString,
   );
@@ -569,6 +564,8 @@ function readStabilityEventRecord(
     label,
     [
       "durationMs",
+      "providerProcessingMs",
+      "providerWaitEstimateMs",
       "requestBytes",
       "responseBytes",
       "timeToFirstByteMs",

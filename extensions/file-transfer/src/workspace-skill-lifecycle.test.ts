@@ -9,6 +9,10 @@ import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { registerNodeWorkspaces } from "./workspace-service.js";
@@ -73,6 +77,7 @@ beforeEach(async () => {
       service = value;
     },
   });
+  setRuntimeConfigSnapshot(api.config);
   registerNodeWorkspaces(api);
 });
 afterEach(async () => {
@@ -80,7 +85,11 @@ afterEach(async () => {
   try {
     await service.stop?.(context());
   } finally {
-    await scheduler.stop();
+    try {
+      await scheduler.stop();
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   }
 });
 function skillRequest() {
@@ -201,7 +210,7 @@ it("publishes, tracks, updates and removes Skills on the paired host with Gatewa
       workspaceDir: local,
       slug: "lifecycle-proof",
     }),
-  ).rejects.toThrow("canonical");
+  ).rejects.toThrow("resolved location");
   await fs.unlink(targetDir);
   await fs.rename(moved, targetDir);
 

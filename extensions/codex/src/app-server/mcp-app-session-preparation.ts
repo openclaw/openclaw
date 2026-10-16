@@ -3,7 +3,7 @@ import {
   type AgentHarnessSessionPreparationV1,
   buildCodexUserMcpServersThreadConfigPatchForRuntime,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
-import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { loadExecApprovalsReadOnlyAsync } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { z } from "zod";
 import { resolveCodexAppServerAuthProfileId } from "./auth-profile.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
@@ -65,6 +65,7 @@ export async function prepareCodexMcpAppSession(params: {
       signal: input.abortSignal,
       assertCurrent: assertSourceCurrent,
     });
+    using _ = { [Symbol.dispose]: admitted.release };
     const assertCurrent = () => {
       assertSourceCurrent();
       admitted.authority.assertLegacyCurrent();
@@ -74,7 +75,8 @@ export async function prepareCodexMcpAppSession(params: {
       const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
         permissionMode: input.permissionMode,
         execOverrides: input.execOverrides,
-        approvals: input.permissionMode === "full" ? undefined : loadExecApprovals(),
+        approvals:
+          input.permissionMode === "full" ? undefined : await loadExecApprovalsReadOnlyAsync(),
         config: input.config,
         agentId: input.agentId,
       });
@@ -130,7 +132,7 @@ export async function prepareCodexMcpAppSession(params: {
       });
       const client = await getLeasedSharedCodexAppServerClient({
         startOptions,
-        pluginConfig: params.pluginConfig,
+        pluginConfig,
         agentId: input.agentId,
         agentDir: input.agentDir,
         config: input.config,
@@ -208,6 +210,7 @@ export async function prepareCodexMcpAppSession(params: {
           bindingStore: params.bindingStore,
           params: { ...input, authProfileId },
           assertCurrent,
+          authority: admitted.authority,
           agentId: input.agentId,
           agentDir: input.agentDir,
           cwd: input.workspaceDir,
@@ -277,7 +280,8 @@ export async function prepareCodexMcpAppSession(params: {
     // resumes still acquire the native thread queue before the binding lease.
     const thread = await params.bindingStore.withLease(sessionBindingIdentity(input), async () => {
       assertCurrent();
-      const current = params.bindingStore.read(sessionBindingIdentity(input));
+      const current = await params.bindingStore.readAsync(sessionBindingIdentity(input));
+      assertCurrent();
       return current ?? (await prepareThread());
     });
     assertCurrent();

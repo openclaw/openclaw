@@ -19,13 +19,13 @@ import {
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import {
-  captureDeferredPluginSessionSources,
   deferredPluginSessionStoreIds,
   readDeferredPluginSessionImport,
   readStaleDeferredPluginSessionImport,
   recordDeferredPluginSessionImport,
   type DeferredPluginSessionImport,
 } from "../infra/deferred-plugin-session-sources.js";
+import { captureDeferredPluginSessionSources } from "../infra/deferred-plugin-session-verification.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   readMigrationArtifactIdentity,
@@ -85,6 +85,7 @@ import {
   countRetainedSessionSources,
   prepareRetainedSessionImport,
   retireDeferredPluginSessionImport,
+  collectRetainedTrajectoryPointers,
 } from "./doctor-session-sqlite-retained.js";
 import { settleDuplicateSessionSqliteArchives } from "./doctor-session-sqlite-retirement.js";
 import {
@@ -876,9 +877,9 @@ async function inspectOrMigrateTarget(params: {
     validateLegacySessionRecords(params.target, records, report, "validate", params.env);
   }
   let validationPassed = retainedImport !== undefined;
-  if (params.mode === "import" && retainedImport) {
-    // Exact source and database identities carry the earlier verified import into archival.
-    updateManifest("passed");
+  if (params.mode === "import") {
+    // A blocked import cannot certify archival; retained imports already carry exact identities.
+    updateManifest(retainedImport ? "passed" : "failed");
   }
   if (
     params.mode === "import" &&
@@ -993,7 +994,7 @@ async function inspectOrMigrateTarget(params: {
         if (indexless) {
           report.issues.push({
             code: "retained_plugin_source_index_rebuilt",
-            message: `Derived the retained source index from verified transcripts for ${path.dirname(params.target.storePath)}. Recorded their identities in the completed import receipt without creating sessions.json or replaying canonical metadata.`,
+            message: `Derived the retained source index from verified transcripts for ${path.dirname(params.target.storePath)}. Recorded their identities in the completed import receipt without creating sessions.json or replaying existing metadata.`,
           });
         }
       }
@@ -1293,18 +1294,11 @@ async function archiveLegacyArtifacts(
         pointers.add(pointer);
       }
     }
-    // A pointer sidecar only locates its transcript's trajectory, so it settles with that
-    // transcript, including a receipt-verified one an earlier run archived without it.
-    for (const transcript of receiptSources) {
-      const pointer = resolveTrajectoryPointerPath(transcript);
-      if (
-        pointer &&
-        receiptSources.has(pointer) &&
-        !owner.sourceConflicts?.has(transcript) &&
-        !fs.existsSync(transcript)
-      ) {
-        pointers.add(pointer);
-      }
+    for (const pointer of collectRetainedTrajectoryPointers(
+      receiptSources,
+      owner.sourceConflicts,
+    )) {
+      pointers.add(pointer);
     }
     for (const pointer of pointers) {
       const source = canonicalMigrationFilePath(pointer);

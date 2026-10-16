@@ -309,17 +309,15 @@ export function registerMatrixVerificationCommands(root: Command): void {
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(async (id: string, options: cli.MatrixCliVerificationCommandOptions) => {
-      const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-      await cli.runMatrixCliCommand(options, {
-        run: () =>
+      await cli.runMatrixCliAccountCommand(options, {
+        run: ({ accountId, cfg }) =>
           verification.getMatrixVerificationSas(id, {
             accountId,
             cfg,
             ...matrixCliVerificationDmLookupOptions(options),
           }),
-        onText: (sas) => {
+        onText: (sas, _verbose, accountId) => {
           const requestId = cli.formatMatrixCliText(id);
-          cli.printAccountLabel(accountId);
           console.log(`Verification id: ${requestId}`);
           cli.printMatrixVerificationSas(sas);
           printMatrixVerificationSasGuidance(
@@ -382,6 +380,14 @@ export function registerMatrixVerificationCommands(root: Command): void {
         },
       ) => {
         await cli.runMatrixCliAccountCommand(options, {
+          gateway: {
+            method: "matrix.verify.status.owner",
+            params: () => ({
+              accountId: options.account,
+              includeRecoveryKey: options.includeRecoveryKey === true,
+              allowDegradedLocalState: options.allowDegradedLocalState === true,
+            }),
+          },
           run: ({ accountId, cfg }) =>
             verification.getMatrixVerificationStatus({
               accountId,

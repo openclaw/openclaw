@@ -66,6 +66,20 @@ Client replies with `connect`:
 
 Gateway responds with `hello-ok`:
 
+The default connect deadline is 30 seconds, allowing authentication and profile
+preparation to finish on busy or slower hosts. It is a total deadline, not an idle
+timeout: progress does not extend it. The client connect watchdog and server
+preauth timeout share this default. Operators can override the server budget with
+`OPENCLAW_HANDSHAKE_TIMEOUT_MS`; configure connecting clients with the same budget.
+
+When the Gateway already holds a named canonical owner and its local-owner
+binding, initial connections and reconnects reuse those profile facts. Committed
+profile writes update the retained catalog; creating an owner, adopting a missing
+name, or restoring an absent binding still uses the profile writer. Merged or
+misbound owners require `openclaw doctor --fix` before reconnecting. Every
+connection retains its authentication, device authorization, role, and visibility
+checks.
+
 ```json
 {
   "type": "res",

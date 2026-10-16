@@ -77,7 +77,7 @@ suite.define(() => {
       await captureUiProof(page, "01-devices-inventory.png");
 
       await row.locator(".device-entry__menu-trigger").click();
-      await page.locator('wa-dropdown-item[value="editAlias"]').click();
+      await row.locator('[role="menuitem"][data-value="editAlias"]').click();
       const dialog = page.locator("openclaw-modal-dialog").last();
       await dialog.locator('input[name="value"]').waitFor();
       await captureUiProof(page, "02-alias-dialog-open.png");
@@ -130,7 +130,7 @@ suite.define(() => {
       await dialog.waitFor({ state: "hidden" });
       const renamedRow = page.locator(".device-entry", { hasText: "Office node" });
       await renamedRow.locator(".device-entry__menu-trigger").click();
-      await page.locator('wa-dropdown-item[value="editAlias"]').click();
+      await renamedRow.locator('[role="menuitem"][data-value="editAlias"]').click();
       await dialog.locator('input[name="value"]').fill("Unsaved alias");
       const socketsBefore = await gateway.getSocketCount();
       await gateway.closeLatest();

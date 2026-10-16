@@ -1,18 +1,21 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import * as hostTranscriptWriter from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { SessionManager } from "../../plugin-sdk/agent-sessions.js";
-import { readGlobalSingleton } from "../../shared/global-singleton.js";
+import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { withSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import type { SessionEntry } from "./session-manager-types.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -280,22 +283,50 @@ it("propagates queued write revocation and user/custom commit failures without p
   });
 });
 
-it("warns once per synchronous method across manager instances while preserving compatibility results", () => {
-  const methods = [
-    ["appendCustomEntry", "appendCustomEntryAsync"],
-    ["appendSessionInfo", "appendSessionInfoAsync"],
-  ] as const;
-  const warned = readGlobalSingleton(Symbol.for("openclaw.sessionPersistenceDeprecations"));
-  if (!(warned instanceof Set)) {
-    throw new Error("Expected the process-wide session persistence warning registry");
-  }
-  // Shared Vitest workers retain earlier files' process-wide warning budgets.
-  const priorWarnings = methods.map(([method]) => {
-    const key = `SessionManager.${method}`;
-    return { key, existed: warned.delete(key) };
+it("adopts a compaction owner's canonical parent without a host reload", async () => {
+  await withOpenClawTestState({ label: "async-compaction-parent" }, async (state) => {
+    const { target, manager } = await openFixture(state, "compaction-parent");
+    const first = expectDefined(
+      await manager.appendMessageAsync({ role: "user", content: "Retained", timestamp: 1 }),
+      "retained entry id",
+    );
+    const tail = await manager.appendCustomEntryAsync("side-history");
+    const sql = observeHostDataSql();
+    let boundary: string;
+    try {
+      boundary = await withSessionCompactionPersistenceAsync(
+        manager,
+        (prepared) =>
+          persistCompactionBoundaryWithSessionEntryAsync(target, {
+            prepared: {
+              ...prepared,
+              event: { ...prepared.event, parentId: first },
+              appendIntent: undefined,
+            },
+            transcriptByteCompactionLatch: {
+              activeBytes: 2048,
+              sessionId: target.sessionId,
+              maxBytes: 1024,
+            },
+          }),
+        () => manager.appendCompactionAsync("Summary", first, 100),
+      );
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+    expect(manager.getBranch().map(({ id }) => id)).toEqual([first, boundary]);
+    expect(manager.getEntry(tail)).toMatchObject({ id: tail });
+    expect(manager.getEntry(boundary)).toMatchObject({ parentId: first, type: "compaction" });
+    const reopened = await SessionManager.openAsync(target, state.workspaceDir);
+    expect(reopened.getEntries()).toEqual(manager.getEntries());
+    expect(reopened.getBranch()).toEqual(manager.getBranch());
   });
+});
+
+it("deduplicates legacy session methods across managers while preserving immediate results", () => {
   const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-  try {
+  withPluginRuntimePluginScope({ pluginId: "session-compat-family" }, () => {
     for (let index = 0; index < 2; index++) {
       const manager = SessionManager.inMemory();
       const id = manager.appendCustomEntry("legacy", { index });
@@ -303,25 +334,11 @@ it("warns once per synchronous method across manager instances while preserving 
       const info = manager.appendSessionInfo("Legacy name");
       expect(manager.getEntry(info)).toMatchObject({ id: info, type: "session_info" });
     }
-    for (const [method, replacement] of methods) {
-      const calls = warning.mock.calls.filter(([message]) =>
-        String(message).startsWith(`SessionManager.${method} is deprecated;`),
-      );
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.[0]).toContain(replacement);
-      expect(calls[0]?.[1]).toMatchObject({
-        code: "DEP_SESSION_PERSISTENCE",
-        type: "DeprecationWarning",
-      });
-    }
-  } finally {
-    warning.mockRestore();
-    for (const { key, existed } of priorWarnings) {
-      if (existed) {
-        warned.add(key);
-      } else {
-        warned.delete(key);
-      }
-    }
-  }
+  });
+  expect(warning).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining(
+      "Plugin session-compat-family: SessionManager.appendCustomEntry is deprecated; use appendCustomEntryAsync",
+    ),
+    { code: "DEP_SESSION_PERSISTENCE", type: "DeprecationWarning" },
+  );
 });

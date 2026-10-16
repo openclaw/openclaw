@@ -4,6 +4,7 @@ import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.j
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { ProviderServingContextLimits } from "./model-serving-context.js";
 import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.js";
 import type {
   PreparedAccountCatalogAccess,
@@ -49,6 +50,8 @@ export type PreparedModelRuntimeCatalogFacts = {
 };
 
 export type PreparedModelRuntimeCatalogSource = Readonly<{
+  providerExpiries?: Map<string, number>;
+  servingLimits?: ProviderServingContextLimits;
   modelsJsonContents: string | null;
   pluginCatalogs: readonly PersistedPluginModelCatalog[];
   providerOutcomes?: readonly ProviderCatalogOutcome[];
@@ -79,7 +82,7 @@ export type PreparedModelRuntimeCatalogAccess = Readonly<{
   isCurrent: () => boolean;
   withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
   readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
-  recheckNativeLogin: () => void;
+  recheckNativeLogin: (options?: { force?: boolean }) => void | Promise<void>;
   refreshExpiredModelCatalog: () => void;
   readPublishedModels: () => ReadonlyMap<string, readonly Model[]> | undefined;
   loadFullModelCatalog: (

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CronDeliveryPreview, CronJob, CronJobCreate, CronJobPatch } from "../cron/types.js";
 import { ExitError } from "../runtime.js";
 import { registerCronCli } from "./cron-cli.js";
+import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
 
 const mocks = vi.hoisted(() => {
   const defaultRuntime = {
@@ -454,6 +455,48 @@ describe("cron cli", () => {
     expect(defaultRuntime.log).toHaveBeenCalledWith("diagnostic: exec stderr tail");
   });
 
+  it.each([false, true])(
+    "renders cron show without state (missing payload: %s)",
+    async (missingPayload) => {
+      mockExistingJob({ state: undefined, ...(missingPayload ? { payload: undefined } : {}) });
+
+      await buildProgram().parseAsync(["cron", "show", "job-1"], { from: "user" });
+
+      expect(defaultRuntime.log.mock.calls).toEqual(
+        expect.arrayContaining([
+          ["id: job-1"],
+          ["next: -"],
+          ["last: -"],
+          ["status: idle"],
+          ["last error: -"],
+          ["diagnostic: -"],
+        ]),
+      );
+      expect(defaultRuntime.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the ambiguous cron show name error when a matching row has no schedule", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(async (method: string) =>
+      method === "cron.list"
+        ? {
+            ...cronPage([]),
+            total: 2,
+            jobs: [
+              { id: "broken", name: "Duplicate", enabled: true },
+              createCronJob("second", "Duplicate"),
+            ],
+          }
+        : undefined,
+    );
+
+    await expect(
+      buildProgram().parseAsync(["cron", "show", "Duplicate"], { from: "user" }),
+    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+    expectRuntimeErrorContaining("Multiple automations match this name.");
+  });
+
   it("creates a configured agent job from a positional cron schedule and prompt", async () => {
     const params = await add(
       "0 2 * * *",
@@ -557,6 +600,36 @@ describe("cron cli", () => {
       schedule: { kind: "cron", staggerMs: 0 },
       payload: { kind: "systemEvent", text: "tick", toolsAllow: ["read", "write"] },
     });
+  });
+
+  it("keeps invalid add target/payload guidance in JSON mode before RPC", async () => {
+    const argv = process.argv;
+    const args = [
+      ...CREATE,
+      "--at",
+      "+3m",
+      "--session",
+      "current",
+      "--system-event",
+      "resume",
+      "--json",
+    ];
+    process.argv = [...argv.slice(0, 2), ...args];
+    try {
+      const failure = await runCronCommand(args).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ExpectedCliError);
+      expect(formatCliJsonFailure(failure)).toEqual({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message:
+            'cron sessionTarget "current" cannot run systemEvent: systemEvent only runs in the main session; for sessionTarget "current" use payload {kind:"agentTurn",message}',
+        },
+      });
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      process.argv = argv;
+    }
   });
 
   it("accepts a positional every interval without delivery", async () => {

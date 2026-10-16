@@ -1,4 +1,7 @@
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictNonNegativeInteger,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import { escapeHtml, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
@@ -57,15 +60,17 @@ function formatSubMessageContent(
   }
 }
 
-export function parseMergeForwardContent(
+export async function parseMergeForwardContent(
   items: ReadonlyArray<{
     msg_type?: string;
     body?: { content?: string };
     upper_message_id?: string;
     create_time?: string;
+    sender?: { id?: string };
     mentions?: ReadonlyArray<FeishuTextMention>;
   }>,
-): string {
+  resolveSenderName?: (senderId: string) => Promise<string | undefined>,
+): Promise<string> {
   const maxMessages = 50;
   if (items.length === 0) {
     return "[Merged and Forwarded Message - no sub-messages]";
@@ -86,10 +91,21 @@ export function parseMergeForwardContent(
   );
 
   const lines = ["[Merged and Forwarded Messages]"];
+  const senderNames = new Map<string, string>();
   for (const item of subMessages.slice(0, maxMessages)) {
-    lines.push(
-      `- ${formatSubMessageContent(item.body?.content || "", item.msg_type || "text", item.mentions)}`,
+    const body = formatSubMessageContent(
+      item.body?.content || "",
+      item.msg_type || "text",
+      item.mentions,
     );
+    const ms = parseStrictNonNegativeInteger(item.create_time);
+    const timestamp = ms === undefined ? undefined : timestampMsToIsoString(ms);
+    const senderId = item.sender?.id;
+    if (senderId && resolveSenderName && !senderNames.has(senderId)) {
+      senderNames.set(senderId, (await resolveSenderName(senderId)) ?? senderId);
+    }
+    const sender = senderId ? (senderNames.get(senderId) ?? senderId) : undefined;
+    lines.push(`- ${timestamp ? `[${timestamp}] ` : ""}${sender ? `${sender}: ` : ""}${body}`);
   }
   if (subMessages.length > maxMessages) {
     lines.push(`... and ${subMessages.length - maxMessages} more messages`);

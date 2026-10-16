@@ -15,6 +15,7 @@ import { context, diag, DiagLogLevel, metrics, propagation, trace } from "@opent
 import { logs } from "@opentelemetry/api-logs";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
+import { AggregationTemporality, MeterProvider, MetricReader } from "@opentelemetry/sdk-metrics";
 import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
@@ -72,6 +73,70 @@ function releasePreloadedOtelGlobals() {
   trace.disable();
   process.env[PRELOAD_ENV] = "0";
 }
+
+test("bounds tool metric series across collections while preserving span parameter lengths", async () => {
+  const reader = new (class extends MetricReader {
+    protected onForceFlush() {
+      return Promise.resolve();
+    }
+    protected onShutdown() {
+      return Promise.resolve();
+    }
+  })({ aggregationTemporalitySelector: () => AggregationTemporality.CUMULATIVE });
+  const provider = new MeterProvider({ readers: [reader] });
+  metrics.disable();
+  metrics.setGlobalMeterProvider(provider);
+  try {
+    const { service, ctx } = await startOtelService({ traces: true, metrics: true });
+    try {
+      for (const iteration of [1, 2]) {
+        for (const paramsSummary of [
+          { kind: "string", length: iteration * 3 },
+          { kind: "array", length: iteration * 5 },
+        ] as const) {
+          const tool = { toolName: "read", paramsSummary };
+          emit({ type: "tool.execution.completed", ...tool, durationMs: 17 });
+          emit({
+            type: "tool.execution.blocked",
+            ...tool,
+            deniedReason: "policy",
+            reason: "Blocked by synthetic policy",
+          });
+        }
+        await waitForDiagnosticEventsDrained();
+        const { resourceMetrics } = await reader.collect();
+        if (iteration === 2) {
+          const exported = resourceMetrics.scopeMetrics.flatMap((scope) => scope.metrics);
+          for (const name of [
+            "openclaw.tool.execution.duration_ms",
+            "openclaw.tool.execution.blocked",
+          ]) {
+            const points = exported.find((metric) => metric.descriptor.name === name)?.dataPoints;
+            expect(points).toHaveLength(2);
+            expect(
+              points?.map((point) => point.attributes["openclaw.tool.params.kind"]).toSorted(),
+            ).toEqual(["array", "string"]);
+            for (const point of points ?? []) {
+              expect(point.attributes).not.toHaveProperty("openclaw.tool.params.length");
+              expect(typeof point.value === "number" ? point.value : point.value.count).toBe(2);
+            }
+          }
+        }
+      }
+      await sdk.provider.forceFlush();
+      expect(
+        sdk.exporter
+          .getFinishedSpans()
+          .map((span) => span.attributes["openclaw.tool.params.length"])
+          .toSorted((a, b) => Number(a) - Number(b)),
+      ).toEqual([3, 3, 5, 5, 6, 6, 10, 10]);
+    } finally {
+      await service.stop?.(ctx);
+    }
+  } finally {
+    await provider.shutdown();
+  }
+});
 
 test.each([
   {
@@ -271,7 +336,7 @@ test("propagates the exported model span across two OTLP services with one roote
     });
     emit({ type: "harness.run.started", ...harnessBase, trace: harnessTrace });
     emit({ type: "run.started", ...base, trace: runTrace });
-    const outboundTraceparent = runModelCallAndCaptureTraceparent({
+    const outboundTraceparent = await runModelCallAndCaptureTraceparent({
       ...base,
       callId: "call-live-bridge",
       trace: runTrace,

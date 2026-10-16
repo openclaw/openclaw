@@ -63,7 +63,6 @@ import {
 const prefix = stagingPrefix;
 const receiptName = "staging.json";
 const manifestName = "manifest.json";
-const cursorName = prefix + "discovery";
 const headerLimit = 32 * 1024;
 const manifestLimit = 64 * 1024 * 1024;
 const identitySchema = crabboxArtifactIdentitySchema;
@@ -849,7 +848,6 @@ function mirrorLock(path: string, waitForAllocation = false) {
     if (released) {
       return;
     }
-    assertOwned();
     connection.exec("ROLLBACK");
     connection.close();
     released = true;
@@ -1080,7 +1078,6 @@ function claimIdleMirror(syncRoot: string, key: string, expectedId?: string) {
     return {
       release,
       removePayload() {
-        release.assertOwned();
         if (lstatSync(join(current.root, "recovery.lock"), { throwIfNoEntry: false })) {
           throw new Error(
             "Another or interrupted recovery owns this copy; its recovery lock must remain protected.",
@@ -1425,7 +1422,6 @@ export function createMirrorStaging(
       }
     };
     const ownedReceipt = () => {
-      unlock.assertOwned();
       const current = mirrorSlot(syncRoot, key);
       if (
         current.root !== root ||
@@ -1772,7 +1768,7 @@ function inspectStaging(
         skipping = entry.name !== options.startAfter;
         continue;
       }
-      if (!entry.name.startsWith(prefix) || entry.name === cursorName) {
+      if (!entry.name.startsWith(prefix)) {
         continue;
       }
       nextCursor = entry.name;
@@ -1817,89 +1813,6 @@ function inspectStaging(
   return { entries, incomplete, nextCursor, elapsedMs: performance.now() - started };
 }
 
-const cursorSchema = z.strictObject({
-  version: z.literal(1),
-  rootIdentity: identitySchema,
-  cursorIdentity: identitySchema,
-  after: z.string().startsWith(prefix).max(256).optional(),
-});
-
-function readCursor(syncRoot: string) {
-  const physicalRoot = realpathSync(syncRoot);
-  const root = join(physicalRoot, cursorName);
-  let recordedAtNs = 0n;
-  const value = cursorSchema.parse(
-    JSON.parse(
-      readBounded(join(root, "position.json"), headerLimit, (stat) => {
-        recordedAtNs = metadataTimestamp(stat);
-      }).toString("utf8"),
-    ),
-  );
-  assertIdentity(physicalRoot, value.rootIdentity, recordedAtNs);
-  assertIdentity(root, value.cursorIdentity, recordedAtNs);
-  if (value.after && basename(value.after) !== value.after) {
-    throw new Error("staging discovery cursor is invalid");
-  }
-  return value;
-}
-
-/** Metadata-only discovery; its cursor is a fairness hint, never deletion authority. */
-export function discoverStaging(syncRoot: string) {
-  let startAfter: string | undefined;
-  try {
-    startAfter = readCursor(syncRoot).after;
-  } catch {
-    // Unknown cursor data grants no authority and is never overwritten below.
-  }
-  return inspectStaging(syncRoot, { startAfter });
-}
-
-/** Advance bounded discovery and attempt at most one old candidate after normal completion. */
-export async function recoverDiscoveredStaging(
-  syncRoot: string,
-  discovery: ReturnType<typeof discoverStaging>,
-  options: RecoveryOptions,
-) {
-  options.signal?.throwIfAborted();
-  if (!discovery.entries.length && !discovery.incomplete) {
-    return undefined;
-  }
-  const physicalRoot = realpathSync(syncRoot);
-  const cursor = join(physicalRoot, cursorName);
-  const candidate = discovery.entries.find((entry) => entry.status === "candidate");
-  try {
-    if (!canRecordStaging(cursor, options.cwd)) {
-      throw new Error("This source location does not support recovery metadata.");
-    }
-    if (!lstatSync(cursor, { throwIfNoEntry: false })) {
-      mkdirSync(cursor, { mode: 0o700 });
-    } else {
-      readCursor(physicalRoot);
-    }
-    writeAtomic(
-      cursor,
-      "position.json",
-      JSON.stringify({
-        version: 1,
-        rootIdentity: identity(physicalRoot),
-        cursorIdentity: identity(cursor),
-        after: candidate ? basename(candidate.directory) : discovery.nextCursor,
-      }) + "\n",
-    );
-  } catch {
-    // A corrupt or interrupted hint is never adopted or allowed to veto the
-    // independently validated candidate already found in this bounded page.
-    options.signal?.throwIfAborted();
-    console.error(
-      "[crabbox] staging discovery cursor is unavailable; retained it for inspection. Use staging inspect --after to page past protected entries.",
-    );
-  }
-  if (candidate) {
-    return recoverStaging(physicalRoot, candidate.id, { ...options, automatic: true });
-  }
-  return undefined;
-}
-
 function validatePayload(root: string, receipt: Receipt, manifest: Manifest) {
   const payload = join(root, "payload");
   const present = lstatSync(payload, { throwIfNoEntry: false });
@@ -1939,7 +1852,6 @@ function validatePayload(root: string, receipt: Receipt, manifest: Manifest) {
 type RecoveryOptions = {
   binary: string;
   cwd: string;
-  automatic?: boolean;
   witness?: SourceWitness;
   signal?: AbortSignal;
   dryRun?: boolean;
@@ -1990,13 +1902,8 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
     const { receipt: before, disposal: recordedDisposal } = readMirrorState(syncRoot, id);
     originalDigest = before ? receiptDigest(before) : undefined;
     const originalSignature = before ? receiptSignature(before) : undefined;
-    if (
-      options.confirmSameHostPriorBoot &&
-      (options.automatic || !before || recordedDisposal || idleMirror(before))
-    ) {
-      throw new Error(
-        "Prior-boot confirmation is per-ID and only for non-idle legacy capsules; automatic discovery cannot confirm it.",
-      );
+    if (options.confirmSameHostPriorBoot && (!before || recordedDisposal || idleMirror(before))) {
+      throw new Error("Prior-boot confirmation is per-ID and only for non-idle legacy capsules.");
     }
     if (before && options.confirmSameHostPriorBoot) {
       confirmation = confirmPriorBoot(root, before, options.receiptSha256, Boolean(options.dryRun));
@@ -2012,13 +1919,6 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
       }
       const key = recordedDisposal?.key ?? before!.mirror!.key;
       const slotIdentity = recordedDisposal?.slotIdentity ?? before!.mirror!.slotIdentity;
-      if (options.automatic && !recordedDisposal && !before?.mirror?.disposing) {
-        return {
-          id,
-          recovered: false,
-          reason: "Idle source mirrors are retained until capacity eviction or explicit recovery.",
-        };
-      }
       let allocation = mirrorLock(join(syncRoot, "mirrors", ".allocation.lock"), true);
       if (!allocation) {
         return {
@@ -2085,7 +1985,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
     const status = metadataStatus(
       root,
       { ...before, witness: selectedWitness },
-      !options.automatic,
+      true,
       confirmation,
     );
     if (status.status !== "candidate") {
@@ -2180,11 +2080,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
         writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n", false);
         throw new Error("Durable recovery updates are unavailable; staging remains protected.");
       }
-      const installed = readReceipt(root);
-      if (receiptDigest(installed) !== createHash("sha256").update(bytes).digest("hex")) {
-        throw new Error("staging receipt changed while publishing recovery metadata");
-      }
-      receipt = installed;
+      receipt = readReceipt(root);
       currentSignature = receiptSignature(receipt);
     };
     if (confirmation && !options.dryRun) {
@@ -2239,7 +2135,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
           receiptDeadline(receipt),
         );
       } catch (error) {
-        if (options.automatic || options.dryRun || receipt.state === "removing") {
+        if (options.dryRun || receipt.state === "removing") {
           throw error;
         }
         if (!receipt.repositoryIdentity) {
@@ -2273,13 +2169,10 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
         });
       }
     }
-    const generations = recoveryMetadata(root, source, manifest.artifacts);
-    const footprint = validatePayload(root, receipt, manifest);
     const witness = await verifySourceWitness({
       source: manifest.source,
       witness: selectedWitness!,
       payloadRoot: root,
-      automatic: options.automatic,
       signal: options.signal,
     });
     if (!witness.ok) {
@@ -2298,10 +2191,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
     options.signal?.throwIfAborted();
     // Both asynchronous readers have settled. Recheck all remaining bytes and
     // authority immediately before recording disposal and removing this payload.
-    assertCurrentReceipt();
-    if (validatePayload(root, receipt, manifest) !== footprint) {
-      throw new Error("staging changed during preservation verification");
-    }
+    validatePayload(root, receipt, manifest);
     if (manifest.artifacts) {
       verifyPreservedCrabboxArtifacts(
         source,
@@ -2310,12 +2200,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
         receiptDeadline(receipt),
       );
     }
-    if (
-      JSON.stringify(recoveryMetadata(root, source, manifest.artifacts)) !==
-      JSON.stringify(generations)
-    ) {
-      throw new Error("staging metadata changed during preservation verification");
-    }
+    const generations = recoveryMetadata(root, source, manifest.artifacts);
     if (options.dryRun) {
       witness.revalidate();
       assertCurrentReceipt();

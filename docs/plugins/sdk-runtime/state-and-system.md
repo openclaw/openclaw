@@ -25,6 +25,22 @@ Memory Core's private shadow-index owner uses
 `memory-core-host-engine-storage` facade before draining its private queue and
 closing the connection.
 
+Memory Core's publication worker uses `stageMemoryIndexSchemaExtension(db)` from
+the private `memory-core-host-engine-schema` facade before replacing derived
+indexes in a managed transaction. Successful commit republishes the already
+admitted memory table contracts, so a clean restart can reuse their seal without
+repeating schema setup. Full-index publication supplies the replacement's FTS
+availability; a missing required index leaves admission invalid for repair.
+Rollback publishes no replacement receipt, and an unclean restart still performs
+normal integrity and schema admission.
+
+Memory Core's `MemorySearchManager.statusAsync({ includeCounts: false })` returns
+in-process provider and index facts without database diagnostics. Query callers
+can pass the same option to `readMemorySearchManagerStatus`; file, chunk, source,
+storage, and embedding-cache counts are omitted by the built-in manager.
+Calling `statusAsync()` retains the full diagnostic result, and legacy managers
+keep the existing synchronous fallback.
+
 ## State, config, and system namespaces
 
 <AccordionGroup>
@@ -119,11 +135,11 @@ closing the connection.
 
   </Accordion>
   <Accordion title="api.runtime.state">
-    State directory resolution and SQLite-backed keyed storage.
+    State directory resolution and engine-aware keyed storage.
 
     ```typescript
     const stateDir = api.runtime.state.resolveStateDir(process.env);
-    const store = api.runtime.state.openKeyedStore<MyRecord>({
+    const store = api.runtime.state.openKeyedStoreV2<MyRecord>({
       namespace: "my-feature",
       maxEntries: 200,
       defaultTtlMs: 15 * 60_000,
@@ -150,6 +166,14 @@ closing the connection.
     const blob = await blobs.lookup("artifact-1");
     ```
 
+    Keyed stores use the boot-selected `state` family engine. To open an additional
+    physical state root, pass `env: { ...process.env, OPENCLAW_STATE_DIR: root }`
+    in the store options. Every root retains the same keyed-store contract and,
+    on PostgreSQL, gets its own anchor UUID and namespace from the engine owner.
+    Declare the root through [`backupResources`](/plugins/manifest/surfaces#backupresources-reference)
+    with `databaseFamily: "state"` so port, backup, update, and Doctor can discover
+    it after the account is disabled. Never allocate PostgreSQL schemas in a plugin.
+
     For command-owned writes, `store.register(key, value, { assertCurrent })`
     and `store.delete(key, { assertCurrent })` carry the captured owner assertion
     through worker preparation and admission. The assertion remains in the host;
@@ -159,10 +183,12 @@ closing the connection.
 
     Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `observe(...)` with `compareAndApply(...)` when a mutation depends on the current value; the comparison and mutation run in one SQLite worker transaction. Each namespace owns its `maxEntries` retention policy and optional TTL expiry; there is no aggregate row limit across a plugin’s namespaces. JSON values are limited to 1 MiB of UTF-8 encoded JSON. By default, a write over `maxEntries` sheds the oldest live rows only from that namespace. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at the namespace limit, while existing keys remain updateable. Growth in a sibling cache cannot reject or evict those ownership records. Existing databases need no migration or cleanup when upgrading; their stored rows are preserved.
 
+    Expired values become unavailable immediately at their TTL deadline. Namespace mutations remove expired rows in bounded batches; the Gateway does not run a periodic keyed-state expiry sweep. An inactive namespace may retain expired rows on disk until a later mutation, without making those values readable or counting them toward live capacity.
+
     To retain records without count-based eviction, use the async opener with `retention: "retained"` instead of `maxEntries`:
 
     ```typescript
-    const history = api.runtime.state.openKeyedStore<MyRecord>({
+    const history = api.runtime.state.openKeyedStoreV2<MyRecord>({
       namespace: "conversation-history",
       retention: "retained",
     });
@@ -175,7 +201,7 @@ closing the connection.
 
     `entriesInKeyRange({ keyStartInclusive, keyEndExclusive, limit, order })` reads a lexical key range, including the lower bound and excluding the upper bound. `limit` must be a positive safe integer; `order` is `"asc"` by default or `"desc"`. Storage applies ordering and the limit before returning values. Encode sortable keys when native identifiers do not sort lexically. Use bounded pages rather than `entries()` to read a growing retained store.
 
-    `moveEntriesFrom({ namespace, entries: [{ sourceKey, targetKey }] })` promotes at most 10,000 rows from a bounded namespace owned by the same plugin into the receiving retained store. One transaction rereads and moves the source records without decoding or rewriting their payloads. Existing destination records win, missing source records are no-ops, and a retry after a completed move is idempotent. Live source records with TTL reject the whole operation; expired records are not revived. The returned number counts settled source rows. This operation does not create another table or require a Doctor step.
+    `moveEntriesFrom({ namespace, entries: [{ sourceKey, targetKey }] })` promotes at most 10,000 rows from a bounded namespace owned by the same plugin into the receiving retained store. One transaction rereads and moves the source records without decoding or rewriting their payloads. Existing destination records win, missing source records are no-ops, and a retry after a completed move has no additional effect. Live source records with TTL reject the whole operation; expired records are not revived. The returned number counts settled source rows. This operation does not create another table or require a Doctor step.
 
     These two methods remain optional in the public store type for existing adapters. A plugin using retained storage must require the host capabilities it needs; do not silently fall back to an evicting store or retry failed reads through a different path. Retained runtime handles reject operations after their owning capability closes.
 
@@ -189,19 +215,23 @@ closing the connection.
 
     `count()` returns the number of live stored rows in the runtime-bound plugin and namespace without loading or decoding their JSON values. A row expires when its expiry timestamp is at or before the call's cutoff. Counting does not delete expired rows, create a missing database, or join the writable database lifecycle. Corrupt JSON still occupies a live row and is counted; `lookup` and `entries` retain their decoding errors. Database acquisition and query failures propagate with operation `count`. A count and a later write are separate operations; the write remains responsible for enforcing capacity.
 
-    Current host factories provide `count`, but it remains optional in the public async and synchronous store types for shipped hosts and adapters through the next Plugin SDK major. Callers supporting those stores can use `store.count ? await store.count() : (await store.entries()).length`; synchronous callers omit `await`. The fallback retains the older store's enumeration and decoding behavior. Only fall back when the method is absent, never after a failed count.
+    Current host factories provide `count`, but it remains optional in the public async and synchronous store types for supported older hosts and adapters. Callers supporting those stores can use `store.count ? await store.count() : (await store.entries()).length`; synchronous callers omit `await`. The fallback retains the older store's enumeration and decoding behavior. Only fall back when the method is absent, never after a failed count.
 
-    `openSyncKeyedStore<T>(...)` remains available for callers that cannot await, with its existing synchronous return values and errors. It is deprecated through the `next-plugin-sdk-major` compatibility gate. See [Synchronous keyed store migration](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
+    Use `openKeyedStoreV2<T>(...)` and await its methods. `openSyncKeyedStore<T>(...)` preserves released synchronous return values and errors through 2026-12-31, the final compatibility day. Removal ships in the first January 2027 stable release without a Plugin SDK major version. See [Synchronous keyed store migration](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration) and the [complete migration mapping](/plugins/sdk-migration/sqlite-async#keyed-state).
 
     `openBlobStore<TMetadata>(...)` stores bounded binary payloads in shared SQLite without base64 or file sidecars. It requires per-entry, per-namespace byte, and row limits; copies byte arrays at the API boundary; and lists metadata without loading every BLOB. `register(...)` is an explicit upsert, including for expired keys. `registerIfAbsent(...)` provides collision-safe creation: an expired key remains occupied until its owner claims it with `deleteExpiredKey(key)` or `deleteExpired()`, preserving metadata needed to remove related named artifacts after the SQLite commit. Any row with a TTL is transient and excluded from backup/restore even before it expires; omit TTL for durable, restorable state. Host fuses cap each BLOB at 100 MiB, each plugin at 512 MiB of physically stored BLOBs, and each plugin at 50,000 physically stored rows, including expired rows awaiting owner cleanup. Use `registerIfAbsent(...)` with `overflowPolicy: "reject-new"` when external materializations must not be silently orphaned by replacement or eviction.
+
+    Current host blob stores return `PluginBlobStoreWithReceipts<TMetadata>`. Its `registerIfAbsentWithReceipt(...)` method returns the committed `{ createdAt, expiresAt? }` timestamps, or `undefined` when the key is occupied. Use this receipt to publish artifact timestamps without reading back the payload. `PluginBlobStore<TMetadata>` remains unchanged for existing adapters, and `registerIfAbsent(...)` still returns a boolean.
 
     Blob mutations use the shared SQLite worker and keep quota checks and changes in one transaction. `lookup` and `entries` use the retained read-only worker path. Missing stores stay absent. Ordinary unselected reads observe independently committed data; an unrelated cached native cursor can retain an older view. An explicitly selected snapshot keeps its private source through completion. Await all methods before publishing dependent artifacts or removing their storage. Shared reader admission is bounded: process inventories sequentially or with bounded concurrency, and join every started operation before reporting a batch failure or completing shutdown. Worker errors preserve `PluginBlobStoreError` classification, operation, path, and causal errors. Byte copying, metadata serialization, and complete result materialization still use caller memory; this is not a streaming BLOB API.
 
     `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
 
-    Host ingress queues provide `listUnsettled({ orderBy })`, returning `{ pending, claims }` from one snapshot in the shared-state broker, ordered with queue mutations. The shared drain uses this coherent view so a claim released during inspection cannot let a later event overtake its lane head. The method remains optional through the next Plugin SDK major for existing external queue implementations; only those implementations retain the separate `listPending`/`listClaims` path. A failed snapshot read never falls back to separate reads.
+    Sources with revocable per-event authority require `queue.enqueueAuthorized(id, payload, { assertCurrent, receivedAt?, laneKey?, metadata? })`. Its synchronous assertion is composed with the queue owner at transaction and final commit admission; the callback never crosses into stored JSON. The method is optional only for existing external queue implementations. A source requiring it must refuse when it is absent, not fall back to unguarded `enqueue`. Revoking one source does not retire the shared account queue.
 
-    Plugin-state leases were removed in 2026.8.1. Use short SQLite transactions for atomic database work and plugin-scoped keyed stores (`openKeyedStore` or `openSyncKeyedStore`) for bounded durable state.
+    Host ingress queues provide `listUnsettled({ orderBy })`, returning `{ pending, claims }` from one snapshot in the shared-state broker, ordered with queue mutations. The shared drain uses this coherent view so a claim released during inspection cannot let a later event overtake its lane head. The method remains optional for existing external queue implementations until a separately announced compatibility window ends; only those implementations retain the separate `listPending`/`listClaims` path. A failed snapshot read never falls back to separate reads.
+
+    Plugin-state leases were removed in 2026.8.1. Use plugin-scoped keyed stores (`openKeyedStoreV2`) for bounded durable state and their data-only commands for atomic database work.
 
     `openChannelIngressDrain(...)` opens the core channel-agnostic worker over that queue (or creates a queue when none is supplied). The drain owns stale-claim recovery, per-lane claim serialization, complete-at-adoption or complete-on-dispatch-return, retry/dead-letter disposition, optional pre-adoption supersede, and claim→adoption stall timeout. Wire claim ownership into reply generation with `turnAdoptionLifecycle` (via `bindIngressLifecycleToReplyOptions` from `plugin-sdk/channel-outbound`). Channel plugins keep accept-side enqueue, lane derivation, non-retryable classification, and any supersede authorization policy.
 
@@ -210,32 +240,59 @@ closing the connection.
     while the drain still owns the claim, shutdown reports the error and retains
     that ownership.
 
-    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available to every loaded plugin, including workspace plugins, `plugins.load.paths`, and linked installs. The runtime binds each handle to the calling plugin's namespace; existing quotas, retention and overflow policies, scope checks, and worker ownership still apply. This change requires no provenance repair or data migration.
+    `openBlobStore`, `openKeyedStoreV2`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available to every loaded plugin, including workspace plugins, `plugins.load.paths`, and linked installs. The retained `openKeyedStore` and `openSyncKeyedStore` compatibility openers have the same availability. The runtime binds each handle to the calling plugin's namespace; existing quotas, retention and overflow policies, scope checks, and worker ownership still apply. This change requires no provenance repair or data migration.
 
     `plugins inspect` and startup provenance warnings still report trust information. Trust remains required for hook agent turns and Gateway scope elevation; see [Plugin runtime trust refused](/tools/plugin#plugin-runtime-trust-refused) for those capabilities.
 
   </Accordion>
 </AccordionGroup>
 
+## Prepared keyed-state effect guards
+
+`preparePluginStateRead(store, key)` from
+`openclaw/plugin-sdk/plugin-state-runtime` prepares a current read for stores
+created by the host. It returns `{ read, release }`; call `read()` immediately
+before a tool, disclosure, or external send, and call `release()` in `finally`.
+Preparation uses the state worker when the owner has no published row or absence.
+The final read uses memory, follows committed replacements and deletions, and
+honors expiry and runtime retirement.
+
+Queued mutations deny these reads before commit. Known rollback preserves the
+prior facts; compound binding cleanup publishes deletion or compensation before
+releasing denial. An unknown outcome keeps effect guards denied for that database
+identity until the Gateway restarts. Ordinary descriptive reads remain available.
+
+Custom store adapters return `undefined` because the host cannot observe their
+writers. Keep the adapter's authoritative reader for that case. A failed prepared
+read is a denial, never permission to fall back to an older value. Preparation
+and its receipt do not replace account, session-incarnation, or other independent
+security checks.
+
+Retained synchronous effect guards can call `assertPluginStateReadAvailable(store)`
+with the host-created async store before their native read. This checks the same
+pending, unknown, and runtime state without depending on a cached row. Use it at
+the effect boundary, not inside a writer's own admission callback.
+
 ## Synchronous keyed store migration
 
 `api.runtime.state.openSyncKeyedStore` and `PluginStateSyncKeyedStore` are deprecated
 as of September 11, 2026. The existing `createPluginStateSyncKeyedStore` factory is
 the named `plugin-state-sync-keyed-store` compatibility adapter. Existing methods
-remain supported through the next Plugin SDK major; removal also requires a
-supported external-plugin migration and explicit breaking-release approval.
+remain supported during a stable deprecation period. Removal in a later stable
+release requires a supported external-plugin migration.
 
-Use `api.runtime.state.openKeyedStore` with the same namespace and options, then
+Use `api.runtime.state.openKeyedStoreV2` with the same namespace and options, then
 await its operations. The opener itself still returns a store synchronously.
 Both interfaces use the same plugin-scoped data, so no data migration is needed.
 
 Deferred runtime code without a bound plugin API can import
-`createPluginStateKeyedStore` from `openclaw/plugin-sdk/plugin-state-store-runtime`.
-Pass the plugin ID and the same namespace options, then await each operation.
+`createPluginStateKeyedStoreV2` from `openclaw/plugin-sdk/plugin-state-store-runtime`.
+Pass the plugin ID, the same namespace options, and the owner's required
+`{ assertCurrent }` capability, then await each operation.
 Keep this import lazy because the factory loads the state database runtime.
 
 ```typescript
-const store = api.runtime.state.openKeyedStore<MyRecord>({
+const store = api.runtime.state.openKeyedStoreV2<MyRecord>({
   namespace: "my-feature",
   maxEntries: 200,
 });
@@ -244,19 +301,21 @@ const value = await store.lookup("key-1");
 ```
 
 For writes on behalf of a current tool invocation or other revocable action,
-require `store.withCurrent` before starting effects. Bind the host-provided
-assertion together with any action-specific permission check:
+bind the host-provided assertion together with the action's permission check:
 
 ```typescript
-if (!store.withCurrent) {
-  throw new Error("Update OpenClaw to authorize this state mutation.");
-}
-const actionStore = store.withCurrent({
-  assertCurrent: () => {
-    context.assertInvocationCurrent();
-    assertActionAllowed();
+const actionStore = api.runtime.state.openKeyedStoreV2<MyRecord>(
+  {
+    namespace: "my-feature",
+    maxEntries: 200,
   },
-});
+  {
+    assertCurrent: () => {
+      context.assertInvocationCurrent();
+      assertActionAllowed();
+    },
+  },
+);
 await actionStore.register("key-1", { value: "hello" });
 ```
 
@@ -267,7 +326,10 @@ host and is checked after reads and at both transaction and final commit
 admission for writes, including bounded stores. Create a separate view for each
 action; do not keep one caller's authority on a shared service. The legacy
 `PluginStateKeyedStore<T>` keeps this capability optional for older hosts and
-adapters. An action requiring it must refuse when it is absent.
+adapters through its optional `withCurrent` method. An action requiring that
+capability must refuse when it is absent. The V2 opener binds the plugin lifetime
+without requiring a separate action; its optional authority adds the action's
+revocation checks. Worker completion includes committed fact installation.
 
 `observe` and a comparison conflict return observations without committing the
 requested mutation; they also require current authority when returning that data.
@@ -276,29 +338,68 @@ A refusal before the commit grant rolls back the mutation. Once commit is
 authorized, later revocation does not turn the settled write into a refusal.
 Recheck authority before the next external effect, and preserve the recorded
 result; never retry a committed or unknown write to compensate for revocation.
+Runtime adapters can use `hasSqliteWorkerOutcomeUnknown(error)` from
+`openclaw/plugin-sdk/sqlite-runtime` to recognize unknown outcomes through
+canonical error causes. For an unknown outcome, retire an uncertain cached view
+instead of attempting a reconciliation read; rejection alone does not prove
+that native work has stopped.
 
 The async store's `update` updater and `deleteIf` predicate are deprecated
 compatibility methods. They still run synchronously on the main thread inside
 the transaction containing the authoritative read and mutation, and remain
-supported through the next Plugin SDK major.
+supported through 2026-12-31, with removal in the first January 2027 stable
+release. Actual legacy
+calls emit one deprecation diagnostic per plugin and capability family per
+Gateway process; importing the SDK does not warn. Synchronous methods still
+commit and install their facts before returning.
+
+Bundled caches, dedupe stores, and Discord/Telegram binding persistence open V2
+receivers directly. The account-scoped conversation binding manager also returns
+an async-only V2 receiver; its deprecated factory separately supplies synchronous
+methods over the same owner. Native session initialization uses `linkAsync`,
+including exact-identity rollback through the upstream-link worker.
+
+Final ClickClack and Codex binding/revocation checks still use native reads where
+compound binding settlement invalidates a fact without publishing its replacement.
+The bounded observation cache is not complete authority for a cold or evicted key.
+These security reads remain migration debt until the owner can publish every
+replacement and deletion; they must continue to deny revoked actions immediately.
+
+Runtime-bound stores retain their plugin identity for diagnostics even when a
+saved method is called outside the opening invocation.
 Finish asynchronous planning before calling these methods; do not make their
 callbacks async or replace atomic operations with separate lookups and writes.
 Returning `undefined` from an updater leaves the entry unchanged. `update`,
 `deleteIf`, `lookupMany`, and `count` remain optional in public store types, so preserve
 capability checks for supported older hosts and third-party adapters.
 
-For new atomic mutations, use the optional `observe` and `compareAndApply`
-methods. `observe(key)` prepares a mutation through canonical writable database
+Thread-binding adapters that preserve deprecated cache mutations can import
+`warnPluginSdkDeprecation` from `openclaw/plugin-sdk/thread-bindings-session-runtime`.
+Call it at the legacy operation with static `family`, `method`, and `replacement`
+descriptions, plus the known `pluginId` and an accurate `compatibility` description.
+It shares the host's warning budget; a cache mutation that defers persistence
+must describe that timing rather than claim the write has already committed.
+
+For new atomic mutations, use `observe` and `compareAndApply`, which are required
+on V2 stores and optional only in the legacy structural store contract.
+`observe(key)` prepares a mutation through canonical writable database
 admission and may create or open state. It returns `{ value, comparison }`; use
 `lookup` for a plain, noncreating read. No transaction remains open while the
 caller prepares the next value.
 
-`compareAndApply(key, comparison, intent)` compares the current live row before
+`compareAndApply(key, comparison, intent, options?)` compares the current live row before
 changing it in the same worker-owned transaction. The opaque comparison binds
 the actual database, plugin, namespace, key, stored JSON bytes, creation time,
 and expiry. It compares content and metadata; it is not an incarnation token or
 permission to act. Another store or key rejects the comparison with
 `PLUGIN_STATE_INVALID_INPUT`.
+
+The optional `conditions` array contains up to 100 observations for other keys
+in the same plugin's namespaces. The worker checks them in the destination's
+transaction before applying the intent. A condition conflict returns the
+destination's current observation; reread all dependent inputs before preparing
+another attempt. This preserves a cross-key predicate without sending a closure
+or holding a transaction open during asynchronous preparation.
 
 The intent is explicit:
 
@@ -319,8 +420,88 @@ Existing quotas, eviction order, validation, and store errors still apply.
 On an explicit conflict, a plugin may recompute a named pure decision from
 `current.value` and try again. Prepare clocks, randomness, and external effects
 outside that decision. Never retry transport failures, unknown outcomes, or
-arbitrary callbacks. Check both optional methods before using this capability;
-there is no safe fallback consisting of a separate lookup and unconditional write.
+arbitrary callbacks. When accepting a legacy store, check both optional methods
+before using this capability; there is no safe fallback consisting of a separate
+lookup and unconditional write.
+
+For a complete operation spanning keys or namespaces, use the optional
+`store.createOperation` capability. Its named plugin module runs inside the
+existing shared-state worker, with all reads and writes in one synchronous
+transaction. The factory captures the admitted plugin generation, physical state
+source, namespace handles, and live action authority before any await.
+
+```typescript
+type MoveOperations = {
+  move: { input: { key: string }; output: boolean };
+};
+const operation = source.createOperation<MoveOperations>(
+  [source, destination],
+  {
+    moduleName: "transfer-operation-api.js",
+    exportName: "executeTransfer",
+  },
+  { assertCurrent },
+);
+const receipt = await operation.execute(
+  { type: "move", input: { key } },
+  { writeStores: [0, 1], watchStores: [1] },
+);
+receipt.assertCurrent();
+```
+
+The worker export accepts the typed command and a
+`PluginStateOperationTransaction`. Its synchronous `lookup`, `lookupMany`,
+`entries`, `set`, and `delete` methods address the captured stores by index.
+Repeated reads share the transaction's row view; `lookupMany` selects uncached
+keys together. Writes update that view and preserve existing JSON limits,
+namespace quotas, eviction, and TTL rules. The host rejects writes outside
+`writeStores`, retained transaction methods used after return, and Promise or
+thenable handler results. A failure rolls back the whole operation.
+
+Put operation entrypoints at the plugin package root as `*-operation-api.ts`
+(or compiled JavaScript). They are captured with the admitted plugin generation
+and included by the existing bundled and standalone plugin build owners. The
+worker loads that captured module before entering the transaction. The captured
+plugin owner resolves the top-level filename within its selected source or build
+family, including `.js` references to TypeScript source. Paths and URLs are refused.
+It does not rediscover a current plugin by id, serialize a closure, or open another
+database owner. Plugins do not need a process-runtime import or their own knowledge
+of source, bundled-build, and standalone-package directory layouts.
+
+For bundled plugins, capture follows all operation entrypoints in the selected
+source or build family and their actual imports. Packages compiled into those
+files do not also need an installed runtime copy merely because the source
+manifest declares them. External imports still need their runtime dependencies.
+The entries share one captured generation, including their common dependencies,
+and recovery retains those bytes until the last owning instance releases them.
+Compiled entries can also capture shared chunks from their owning host package.
+This also applies when Doctor loads the plugin during an update.
+
+An empty `writeStores` array selects a noncreating read. Supply `missingValue`
+when an absent physical database has a defined result, including explicit
+`undefined`; the host returns that value without creating the database or
+executing the handler. An absent source without `missingValue` refuses the call.
+
+The Gateway owns online database mutation. Operation receipts use its in-process
+write publications, pending-mutation invalidation, expiry, and lifecycle state.
+They do not poll SQLite for foreign commits or reread rows on the main thread.
+Call `receipt.assertCurrent()` immediately before a later external effect.
+`watchStores` selects the namespaces on which that effect depends; unrelated
+writes to other namespaces do not invalidate it. A queued mutation invalidates
+older receipts before native commit. Unknown outcomes never authorize replay.
+Accepted writes still settle when their caller closes; a returned historical
+result does not grant permission for a new effect.
+
+When composing a continuation with more store handles, pass its original
+`sourceReceipt` in the factory's authority options. The host verifies that all
+participants belong to that captured source before awaiting; a new environment
+selection cannot redirect a recovery operation.
+
+`createOperation` remains optional in version 1 and version 2 store types so
+released hosts and third-party adapters remain source-compatible. Select a named
+compatibility path only when the capability is absent, before awaiting. A worker,
+authority, or module-loading failure never selects a synchronous fallback.
+No schema, retention, durability, or minimum-host version change is required.
 
 `registerIfAbsent` and the optional `deleteIfEqual(key, expected)` operation use
 the shared-state SQLite worker. `deleteIfEqual` accepts a string, finite number,
@@ -337,7 +518,7 @@ deletes atomically; a decode failure rolls back the deletion. Store creation,
 input validation, and JSON serialization remain on the calling thread.
 
 Callback-based `update` and `deleteIf` retain the native synchronous transaction;
-do not replace either with a separate lookup and write. Worker errors retain `PluginStateStoreError` codes, operation, and path. Canonical
+do not replace either with a separate lookup and write. Worker errors retain `PluginStateStoreError` codes, operation, and path. OpenClaw
 state errors use their existing codec; other native causes retain bounded causal
 messages, error codes, and numeric `errno` values. Structured file logs include
 the process ID, thread ID, and OpenClaw version that constructed the plugin-state
@@ -359,23 +540,27 @@ without comparisons retain atomic `deleteIf` cleanup; a failed worker operation
 never selects that compatibility path. The namespace, stored records, and
 retention remain unchanged, so this cutover requires no data migration.
 
-This deprecation adds editor annotations, documentation, and compatibility
-inventory metadata. It adds no runtime warning. Both runtime openers are available
-to every loaded plugin. Runtime deprecation warnings should wait for an actionable supported upgrade.
-Only the operations identified above execute on the worker. Callback execution
-is unchanged during this migration.
+Both legacy and versioned runtime openers are available to every loaded plugin.
+Actual legacy operations warn as described above; opening a store does not warn.
+Only the operations identified above execute on the worker. Callback execution,
+stored data, and retention are unchanged during this migration.
 
 ## Per-agent SQLite writes
 
 Bundled and official plugins that already use the private `sqlite-runtime`
-facade can import `withOpenClawAgentDatabaseWrite` from
-`openclaw/plugin-sdk/sqlite-runtime`. This remains an internal runtime facade,
-not a typed public SDK entrypoint for third-party plugins.
+facade use `openOpenClawAgentSqliteWorkerStoreV2` with required live authority.
+Send serializable domain commands to its paired backend, explicitly await
+`prepare()` when creation is required, and close the store after accepted work
+settles. `executeExisting` preserves absence. See the
+[native SQLite migration](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
+This remains an internal runtime facade, not a typed public SDK entrypoint for
+third-party plugins.
 
-Call it from an asynchronous producer before entering synchronous SQLite. It
-shares the agent database's in-process write admission with session writers and
-off-thread reclamation, leaving the Gateway thread available to authorize a
-reclamation commit.
+The deprecated `withOpenClawAgentDatabaseWrite` and raw-handle exports retain
+their native callback ordering through the announced stable deprecation period. Awaiting their
+admission does not move callbacks off the host. Actual legacy use shares the
+per-plugin capability-family warning budget; explicit read-only inspection,
+offline maintenance, and worker kernels keep their scoped contracts.
 
 Asynchronous AgentSession message, model, compaction, and tree operations use
 this admission for their transcript writes. Embedded prompt preparation, replay
@@ -386,7 +571,7 @@ admission releases. SessionManager `appendModelChange` and
 AgentSession and extension `setThinkingLevel` return `Promise<void>`. Await these
 operations before using the resulting model or thinking state. Other
 SessionManager transcript writes use their awaited `Async` companions through
-the same canonical SQLite worker. They retain the caller's live write authority,
+the same shared SQLite worker. They retain the caller's live write authority,
 commit before dependent publication, and preserve the loaded view on failure
 before commit. See the [complete session migration table](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence).
 
@@ -396,24 +581,24 @@ message ID after the worker commits. `SessionManager.appendMessageToTranscript`
 retains its synchronous return contract for third-party plugins using the
 v2026.9.5 API, emits a deprecation warning once per process, and can still perform
 SQLite work on the calling thread. The `session-manager-sync-persistence` record
-sets removal at the next Plugin SDK major. Bundled production paths use awaited
+requires a later stable removal release with an announced migration window. Bundled production paths use awaited
 operations.
 
 Core failed-image settlement uses the internal `appendSessionTranscriptNote`
-operation, which accepts a custom message and returns a promise for its persisted `messageId`, canonical
+operation, which accepts a custom message and returns a promise for its persisted `messageId`, stored
 `message`, the append owner's `appended` result, and a `currentTail` fact from the same snapshot.
 The tail fact uses the transaction's visible leaf and generation: side metadata does not suppress a retry's publication, while a later visible entry does.
-File-backed notes use the same canonical agent worker and writer queue, reserving their turn
+File-backed notes use the same shared agent worker and writer queue, reserving their turn
 before asynchronous target preparation. The embedded runner awaits its failed-image note before publishing that stored message in live context or the
-completed result when the owner appended it or confirms it is still the current tail after a lost reply. An idempotent historical result does not reintroduce a note omitted by compaction. Input and target capture precede awaited work; transaction and
+completed result when the owner appended it or confirms it is still the current tail after a lost reply. A duplicate result for an earlier append does not reintroduce a note omitted by compaction. Input and target capture precede awaited work; transaction and
 publication checks retain the original writer and session binding. A known
 commit followed by a publication failure retains its message ID and prevents
-model fallback from replaying the append. Incognito notes use the same canonical
+model fallback from replaying the append. Incognito notes use the same stored
 append snapshot under their existing process-held native write owner until its
 actor cutover; this path still performs caller-thread SQLite work. It leaves the
 manager's loaded view unchanged and applies the same fresh-append/current-tail
 publication rules. Detached notes continue through their in-memory manager owner.
-Canonical storage close revokes pending asynchronous notes and joins their target
+Closing the underlying store revokes pending asynchronous notes and joins their target
 preparation, accepted work, and cleanup before releasing the store.
 Failed-image notes use the existing message idempotency key to survive redaction
 and same-run retries. Existing unkeyed notes retain their run-metadata matching.
@@ -427,7 +612,7 @@ captures the resolved state directory and supervisor mode; environment changes
 cannot redirect later writes. Existing `sessions.json` and custom-store routing
 and symlink spelling are preserved.
 
-File-backed transcript writes execute through the canonical agent database
+File-backed transcript writes execute through the underlying agent database
 worker. Queued extension actions retain their original runtime and session
 authority through transaction and commit admission. Runtime session hydration
 uses the existing read worker. Deprecated third-party synchronous adapters and
@@ -459,17 +644,17 @@ the operation settles. The caller still owns transactions and authorization.
 For large native publications, `openOpenClawAgentSqliteWorkerStore(options, borrowedDb, { moduleUrl, input })`
 retains the original borrowed handle and physical identity. Its
 `run(operation, assertCurrent)` joins the existing agent writer queue and borrows
-the canonical agent executor for the complete operation. The module exports
+the shared agent executor for the complete operation. The module exports
 `bindSqliteWorkerBackend(input, { databasePath, database, admit })`; it uses the
 supplied connection and closes only its own temporary state. It must not open or
 close the agent database. The operation receives only the bound backend's
 `execute` method; finish it before calling `close()`. Client close revokes new work,
-drains its accepted operations, and releases its original borrow. The canonical
+drains its accepted operations, and releases its original borrow. The shared
 executor owns the native connection, lease, idle reuse, and final close.
 
 A backend used with this owner requests `transaction` admission after BEGIN and
 `commit` admission immediately before COMMIT through the supplied `admit` callback.
-The host checks the canonical connection and current caller authority at
+The host checks the underlying connection and current caller authority at
 both points without waiting synchronously for the native transaction. An accepted
 commit grant orders the commit before later revocation; an earlier refusal rolls
 back. Callers must preserve committed or unknown outcomes and never replay them.
@@ -488,7 +673,7 @@ Preparation carries captured state/runtime facts and performs no native work.
 After it settles, `execute(command)` enters fresh synchronous authority scopes;
 connection-bound execution revalidates authority before native work. Extension
 loading, transactions, and domain callbacks remain synchronous. Agent connection policy, including TEMP
-storage, belongs to the canonical connection owner and cannot be reset when a
+storage, belongs to the underlying connection owner and cannot be reset when a
 publication binds.
 
 Backends whose failure handling can leave an unusable native connection implement

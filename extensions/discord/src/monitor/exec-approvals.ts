@@ -24,7 +24,7 @@ import {
   Container,
   Separator,
   TextDisplay,
-  type ButtonInteraction,
+  type BaseComponentInteraction,
   type ComponentData,
   type MessagePayloadObject,
 } from "../internal/discord.js";
@@ -72,7 +72,7 @@ function buildTerminalPayload(params: {
       new Container(
         [
           new TextDisplay(params.applied ? "## Approval resolved" : "## Approval already resolved"),
-          new TextDisplay(`Canonical result: **${label}**`),
+          new TextDisplay(`Recorded result: **${label}**`),
           new Separator({ divider: false, spacing: "small" }),
           new TextDisplay(`-# ID: ${formatDiscordApprovalDisplayValue(approval.id)}`),
         ],
@@ -107,7 +107,7 @@ class ExecApprovalButton extends Button {
     super();
   }
 
-  override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
+  override async run(interaction: BaseComponentInteraction, data: ComponentData): Promise<void> {
     const parsed = parseExecApprovalData(data);
     if (!parsed) {
       await replySilently(interaction, {
@@ -136,7 +136,9 @@ class ExecApprovalButton extends Button {
 
     try {
       await interaction.acknowledge();
-    } catch {}
+    } catch {
+      // A failed Discord acknowledgement must not discard an approval decision.
+    }
 
     const result = await this.ctx.resolveApproval(
       parsed.approvalId,
@@ -153,7 +155,9 @@ class ExecApprovalButton extends Button {
               : `Failed to submit approval decision for **${decisionLabel}**. The request may have expired or already been resolved.`,
           ephemeral: true,
         });
-      } catch {}
+      } catch {
+        // The Gateway result is authoritative even if Discord feedback fails.
+      }
       return;
     }
     const terminalLabel = resolveTerminalLabel(result.resolution.approval);
@@ -177,7 +181,9 @@ class ExecApprovalButton extends Button {
           },
         );
       }
-    } catch {}
+    } catch {
+      // The approval is already resolved; fall back to a separate receipt below.
+    }
     if (!terminalized || !result.resolution.applied) {
       try {
         await interaction.followUp({
@@ -186,7 +192,9 @@ class ExecApprovalButton extends Button {
             : `This approval was already resolved: ${terminalLabel}.`,
           ephemeral: true,
         });
-      } catch {}
+      } catch {
+        // Resolving an approval does not depend on delivering its receipt.
+      }
     }
   }
 }

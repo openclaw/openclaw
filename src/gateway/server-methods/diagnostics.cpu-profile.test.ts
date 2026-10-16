@@ -102,6 +102,7 @@ function request(
     } as GatewayRequestOptions["client"],
     isWebchatConnect: () => false,
     context: {
+      getRuntimeConfig: () => ({}),
       logGateway: { warn: vi.fn() },
       requestEntryLifetime: options.gateway,
     } as unknown as GatewayRequestOptions["context"],
@@ -237,6 +238,7 @@ describe("diagnostics.cpuProfile dispatch", () => {
 describe("diagnostics.heapProfile dispatch", () => {
   it.each([
     undefined,
+    { durationMs: 30_000, includeCollected: true },
     {
       durationMs: 200,
       samplingIntervalBytes: 4096,

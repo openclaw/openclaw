@@ -1,35 +1,42 @@
-import { expect, it, onTestFinished } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { getAdmittedRunDelegatedAuthority } from "../agents/admitted-run-context.js";
 import { prepareAgentCommandExecutionIdentity } from "../agents/agent-command-execution-identity.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import type { SessionProviderReview } from "../config/sessions/provider-review.types.js";
-import {
-  readExactSessionEntryRow,
-  writeSessionEntry,
-} from "../config/sessions/session-accessor.sqlite-entry-store.js";
-import { appendTranscriptMessageSync } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { createSessionEntryWithTranscript } from "../config/sessions/session-accessor.entry-mutation.js";
+import * as sessionEntries from "../config/sessions/session-accessor.sqlite-entry.js";
+import { appendTranscriptMessage } from "../config/sessions/session-accessor.transcript.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import {
   clearAgentRunContext,
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
+import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
 import {
   captureAgentRunProviderReview,
   readAgentRunProviderReview,
 } from "../sessions/provider-review-terminal.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  memorySessionActorOwners.reset();
+});
+
 it("keeps embedded completion pending until its incognito pause fences the next admission", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    setRuntimeConfigSnapshot({});
     const runId = "incognito-deferred-review";
     const target = {
       agentId: "main",
@@ -38,18 +45,17 @@ it("keeps embedded completion pending until its incognito pause fences the next 
       sessionId: "incognito-deferred-session",
       lifecycleRevision: "generation-1",
     };
-    const options = { agentId: "main", env, path: target.storePath };
-    const database = openOpenClawAgentDatabase(options);
     const entry = {
       sessionId: target.sessionId,
+      incognito: true as const,
       lifecycleRevision: target.lifecycleRevision,
       activeWriterRunId: runId,
       lifecycleRunId: runId,
       updatedAt: 1_000,
       startedAt: 1_000,
     };
-    writeSessionEntry(database, target.sessionKey, entry);
-    appendTranscriptMessageSync(
+    await createSessionEntryWithTranscript({ ...target, env }, () => ({ ok: true, entry }));
+    await appendTranscriptMessage(
       { ...target, env },
       {
         message: {
@@ -104,17 +110,20 @@ it("keeps embedded completion pending until its incognito pause fences the next 
         },
       });
       // This is the production capture path, with no CLI-specific context binding.
-      const captured = captureAgentRunTerminalWriteContext(runId);
+      const captured = captureAgentRunTerminalPersistence(runId).writeContext;
       if (!captured) {
         throw new Error("Embedded terminal persistence was not retained");
       }
       const entered = createDeferred();
       const release = createDeferred();
-      const held = runOpenClawAgentWriteAdmission(options, async () => {
-        entered.resolve();
-        await release.promise;
-      });
-      await entered.promise;
+      const patchEntry = sessionEntries.applySessionEntryTargetOperation;
+      vi.spyOn(sessionEntries, "applySessionEntryTargetOperation").mockImplementationOnce(
+        async (...args) => {
+          entered.resolve();
+          await release.promise;
+          return patchEntry(...args);
+        },
+      );
       const scheduler = createTestGatewayScheduler();
       onTestFinished(() => scheduler.stop());
       const owner = createSessionLifecyclePersistenceOwner(scheduler);
@@ -140,21 +149,23 @@ it("keeps embedded completion pending until its incognito pause fences the next 
         finished = true;
         return resolveSessionWorkStartError(
           target.sessionKey,
-          readExactSessionEntryRow(database, target.sessionKey)?.entry,
+          sessionEntries.loadSessionEntry(target),
         );
       });
       try {
-        await Promise.resolve();
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          persistence,
+          "Lifecycle persistence did not reach the memory entry write",
+        );
         expect(finished).toBe(false);
-        expect(
-          readExactSessionEntryRow(database, target.sessionKey)?.entry.providerReview,
-        ).toBeUndefined();
+        expect(sessionEntries.loadSessionEntry(target)?.providerReview).toBeUndefined();
         release.resolve();
         await expect(nextAdmission).resolves.toContain("paused as a precaution");
         await persistence;
       } finally {
         release.resolve();
-        await Promise.allSettled([held, persistence, nextAdmission]);
+        await Promise.allSettled([persistence, nextAdmission]);
         await owner.drain();
       }
     } finally {
@@ -163,13 +174,10 @@ it("keeps embedded completion pending until its incognito pause fences the next 
   });
 });
 
-it("records an incognito pause in its existing terminal entry write and fences stale facts", async () => {
+it("records an incognito pause in actor state without SQL and rejects stale facts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      env,
-      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
-    });
+    setRuntimeConfigSnapshot({});
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
     for (const variant of [
       "ordinary",
       "current",
@@ -183,10 +191,16 @@ it("records an incognito pause in its existing terminal entry write and fences s
       const runId = `review-terminal-${variant}`;
       const target = {
         agentId: "main",
-        storePath: database.path,
+        storePath,
         sessionKey: `agent:main:dashboard:incognito-${variant}`,
         sessionId: `review-session-${variant}`,
         lifecycleRevision: "generation-1",
+      };
+      const entryScope = {
+        agentId: target.agentId,
+        storePath,
+        sessionKey: target.sessionKey,
+        env,
       };
       const review: SessionProviderReview = {
         id: `review-${variant}`,
@@ -199,6 +213,7 @@ it("records an incognito pause in its existing terminal entry write and fences s
       };
       const entry = {
         sessionId: variant === "session" ? "replacement-session" : target.sessionId,
+        incognito: true as const,
         lifecycleRevision:
           variant === "revision" ? "replacement-generation" : target.lifecycleRevision,
         activeWriterRunId: variant === "writer" ? "replacement-writer" : runId,
@@ -209,8 +224,15 @@ it("records an incognito pause in its existing terminal entry write and fences s
           ? { providerReview: { ...review, id: "newer-review" } }
           : {}),
       };
-      writeSessionEntry(database, target.sessionKey, entry, { providerReviewMutation: true });
-      appendTranscriptMessageSync(
+      await createSessionEntryWithTranscript(entryScope, () => ({ ok: true, entry }));
+      if (entry.providerReview) {
+        await sessionEntries.patchSessionEntryCore(
+          entryScope,
+          () => ({ providerReview: entry.providerReview }),
+          { providerReviewMutation: true, skipMaintenance: true },
+        );
+      }
+      await appendTranscriptMessage(
         { ...target, env, sessionId: entry.sessionId },
         {
           message: {
@@ -262,11 +284,7 @@ it("records an incognito pause in its existing terminal entry write and fences s
             providerReview: review,
           },
         };
-        const statements = trackSqliteStatementExecutions(database.db, ["entryWrite"], (sql) =>
-          /(?:insert into|update) "session_nodes"/i.test(sql) && /entry_json/i.test(sql)
-            ? "entryWrite"
-            : null,
-        );
+        const statements = observeHostDataSql();
         try {
           const persistence = persistGatewaySessionLifecycleEvent({
             sessionKey: target.sessionKey,
@@ -282,21 +300,18 @@ it("records an incognito pause in its existing terminal entry write and fences s
           });
           if (variant === "revoked") {
             await expect(persistence).rejects.toThrow("Source authority expired");
-            expect(
-              readExactSessionEntryRow(database, target.sessionKey)?.entry.status,
-            ).toBeUndefined();
+            expect(sessionEntries.loadSessionEntry(entryScope)?.status).toBeUndefined();
           } else {
             await persistence;
           }
-          // The normal lifecycle write already owns entry serialization; a pause adds no second write.
-          expect(statements.counts.entryWrite).toBeLessThanOrEqual(1);
+          expect(statements.queries.filter(isSessionEntryDataSql)).toEqual([]);
           if (variant === "current" || variant === "ordinary") {
-            expect(statements.counts.entryWrite).toBe(1);
+            expect(sessionEntries.loadSessionEntry(entryScope)?.status).toBe("failed");
           }
         } finally {
           statements.restore();
         }
-        expect(readExactSessionEntryRow(database, target.sessionKey)?.entry.providerReview).toEqual(
+        expect(sessionEntries.loadSessionEntry(entryScope)?.providerReview).toEqual(
           variant === "current" ? review : entry.providerReview,
         );
       } finally {

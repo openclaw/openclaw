@@ -130,10 +130,6 @@ const STOP_REDIRECT_CONTROL_PATTERNS = [
   /^(?:(?:ok|okay|alright|all right)[,\s]+)?(?:please\s+)?stop\s+(?:that|this|it|the\s+(?:check|run|task|work))\s+from\b/,
 ] as const;
 
-function matchesAnyPattern(text: string, patterns: readonly RegExp[]): boolean {
-  return patterns.some((pattern) => pattern.test(text));
-}
-
 function hasNegatedCancelIntent(text: string): boolean {
   return (
     /\b(?:don'?t|do\s+not|not|never)\s+(?:please\s+)?(?:cancel|cancle|stop|abort|kill|end)\b/.test(
@@ -141,6 +137,14 @@ function hasNegatedCancelIntent(text: string): boolean {
     ) || /\bstop\s+(?:it|that|this)\s+from\b/.test(text)
   );
 }
+
+const CONTROL_INTENT_RULES = [
+  ["steer", "steer_command", STOP_REDIRECT_CONTROL_PATTERNS],
+  ["cancel", "cancel_safety", CANCEL_CONTROL_PATTERNS],
+  ["status", "status_query", STATUS_CONTROL_PATTERNS],
+  ["followup", "followup_marker", FOLLOWUP_CONTROL_PATTERNS],
+  ["steer", "steer_command", STEER_CONTROL_PATTERNS],
+] as const;
 
 /** Classify raw spoken control text with conservative auto-control gating. */
 export function resolveRealtimeVoiceAgentControlIntent(params: {
@@ -160,48 +164,18 @@ export function resolveRealtimeVoiceAgentControlIntent(params: {
   const normalized = params.text.trim().toLowerCase();
   // "Stop using X" redirects the active work; it must not be treated as an
   // abort of the whole run just because it starts with "stop".
-  if (matchesAnyPattern(normalized, STOP_REDIRECT_CONTROL_PATTERNS)) {
-    return {
-      mode: "steer",
-      confidence: "medium",
-      reason: "steer_command",
-      shouldAutoControl: true,
-    };
-  }
-  if (
-    !hasNegatedCancelIntent(normalized) &&
-    matchesAnyPattern(normalized, CANCEL_CONTROL_PATTERNS)
-  ) {
-    return {
-      mode: "cancel",
-      confidence: "high",
-      reason: "cancel_safety",
-      shouldAutoControl: true,
-    };
-  }
-  if (matchesAnyPattern(normalized, STATUS_CONTROL_PATTERNS)) {
-    return {
-      mode: "status",
-      confidence: "high",
-      reason: "status_query",
-      shouldAutoControl: true,
-    };
-  }
-  if (matchesAnyPattern(normalized, FOLLOWUP_CONTROL_PATTERNS)) {
-    return {
-      mode: "followup",
-      confidence: "high",
-      reason: "followup_marker",
-      shouldAutoControl: true,
-    };
-  }
-  if (matchesAnyPattern(normalized, STEER_CONTROL_PATTERNS)) {
-    return {
-      mode: "steer",
-      confidence: "medium",
-      reason: "steer_command",
-      shouldAutoControl: true,
-    };
+  for (const [mode, reason, patterns] of CONTROL_INTENT_RULES) {
+    if (
+      (mode !== "cancel" || !hasNegatedCancelIntent(normalized)) &&
+      patterns.some((pattern) => pattern.test(normalized))
+    ) {
+      return {
+        mode,
+        confidence: mode === "steer" ? "medium" : "high",
+        reason,
+        shouldAutoControl: true,
+      };
+    }
   }
   return {
     mode: "status",

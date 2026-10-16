@@ -1,44 +1,54 @@
-import { property } from "lit/decorators.js";
+import { onSettled } from "solid-js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
-import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 
-export abstract class ChatCiDisclosure extends OpenClawLightDomElement {
-  @property({ attribute: false }) gateway?: ApplicationGateway;
-  @property({ attribute: false }) pullRequest?: ControlUiSessionPullRequest;
-  @property({ attribute: false }) sessionKey = "";
-  @property({ type: Boolean }) presented = true;
-  protected disclosure: HTMLDetailsElement | null = null;
-  protected abstract readonly handleVisibility: () => void;
-  protected abstract disconnect(): void;
+export type ChatCiDisclosureProps = {
+  gateway?: ApplicationGateway;
+  pullRequest?: ControlUiSessionPullRequest;
+  sessionKey: string;
+  presented: boolean;
+};
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.disclosure = this.closest<HTMLDetailsElement>(".chat-pr__checks");
-    this.disclosure?.addEventListener("toggle", this.handleToggle);
-    this.ownerDocument.addEventListener("visibilitychange", this.handleVisibility);
-    this.requestUpdate();
-  }
-
-  override disconnectedCallback(): void {
-    this.disclosure?.removeEventListener("toggle", this.handleToggle);
-    this.ownerDocument.removeEventListener("visibilitychange", this.handleVisibility);
-    this.disconnect();
-    super.disconnectedCallback();
-  }
-
-  protected get visible(): boolean {
-    return (
-      this.isConnected &&
-      this.presented &&
-      this.disclosure?.open === true &&
-      this.ownerDocument.visibilityState !== "hidden"
-    );
-  }
-
-  private readonly handleToggle = (event: Event): void => {
-    if (event.target === this.disclosure) {
-      this.handleVisibility();
-    }
+/** The disclosure owns visibility; the two CI projections own their request fences. */
+export function createCiDisclosure(
+  host: HTMLElement & Pick<ChatCiDisclosureProps, "presented">,
+  onVisibility: () => void,
+  dispose: () => void,
+) {
+  let disclosure: HTMLDetailsElement | null = null;
+  let active = false;
+  const isConnected = () => active && host.isConnected;
+  const visible = () =>
+    isConnected() &&
+    host.presented &&
+    disclosure?.open === true &&
+    host.ownerDocument.visibilityState !== "hidden";
+  onSettled(() => {
+    active = true;
+    disclosure = host.closest<HTMLDetailsElement>(".chat-pr__checks");
+    const document = host.ownerDocument;
+    const toggle = (event: Event) => {
+      if (event.target === disclosure) {
+        onVisibility();
+      }
+    };
+    disclosure?.addEventListener("toggle", toggle);
+    document.addEventListener("visibilitychange", onVisibility);
+    onVisibility();
+    return () => {
+      active = false;
+      disclosure?.removeEventListener("toggle", toggle);
+      document.removeEventListener("visibilitychange", onVisibility);
+      dispose();
+    };
+  });
+  return {
+    isConnected,
+    visible,
+    close: () => {
+      if (disclosure) {
+        disclosure.open = false;
+      }
+    },
   };
 }

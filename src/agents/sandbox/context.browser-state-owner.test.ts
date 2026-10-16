@@ -9,7 +9,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { registerSandboxBackend } from "./backend.js";
 import { SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH } from "./constants.js";
 import { resolveSandboxContext } from "./context.js";
-import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import { resolvePreparedSandboxRuntimeStatus } from "./runtime-status.js";
 
 const docker = vi.hoisted(() => ({
   dockerContainerState: vi.fn(),
@@ -87,7 +87,7 @@ it("rejects hosted custody released during ordinary browser inspection before cr
       config,
       sessionKey,
       workspaceDir: path.join(root, "workspace"),
-      preparedRuntimeStatus: resolveSandboxRuntimeStatus({
+      preparedRuntimeStatus: resolvePreparedSandboxRuntimeStatus({
         cfg: config,
         sessionKey,
         preparedSessionEntry: null,

@@ -2,7 +2,11 @@ import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
-import { getDiagnosticSessionState, type SessionRef } from "./diagnostic-session-state.js";
+import {
+  getDiagnosticSessionState,
+  touchDiagnosticSessionState,
+  type SessionRef,
+} from "./diagnostic-session-state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
 export const diagnosticLogger = createSubsystemLogger("diagnostic");
@@ -37,17 +41,7 @@ export function logMessageQueuedWithBacklogPolicy(
   if (countsTowardBacklog) {
     state.queueDepth += 1;
   }
-  state.lastActivity = Date.now();
-  state.generation = (state.generation ?? 0) + 1;
-  state.lastStuckWarnAgeMs = undefined;
-  state.lastLongRunningWarnAgeMs = undefined;
-  if (diagnosticLogger.isEnabled("debug")) {
-    diagnosticLogger.debug(
-      `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
-        state.sessionKey ?? "unknown"
-      } source=${params.source} queueDepth=${state.queueDepth} sessionState=${state.state}`,
-    );
-  }
+  touchDiagnosticSessionState(state);
   emitDiagnosticEvent({
     type: "message.queued",
     sessionId: state.sessionId,
@@ -63,7 +57,6 @@ export function logLaneEnqueue(lane: string, queueSize: number): void {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  diagnosticLogger.debug(`lane enqueue: lane=${lane} queueSize=${queueSize}`);
   emitDiagnosticEvent({
     type: "queue.lane.enqueue",
     lane,
@@ -76,7 +69,6 @@ export function logLaneDequeue(lane: string, waitMs: number, queueSize: number):
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  diagnosticLogger.debug(`lane dequeue: lane=${lane} waitMs=${waitMs} queueSize=${queueSize}`);
   emitDiagnosticEvent({
     type: "queue.lane.dequeue",
     lane,

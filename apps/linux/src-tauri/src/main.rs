@@ -1,4 +1,4 @@
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
 mod bundled_runtime;
 mod chrome_setup;
 mod cli;
@@ -7,6 +7,7 @@ mod desktop_bridge;
 mod desktop_node;
 mod desktop_node_process;
 mod discovery;
+mod first_run;
 mod gateway;
 mod gateway_control_auth;
 mod gateway_device_identity;
@@ -32,7 +33,7 @@ mod pending_approvals;
 mod quickchat;
 mod quickchat_widgets;
 mod remote_gateway;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
 mod runtime_action;
 mod tray;
 mod updater;
@@ -402,6 +403,7 @@ struct NavigationState {
     watch_generation: u64,
     retired_preparation: Option<u64>,
     onboarding_pending: bool,
+    automatic_setup: bool,
     remote_snapshot: Option<GatewaySnapshot>,
     settings_return: Option<SettingsReturn>,
     #[cfg(target_os = "linux")]
@@ -630,10 +632,19 @@ impl NavigationState {
         if self.onboarding_pending {
             // Setup owns inference before chat; preserve Gateway base paths and fragment auth.
             // Saved first-run links may use either marker; new links use explicit.
+            let (path, key, value) = if self.automatic_setup {
+                (["custodian"].as_slice(), "onboarding", "1")
+            } else {
+                (
+                    ["settings", "model-setup"].as_slice(),
+                    "firstRun",
+                    "explicit",
+                )
+            };
             url.path_segments_mut()
                 .map_err(|_| "Dashboard returned an invalid URL.".to_string())?
                 .pop_if_empty()
-                .extend(["settings", "model-setup"]);
+                .extend(path);
             let existing_query = url
                 .query_pairs()
                 .filter(|(key, _)| key != "firstRun")
@@ -642,8 +653,9 @@ impl NavigationState {
             url.query_pairs_mut()
                 .clear()
                 .extend_pairs(existing_query)
-                .append_pair("firstRun", "explicit");
+                .append_pair(key, value);
             self.onboarding_pending = false;
+            self.automatic_setup = false;
         }
         Ok(url)
     }
@@ -741,13 +753,46 @@ impl DesktopState {
     }
 
     pub fn connect(&self, app: &AppHandle, selection: u64) -> Result<GatewaySnapshot, String> {
+        let fresh = if cfg!(any(target_os = "linux", target_os = "windows")) {
+            first_run::eligible(remote_gateway::has_saved_config(), || {
+                app.state::<gateway_windows::GatewayWindows>()
+                    .has_saved_profiles()
+            })
+        } else {
+            Ok(false)
+        };
         let result = self.connect_selected(app, false, selection);
         if let Err(error) = &result {
             if remote_gateway::saved_settings()?.is_some() {
                 return self.remote_failure(app, error.clone(), selection, None);
             }
         }
-        result
+        first_run::complete(result?, fresh, |missing_cli| {
+            {
+                let mut navigation = self.inner.navigation.lock().expect("navigation");
+                navigation.mark_onboarding_pending();
+                navigation.automatic_setup = true;
+            }
+            let result = if missing_cli {
+                self.install_cli(
+                    app,
+                    if is_release_version(&app.package_info().version.to_string()) {
+                        InstallChannel::Stable
+                    } else {
+                        InstallChannel::Dev
+                    },
+                    selection,
+                )
+            } else {
+                self.connect_explicit_local(app, selection)
+            };
+            if result.is_err() {
+                let mut navigation = self.inner.navigation.lock().expect("navigation");
+                navigation.onboarding_pending = false;
+                navigation.automatic_setup = false;
+            }
+            result
+        })
     }
 
     fn retry_remote(&self, app: &AppHandle, selection: u64) -> Result<GatewaySnapshot, String> {
@@ -822,7 +867,7 @@ impl DesktopState {
         if explicit_local {
             self.inner.remote_tunnels.clear();
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         let ready = {
             // Startup, app updates, and reconnects only observe the existing service.
             let snapshot = gateway::status(&cli)?;
@@ -842,7 +887,7 @@ impl DesktopState {
             }
             gateway::dashboard(&cli, snapshot)?
         };
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         let ready = gateway::ensure_ready(&cli)?;
         self.finish_local_connection(app, cli, ready)
     }
@@ -858,7 +903,7 @@ impl DesktopState {
             .operation
             .lock()
             .map_err(|_| "Installer lock is unavailable.".to_string())?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         let cli = {
             let runtime = bundled_runtime::seed(app)?;
             let cli = match OpenClawCli::discover() {
@@ -883,7 +928,7 @@ impl DesktopState {
             })?;
             cli
         };
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         let cli = {
             installer::install(app, channel, false)?;
             let cli = OpenClawCli::discover().map_err(|error| {
@@ -923,10 +968,10 @@ impl DesktopState {
                     .to_string()
             })?
             .mark_onboarding_pending();
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         let readiness =
             gateway::status(&cli).and_then(|snapshot| gateway::dashboard(&cli, snapshot));
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         let readiness = gateway::ensure_ready(&cli);
         let ready = readiness.map_err(|error| {
             format!("OpenClaw is installed, but connecting to the Gateway failed: {error}")
@@ -963,7 +1008,7 @@ impl DesktopState {
         self.finish_local_connection(app, cli, ready)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn runtime_operation_is_current(&self, app: &AppHandle, selection: u64) -> bool {
         !self.is_quitting()
             && app
@@ -1049,7 +1094,7 @@ impl DesktopState {
             }
             Ok(())
         })?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         if let Ok(cli) = self.resolve_cli() {
             let snapshot = gateway::status(&cli)?;
             if !snapshot.installed && !snapshot.reachable {
@@ -1856,6 +1901,7 @@ impl DesktopState {
             return Ok(());
         }
         let onboarding_was_pending = dashboard && navigation.onboarding_pending;
+        let automatic_setup = navigation.automatic_setup;
         let bridge = app.state::<native_browser_bridge::NativeBrowserBridgeState>();
         let bridge_script = if dashboard {
             bridge.select(app, &base, false)?
@@ -1880,6 +1926,7 @@ impl DesktopState {
             let _ = replace_main_webview(app, self.inner.local_url.clone(), None, None);
             if onboarding_was_pending {
                 navigation.mark_onboarding_pending();
+                navigation.automatic_setup = automatic_setup;
             }
             return Err(error);
         }
@@ -2812,6 +2859,25 @@ mod navigation_tests {
             "local navigation failed".to_string()
         )));
         assert!(!local_recovery_owns_gateway(&Ok(false)));
+    }
+
+    #[test]
+    fn automatic_first_run_opens_custodian_once_preserving_dashboard_auth() {
+        let mut navigation = NavigationState::default();
+        navigation.mark_onboarding_pending();
+        navigation.automatic_setup = true;
+        let first = navigation
+            .prepare_dashboard_url("http://127.0.0.1:18789/control/?foo=bar#token=fixture")
+            .unwrap();
+        assert_eq!(first.path(), "/control/custodian");
+        assert_eq!(first.query(), Some("foo=bar&onboarding=1"));
+        assert_eq!(first.fragment(), Some("token=fixture"));
+        assert!(is_active_onboarding_url(&first));
+        let next = navigation
+            .prepare_dashboard_url("http://127.0.0.1:18789/control/")
+            .unwrap();
+        assert_eq!(next.path(), "/control/");
+        assert_eq!(next.query(), None);
     }
 
     #[test]

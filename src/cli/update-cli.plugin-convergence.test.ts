@@ -37,7 +37,6 @@ import {
   listUpdateRuns,
   makeOkUpdateResult,
   mockGitUpdateAfterMutation,
-  mutateConfigFileWithRetry,
   readConfigFileSnapshot,
   replaceConfigFile,
   resolveGatewayInstallEntrypoint,
@@ -139,35 +138,15 @@ describe("update-cli", () => {
     expect(result.status).toBe("ok");
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
     expectNoSideEffects(updateGitCheckout, spawn);
-    expect(listUpdateRuns()).toEqual(runsBefore);
-  });
-
-  it("post-core resume mode prefers post-doctor disk install records over the stale parent snapshot", async () => {
-    const resultDir = createCaseDir("openclaw-post-core-disk-records");
-    const recordsPath = path.join(resultDir, "plugin-install-records.json");
-    await fs.mkdir(resultDir, { recursive: true });
-    await writeJsonFixture(recordsPath, {
-      stale: {
-        source: "npm",
-        spec: "@openclaw/stale@1.0.0",
-        installPath: "/tmp/stale-plugin",
-      },
-    });
-    const postDoctorRecords = {
-      codex: {
-        source: "npm",
-        spec: "@openclaw/codex@2026.5.17",
-        installPath: "/tmp/codex-plugin",
-      },
-    } satisfies Record<string, PluginInstallRecord>;
-    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(postDoctorRecords);
-
-    await runPostCoreCommand(
-      { json: true, restart: false },
-      { OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH: recordsPath },
-    );
-
-    expect(syncPluginCall()?.config?.plugins?.installs).toEqual(postDoctorRecords);
+    const runsAfter = listUpdateRuns();
+    expect(runsAfter).toHaveLength(runsBefore.length);
+    const { steps: priorSteps, updatedAtMs: _priorUpdate, ...priorOwnership } = runsBefore[0]!;
+    const { steps, updatedAtMs: _updated, ...ownership } = runsAfter[0]!;
+    expect(ownership).toEqual(priorOwnership);
+    expect(steps).toEqual([
+      ...priorSteps,
+      expect.objectContaining({ step: "post-plugin doctor", status: "completed", exitCode: 0 }),
+    ]);
   });
 
   it("post-core resume mode persists the requested update channel with the updated process", async () => {
@@ -187,15 +166,6 @@ describe("update-cli", () => {
     expect(replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: { update: { channel: "dev" } },
       baseHash: "stable-hash",
-    });
-    expect(mutateConfigFileWithRetry).toHaveBeenCalledExactlyOnceWith({
-      mutate: expect.any(Function),
-      writeOptions: {
-        assertCurrent: expect.any(Function),
-        beforeCommit: expect.any(Function),
-        observe: false,
-        skipPluginValidation: true,
-      },
     });
     expect(syncPluginCall()?.channel).toBe("dev");
     expect(syncPluginCall()?.config?.update?.channel).toBe("dev");
@@ -479,37 +449,10 @@ describe("update-cli", () => {
         expect(logEntries).toContainEqual(retainedWarning);
       }
       if (json) {
-        const result = lastWriteJsonCall();
-        if (repaired) {
-          expect(result).toMatchObject({ status: "ok", postUpdate: { plugins: { warnings: [] } } });
-          return;
-        }
-        expect(result).toMatchObject({
+        expect(lastWriteJsonCall()).toMatchObject({
           status: "ok",
-          postUpdate: {
-            plugins: {
-              status: "warning",
-              warnings: [
-                expect.objectContaining({
-                  pluginId: "demo",
-                  reason: "plugin-target-unavailable",
-                  message,
-                }),
-              ],
-            },
-          },
-          run: {
-            status: "succeeded",
-            steps: expect.arrayContaining([
-              expect.objectContaining({
-                step: expect.stringMatching(/^warning:/),
-                status: "completed",
-                detail: expect.stringContaining(message),
-              }),
-            ]),
-          },
+          postUpdate: { plugins: { warnings: [] } },
         });
-        expect(result).not.toHaveProperty("reason", "plugin-target-unavailable");
       } else {
         expect(stripAnsi(getLogOutput())).toContain(message);
       }

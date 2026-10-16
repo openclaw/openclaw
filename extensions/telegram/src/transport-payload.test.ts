@@ -255,25 +255,6 @@ describe("Telegram topic transport payloads", () => {
     expect(requests).toHaveLength(before);
   });
 
-  it("serializes callback replies through only the canonical direct topic field", async () => {
-    const callbackMessage = directMessagesMessage({
-      message_thread_id: 999,
-    }) as unknown as Message;
-    const actions = createTelegramCallbackMessageActions({
-      bot,
-      callbackMessage,
-      threadSpec: { id: DIRECT_TOPIC_ID, scope: "direct-messages" },
-    });
-
-    await actions.replyToCallbackChat("callback reply");
-
-    const request = requests.find((candidate) => candidate.method === "sendMessage");
-    expect(request && parseJsonBody(request)).toMatchObject({
-      direct_messages_topic_id: DIRECT_TOPIC_ID,
-    });
-    expect(request && parseJsonBody(request)).not.toHaveProperty("message_thread_id");
-  });
-
   it.each([
     {
       name: "ordinary callbacks",

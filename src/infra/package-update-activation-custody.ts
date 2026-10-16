@@ -189,6 +189,8 @@ export function settlePackageActivationCustody(params: {
   record: PackageActivationRecord;
   settlement: Extract<NonNullable<PackageActivationRecord["intent"]>, { settled: boolean }>;
   assertCurrent: () => void;
+  // Once durably closed, archival may move the custody paths verified before close.
+  assertArchiveCurrent?: () => void;
   onSettled?: () => void;
 }) {
   const { anchor, journal, settlement, assertCurrent } = params;
@@ -199,7 +201,12 @@ export function settlePackageActivationCustody(params: {
     assertCurrent,
   );
   params.onSettled?.();
-  const warning = archivePackageActivationCustody(anchor, journal, record, assertCurrent);
+  const warning = archivePackageActivationCustody(
+    anchor,
+    journal,
+    record,
+    params.assertArchiveCurrent ?? assertCurrent,
+  );
   return {
     record,
     warning: `${settlement.detail ?? settlement.kind}. ${warning ?? `Preserved at ${anchor}.superseded-${record.descriptor.operationId}`}`,

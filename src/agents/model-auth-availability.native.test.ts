@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
   createOAuthRefreshCredential,
 } from "./auth-profiles/credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 import {
   authStore,
@@ -15,6 +17,13 @@ import {
   routeResolverFactory,
 } from "./model-auth-availability.test-support.js";
 import { resolveApiKeyForProviderCore } from "./model-auth-provider.js";
+
+const profileMocks = vi.hoisted(() => ({ resolveApiKeyForProfile: vi.fn() }));
+vi.mock("./auth-profiles/oauth.js", async (importActual) => ({
+  ...(await importActual<typeof import("./auth-profiles/oauth.js")>()),
+  resolveApiKeyForProfile: profileMocks.resolveApiKeyForProfile,
+}));
+afterEach(() => profileMocks.resolveApiKeyForProfile.mockReset());
 
 function resolver(mode?: "api_key" | "oauth" | "token", cfg: OpenClawConfig = {}, complete = true) {
   return createModelAuthAvailabilityResolver({
@@ -101,6 +110,7 @@ describe("OAuth inference grants", () => {
   );
 
   it("does not substitute another account when SIWC is locked for an unsupported capability", async () => {
+    await prepareSharedAuthStoreOwnership();
     await expect(
       resolveApiKeyForProviderCore({
         provider: "openai",
@@ -116,5 +126,94 @@ describe("OAuth inference grants", () => {
         }),
       }),
     ).rejects.toThrow(/does not support this operation with Sign in with ChatGPT/);
+  });
+});
+
+describe("OpenAI Decision credentials", () => {
+  const decisionRequest = {
+    provider: "openai",
+    modelId: "gpt-6-luna",
+    modelApi: "openai-responses",
+    modelBaseUrl: "https://api.openai.com/v1",
+    capability: "decision",
+  };
+
+  it.each([
+    { authFlow: undefined, withApiKey: true },
+    { authFlow: "chatgpt-token-sharing" as const, withApiKey: true },
+    { authFlow: undefined, withApiKey: false },
+    { authFlow: "chatgpt-token-sharing" as const, withApiKey: false },
+  ])(
+    "excludes OAuth before credential resolution (flow=$authFlow, API key=$withApiKey)",
+    async ({ authFlow, withApiKey }) => {
+      await prepareSharedAuthStoreOwnership();
+      const profiles = {
+        "openai:oauth": createOAuthRefreshCredential({
+          ...(authFlow ? { authFlow } : {}),
+          expires: Date.now() + 3_600_000,
+        }),
+        ...(withApiKey
+          ? { "openai:platform": createApiKeyCredential("openai", "platform-key") }
+          : {}),
+      };
+      const order = ["openai:oauth", ...(withApiKey ? ["openai:platform"] : [])];
+      profileMocks.resolveApiKeyForProfile.mockImplementation(async ({ profileId }) => {
+        if (profileId !== "openai:platform") {
+          throw new Error("Incompatible OAuth must not be resolved or refreshed");
+        }
+        return { apiKey: "platform-key", provider: "openai", profileId };
+      });
+
+      await withEnvAsync({ OPENAI_API_KEY: undefined }, async () => {
+        const result = resolveApiKeyForProviderCore({
+          ...decisionRequest,
+          cfg: { auth: { order: { openai: order } } },
+          store: createAuthProfileStoreFixture(profiles),
+        });
+        if (withApiKey) {
+          await expect(result).resolves.toMatchObject({
+            mode: "api-key",
+            apiKey: "platform-key",
+            profileId: "openai:platform",
+          });
+        } else {
+          await expect(result).rejects.toMatchObject({
+            code: "missing-provider-auth",
+            provider: "openai",
+          });
+        }
+      });
+      expect(
+        profileMocks.resolveApiKeyForProfile.mock.calls.map(([call]) => call.profileId),
+      ).toEqual(withApiKey ? ["openai:platform"] : []);
+    },
+  );
+
+  it("keeps an explicit incompatible OAuth binding terminal despite another API key", async () => {
+    await prepareSharedAuthStoreOwnership();
+    await withEnvAsync({ OPENAI_API_KEY: "env-must-not-be-used" }, async () => {
+      await expect(
+        resolveApiKeyForProviderCore({
+          ...decisionRequest,
+          cfg: {
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  api: "openai-responses",
+                  apiKey: "openai:oauth",
+                  models: [],
+                },
+              },
+            },
+          },
+          store: createAuthProfileStoreFixture({
+            "openai:oauth": createOAuthRefreshCredential({ expires: Date.now() + 3_600_000 }),
+            "openai:platform": createApiKeyCredential("openai", "platform-key"),
+          }),
+        }),
+      ).rejects.toThrow(/not a bearer-style auth class/);
+    });
+    expect(profileMocks.resolveApiKeyForProfile).not.toHaveBeenCalled();
   });
 });

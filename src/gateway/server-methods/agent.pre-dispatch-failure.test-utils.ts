@@ -103,11 +103,9 @@ export function registerAgentPreDispatchFailureTests() {
             expect(mocks.agentCommand).not.toHaveBeenCalled();
             expect(respond).toHaveBeenCalledWith(
               false,
-              undefined,
-              expect.objectContaining({
-                code: "UNAVAILABLE",
-                message: "ACP preparation cancelled",
-              }),
+              { runId, status: "error", summary: "ACP preparation cancelled" },
+              { code: "UNAVAILABLE", message: "ACP preparation cancelled" },
+              { runId, error: "ACP preparation cancelled" },
             );
           } else if (acp) {
             expect(mocks.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();

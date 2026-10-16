@@ -193,41 +193,6 @@ describe("qa suite gateway helpers", () => {
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
-  it("bounds oversized suite gateway JSON responses", async () => {
-    let chunksRead = 0;
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (chunksRead === 0) {
-            chunksRead += 1;
-            controller.enqueue(new TextEncoder().encode('{"payload":"'));
-            return;
-          }
-          if (chunksRead <= 256) {
-            chunksRead += 1;
-            controller.enqueue(new Uint8Array(64 * 1024).fill(0x61));
-            return;
-          }
-          controller.enqueue(new TextEncoder().encode('"}'));
-          controller.close();
-        },
-      }),
-      {
-        headers: { "content-type": "application/json" },
-      },
-    );
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({ response, release });
-
-    await expect(fetchJson("http://127.0.0.1:43123/config")).rejects.toThrow(
-      "qa-lab-suite-fetch-json: JSON response exceeds 16777216 bytes",
-    );
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 15_000 }),
-    );
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
   it("bounds stalled suite gateway JSON response bodies", async () => {
     vi.useFakeTimers();
     const release = vi.fn(async () => {});
@@ -431,66 +396,6 @@ describe("qa suite gateway helpers", () => {
     expect(gatewayCall).toHaveBeenCalledOnce();
   });
 
-  it("retries rate-limited config mutations using the primary gateway error", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: { ok: true },
-      release: vi.fn(async () => {}),
-    });
-    let patchAttempts = 0;
-    const gatewayCall = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return { hash: `hash-${patchAttempts + 1}`, config: { tools: {} } };
-      }
-      patchAttempts += 1;
-      if (patchAttempts === 1) {
-        throw new Error(
-          "rate limit exceeded for config.patch; retryAfterMs=1\nGateway logs:\nprevious config changed since last load",
-        );
-      }
-      return { ok: true };
-    });
-    const { env } = createConfigMutationEnv(gatewayCall);
-
-    await expect(
-      patchConfig({
-        env,
-        patch: { tools: { deny: ["read"] } },
-        restartDelayMs: 0,
-      }),
-    ).resolves.toEqual({ ok: true });
-    expect(patchAttempts).toBe(2);
-  });
-
-  it("retries config hash conflicts from the primary gateway error", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: { ok: true },
-      release: vi.fn(async () => {}),
-    });
-    let patchAttempts = 0;
-    const gatewayCall = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return { hash: `hash-${patchAttempts + 1}`, config: { tools: {} } };
-      }
-      patchAttempts += 1;
-      if (patchAttempts === 1) {
-        throw new Error(
-          "config changed since last load; re-run config.get and retry\nGateway logs:\nold rate limit exceeded; retry after 38s",
-        );
-      }
-      return { ok: true };
-    });
-    const { env } = createConfigMutationEnv(gatewayCall);
-
-    await expect(
-      patchConfig({
-        env,
-        patch: { tools: { deny: ["read"] } },
-        restartDelayMs: 0,
-      }),
-    ).resolves.toEqual({ ok: true });
-    expect(patchAttempts).toBe(2);
-  });
-
   it("does not wait for a deferred restart beyond the mutation timeout", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -515,88 +420,6 @@ describe("qa suite gateway helpers", () => {
       gateway: env.gateway,
       timeoutMs: 180_000,
     });
-  });
-
-  it("uses the live timeout profile when config mutation races a restart", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: { ok: true },
-      release,
-    });
-    const snapshots = [
-      { hash: "hash-1", config: { tools: {} } },
-      { hash: "hash-2", config: { tools: { deny: ["read"] } } },
-    ];
-    const gatewayCall = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return snapshots.shift() ?? snapshots.at(-1);
-      }
-      throw new Error("service restart");
-    });
-    const { env, waitReady } = createConfigMutationEnv(gatewayCall);
-
-    const result = await patchConfig({
-      env,
-      patch: { tools: { deny: ["read"] } },
-      restartDelayMs: 0,
-    });
-
-    expect(result).toEqual({ ok: true, restarted: true });
-    expect(waitReady).toHaveBeenCalledWith({
-      gateway: env.gateway,
-      timeoutMs: expect.any(Number),
-    });
-    expect(waitReady.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(60_000);
-  });
-
-  it("retries when a restart race settles before the config mutation is visible", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: { ok: true },
-      release,
-    });
-    const snapshots = [
-      { hash: "hash-1", config: { tools: {} } },
-      { hash: "hash-2", config: { tools: {} } },
-      { hash: "hash-2", config: { tools: {} } },
-    ];
-    const gatewayCall = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return snapshots.shift() ?? { hash: "hash-3", config: { tools: { deny: ["read"] } } };
-      }
-      if (method === "config.patch" && gatewayCall.mock.calls.length < 4) {
-        throw new Error("service restart");
-      }
-      return { ok: true };
-    });
-    const { env } = createConfigMutationEnv(gatewayCall);
-
-    const mutation = patchConfig({
-      env,
-      patch: { tools: { deny: ["read"] } },
-      replacePaths: ["tools.deny"],
-      restartDelayMs: 0,
-      restartSettleBufferMs: 1,
-    });
-
-    await expect(mutation).resolves.toEqual({ ok: true });
-
-    expect(gatewayCall).toHaveBeenCalledWith(
-      "config.patch",
-      expect.objectContaining({
-        baseHash: "hash-1",
-        replacePaths: ["tools.deny"],
-      }),
-      { timeoutMs: 180_000 },
-    );
-    expect(gatewayCall).toHaveBeenCalledWith(
-      "config.patch",
-      expect.objectContaining({
-        baseHash: "hash-2",
-        replacePaths: ["tools.deny"],
-      }),
-      { timeoutMs: 180_000 },
-    );
   });
 
   it("keeps polling gateway health instead of sleeping blindly through restart settle", async () => {

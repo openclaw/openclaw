@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import * as processIdentity from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as serviceMembership from "../../daemon/service-process-membership.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
@@ -20,6 +21,10 @@ import {
 import { createHandoffLifetimePreload } from "./update-command-handoff.test-support.js";
 
 const UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE = 75;
+
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
+}));
 
 const tempDirs = createTrackedTempDirs();
 beforeEach(async () => {
@@ -167,6 +172,57 @@ const callerService = {
 } satisfies GatewayServiceState;
 
 describe("gatewayMaintenanceBlock", () => {
+  it.runIf(process.platform === "darwin").each([
+    { membership: "outside", ancestor: false, code: undefined },
+    { membership: "absent", ancestor: false, code: "service-ancestry-unverified" },
+    { membership: "inside", ancestor: false, code: "inside-gateway-service" },
+    { membership: "unknown", ancestor: false, code: "service-membership-unverified" },
+    { membership: "outside", ancestor: true, code: "inside-gateway-process-tree" },
+  ] as const)(
+    "uses native $membership containment with an unreadable login ancestor (gateway ancestor: $ancestor)",
+    ({ membership, ancestor, code }) => {
+      const gatewayPid = process.pid + 1_000_000;
+      vi.spyOn(processIdentity, "readProcessAncestry").mockReturnValue({
+        chain: [
+          {
+            pid: process.pid,
+            parentPid: ancestor ? gatewayPid : gatewayPid + 1,
+            startTimeMicros: 2,
+            startTimeResolutionMicros: 1,
+            exited: false,
+          },
+          ...(ancestor
+            ? [
+                {
+                  pid: gatewayPid,
+                  parentPid: gatewayPid + 1,
+                  startTimeMicros: 1,
+                  startTimeResolutionMicros: 1,
+                  exited: false,
+                },
+              ]
+            : []),
+        ],
+        complete: false,
+        stoppedBy: "unreadable-parent",
+      });
+      vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue(
+        membership,
+      );
+      const block = gatewayMaintenanceBlock(
+        { ...callerService, runtime: { status: "running", pid: gatewayPid } },
+        process.cwd(),
+      );
+      if (code === undefined) {
+        expect(block).toBeUndefined();
+      } else {
+        expect(block?.failureFacts).toEqual([
+          expect.objectContaining({ check: "managed-service-preflight", code }),
+        ]);
+      }
+    },
+  );
+
   it("never advises stopping the gateway service or running update from the caller", () => {
     const message = gatewayMaintenanceBlock(callerService, process.cwd())?.message;
     expect(message).toContain("inside the gateway process tree");
@@ -190,11 +246,15 @@ describe("gatewayMaintenanceBlock", () => {
   });
 });
 
-it.runIf(process.platform === "linux" || process.platform === "darwin").each([true, false])(
-  "does not start a handoff from inherited markers without a verified ancestor (complete: %s)",
-  async (complete) => {
+it.runIf(process.platform === "linux" || process.platform === "darwin").each([
+  { complete: true, containsParent: false },
+  { complete: false, containsParent: false },
+  { complete: false, containsParent: true },
+])(
+  "does not start an unverified handoff ($complete, parent: $containsParent)",
+  async ({ complete, containsParent }) => {
     vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
-      pids: new Set([process.pid]),
+      pids: new Set(containsParent ? [process.pid, process.ppid] : [process.pid]),
       complete,
     });
     await withEnvAsync(

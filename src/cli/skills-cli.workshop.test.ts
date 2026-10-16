@@ -51,6 +51,8 @@ vi.mock("../skills/workshop/workshop-list.js", async (importOriginal) => ({
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   getRuntimeConfig: () => mocks.config,
+  loadConfig: () => mocks.config,
+  captureRuntimeConfigAsyncReader: () => async () => mocks.config,
   resetConfigRuntimeState: () => undefined,
 }));
 vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
@@ -186,24 +188,41 @@ describe("skills workshop cli", () => {
       },
     });
 
-  it("archives locally as the user without a Gateway while holding the Gateway lock", async () => {
+  it("keeps the archived agent in the undo command while holding the offline Gateway lock", async () => {
     const release = vi.fn();
     mocks.acquireGatewayLock.mockResolvedValue({
       run: (action: () => unknown) => action(),
       release,
     });
     mocks.archiveWorkshopSkill.mockResolvedValue(change);
+    mocks.restoreWorkshopSkill.mockResolvedValue({ ...change, action: "restore" });
 
-    await runCli(["skills", "workshop", "archive", "release-notes", "--reason", "superseded"]);
+    await runCli([
+      "skills",
+      "workshop",
+      "archive",
+      "release-notes",
+      "--agent",
+      "writer",
+      "--reason",
+      "superseded",
+    ]);
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.archiveWorkshopSkill).toHaveBeenCalledWith(
-      { config: mocks.config, agentId: "main", actor: "user" },
+      { config: mocks.config, agentId: "writer", actor: "user" },
       { name: "release-notes", reason: "superseded" },
     );
     expect(release).toHaveBeenCalledOnce();
     expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
       expect.stringContaining("Archived release-notes. Undo with:"),
+    );
+    const [, undo] = mocks.defaultRuntime.writeStdout.mock.lastCall![0].trim().split("Undo with: ");
+    expect(undo).toMatch(/^openclaw /);
+    await runCli(undo!.split(" ").slice(1));
+    expect(mocks.restoreWorkshopSkill).toHaveBeenCalledWith(
+      { config: mocks.config, agentId: "writer", actor: "user" },
+      { name: "release-notes", versionId: undefined },
     );
   });
 

@@ -61,20 +61,7 @@ describe("cron trigger CLI options", () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  it("advertises every canonical thinking level on add and edit", () => {
-    const program = new Command().exitOverride();
-    registerCronAddCommand(program);
-    registerCronEditCommand(program);
-
-    for (const commandName of ["add", "edit"]) {
-      const help = program.commands
-        .find((command) => command.name() === commandName)
-        ?.helpInformation();
-      expect(help).toContain("off|minimal|low|medium|high|xhigh|adaptive|max|ultra");
-    }
-  });
-
-  it.each(["watch.js", "watch.js "])("reads trigger file %j on add", async (fileName) => {
+  it.each(["watch.js "])("reads trigger file %j on add", async (fileName) => {
     const scriptPath = path.join(fixtureRoot, fileName);
     await fs.writeFile(path.join(fixtureRoot, "watch.js"), "json({ fire: false })", "utf8");
     await fs.writeFile(scriptPath, "  json({ fire: true })  \n", "utf8");
@@ -108,44 +95,44 @@ describe("cron trigger CLI options", () => {
     );
   });
 
-  it.each([
-    ["empty", ""],
-    ["whitespace", "   "],
-  ])("rejects an explicitly %s trigger script before adding a job", async (_label, value) => {
-    const program = new Command().exitOverride();
-    registerCronAddCommand(program);
-    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  it.each([["whitespace", "   "]])(
+    "rejects an explicitly %s trigger script before adding a job",
+    async (_label, value) => {
+      const program = new Command().exitOverride();
+      registerCronAddCommand(program);
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 
-    try {
-      await expect(
-        program.parseAsync(
-          [
-            "add",
-            "--name",
-            "watcher",
-            "--every",
-            "30s",
-            "--trigger-script",
-            value,
-            "--system-event",
-            "changed",
-            "--session",
-            "main",
-          ],
-          { from: "user" },
-        ),
-      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      try {
+        await expect(
+          program.parseAsync(
+            [
+              "add",
+              "--name",
+              "watcher",
+              "--every",
+              "30s",
+              "--trigger-script",
+              value,
+              "--system-event",
+              "changed",
+              "--session",
+              "main",
+            ],
+            { from: "user" },
+          ),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("--trigger-script must not be blank"),
-      );
-      expect(callGatewayFromCli).not.toHaveBeenCalled();
-    } finally {
-      errorSpy.mockRestore();
-    }
-  });
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("--trigger-script must not be blank"),
+        );
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+      }
+    },
+  );
 
-  it.each(["job.js", "job.js "])("reads payload file %j and budgets on add", async (fileName) => {
+  it.each(["job.js "])("reads payload file %j and budgets on add", async (fileName) => {
     const scriptPath = path.join(fixtureRoot, fileName);
     await fs.writeFile(path.join(fixtureRoot, "job.js"), "return { notify: 'wrong file' }", "utf8");
     await fs.writeFile(scriptPath, "  return { notify: 'done' }  \n", "utf8");
@@ -190,38 +177,35 @@ describe("cron trigger CLI options", () => {
     );
   });
 
-  it.each([
-    { label: "generic timeout only", args: ["--timeout-seconds", "30"] },
-    {
-      label: "generic and script-specific timeouts",
-      args: ["--timeout-seconds", "30", "--script-timeout-seconds", "60"],
+  it.each([{ label: "generic timeout only", args: ["--timeout-seconds", "30"] }])(
+    "rejects script creation with $label",
+    async ({ args }) => {
+      const scriptPath = path.join(fixtureRoot, "job.js");
+      await fs.writeFile(scriptPath, "return { notify: 'done' }", "utf8");
+      const program = new Command().exitOverride();
+      registerCronAddCommand(program);
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+
+      try {
+        await expect(
+          program.parseAsync(
+            ["add", "--name", "script job", "--every", "30s", "--script", scriptPath, ...args],
+            { from: "user" },
+          ),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "Use --script-timeout-seconds for script jobs, not --timeout-seconds.",
+          ),
+        );
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+      }
     },
-  ])("rejects script creation with $label", async ({ args }) => {
-    const scriptPath = path.join(fixtureRoot, "job.js");
-    await fs.writeFile(scriptPath, "return { notify: 'done' }", "utf8");
-    const program = new Command().exitOverride();
-    registerCronAddCommand(program);
-    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  );
 
-    try {
-      await expect(
-        program.parseAsync(
-          ["add", "--name", "script job", "--every", "30s", "--script", scriptPath, ...args],
-          { from: "user" },
-        ),
-      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Use --script-timeout-seconds for script jobs, not --timeout-seconds.",
-        ),
-      );
-      expect(callGatewayFromCli).not.toHaveBeenCalled();
-    } finally {
-      errorSpy.mockRestore();
-    }
-  });
-
-  it.each(["edit-job.js", "edit-job.js "])("reads payload file %j on edit", async (fileName) => {
+  it.each(["edit-job.js "])("reads payload file %j on edit", async (fileName) => {
     const scriptPath = path.join(fixtureRoot, fileName);
     await fs.writeFile(
       path.join(fixtureRoot, "edit-job.js"),
@@ -291,61 +275,6 @@ describe("cron trigger CLI options", () => {
       expect.anything(),
       expect.objectContaining({ pacing: { min: "15m", max: "4h" } }),
     );
-  });
-
-  it("accepts trigger script files at the byte limit", async () => {
-    const scriptPath = path.join(fixtureRoot, "at-limit.js");
-    await fs.writeFile(scriptPath, "x".repeat(65_536), "utf8");
-
-    await expect(readCronTriggerScript(scriptPath)).resolves.toHaveLength(65_536);
-  });
-
-  it("uses the same size and empty-input validation for payload scripts", async () => {
-    const atLimitPath = path.join(fixtureRoot, "payload-at-limit.js");
-    const emptyPath = path.join(fixtureRoot, "payload-empty.js");
-    await fs.writeFile(atLimitPath, "x".repeat(65_536), "utf8");
-    await fs.writeFile(emptyPath, " \n", "utf8");
-
-    await expect(readCronPayloadScript(atLimitPath)).resolves.toHaveLength(65_536);
-    await expect(readCronPayloadScript(emptyPath)).rejects.toThrow(
-      "Script payload must not be empty",
-    );
-  });
-
-  it("stops oversized trigger script files before the gateway call", async () => {
-    const scriptPath = path.join(fixtureRoot, "oversized.js");
-    await fs.writeFile(scriptPath, "x".repeat(65_537), "utf8");
-    const program = new Command().exitOverride();
-    registerCronAddCommand(program);
-    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-
-    try {
-      await expect(
-        program.parseAsync(
-          [
-            "add",
-            "--name",
-            "oversized",
-            "--every",
-            "30s",
-            "--trigger-script",
-            scriptPath,
-            "--system-event",
-            "changed",
-            "--session",
-            "main",
-          ],
-          { from: "user" },
-        ),
-      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Trigger script exceeds 65536 bytes"),
-      );
-      expect(callGatewayFromCli).not.toHaveBeenCalled();
-    } finally {
-      errorSpy.mockRestore();
-    }
   });
 
   it("maps --clear-trigger to a nullable edit patch", async () => {

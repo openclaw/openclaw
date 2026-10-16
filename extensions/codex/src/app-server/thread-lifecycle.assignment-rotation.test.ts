@@ -39,6 +39,7 @@ afterEach(resetThreadLifecycleTestFixtures);
 async function fixture() {
   const cwd = tempDirs.make("codex-assignment-rotation-");
   const params = createParams(path.join(cwd, "session.jsonl"), cwd);
+  params.disableTools = false;
   params.agentId = "main";
   const identity = {
     kind: "session" as const,
@@ -150,7 +151,7 @@ async function fixture() {
     const { lease: _lease, ...durable } = current;
     return structuredClone(durable);
   };
-  expect(readAssignments(parent.threadId)).toEqual(assignments);
+  expect(await readAssignments(parent.threadId)).toEqual(assignments);
   return {
     ...wire,
     options,
@@ -193,7 +194,7 @@ describe("native assignment custody across ordinary parent rotation", () => {
         }),
       ]);
       expect(f.readState()).toEqual(before);
-      expect(f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
+      expect(await f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
       expect(f.releasePredecessor).toHaveBeenCalledExactlyOnceWith(
         f.parent.threadId,
         undefined,
@@ -205,14 +206,14 @@ describe("native assignment custody across ordinary parent rotation", () => {
     }
     const replacement = await pending;
     expect(f.store.read(f.identity)?.threadId).toBe("parent-2");
-    expect(f.readAssignments(replacement.threadId, replacement)).toEqual(f.assignments);
+    expect(await f.readAssignments(replacement.threadId, replacement)).toEqual(f.assignments);
   });
 
   it("does not expose the old assignments through a different connection", async () => {
     const f = await fixture();
     const replacement = await f.rotate({ appServerRuntimeFingerprint: "connection-B" });
     expect(replacement.appServerRuntimeFingerprint).toBe("connection-B");
-    expect(f.readAssignments(replacement.threadId, replacement)).toEqual([]);
+    expect(await f.readAssignments(replacement.threadId, replacement)).toEqual([]);
   });
 
   it.each(["start", "revoked", "conflict"] as const)(
@@ -261,7 +262,7 @@ describe("native assignment custody across ordinary parent rotation", () => {
       );
       expect(f.readState()).toEqual(expected);
       assert(expected?.state === "active");
-      expect(f.readAssignments(expected.binding.threadId)).toEqual(f.assignments);
+      expect(await f.readAssignments(expected.binding.threadId)).toEqual(f.assignments);
       expect(f.request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(2);
       expect(
         f.request.mock.calls
@@ -305,7 +306,7 @@ describe("native assignment custody across ordinary parent rotation", () => {
     expect(methods.filter((method) => method === "thread/unsubscribe")).toEqual([]);
     expect(methods.filter((method) => method === "thread/start")).toHaveLength(1);
     expect(f.readState()).toEqual(before);
-    expect(f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
+    expect(await f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
   });
 
   it("refuses a claimed predecessor before starting or committing a successor", async () => {
@@ -316,7 +317,7 @@ describe("native assignment custody across ordinary parent rotation", () => {
     try {
       await expect(f.rotate()).rejects.toThrow("claimed by active work; stop it first");
       expect(f.readState()).toEqual(before);
-      expect(f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
+      expect(await f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
       expect(f.request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(1);
       expect(f.releasePredecessor).not.toHaveBeenCalled();
       expect(() => claim.assertCurrent()).not.toThrow();

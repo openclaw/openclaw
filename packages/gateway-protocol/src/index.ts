@@ -1,4 +1,5 @@
 export * from "./error-details.js";
+export * from "./node-permissions.js";
 export * from "./github-publication-api.js";
 export * from "./session-agent-status.js";
 export type {
@@ -92,3 +93,9 @@ export type { GatewayCoreRequestParams } from "./core-request-params.js";
 export type { SessionsPatchResult } from "./sessions-patch-result.js";
 
 export * from "./schema/session-processes.js";
+export type {
+  DoctorMemoryStatusPayload,
+  DoctorMemoryEmbeddingRuntimePayload,
+  DoctorMemoryDreamingConfig,
+  DoctorMemoryDreamingPayload,
+} from "./doctor-memory.js";

@@ -279,7 +279,7 @@ describe("canary teardown evidence", () => {
         await rejected;
         expect(remove).not.toHaveBeenCalled();
         expect(onWarning).not.toHaveBeenCalled();
-        await expect(fs.access(directory)).resolves.toBeUndefined();
+        await fs.access(directory);
       } finally {
         receipt.resolve();
         await pending.catch(() => undefined);
@@ -361,7 +361,7 @@ describe("canary teardown evidence", () => {
       if (!retained) {
         throw new Error("Gateway did not capture its rehearsal state directory");
       }
-      await expect(fs.access(path.join(retained, "openclaw.json"))).resolves.toBeUndefined();
+      await fs.access(path.join(retained, "openclaw.json"));
     } finally {
       response.resolve(Response.json({ status: "started", ready: true }));
       gateway?.emit("close", 0);

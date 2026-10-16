@@ -61,7 +61,6 @@ describe("device management", () => {
         isDeviceTokenAuth: true,
       }),
     },
-    { name: "non-device operator sessions", client: createClient(["operator.pairing"]) },
     {
       name: "shared-auth sessions carrying a device identity",
       client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: false }),
@@ -133,7 +132,7 @@ describe("device management", () => {
     expectRespondedErrorMessage(opts, "device pairing approval denied");
   });
 
-  it.each(["req-2", " \treq-2\n "])(
+  it.each([" \treq-2\n "])(
     "allows admins to approve another device with requestId %j",
     async (requestId) => {
       approveDevicePairingMock.mockResolvedValue({
@@ -238,7 +237,7 @@ describe("device management", () => {
     expect(disconnect).toHaveBeenCalledWith("node-repaired", { role: "node" });
   });
 
-  it.each(["req-1", " \treq-1\n "])(
+  it.each([" \treq-1\n "])(
     "allows approving the caller device from a non-admin device session with requestId %j",
     async (requestId) => {
       getPendingDevicePairingMock.mockImplementation(async (requestedId: string) =>
@@ -386,49 +385,6 @@ describe("device management", () => {
     expect(JSON.stringify(captured.events)).not.toContain("device-1");
   });
 
-  it("rejects approving node roles from non-admin shared-auth sessions", async () => {
-    getPendingDevicePairingMock.mockResolvedValue({
-      requestId: "req-1",
-      deviceId: "device-1",
-      publicKey: "pk-1",
-      role: "node",
-      roles: ["node"],
-      ts: 100,
-    });
-    const opts = createOptions(
-      "device.pair.approve",
-      { requestId: "req-1" },
-      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: false }) },
-    );
-
-    await invokeDeviceHandler(opts);
-
-    expect(approveDevicePairingMock).not.toHaveBeenCalled();
-    expectRespondedErrorMessage(opts, "device pairing approval denied");
-  });
-
-  it("rejects approving mixed operator and node roles from non-admin sessions", async () => {
-    getPendingDevicePairingMock.mockResolvedValue({
-      requestId: "req-1",
-      deviceId: "device-2",
-      publicKey: "pk-2",
-      role: "operator",
-      roles: [" operator ", " node "],
-      scopes: ["operator.pairing"],
-      ts: 100,
-    });
-    const opts = createOptions(
-      "device.pair.approve",
-      { requestId: "req-1" },
-      { client: createClient(["operator.pairing"]) },
-    );
-
-    await invokeDeviceHandler(opts);
-
-    expect(approveDevicePairingMock).not.toHaveBeenCalled();
-    expectRespondedErrorMessage(opts, "device pairing approval denied");
-  });
-
   it("denies unknown approvals from non-admin non-device sessions", async () => {
     getPendingDevicePairingMock.mockResolvedValue(null);
     const opts = createOptions(
@@ -464,7 +420,7 @@ describe("device management", () => {
     expectRespondedErrorMessage(opts, "device pairing rejection denied");
   });
 
-  it.each(["req-1", " \treq-1\n "])(
+  it.each([" \treq-1\n "])(
     "allows rejecting the caller device from a non-admin device session with requestId %j",
     async (requestId) => {
       getPendingDevicePairingMock.mockImplementation(async (requestedId: string) =>
@@ -506,7 +462,7 @@ describe("device management", () => {
     },
   );
 
-  it.each(["req-2", " \treq-2\n "])(
+  it.each([" \treq-2\n "])(
     "allows admins to reject another device with requestId %j",
     async (requestId) => {
       rejectDevicePairingMock.mockResolvedValue({

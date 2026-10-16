@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -20,14 +19,14 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const container of containers.splice(0)) {
-    render(null, container);
+    disposeChatView(container);
   }
   resetChatViewState();
   resetTranscriptTestDom();
 });
 
 function createPane(paneId = "primary") {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   containers.push(container);
   document.body.append(container);
   const onClearReply = vi.fn();
@@ -40,9 +39,9 @@ function createPane(paneId = "primary") {
     runActive: true,
     onClearReply,
     onAbort,
-    onRequestUpdate: () => render(renderChat(props), container),
+    onRequestUpdate: () => renderChatPropsInto(container, props),
   });
-  render(renderChat(props), container);
+  renderChatPropsInto(container, props);
   const composer = expectDefined(
     container.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea"),
     "composer",
@@ -85,6 +84,9 @@ describe("transcript search Escape", () => {
       "search control",
     );
     target.focus();
+    const tooltip = expectDefined(target.closest("openclaw-tooltip"), "search tooltip");
+    await tooltip.updateComplete;
+    expect(tooltip.hasAttribute("open")).toBe(true);
     // Its focused tooltip owns the first Escape, before search receives it.
     target.dispatchEvent(escape());
     await Promise.resolve();

@@ -61,7 +61,7 @@ it.each([
       context.chatAbortControllers.clear();
       context.getRuntimeConfig = () => cfg;
       context.logGateway = createSubsystemLogger("test/source-lineage");
-      const result = prepareAgentRequestPreflight({
+      const result = await prepareAgentRequestPreflight({
         request: {
           message: "Worker progress",
           sessionKey: parentKey,

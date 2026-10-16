@@ -373,18 +373,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
       params.getRuntimeConfig?.() ??
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
     prepareModelChoice: params.prepareModelChoiceMock ?? supportedSpawnModelChoice,
-    loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
-      ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
-    readSessionEntryReadOnlyInWorker: async (
-      scope: { storePath?: string; sessionKey: string },
-      assertCurrent: () => void,
-    ) => {
-      assertCurrent();
-      const store = (params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore;
-      const value = await Promise.resolve(store[scope.sessionKey]);
-      assertCurrent();
-      return value;
-    },
     ensureContextEnginesInitialized:
       params.ensureContextEnginesInitializedMock ?? (() => undefined),
     resolveContextEngine: params.resolveContextEngineMock ?? (async () => ({})),
@@ -446,8 +434,11 @@ export async function loadSubagentSpawnModuleForTest(params: {
       params.resolveSandboxRuntimeStatus ?? (() => ({ sandboxed: false })),
   }));
 
+  // mock-isolation: Spawn fixtures supply caller depth without opening a session database.
   vi.doMock("./subagent-depth.js", () => ({
     getSubagentDepthFromSessionStore: params.getSubagentDepthFromSessionStore ?? (() => 0),
+    getSubagentDepthFromSessionStoreInWorker: async (key: string, opts?: unknown) =>
+      params.getSubagentDepthFromSessionStore?.(key, opts) ?? 0,
   }));
 
   vi.doMock("../registry/subagent-registry.js", () => ({

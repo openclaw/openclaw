@@ -274,20 +274,6 @@ describe("loginMiniMaxPortalOAuth", () => {
     await loginMiniMax({ deviceCode });
   });
 
-  it.each([
-    [3600, 1_700_003_600_000],
-    [1_700_000_000, 1_700_000_000_000],
-    [1_700_000_000_000, 1_700_000_000_000],
-  ])("normalizes token expiry %s through the OAuth flow", async (expiredIn, expectedExpires) => {
-    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-    stubOAuthFetch(
-      (_input, init) => authorizationResponse(init),
-      tokenResponse({ expired_in: expiredIn }),
-    );
-
-    await expect(loginMiniMax()).resolves.toMatchObject({ expires: expectedExpires });
-  });
-
   it("rejects malformed token expiry through the OAuth flow", async () => {
     stubOAuthFetch(
       (_input, init) => authorizationResponse(init),
@@ -411,7 +397,7 @@ describe("loginMiniMaxPortalOAuth", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
-  it("uses MiniMax account OAuth endpoints directly for global and CN login", async () => {
+  it("records the issuing account endpoint for Global and CN credentials", async () => {
     for (const [region, expectedHosts] of [
       [
         "global",
@@ -434,8 +420,7 @@ describe("loginMiniMaxPortalOAuth", () => {
       );
 
       await expect(loginMiniMax({ region })).resolves.toMatchObject({
-        access: "access",
-        refresh: "refresh",
+        tokenEndpoint: expectedHosts[1],
       });
       expect(
         fetchMock.mock.calls.map(([input]) =>
@@ -497,24 +482,5 @@ describe("loginMiniMaxPortalOAuth", () => {
     const rejection = expect(result).rejects.toThrow("timed out");
     await vi.advanceTimersByTimeAsync(10_000);
     await rejection;
-  });
-
-  it("keeps the default poll delay for zero authorization intervals", async () => {
-    vi.useFakeTimers();
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    stubOAuthFetch(
-      (_input, init) => authorizationResponse(init, { interval: 0 }),
-      jsonResponse({ status: "pending" }),
-      tokenResponse(),
-    );
-
-    const result = loginMiniMax();
-
-    await vi.waitFor(() => {
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 2_000);
-    });
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    await expect(result).resolves.toMatchObject({ access: "access", refresh: "refresh" });
   });
 });

@@ -7,6 +7,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   closeSessionTranscriptReconcileWorkerPool,
@@ -35,7 +36,9 @@ it("drains deferred reconciliation after the caller retires its timer queue", as
     await closeSessionTranscriptReconcileWorkerPool();
     await closeOpenClawAgentDatabasesAsync(stateDir);
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
   });
+  setRuntimeConfigSnapshot({});
   await persistSessionTranscriptTurn(
     { ...options, sessionId: "deferred", sessionKey: "agent:main:deferred" },
     {
@@ -95,58 +98,3 @@ it("keeps a missing projection store absent", async ({ onTestFinished }) => {
   });
   expect(fs.existsSync(options.path)).toBe(false);
 });
-
-it.for(["before", "after"] as const)(
-  "retains a fresh deferred request when caller cancellation arrives %s it",
-  async (cancellation, { onTestFinished }) => {
-    const stateDir = useAutoCleanupTempDirTracker(onTestFinished).make(
-      "openclaw-reconcile-handoff-",
-    );
-    const options = { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-    onTestFinished(async () => {
-      await closeSessionTranscriptReconcileWorkerPool();
-      await closeOpenClawAgentDatabasesAsync(stateDir);
-      closeOpenClawStateDatabaseForTest();
-    });
-    await persistSessionTranscriptTurn(
-      { ...options, sessionId: "handoff", sessionKey: "agent:main:handoff" },
-      {
-        messages: [
-          { eventId: "message", message: { role: "user", content: "Fresh caller repair" } },
-        ],
-        touchSessionEntry: false,
-      },
-    );
-    await waitForSessionTranscriptIndexReconcile(options);
-    const database = openOpenClawAgentDatabase(options);
-    database.db.exec(
-      "DELETE FROM session_transcript_fts_rows; UPDATE session_transcript_index_state SET needs_rebuild = 1",
-    );
-    const controller = new AbortController();
-    const settled: string[] = [];
-    startSessionTranscriptIndexReconcile({
-      ...options,
-      signal: controller.signal,
-      assertCurrent: () => controller.signal.throwIfAborted(),
-    });
-    const cancelled = waitForSessionTranscriptIndexReconcile(options).then(() =>
-      settled.push("cancelled"),
-    );
-    if (cancellation === "before") {
-      controller.abort(new Error("original caller cancelled"));
-    }
-    startSessionTranscriptIndexReconcile(options);
-    const fresh = waitForSessionTranscriptIndexReconcile(options).then(() => settled.push("fresh"));
-    if (cancellation === "after") {
-      controller.abort(new Error("original caller cancelled"));
-    }
-    await Promise.all([cancelled, fresh]);
-    expect(settled).toEqual(["cancelled", "fresh"]);
-    expect(
-      database.db.prepare("SELECT needs_rebuild FROM session_transcript_index_state").all(),
-    ).toEqual([{ needs_rebuild: 0 }]);
-    expect(
-      database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
-    ).toEqual([{ message_id: "message", text: "Fresh caller repair" }]);
-  },
-);

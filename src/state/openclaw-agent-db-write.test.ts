@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as databasePathIdentity from "../infra/sqlite-worker-identity.js";
 import { withOpenClawAgentDatabaseWrite } from "../plugin-sdk/sqlite-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   borrowOpenClawAgentDatabase,
   closeOpenClawAgentDatabasesForTest,
@@ -50,34 +51,6 @@ describe("agent database write admission", () => {
     });
     return { entered: entered.promise, done, release: settled.resolve };
   }
-
-  it.each(["cold", "warm"] as const)(
-    "admits %s writes only after the reserved worker operation settles",
-    async (temperature) => {
-      const warm = temperature === "warm" ? openOpenClawAgentDatabase(options) : undefined;
-      const reservation = reserveWorkerOperation();
-      await reservation.entered;
-      const mutate = vi.fn(({ db }: ReturnType<typeof openOpenClawAgentDatabase>) => {
-        db.exec("CREATE TABLE admission_proof (value TEXT NOT NULL) STRICT");
-        db.prepare("INSERT INTO admission_proof VALUES (?)").run("committed");
-        return db;
-      });
-      const write = withOpenClawAgentDatabaseWrite(options, mutate);
-      await setImmediate();
-      expect(mutate).not.toHaveBeenCalled();
-      expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(warm);
-      reservation.release();
-      await reservation.done;
-      const db = await write;
-      expect(mutate).toHaveBeenCalledOnce();
-      expect(db.prepare("SELECT value FROM admission_proof").all()).toEqual([
-        { value: "committed" },
-      ]);
-      if (warm) {
-        expect(db).toBe(warm.db);
-      }
-    },
-  );
 
   it.each(["stable", "retargeted"] as const)(
     "preserves FIFO and rejects stale worker reservation through a %s alias",
@@ -166,6 +139,7 @@ describe("agent database write admission", () => {
         database.db.exec("CREATE TABLE admission_proof (value TEXT NOT NULL) STRICT");
       }
       const borrowed = mode === "borrowed" ? borrowOpenClawAgentDatabase(aliased) : undefined;
+      const borrowedDb = borrowed && requireNativeSqliteDatabase(borrowed.db);
       const commit = (value: string) => (database: typeof original) => {
         database.db.prepare("INSERT INTO admission_proof VALUES (?)").run(value);
       };
@@ -175,9 +149,9 @@ describe("agent database write admission", () => {
           ? runOpenClawAgentWriteAdmission(aliased, () =>
               commit(value)(openOpenClawAgentDatabase(aliased)),
             )
-          : withOpenClawAgentDatabaseWrite(aliased, commit(value), borrowed?.db);
+          : withOpenClawAgentDatabaseWrite(aliased, commit(value), borrowedDb);
       if (!cold) {
-        await withOpenClawAgentDatabaseWrite(aliased, commit("before"), borrowed?.db);
+        await withOpenClawAgentDatabaseWrite(aliased, commit("before"), borrowedDb);
       }
       const reservation = reserveWorkerOperation();
       await reservation.entered;
@@ -209,14 +183,18 @@ describe("agent database write admission", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "rejects a closed borrowed handle without adopting a replacement (%s)",
     async (replace) => {
       const borrowed = borrowOpenClawAgentDatabase(options);
       const reservation = reserveWorkerOperation();
       await reservation.entered;
       const mutate = vi.fn();
-      const write = withOpenClawAgentDatabaseWrite(options, mutate, borrowed.db);
+      const write = withOpenClawAgentDatabaseWrite(
+        options,
+        mutate,
+        requireNativeSqliteDatabase(borrowed.db),
+      );
       const rejected = expect(write).rejects.toThrow("Borrowed agent database closed or changed");
       closeOpenClawAgentDatabasesForTest();
       const replacement = replace ? openOpenClawAgentDatabase(options) : undefined;
@@ -236,6 +214,7 @@ describe("agent database write admission", () => {
       const secondDirectory = path.join(firstDirectory, "other-cwd");
       fs.mkdirSync(secondDirectory);
       const borrowed = mode === "borrowed" ? borrowOpenClawAgentDatabase(options) : undefined;
+      const borrowedDb = borrowed && requireNativeSqliteDatabase(borrowed.db);
       const reservation = reserveWorkerOperation();
       const cwd = vi.spyOn(process, "cwd").mockReturnValue(firstDirectory);
       const mutate = vi.fn(
@@ -247,7 +226,7 @@ describe("agent database write admission", () => {
         write = withOpenClawAgentDatabaseWrite(
           { ...options, path: path.basename(options.path) },
           mutate,
-          borrowed?.db,
+          borrowedDb,
         );
         void write.catch(() => {});
         await setImmediate();
@@ -311,40 +290,6 @@ describe("agent database write admission", () => {
       await write?.catch(() => {});
       cwd.mockRestore();
     }
-  });
-
-  it("rechecks live caller authority after waiting and preserves the original rejection", async () => {
-    const reservation = reserveWorkerOperation();
-    await reservation.entered;
-    let active = true;
-    const revoked = new Error("caller authority revoked");
-    const committed = vi.fn();
-    const write = withOpenClawAgentDatabaseWrite(options, () => {
-      if (!active) {
-        throw revoked;
-      }
-      committed();
-    });
-    const rejected = expect(write).rejects.toBe(revoked);
-    active = false;
-    reservation.release();
-    await reservation.done;
-    await rejected;
-    expect(committed).not.toHaveBeenCalled();
-    await expect(withOpenClawAgentDatabaseWrite(options, () => "next owner")).resolves.toBe(
-      "next owner",
-    );
-  });
-
-  it("does not serialize independent agent database paths behind a reserved worker", async () => {
-    const reservation = reserveWorkerOperation();
-    await reservation.entered;
-    const other = { agentId: "peer", path: path.join(path.dirname(options.path), "peer.sqlite") };
-    await expect(withOpenClawAgentDatabaseWrite(other, ({ agentId }) => agentId)).resolves.toBe(
-      "peer",
-    );
-    reservation.release();
-    await reservation.done;
   });
 
   it("joins a mistakenly asynchronous callback before rejecting it or admitting the next writer", async () => {

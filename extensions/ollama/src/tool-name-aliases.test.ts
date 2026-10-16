@@ -46,18 +46,18 @@ function assistant(name: string): AssistantMessage {
   };
 }
 
-function context(names: string[]): Context {
+function context(names: string[], replayName = "ls"): Context {
   return {
-    systemPrompt: "Call tool_call with id and args. Preserve literal examples.",
+    systemPrompt: "Call ls with id and args. Preserve literal examples.",
     tools: names.map((name) => ({ name, description: name, parameters: { type: "object" } })),
     messages: [
-      { role: "user", content: "Use tool_call; keep this user text unchanged.", timestamp: 0 },
-      assistant("tool_call"),
+      { role: "user", content: "Use ls; keep this user text unchanged.", timestamp: 0 },
+      assistant(replayName),
       {
         role: "toolResult",
         toolCallId: "previous",
-        toolName: "tool_call",
-        content: [{ type: "text", text: "literal tool_call output" }],
+        toolName: replayName,
+        content: [{ type: "text", text: "literal ls output" }],
         isError: false,
         timestamp: 0,
       },
@@ -72,7 +72,7 @@ function respond(name: string) {
       message: {
         role: "assistant",
         content: "",
-        tool_calls: [{ id: "next", function: { name, arguments: { id: "tool_call", args: {} } } }],
+        tool_calls: [{ id: "next", function: { name, arguments: { id: "ls", args: {} } } }],
       },
       done: false,
     },
@@ -96,13 +96,13 @@ function readRequest() {
   return JSON.parse(body);
 }
 
-it.each(["tool_call", "functions.tool_call"])(
+it.each(["ls", "functions.ls"])(
   "aliases native definitions and %s replay while restoring streamed and final names",
   async (replayName) => {
-    const original = context(["exec", "tool_call"]);
+    const original = context(["exec", "ls"]);
     original.messages[1] = assistant(replayName);
     const saved = structuredClone(original);
-    respond("openclaw_tool_call");
+    respond("openclaw_ls");
     const stream = await createOllamaStreamFn(model.baseUrl)(model, original);
     const events = [];
     for await (const event of stream) {
@@ -110,24 +110,24 @@ it.each(["tool_call", "functions.tool_call"])(
     }
     const request = readRequest();
     expect(request.tools.map((tool: { function: { name: string } }) => tool.function.name)).toEqual(
-      ["exec", "openclaw_tool_call"],
+      ["exec", "openclaw_ls"],
     );
-    expect(request.messages[0].content).toContain("tool_call: use openclaw_tool_call");
-    expect(request.messages[1].content).toBe("Use tool_call; keep this user text unchanged.");
+    expect(request.messages[0].content).toContain("ls: use openclaw_ls");
+    expect(request.messages[1].content).toBe("Use ls; keep this user text unchanged.");
     expect(request.messages[2].tool_calls[0].function).toEqual({
-      name: "openclaw_tool_call",
+      name: "openclaw_ls",
       arguments: { id: "session_status" },
     });
     expect(request.messages[3]).toMatchObject({
-      tool_name: "openclaw_tool_call",
-      content: "literal tool_call output",
+      tool_name: "openclaw_ls",
+      content: "literal ls output",
       tool_call_id: "previous",
     });
     const expected = {
       type: "toolCall",
       id: "next",
-      name: "tool_call",
-      arguments: { id: "tool_call", args: {} },
+      name: "ls",
+      arguments: { id: "ls", args: {} },
     };
     expect(events.find((event) => event.type === "toolcall_end")).toMatchObject({
       toolCall: expected,
@@ -139,28 +139,28 @@ it.each(["tool_call", "functions.tool_call"])(
 );
 
 it("keeps aliases stable across tool order and disjoint from real replay names", async () => {
-  const original = context(["tool_call", "exec", "functions", "tool_search"]);
-  original.messages.push(assistant("openclaw_tool_call"));
+  const original = context(["ls", "exec", "functions", "tool_search"]);
+  original.messages.push(assistant("openclaw_ls"));
   const requests = [];
   for (const tools of [original.tools, original.tools?.toReversed()]) {
-    respond("openclaw_openclaw_tool_call");
+    respond("openclaw_openclaw_ls");
     const stream = await createOllamaStreamFn(model.baseUrl)(model, { ...original, tools });
-    expect((await stream.result()).content[0]).toMatchObject({ name: "tool_call" });
+    expect((await stream.result()).content[0]).toMatchObject({ name: "ls" });
     requests.push(readRequest());
   }
   expect(requests[0]).toEqual(requests[1]);
   expect(
     requests[0].tools.map((tool: { function: { name: string } }) => tool.function.name),
-  ).toEqual(["exec", "functions", "openclaw_openclaw_tool_call", "tool_search"]);
+  ).toEqual(["exec", "functions", "openclaw_openclaw_ls", "tool_search"]);
   expect(
     requests[0].messages.flatMap(
       (message: { tool_calls?: { function: { name: string } }[] }) =>
         message.tool_calls?.map((call) => call.function.name) ?? [],
     ),
-  ).toEqual(["openclaw_openclaw_tool_call", "openclaw_tool_call"]);
-  respond("openclaw_tool_call");
+  ).toEqual(["openclaw_openclaw_ls", "openclaw_ls"]);
+  respond("openclaw_ls");
   const stream = await createOllamaStreamFn(model.baseUrl)(model, original);
-  expect((await stream.result()).content[0]).toMatchObject({ name: "openclaw_tool_call" });
+  expect((await stream.result()).content[0]).toMatchObject({ name: "openclaw_ls" });
 });
 
 it.each(["ls", "call", "tool_calls", "function", "TOOL_CALLS", "name"])(
@@ -183,55 +183,30 @@ it.each(["ls", "call", "tool_calls", "function", "TOOL_CALLS", "name"])(
   },
 );
 
-it("preserves the system prompt while appending wire names and translating tool references", async () => {
-  const input = context(["ls", "tool_call", "tool_search", "exec", "custom-tool_call"]);
-  const projectText =
-    "## Workspace\nRun ls; preserve the literal tool_call example.\n## Tooling\n- tool_call";
-  input.systemPrompt = [
-    "<!-- openclaw:attempt:STABLE -->",
-    "You are a personal assistant running inside OpenClaw.",
-    "## Tooling",
-    "Tools policy-filtered. Names case-sensitive; call exact.",
-    "- ls: List directories",
-    "- tool_call",
-    "- tool_search",
-    "- custom-tool_call",
-    "### Deferred Tool Schemas",
-    "- function (plugin)",
-    "Call tool_call with the result id or name in id and all tool parameters in args.",
-    projectText,
-  ].join("\n");
+it("leaves dispatcher guidance unchanged when a direct name needs an alias", async () => {
+  const input = context(["ls", "dispatch_action", "tool_search"]);
+  input.systemPrompt = "Call dispatch_action with id and args. Run ls to list files.";
   input.tools = input.tools?.map((tool) => ({
     ...tool,
-    description:
-      tool.name === "tool_search"
-        ? "Execute results with tool_call. Preserve custom-tool_call."
-        : "Literal ls and tool_call.",
+    description: "Use dispatch_action; catalog IDs and literal ls remain unchanged.",
   }));
-  const original = structuredClone(input);
-  respond("openclaw_tool_call");
+  const saved = structuredClone(input);
+  respond("openclaw_ls");
   await (await createOllamaStreamFn(model.baseUrl)(model, input)).result();
   const request = readRequest();
   expect(request.messages[0].content).toBe(
-    `${input.systemPrompt}\n## Tool wire names\nUse these function names for the tools referenced in instructions; arguments and tool IDs are unchanged:\nls: use openclaw_ls\ntool_call: use openclaw_tool_call`,
+    `${input.systemPrompt}\n## Tool wire names\nUse these function names for the tools referenced in instructions; arguments and tool IDs are unchanged:\nls: use openclaw_ls`,
   );
-  expect(request.tools).toContainEqual({
-    type: "function",
-    function: {
-      name: "tool_search",
-      description: "Execute results with openclaw_tool_call. Preserve custom-tool_call.",
+  expect(
+    request.tools.map((tool: { function: { name: string; description: string } }) => tool.function),
+  ).toEqual(
+    ["dispatch_action", "openclaw_ls", "tool_search"].map((name) => ({
+      name,
+      description: "Use dispatch_action; catalog IDs and literal ls remain unchanged.",
       parameters: { type: "object", properties: {} },
-    },
-  });
-  expect(request.tools).toContainEqual({
-    type: "function",
-    function: {
-      name: "exec",
-      description: "Literal ls and tool_call.",
-      parameters: { type: "object", properties: {} },
-    },
-  });
-  expect(input).toEqual(original);
+    })),
+  );
+  expect(input).toEqual(saved);
 });
 
 it("recovers aliased plain-text calls before restoring the canonical tool name", async () => {
@@ -241,19 +216,19 @@ it("recovers aliased plain-text calls before restoring the canonical tool name",
         model: model.id,
         message: {
           role: "assistant",
-          content: '[openclaw_tool_call]\n{"id":"session_status"}\n[/openclaw_tool_call]',
+          content: '[openclaw_ls]\n{"id":"session_status"}\n[/openclaw_ls]',
         },
         done: true,
       }),
     ),
     release: async () => {},
   });
-  const stream = await createOllamaStreamFn(model.baseUrl)(model, context(["tool_call"]));
+  const stream = await createOllamaStreamFn(model.baseUrl)(model, context(["ls"]));
   expect((await stream.result()).content).toMatchObject([
     {
       type: "toolCall",
       id: expect.any(String),
-      name: "tool_call",
+      name: "ls",
       arguments: { id: "session_status" },
     },
   ]);
@@ -264,7 +239,7 @@ it.each(["done", "error"] as const)(
   async (terminal) => {
     const compatModel: Model = { ...model, api: "openai-completions" };
     let wireContext: Context | undefined;
-    const replacement = { tool_choice: { type: "function", function: { name: "tool_call" } } };
+    const replacement = { tool_choice: { type: "function", function: { name: "ls" } } };
     const wrapped = expectDefined(
       createConfiguredOllamaCompatStreamWrapper({
         provider: "ollama",
@@ -274,7 +249,7 @@ it.each(["done", "error"] as const)(
           wireContext = input;
           await options?.onPayload?.({}, compatModel);
           const stream = createAssistantMessageEventStream();
-          const message = assistant("openclaw_tool_call");
+          const message = assistant("openclaw_ls");
           stream.push({
             type: "toolcall_end",
             contentIndex: 0,
@@ -282,7 +257,7 @@ it.each(["done", "error"] as const)(
             toolCall: {
               type: "toolCall",
               id: "previous",
-              name: "openclaw_tool_call",
+              name: "openclaw_ls",
               arguments: { id: "session_status" },
             },
           });
@@ -300,24 +275,24 @@ it.each(["done", "error"] as const)(
       }),
       "Ollama compatible transport",
     );
-    const stream = await wrapped(compatModel, context(["tool_call"]), {
+    const stream = await wrapped(compatModel, context(["ls"]), {
       onPayload: async () => replacement,
     });
     const events = [];
     for await (const event of stream) {
       events.push(event);
     }
-    expect(wireContext).toMatchObject({ tools: [{ name: "openclaw_tool_call" }] });
-    expect(replacement.tool_choice.function.name).toBe("openclaw_tool_call");
+    expect(wireContext).toMatchObject({ tools: [{ name: "openclaw_ls" }] });
+    expect(replacement.tool_choice.function.name).toBe("openclaw_ls");
     expect(events[0]).toMatchObject({
-      toolCall: { name: "tool_call" },
-      partial: { content: [{ name: "tool_call" }] },
+      toolCall: { name: "ls" },
+      partial: { content: [{ name: "ls" }] },
     });
     expect(events.at(-1)).toMatchObject({
       type: terminal,
-      [terminal === "done" ? "message" : "error"]: { content: [{ name: "tool_call" }] },
+      [terminal === "done" ? "message" : "error"]: { content: [{ name: "ls" }] },
     });
-    expect((await stream.result()).content[0]).toMatchObject({ name: "tool_call" });
+    expect((await stream.result()).content[0]).toMatchObject({ name: "ls" });
   },
 );
 
@@ -333,24 +308,24 @@ it("does not advertise replay-only tools or rewrite non-colliding names", async 
     "functions",
     "tool_search",
   ]);
-  expect(request.messages[2].tool_calls[0].function.name).toBe("openclaw_tool_call");
+  expect(request.messages[2].tool_calls[0].function.name).toBe("ls");
 });
 
 it("preserves prefixed replay when no tools are active", async () => {
   const input = context([]);
-  input.messages[1] = assistant("functions.tool_call");
+  input.messages[1] = assistant("functions.ls");
   respond("exec");
   await (await createOllamaStreamFn(model.baseUrl)(model, input)).result();
   const request = readRequest();
   expect(request.messages[0].content).toBe(input.systemPrompt);
-  expect(request.messages[2].tool_calls[0].function.name).toBe("openclaw_tool_call");
-  expect(request.messages[3].tool_name).toBe("openclaw_tool_call");
+  expect(request.messages[2].tool_calls[0].function.name).toBe("ls");
+  expect(request.messages[3].tool_name).toBe("ls");
 });
 
 it.each(["function", "allowed_tools"] as const)(
   "translates explicit /v1 %s selectors before request reconciliation",
   async (type) => {
-    const selection = { type: "function" as const, function: { name: "tool_call" } };
+    const selection = { type: "function" as const, function: { name: "ls" } };
     const toolChoice =
       type === "function"
         ? selection
@@ -375,7 +350,7 @@ it.each(["function", "allowed_tools"] as const)(
           stream.push({
             type: "done",
             reason: "toolUse",
-            message: assistant("openclaw_tool_call"),
+            message: assistant("openclaw_ls"),
           });
           return stream;
         },
@@ -383,9 +358,9 @@ it.each(["function", "allowed_tools"] as const)(
       "Ollama compatible transport",
     );
     const options = { toolChoice, temperature: 0 };
-    const stream = await wrapped(compatModel, context(["tool_call"]), options);
+    const stream = await wrapped(compatModel, context(["ls"]), options);
     await stream.result();
-    const wireSelection = { type: "function", function: { name: "openclaw_tool_call" } };
+    const wireSelection = { type: "function", function: { name: "openclaw_ls" } };
     expect(request?.tool_choice).toEqual(
       type === "function"
         ? wireSelection
@@ -394,6 +369,23 @@ it.each(["function", "allowed_tools"] as const)(
             allowed_tools: { mode: "required", tools: [wireSelection] },
           },
     );
-    expect(selection.function.name).toBe("tool_call");
+    expect(selection.function.name).toBe("ls");
   },
 );
+
+it.each(["exec", "call"])("keeps legacy dispatcher replay unchanged beside %s", async (name) => {
+  const input = context(["dispatch_action", "tool_search", name], "tool_call");
+  input.systemPrompt = "Call dispatch_action with id and args.";
+  const saved = structuredClone(input);
+  respond("dispatch_action");
+  const stream = await createOllamaStreamFn(model.baseUrl)(model, input);
+  expect((await stream.result()).content[0]).toMatchObject({ name: "dispatch_action" });
+  const request = readRequest();
+  expect(request.tools.map((tool: { function: { name: string } }) => tool.function.name)).toEqual(
+    ["dispatch_action", name === "call" ? "openclaw_call" : name, "tool_search"].toSorted(),
+  );
+  expect(request.messages[0].content).not.toContain("openclaw_tool_call");
+  expect(request.messages[2].tool_calls[0].function.name).toBe("tool_call");
+  expect(request.messages[3].tool_name).toBe("tool_call");
+  expect(input).toEqual(saved);
+});

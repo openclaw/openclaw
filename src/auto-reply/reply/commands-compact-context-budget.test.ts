@@ -1,82 +1,20 @@
 // Tests compact command context-budget resolution separately from command lifecycle behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionAgentIdMock } from "./commands-agent-scope.test-support.js";
 import {
-  resolveAgentDirMock,
-  resolveSessionAgentIdMock,
-} from "./commands-agent-scope.test-support.js";
-import type { HandleCommandsParams } from "./commands-types.js";
-
-vi.mock("./commands-compact.runtime.js", () => ({
-  abortEmbeddedAgentRun: vi.fn(),
-  compactEmbeddedAgentSession: vi.fn(),
-  enqueueSystemEvent: vi.fn(),
-  formatContextUsageShort: vi.fn(() => "Context 12.1k"),
-  formatTokenCount: vi.fn((value: number) => `${value}`),
-  incrementCompactionCount: vi.fn(),
-  resolveCurrentSessionEntry: vi.fn(
-    ({ expected }: { expected: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> }) => ({
-      updatedAt: 1,
-      ...expected,
-    }),
-  ),
-  isEmbeddedAgentRunAbortableForCompaction: vi.fn().mockReturnValue(false),
-  resolveFreshSessionTotalTokens: vi.fn(() => 12_345),
-  waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
-}));
-
-const {
+  buildCompactParams,
   compactEmbeddedAgentSession,
   formatContextUsageShort,
-  incrementCompactionCount,
-  resolveCurrentSessionEntry,
-} = await import("./commands-compact.runtime.js");
-const { handleCompactCommand } = await import("./commands-compact.js");
-
-function buildCompactParams(cfg: OpenClawConfig): HandleCommandsParams {
-  return {
-    cfg,
-    ctx: {
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      CommandSource: "text",
-      CommandBody: "/compact",
-      commandText: "/compact",
-    },
-    command: {
-      commandBodyNormalized: "/compact",
-      isAuthorizedSender: true,
-      senderIsOwner: false,
-      senderId: "owner",
-      channel: "whatsapp",
-      ownerList: [],
-    },
-    sessionKey: "agent:main:main",
-    sessionStore: {},
-    resolveDefaultThinkingLevel: async () => "medium",
-  } as unknown as HandleCommandsParams;
-}
-
-function requireCompactEmbeddedAgentSessionCall() {
-  const call = vi.mocked(compactEmbeddedAgentSession).mock.calls[0]?.[0];
-  if (!call) {
-    throw new Error("compactEmbeddedAgentSession call missing");
-  }
-  return call;
-}
+  handleCompactCommand,
+  requireCompactEmbeddedAgentSessionCall,
+  resetCompactCommandMocks,
+} from "./commands-compact.test-support.js";
+import type { HandleCommandsParams } from "./commands-types.js";
 
 describe("handleCompactCommand context budget", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(incrementCompactionCount).mockResolvedValue(1);
-    vi.mocked(resolveCurrentSessionEntry).mockImplementation(({ expected }) => ({
-      updatedAt: 1,
-      ...expected,
-    }));
-    resolveAgentDirMock.mockImplementation(
-      (_cfg: unknown, agentId: string) => `/tmp/workspace/.openclaw/agents/${agentId}/agent`,
-    );
+    resetCompactCommandMocks();
     resolveSessionAgentIdMock.mockReturnValue("main");
   });
 
@@ -94,7 +32,7 @@ describe("handleCompactCommand context budget", () => {
 
     await handleCompactCommand(
       {
-        ...buildCompactParams({
+        ...buildCompactParams("/compact", {
           agents: {
             defaults: {
               models: {
@@ -139,7 +77,7 @@ describe("handleCompactCommand context budget", () => {
 
     await handleCompactCommand(
       {
-        ...buildCompactParams({
+        ...buildCompactParams("/compact", {
           agents: {
             defaults: {
               models: { "custom/actual-model": { alias: "legacy-fast-model" } },

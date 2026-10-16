@@ -23,15 +23,6 @@ const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const CLICKCLACK_SETUP_CODE_CLAIM_JSON_LIMIT_BYTES = 64 * 1024;
 const CLICKCLACK_SETUP_CODE_CLAIM_TIMEOUT_MS = 30_000;
 
-class ClickClackSetupCodeClaimError extends Error {
-  constructor(
-    readonly status: number,
-    detail: string,
-  ) {
-    super(`ClickClack setup code claim failed (${status}): ${detail}`);
-  }
-}
-
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`ClickClack setup code claim returned invalid ${label}`);
@@ -184,7 +175,10 @@ export async function claimClickClackSetupCode(params: {
   try {
     if (!response.ok) {
       const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
-      throw new ClickClackSetupCodeClaimError(response.status, detail);
+      throw Object.assign(
+        new Error(`ClickClack setup code claim failed (${response.status}): ${detail}`),
+        { status: response.status },
+      );
     }
     const value = await readProviderJsonResponse<unknown>(response, "ClickClack setup code claim", {
       maxBytes: CLICKCLACK_SETUP_CODE_CLAIM_JSON_LIMIT_BYTES,

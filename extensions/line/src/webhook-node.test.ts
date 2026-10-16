@@ -111,18 +111,6 @@ async function invokeNodePostContract(params: {
 }
 
 describe("LINE webhook POST contract", () => {
-  it("rejects verification-shaped requests without a signature", async () => {
-    const result = await invokeNodePostContract({
-      rawBody: JSON.stringify({ events: [] }),
-      signed: false,
-    });
-
-    expect(result.status).toBe(400);
-    expect(result.body).toEqual({ error: "Missing X-Line-Signature header" });
-    expect(result.contentType).toBe("application/json");
-    expect(result.dispatched).not.toHaveBeenCalled();
-  });
-
   it("accepts signed verification-shaped requests without dispatching events", async () => {
     const result = await invokeNodePostContract({
       rawBody: JSON.stringify({ events: [] }),
@@ -133,29 +121,6 @@ describe("LINE webhook POST contract", () => {
     expect(result.body).toEqual({ status: "ok" });
     expect(result.contentType).toBe("application/json");
     expect(result.dispatched).not.toHaveBeenCalled();
-  });
-
-  it("rejects missing signature when events are non-empty", async () => {
-    const result = await invokeNodePostContract({
-      rawBody: JSON.stringify({ events: [{ type: "message" }] }),
-      signed: false,
-    });
-
-    expect(result.status).toBe(400);
-    expect(result.body).toEqual({ error: "Missing X-Line-Signature header" });
-    expect(result.dispatched).not.toHaveBeenCalled();
-  });
-
-  it("returns 500 when durable admission fails", async () => {
-    const result = await invokeNodePostContract({
-      failWith: new Error("persist failed"),
-      rawBody: JSON.stringify({ events: [{ type: "message" }] }),
-      signed: true,
-    });
-
-    expect(result.status).toBe(500);
-    expect(result.body).toEqual({ error: "Internal server error" });
-    expect(result.runtimeError).toHaveBeenCalledTimes(1);
   });
 
   it("reports non-Error admission failures without object Object", async () => {

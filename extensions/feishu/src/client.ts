@@ -157,7 +157,6 @@ function isManagedProxyActive() {
 
 let cachedFeishuProxyAgent: Agent | undefined;
 let pendingFeishuProxyAgent: Promise<Agent | undefined> | undefined;
-let feishuProxyAgentGeneration = 0;
 
 // Ambient proxy configuration is process-stable. Share one dual-protocol agent
 // across REST, bootstrap, and WebSocket traffic so connections stay pooled.
@@ -169,17 +168,12 @@ async function getFeishuProxyAgent(): Promise<Agent | undefined> {
     return pendingFeishuProxyAgent;
   }
 
-  const generation = feishuProxyAgentGeneration;
   let resolutionError: unknown;
   const pending = resolveAmbientNodeProxyAgent<Agent>({
     onError: (error) => {
       resolutionError = error;
     },
   }).then((agent) => {
-    if (generation !== feishuProxyAgentGeneration) {
-      agent?.destroy();
-      return undefined;
-    }
     if (!agent && isManagedProxyActive()) {
       throw new Error("Feishu managed proxy is active but no proxy agent could be created", {
         cause: resolutionError,
@@ -192,15 +186,12 @@ async function getFeishuProxyAgent(): Promise<Agent | undefined> {
   try {
     return await pending;
   } finally {
-    if (pendingFeishuProxyAgent === pending) {
-      pendingFeishuProxyAgent = undefined;
-    }
+    pendingFeishuProxyAgent = undefined;
   }
 }
 
 /** @internal Resets process-scoped proxy state between tests. */
 export function resetFeishuProxyAgentForTest(): void {
-  feishuProxyAgentGeneration += 1;
   pendingFeishuProxyAgent = undefined;
   cachedFeishuProxyAgent?.destroy();
   cachedFeishuProxyAgent = undefined;

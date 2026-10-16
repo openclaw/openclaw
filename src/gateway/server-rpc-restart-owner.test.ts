@@ -2,7 +2,6 @@ import { createServer } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import * as followupDelivery from "../auto-reply/reply/followup-delivery.js";
 import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,6 +11,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as queuedChatTurns from "./chat-queued-turns.js";
+import * as sourceFinalization from "./server-methods/chat-send-source-finalization.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 it(
-  "records an actual RPC queued reply awaiting final delivery during restart",
+  "records an actual RPC queued reply awaiting finalization during restart",
   { timeout: 120_000 },
   async ({ signal }) => {
     const token = "synthetic-rpc-owner-token";
@@ -109,26 +109,25 @@ it(
         context = result.gatewayRequestContext;
         return result;
       });
-    const deliver = followupDelivery.deliverFollowupDecision;
-    const deliverySpy = vi
-      .spyOn(followupDelivery, "deliverFollowupDecision")
-      .mockImplementation(async (params) => {
-        if (
-          params.decision.kind === "deliver" &&
-          params.kind !== "tool" &&
-          params.kind !== "block"
-        ) {
-          finalReached.resolve();
-          await finalGate.promise;
-        }
-        return await deliver(params);
+    const createFinalizer = sourceFinalization.createChatSendLateReplyFinalizer;
+    const finalizationSpy = vi
+      .spyOn(sourceFinalization, "createChatSendLateReplyFinalizer")
+      .mockImplementation((params) => {
+        const finalize = createFinalizer(params);
+        return async (batch) => {
+          if (batch.clientRunId === "rpc-queued" && batch.completion.kind !== "progress") {
+            finalReached.resolve();
+            await finalGate.promise;
+          }
+          return await finalize(batch);
+        };
       });
     let cleanupPromise: Promise<void> | undefined;
     const cleanup = () =>
       (cleanupPromise ??= (async () => {
         startupSpy.mockRestore();
         registrationSpy.mockRestore();
-        deliverySpy.mockRestore();
+        finalizationSpy.mockRestore();
         firstGate.resolve();
         finalGate.resolve();
         if (gateway) {
@@ -210,6 +209,18 @@ it(
       firstGate.resolve();
       await withinTest(finalReached.promise, signal);
       expect(followupReceived).toBe(true);
+      const history = await gateway.client.request<{ messages: unknown[] }>("chat.history", {
+        sessionKey,
+        limit: 20,
+      });
+      expect(history.messages).toContainEqual(
+        expect.objectContaining({
+          role: "assistant",
+          content: expect.arrayContaining([
+            expect.objectContaining({ type: "text", text: "QUEUED_REPLY_FOR_RECOVERY" }),
+          ]),
+        }),
+      );
       if (!context || !hostResolver || !context.resolveGatewayContext) {
         throw new Error("Missing actual Gateway resolver");
       }

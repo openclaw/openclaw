@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { createAuthProfileStoreFixture } from "./credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import type { AuthProfileCredential, AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 vi.hoisted(() => {
@@ -32,6 +33,7 @@ beforeAll(async () => {
     await import("./runtime-snapshots.js"));
 });
 beforeEach(() => {
+  prepareSharedAuthStoreOwnershipForNative();
   resolveProviderOAuthCredentialWithPlugin.mockClear();
   clearRuntimeAuthProfileStoreSnapshots();
   setActiveDegradedSecretOwners([]);
@@ -61,7 +63,7 @@ function resolveCredential(
 }
 
 describe("resolveApiKeyForProfile", () => {
-  it("rejects a persisted Claude CLI token even when legacy metadata marks it external", async () => {
+  it("rejects a persisted Claude CLI token", async () => {
     const profileId = "anthropic:claude-cli";
     const store: RuntimeAuthProfileStore = {
       version: 1,
@@ -75,7 +77,6 @@ describe("resolveApiKeyForProfile", () => {
         },
       },
       runtimePersistedProfileIds: [profileId],
-      runtimeExternalCliProfileIds: [profileId],
     };
     await expect(
       resolveApiKeyForProfile({

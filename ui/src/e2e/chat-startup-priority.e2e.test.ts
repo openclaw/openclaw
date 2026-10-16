@@ -6,7 +6,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { openChatDetails } from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -32,7 +32,15 @@ async function installStartupGateway(page: Page) {
     assistantAgentId: "main",
     mainSessionKey: "agent:main:main",
     sessionKey,
-    sessions: [{ key: sessionKey, kind: "direct", label: "Selected conversation", updatedAt: 1 }],
+    sessions: [
+      {
+        key: sessionKey,
+        kind: "direct",
+        label: "Selected conversation",
+        updatedAt: 1,
+        owner: { actor: { type: "human", id: "reader" } },
+      },
+    ],
     historyMessages: [{ role: "assistant", content: historyText }],
     deferredMethods: ["chat.startup"],
     heldMethods: bulkMethods,
@@ -197,7 +205,11 @@ suite.define(() => {
           document.dispatchEvent(new Event("visibilitychange"));
         });
         await transcript.getByText(historyText, { exact: true }).waitFor();
-        for (const method of secondaryMethods) {
+        // Held roster and owner-count reads occupy both bootstrap slots. Inbox
+        // hydration stays queued until those replies are released below.
+        for (const method of secondaryMethods.filter(
+          (candidate) => candidate !== "mentions.list",
+        )) {
           await gateway.waitForRequest(method);
           expect(await gateway.getRequests(method)).toHaveLength(1);
         }
@@ -225,7 +237,7 @@ suite.define(() => {
           .getByRole("region", { name: "Progress note", exact: true })
           .getByText("Current rollout progress", { exact: true })
           .waitFor();
-        await details.getByRole("button", { name: "Close details", exact: true }).click();
+        await closeChatDetails(activePane);
         await page.getByText(suggestion.title, { exact: true }).waitFor();
         const composer = page.locator(
           ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
@@ -259,6 +271,8 @@ suite.define(() => {
           });
         }
         await expectBulkReadsReleased(gateway);
+        await gateway.waitForRequest("mentions.list");
+        expect(await gateway.getRequests("mentions.list")).toHaveLength(1);
         await gateway.waitForRequest("sessions.list", { match: { spawnedBy: sessionKey } });
       } finally {
         await writeFile(
@@ -296,7 +310,7 @@ suite.define(() => {
             document.dispatchEvent(new Event("visibilitychange"));
           });
         } else {
-          await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+          await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
           await page.waitForURL((url) => url.pathname === "/new");
           await page.locator("openclaw-new-session-page").waitFor();
           await expect
@@ -331,8 +345,8 @@ suite.define(() => {
           .getByRole("region", { name: "Progress note", exact: true })
           .getByText("Resumed progress", { exact: true })
           .waitFor();
-        // A pending snapshot already carrying revision 3 satisfies the hidden event.
-        expect(await gateway.getRequests("progressCard.get")).toHaveLength(pendingSnapshot ? 1 : 2);
+        // One coalesced follow-up reconciles events received during the pending snapshot.
+        expect(await gateway.getRequests("progressCard.get")).toHaveLength(2);
       });
     },
   );
@@ -411,6 +425,7 @@ suite.define(() => {
             key: "agent:research:archived-fixture",
             kind: "direct",
             label: "Archived fixture",
+            owner: { actor: { type: "human", id: "reader" } },
             updatedAt: 2,
             archived: true,
           },
@@ -422,6 +437,7 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.list", {
         match: { agentId: "research", archived: true },
       });
+      expect(await gateway.getRequests("sessions.list")).toHaveLength(1);
       await gateway.resolveDeferred("sessions.list");
       await page
         .locator("openclaw-app-sidebar")
@@ -456,7 +472,7 @@ suite.define(() => {
             await gateway.waitForRequest(method);
           }
         } else {
-          await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+          await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
           await page.waitForURL((url) => url.pathname === "/new");
           await page.locator("openclaw-new-session-page").waitFor();
         }

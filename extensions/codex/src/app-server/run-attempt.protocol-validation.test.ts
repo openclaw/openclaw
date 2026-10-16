@@ -5,9 +5,10 @@ import {
   createMockPluginRegistry,
   loadUserTurnTranscriptRecorderFactoryForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFailed, vi } from "vitest";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
@@ -31,9 +32,19 @@ import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
 setupRunAttemptTestHooks();
 
 describe("Codex submitted prompt provenance", () => {
-  it("forks a sender-attributed turn using the exact submitted text without changing its display", async () => {
+  it("forks a sender-attributed turn through a database alias using exact submitted text without changing its display", async () => {
+    let stage = "create-harness";
+    let cleanupStage = "not-started";
+    onTestFailed(() => {
+      console.error(
+        `Codex submitted prompt provenance failed at stage=${stage} cleanup=${cleanupStage}`,
+      );
+    });
     const harness = createStartedThreadHarness();
     const params = createTestParams();
+    const abortController = new AbortController();
+    params.abortSignal = abortController.signal;
+    setRuntimeConfigSnapshot(params.config ?? {});
     params.agentId = "main";
     params.prompt = "  Keep the original whitespace.\n";
     params.trigger = "user";
@@ -44,10 +55,12 @@ describe("Codex submitted prompt provenance", () => {
       storePath: path.join(tempDir, "agent.sqlite"),
     };
     params.sessionTarget = target;
+    stage = "upsert-session-entry";
     await upsertSessionEntry({
       ...target,
       entry: { sessionId: params.sessionId, updatedAt: Date.now() },
     });
+    stage = "load-transcript-recorder";
     const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
     const recorder = createRecorder({
       input: {
@@ -57,16 +70,20 @@ describe("Codex submitted prompt provenance", () => {
       },
       target: { ...target, sessionEntry: undefined },
     });
+    stage = "persist-approved-user-turn";
     await recorder.persistApproved();
     params.userTurnTranscriptRecorder = recorder;
     // The admission owner canonicalizes its locator; the harness may retain an alias.
     const alias = path.join(tempDir, "database-alias");
+    stage = "create-database-alias";
     await symlink(tempDir, alias, process.platform === "win32" ? "junction" : "dir");
     params.sessionTarget = { ...target, storePath: path.join(alias, "agent.sqlite") };
+    stage = "bind-host-capabilities";
     const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
     const run = runCodexAppServerAttempt(params);
     try {
-      await harness.waitForMethod("turn/start");
+      stage = "wait-for-turn-acceptance";
+      await run.waitForTurnAccepted();
       const request = harness.requests.find(({ method }) => method === "turn/start")!
         .params as CodexTurnStartParams;
       const sentInput = structuredClone(request.input);
@@ -75,6 +92,7 @@ describe("Codex submitted prompt provenance", () => {
         .join("\n");
       expect(sentText).toContain('[OpenClaw conversation info: sender={"id":"profile-fork-test"');
       expect(sentText).toContain(params.prompt);
+      stage = "wait-for-prompt-annotation";
       await vi.waitFor(() => {
         expect(recorder.getPersistedMessage?.()?.["__openclaw"]?.mirrorIdentity).toBe(
           "turn-1:prompt",
@@ -83,13 +101,16 @@ describe("Codex submitted prompt provenance", () => {
       const earlyPrompt = recorder.getPersistedMessage?.();
       expect.soft(readUpstreamUserText(earlyPrompt)).toBe(sentText);
       expect(earlyPrompt?.content).toBe(params.prompt);
+      stage = "complete-turn";
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      stage = "await-attempt-result";
       const result = await run;
       expect
         .soft(
           readUpstreamUserText(result.messagesSnapshot.find((message) => message.role === "user")),
         )
         .toBe(sentText);
+      stage = "read-visible-transcript";
       const entries = await readVisibleSessionTranscriptMessageEntries(target);
       const entry = entries.find((candidate) => candidate.role === "user")!;
       expect(entry.message).toMatchObject({ role: "user", content: params.prompt });
@@ -118,6 +139,7 @@ describe("Codex submitted prompt provenance", () => {
           throw new Error("boundary resolution must not archive");
         },
       };
+      stage = "resolve-fork-boundary";
       const boundary = await resolveCodexUpstreamForkBoundary({
         ...target,
         entryId: entry.entryId,
@@ -131,9 +153,16 @@ describe("Codex submitted prompt provenance", () => {
         editorText: params.prompt,
       });
     } finally {
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
-      closeHost();
+      try {
+        // Settle the attempt even when admission rejects before notification handlers attach.
+        cleanupStage = "abort-attempt";
+        abortController.abort();
+        cleanupStage = "await-attempt";
+        await run.catch(() => {});
+      } finally {
+        closeHost();
+      }
+      cleanupStage = "done";
     }
   });
 });

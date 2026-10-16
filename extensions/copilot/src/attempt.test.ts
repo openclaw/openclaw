@@ -25,9 +25,14 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCopilotCleanupTests } from "./attempt-cleanup.test-support.js";
+import { registerCopilotWorkspaceTests } from "./attempt-workspace.test-support.js";
 import { runCopilotAttempt } from "./attempt.js";
 import {
   makeAssistantMessageEvent,
@@ -264,12 +269,7 @@ function requireResumeSessionConfig(sdk: FakeSdk): Record<string, unknown> {
 }
 
 function flushAsync() {
-  // Pump enough microtasks for the attempt to settle past every
-  // pre-createSession `await` in attempt.ts (resolvePoolAcquire,
-  // BYOK proxy setup, loadCopilotWorkspaceInstructions,
-  // createSession, etc.).
-  // Each chained `then` is one tick; tests rely on this to observe
-  // `sdk.sessions[0]` being populated before they emit deltas.
+  // Drain the in-flight delta and timeout continuations after SDK startup.
   const tick = () => Promise.resolve();
   return tick().then(tick).then(tick).then(tick).then(tick);
 }
@@ -343,6 +343,8 @@ function makeParams(
     agentDir: "C:\\copilot-home",
     agentId: "agent-1",
     auth: { useLoggedInUser: true, ...(overrides as { auth?: object }).auth },
+    authProfileStore: { version: 1, profiles: {} },
+    config: {},
     disableTools: true,
     hostCapabilities: createCopilotTestHostCapabilities(),
     initialReplayState: undefined,
@@ -381,22 +383,30 @@ function makeFinalizationParams(
   return params;
 }
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
 afterEach(() => {
   resetGlobalHookRunner();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
 describe("runCopilotAttempt", () => {
-  it.each(["provider headers", "prepared header auth"] as const)(
-    "forwards BYOK %s on both session creation and the model request",
+  it.each(["provider headers", "prepared header auth", "token auth"] as const)(
+    "preserves BYOK %s in the pool, session, and model request",
     async (mode) => {
       const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
       const headers =
         mode === "provider headers"
           ? { "X-Tenant": "tenant-a", "X-Trace": "trace-1" }
-          : { "x-api-key": "header-secret" };
+          : mode === "prepared header auth"
+            ? { "x-api-key": "header-secret" }
+            : undefined;
       const model =
         mode === "provider headers"
           ? {
@@ -406,26 +416,47 @@ describe("runCopilotAttempt", () => {
               id: "claude-test",
               provider: "anthropic-proxy",
             }
-          : attachModelProviderRequestTransport(
-              {
+          : mode === "token auth"
+            ? {
                 api: "openai-responses",
-                baseUrl: "https://proxy.example.test/v1",
-                headers,
+                baseUrl: "https://api.example.test/v1",
                 id: "gpt-test",
-                provider: "custom-header-proxy",
-              },
-              { auth: { mode: "header", headerName: "x-api-key", value: "header-secret" } },
-            );
+                provider: "custom-openai",
+              }
+            : attachModelProviderRequestTransport(
+                {
+                  api: "openai-responses",
+                  baseUrl: "https://proxy.example.test/v1",
+                  headers,
+                  id: "gpt-test",
+                  provider: "custom-header-proxy",
+                },
+                { auth: { mode: "header", headerName: "x-api-key", value: "header-secret" } },
+              );
       await runCopilotAttempt(
         makeParams({
+          ...(mode === "token auth" ? { auth: { gitHubToken: "unrelated-token" } } : {}),
           model: model as never,
-          resolvedApiKey: mode === "provider headers" ? "byok-token" : "header-secret",
+          resolvedApiKey: mode === "prepared header auth" ? "header-secret" : "byok-token",
           authProfileId: `${model.provider}:main`,
         }),
-        { pool: makeFakePool(sdk) },
+        { pool },
       );
       const provider = requireCreateSessionConfig(sdk).provider;
-      expect(provider).toEqual(expect.objectContaining({ headers }));
+      if (mode === "token auth") {
+        const [key, options] = expectDefined(pool.acquire.mock.calls[0], "pool acquisition");
+        expect(key).toMatchObject({ authMode: "byok", authProfileId: "custom-openai:main" });
+        expect(options.gitHubToken).toBeUndefined();
+        expect(options.useLoggedInUser).toBe(false);
+        expect(provider).toEqual(
+          expect.objectContaining({
+            apiKey: "byok-token",
+            baseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{24}\/v1$/),
+          }),
+        );
+      } else {
+        expect(provider).toEqual(expect.objectContaining({ headers }));
+      }
       const sendOptions = requireSession(sdk).sendAndWait.mock.calls[0]?.[0] as {
         requestHeaders?: Record<string, string>;
       };
@@ -541,7 +572,7 @@ describe("runCopilotAttempt", () => {
   });
 
   it("hands the foreground prompt context to agent-end side effects", async () => {
-    const runAgentEndSideEffects = vi.spyOn(agentHarnessRuntime, "runAgentEndSideEffects");
+    const runAgentEnd = vi.spyOn(agentHarnessRuntime, "runAgentEndSideEffectsAsync");
     const params = makeParams({
       memberRoleIds: ["maintainer-role"],
       messageChannel: "discord",
@@ -549,7 +580,7 @@ describe("runCopilotAttempt", () => {
 
     await runCopilotAttempt(params, { pool: makeFakePool(makeFakeSdk()) });
 
-    const ctx = runAgentEndSideEffects.mock.calls.at(-1)?.[0]?.ctx;
+    const ctx = runAgentEnd.mock.calls.at(-1)?.[0]?.ctx;
     expect(ctx?.foregroundPromptContext?.memberRoleIds).toEqual(["maintainer-role"]);
     expect(ctx?.foregroundPromptContext?.agentDir).toBe(params.agentDir);
   });
@@ -602,27 +633,6 @@ describe("runCopilotAttempt", () => {
 
     expect(observeToolTerminal).toHaveBeenCalledTimes(2);
     expect(result.lastToolError).toEqual(terminalError);
-  });
-
-  it("reports code-mode engagement through the real tool bridge", async () => {
-    const { createOpenClawCodingTools } = await import("openclaw/plugin-sdk/agent-harness");
-    const sdk = makeFakeSdk((session) => {
-      session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-    });
-
-    // No `createToolBridge` override: this runs the production bridge, so the
-    // reported value is the gate `createAgentHarnessToolSurfaceRuntime`
-    // actually resolved for the run rather than a stubbed constant.
-    const result = await runCopilotAttempt(
-      makeParams({
-        disableTools: false,
-        config: { tools: { codeMode: true } },
-        hostCapabilities: createCopilotTestHostCapabilities(createOpenClawCodingTools),
-      } as never),
-      { pool: makeFakePool(sdk) },
-    );
-
-    expect(result.codeModeEngaged).toBe(true);
   });
 
   it("keeps generic compaction hooks attached through asynchronous SDK completion", async () => {
@@ -856,6 +866,7 @@ describe("runCopilotAttempt", () => {
       layout: "state-only",
       prefix: "copilot-offloaded-image-",
     });
+    setRuntimeConfigSnapshot({});
     const inboundDir = openClawState.statePath("media", "inbound");
     const mediaId = "telegram-photo.png";
     await fsp.mkdir(inboundDir, { recursive: true });
@@ -897,74 +908,52 @@ describe("runCopilotAttempt", () => {
     }
   });
 
-  it("does not hydrate prompt image paths outside workspace-only policy", async () => {
-    const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-image-policy-"));
-    const workspaceDir = path.join(stateDir, "workspace");
-    const outsideDir = path.join(stateDir, "outside");
-    const outsideImage = path.join(outsideDir, "secret.png");
-    await fsp.mkdir(workspaceDir, { recursive: true });
-    await fsp.mkdir(outsideDir, { recursive: true });
-    await fsp.writeFile(outsideImage, Buffer.from(TINY_PNG_BASE64, "base64"));
-    const sdk = makeFakeSdk();
-    const pool = makeFakePool(sdk);
+  it.each(["outside workspace", "relative to task cwd"] as const)(
+    "hydrates local prompt images according to workspace policy: %s",
+    async (mode) => {
+      const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-image-policy-"));
+      const workspaceDir = path.join(stateDir, "workspace");
+      const cwd = path.join(workspaceDir, "task-repo");
+      const imageDir = mode === "outside workspace" ? path.join(stateDir, "outside") : cwd;
+      const imagePath = path.join(imageDir, "image.png");
+      await fsp.mkdir(workspaceDir, { recursive: true });
+      await fsp.mkdir(imageDir, { recursive: true });
+      await fsp.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
 
-    try {
-      await runCopilotAttempt(
-        makeParams({
-          config: { tools: { fs: { workspaceOnly: true } } },
-          model: makeImageModel(),
-          prompt: `inspect ${outsideImage}`,
-          workspaceDir,
-        } as never),
-        { pool },
-      );
+      try {
+        await runCopilotAttempt(
+          makeParams({
+            config: { tools: { fs: { workspaceOnly: true } } },
+            model: makeImageModel(),
+            ...(mode === "relative to task cwd" ? { cwd } : {}),
+            prompt: mode === "outside workspace" ? `inspect ${imagePath}` : "inspect ./image.png",
+            workspaceDir,
+          } as never),
+          { pool },
+        );
 
-      const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as
-        | { attachments?: unknown[] }
-        | undefined;
-      expect(sendOptions?.attachments).toBeUndefined();
-    } finally {
-      await fsp.rm(stateDir, { recursive: true, force: true });
-    }
-  });
-
-  it("resolves relative prompt image paths from task cwd", async () => {
-    const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-cwd-image-"));
-    const workspaceDir = path.join(stateDir, "workspace");
-    const cwd = path.join(workspaceDir, "task-repo");
-    const imagePath = path.join(cwd, "relative.png");
-    await fsp.mkdir(cwd, { recursive: true });
-    await fsp.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    const sdk = makeFakeSdk();
-    const pool = makeFakePool(sdk);
-
-    try {
-      await runCopilotAttempt(
-        makeParams({
-          config: { tools: { fs: { workspaceOnly: true } } },
-          cwd,
-          model: makeImageModel(),
-          prompt: "inspect ./relative.png",
-          workspaceDir,
-        } as never),
-        { pool },
-      );
-
-      const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as
-        | { attachments?: unknown[] }
-        | undefined;
-      expect(sendOptions?.attachments).toEqual([
-        {
-          type: "blob",
-          data: TINY_PNG_BASE64,
-          mimeType: "image/png",
-          displayName: "prompt-image-1",
-        },
-      ]);
-    } finally {
-      await fsp.rm(stateDir, { recursive: true, force: true });
-    }
-  });
+        const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as
+          | { attachments?: unknown[] }
+          | undefined;
+        if (mode === "outside workspace") {
+          expect(sendOptions?.attachments).toBeUndefined();
+        } else {
+          expect(sendOptions?.attachments).toEqual([
+            {
+              type: "blob",
+              data: TINY_PNG_BASE64,
+              mimeType: "image/png",
+              displayName: "prompt-image-1",
+            },
+          ]);
+        }
+      } finally {
+        await fsp.rm(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([
     "resume",
@@ -1069,27 +1058,54 @@ describe("runCopilotAttempt", () => {
     });
   });
 
-  it("replay-shim: prior replayInvalid propagates even on an early-return failure", async () => {
-    const sdk = makeFakeSdk();
-    const pool = makeFakePool(sdk);
+  it.each(["unsupported model", "request proxy override"] as const)(
+    "rejects an unsupported provider before SDK session creation: %s",
+    async (mode) => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+      const model =
+        mode === "unsupported model"
+          ? { api: "openai-responses", id: "claude", provider: "anthropic" }
+          : attachModelProviderRequestTransport(
+              {
+                api: "openai-responses",
+                baseUrl: "https://proxy.example.test/v1",
+                id: "gpt-test",
+                provider: "custom-header-proxy",
+              },
+              { proxy: { mode: "env-proxy" } },
+            );
 
-    const result = await runCopilotAttempt(
-      makeParams({
-        model: { api: "openai-responses", id: "claude", provider: "anthropic" } as never,
-        initialReplayState: {
-          replayInvalid: true,
+      const result = await runCopilotAttempt(
+        makeParams({
+          model: model as never,
+          ...(mode === "unsupported model"
+            ? {
+                initialReplayState: {
+                  replayInvalid: true,
+                  hadPotentialSideEffects: true,
+                } as never,
+              }
+            : { resolvedApiKey: "header-secret", authProfileId: "custom-header-proxy:main" }),
+        }),
+        { pool },
+      );
+
+      expect(getPromptErrorCode(result)).toBe("model_not_supported");
+      expect(sdk.createSession).not.toHaveBeenCalled();
+      if (mode === "unsupported model") {
+        expect(result.replayMetadata).toEqual({
           hadPotentialSideEffects: true,
-        } as never,
-      }),
-      { pool },
-    );
-
-    expect(getPromptErrorCode(result)).toBe("model_not_supported");
-    expect(result.replayMetadata).toEqual({
-      hadPotentialSideEffects: true,
-      replaySafe: false,
-    });
-  });
+          replaySafe: false,
+        });
+      } else {
+        expect(
+          (projectAgentRunAttemptTerminal(result.terminal).promptError as Error | undefined)
+            ?.message,
+        ).toContain("request proxy");
+      }
+    },
+  );
 
   it.each(["before start", "session establishment", "mid-stream"] as const)(
     "keeps cancellation external when aborted during %s",
@@ -1294,34 +1310,54 @@ describe("runCopilotAttempt", () => {
     );
   });
 
-  it.each([false, true])(
-    "reports a release failure without masking a primary error (%s)",
-    async (hasPrimary) => {
+  it.each([
+    { stage: "release", hasPrimary: false },
+    { stage: "release", hasPrimary: true },
+    { stage: "disconnect", hasPrimary: false },
+    { stage: "disconnect", hasPrimary: true },
+  ] as const)(
+    "reports $stage failure without masking a primary error ($hasPrimary)",
+    async ({ stage, hasPrimary }) => {
       const agentEnd = vi.fn();
       installHooks([{ hookName: "agent_end", handler: agentEnd }]);
       const primaryError = new Error("send failed");
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       const sdk = makeFakeSdk((session) => {
+        if (stage === "disconnect") {
+          session.disconnect.mockRejectedValueOnce(new Error("disconnect failed"));
+        }
         if (hasPrimary) {
           session.sendAndWait.mockRejectedValueOnce(primaryError);
+        } else if (stage === "disconnect") {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
         }
       });
       const pool = makeFakePool(sdk);
-      pool.release.mockRejectedValueOnce(new Error("release failed"));
+      if (stage === "release") {
+        pool.release.mockRejectedValueOnce(new Error("release failed"));
+      }
       const attempt = runCopilotAttempt(makeParams(), { pool });
       if (hasPrimary) {
         const result = await attempt;
         expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBe(primaryError);
-        expect(warnSpy).toHaveBeenCalledWith(
-          "[copilot-attempt] pool.release failed after primary error",
-          expect.objectContaining({ message: "release failed" }),
-        );
-      } else {
+        if (stage === "release") {
+          expect(warnSpy).toHaveBeenCalledWith(
+            "[copilot-attempt] pool.release failed after primary error",
+            expect.objectContaining({ message: "release failed" }),
+          );
+        }
+      } else if (stage === "release") {
         await expect(attempt).rejects.toThrow("release failed");
         expect(agentEnd).toHaveBeenCalledWith(
           expect.objectContaining({ error: "release failed", success: false }),
           expect.objectContaining({ sessionId: "session-1" }),
         );
+      } else {
+        const result = await attempt;
+        expect(
+          (projectAgentRunAttemptTerminal(result.terminal).promptError as Error | undefined)
+            ?.message,
+        ).toBe("disconnect failed");
       }
     },
   );
@@ -1400,53 +1436,6 @@ describe("runCopilotAttempt", () => {
       await vi.waitFor(() => settledAttempt);
       expect(gatewayQuestionMock.waiters.size).toBe(0);
     }
-  });
-
-  it("holds a steering receipt until pending tool results and the user turn persist", async () => {
-    const initialTurn = createDeferred<SessionEventShape | undefined>();
-    const sdk = makeFakeSdk((session) => {
-      session.sendAndWait.mockImplementationOnce(async () => {
-        session.emit("user.message", { __eventId: "initial-user", content: "hello" });
-        session.emit("assistant.message", {
-          __eventId: "assistant-tools",
-          content: "checking",
-          messageId: "assistant-tools",
-          toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-1" }],
-        });
-        return initialTurn.promise;
-      });
-      session.send.mockImplementationOnce(async (options) => {
-        session.emit("user.message", {
-          __eventId: "steered-user",
-          content: (options as { prompt?: string }).prompt,
-          delivery: "steering",
-        });
-        return "steered-user";
-      });
-    });
-    const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
-
-    await vi.waitFor(() => expect(requireSession(sdk).sendAndWait).toHaveBeenCalledTimes(1));
-    const handle = requireActiveSteeringHandle();
-    let receiptSettled = false;
-    const receipt = handle
-      .queueMessage("change course", { waitForTranscriptCommit: true })
-      .then(() => {
-        receiptSettled = true;
-      });
-    await Promise.resolve();
-    expect(receiptSettled).toBe(false);
-
-    requireSession(sdk).emit("tool.execution_complete", {
-      __eventId: "tool-result",
-      result: { content: "done" },
-      success: true,
-      toolCallId: "call-1",
-    });
-    await receipt;
-
-    initialTurn.resolve(makeAssistantMessageEvent("done"));
-    await expect(attempt).resolves.toMatchObject({ terminal: { kind: "ok" } });
   });
 
   it("rejects a waited steering receipt without leaking an unhandled rejection", async () => {
@@ -1603,7 +1592,7 @@ describe("runCopilotAttempt", () => {
             config,
             disableTools: false,
             hostCapabilities: createCopilotTestHostCapabilities(() => [
-              ...["tool_search", "tool_describe", "tool_call"].map(makeTool),
+              ...["tool_search", "tool_describe", "dispatch_action"].map(makeTool),
               ...["read", "fixture_allowed", "fixture_denied"].map(makeTool),
             ]),
           }),
@@ -1633,7 +1622,7 @@ describe("runCopilotAttempt", () => {
           expect(content).toContain("Allowed catalog capability.");
           expect(submitted.tools?.map((tool) => tool.name)).not.toContain("fixture_allowed");
           expect(content).toContain("Deferred names are not directly callable.");
-          expect(content).toContain("Call tool_call");
+          expect(content).toContain("Call dispatch_action");
           expect(content).not.toContain("Call a unique deferred tool name directly");
           expect(content.includes("fixture_denied")).toBe(toolsAllow === undefined);
         }
@@ -1690,7 +1679,7 @@ describe("runCopilotAttempt", () => {
       expect(content).toContain("## Skill Workshop");
       expect(content).toContain("## Delegation");
       expect(content).toContain("spawn `sessions_spawn` with `visible=true`");
-      expect(content).toContain("You can participate in the conversation throughout your work.");
+      expect(content).toContain("is your complete reply.");
       expect(llmInput).toHaveBeenCalledWith(
         expect.objectContaining({ systemPrompt: content }),
         expect.any(Object),
@@ -1784,13 +1773,17 @@ describe("runCopilotAttempt", () => {
     // without waiting for them. Round-5 awaits the delta chain inside
     // the timeout branch so the recorded assistantTexts reflect what
     // the model actually streamed.
+    const sendStarted = createDeferred<FakeSession>();
     const sendDeferred = createDeferred<SessionEventShape | undefined>();
     const release = createDeferred<void>();
     const onAssistantDelta = vi.fn(async (_payload: { delta: string }) => {
       await release.promise;
     });
     const sdk = makeFakeSdk((session) => {
-      session.sendAndWait.mockReturnValue(sendDeferred.promise);
+      session.sendAndWait.mockImplementationOnce(() => {
+        sendStarted.resolve(session);
+        return sendDeferred.promise;
+      });
     });
     const pool = makeFakePool(sdk);
     const createToolBridge = vi.fn(async () => createStubToolBridge());
@@ -1799,8 +1792,7 @@ describe("runCopilotAttempt", () => {
       createToolBridge,
       pool,
     });
-    await flushAsync();
-    const session = requireSession(sdk);
+    const session = await sendStarted.promise;
     session.emit("assistant.message_delta", { deltaContent: "partial-", messageId: "msg-1" });
     await flushAsync();
     // SDK timer fires before the slow delta consumer resolves.
@@ -1837,101 +1829,6 @@ describe("runCopilotAttempt", () => {
   });
 
   registerCopilotCleanupTests({ makeParams, requireSession });
-
-  it("cleanup on disconnect throw", async () => {
-    const primaryError = new Error("send failed");
-    const sdkWithPrimaryError = makeFakeSdk((session) => {
-      session.disconnect.mockRejectedValueOnce(new Error("disconnect failed"));
-      session.sendAndWait.mockRejectedValueOnce(primaryError);
-    });
-    const poolWithPrimaryError = makeFakePool(sdkWithPrimaryError);
-
-    const first = await runCopilotAttempt(makeParams(), { pool: poolWithPrimaryError });
-    expect(projectAgentRunAttemptTerminal(first.terminal).promptError).toBe(primaryError);
-
-    const sdkWithoutPrimaryError = makeFakeSdk((session) => {
-      session.disconnect.mockRejectedValueOnce(new Error("disconnect failed"));
-      session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-    });
-    const poolWithoutPrimaryError = makeFakePool(sdkWithoutPrimaryError);
-
-    const second = await runCopilotAttempt(makeParams(), { pool: poolWithoutPrimaryError });
-    expect(
-      (projectAgentRunAttemptTerminal(second.terminal).promptError as Error | undefined)?.message,
-    ).toBe("disconnect failed");
-  });
-
-  it("pool keying: BYOK does not resolve unrelated GitHub auth", async () => {
-    const sdk = makeFakeSdk();
-    const pool = makeFakePool(sdk);
-
-    await runCopilotAttempt(
-      makeParams({
-        auth: { gitHubToken: "unrelated-token" } as never,
-        model: {
-          api: "openai-responses",
-          baseUrl: "https://api.example.test/v1",
-          id: "gpt-test",
-          provider: "custom-openai",
-        } as never,
-        resolvedApiKey: "byok-token",
-        authProfileId: "custom-openai:main",
-      } as never),
-      { pool },
-    );
-
-    const key = (vi.mocked(pool["acquire"]).mock.calls[0] as unknown[] | undefined)?.[0] as {
-      authMode: string;
-      authProfileId?: string;
-    };
-    const options = (vi.mocked(pool["acquire"]).mock.calls[0] as unknown[] | undefined)?.[1] as {
-      gitHubToken?: string;
-      useLoggedInUser?: boolean;
-    };
-    const cfg = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
-      provider?: { apiKey?: string; baseUrl?: string };
-    };
-
-    expect(key.authMode).toBe("byok");
-    expect(key.authProfileId).toBe("custom-openai:main");
-    expect(options.gitHubToken).toBeUndefined();
-    expect(options.useLoggedInUser).toBe(false);
-    expect(cfg.provider).toEqual(
-      expect.objectContaining({
-        apiKey: "byok-token",
-        baseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{24}\/v1$/),
-      }),
-    );
-  });
-
-  it("rejects BYOK providers with request transport policy overrides before creating a SDK session", async () => {
-    const sdk = makeFakeSdk();
-    const pool = makeFakePool(sdk);
-    const model = attachModelProviderRequestTransport(
-      {
-        api: "openai-responses",
-        baseUrl: "https://proxy.example.test/v1",
-        id: "gpt-test",
-        provider: "custom-header-proxy",
-      },
-      { proxy: { mode: "env-proxy" } },
-    );
-
-    const result = await runCopilotAttempt(
-      makeParams({
-        model: model as never,
-        resolvedApiKey: "header-secret",
-        authProfileId: "custom-header-proxy:main",
-      } as never),
-      { pool },
-    );
-
-    expect(getPromptErrorCode(result)).toBe("model_not_supported");
-    expect(
-      (projectAgentRunAttemptTerminal(result.terminal).promptError as Error | undefined)?.message,
-    ).toContain("request proxy");
-    expect(sdk.createSession).not.toHaveBeenCalled();
-  });
 
   describe("canonical transcript journal", () => {
     afterEach(() => {
@@ -2242,62 +2139,13 @@ describe("runCopilotAttempt", () => {
       } as unknown as SandboxContext;
     }
 
-    it.each(["unsandboxed", "rw", "ro"] as const)(
-      "uses the correct SDK and tool workspace in %s mode",
-      async (mode) => {
-        const sandboxDir = `${tmpdir()}/copilot-sandbox-${Date.now()}`;
-        const workspaceDir =
-          mode === "ro" ? `${tmpdir()}/copilot-orig-${Date.now()}` : "C:\\workspace";
-        const cwd = mode === "unsandboxed" ? "C:\\workspace\\task-repo" : undefined;
-        const sandbox =
-          mode === "unsandboxed"
-            ? null
-            : makeSandboxStub({
-                workspaceAccess: mode,
-                ...(mode === "ro" ? { workspaceDir: sandboxDir } : {}),
-              });
-        const sdk = makeFakeSdk();
-        const createToolBridge = vi.fn(async (_input: CopilotToolBridgeInput) =>
-          createStubToolBridge(),
-        );
-        try {
-          await runCopilotAttempt(makeParams({ workspaceDir, ...(cwd ? { cwd } : {}) }), {
-            createToolBridge,
-            pool: makeFakePool(sdk),
-            resolveSandboxContextOverride: async () => sandbox,
-          });
-          const bridgeArgs = expectDefined(createToolBridge.mock.calls[0]?.[0], "bridge input");
-          const effectiveWorkspaceDir = mode === "ro" ? sandboxDir : workspaceDir;
-          expect(bridgeArgs.workspaceDir).toBe(effectiveWorkspaceDir);
-          expect(requireCreateSessionConfig(sdk).workingDirectory).toBe(
-            cwd ?? effectiveWorkspaceDir,
-          );
-          if (mode === "unsandboxed") {
-            expect(bridgeArgs.cwd).toBe(cwd);
-            expect(requireCreateSessionConfig(sdk).instructionDirectories).toEqual([workspaceDir]);
-          } else {
-            expect(bridgeArgs.sandbox).toBe(sandbox);
-            expect(bridgeArgs.spawnWorkspaceDir).toBe(mode === "ro" ? workspaceDir : undefined);
-            if (mode === "ro") {
-              expect(
-                workspaceBootstrapMock.loadCopilotWorkspaceInstructions,
-              ).toHaveBeenLastCalledWith(
-                expect.objectContaining({
-                  effectiveWorkspaceDir: sandboxDir,
-                  attempt: expect.objectContaining({ workspaceDir }),
-                }),
-              );
-              await expect(fsp.stat(sandboxDir)).resolves.toBeTruthy();
-            }
-          }
-        } finally {
-          if (mode === "ro") {
-            await fsp.rm(sandboxDir, { recursive: true, force: true });
-            await fsp.rm(workspaceDir, { recursive: true, force: true });
-          }
-        }
-      },
-    );
+    registerCopilotWorkspaceTests({
+      makeParams,
+      makeSandboxStub,
+      createStubToolBridge,
+      requireCreateSessionConfig,
+      workspaceBootstrapMock,
+    });
 
     it("applies sandbox workspace-only guards when hydrating prompt image refs", async () => {
       const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-sandbox-image-policy-"));

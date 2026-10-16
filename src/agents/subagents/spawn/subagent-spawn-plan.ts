@@ -51,6 +51,7 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
   modelOverride?: string;
   thinkingOverrideRaw?: string;
   callerThinkingRaw?: string;
+  callerThinkingExplicit?: boolean;
   inheritedModel?: ModelRef;
   fastMode?: FastMode;
   workspaceDir?: string;
@@ -72,6 +73,7 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
     targetAgentConfig: params.targetAgentConfig,
     thinkingOverrideRaw: params.thinkingOverrideRaw,
     callerThinkingRaw: params.callerThinkingRaw,
+    callerThinkingExplicit: params.callerThinkingExplicit,
   });
   if (thinkingPlan.status === "error") {
     const { provider, model } = splitModelRef(requestedModel);

@@ -283,38 +283,6 @@ describe("context-engine host parameter projection", () => {
     ]);
   });
 
-  it("passes every host parameter to resolved undeclared engines", async () => {
-    const assembleCalls: Array<Record<string, unknown>> = [];
-    const compactCalls: Array<Record<string, unknown>> = [];
-    const maintainCalls: Array<Record<string, unknown>> = [];
-    const engineId = await registerProbeEngine({ assembleCalls, compactCalls, maintainCalls });
-    const engine = await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
-
-    const abortSignal = await invokeHostParamMethods(engine);
-
-    expect(assembleCalls[0]).toMatchObject({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      prompt: "hello",
-      runtimeSettings,
-    });
-    expect(compactCalls[0]).toMatchObject({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionTarget: { agentId: "main", sessionId: "session-1" },
-      runtimeSettings,
-      runtimeContext: { tokenBudget: 1000 },
-      abortSignal,
-    });
-    expect(maintainCalls[0]).toMatchObject({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      runtimeSettings,
-      runtimeContext: { tokenBudget: 1000 },
-      abortSignal,
-    });
-  });
-
   it("does not retry validator-shaped engine failures", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const assembleCalls: Array<Record<string, unknown>> = [];

@@ -63,6 +63,12 @@ export async function finalizeAgentRunMedia(
   let releaseSource: (() => void) | undefined;
   let releasePlacement: (() => void) | undefined;
   let work: Promise<void> | undefined;
+  const release = () => {
+    active = false;
+    predicate?.release();
+    releaseSource?.();
+    releasePlacement?.();
+  };
   try {
     const state = captureOpenClawStateWorkerContext();
     const placement = await prepareSessionPlacementRead(
@@ -123,6 +129,8 @@ export async function finalizeAgentRunMedia(
           ...scope,
           readSource: source,
           workspace: authority.workspace,
+          prepareRead: predicate.prepareRead,
+          release,
           assertCurrent: () => {
             assertCurrent();
             assertExistingDatabaseIdentity(source.path, databaseIdentity, source.databaseBirthtime);
@@ -145,14 +153,15 @@ export async function finalizeAgentRunMedia(
         sessionId: reply.sessionId,
         storePath: reply.storePath,
       };
-      const { persistedAssistantContent: content } = await prepareWebchatReplyMediaForDisplay({
-        scope: prepared,
-        storePath: scope.storePath,
-        inputs: plan.map((entry) => ({ kind: "prepared", plan: entry })),
-        abortSignal: params.abortSignal,
-        includeSensitiveMedia: false,
-        includeSensitiveDisplay: false,
-      });
+      const { persistedAssistantContent: content, mediaBySource } =
+        await prepareWebchatReplyMediaForDisplay({
+          scope: prepared,
+          storePath: scope.storePath,
+          inputs: plan.map((entry) => ({ kind: "prepared", plan: entry })),
+          abortSignal: params.abortSignal,
+          includeSensitiveMedia: false,
+          includeSensitiveDisplay: false,
+        });
       if (!content || !hasAssistantDisplayMediaContent(content)) {
         throw new Error("WebChat final media could not be prepared");
       }
@@ -168,6 +177,7 @@ export async function finalizeAgentRunMedia(
               runId,
               expectedLifecycleRevision: reply.lifecycleRevision ?? null,
               content,
+              mediaBySource,
               mediaUrls: plan.flatMap((entry) => entry.parts.mediaUrls),
             }),
         );
@@ -207,9 +217,6 @@ export async function finalizeAgentRunMedia(
     })();
     await work;
   } finally {
-    active = false;
-    predicate?.release();
-    releaseSource?.();
-    releasePlacement?.();
+    release();
   }
 }

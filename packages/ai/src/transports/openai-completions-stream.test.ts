@@ -10,13 +10,116 @@ import {
   makeCompletionsModel,
   streamChunks,
 } from "./openai-completions.test-support.js";
-import { parseOpenAICompletionsUsage } from "./openai-transport-shared.js";
 
 function collectVisibleText(output: OpenAICompletionsOutput): string {
   return output.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
 }
 
 describe("openai completions stream", () => {
+  it.each(["delta", "message"] as const)(
+    "keeps Groq parsed %s reasoning in thinking blocks",
+    async (field) => {
+      const model = makeCompletionsModel({
+        provider: "groq",
+        id: "qwen/qwen3.6-27b",
+        baseUrl: "https://api.groq.com/openai/v1",
+      });
+      const output = createAssistantOutput(model);
+      const events: CapturedStreamEvent[] = [];
+      await processCompletionsStream(
+        streamChunks([
+          {
+            ...makeCompletionsChunk({}, "stop"),
+            choices: [
+              {
+                index: 0,
+                [field]: { role: "assistant", reasoning: "Multiply 17 by 23.", content: "391" },
+                finish_reason: "stop",
+              },
+            ],
+          },
+        ]),
+        output,
+        model,
+        { push: (event) => events.push(event) },
+      );
+      expect(output.content).toEqual([
+        { type: "thinking", thinking: "Multiply 17 by 23.", thinkingSignature: "reasoning" },
+        { type: "text", text: "391" },
+      ]);
+      expect(
+        events.filter((event) => event.type === "thinking_delta").map((event) => event.delta),
+      ).toEqual(["Multiply 17 by 23."]);
+      expect(collectVisibleText(output)).toBe("391");
+    },
+  );
+
+  it.each([false, true])(
+    "publishes cumulative tool input before execution (direct=%s)",
+    async (direct) => {
+      const model = makeCompletionsModel();
+      const output = createAssistantOutput(model);
+      const snapshots: unknown[] = [];
+      await processCompletionsStream(
+        streamChunks([
+          makeCompletionsChunk({
+            tool_calls: [
+              {
+                index: 0,
+                id: "write-progress",
+                type: "function",
+                function: { name: "write", arguments: '{"content":"first' },
+              },
+            ],
+          }),
+          makeCompletionsChunk({
+            tool_calls: [
+              {
+                index: 1,
+                id: "edit-progress",
+                type: "function",
+                function: { name: "edit", arguments: '{"newText":"second' },
+              },
+            ],
+          }),
+          makeCompletionsChunk({ tool_calls: [{ index: 0, function: { arguments: ' line"}' } }] }),
+          makeCompletionsChunk({ tool_calls: [{ index: 1, function: { arguments: ' line"}' } }] }),
+          makeCompletionsChunk({}, "tool_calls"),
+        ]),
+        output,
+        model,
+        {
+          push: (event) => {
+            if (event.type === "toolcall_delta") {
+              snapshots.push(structuredClone(event.partial.content[event.contentIndex]));
+            }
+          },
+        },
+        direct ? { mode: "direct", beforeContentBlock() {} } : undefined,
+      );
+      expect(snapshots).toEqual([
+        expect.objectContaining({ id: "write-progress", partialJson: '{"content":"first' }),
+        expect.objectContaining({ id: "edit-progress", partialJson: '{"newText":"second' }),
+        expect.objectContaining({ id: "write-progress", partialJson: '{"content":"first line"}' }),
+        expect.objectContaining({ id: "edit-progress", partialJson: '{"newText":"second line"}' }),
+      ]);
+      expect(output.content).toEqual([
+        {
+          type: "toolCall",
+          id: "write-progress",
+          name: "write",
+          arguments: { content: "first line" },
+        },
+        {
+          type: "toolCall",
+          id: "edit-progress",
+          name: "edit",
+          arguments: { newText: "second line" },
+        },
+      ]);
+    },
+  );
+
   it.each([
     ["length", ["<thi", "nk>unfinished reasoning"], ""],
     ["length", ["Answer. ", "<reasoning>unfinished\n\nreasoning"], "Answer. "],
@@ -282,7 +385,7 @@ describe("openai completions stream", () => {
     },
   );
 
-  it("phases text interrupted by resumed reasoning_details", async () => {
+  it("preserves unphased text across resumed reasoning_details", async () => {
     const model = makeCompletionsModel({
       id: "openrouter/qwen/qwen3-235b-a22b",
       name: "Qwen3 235B A22B",
@@ -317,9 +420,6 @@ describe("openai completions stream", () => {
       {
         type: "text",
         text: "Interim.",
-        textSignature: expect.stringMatching(
-          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-        ),
       },
       {
         type: "thinking",
@@ -329,9 +429,6 @@ describe("openai completions stream", () => {
       {
         type: "text",
         text: "Final.",
-        textSignature: expect.stringMatching(
-          /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
-        ),
       },
     ]);
   });
@@ -389,35 +486,6 @@ describe("openai completions stream", () => {
 });
 
 describe("openai completions stream", () => {
-  it("normalizes structured completions content blocks without stringifying objects (#78846)", async () => {
-    const model = makeCompletionsModel({
-      id: "mistral-small-latest",
-      name: "Mistral Small",
-      provider: "mistral",
-      baseUrl: "https://api.mistral.ai/v1",
-    });
-
-    const output = createAssistantOutput(model);
-
-    const stream: { push(event: unknown): void } = { push() {} };
-    const mockChunks = [
-      makeCompletionsChunk({
-        content: [
-          { type: "thinking", thinking: [{ type: "text", text: "Need to think." }] },
-          { type: "text", content: "Visible answer." },
-        ],
-      }),
-      makeCompletionsChunk({}, "stop"),
-    ] as const;
-
-    await processCompletionsStream(streamChunks(mockChunks), output, model, stream);
-
-    expect(output.content).toEqual([
-      { type: "thinking", thinking: "Need to think." },
-      { type: "text", text: "Visible answer." },
-    ]);
-  });
-
   it.each([
     {
       name: "keeps a streaming tool call intact when visible reasoning text arrives between chunks",
@@ -474,69 +542,6 @@ describe("openai completions stream", () => {
   });
 });
 
-describe("openai completions stream", () => {
-  it("accumulates arguments for parallel tool calls with split indices", async () => {
-    const model = makeCompletionsModel({
-      id: "kimi-for-coding",
-      name: "Kimi for Coding",
-      provider: "kimi-code",
-      baseUrl: "https://api.moonshot.cn",
-    });
-
-    const output = createAssistantOutput(model);
-
-    const mockChunks = [
-      makeCompletionsChunk({
-        tool_calls: [
-          {
-            index: 0,
-            id: "call_0",
-            type: "function",
-            function: { name: "exec", arguments: "" },
-          },
-          {
-            index: 1,
-            id: "call_1",
-            type: "function",
-            function: { name: "read", arguments: "" },
-          },
-        ],
-      }),
-      makeCompletionsChunk({
-        tool_calls: [{ index: 0, function: { arguments: '{"command":"ls"}' } }],
-      }),
-      makeCompletionsChunk(
-        {
-          tool_calls: [{ index: 1, function: { arguments: '{"path":"/tmp"}' } }],
-        },
-        "tool_calls" as const,
-      ),
-    ] as const;
-
-    await processCompletionsStream(streamChunks(mockChunks), output, model, {
-      push() {},
-    });
-
-    expect(output.content).toHaveLength(2);
-    expectRecordFields(output.content[0], {
-      type: "toolCall",
-      id: "call_0",
-      name: "exec",
-      arguments: { command: "ls" },
-    });
-    expectRecordFields(output.content[1], {
-      type: "toolCall",
-      id: "call_1",
-      name: "read",
-      arguments: { path: "/tmp" },
-    });
-  });
-});
-
-const pricedModel = makeCompletionsModel({
-  id: "gpt-5",
-  cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
-});
 function usageChunk(completionTokens: number, reasoningTokens?: number) {
   return makeCompletionsChunk({}, null, {
     choices: [],
@@ -562,25 +567,6 @@ async function runChunks(chunks: readonly unknown[], model = makeCompletionsMode
 }
 
 describe("openai completions stream", () => {
-  it("clamps uncached prompt usage at zero", () => {
-    const usage = parseOpenAICompletionsUsage(
-      {
-        prompt_tokens: 2,
-        completion_tokens: 5,
-        total_tokens: 7,
-        prompt_tokens_details: { cached_tokens: 4 },
-      },
-      pricedModel,
-    );
-    expectRecordFields(usage, {
-      input: 0,
-      output: 5,
-      cacheRead: 4,
-      totalTokens: 9,
-      contextUsage: { state: "unavailable" },
-    });
-  });
-
   it.each(["reasoning before text", "reasoning after text"] as const)(
     "handles %s usage chunks",
     async (kind) => {
@@ -722,4 +708,86 @@ describe("openai completions stream", () => {
     expect(textDeltas.map((event) => event.delta)).toEqual(deltas);
     expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
   });
+});
+
+describe("OpenAI-compatible provider processing timing", () => {
+  it.each([false, true])(
+    "preserves final timing in both transports (direct=%s)",
+    async (direct) => {
+      const model = makeCompletionsModel();
+      const output = createAssistantOutput(model);
+      const previousDiagnostic = { type: "previous", timestamp: 1 };
+      output.diagnostics = [previousDiagnostic];
+      await processCompletionsStream(
+        streamChunks([
+          makeCompletionsChunk({ content: "ok" }, null, {
+            timings: { prompt_ms: 100, predicted_ms: 200 },
+          }),
+          makeCompletionsChunk({}, "stop", {
+            timings: { prompt_ms: 3, predicted_ms: 5 },
+          }),
+          { ...usageChunk(2), timings: { prompt_ms: 1.25, predicted_ms: 2.5 } },
+        ]),
+        output,
+        model,
+        { push() {} },
+        direct ? { mode: "direct", beforeContentBlock() {} } : undefined,
+      );
+      expect(output.diagnostics).toEqual([
+        previousDiagnostic,
+        {
+          type: "provider_timing",
+          timestamp: expect.any(Number),
+          details: { processingMs: 3.75 },
+        },
+      ]);
+    },
+  );
+
+  it.each([
+    undefined,
+    { prompt_ms: 1 },
+    { predicted_ms: 1 },
+    { prompt_ms: -1, predicted_ms: 1 },
+    { prompt_ms: "1", predicted_ms: 1 },
+    { prompt_ms: Number.NaN, predicted_ms: 1 },
+    { prompt_ms: 1, predicted_ms: Number.POSITIVE_INFINITY },
+    { prompt_ms: Number.MAX_VALUE, predicted_ms: Number.MAX_VALUE },
+  ])("omits missing, partial, or invalid final timing: %j", async (timings) => {
+    const { output } = await runChunks([
+      makeCompletionsChunk({ content: "ok" }, null, {
+        timings: { prompt_ms: 1, predicted_ms: 2 },
+      }),
+      makeCompletionsChunk({}, "stop", { timings }),
+    ]);
+    expect(output.diagnostics).toBeUndefined();
+  });
+
+  it.each([false, true])(
+    "does not publish timing after cancellation (direct=%s)",
+    async (direct) => {
+      const model = makeCompletionsModel();
+      const output = createAssistantOutput(model);
+      const abort = new AbortController();
+      async function* interrupted() {
+        yield makeCompletionsChunk({ content: "ok" }, "stop", {
+          timings: { prompt_ms: 1, predicted_ms: 2 },
+        });
+        abort.abort();
+        yield usageChunk(2);
+      }
+      await expect(
+        processCompletionsStream(
+          interrupted(),
+          output,
+          model,
+          { push() {} },
+          direct
+            ? { signal: abort.signal, mode: "direct", beforeContentBlock() {} }
+            : { signal: abort.signal },
+        ),
+      ).rejects.toThrow("Request was aborted");
+      expect(output.diagnostics).toBeUndefined();
+    },
+  );
 });

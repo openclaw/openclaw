@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import { closeChatLayoutMenu, openChatLayoutMenu } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -10,7 +11,7 @@ import {
   navigateToControlUiSession,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { openChatDetails } from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -91,8 +92,7 @@ async function withCompanion(
       await openChatSidePanelType(page, "Side chat");
       const companion = page.locator("openclaw-chat-session-rail");
       await companion.getByText(answer, { exact: true }).waitFor();
-      // The embedded rail has no header of its own: its destructive clear is
-      // contributed to the shared side-panel header by the active panel.
+      // The embedded rail contributes its Clear action to the shared Layout menu.
       const clearButton = page.getByRole("button", { name: "Clear side chat", exact: true });
       await run({ clearButton, companion, gateway, page });
     },
@@ -100,7 +100,10 @@ async function withCompanion(
 }
 
 async function clearCompanion(clearButton: Locator): Promise<void> {
+  const page = clearButton.page();
+  await openChatLayoutMenu(page);
   await clearButton.click();
+  await closeChatLayoutMenu(page);
 }
 
 suite.define(() => {
@@ -121,8 +124,8 @@ suite.define(() => {
           );
         }
 
-        const details = await openChatDetails(page);
-        await details.getByRole("button", { name: "Close details", exact: true }).click();
+        await openChatDetails(page);
+        await closeChatDetails(page);
         await alert.getByRole("button", { name: "Dismiss error" }).click();
         await gateway.setMethodResponse("sessions.companion.reset", { ok: true });
         await gateway.deferNext("sessions.companion.reset");
@@ -140,7 +143,7 @@ suite.define(() => {
         if (artifactDir) {
           await writeFile(
             path.join(artifactDir, "reset-success.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [clearButton]),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [companion]),
           );
         }
       }, width);

@@ -1,3 +1,4 @@
+import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { bindInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -21,7 +22,6 @@ import {
 } from "./in-process-gateway.js";
 import { resolveSessionsSendReplyTarget } from "./sessions-delivery-target.js";
 import type { SessionDeliveryTarget } from "./sessions-send-helpers.js";
-import { isNonDeliverableSessionsReply } from "./sessions-send-tokens.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
 
@@ -133,7 +133,11 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
     const reply = wait.replyText;
-    if (!reply?.trim() || isNonDeliverableSessionsReply(reply)) {
+    if (
+      wait.terminalReply?.disposition !== "visible" ||
+      !reply?.trim() ||
+      reply.trim() === HEARTBEAT_TOKEN
+    ) {
       return;
     }
 

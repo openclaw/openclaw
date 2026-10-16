@@ -26,7 +26,7 @@ import { suspendHandlers } from "./server-methods/suspend.js";
 /** Register host handoff contracts under the caller's shared admission reset hooks. */
 export function registerSuspensionHandoffLifecycleTests() {
   it.each(["resume", "expiry", "replacement"] as const)(
-    "rechecks the lease after %s while status awaits write custody",
+    "reports held custody immediately and observes the lease after %s",
     async (change) => {
       vi.useFakeTimers();
       const prepared = prepareGatewaySuspend({
@@ -41,17 +41,26 @@ export function registerSuspensionHandoffLifecycleTests() {
       }
       try {
         if (change === "expiry") {
-          await vi.advanceTimersByTimeAsync(115_000);
+          await vi.advanceTimersByTimeAsync(40_000);
         }
-        const pending = dispatch({
-          method: "gateway.suspend.status",
-          requestParams: { suspensionId: prepared.suspensionId },
-          scope: "operator.read",
-          core: true,
-          handler: suspendHandlers["gateway.suspend.status"]!,
-        });
-        await vi.advanceTimersByTimeAsync(250);
-        expect(pending.respond).not.toHaveBeenCalled();
+        const status = () =>
+          dispatch({
+            method: "gateway.suspend.status",
+            requestParams: { suspensionId: prepared.suspensionId },
+            scope: "operator.read",
+            core: true,
+            handler: suspendHandlers["gateway.suspend.status"]!,
+          });
+        const initial = status();
+        await initial.request;
+        expect(initial.respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            status: "draining",
+            activeCount: 1,
+            writeCustody: [{ phase: "terminal-persistence", count: 1 }],
+          }),
+        );
         if (change !== "expiry") {
           resumeGatewaySuspend(prepared.suspensionId);
           if (change === "replacement") {
@@ -62,10 +71,13 @@ export function registerSuspensionHandoffLifecycleTests() {
             });
           }
         }
-        await vi.advanceTimersByTimeAsync(5_000);
-        await pending.request;
+        if (change === "expiry") {
+          await vi.advanceTimersByTimeAsync(5_000);
+        }
+        const current = status();
+        await current.request;
         if (change === "replacement") {
-          expect(pending.respond).toHaveBeenCalledWith(
+          expect(current.respond).toHaveBeenCalledWith(
             false,
             undefined,
             expect.objectContaining({
@@ -73,7 +85,7 @@ export function registerSuspensionHandoffLifecycleTests() {
             }),
           );
         } else {
-          expect(pending.respond).toHaveBeenCalledWith(true, { status: "running" });
+          expect(current.respond).toHaveBeenCalledWith(true, { status: "running" });
         }
       } finally {
         resetGatewaySuspendCoordinatorForLifecycleRestart();
@@ -83,7 +95,7 @@ export function registerSuspensionHandoffLifecycleTests() {
   );
 
   it.each(["handoff", "installation-replaced"] as const)(
-    "settles write custody before %s status without interrupting 200 admitted requests",
+    "reports held and settled custody before %s without interrupting 200 admitted requests",
     async (restart) => {
       vi.useFakeTimers();
       const roots = Array.from({ length: 200 }, () => tryBeginGatewayRootWorkAdmission());
@@ -102,6 +114,7 @@ export function registerSuspensionHandoffLifecycleTests() {
         acceptStop: () => {},
       });
       const context = {
+        getRuntimeConfig: () => ({}),
         cron,
         hostLifecycle: host.capability,
         logGateway: { warn: vi.fn(), info: vi.fn() },
@@ -152,17 +165,17 @@ export function registerSuspensionHandoffLifecycleTests() {
           },
         });
         await writing.promise;
-        const policyCheck = rpc("gateway.suspend.status", { suspensionId });
-        let answered = false;
-        void policyCheck.then(() => {
-          answered = true;
-        });
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(answered).toBe(false);
+        expect(await rpc("gateway.suspend.status", { suspensionId })).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            status: "draining",
+            activeCount: 201,
+            writeCustody: [{ phase: "session-mutation", count: 1 }],
+          }),
+        );
         written.resolve();
         await mutation;
-        await vi.advanceTimersByTimeAsync(250);
-        expect(await policyCheck).toHaveBeenCalledWith(
+        expect(await rpc("gateway.suspend.status", { suspensionId })).toHaveBeenCalledWith(
           true,
           expect.objectContaining({ status: "draining", activeCount: 200, writeCustody: [] }),
         );
@@ -323,6 +336,7 @@ export function registerSuspensionHandoffAuthorizationTests() {
           },
         },
         context: {
+          getRuntimeConfig: () => ({}),
           hostLifecycle: host.capability,
           logGateway: { warn: vi.fn() },
         } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],

@@ -15,6 +15,7 @@ import type {
   ProviderModelRouteCandidate,
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import {
@@ -33,7 +34,6 @@ import {
   resolveSecretRefReadOnlyAvailability,
   resolveStoredCredentialReadOnlyAvailability,
 } from "./auth-profiles/read-only-availability.js";
-import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import { getRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
 import type {
@@ -45,6 +45,7 @@ import {
   isActiveUnusableWindow,
   isProfileInCooldown,
   readInlineProviderApiKeyUsage,
+  readAuthProfileUsageStats,
   resolveProfileUnusableUntil,
 } from "./auth-profiles/usage-state.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
@@ -110,6 +111,10 @@ const EXTERNAL_CLI_REFRESH_PROVIDER_IDS = new Set(
 );
 
 type CreateModelAuthAvailabilityResolverParams = {
+  evaluatePluginAuth?: (
+    provider: string,
+    ref: ModelAuthAvailabilityRef,
+  ) => ModelAuthAvailabilityEvaluation;
   cfg: OpenClawConfig;
   preparedCliRuntimeAuthDirectories?: CliRuntimeAuthDirectories;
   agentId?: string;
@@ -185,6 +190,14 @@ function normalizeModelIdForProvider(provider: string, modelId: string): string 
 export function createModelAuthAvailabilityResolver(
   params: CreateModelAuthAvailabilityResolverParams,
 ): ModelAuthAvailabilityResolver {
+  const isPluginAuthProvider = (provider: string) =>
+    resolveProviderAuthScope({
+      provider,
+      config: params.cfg,
+      env: params.env,
+      workspaceDir: params.workspaceDir,
+      pluginMetadataSnapshot: params.metadataSnapshot,
+    }) === "plugin";
   const env = params.env ?? process.env;
   const now = Date.now();
   const isExternalCliProvider = (provider: string) =>
@@ -222,16 +235,8 @@ export function createModelAuthAvailabilityResolver(
         ]),
       )
     : store.profiles;
-  const orderBaseStore =
+  const orderStore =
     orderProfiles === store.profiles ? store : { ...store, profiles: orderProfiles };
-  const orderStore: AuthProfileStore = orderBaseStore.usageStats
-    ? {
-        ...orderBaseStore,
-        usageStats: Object.fromEntries(
-          Object.entries(orderBaseStore.usageStats).map(([id, stats]) => [id, { ...stats }]),
-        ),
-      }
-    : orderBaseStore;
   const { aliasMap, envCandidateMap, authEvidenceMap } = resolveProviderEnvAuthLookupMaps({
     config: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -270,11 +275,7 @@ export function createModelAuthAvailabilityResolver(
   };
   // Refresh authority follows exact profiles marked by the external-auth
   // lifecycle. Provider-wide authority could bless an unrelated stale profile.
-  const externalCliRefreshProfileIds = new Set([
-    ...external.map((profile) => profile.profileId),
-    ...getRuntimeExternalCliProfileIds(runtimeStore ?? store),
-  ]);
-  const readOnlyAuthConfig = params.cfg;
+  const externalCliRefreshProfileIds = new Set(external.map((profile) => profile.profileId));
   const providerInput = (provider: string) =>
     resolveProviderConfigSecretInput(params.cfg, provider);
   const prepareAuthTarget = (provider: string, ref: ModelAuthAvailabilityRef): AuthTarget => {
@@ -325,7 +326,7 @@ export function createModelAuthAvailabilityResolver(
     }
     const resolution = prependAuthProfilePin(
       resolveAuthProfileOrderWithMetadata({
-        cfg: readOnlyAuthConfig,
+        cfg: params.cfg,
         store: orderStore,
         provider: normalized,
         preferredProfile: preferredProfileId,
@@ -378,7 +379,7 @@ export function createModelAuthAvailabilityResolver(
         ? store
         : { ...store, profiles: { ...store.profiles, [profileId]: credential } };
     const eligibility = resolveAuthProfileEligibility({
-      cfg: readOnlyAuthConfig,
+      cfg: params.cfg,
       store: effectiveStore,
       provider: normalizeProvider(provider),
       profileId,
@@ -393,7 +394,7 @@ export function createModelAuthAvailabilityResolver(
     return (
       profileId !== undefined &&
       !resolveAuthProfileEligibility({
-        cfg: readOnlyAuthConfig,
+        cfg: params.cfg,
         store: orderStore,
         provider: normalizeProvider(provider),
         profileId,
@@ -473,18 +474,14 @@ export function createModelAuthAvailabilityResolver(
   const hasProfileEvidence = (provider: string) => {
     const normalized = normalizeProvider(provider);
     const configuredOrder = findNormalizedProviderValue(params.cfg.auth?.order, normalized);
-    if (configuredOrder !== undefined) {
-      return true;
-    }
-    if (
+    return (
+      configuredOrder !== undefined ||
       Object.values(params.cfg.auth?.profiles ?? {}).some(
         (profile) => normalizeProvider(profile.provider) === normalized,
+      ) ||
+      Object.keys(store.profiles).some((profileId) =>
+        hasMatchingProfileEvidence(normalized, profileId),
       )
-    ) {
-      return true;
-    }
-    return Object.keys(store.profiles).some((profileId) =>
-      hasMatchingProfileEvidence(normalized, profileId),
     );
   };
   const firstProfileEvidenceId = (provider: string): string | undefined => {
@@ -670,7 +667,7 @@ export function createModelAuthAvailabilityResolver(
       if (profile.readiness === "unavailable" || profile.cooldown !== "active") {
         return [];
       }
-      const stats = store.usageStats?.[profile.profileId];
+      const stats = readAuthProfileUsageStats(store, profile.profileId);
       const until =
         stats && !hasPermanentAuthFailure(stats) ? resolveProfileUnusableUntil(stats, model) : null;
       return until !== null && until > now ? [until] : [];
@@ -697,6 +694,17 @@ export function createModelAuthAvailabilityResolver(
           target,
         )
       : { availability: false, unavailableReason: "auth-failed" };
+  const rejectedProfileEvaluation = (
+    decision: Extract<ReturnType<typeof selectProviderModelAuthSources>, { kind: "rejected" }>,
+    plan: ProviderModelAuthSourcePlan,
+    target: AuthTarget,
+  ): AuthSourceEvaluation => ({
+    ...rejectedSourceEvaluation(decision.reason, plan, target),
+    ...(decision.source
+      ? { selectedProfileId: decision.source.profileId, selectedAuthMode: decision.source.mode }
+      : {}),
+    evidence: "profile",
+  });
   const sourceEvaluation = (
     selection: ProviderModelAuthSourceSelection,
     provider: string,
@@ -836,16 +844,7 @@ export function createModelAuthAvailabilityResolver(
     const plan = sourcePlanForTarget(provider, ref, policy, orderResolution, () => target);
     const decision = selectProviderModelAuthSources({ provider, plan });
     return decision.kind === "rejected"
-      ? {
-          ...rejectedSourceEvaluation(decision.reason, plan, target),
-          evidence: "profile",
-          ...(decision.source
-            ? {
-                selectedAuthMode: decision.source.mode,
-                selectedProfileId: decision.source.profileId,
-              }
-            : {}),
-        }
+      ? rejectedProfileEvaluation(decision, plan, target)
       : undefined;
   };
   const resolveProviderEvaluation = (
@@ -853,6 +852,14 @@ export function createModelAuthAvailabilityResolver(
     ref: ModelAuthAvailabilityRef = {},
   ): AuthSourceEvaluation => {
     const provider = normalizeProviderIdForAuth(rawProvider);
+    if (isPluginAuthProvider(provider)) {
+      return (
+        params.evaluatePluginAuth?.(provider, ref) ?? {
+          availability: undefined,
+          evidence: "runtime",
+        }
+      );
+    }
     const target = prepareAuthTarget(provider, ref);
     const profileLock = ref.requiredProfileId?.trim();
     if (invalidProfilePin(provider, ref)) {
@@ -871,16 +878,7 @@ export function createModelAuthAvailabilityResolver(
     });
     const decision = selectProviderModelAuthSources({ provider, plan: sourcePlan });
     if (decision.kind === "rejected") {
-      return {
-        ...rejectedSourceEvaluation(decision.reason, sourcePlan, target),
-        ...(decision.source
-          ? {
-              selectedProfileId: decision.source.profileId,
-              selectedAuthMode: decision.source.mode,
-            }
-          : {}),
-        evidence: "profile",
-      };
+      return rejectedProfileEvaluation(decision, sourcePlan, target);
     }
     return sourceEvaluation(decision.selection, provider, target, policy.evaluation);
   };
@@ -893,6 +891,13 @@ export function createModelAuthAvailabilityResolver(
     ref: ModelAuthAvailabilityRef = {},
   ): ModelAuthAvailabilityEvaluation => {
     const provider = normalizeProviderIdForAuth(rawProvider);
+    if (isPluginAuthProvider(provider)) {
+      return {
+        ...resolveProviderEvaluation(provider, ref),
+        routeResolution: null,
+        availabilityAuthoritative: true,
+      };
+    }
     if (provider !== OPENAI_PROVIDER_ID) {
       return {
         ...resolveProviderEvaluation(provider, ref),
@@ -1333,7 +1338,7 @@ export function createModelAuthAvailabilityResolver(
           env: params.env,
         }).runtime;
       const evaluation = evaluateModelAuth(provider, { ...ref, runtimeId });
-      if (ref.requiredProfileId?.trim()) {
+      if (isPluginAuthProvider(provider) || ref.requiredProfileId?.trim()) {
         return evaluation;
       }
       const runtimeEvaluation = evaluateCliRuntimeAuth(provider, { ...ref, runtimeId }, evaluation);

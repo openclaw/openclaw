@@ -5,10 +5,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { readPackageName } from "../../infra/package-json.js";
 import { checkGlobalPackageUpdateAdmission } from "../../infra/package-update-manager-preflight.js";
-import {
-  readUpdateStateSchemaVersions,
-  resolveUpdateStateContentVersion,
-} from "../../infra/update-candidate-state.js";
+import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
+import { resolveUpdateStateContentVersion } from "../../infra/update-candidate-state.versions.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
@@ -53,7 +51,11 @@ export async function previewUpdateCommand(params: {
   target: NonNullable<Awaited<ReturnType<typeof resolveUpdateCommandTarget>>>;
   prepared: Pick<
     Awaited<ReturnType<typeof prepareUpdateCommand>>,
-    "shouldRestart" | "installKind" | "requestedChannel" | "controlPlaneUpdateSentinelMeta"
+    | "shouldRestart"
+    | "installKind"
+    | "requestedChannel"
+    | "controlPlaneUpdateSentinelMeta"
+    | "packageActivationNotes"
   >;
   opts: UpdateCommandOptions;
   runId: string;
@@ -75,6 +77,7 @@ export async function previewUpdateCommand(params: {
         prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     }));
   if (preflight) {
+    preflight.preflightNotes.push(...(prepared.packageActivationNotes ?? []));
     if (target.inspectionWarning) {
       preflight.preflightNotes.push(target.inspectionWarning);
     }

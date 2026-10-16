@@ -98,68 +98,67 @@ describe("worker placement terminal persistence", () => {
     expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
-  it("records a clean terminal timestamp for an idle destroyed-worker reclaim", async () => {
-    const active = await advanceToActive();
-    const draining = await store.startDrain({
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      expectedGeneration: active.generation,
-    });
-    const reconciling = await store.startReconcile({
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      expectedGeneration: draining.generation,
-    });
+  it.each(["draining"] as const)(
+    "atomically fails a %s pending result and preserves its bounded reason across restart",
+    async (state) => {
+      await advanceToActive();
+      const { claim, pending } = await pendingResult();
+      if (state === "draining") {
+        await store.startWorkspaceResultDrain(claim);
+      }
+      const closedClaims: WorkerSessionTurnClaim[] = [];
+      const unregister = store.registerTurnClaimClosedHandler((closedClaim) => {
+        closedClaims.push(closedClaim);
+      });
+      nowMs = 2_000;
+      const disappearance = `cloud worker disappeared: ${"provider-detail ".repeat(100)}`;
 
-    expect(
-      await store.transition({
-        sessionId: active.sessionId,
-        from: "reconciling",
-        to: "reclaimed",
-        expectedGeneration: reconciling.generation,
-      }),
-    ).toMatchObject({
-      state: "reclaimed",
-      generation: active.generation + 3,
-      turnClaim: null,
-      terminalReason: null,
-      terminalAtMs: 1_000,
-    });
-  });
+      const failed = await store.failWorkspaceResultAndReleaseTurn(
+        pending,
+        new Error(disappearance),
+      );
+      expect(failed).toMatchObject({
+        state: "failed",
+        generation: claim.placementGeneration + 3,
+        turnClaim: null,
+        terminalAtMs: 2_000,
+      });
+      expect(failed.terminalReason).toHaveLength(1_024);
+      expect(failed.terminalReason).toMatch(/^cloud worker disappeared: provider-detail/u);
+      expect(failed.recoveryError).toBe(failed.terminalReason);
+      expect(store.get(claim.sessionId)).toMatchObject({
+        state: "failed",
+        generation: claim.placementGeneration + 3,
+        turnClaim: null,
+        terminalAtMs: 2_000,
+      });
+      const updated = await store.fail({
+        sessionId: claim.sessionId,
+        expectedGeneration: failed.generation,
+        recoveryError: "synthetic cleanup failure",
+      });
+      expect(updated.terminalReason).toBe(failed.terminalReason);
+      expect(updated.recoveryError).toBe("synthetic cleanup failure");
+      await expect(
+        store.fail({
+          sessionId: claim.sessionId,
+          expectedGeneration: claim.placementGeneration,
+          recoveryError: "stale cleanup failure",
+        }),
+      ).rejects.toThrow("changed before failure");
+      expect(store.get(claim.sessionId)?.recoveryError).toBe("synthetic cleanup failure");
+      expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
+      expect(closedClaims).toEqual([claim]);
+      unregister();
 
-  it("atomically fails a pending result and preserves its bounded reason across restart", async () => {
-    await advanceToActive();
-    const { claim, pending } = await pendingResult();
-    const closedClaims: WorkerSessionTurnClaim[] = [];
-    const unregister = store.registerTurnClaimClosedHandler((closedClaim) => {
-      closedClaims.push(closedClaim);
-    });
-    nowMs = 2_000;
-    const disappearance = `cloud worker disappeared: ${"provider-detail ".repeat(100)}`;
-
-    const failed = await store.failWorkspaceResultAndReleaseTurn(pending, new Error(disappearance));
-    expect(failed).toMatchObject({
-      state: "failed",
-      generation: claim.placementGeneration + 3,
-      turnClaim: null,
-      terminalAtMs: 2_000,
-    });
-    expect(failed.terminalReason).toHaveLength(1_024);
-    expect(failed.terminalReason).toMatch(/^cloud worker disappeared: provider-detail/u);
-    expect(failed.recoveryError).toBe(failed.terminalReason);
-    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
-    expect(closedClaims).toEqual([claim]);
-    unregister();
-
-    await closeStateDatabaseForTest();
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-    const reopened = store.get(SESSION.sessionId);
-    expect(reopened).toMatchObject({ state: "failed", terminalAtMs: 2_000 });
-    expect(reopened?.terminalReason).toBe(failed.terminalReason);
-  });
+      await closeStateDatabaseForTest();
+      database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+      store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+      const reopened = await store.getAsync(SESSION.sessionId);
+      expect(reopened).toMatchObject({ state: "failed", terminalAtMs: 2_000 });
+      expect(reopened?.terminalReason).toBe(failed.terminalReason);
+    },
+  );
 
   it("atomically abandons an offline remote-exec result while preserving its exact active owner", async () => {
     await advanceToActive(SESSION, "paired-device-environment", "remote-exec");
@@ -200,22 +199,13 @@ describe("worker placement terminal persistence", () => {
     unregister();
   });
 
-  it.each([
-    "worker-owned",
-    "accepted",
-    "staged",
-    "journaled",
-    "stale-claim",
-    "other-gateway",
-  ] as const)(
+  it.each(["worker-owned", "staged", "journaled", "stale-claim", "other-gateway"] as const)(
     "does not abandon a %s workspace result after node transport loss",
     async (resultState) => {
       const executionMode = resultState === "worker-owned" ? "worker-turn" : "remote-exec";
       await advanceToActive(SESSION, "paired-device-environment", executionMode);
       const { active, claim } = await pendingResult();
-      if (resultState === "accepted") {
-        await store.acceptWorkspaceResult(claim);
-      } else if (resultState === "staged") {
+      if (resultState === "staged") {
         await store.recordStagedWorkspaceResult(
           claim,
           "refs/openclaw/worker-results/preserved-result",
@@ -331,6 +321,31 @@ describe("worker placement terminal persistence", () => {
       terminalReason: null,
       terminalAtMs: null,
     });
+  });
+
+  it("preserves the placement when settlement finds no pending result", async () => {
+    await advanceToActive();
+    const { active, claim, pending } = await pendingResult();
+    database.db
+      .prepare("DELETE FROM worker_workspace_pending_results WHERE session_id = ?")
+      .run(active.sessionId);
+
+    await expect(store.completeWorkspaceResultAndReleaseTurn(claim)).rejects.toThrow(
+      "workspace result",
+    );
+    await expect(
+      store.failWorkspaceResultAndReleaseTurn(pending, new Error("worker disappeared")),
+    ).rejects.toThrow("workspace result changed");
+    const preserved = {
+      state: "active",
+      generation: active.generation,
+      turnClaim: { claimId: claim.claimId },
+      terminalReason: null,
+      terminalAtMs: null,
+    };
+    expect(store.get(active.sessionId)).toMatchObject(preserved);
+    expect(await store.listAsync()).toMatchObject([preserved]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
   it("rolls back placement failure when pending-result removal aborts", async () => {

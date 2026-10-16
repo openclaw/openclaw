@@ -275,7 +275,7 @@ describe("worker workspace reconciliation publication", () => {
         expect(workspaceWarning).toHaveBeenCalledWith(
           "worker workspace staging cleanup failed: scratch removal failed",
         );
-        await expect(fs.access(scratch)).resolves.toBeUndefined();
+        await fs.access(scratch);
       } else {
         await expect(fs.access(scratch)).rejects.toMatchObject({ code: "ENOENT" });
       }

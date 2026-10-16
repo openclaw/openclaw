@@ -1,5 +1,3 @@
-/** Converts cron jobs between public store shape and normalized SQLite rows. */
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -11,6 +9,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+/** Converts cron jobs between public store shape and normalized SQLite rows. */
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { normalizeSqliteNumber as normalizeNumber } from "../../infra/sqlite-number.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { hashCronJobDefinition } from "../definition-hash.js";
@@ -41,6 +41,7 @@ import {
   CRON_JOB_READ_COLUMNS,
   getCronStoreKysely,
 } from "./schema.js";
+import { serializeCronJobState } from "./state-codec.js";
 import type { LoadedCronStore } from "./types.js";
 
 function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
@@ -81,15 +82,6 @@ export function resolveCronJobGrantDefinitionRevision(job: CronStoredJob): strin
   }
   const { enabled: _enabled, state: _state, ...definition } = storedDefinition;
   return hashCronJobDefinition(definition);
-}
-
-function serializeCronJobState(state: CronJobState): string {
-  return JSON.stringify({
-    ...state,
-    ...(state.lastRunStatus === undefined && state.lastStatus !== undefined
-      ? { lastRunStatus: state.lastStatus }
-      : {}),
-  });
 }
 
 function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number): CronJobInsert {
@@ -229,18 +221,18 @@ export function projectCronJobThroughStorageCodec(job: CronStoredJob): CronStore
 
 /** Loads cron rows in config order with deterministic fallbacks for old rows. */
 export function loadCronRows(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
   jobIds?: ReadonlySet<string>,
 ): CronJobReadRow[];
 export function loadCronRows(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
   jobIds: ReadonlySet<string> | undefined,
   opts: { includeGrantDefinitionProjection: true },
 ): CronJobGenerationReadRow[];
 export function loadCronRows(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
   jobIds?: ReadonlySet<string>,
   opts?: { includeGrantDefinitionProjection: true },
@@ -282,7 +274,7 @@ export function fingerprintCronJobRows(
 }
 
 /** Reads only definition JSON and order while excluding runtime-owned state. */
-export function readCronJobsFingerprint(db: DatabaseSync, storeKey: string): string {
+export function readCronJobsFingerprint(db: EngineConnection, storeKey: string): string {
   const rows = executeSqliteQuerySync(
     db,
     getCronStoreKysely(db)
@@ -308,7 +300,7 @@ export function fingerprintCronRuntimeRows(rows: readonly CronJobReadRow[]): str
 }
 
 /** Capture both row owners together; Doctor's definition-only token stays unchanged. */
-export function readCronStoreFingerprints(db: DatabaseSync, storeKey: string) {
+export function readCronStoreFingerprints(db: EngineConnection, storeKey: string) {
   const rows = loadCronRows(db, storeKey);
   return {
     jobsFingerprint: fingerprintCronJobRows(rows),
@@ -324,7 +316,7 @@ export type CronJobFamilyIdentity = {
 
 /** Removes one owned job family from obsolete store partitions. */
 export function deleteStaleCronJobFamilyRows(
-  db: DatabaseSync,
+  db: EngineConnection,
   activeStoreKey: string,
   family: CronJobFamilyIdentity,
 ): number {
@@ -371,7 +363,7 @@ type CronRowReplaceResult = {
 };
 
 export function replaceCronRows(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
   store: CronStoreFile,
   opts?: CronRowReplaceOptions,
@@ -419,7 +411,7 @@ export function replaceCronRows(
 
 /** Upserts one persisted cron row without rewriting unrelated jobs in its store partition. */
 export function upsertCronJobRow(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
   job: CronStoredJob,
   sortOrder: number,
@@ -583,14 +575,14 @@ export function upsertCronJobRow(
   return normalized;
 }
 
-function hasStandingGrantGenerationCompanion(db: DatabaseSync): boolean {
+function hasStandingGrantGenerationCompanion(db: EngineConnection): boolean {
   return (
     tableExists(db, "operator_approval_standing_grants") &&
     tableExists(db, "operator_approval_standing_grant_generations")
   );
 }
 
-function readMaximumRetainedGrantDefinitionGeneration(db: DatabaseSync, jobId: string): number {
+function readMaximumRetainedGrantDefinitionGeneration(db: EngineConnection, jobId: string): number {
   if (!hasStandingGrantGenerationCompanion(db)) {
     return 0;
   }
@@ -615,14 +607,14 @@ function readMaximumRetainedGrantDefinitionGeneration(db: DatabaseSync, jobId: s
 }
 
 export function resolveCronJobGrantDefinitionGenerationFloor(
-  db: DatabaseSync,
+  db: EngineConnection,
   jobId: string,
 ): number {
   return readMaximumRetainedGrantDefinitionGeneration(db, jobId) + 1;
 }
 
 export function deleteCronJobRowInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
   jobId: string,
 ): void {
@@ -643,7 +635,7 @@ export function deleteCronJobRowInDatabase(
   );
 }
 
-function revokeCronJobStandingGrants(db: DatabaseSync, jobId: string): void {
+function revokeCronJobStandingGrants(db: EngineConnection, jobId: string): void {
   if (tableExists(db, "operator_approval_standing_grants")) {
     const revoked = executeSqliteQuerySync(
       db,
@@ -660,7 +652,7 @@ function revokeCronJobStandingGrants(db: DatabaseSync, jobId: string): void {
 
 /** Updates only mutable runtime columns without rewriting full job config JSON. */
 export function updateCronRuntimeRows(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
   store: CronStoreFile,
 ): void {
@@ -671,7 +663,7 @@ export function updateCronRuntimeRows(
 
 /** Preserves stored definitions except an explicit runtime enable/disable transition. */
 export function updateCronRuntimeRow(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
   job: CronStoredJob,
   previousEnabled?: boolean,

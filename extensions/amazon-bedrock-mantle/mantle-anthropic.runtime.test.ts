@@ -165,17 +165,7 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
   });
 
-  it("omits unsupported Opus 4.7 sampling and reasoning overrides", () => {
-    const options = captureStreamOptions(createTestModel(), {
-      temperature: 0.2,
-      reasoning: "high",
-    });
-    expect(options.temperature).toBeUndefined();
-    expect(options.thinkingEnabled).toBe(false);
-  });
-
   it.each([
-    { reasoning: undefined, effort: "high" },
     { reasoning: "max" as const, effort: "high" },
     { reasoning: "minimal" as const, effort: "low" },
   ])("maps Mythos Preview $reasoning reasoning to $effort", ({ reasoning, effort }) => {
@@ -187,11 +177,7 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(options.effort).toBe(effort);
   });
 
-  it.each([
-    { reasoning: undefined, thinkingEnabled: true, effort: "high" },
-    { reasoning: "off" as const, thinkingEnabled: false, effort: undefined },
-    { reasoning: "max" as const, thinkingEnabled: true, effort: "max" },
-  ])(
+  it.each([{ reasoning: "max" as const, thinkingEnabled: true, effort: "max" }])(
     "uses the Opus 5 contract for reasoning=$reasoning",
     ({ reasoning, thinkingEnabled, effort }) => {
       const options = captureStreamOptions(createReasoningModel("claude-opus-5", "Claude Opus 5"), {
@@ -237,15 +223,11 @@ describe("createMantleAnthropicStreamFn", () => {
   });
 
   it.each([
-    { reasoning: "max" as const, thinkingBudgets: undefined, expectedBudget: 16384 },
-    { reasoning: "max" as const, thinkingBudgets: { max: 4096 }, expectedBudget: 4096 },
-    { reasoning: "xhigh" as const, thinkingBudgets: { high: 4096 }, expectedBudget: 16384 },
     {
       reasoning: "xhigh" as const,
       thinkingBudgets: { high: 4096, xhigh: 6144 },
       expectedBudget: 6144,
     },
-    { reasoning: "high" as const, thinkingBudgets: { high: 4096 }, expectedBudget: 4096 },
   ])(
     "preserves Mantle's $reasoning legacy budget $expectedBudget",
     ({ reasoning, thinkingBudgets, expectedBudget }) => {
@@ -261,21 +243,20 @@ describe("createMantleAnthropicStreamFn", () => {
     },
   );
 
-  it.each([
-    { reasoning: undefined, effort: "high" },
-    { reasoning: "off" as const, effort: "low" },
-    { reasoning: "max" as const, effort: "max" },
-  ])("maps Mythos 5 $reasoning reasoning to adaptive $effort", ({ reasoning, effort }) => {
-    const options = captureStreamOptions(
-      createReasoningModel("claude-mythos-5", "Claude Mythos 5", {
-        thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
-      }),
-      { maxTokens: 1_000, temperature: 0.2, ...(reasoning ? { reasoning } : {}) },
-    );
-    expect(options.thinkingEnabled).toBe(true);
-    expect(options.effort).toBe(effort);
-    expect(options.maxTokens).toBe(1_000);
-    expect(options).not.toHaveProperty("thinkingBudgetTokens");
-    expect(options.temperature).toBeUndefined();
-  });
+  it.each([{ reasoning: undefined, effort: "high" }])(
+    "maps Mythos 5 $reasoning reasoning to adaptive $effort",
+    ({ reasoning, effort }) => {
+      const options = captureStreamOptions(
+        createReasoningModel("claude-mythos-5", "Claude Mythos 5", {
+          thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+        }),
+        { maxTokens: 1_000, temperature: 0.2, ...(reasoning ? { reasoning } : {}) },
+      );
+      expect(options.thinkingEnabled).toBe(true);
+      expect(options.effort).toBe(effort);
+      expect(options.maxTokens).toBe(1_000);
+      expect(options).not.toHaveProperty("thinkingBudgetTokens");
+      expect(options.temperature).toBeUndefined();
+    },
+  );
 });

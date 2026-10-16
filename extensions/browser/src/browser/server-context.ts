@@ -92,8 +92,6 @@ function createProfileContext(
     return runtimeState;
   };
 
-  const configRevision = getProfileLifecycle(profileState).configRevision;
-
   const rawTabOps = createProfileTabOps({
     profile,
     state,
@@ -105,7 +103,6 @@ function createProfileContext(
     profile,
     state,
     runtime: profileState,
-    configRevision,
   });
 
   const rawSelection = createProfileSelectionOps({
@@ -125,7 +122,6 @@ function createProfileContext(
     await withProfileOperationLease({
       state: state(),
       runtime: profileState,
-      configRevision,
       signal: callerSignal,
       run: async (lifecycleSignal) => await run(lifecycleSignal, profileState),
       commit: options?.commit,
@@ -182,7 +178,7 @@ function createProfileContext(
         );
       }
       const userDataDir = resolveOpenClawUserDataDir(profile.name);
-      assertProfileLifecycleContext({ state: state(), runtime: profileState, configRevision });
+      assertProfileLifecycleContext({ state: state(), runtime: profileState });
       profileState.managedLaunchFailure = undefined;
       let result: Awaited<ReturnType<ProfileContext["resetProfile"]>> = {
         moved: false,

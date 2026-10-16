@@ -1,8 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../../cron/agent-id.js";
+import { assertSupportedJobSpec } from "../../cron/service/jobs-validation.js";
 import { isCronInvalidRequestError } from "./cron-error-classification.js";
 
 describe("isCronInvalidRequestError", () => {
+  it.each([
+    { sessionTarget: "main", payload: { kind: "agentTurn" } },
+    { sessionTarget: "isolated", payload: { kind: "systemEvent" } },
+    { sessionTarget: "current", payload: { kind: "systemEvent" } },
+    { sessionTarget: "session:agent:main:conversation", payload: { kind: "script" } },
+  ] as const)("classifies target/payload guidance as invalid input: $sessionTarget", (job) => {
+    let error: unknown;
+    try {
+      assertSupportedJobSpec(job);
+    } catch (cause) {
+      error = cause;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect(isCronInvalidRequestError(error)).toBe(true);
+  });
+
   it("classifies unresolved agent ownership as an actionable invalid request", () => {
     expect(isCronInvalidRequestError(new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE))).toBe(true);
   });

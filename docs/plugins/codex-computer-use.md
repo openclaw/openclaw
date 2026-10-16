@@ -279,8 +279,8 @@ marketplaces. During install, OpenClaw polls `plugin/list` for up to
 When Codex reports `features.plugins` as disabled, OpenClaw skips this discovery wait.
 
 If multiple known marketplaces contain Computer Use, OpenClaw prefers
-`openai-bundled`, then `openai-curated`, then `local`. Unknown ambiguous
-matches fail closed and ask you to set `marketplaceName` or
+`openai-bundled`, then `openai-curated`, then `local`. OpenClaw rejects unknown ambiguous
+matches and asks you to set `marketplaceName` or
 `marketplacePath`.
 
 ## Bundled macOS marketplace
@@ -334,7 +334,7 @@ or legacy MCP/tool restrictions prevent automatic replacement and cache refresh.
 ## Remote marketplaces
 
 Remote marketplace support was introduced in Codex 0.146.1 and remains
-available in OpenClaw's pinned Codex 0.160.0. OpenClaw passes the opaque remote
+available in OpenClaw's pinned Codex 0.160.1. OpenClaw passes the opaque remote
 plugin ID returned by Codex to `plugin/read` and `plugin/install`; a
 human-readable plugin name is not a valid substitute.
 
@@ -427,7 +427,7 @@ verify the Codex-side Computer Use setup first:
 - macOS has granted the required permissions for the desktop-control app.
 - The current host session can access the desktop being controlled.
 
-When `computerUse.enabled` is true, OpenClaw fails closed if the plugin or its
+When `computerUse.enabled` is true, OpenClaw stops with an error if the plugin or its
 MCP tools are missing. Live desktop readiness gates startup only when
 `computerUse.strictReadiness` is true. Non-strict startup does not guarantee that
 the desktop bridge will answer; actual tool calls still report failures.

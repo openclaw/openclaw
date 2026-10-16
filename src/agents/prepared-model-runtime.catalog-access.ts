@@ -1,6 +1,5 @@
 import pLimit from "p-limit";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
-import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { createPreparedRuntimeAuthProfileUsageReader } from "./auth-profiles/runtime-snapshots.js";
 import {
   augmentPreparedModelCatalogWithAgentHarness,
@@ -10,6 +9,7 @@ import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-pr
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import {
+  createPreparedModelCatalogUsageReader,
   getPreparedModelFullCatalogAuth,
   setPreparedModelFullCatalogAuth,
   type PreparedModelCatalogAuth,
@@ -30,23 +30,23 @@ import type {
 } from "./prepared-model-runtime.catalog-contract.js";
 import { createPreparedModelCatalogProjection } from "./prepared-model-runtime.catalog-projection.js";
 import {
+  filterPreparedProviderCatalog,
+  mergePreparedModelCatalogInventory,
+  mergePreparedNativeCatalog,
+  prepareModelCatalogPublication,
+  retainPreparedModelCatalogPublication,
+} from "./prepared-model-runtime.catalog-publication.js";
+import {
+  listChangedPreparedCatalogProviders,
   preparedProviderCatalogCredentials,
+  preparedProviderCatalogSource,
   prepareRetainedProviderCatalog,
 } from "./prepared-model-runtime.catalog-source.js";
 import * as retry from "./prepared-model-runtime.discovery-retry.js";
 import { assertPreparedModelRuntimeInputCurrent } from "./prepared-model-runtime.errors.js";
 import {
-  fingerprintPreparedRuntimeFacts,
-  preparedModelInventoryKey,
-} from "./prepared-model-runtime.facts.js";
-import {
-  filterPreparedProviderCatalog,
-  mergePreparedModelCatalogInventory,
   isPreparedModelCatalogFull,
   markPreparedModelCatalogFull,
-  mergePreparedNativeCatalog,
-  prepareModelCatalogPublication,
-  retainPreparedModelCatalogPublication,
 } from "./prepared-model-runtime.full-catalog.js";
 import { capturePreparedModelRuntimeLifetime } from "./prepared-model-runtime.lifecycle.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
@@ -106,24 +106,20 @@ export async function createFullModelCatalogAccess(
     params.agentFacts.input.agentDir,
     params.agentFacts.input.inheritedAuthDir,
   );
+  const readCurrentUsage = createPreparedModelCatalogUsageReader(params.isCurrent, readUsage);
   const setCatalogAuth = (catalog: ModelCatalogSnapshot, auth: PreparedModelCatalogAuth) =>
-    setPreparedModelFullCatalogAuth(catalog, auth, (store) =>
-      params.isCurrent() ? readUsage(store) : store,
-    );
+    setPreparedModelFullCatalogAuth(catalog, auth, readCurrentUsage);
   const projectInventory = createPreparedModelCatalogProjection({ ...params, normalizeProvider });
-  const project = (
-    catalog: ModelCatalogSnapshot,
-    configuredRuntimeModels = params.catalogFacts.configuredRuntimeModels,
-  ) => attempt.withRefreshStatus(projectInventory(catalog, configuredRuntimeModels));
-  const inventoryKey = preparedModelInventoryKey(params.agentFacts.input);
-  const nativeSource = fingerprintPreparedRuntimeFacts({
-    runtimePluginSelections: params.agentFacts.input.runtimePluginSelections,
-    config: params.nativeConfigFingerprint,
-    configuredModelRefs: params.agentFacts.configuredModelRefs,
-  });
-  const pluginFingerprint = resolveInstalledManifestRegistryIndexFingerprint(
-    params.pluginGeneration.pluginMetadataSnapshot.index,
-  );
+  const project = (...args: Parameters<typeof projectInventory>) =>
+    attempt.withRefreshStatus(projectInventory(...args));
+  const {
+    retainedInventory,
+    providerSources,
+    unretainedProviders,
+    inventoryKey,
+    nativeSource,
+    pluginFingerprint,
+  } = prepareRetainedProviderCatalog(params, normalizeProvider, eligibleProviders);
   const attempt = createCatalogAttemptReporter(
     params.inventoryOwner,
     { key: inventoryKey, pluginFingerprint, credentials: params.agentFacts.credentials },
@@ -139,14 +135,6 @@ export async function createFullModelCatalogAccess(
     },
     params.isPublished,
   );
-  const { providerSource, retainedInventory, listChangedProviders } =
-    prepareRetainedProviderCatalog(
-      params,
-      normalizeProvider,
-      eligibleProviders,
-      pluginFingerprint,
-      nativeSource,
-    );
   if (retainedInventory) {
     setCatalogAuth(retainedInventory.catalog, currentAuth);
   }
@@ -181,7 +169,7 @@ export async function createFullModelCatalogAccess(
       retirementSignal: params.retirementSignal,
     }),
   );
-  const staticCatalog = project(params.catalogFacts.modelCatalog);
+  const staticCatalog = project({ catalog: params.catalogFacts.modelCatalog });
   if (hasNativeCatalog) {
     staticCatalog.authoritative = false;
   }
@@ -191,10 +179,9 @@ export async function createFullModelCatalogAccess(
     configuredRuntimeModels: Publication["configuredRuntimeModels"],
     acquiredNative: boolean,
   ): Publication => {
-    const catalog = project(nextInventory.catalog, configuredRuntimeModels);
+    const catalog = project(nextInventory, configuredRuntimeModels);
     setCatalogAuth(catalog, getPreparedModelFullCatalogAuth(nextInventory.catalog) ?? currentAuth);
-    catalog.authoritative =
-      acquiredNative && !catalog.refreshFailed ? catalog.authoritative : false;
+    catalog.authoritative = acquiredNative && !catalog.refreshFailed && catalog.authoritative;
     if (
       acquiredNative &&
       eligibleProviders.every((provider) => nextInventory.providers.has(provider))
@@ -265,10 +252,13 @@ export async function createFullModelCatalogAccess(
     return { previous, current: published, staticCatalog };
   };
   const acquireProviderCatalog = async (
-    providerIds: readonly string[] | undefined,
+    requestedProviderIds: readonly string[] | undefined,
     refresh: boolean,
-  ): Promise<PreparedModelCatalogCandidate> =>
-    limitFullModelCatalogBuild(async () => {
+  ): Promise<PreparedModelCatalogCandidate> => {
+    const providerIds = requestedProviderIds
+      ? [...preparedSyntheticAuthProviderScope(requestedProviderIds)]
+      : undefined;
+    return limitFullModelCatalogBuild(async () => {
       assertCurrent();
       const providers = providerIds ?? eligibleProviders;
       const {
@@ -276,7 +266,6 @@ export async function createFullModelCatalogAccess(
         configuredRuntimeModels,
         runtimeModels,
         providerExpiries,
-        hookRows,
       } = await worker.loadCatalog(
         providerIds,
         (error) => attempt.failed(error, providers, "provider"),
@@ -304,7 +293,7 @@ export async function createFullModelCatalogAccess(
             scope.has(normalizeProvider(provider)),
           )
         : discoveredAuth;
-      const { legacyRows, ...publication } = prepareModelCatalogPublication(
+      const { legacyProviders, ...publication } = prepareModelCatalogPublication(
         providerIds
           ? filterPreparedProviderCatalog(workerCatalog, (provider) =>
               scope.has(normalizeProvider(provider)),
@@ -314,7 +303,6 @@ export async function createFullModelCatalogAccess(
         retained,
         auth,
         normalizeProvider,
-        hookRows,
       );
       const completedProviders = new Map(
         [...scope].map((provider) => {
@@ -326,10 +314,15 @@ export async function createFullModelCatalogAccess(
           return [
             provider,
             {
-              source: providerSource(provider),
+              source: preparedProviderCatalogSource(
+                params.agentFacts,
+                params.pluginGeneration,
+                provider,
+                normalizeProvider,
+              ),
               credentials: preparedProviderCatalogCredentials(auth, provider, normalizeProvider),
               ...retry.discoveryDeadline(failed, expiresAt, retained?.providers.get(provider)),
-              ...(legacyRows.get(provider)?.size ? { legacyRows: legacyRows.get(provider) } : {}),
+              ...(legacyProviders.has(provider) ? { legacyAcquired: true } : {}),
             },
           ] as const;
         }),
@@ -354,6 +347,7 @@ export async function createFullModelCatalogAccess(
         nativeCatalogAcquired: published.nativeCatalogAcquired,
       };
     });
+  };
 
   const acquireNativeCatalog = (
     providerIds?: readonly string[],
@@ -429,7 +423,6 @@ export async function createFullModelCatalogAccess(
         normalizeProvider,
         preparedSnapshot: readCatalog(),
         pluginRegistry: params.pluginGeneration.pluginRegistry,
-        isCurrent: isObservationCurrent,
         includesProvider: providerIds
           ? (provider) => providerIds.includes(normalizeProvider(provider))
           : undefined,
@@ -457,7 +450,13 @@ export async function createFullModelCatalogAccess(
         if (!completed && failures.length) {
           throw failures[0]!.error;
         }
-        const catalog = projectInventory(rawCatalog, params.catalogFacts.configuredRuntimeModels);
+        const catalog = projectInventory(
+          {
+            catalog: rawCatalog,
+            discoveryOrigins: capturedCatalog?.acceptedDiscoveryOrigins ?? [],
+          },
+          params.catalogFacts.configuredRuntimeModels,
+        );
         setCatalogAuth(
           catalog,
           getPreparedModelFullCatalogAuth(capturedCatalog ?? staticCatalog) ?? currentAuth,
@@ -577,7 +576,7 @@ export async function createFullModelCatalogAccess(
   );
   const refreshExpiredModelCatalog = () => {
     assertCurrent();
-    recheckNativeLogin();
+    void recheckNativeLogin();
     if (pending || !published.inventory) {
       return;
     }
@@ -611,7 +610,14 @@ export async function createFullModelCatalogAccess(
       ...new Set((options.providerIds ?? eligibleProviders).map(normalizeProvider)),
     ];
     const providers = options.changedOnly
-      ? listChangedProviders(published.inventory, options.providerIds)
+      ? listChangedPreparedCatalogProviders(
+          params.agentFacts,
+          normalizeProvider,
+          providerSources,
+          unretainedProviders,
+          published.inventory,
+          options.providerIds,
+        )
       : requestedProviders;
     // A changed-only pass without provider inventory is a cold start: acquire what a refresh
     // would, including hosted rows for providers without credentials.

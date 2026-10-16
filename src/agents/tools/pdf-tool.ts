@@ -53,7 +53,8 @@ import {
 import {
   applyAgentDefaultModelConfig,
   hasToolModelConfig,
-  prepareToolAuthProfileStoreSource,
+  prepareToolAuthProfileStore,
+  loadLegacyToolAuthProfileStore,
 } from "./model-config.helpers.js";
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
@@ -128,18 +129,20 @@ export function createPdfTool(options?: {
 
   const shouldDeferAutoModelResolution =
     options?.deferAutoModelResolution === true && !hasExplicitModelConfig;
-  const resolveInitialModelConfig = (authProfileStoreSource: boolean | undefined) =>
+  const resolveInitialModelConfig = (authStore: AuthProfileStore | undefined) =>
     resolvePdfModelConfigForTool({
       cfg: options?.config,
       agentDir,
       workspaceDir: options?.workspaceDir,
-      authStore: options?.authProfileStore,
-      authProfileStoreSource,
+      authStore,
       activeModel: options?.activeModel,
     });
   const registrationPdfModelConfig = shouldDeferAutoModelResolution
     ? null
-    : resolveInitialModelConfig(options?.authProfileStoreSource);
+    : resolveInitialModelConfig(
+        options?.authProfileStore ??
+          (hasExplicitModelConfig ? undefined : loadLegacyToolAuthProfileStore(agentDir)),
+      );
   if (!registrationPdfModelConfig && !shouldDeferAutoModelResolution) {
     return null;
   }
@@ -187,13 +190,13 @@ export function createPdfTool(options?: {
     const password = typeof record.password === "string" ? record.password : undefined;
 
     let pdfModelConfig = registrationPdfModelConfig;
-    let authProfileStoreSource = options?.authProfileStoreSource;
+    const authProfileStoreSource = options?.authProfileStoreSource;
     if (!pdfModelConfig) {
-      authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+      const authStore = await prepareToolAuthProfileStore(options);
       signal?.throwIfAborted();
       assertResourcesOpen?.();
       operatorAuthority?.assertCurrent();
-      pdfModelConfig = resolveInitialModelConfig(authProfileStoreSource);
+      pdfModelConfig = resolveInitialModelConfig(authStore);
     }
     if (!pdfModelConfig) {
       throw new ToolInputError("No PDF model configured.");
@@ -341,9 +344,9 @@ export function createPdfTool(options?: {
     }
     const runtimeAgentDir = preparedRuntime.agentDir;
     const runtimeWorkspaceDir = preparedRuntime.workspaceDir ?? workspaceDir;
-    const runtimeAuthProfileStoreSource = hasExplicitPdfToolModelConfig(preparedRuntime.config)
-      ? authProfileStoreSource
-      : await prepareToolAuthProfileStoreSource({
+    const runtimeAuthProfileStore = hasExplicitPdfToolModelConfig(preparedRuntime.config)
+      ? authProfileStore
+      : await prepareToolAuthProfileStore({
           agentDir: runtimeAgentDir,
           authProfileStore,
           authProfileStoreSource,
@@ -354,8 +357,7 @@ export function createPdfTool(options?: {
       cfg: preparedRuntime.config,
       agentDir: runtimeAgentDir,
       ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
-      authStore: authProfileStore,
-      authProfileStoreSource: runtimeAuthProfileStoreSource,
+      authStore: runtimeAuthProfileStore,
       activeModel,
     });
     if (!committedPdfModelConfig) {

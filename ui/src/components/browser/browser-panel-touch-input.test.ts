@@ -1,5 +1,7 @@
-import { nothing, render } from "lit";
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { BROWSER_ANNOTATION_EVENT } from "./browser-annotation.ts";
 import {
   createBrowserClient,
@@ -9,8 +11,8 @@ import {
   setupBrowserPanelTestCleanup,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
-import { renderBrowserPanelChrome } from "./browser-panel-render.ts";
+import type { BrowserPanel } from "./browser-panel-owner.ts";
+import { BrowserPanelChrome } from "./browser-panel-render.tsx";
 
 setupBrowserPanelTestCleanup();
 
@@ -27,20 +29,22 @@ function click(x: number, y: number) {
   return new MouseEvent("click", { bubbles: true, clientX: x, clientY: y });
 }
 
-function renderInput(controller: BrowserPanelController): HTMLTextAreaElement {
+function renderInput(controller: BrowserPanel): HTMLTextAreaElement {
   const root = controller.host.renderRoot;
-  render(
-    renderBrowserPanelChrome(
+  const rendered = mountSolid(() =>
+    createComponent(BrowserPanelChrome, {
       controller,
-      "right",
-      400,
-      400,
-      () => {},
-      () => {},
-      nothing,
-    ),
-    root,
+      dock: "right",
+      height: 400,
+      width: 400,
+      onDockChange() {},
+      onClose() {},
+      embedded: false,
+      tabsInHeader: false,
+    }),
   );
+  root.replaceChildren(rendered.container);
+  flush();
   vi.spyOn(root.querySelector<HTMLElement>(".bp-stage")!, "getBoundingClientRect").mockReturnValue(
     new DOMRect(0, 0, 100, 100),
   );
@@ -147,8 +151,8 @@ describe("Browser panel touch and pen input", () => {
       controller.input.handleOverlayPointerDown(pointer("pointerdown", 1, 20, 20, "pen"));
       await flushBrowserResponses();
       expect(controller.mode).toBe("interact");
-      controller.handleStageClick(click(20, 20));
-      controller.handleStageClick(click(40, 50));
+      controller.input.handleStageClick(click(20, 20));
+      controller.input.handleStageClick(click(40, 50));
       await flushBrowserResponses();
     } finally {
       window.removeEventListener(BROWSER_ANNOTATION_EVENT, acceptAnnotation);

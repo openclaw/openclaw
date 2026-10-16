@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type {
   WorkerOperationHandlers,
   WorkerWriteOperationContext,
@@ -23,13 +22,14 @@ import {
   snapshotFromExecApprovalsRow,
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 
 function applyAuthorizationBatch(
-  db: DatabaseSync,
+  db: EngineConnection,
   initial: ExecApprovalsSnapshot,
   items: readonly ExecAuthorizationCommitInput[],
 ) {

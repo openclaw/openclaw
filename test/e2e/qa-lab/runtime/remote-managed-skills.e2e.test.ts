@@ -9,6 +9,10 @@ import { getAgentWorkspaceAccess } from "../../../../src/agents/workspace-access
 import { requireGit } from "../../../../src/agents/worktrees/git.js";
 import { ManagedWorktreeService } from "../../../../src/agents/worktrees/service.js";
 import { ensureSkillSnapshot } from "../../../../src/auto-reply/reply/session-updates.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../../src/config/runtime-snapshot.js";
 import type { SessionEntry } from "../../../../src/config/sessions/types.js";
 import {
   createTestPluginApi,
@@ -34,6 +38,7 @@ afterEach(async () => {
   await closeSkillsWatchers(true);
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
@@ -115,6 +120,7 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
       agents: { entries: { main: { workspace: local, agentDir: path.join(stateDir, "agent") } } },
       plugins: { enabled: false, entries: { "file-transfer": { config: pluginConfig } } },
     };
+    setRuntimeConfigSnapshot(config);
     let service!: Parameters<OpenClawPluginApi["registerService"]>[0];
     const api = createTestPluginApi({
       registrationMode: "full",

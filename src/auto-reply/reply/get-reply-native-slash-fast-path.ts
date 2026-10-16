@@ -11,7 +11,7 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
-import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
+import { resolveStoredModelOverrideAsync } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import {
@@ -19,11 +19,8 @@ import {
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
 import { isInternalMessageChannel, normalizeMessageChannel } from "../../utils/message-channel.js";
-import {
-  isAuthorizedTextSlashCommandTurn,
-  isNativeCommandTurn,
-  resolveCommandTurnContext,
-} from "../command-turn-context.js";
+import { resolveCommandAuthorizationAsync } from "../command-auth.js";
+import { isAuthorizedTextSlashCommandTurn, isNativeCommandTurn } from "../command-turn-context.js";
 import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
 import type { FinalizedRuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
@@ -51,7 +48,7 @@ const skillCommandsRuntimeLoader = createLazyImportLoader(
 const statusCommandRuntimeLoader = createLazyImportLoader(() => import("./commands-status.js"));
 
 function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
-  const commandTurn = resolveCommandTurnContext(ctx);
+  const commandTurn = ctx.CommandTurn;
   if (!isNativeCommandTurn(commandTurn) && !isAuthorizedTextSlashCommandTurn(commandTurn)) {
     return false;
   }
@@ -144,7 +141,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     sessionState.sessionEntryHandle.replaceCurrent(persistedInitialEntry);
     sessionState.sessionId = persistedInitialEntry.sessionId;
   }
-  const command = buildCommandContext({
+  const commandContext = {
     ctx: params.ctx,
     cfg: params.cfg,
     agentId: params.agentId,
@@ -152,7 +149,11 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     isGroup: sessionState.isGroup,
     triggerBodyNormalized: sessionState.triggerBodyNormalized,
     commandAuthorized: params.commandAuthorized,
-  });
+  };
+  const command = buildCommandContext(
+    commandContext,
+    await resolveCommandAuthorizationAsync(commandContext),
+  );
   const commandScope = () => ({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -168,7 +169,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     const canApplyStoredModel =
       params.provider === params.defaultProvider && params.model === params.defaultModel;
     const storedModelOverride = canApplyStoredModel
-      ? resolveStoredModelOverride({
+      ? await resolveStoredModelOverrideAsync({
           sessionEntry: targetSessionEntry,
           sessionStore: sessionState.sessionStore,
           sessionKey: sessionState.sessionKey,
@@ -325,6 +326,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         resolveModelLevels: async () => ({
           resolvedThinkLevel: undefined,
           resolvedReasoningLevel: "off",
+          thinkingExplicit: false,
         }),
         resolvedVerboseLevel: "off",
         resolvedElevatedLevel: "off",

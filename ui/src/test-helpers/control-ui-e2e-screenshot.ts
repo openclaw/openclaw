@@ -1,5 +1,5 @@
 import photon from "@silvia-odwyer/photon-node";
-import type { Locator, Page } from "playwright";
+import type { ElementHandle, Locator, Page } from "playwright";
 import { expect } from "vitest";
 
 export async function waitForControlUiProofSurface(
@@ -86,6 +86,7 @@ type ScreenshotFrameOptions = {
   viewport?: { width: number; height: number };
   scrollTo?: Locator;
   animations?: "disabled";
+  animationFrameBeforeCapture?: boolean;
   fullPage?: boolean;
 };
 
@@ -103,6 +104,7 @@ export async function takeControlUiScreenshotFrame(
     page,
     options.animations === "disabled",
   );
+  const targetElements = new Map<Locator, ElementHandle>();
   try {
     await expect
       .poll(async () => {
@@ -120,12 +122,14 @@ export async function takeControlUiScreenshotFrame(
       ]),
     ];
     let previous: string | undefined;
+    let settled: Awaited<ReturnType<typeof inspectControlUiFrameTargets>> = [];
     let requestedScroll: string | null | undefined;
     await expect
       .poll(
         async () => {
           await preparation.evaluate((state) => state.prepare());
           await waitForControlUiFrameLayout(targets);
+          await preparation.evaluate((state) => state.freezeTransitions());
           if (options.scrollTo) {
             requestedScroll = await inspectControlUiProofScroll(options.scrollTo, true);
             await waitForControlUiFrameLayout(targets);
@@ -135,7 +139,7 @@ export async function takeControlUiScreenshotFrame(
           await preparation.evaluate((state) => state.prepare());
           await waitForControlUiFrameLayout(targets);
           const images = await preparation.evaluate((state) => state.images());
-          const presentation = await inspectControlUiFrameTargets(targets);
+          const presentation = await inspectControlUiFrameTargets(targets, targetElements);
           const scroll = options.scrollTo
             ? await inspectControlUiProofScroll(options.scrollTo, false)
             : undefined;
@@ -143,28 +147,39 @@ export async function takeControlUiScreenshotFrame(
           const stable = current === previous;
           previous = current;
           // A recenter can expose another lazy image; repeat readiness, never captures.
-          return (
+          const ready =
             stable &&
             requestedScroll !== null &&
             scroll === requestedScroll &&
-            presentation.every((target) => target.visible) &&
-            images.every((image) => image.decoded)
+            presentation.every((target) => target.visible && target.sameTarget) &&
+            images.every((image) => image.decoded);
+          if (!ready) {
+            return false;
+          }
+          // A renderer can replace a target while its intersection is pending.
+          // Keep the final readiness read inside preparation, not after polling.
+          settled = await inspectControlUiFrameTargets(targets, targetElements);
+          return (
+            settled.every((target) => target.visible && target.sameTarget) &&
+            JSON.stringify(settled) === JSON.stringify(presentation) &&
+            (!options.scrollTo ||
+              (await inspectControlUiProofScroll(options.scrollTo, false)) === requestedScroll)
           );
         },
         { message: "Proof frame did not reach visible, settled targets" },
       )
       .toBe(true);
-    const settled = await inspectControlUiFrameTargets(targets);
-    expect(
-      settled.every((target) => target.visible),
-      "Proof content must remain visible",
-    ).toBe(true);
-    if (options.scrollTo) {
-      expect(await inspectControlUiProofScroll(options.scrollTo, false)).toBe(requestedScroll);
+    if (options.animationFrameBeforeCapture) {
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
+      );
     }
     const frame = await captureControlUiFrame(page, options.elements ?? [], options);
     expect(
-      await inspectControlUiFrameTargets(targets),
+      await inspectControlUiFrameTargets(targets, targetElements),
       "Proof content moved or disappeared during frame capture",
     ).toEqual(settled);
     if (options.scrollTo) {
@@ -177,38 +192,64 @@ export async function takeControlUiScreenshotFrame(
         await preparation.evaluate((state) => state.restore());
       }
     } finally {
-      await preparation.dispose();
+      await Promise.all([
+        preparation.dispose(),
+        ...[...targetElements.values()].map((element) => element.dispose()),
+      ]);
     }
   }
 }
 
-async function inspectControlUiFrameTargets(targets: readonly Locator[]) {
+async function inspectControlUiFrameTargets(
+  targets: readonly Locator[],
+  targetElements: Map<Locator, ElementHandle>,
+) {
   return Promise.all(
     targets.map(async (target) => {
-      const intersects = await target.evaluate(
-        (element) =>
-          new Promise<boolean>((resolve) => {
+      const matches = await target.elementHandles();
+      if (matches.length > 1) {
+        await Promise.all(matches.map((element) => element.dispose()));
+        throw new Error("Proof target must resolve to one element");
+      }
+      const element = matches[0];
+      if (!element) {
+        return { bounds: null, visible: false, sameTarget: false };
+      }
+      const previous = targetElements.get(target);
+      targetElements.set(target, element);
+      try {
+        // Retain one DOM identity across the asynchronous intersection delivery
+        // and Playwright's frame-relative bounds read; never re-resolve a locator.
+        const presentation = await element.evaluate((node, previousNode) => {
+          if (!(node instanceof Element)) {
+            throw new Error("Proof target must be an element");
+          }
+          return new Promise<{ sameTarget: boolean; visible: boolean }>((resolve) => {
             const observer = new IntersectionObserver(([entry]) => {
               observer.disconnect();
-              resolve(
-                Boolean(
-                  entry && entry.intersectionRect.width > 0 && entry.intersectionRect.height > 0,
+              resolve({
+                sameTarget: !previousNode || node === previousNode,
+                visible: Boolean(
+                  node.isConnected &&
+                  entry &&
+                  entry.intersectionRect.width > 0 &&
+                  entry.intersectionRect.height > 0 &&
+                  node.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
                 ),
-              );
+              });
             });
-            observer.observe(element);
-          }),
-      );
-      const bounds = await target.boundingBox();
-      const visible =
-        intersects &&
-        bounds !== null &&
-        bounds.width > 0 &&
-        bounds.height > 0 &&
-        (await target.evaluate((element) =>
-          element.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
-        ));
-      return { bounds, visible };
+            observer.observe(node);
+          });
+        }, previous ?? null);
+        const bounds = await element.boundingBox();
+        return {
+          sameTarget: presentation.sameTarget,
+          bounds,
+          visible: presentation.visible && bounds !== null && bounds.width > 0 && bounds.height > 0,
+        };
+      } finally {
+        await previous?.dispose();
+      }
     }),
   );
 }
@@ -227,6 +268,7 @@ async function createControlUiFramePreparation(page: Page, disableAnimations: bo
       return result;
     };
     const resumed = new Set<Animation>();
+    const transitionStyles = new Map<Document | ShadowRoot, HTMLStyleElement>();
     const listeners = new Map<Document | ShadowRoot, () => void>();
     const carets = new Map<HTMLElement, { value: string; priority: string }>();
     const decoded = new Map<HTMLImageElement, string>();
@@ -286,6 +328,22 @@ async function createControlUiFramePreparation(page: Page, disableAnimations: bo
           }
         }
       },
+      freezeTransitions() {
+        if (!staticFrame) {
+          return;
+        }
+        // Finite effects and their completion handlers settle before removing the
+        // transition layers, which can otherwise retain fractional shadow paints.
+        for (const root of roots()) {
+          if (transitionStyles.has(root)) {
+            continue;
+          }
+          const style = document.createElement("style");
+          style.textContent = "*, *::before, *::after { transition: none !important; }";
+          (root instanceof Document ? root.head : root).append(style);
+          transitionStyles.set(root, style);
+        }
+      },
       async decodeImages() {
         await Promise.all(
           visibleImages().map(async (image) => {
@@ -321,6 +379,9 @@ async function createControlUiFramePreparation(page: Page, disableAnimations: bo
         });
       },
       restore() {
+        for (const style of transitionStyles.values()) {
+          style.remove();
+        }
         for (const [root, listener] of listeners) {
           root.removeEventListener("animationstart", listener);
           root.removeEventListener("transitionrun", listener);

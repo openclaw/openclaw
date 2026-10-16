@@ -19,7 +19,6 @@ type EmbeddingQueryRetryHarness = {
   ) => Promise<number[]>;
   markLocalEmbeddingProviderDegraded: (error: unknown) => void;
   resolveEmbeddingTimeout: () => number;
-  withProviderUse: <T>(provider: EmbeddingProvider, run: () => Promise<T>) => Promise<T>;
 };
 
 function createEmbeddingQueryRetryHarness(
@@ -39,7 +38,6 @@ function createEmbeddingQueryRetryHarness(
     provider,
     resolveEmbeddingTimeout: () => timeoutMs,
     markLocalEmbeddingProviderDegraded: vi.fn(),
-    withProviderUse: async <T>(_provider: EmbeddingProvider, run: () => Promise<T>) => await run(),
   }) as EmbeddingQueryRetryHarness;
 }
 

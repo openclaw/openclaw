@@ -12,6 +12,26 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 describe("secret target registry", () => {
+  it("discovers PostgreSQL connection refs for configure, apply, and audit", () => {
+    const connection = { source: "env" as const, provider: "default", id: "DATABASE_DSN" };
+    const config: OpenClawConfig = { database: { engine: "postgres", postgres: { connection } } };
+    const [target] = discoverConfigSecretTargetsByIds(
+      config,
+      new Set(["database.postgres.connection"]),
+    );
+    expect(target).toMatchObject({
+      path: "database.postgres.connection",
+      value: connection,
+      entry: { includeInPlan: true, includeInConfigure: true, includeInAudit: true },
+    });
+    expect(
+      resolveSecretPlanTargetByPathCore({
+        configFile: "openclaw.json",
+        pathSegments: ["database", "postgres", "connection"],
+      })?.entry.id,
+    ).toBe("database.postgres.connection");
+  });
+
   it("preserves dotted provider header keys during discovery", () => {
     const config = {
       models: {
@@ -50,6 +70,22 @@ describe("secret target registry", () => {
 
     expect(target).toBeNull();
   });
+
+  it.each([{ prefix: [] }, { prefix: ["agents", "entries", "main"] }])(
+    "does not offer string-only memory headers as structured SecretRef apply targets ($prefix)",
+    ({ prefix }) => {
+      expect(
+        resolveConfigSecretTargetByPath([
+          ...prefix,
+          "memory",
+          "search",
+          "remote",
+          "headers",
+          "Authorization",
+        ]),
+      ).toBeNull();
+    },
+  );
 
   it("resolves plan targets by owning config document", () => {
     const configTarget = resolveSecretPlanTargetByPathCore({

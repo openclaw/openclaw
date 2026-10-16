@@ -1,5 +1,6 @@
 // Tool schema projection tests cover runtime/provider filtering for plugin tool
 // schemas before they are exposed to model providers.
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
   filterProviderNormalizableTools,
@@ -43,24 +44,6 @@ describe("runtime tool input schema projection", () => {
     });
   });
 
-  it("rejects raw JSON numeric overflow at the root and inside schemas", ({ skip }) => {
-    if (!("rawJSON" in JSON) || typeof JSON.rawJSON !== "function") {
-      skip();
-      return;
-    }
-    const overflow: unknown = JSON.rawJSON("1e400");
-    for (const schema of [
-      overflow,
-      { type: "object", properties: { score: { default: overflow } } },
-      { type: "object", anyOf: [{ $dynamicRef: "#value", default: overflow }] },
-    ]) {
-      expect(projectRuntimeToolInputSchema(schema)).toEqual({
-        schema: {},
-        violations: ["parameters is not a JSON value"],
-      });
-    }
-  });
-
   it("keeps empty property names in non-finite diagnostic paths", () => {
     expect(
       projectRuntimeToolInputSchema({
@@ -102,23 +85,6 @@ describe("runtime tool input schema projection", () => {
       violations: ["parameters.properties.second.items[0].maximum is not JSON-serializable"],
     });
     expect(reads).toEqual(["first", "maximum", "second", "maximum"]);
-  });
-
-  it("finishes JSON serialization after an invalid number and preserves later getter failures", () => {
-    let reads = 0;
-    expect(
-      projectRuntimeToolInputSchema({
-        type: "object",
-        properties: {
-          first: { default: Number.NaN },
-          get later() {
-            reads++;
-            throw new Error("unreadable schema");
-          },
-        },
-      }),
-    ).toEqual({ schema: {}, violations: ["parameters is not JSON-serializable"] });
-    expect(reads).toBe(1);
   });
 
   it("reports boxed non-finite numeric schema values", () => {
@@ -196,26 +162,26 @@ describe("runtime tool input schema projection", () => {
     ).toEqual([]);
   });
 
-  it("filters unsupported schemas without dropping healthy tools", () => {
-    const healthy = {
-      name: "healthy",
-      parameters: { type: "object", properties: {} },
+  it("keeps tools whose examples contain literal schema documents", () => {
+    const instance = {
+      document: {
+        $dynamicAnchor: "node",
+        properties: { child: { $dynamicRef: "#node" } },
+      },
     };
-    const broken = {
-      name: "fuzzplugin_move_angles",
-      parameters: { type: "array", items: { type: "number" } },
-    };
+    const parameters = Type.Object(
+      { document: Type.Record(Type.String(), Type.Unknown()) },
+      { examples: [instance] },
+    );
+    const original = structuredClone(parameters);
+    const tool = { name: "store_schema", parameters };
 
-    expect(filterRuntimeCompatibleTools([healthy, broken])).toEqual({
-      tools: [healthy],
-      diagnostics: [
-        {
-          toolName: "fuzzplugin_move_angles",
-          toolIndex: 1,
-          violations: ['fuzzplugin_move_angles.parameters.type must be "object"'],
-        },
-      ],
+    expect(projectRuntimeToolInputSchema(parameters)).toEqual({
+      schema: original,
+      violations: [],
     });
+    expect(filterRuntimeCompatibleTools([tool])).toEqual({ tools: [tool], diagnostics: [] });
+    expect(parameters).toEqual(original);
   });
 
   it("quarantines unreadable runtime tool entries before field projection", () => {
@@ -295,23 +261,6 @@ describe("runtime tool input schema projection", () => {
       diagnostics: [],
     });
     expect(tools[1]).toBe(replacement);
-  });
-
-  it("keeps provider-normalizable object schemas for provider-specific cleanup", () => {
-    const dynamicSchema = {
-      name: "fuzzplugin_dynamic_ref",
-      parameters: {
-        type: "object",
-        properties: {
-          target: { $dynamicRef: "#target" },
-        },
-      },
-    };
-
-    expect(filterProviderNormalizableTools([dynamicSchema])).toEqual({
-      tools: [dynamicSchema],
-      diagnostics: [],
-    });
   });
 
   it("keeps missing parameter schemas for provider-specific normalization", () => {

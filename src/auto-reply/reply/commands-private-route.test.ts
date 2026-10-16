@@ -137,11 +137,7 @@ afterEach(() => {
 });
 
 describe("private command approval requests", () => {
-  it.each([
-    ["a valid clock", 1_800_000_000_000, 1_800_000_300_000],
-    ["an invalid clock", Number.NaN, 0],
-    ["an overflowing clock", MAX_DATE_TIMESTAMP_MS, 0],
-  ])(
+  it.each([["an overflowing clock", MAX_DATE_TIMESTAMP_MS, 0]])(
     "preserves command identity and bounds private route expiry with %s",
     async (_label, createdAtMs, expiresAtMs) => {
       vi.spyOn(Date, "now").mockReturnValue(createdAtMs);

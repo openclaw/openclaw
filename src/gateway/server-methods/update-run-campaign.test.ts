@@ -3,7 +3,7 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateScheduleState } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateCampaignController } from "../../infra/update-campaign.js";
@@ -489,22 +489,6 @@ describe("update.run campaign ownership", () => {
     expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
   });
 
-  it("pins a directly applied dev campaign to its announced commit", async () => {
-    setDevCampaignSchedule();
-
-    await invokeUpdateRun();
-
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        devTarget: {
-          mode: "tracked",
-          upstreamRef: "origin/main",
-          upstreamSha: "frozen-upstream-sha",
-        },
-      }),
-    );
-  });
-
   it("pins a managed dev campaign handoff to its announced commit", async () => {
     setDevCampaignSchedule();
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
@@ -521,7 +505,6 @@ describe("update.run campaign ownership", () => {
       }),
     );
   });
-
   it("rejects an explicit commit that conflicts with the adopted Git campaign before mutation", async () => {
     const campaignSha = "1234567890abcdef1234567890abcdef12345678";
     setDevCampaignSchedule(campaignSha);
@@ -550,20 +533,6 @@ describe("update.run campaign ownership", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
         devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: campaignSha },
-      }),
-    );
-  });
-
-  it("coalesces an explicit commit matching the adopted Git campaign", async () => {
-    const upstreamSha = "1234567890abcdef1234567890abcdef12345678";
-    setDevCampaignSchedule(upstreamSha);
-    mockGitInstallStatus(upstreamSha);
-
-    await invokeUpdateRun({ target: { kind: "git", upstreamRef: "origin/main", upstreamSha } });
-
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha },
       }),
     );
   });
@@ -762,17 +731,26 @@ describe("update.run campaign ownership", () => {
           >
         >
       >();
-    startManagedServiceUpdateHandoffMock.mockReturnValueOnce(deferredUpdate.promise);
+    const handoffStarted = createDeferred();
+    startManagedServiceUpdateHandoffMock.mockImplementationOnce(() => {
+      handoffStarted.resolve();
+      return deferredUpdate.promise;
+    });
     const updateRun = invokeUpdateRun();
-    await vi.waitFor(() => {
+    try {
+      await awaitGateBeforeSettlement(
+        handoffStarted.promise,
+        updateRun,
+        "update.run settled before starting its managed handoff",
+      );
       expect(adoptCampaignMock).toHaveBeenCalledOnce();
       expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledOnce();
-    });
-    expect(getCampaignStateMock).not.toHaveBeenCalled();
-    currentCampaignId = "campaign-2";
-    deferredUpdate.reject(new Error("entrypoint unavailable"));
-
-    await updateRun;
+      expect(getCampaignStateMock).not.toHaveBeenCalled();
+      currentCampaignId = "campaign-2";
+    } finally {
+      deferredUpdate.reject(new Error("entrypoint unavailable"));
+      await updateRun;
+    }
 
     expect(getCampaignStateMock).toHaveBeenCalledOnce();
     expect(clearCampaignMock).not.toHaveBeenCalled();

@@ -27,11 +27,11 @@ export function isReplyOperationStalledBeforeOutput(
 }
 
 /** Builds the one recovery run that answers a stalled turn over its persisted transcript. */
-export function buildStalledTurnRecoveryRun(base: FollowupRun): FollowupRun {
+export function buildStalledTurnRecoveryRun(base: FollowupRun, guidance?: string): FollowupRun {
   const source = base.queuedFollowupReplyDisposition;
   return {
     ...base,
-    prompt: formatSystemTurnPrompt(STALLED_TURN_GUIDANCE),
+    prompt: formatSystemTurnPrompt(guidance ?? STALLED_TURN_GUIDANCE),
     summaryLine: "stalled-turn-recovery",
     stalledTurnRecovery: true,
     disableCollectBatching: true,
@@ -40,6 +40,7 @@ export function buildStalledTurnRecoveryRun(base: FollowupRun): FollowupRun {
     // transcript; this internal system turn persists no user message of its own.
     transcriptPrompt: undefined,
     userTurnTranscriptRecorder: undefined,
+    sourceTurnId: undefined,
     currentInboundContext: undefined,
     images: undefined,
     imageOrder: undefined,
@@ -61,6 +62,7 @@ export function buildStalledTurnRecoveryRun(base: FollowupRun): FollowupRun {
     // wider workspace tool, while every other tool stays available.
     run: {
       ...base.run,
+      inputProvenance: { kind: "internal_system", sourceTool: "stalled-turn-recovery" },
       suppressNextUserMessagePersistence: true,
       skillLibraryAuthoring: base.run.skillLibraryAuthoring && {
         target: "personal",

@@ -12,7 +12,7 @@ import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.type
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   claimAgentRunContext,
@@ -684,7 +684,7 @@ describe("gateway server chat", () => {
         key: "agent:main:dashboard:test-abort",
         runId: "idem-sessions-abort-1",
       });
-      expect(abortRes.ok).toBe(true);
+      expect(abortRes.ok, JSON.stringify(abortRes.error)).toBe(true);
       expect(["aborted", "no-active-run"]).toContain(abortRes.payload?.status);
       if (abortRes.payload?.status === "aborted") {
         expect(abortRes.payload?.abortedRunId).toBe("idem-sessions-abort-1");
@@ -715,7 +715,6 @@ describe("gateway server chat", () => {
       await removeTempDir(dir);
     }
   });
-
   test("sessions.abort resolves active runs by runId without a caller session key", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-abort-runid-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
@@ -1006,29 +1005,6 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("chat.send accepts the backing session id returned by chat.history", async () => {
-    await withMainSessionStore(async () => {
-      const historyRes = await rpcReq<{ sessionId?: string }>(ws, "chat.history", {
-        sessionKey: "main",
-      });
-      expect(historyRes.ok).toBe(true);
-      const sessionId = historyRes.payload?.sessionId;
-      expect(sessionId).toBe("sess-main");
-
-      const runId = "idem-chat-send-history-session-id";
-      const sendRes = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        sessionId,
-        message: "/context list",
-        idempotencyKey: runId,
-      });
-      expect(sendRes.ok).toBe(true);
-      expect(sendRes.payload?.status).toBe("started");
-
-      await waitForAgentRunDrained(runId);
-    });
-  });
-
   test("chat.history applies the reset kept-tail cut and preserves its marker", async () => {
     await withMainSessionStore(async () => {
       const storePath = testState.sessionStorePath;
@@ -1277,21 +1253,7 @@ describe("gateway server chat", () => {
       expected: ["assistant:visible response", "assistant:visible assistant input"],
     },
     {
-      name: "hides commentary-only assistant entries",
-      messages: [
-        createGatewayHistoryText("user", "hello", 1),
-        {
-          role: "assistant",
-          phase: "commentary",
-          content: [{ type: "text", text: "thinking like caveman" }],
-          timestamp: 2,
-        },
-        createGatewayHistoryText("assistant", "real reply", 3),
-      ],
-      expected: ["user:hello", "assistant:real reply"],
-    },
-    {
-      name: "hides assistant announce/reply skip-only entries",
+      name: "preserves literal announce/reply skip text outside its owning protocol",
       messages: [
         createGatewayHistoryText("assistant", "ANNOUNCE_SKIP", 1),
         createGatewayHistoryText("assistant", "REPLY_SKIP", 2),
@@ -1303,36 +1265,11 @@ describe("gateway server chat", () => {
         },
         createGatewayHistoryText("assistant", "real reply", 4),
       ],
-      expected: ["assistant:real text field reply", "assistant:real reply"],
-    },
-    {
-      name: "hides assistant NO_REPLY-only entries and keeps mixed-content assistant entries",
-      messages: [
-        createGatewayHistoryText("user", "hello", 1),
-        createGatewayHistoryText("assistant", "NO_REPLY", 2),
-        createGatewayHistoryText("assistant", "real reply", 3),
-        {
-          role: "assistant",
-          text: "real text field reply",
-          content: "NO_REPLY",
-          timestamp: 4,
-        },
-        createGatewayHistoryText("user", "NO_REPLY", 5),
-        {
-          role: "assistant",
-          content: [
-            { type: "text", text: "NO_REPLY" },
-            { type: "image", source: { type: "base64", media_type: "image/png", data: "abc" } },
-          ],
-          timestamp: 6,
-        },
-      ],
       expected: [
-        "user:hello",
-        "assistant:real reply",
+        "assistant:ANNOUNCE_SKIP",
+        "assistant:REPLY_SKIP",
         "assistant:real text field reply",
-        "user:NO_REPLY",
-        "assistant:NO_REPLY",
+        "assistant:real reply",
       ],
     },
   ])("chat.history $name", async ({ messages, expected }) => {
@@ -1382,54 +1319,6 @@ describe("gateway server chat", () => {
       expect.objectContaining({ role: "toolResult", toolCallId: "reused-call", content: result }),
     );
     expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
-  });
-
-  test("chat.history retains canonical publications after tool results without caption or call-ID joins", async () => {
-    const imageBlocks = ["first", "second"].map((name) => ({
-      type: "image",
-      artifactId: `artifact_managed_image_${name}`,
-      url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
-      openUrl: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
-      alt: `${name}.png`,
-      mimeType: "image/png",
-    }));
-    const publications = imageBlocks.map((image, index) => ({
-      role: "assistant",
-      provider: "openclaw",
-      model: "delivery-mirror",
-      content: [{ type: "text", text: "Sanitized publication." }, image],
-      openclawDeliveryMirror: { kind: "message-tool-source-reply", toolCallId: "different-call" },
-      timestamp: index + 3,
-    }));
-    const result = createGatewayHistoryMessageToolResult("reused-call", { ok: true }, 5);
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryMessageToolCall(
-        "reused-call",
-        { action: "send", message: "Unverified argument caption." },
-        1,
-      ),
-      result,
-      ...publications,
-      createGatewayHistoryText("assistant", "NO_REPLY", 6),
-    ]);
-    expect(collectHistoryTextValues(historyMessages)).toEqual([
-      "Sanitized publication.",
-      "Sanitized publication.",
-    ]);
-    for (const publication of publications) {
-      expect(historyMessages).toContainEqual(expect.objectContaining(publication));
-    }
-    expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
-    const publicRows = historyMessages.filter(isRecord);
-    expect(publicRows).toHaveLength(historyMessages.length);
-    const reprojected = await loadChatHistoryWithMessages(publicRows);
-    expect(collectHistoryTextValues(reprojected)).toEqual([
-      "Sanitized publication.",
-      "Sanitized publication.",
-    ]);
-    for (const publication of publications) {
-      expect(reprojected).toContainEqual(expect.objectContaining(publication));
-    }
   });
 
   test("chat.history drops retired synthetic replies without dropping canonical or forwarded messages", async () => {

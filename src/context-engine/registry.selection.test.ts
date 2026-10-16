@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createContextEngineLogicalTurnLease } from "../agents/harness/context-engine-logical-turn.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -79,6 +80,68 @@ it("uses the default slot while plugins are disabled", async () => {
   });
   expect(factory).not.toHaveBeenCalled();
 });
+
+it.each(["custom", "rejected", "default", "disabled"] as const)(
+  "settles workspace attribution before constructing only a selected custom engine (%s)",
+  async (mode) => {
+    const { registry, factory } = fixture();
+    const entered = createDeferred();
+    const baseline = createDeferred();
+    const beforeCustomEngine = vi.fn(async () => {
+      entered.resolve();
+      await baseline.promise;
+    });
+    const config: OpenClawConfig = {
+      plugins: {
+        enabled: mode !== "disabled",
+        slots: { contextEngine: mode === "default" ? "legacy" : engineId },
+      },
+    };
+    const pending = withPluginRuntimeRegistryScope(registry, () =>
+      createContextEngineLogicalTurnLease({
+        identity: { runId: `attribution-${mode}`, sessionId: "attribution-session" },
+        config,
+        awaitSessionDiffBaseline: beforeCustomEngine,
+      }),
+    );
+    try {
+      if (mode === "default" || mode === "disabled") {
+        const lease = await awaitGateBeforeSettlement(
+          pending,
+          entered.promise,
+          "Default context engine waited for workspace attribution",
+        );
+        expect(lease.effectiveEngineId).toBe("legacy");
+        expect(beforeCustomEngine).not.toHaveBeenCalled();
+        expect(factory).not.toHaveBeenCalled();
+      } else {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Custom factory bypassed attribution",
+        );
+        expect(factory).not.toHaveBeenCalled();
+        if (mode === "rejected") {
+          const failure = new Error("workspace attribution failed");
+          baseline.reject(failure);
+          await expect(pending).rejects.toBe(failure);
+          expect(factory).not.toHaveBeenCalled();
+          expect(await listContextEngineQuarantines()).toEqual([]);
+        } else {
+          baseline.resolve();
+          expect((await pending).effectiveEngineId).toBe(engineId);
+          expect(factory).toHaveBeenCalledOnce();
+        }
+      }
+    } finally {
+      baseline.resolve();
+      await pending.then(
+        (lease) => lease.dispose(),
+        () => undefined,
+      );
+    }
+  },
+);
 
 it.each([
   ["standalone", "missing"],

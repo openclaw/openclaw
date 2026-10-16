@@ -20,14 +20,11 @@ export function resolveStateReadWorkerCount(): number {
 // These hosts multiplex independent database owners, never writers for the same database.
 export const AGENT_DATABASE_PREFLIGHT_CONCURRENCY = 2;
 export function resolveSqliteBrokerWorkerCount(): number {
-  return Math.min(8, Math.max(2, Math.floor(availableParallelism() / 8)));
+  return 2;
 }
 
-// Foreground history and context divide the same CPU headroom between two pools.
-export const SESSION_TRANSCRIPT_FOREGROUND_WORKERS = Math.min(
-  8,
-  Math.ceil(resolveWorkerComputeLimit() / 2),
-);
+// History and search retain the same bounded isolate budget as other readers.
+export const SESSION_TRANSCRIPT_FOREGROUND_WORKERS = resolveWorkerPoolSize("reader");
 
 export function resolveUpdateHashWorkerCount(): number {
   // Bun/Linux reports host memory rather than the process's cgroup allowance.

@@ -57,7 +57,6 @@ const controlUiPerformanceBudgets = {
   // Allow 3 above the maximum while catching the roughly 19-request facade regression.
   routeBootJsRequests: 35,
   startupCssRequests: 1,
-  // Personal backgrounds: operator-approved 1,407 B cap adjustment; tolerances stay unchanged.
   startupJsGzipBytes: 374_285,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
@@ -710,6 +709,8 @@ function main(argv: string[] = process.argv.slice(2)): void {
   }
   if (!reportOnly) {
     const artifactContractMetrics = new Set([
+      "chat boot JS requests",
+      "new boot JS requests",
       "isolated Mermaid JS assets",
       "startup Mermaid JS assets",
       "locale catalog base JS assets per locale",

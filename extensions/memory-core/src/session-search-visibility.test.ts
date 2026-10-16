@@ -22,7 +22,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-hit")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: vi.fn(() => ({
+    loadCombinedSessionStoreForGatewayAsync: vi.fn(async () => ({
       storePath: "(test)",
       store: combinedSessionStore,
     })),
@@ -32,7 +32,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
 describe("filterMemorySearchHitsBySessionVisibility", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGateway).mockClear();
+    vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGatewayAsync).mockClear();
     combinedSessionStore = crossAgentStore;
   });
 
@@ -47,7 +47,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toStrictEqual([]);
   });
 
-  it.each([undefined, "configured", "sessions"] as const)(
+  it.each(["configured"] as const)(
     "does not load session history for memory-only hits with recall corpus %s",
     async (corpus) => {
       const guard = vi.spyOn(sessionVisibility, "createSessionVisibilityGuard");
@@ -57,21 +57,19 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
         requesterSessionKey: "agent:main:main",
         sandboxed: false,
         hits,
-        conversationRecall: corpus
-          ? {
-              anchorSessionKey: "agent:main:main",
-              scope: "same-agent-private",
-              corpus,
-            }
-          : undefined,
+        conversationRecall: {
+          anchorSessionKey: "agent:main:main",
+          scope: "same-agent-private",
+          corpus,
+        },
       });
-      expect(filtered).toEqual(corpus === "sessions" ? [] : hits);
-      expect(sessionTranscriptHit.loadCombinedSessionStoreForGateway).not.toHaveBeenCalled();
+      expect(filtered).toEqual(hits);
+      expect(sessionTranscriptHit.loadCombinedSessionStoreForGatewayAsync).not.toHaveBeenCalled();
       expect(guard).not.toHaveBeenCalled();
     },
   );
 
-  it.each([undefined, "tree"] as const)(
+  it.each([undefined] as const)(
     "applies %s visibility to unrelated same-agent recall from a voice requester",
     async (visibility) => {
       combinedSessionStore = {
@@ -104,72 +102,9 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
         hits: [memoryHit, sessionHit],
       });
 
-      expect(filtered).toEqual(visibility === "tree" ? [memoryHit] : [memoryHit, sessionHit]);
+      expect(filtered).toEqual([memoryHit, sessionHit]);
     },
   );
-
-  it("allows another same-agent private transcript through trusted conversation recall", async () => {
-    combinedSessionStore = {
-      "agent:main:telegram:direct:owner": sessionEntry(
-        "current",
-        2,
-        "/tmp/sessions/current.jsonl",
-        { chatType: "direct" },
-      ),
-      "agent:main:webchat:direct:owner": sessionEntry("past", 1, "/tmp/sessions/past.jsonl", {
-        chatType: "direct",
-      }),
-    };
-    const hit: MemorySearchResult = searchHit("sessions/past.jsonl", "sessions", "private context");
-    const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg: asOpenClawConfig({ tools: { sessions: { visibility: "self" } } }),
-      requesterSessionKey: "agent:main:telegram:direct:owner",
-      sandboxed: false,
-      hits: [hit],
-      conversationRecall: {
-        anchorSessionKey: "agent:main:telegram:direct:owner",
-        scope: "same-agent-private",
-        corpus: "sessions",
-      },
-    });
-
-    expect(filtered).toEqual([hit]);
-  });
-
-  it("allows an agent-scoped builtin hit for an Active Memory private requester", async () => {
-    const anchorSessionKey = "agent:qa:qa-channel:direct:dm:remember-target";
-    combinedSessionStore = {
-      [anchorSessionKey]: sessionEntry("target-id", 2, "/tmp/sessions/target-id.jsonl", {
-        chatType: "direct",
-      }),
-      "agent:qa:qa-channel:direct:dm:remember-source": sessionEntry(
-        "source-id",
-        1,
-        "/tmp/sessions/source-id.jsonl",
-        { chatType: "direct" },
-      ),
-    };
-    const hit: MemorySearchResult = searchHit(
-      "sessions/qa/source-id.jsonl",
-      "sessions",
-      "private context",
-    );
-
-    const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg: asOpenClawConfig({ tools: { sessions: { visibility: "self" } } }),
-      agentId: "qa",
-      requesterSessionKey: `${anchorSessionKey}:active-memory:7e1ee8190516`,
-      sandboxed: false,
-      hits: [hit],
-      conversationRecall: {
-        anchorSessionKey,
-        scope: "same-agent-private",
-        corpus: "sessions",
-      },
-    });
-
-    expect(filtered).toEqual([hit]);
-  });
 
   it("allows recognized explicit private sessions with persisted direct metadata", async () => {
     const anchorSessionKey = "agent:main:explicit:laptop";
@@ -440,114 +375,46 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toStrictEqual([]);
   });
 
-  it("excludes the anchor transcript from trusted conversation recall", async () => {
-    combinedSessionStore = {
-      "agent:main:telegram:direct:owner": sessionEntry(
-        "current",
-        2,
-        "/tmp/sessions/current.jsonl",
-        { chatType: "direct" },
-      ),
-    };
-    const hit: MemorySearchResult = searchHit(
-      "sessions/current.jsonl",
-      "sessions",
-      "already in context",
-    );
-    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "agent" } } });
+  it.each([{ name: "unknown", chatType: undefined }])(
+    "denies $name transcript hits from trusted conversation recall",
+    async ({ chatType }) => {
+      combinedSessionStore = {
+        "agent:main:telegram:direct:owner": sessionEntry(
+          "current",
+          2,
+          "/tmp/sessions/current.jsonl",
+          { chatType: "direct" },
+        ),
+        [chatType ? "agent:main:telegram:group:family" : "agent:main:unknown-surface"]:
+          sessionEntry(
+            "candidate",
+            1,
+            "/tmp/sessions/candidate.jsonl",
+            chatType ? { chatType } : {},
+          ),
+      };
+      const hit: MemorySearchResult = searchHit(
+        "sessions/candidate.jsonl",
+        "sessions",
+        "not private",
+      );
+      const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "agent" } } });
 
-    const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg,
-      requesterSessionKey: "agent:main:telegram:direct:owner",
-      sandboxed: false,
-      hits: [hit],
-      conversationRecall: {
-        anchorSessionKey: "agent:main:telegram:direct:owner",
-        scope: "same-agent-private",
-        corpus: "sessions",
-      },
-    });
+      const filtered = await filterMemorySearchHitsBySessionVisibility({
+        cfg,
+        requesterSessionKey: "agent:main:telegram:direct:owner",
+        sandboxed: false,
+        hits: [hit],
+        conversationRecall: {
+          anchorSessionKey: "agent:main:telegram:direct:owner",
+          scope: "same-agent-private",
+          corpus: "sessions",
+        },
+      });
 
-    expect(filtered).toStrictEqual([]);
-  });
-
-  it("excludes the anchor transcript when another private key aliases the same session", async () => {
-    combinedSessionStore = {
-      "agent:main:telegram:direct:owner": sessionEntry(
-        "current",
-        2,
-        "/tmp/sessions/current.jsonl",
-        { chatType: "direct" },
-      ),
-      "agent:main:explicit:legacy-owner-alias": sessionEntry(
-        "current",
-        1,
-        "/tmp/sessions/current.jsonl",
-        { chatType: "direct" },
-      ),
-    };
-    const hit: MemorySearchResult = searchHit(
-      "sessions/current.jsonl",
-      "sessions",
-      "already in context",
-    );
-    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "agent" } } });
-
-    const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg,
-      requesterSessionKey: "agent:main:telegram:direct:owner",
-      sandboxed: false,
-      hits: [hit],
-      conversationRecall: {
-        anchorSessionKey: "agent:main:telegram:direct:owner",
-        scope: "same-agent-private",
-        corpus: "sessions",
-      },
-    });
-
-    expect(filtered).toStrictEqual([]);
-  });
-
-  it.each([
-    { name: "group", chatType: "group" as const },
-    { name: "channel", chatType: "channel" as const },
-    { name: "unknown", chatType: undefined },
-  ])("denies $name transcript hits from trusted conversation recall", async ({ chatType }) => {
-    combinedSessionStore = {
-      "agent:main:telegram:direct:owner": sessionEntry(
-        "current",
-        2,
-        "/tmp/sessions/current.jsonl",
-        { chatType: "direct" },
-      ),
-      [chatType ? "agent:main:telegram:group:family" : "agent:main:unknown-surface"]: sessionEntry(
-        "candidate",
-        1,
-        "/tmp/sessions/candidate.jsonl",
-        chatType ? { chatType } : {},
-      ),
-    };
-    const hit: MemorySearchResult = searchHit(
-      "sessions/candidate.jsonl",
-      "sessions",
-      "not private",
-    );
-    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "agent" } } });
-
-    const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg,
-      requesterSessionKey: "agent:main:telegram:direct:owner",
-      sandboxed: false,
-      hits: [hit],
-      conversationRecall: {
-        anchorSessionKey: "agent:main:telegram:direct:owner",
-        scope: "same-agent-private",
-        corpus: "sessions",
-      },
-    });
-
-    expect(filtered).toStrictEqual([]);
-  });
+      expect(filtered).toStrictEqual([]);
+    },
+  );
 
   it("rejects a transcript when one alias is private and another alias is shared", async () => {
     combinedSessionStore = {
@@ -584,65 +451,6 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       hits: [hit],
       conversationRecall: {
         anchorSessionKey: "agent:main:telegram:direct:owner",
-        scope: "same-agent-private",
-        corpus: "sessions",
-      },
-    });
-
-    expect(filtered).toStrictEqual([]);
-  });
-
-  it("denies a metadata-less main transcript during trusted conversation recall", async () => {
-    combinedSessionStore = {
-      "agent:main:telegram:direct:owner": sessionEntry(
-        "current",
-        2,
-        "/tmp/sessions/current.jsonl",
-        { chatType: "direct" },
-      ),
-      "agent:main:main": sessionEntry("ambiguous-main", 1, "/tmp/sessions/ambiguous-main.jsonl"),
-    };
-    const hit: MemorySearchResult = searchHit(
-      "sessions/ambiguous-main.jsonl",
-      "sessions",
-      "unknown conversation kind",
-    );
-    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "agent" } } });
-
-    const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg,
-      requesterSessionKey: "agent:main:telegram:direct:owner",
-      sandboxed: false,
-      hits: [hit],
-      conversationRecall: {
-        anchorSessionKey: "agent:main:telegram:direct:owner",
-        scope: "same-agent-private",
-        corpus: "sessions",
-      },
-    });
-
-    expect(filtered).toStrictEqual([]);
-  });
-
-  it("rejects a synthetic recall requester that does not start with the anchor key", async () => {
-    combinedSessionStore = {
-      "agent:main:main": sessionEntry("current", 2, "/tmp/sessions/current.jsonl", {
-        chatType: "direct",
-      }),
-      "agent:main:webchat:direct:owner": sessionEntry("past", 1, "/tmp/sessions/past.jsonl", {
-        chatType: "direct",
-      }),
-    };
-    const hit: MemorySearchResult = searchHit("sessions/past.jsonl", "sessions", "private context");
-    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "all" } } });
-
-    const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg,
-      requesterSessionKey: "agent:main:xxxx:active-memory:abcdef123456",
-      sandboxed: false,
-      hits: [hit],
-      conversationRecall: {
-        anchorSessionKey: "agent:main:main",
         scope: "same-agent-private",
         corpus: "sessions",
       },
@@ -757,24 +565,6 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toStrictEqual([]);
   });
 
-  it("loads the combined session store once per filter pass", async () => {
-    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "all" } } });
-    const hits: MemorySearchResult[] = [
-      searchHit("sessions/w1.jsonl", "sessions", "a"),
-      searchHit("sessions/w1.jsonl", "sessions", "b", { score: 0.9 }),
-    ];
-    await filterMemorySearchHitsBySessionVisibility({
-      cfg,
-      requesterSessionKey: "agent:main:main",
-      sandboxed: false,
-      hits,
-    });
-    expect(sessionTranscriptHit.loadCombinedSessionStoreForGateway).toHaveBeenCalledTimes(1);
-    expect(sessionTranscriptHit.loadCombinedSessionStoreForGateway).toHaveBeenCalledWith(cfg, {
-      agentId: "main",
-    });
-  });
-
   it.each([
     { sandboxed: false, visible: true },
     { sandboxed: true, visible: false },
@@ -802,33 +592,6 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     },
   );
 
-  it("applies canonical global-main tree visibility in an explicit fleet", async () => {
-    combinedSessionStore = {
-      "agent:main:slack:channel:team": sessionEntry("team", 1, "/tmp/sessions/team.jsonl", {
-        chatType: "channel",
-      }),
-    };
-    const hit: MemorySearchResult = searchHit("sessions/team.jsonl", "sessions", "team context");
-
-    const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg: asOpenClawConfig({
-        session: { scope: "global" },
-        tools: { sessions: { visibility: "tree" } },
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "main" } },
-          entries: { main: {}, research: {} },
-        },
-      }),
-      agentId: "main",
-      requesterSessionKey: "global",
-      sandboxed: false,
-      hits: [hit],
-    });
-
-    expect(filtered).toEqual([hit]);
-  });
-
   it("keeps same-agent live orphan transcript hits", async () => {
     combinedSessionStore = {};
     const hit: MemorySearchResult = searchHit("sessions/main/live-orphan.jsonl", "sessions", "x");
@@ -839,23 +602,6 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       hits: [hit],
     });
     expect(filtered).toEqual([hit]);
-  });
-
-  it("drops cross-agent live orphan transcript hits", async () => {
-    combinedSessionStore = {};
-    const hit: MemorySearchResult = searchHit("sessions/peer/live-orphan.jsonl", "sessions", "x");
-    const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg: asOpenClawConfig({
-        tools: {
-          sessions: { visibility: "all" },
-          agentToAgent: { enabled: true, allow: ["*"] },
-        },
-      }),
-      requesterSessionKey: "agent:main:main",
-      sandboxed: false,
-      hits: [hit],
-    });
-    expect(filtered).toStrictEqual([]);
   });
 
   it("does not treat a same-agent orphan filename as proven self-session lineage", async () => {

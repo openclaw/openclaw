@@ -7,6 +7,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readSessionUpdatedAtCore } from "../../config/sessions/session-accessor.js";
 import { readSessionUpdatedAtInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import {
   resolveAgentRoute,
   type ResolvedAgentRoute,
@@ -22,8 +23,13 @@ type ChannelInboundEnvelopeBuilderParams = {
   route: Pick<ResolvedAgentRoute, "agentId" | "sessionKey">;
 };
 
-/** @deprecated Use createChannelInboundEnvelopeBuilderAsync. Retained until the next Plugin SDK major. */
+/** @deprecated Await createChannelInboundEnvelopeBuilderAsync. Final compatibility day: 2026-12-31. */
 export function createChannelInboundEnvelopeBuilder(params: ChannelInboundEnvelopeBuilderParams) {
+  warnPluginSdkDeprecation({
+    family: "channel-inbound-envelope",
+    method: "createChannelInboundEnvelopeBuilder",
+    replacement: "await createChannelInboundEnvelopeBuilderAsync",
+  });
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.route.agentId,
   });
@@ -64,8 +70,13 @@ function createEnvelopeFormatter(
   };
 }
 
-/** @deprecated Use resolveAgentRoute and createChannelInboundEnvelopeBuilderAsync. Retained until the next Plugin SDK major. */
+/** @deprecated Use resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync. Final compatibility day: 2026-12-31. */
 export function resolveChannelInboundRouteEnvelope(params: ResolveAgentRouteInput) {
+  warnPluginSdkDeprecation({
+    family: "channel-inbound-envelope",
+    method: "resolveChannelInboundRouteEnvelope",
+    replacement: "resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync",
+  });
   const route = resolveAgentRoute(params);
   return {
     route,
@@ -106,10 +117,15 @@ type InboundEnvelopeBuilderParams<TConfig, TEnvelope> = {
   formatAgentEnvelope: (params: InboundEnvelopeFormatParams<TEnvelope>) => string;
 };
 
-/** @deprecated Use createChannelInboundEnvelopeBuilderAsync. Retained for released SDK callbacks until the next major. */
+/** @deprecated Await createChannelInboundEnvelopeBuilderAsync. Final compatibility day: 2026-12-31. */
 export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(
   params: InboundEnvelopeBuilderParams<TConfig, TEnvelope>,
 ) {
+  warnPluginSdkDeprecation({
+    family: "channel-inbound-envelope",
+    method: "createInboundEnvelopeBuilder",
+    replacement: "await createChannelInboundEnvelopeBuilderAsync",
+  });
   const storePath = params.resolveStorePath(params.sessionStore, {
     agentId: params.route.agentId,
   });
@@ -131,7 +147,7 @@ export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(
   };
 }
 
-/** @deprecated Use resolveAgentRoute and createChannelInboundEnvelopeBuilderAsync. Retained for released SDK callbacks until the next major. */
+/** @deprecated Use resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync. Final compatibility day: 2026-12-31. */
 export function resolveInboundRouteEnvelopeBuilder<
   TConfig,
   TEnvelope,
@@ -146,6 +162,11 @@ export function resolveInboundRouteEnvelopeBuilder<
   route: TRoute;
   buildEnvelope: ReturnType<typeof createInboundEnvelopeBuilder<TConfig, TEnvelope>>;
 } {
+  warnPluginSdkDeprecation({
+    family: "channel-inbound-envelope",
+    method: "resolveInboundRouteEnvelopeBuilder",
+    replacement: "resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync",
+  });
   const route = params.resolveAgentRoute({
     cfg: params.cfg,
     channel: params.channel,
@@ -174,7 +195,7 @@ type InboundRouteEnvelopeRuntime<
   >;
 };
 
-/** @deprecated Use resolveAgentRoute and createChannelInboundEnvelopeBuilderAsync. Retained for released SDK callbacks until the next major. */
+/** @deprecated Use resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync. Final compatibility day: 2026-12-31. */
 export function resolveInboundRouteEnvelopeBuilderWithRuntime<
   TConfig,
   TEnvelope,
@@ -189,6 +210,11 @@ export function resolveInboundRouteEnvelopeBuilderWithRuntime<
   route: TRoute;
   buildEnvelope: ReturnType<typeof createInboundEnvelopeBuilder<TConfig, TEnvelope>>;
 } {
+  warnPluginSdkDeprecation({
+    family: "channel-inbound-envelope",
+    method: "resolveInboundRouteEnvelopeBuilderWithRuntime",
+    replacement: "resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync",
+  });
   return resolveInboundRouteEnvelopeBuilder({
     cfg: params.cfg,
     channel: params.channel,

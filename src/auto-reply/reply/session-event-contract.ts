@@ -21,6 +21,8 @@ export type SessionEventOutcome = {
   delivered: boolean;
   summary?: string;
   error?: string;
+  /** Admission policy decides whether a durable producer may retry this refusal. */
+  retryable?: boolean;
   deliveryAttempted?: boolean;
   deliveryAmbiguous?: boolean;
   deliverySuppressionReason?: NormalizeReplySkipReason;
@@ -50,6 +52,10 @@ export type SessionEventTarget = {
   agentId?: string;
   sessionKey?: string;
 };
+
+export type SessionEventSourcePolicy = Readonly<
+  Pick<SessionEventTarget, "toolsAllow" | "settings">
+>;
 
 /** Producer callbacks stay bound to the queued occurrence, not a later dispatcher. */
 export type SessionEventExecution = {

@@ -7,6 +7,10 @@ import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import type { MemoryWorkspaceFiles } from "../../packages/memory-host-sdk/src/host/workspace-files.js";
 import { withinTest } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot as clearFixtureRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot as setFixtureRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -41,20 +45,21 @@ const providerId = "background-reload-fixture";
 const { createOpenClawTestState } = loadHost(
   path.join(repository, "src/test-utils/openclaw-test-state.ts"),
 ) as typeof import("../test-utils/openclaw-test-state.js");
-// Match the SDK's native host so its module-local workspace bindings are shared.
-const workspaceSdk = tryNativeRequireModule(
-  path.join(repository, "src/plugin-sdk/agent-workspace-runtime.ts"),
-  {
+// Native SDK and config reads must share their module-local host bindings.
+function loadNativeHost(source: string): unknown {
+  const loaded = tryNativeRequireModule(path.join(repository, source), {
     aliasMap: preparePluginLoaderAliases({
       modulePath: memorySource,
       devSourceRoot: repository,
       pluginSdkResolution: "src",
     }).resolveAlias,
-  },
-);
-assert(workspaceSdk.ok, "Expected the native workspace SDK fixture");
-const { registerAgentWorkspaceAccess } =
-  workspaceSdk.moduleExport as typeof import("../plugin-sdk/agent-workspace-runtime.js");
+  });
+  assert(loaded.ok, `Expected native host module ${source}`);
+  return loaded.moduleExport;
+}
+const { registerAgentWorkspaceAccess } = loadNativeHost(
+  "src/plugin-sdk/agent-workspace-runtime.ts",
+) as typeof import("../plugin-sdk/agent-workspace-runtime.js");
 const { resolveSessionTranscriptsDirForAgent } = loadHost(
   path.join(repository, "src/config/sessions/paths.ts"),
 ) as typeof import("../config/sessions/paths.js");
@@ -72,12 +77,52 @@ const { appendSessionTranscriptMessageByIdentity, publishSessionTranscriptUpdate
     path.join(repository, "src/plugin-sdk/session-transcript-runtime.ts"),
   ) as typeof import("../plugin-sdk/session-transcript-runtime.js");
 
+const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = loadNativeHost(
+  "src/config/runtime-snapshot.ts",
+) as typeof import("../config/runtime-snapshot.js");
+
 type RegistryHost = ReturnType<typeof createPluginRegistry>;
 type SyncReason = "watch" | "interval" | "session-delta" | "session-startup-catchup";
+type MemorySearchSettings = NonNullable<NonNullable<OpenClawConfig["memory"]>["search"]>;
+
+function memoryConfig(
+  workspace: string,
+  search: MemorySearchSettings,
+  agentId = "main",
+): OpenClawConfig {
+  return {
+    agents: { entries: { [agentId]: { workspace } } },
+    memory: { search: { provider: "none", store: { vector: { enabled: false } }, ...search } },
+  };
+}
+
+function publishConfig(config: OpenClawConfig) {
+  setRuntimeConfigSnapshot(config, config);
+  setFixtureRuntimeConfigSnapshot(config, config);
+}
+
+async function cleanupState(state: Awaited<ReturnType<typeof createOpenClawTestState>>) {
+  await state.cleanup().finally(() => {
+    clearRuntimeConfigSnapshot();
+    clearFixtureRuntimeConfigSnapshot();
+  });
+}
+
+async function openManager(
+  memory: ReturnType<typeof loadMemory>,
+  cfg: OpenClawConfig,
+  agentId = "main",
+  purpose?: "cli",
+) {
+  const opened = await memory.runtime.getMemorySearchManager({ cfg, agentId, purpose });
+  assert(opened.manager, opened.error ?? "Expected memory manager");
+  const manager = opened.manager;
+  const raw = getPluginOriginalValue(manager, memory.instance) ?? manager;
+  return { manager, raw, prototype: Object.getPrototypeOf(raw) as RegisteredMemorySearchManager };
+}
 
 function enableInterval(manager: object) {
-  // Interval scheduling is dormant in current config defaults. Exercise the
-  // existing owner without inventing a public config option.
+  // Exercise the dormant interval owner without inventing a public config option.
   const scheduled = manager as {
     settings: { sync: { intervalMinutes: number } };
     ensureIntervalSync(): void;
@@ -161,16 +206,10 @@ it("retires live watchers and starts successor indexing without a search or turn
   signal,
 }) => {
   const state = await createOpenClawTestState({ label: "memory-watcher-retirement" });
-  const config: OpenClawConfig = {
-    agents: { entries: { main: { workspace: state.workspaceDir } } },
-    memory: {
-      search: {
-        provider: "none",
-        sources: ["memory"],
-        store: { vector: { enabled: false } },
-      },
-    },
-  };
+  const config = memoryConfig(state.workspaceDir, {
+    sources: ["memory"],
+    rememberAcrossConversations: false,
+  });
   const { subscriptions, release, nextSubscription } = registerMemoryWorkspaceWatch(
     state.workspaceDir,
   );
@@ -180,13 +219,9 @@ it("retires live watchers and starts successor indexing without a search or turn
     const initial = registryHost();
     const memory = loadMemory(initial, config);
     instances.push(memory.instance);
-    const opened = await memory.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
-    assert(opened.manager, opened.error ?? "Expected the initial memory manager");
-    // Close drains accepted syncs by contract; settle the dirty startup index first so the
-    // fixed retirement budget measures watcher retirement, not cold first-index latency.
-    await opened.manager.sync?.({ reason: "startup-settled" });
-    const raw = getPluginOriginalValue(opened.manager, memory.instance) ?? opened.manager;
-    const prototype = Object.getPrototypeOf(raw) as RegisteredMemorySearchManager;
+    const { manager, raw, prototype } = await openManager(memory, config);
+    // Drain cold indexing before measuring watcher retirement's fixed budget.
+    await manager.sync?.({ reason: "startup-settled" });
     closeInitial = async () => {
       await prototype.close?.call(raw);
     };
@@ -251,6 +286,54 @@ it("retires live watchers and starts successor indexing without a search or turn
   }
 });
 
+it("retires Memory Core while session startup discovery is in flight", async ({ signal }) => {
+  const state = await createOpenClawTestState({ label: "memory-startup-retirement" });
+  const config = memoryConfig(state.workspaceDir, { sources: ["sessions"] });
+  publishConfig(config);
+  const memory = loadMemory(registryHost(), config);
+  try {
+    // A transient manager exposes the shared prototype without scheduling startup work.
+    const probe = await openManager(memory, config, "main", "cli");
+    const discovery = probe.prototype as RegisteredMemorySearchManager & {
+      listSessionCorpusEntries(): Promise<unknown[]>;
+      awaitManagerIdle(): Promise<void>;
+    };
+    await probe.manager.close?.();
+    const listed = createDeferredCore();
+    const closing = createDeferredCore();
+    // oxlint-disable-next-line typescript/unbound-method -- The spy forwards the manager receiver with call().
+    const list = discovery.listSessionCorpusEntries;
+    vi.spyOn(discovery, "listSessionCorpusEntries").mockImplementationOnce(async function (
+      this: object,
+    ) {
+      const entries = await list.call(this);
+      listed.resolve();
+      await closing.promise;
+      return entries;
+    });
+    // oxlint-disable-next-line typescript/unbound-method -- The spy forwards the manager receiver with call().
+    const awaitIdle = discovery.awaitManagerIdle;
+    vi.spyOn(discovery, "awaitManagerIdle").mockImplementation(function (this: object) {
+      closing.resolve();
+      return awaitIdle.call(this);
+    });
+    const opened = await openManager(memory, config);
+    await withinTest(listed.promise, signal);
+    const { database } = opened.raw as unknown as { database: object };
+    const sourceState = vi.spyOn(
+      Object.getPrototypeOf(database) as { readSourceState(): unknown },
+      "readSourceState",
+    );
+
+    await expect(memory.instance.dispose()).resolves.toEqual({ errors: [] });
+    expect(sourceState).not.toHaveBeenCalled();
+  } finally {
+    await memory.instance.dispose();
+    vi.restoreAllMocks();
+    await cleanupState(state);
+  }
+});
+
 it.for([false, true])(
   "syncs detached background work after reload (replace Memory Core: %s)",
   async (replaceMemory, { signal }) => {
@@ -281,19 +364,19 @@ it.for([false, true])(
         ),
       );
     const config = (agentId: string, reason?: SyncReason): OpenClawConfig => ({
-      plugins: { enabled: false },
-      agents: { entries: { [agentId]: { workspace: path.join(state.workspaceDir, agentId) } } },
-      memory: {
-        search: {
+      ...memoryConfig(
+        path.join(state.workspaceDir, agentId),
+        {
           provider: providerId,
           model: "synthetic",
           fallback: "none",
           sources: reason?.startsWith("session") ? ["sessions"] : ["memory"],
           rememberAcrossConversations: true,
           cache: { enabled: false },
-          store: { vector: { enabled: false } },
         },
-      },
+        agentId,
+      ),
+      plugins: { enabled: false },
     });
     const addProvider = (host: RegistryHost, generation: number) => {
       const record = createPluginRecord({
@@ -328,6 +411,7 @@ it.for([false, true])(
       const storePath = path.join(resolveSessionTranscriptsDirForAgent(agentId), "sessions.json");
       const sessionId = "background-session";
       const sessionKey = `agent:${agentId}:memory:${sessionId}`;
+      const identity = { agentId, sessionId, sessionKey, storePath };
       await upsertSessionEntry({
         agentId,
         sessionKey,
@@ -335,17 +419,14 @@ it.for([false, true])(
         entry: { sessionId, updatedAt: Date.now() },
       });
       await appendSessionTranscriptMessageByIdentity({
-        agentId,
-        sessionId,
-        sessionKey,
-        storePath,
+        ...identity,
         message: {
           role: "user",
           timestamp: Date.now(),
           content: [{ type: "text", text: `Remember the violet ${agentId} background fact.` }],
         },
       });
-      return { agentId, sessionId, sessionKey, storePath };
+      return identity;
     };
     const errors: unknown[] = [];
     try {
@@ -355,17 +436,9 @@ it.for([false, true])(
       instances.push(memory.instance);
       awaitingInstance = memory.instance;
       awaitingStage = "initial manager acquisition";
-      const boot = await inTurn(() =>
-        memory.runtime.getMemorySearchManager({
-          cfg: config("bootstrap"),
-          agentId: "bootstrap",
-          purpose: "cli",
-        }),
-      );
-      assert(boot.manager, boot.error ?? "Expected initial memory manager");
+      const boot = await inTurn(() => openManager(memory, config("bootstrap"), "bootstrap", "cli"));
       managers.add(boot.manager);
-      const raw = getPluginOriginalValue(boot.manager, memory.instance) ?? boot.manager;
-      const prototype = Object.getPrototypeOf(raw) as RegisteredMemorySearchManager;
+      const { raw, prototype } = boot;
       const sync = prototype.sync;
       assert(sync);
       const completions = new Map<string, ReturnType<typeof createDeferredCore<Promise<void>>>>();
@@ -455,6 +528,7 @@ it.for([false, true])(
         awaitingStage = `${reason}: prepare sources`;
         const agentId = reason;
         const cfg = config(agentId, reason);
+        publishConfig(cfg);
         const workspace = path.join(state.workspaceDir, agentId);
         await fs.mkdir(workspace, { recursive: true });
         await fs.writeFile(
@@ -473,28 +547,27 @@ it.for([false, true])(
         completions.set(reason, completed);
         const before = embedded.length;
         awaitingStage = `${reason}: open manager`;
-        const opened = await inTurn(() => current.runtime.getMemorySearchManager({ cfg, agentId }));
-        assert(opened.manager, opened.error ?? "Expected replacement memory manager");
+        const opened = await inTurn(() => openManager(current, cfg, agentId));
         managers.add(opened.manager);
-        const rawManager =
-          getPluginOriginalValue(opened.manager, current.instance) ?? opened.manager;
-        if (reason === "session-delta") {
-          const startupWork = startupCompletions.get(rawManager);
+        if (reason === "session-startup-catchup" || reason === "session-delta") {
+          const startupWork = startupCompletions.get(opened.raw);
           assert(startupWork, "Constructor must own startup discovery");
-          awaitingStage = "session-delta: empty startup completion";
+          awaitingStage = `${reason}: startup discovery`;
           await withinTest(startupWork, signal);
-          awaitingStage = "session-delta: publish transcript update";
-          await inTurn(async () => {
-            const target = await seedSession(agentId);
-            await publishSessionTranscriptUpdateByIdentity(target);
-          });
-          await vi.advanceTimersByTimeAsync(5_000);
+          if (reason === "session-delta") {
+            awaitingStage = "session-delta: publish transcript update";
+            await inTurn(async () => {
+              const target = await seedSession(agentId);
+              await publishSessionTranscriptUpdateByIdentity(target);
+            });
+          }
+          await vi.advanceTimersByTimeAsync(30_000);
         } else if (reason === "watch") {
           const subscription = watchedWorkspace?.subscriptions.at(-1);
           assert(subscription, "Memory manager must subscribe to its workspace host");
           inTurn(subscription.notify);
         } else if (reason === "interval") {
-          inTurn(() => enableInterval(rawManager));
+          inTurn(() => enableInterval(opened.raw));
           await vi.advanceTimersByTimeAsync(60_000);
         }
         awaitingStage = `${reason}: sync completion`;
@@ -513,8 +586,7 @@ it.for([false, true])(
       }
       if (replaceMemory) {
         awaitingStage = "retired manager interval callback";
-        // A queued callback may arrive after cancellation from a newer caller.
-        // Its manager must still ask the original owner for admission.
+        // Even a queued, cancelled callback must ask its original owner for admission.
         const callsBefore = current.instance.ordinaryCallCount;
         const syncsBefore = syncObserver.mock.calls.length;
         current.instance.run(() => retiredInterval());
@@ -528,6 +600,7 @@ it.for([false, true])(
       errors.push(error);
     } finally {
       awaitingStage = "fixture cleanup";
+      // Convert synchronous cleanup throws into rejections so every owner still retires.
       const closed = await Promise.allSettled(
         [...managers].map(async (manager) => await manager.close?.()),
       );
@@ -539,7 +612,7 @@ it.for([false, true])(
       const disposed = await Promise.allSettled(
         instances.toReversed().map(async (instance) => await instance.dispose()),
       );
-      const cleaned = await Promise.allSettled([state.cleanup()]);
+      const cleaned = await Promise.allSettled([cleanupState(state)]);
       signal.removeEventListener("abort", reportInterruptedStage);
       errors.push(
         ...[...closed, ...disposed, ...cleaned].flatMap((result) =>

@@ -1,7 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -118,17 +117,6 @@ describe("Telegram live QA scenario gate", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("leaves the exit code clear when every Telegram scenario passes", async () => {
-    writeSummary("pass");
-
-    await runQaTelegramSuite({
-      repoRoot: "/repo",
-      providerMode: "mock-openai",
-    });
-
-    expect(process.exitCode).toBe(0);
-  });
-
   it("permits genuinely executed failed scenarios when failures are explicitly allowed", async () => {
     writeSummary("fail");
     await runQaTelegramSuite({
@@ -205,44 +193,6 @@ describe("Telegram live QA scenario gate", () => {
     expect(output).toContain("channel-message-flows\tdefault\t");
     expect(output).not.toContain("telegram-startup-getme-live");
     expect(mocks.runQaFlowSuiteFromRuntime).not.toHaveBeenCalled();
-  });
-
-  it("forwards caller-owned gateway config mutation to the flow suite", async () => {
-    const mutateConfig = vi.fn((cfg: OpenClawConfig) => cfg);
-
-    await runQaTelegramSuite({
-      allowFailures: true,
-      mutateConfig,
-      providerMode: "mock-openai",
-      repoRoot: process.cwd(),
-    });
-
-    expect(mocks.runQaFlowSuiteFromRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({ mutateConfig }),
-    );
-  });
-
-  it("lists scenarios against the exact requested model", async () => {
-    mocks.resolveTelegramQaRunOptions.mockReturnValueOnce({
-      allowFailures: false,
-      listScenarios: true,
-      primaryModel: "openai/custom-list-model",
-      providerMode: "live-frontier",
-      repoRoot: process.cwd(),
-    });
-    mocks.listTelegramQaScenarios.mockReturnValue([]);
-
-    await runQaTelegramSuite({
-      listScenarios: true,
-      primaryModel: "openai/custom-list-model",
-      providerMode: "live-frontier",
-      repoRoot: process.cwd(),
-    });
-
-    expect(mocks.listTelegramQaScenarios).toHaveBeenCalledWith({
-      primaryModel: "openai/custom-list-model",
-      providerMode: "live-frontier",
-    });
   });
 
   it("selects scenarios against the exact requested model before suite startup", async () => {

@@ -19,7 +19,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
-import { reconcileSessionRunTerminal, type SessionRunTerminal } from "./session-run-terminal.ts";
+import type { SessionRunTerminal } from "./session-run-terminal.ts";
 
 const mainKey = "agent:main:main";
 const row = (key = mainKey, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
@@ -66,26 +66,60 @@ function changed(key: string) {
 
 afterEach(() => vi.useRealTimers());
 
-it("shares confirmed archive visibility after Gateway events", async () => {
-  const key = "agent:main:archive-from-agent";
-  const held = row(key, { sessionId: "archive-session" });
+it.each([false, null])(
+  "shares confirmed archive visibility after a %s restore event",
+  async (restored) => {
+    const key = "agent:main:archive-from-agent";
+    const held = row(key, { sessionId: "archive-session" });
+    const { sessions, emitEvent } = sessionHarness({
+      "sessions.list": () => sessionsResult([held], 1),
+    });
+    const reconcile = (archived: boolean | null, updatedAt: number) =>
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { ...held, sessionKey: key, reason: "patch", archived, updatedAt },
+      });
+    await sessions.refresh({ agentId: "main", force: true });
+    reconcile(true, 2);
+    expect(sessions.archiveVisibility(key)).toBe("archived");
+    await sessions.refresh({ agentId: "main", force: true });
+    expect(sessions.archiveVisibility(key)).toBe("archived");
+    reconcile(restored, 3);
+    expect(sessions.archiveVisibility(key)).toBeUndefined();
+    sessions.dispose();
+  },
+);
+
+it("accepts a descriptor restore outside the primary list", async () => {
+  const key = "agent:main:descriptor-restore";
+  const held = row(key, { sessionId: "restored-session", archived: true, updatedAt: 2 });
+  let listed = [held];
   const { sessions, emitEvent } = sessionHarness({
-    "sessions.list": () => sessionsResult([held], 1),
+    "sessions.list": () => sessionsResult(listed, 2),
+    "sessions.describe": () => ({ session: { ...held, archived: false, updatedAt: 3 } }),
   });
-  const reconcile = (archived: boolean, updatedAt: number) =>
+  const observation = sessions.observeRow({ key, agentId: "main" }, () => {});
+  try {
+    await sessions.refresh({ agentId: "main", force: true });
     emitEvent({
       type: "event",
       event: "sessions.changed",
-      payload: { ...held, sessionKey: key, reason: "patch", archived, updatedAt },
+      payload: { ...held, sessionKey: key, reason: "patch" },
     });
-  await sessions.refresh({ agentId: "main", force: true });
-  reconcile(true, 2);
-  expect(sessions.archiveVisibility(key)).toBe("archived");
-  await sessions.refresh({ agentId: "main", force: true });
-  expect(sessions.archiveVisibility(key)).toBe("archived");
-  reconcile(false, 3);
-  expect(sessions.archiveVisibility(key)).toBeUndefined();
-  sessions.dispose();
+    expect(sessions.archiveVisibility(key)).toBe("archived");
+    listed = [];
+    await sessions.refresh({ agentId: "main", force: true });
+    expect(sessions.state.result?.sessions).toEqual([]);
+    const reconcile = observation.captureReconcile();
+    const described = await sessions.describe({ key, agentId: "main" }, { refresh: true });
+    reconcile(described.session ?? undefined);
+    expect(observation.row?.archived).toBe(false);
+    expect(sessions.archiveVisibility(key)).toBeUndefined();
+  } finally {
+    observation.dispose();
+    sessions.dispose();
+  }
 });
 
 it("automatically retries an explicitly retryable group catalog failure", async () => {
@@ -165,31 +199,6 @@ it("keeps a confirmed group rename completed when its row refresh outlives the c
   publish(false);
   refreshed.resolve(emptyList());
   await expect(mutation).resolves.toBe("completed");
-  sessions.dispose();
-});
-
-it("ignores an older group load failure after an event-driven load succeeds", async () => {
-  const first = createDeferred<{ groups: Array<{ name: string }> }>();
-  const current = createDeferred<{ groups: Array<{ name: string }> }>();
-  let calls = 0;
-  const { sessions, emitEvent } = sessionHarness(
-    {
-      "sessions.groups.list": () => (++calls === 1 ? first.promise : current.promise),
-      "sessions.list": () => sessionsResult([], 1),
-    },
-    ["sessions.groups.list"],
-  );
-  const firstLoad = sessions.groupsLoad();
-  await waitForFast(() => expect(calls).toBe(1));
-  emitEvent({ type: "event", event: "sessions.changed", payload: { reason: "groups" } });
-  await waitForFast(() => expect(calls).toBe(2));
-  current.resolve({ groups: [{ name: "Current" }] });
-  await waitForFast(() => expect(sessions.state.groups).toEqual(["Current"]));
-  first.reject(new Error("stale catalog failure"));
-  await firstLoad;
-  await sessions.groupsLoad();
-  expect(calls).toBe(2);
-  expect(sessions.state.groups).toEqual(["Current"]);
   sessions.dispose();
 });
 
@@ -455,43 +464,6 @@ it("ignores stale archive state after a newer unarchive via Gateway events", asy
   sessions.dispose();
 });
 
-it("advances the canonical list revision only for sessions.list publications", async () => {
-  const { sessions } = sessionHarness({
-    "sessions.list": () => sessionsResult([row("agent:main:listed", { updatedAt: 2 })], 2),
-  });
-  expect(sessions.canonicalListRevision).toBe(0);
-  sessions.reconcile(row("agent:main:startup"), {
-    modelProvider: null,
-    model: null,
-    contextTokens: null,
-  });
-  expect(sessions.canonicalListRevision).toBe(0);
-  await sessions.refresh({ force: true });
-  expect(sessions.canonicalListRevision).toBe(1);
-  expect(sessions.state.result?.sessions[0]?.key).toBe("agent:main:listed");
-  sessions.dispose();
-});
-
-it("starts a fresh list epoch when the same client reconnects", async () => {
-  const stale = createDeferred<SessionsListResult>();
-  const current = createDeferred<SessionsListResult>();
-  let calls = 0;
-  const { sessions, publish } = sessionHarness({
-    "sessions.subscribe": subscribed,
-    "sessions.list": () => (++calls === 1 ? stale.promise : current.promise),
-  });
-  const staleRefresh = sessions.refresh({ force: true });
-  publish(false);
-  publish(true);
-  await waitForFast(() => expect(calls).toBe(2));
-  stale.resolve(sessionsResult([row("stale")], 1));
-  await staleRefresh;
-  expect(sessions.state.result).toBeNull();
-  current.resolve(sessionsResult([row("current", { updatedAt: 2 })], 2));
-  await waitForFast(() => expect(sessions.state.result?.sessions[0]?.key).toBe("current"));
-  sessions.dispose();
-});
-
 it("does not probe for a group catalog when the method is explicitly absent", async () => {
   const { sessions, request } = sessionHarness({}, []);
   await sessions.groupsLoad();
@@ -499,18 +471,6 @@ it("does not probe for a group catalog when the method is explicitly absent", as
   expect(request).not.toHaveBeenCalled();
   expect(sessions.state.groups).toEqual([]);
   sessions.dispose();
-});
-
-it("preserves registry-active terminal rows without matching run identity", () => {
-  const result = sessionsResult([row(mainKey, { hasActiveRun: true, status: "done" })], 1);
-  expect(
-    reconcileSessionRunTerminal(result, {
-      sessionKeys: ["main"],
-      runId: "run-1",
-      status: "done",
-      endedAt: 160,
-    }),
-  ).toBe(result);
 });
 
 it("refreshes stale active rows after a terminal session message", async () => {

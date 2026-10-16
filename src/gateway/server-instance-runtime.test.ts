@@ -14,6 +14,10 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+// First dispatch lazily loads these modules; keep cold compilation outside the test deadline.
+import "./agent-turn/agent-request-preflight.js";
+import "./agent-turn/agent-turn-service.js";
+import "./agent-turn/principal.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
@@ -103,7 +107,11 @@ describe("createGatewayInstanceRuntime", () => {
 
     await expect(
       runtime.recovery.dispatchAgent({ message: "test", idempotencyKey: "run-unavailable" }),
-    ).rejects.toThrow("Gateway instance dispatch unavailable");
+    ).rejects.toMatchObject({
+      name: "GatewayDispatchUnavailableError",
+      message: expect.stringContaining("Gateway instance dispatch unavailable"),
+      retryable: true,
+    });
     available = true;
     await expect(runtime.recovery.waitForAgent({ runId: "run-1", timeoutMs: 0 })).resolves.toEqual({
       runId: "run-1",
@@ -155,9 +163,11 @@ describe("createGatewayInstanceRuntime", () => {
     preparing.resolve(undefined);
     await expect(preparation).rejects.toThrow("Gateway instance dispatch unavailable");
     expect(getGatewayRecoveryRuntime()).toBeUndefined();
-    await expect(runtime.recovery.waitForAgent({ runId: "run-1" })).rejects.toThrow(
-      "Gateway instance dispatch unavailable",
-    );
+    await expect(runtime.recovery.waitForAgent({ runId: "run-1" })).rejects.toMatchObject({
+      name: "GatewayDispatchUnavailableError",
+      message: expect.stringContaining("Gateway instance dispatch unavailable"),
+      retryable: false,
+    });
     await expect(
       retainedFacade.dispatch({ message: "stale completion", idempotencyKey: "closed-host" }),
     ).rejects.toThrow("Gateway instance dispatch unavailable");
@@ -294,7 +304,7 @@ describe("createGatewayInstanceRuntime", () => {
     });
   });
 
-  it("keeps approval subscribers isolated by Gateway instance and unregisters exactly once", () => {
+  it("keeps approval subscribers isolated by Gateway instance and unregisters exactly once", async () => {
     const registry = createRegistry({});
     const first = createGatewayInstanceRuntime({
       getContext: createContext,
@@ -333,17 +343,94 @@ describe("createGatewayInstanceRuntime", () => {
     const declined = vi.fn();
     first.nativeApprovals.subscribe({
       eventKinds: new Set(["exec"]),
-      shouldHandle: () => false,
+      shouldHandle: async () => false,
       onRequested: declined,
       onResolved: vi.fn(),
     });
-    expect(first.approvalEvents.publishRequested("exec", request)).toBe(0);
+    expect(await first.approvalEvents.publishRequestedAsync("exec", request)).toBe(0);
     expect(declined).not.toHaveBeenCalled();
     first.close();
     expect(getGatewayRecoveryRuntime()).toBe(second.recovery);
     second.close();
     expect(getGatewayRecoveryRuntime()).toBeUndefined();
   });
+
+  it("refuses synchronous publication before sending when a subscriber requires async eligibility", async () => {
+    const logError = vi.fn();
+    const runtime = createGatewayInstanceRuntime({
+      getContext: createContext,
+      getMethodRegistry: () => createRegistry({}),
+      isDispatchAvailable: () => true,
+      logError,
+    });
+    const pending = createDeferred<boolean>();
+    const onRequested = vi.fn();
+    runtime.nativeApprovals.subscribe({
+      eventKinds: new Set(["exec"]),
+      shouldHandle: () => true,
+      onRequested,
+      onResolved: vi.fn(),
+    });
+    runtime.nativeApprovals.subscribe({
+      eventKinds: new Set(["exec"]),
+      shouldHandle: () => pending.promise,
+      onRequested,
+      onResolved: vi.fn(),
+    });
+    try {
+      expect(() =>
+        runtime.approvalEvents.publishRequested("exec", {
+          id: "legacy-async-eligibility",
+          request: {},
+          createdAtMs: 1,
+          expiresAtMs: 2,
+        }),
+      ).toThrow("use approvalEvents.publishRequestedAsync");
+      expect(onRequested).not.toHaveBeenCalled();
+      pending.reject(new Error("eligibility rejected"));
+      await Promise.resolve();
+      expect(logError).toHaveBeenCalledWith(expect.stringContaining("eligibility rejected"));
+      expect(onRequested).not.toHaveBeenCalled();
+    } finally {
+      runtime.close();
+    }
+  });
+
+  it.each(["unsubscribe", "resolve", "close"] as const)(
+    "retires native approval delivery when %s wins an async eligibility wait",
+    async (retire) => {
+      const eligibility = createDeferred<boolean>();
+      const runtime = createGatewayInstanceRuntime({
+        getContext: createContext,
+        getMethodRegistry: () => createRegistry({}),
+        isDispatchAvailable: () => true,
+      });
+      const onRequested = vi.fn();
+      const unsubscribe = runtime.nativeApprovals.subscribe({
+        eventKinds: new Set(["exec"]),
+        shouldHandle: () => eligibility.promise,
+        onRequested,
+        onResolved: vi.fn(),
+      });
+      const publication = runtime.approvalEvents.publishRequestedAsync("exec", {
+        id: "pending-eligibility",
+        request: { command: "echo test" },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      });
+      if (retire === "unsubscribe") {
+        unsubscribe();
+      } else if (retire === "resolve") {
+        runtime.approvalEvents.publishResolved("exec", { id: "pending-eligibility" });
+      } else {
+        runtime.close();
+      }
+      eligibility.resolve(true);
+      expect(await publication).toBe(0);
+      expect(onRequested).not.toHaveBeenCalled();
+      runtime.close();
+    },
+  );
 
   it("rejects methods outside each closed internal principal", async () => {
     const runtime = createGatewayInstanceRuntime({

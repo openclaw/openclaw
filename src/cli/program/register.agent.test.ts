@@ -70,8 +70,7 @@ vi.mock("../one-shot-exit.js", () => ({
   requestExitAfterOneShotOutput: mocks.requestExitAfterOneShotOutputMock,
 }));
 
-const { agentCliCommandMock, agentExecCommandMock, requestExitAfterOneShotOutputMock, runtime } =
-  mocks;
+const { agentCliCommandMock, agentExecCommandMock, runtime } = mocks;
 
 async function runCli(args: string[]) {
   const program = new Command().enablePositionalOptions();
@@ -95,73 +94,31 @@ describe("agent command registration", () => {
     );
   });
 
-  it("keeps exec-valued parent messages and failure status on the parent action", async () => {
-    const previousExitCode = process.exitCode;
-    agentCliCommandMock.mockImplementationOnce(async () => {
-      process.exitCode = 1;
-    });
-    try {
-      await runCli("agent --message exec --agent ops".split(" "));
-      expect(agentCliCommandMock).toHaveBeenCalledOnce();
-      expect(agentExecCommandMock).not.toHaveBeenCalled();
-      expect(requestExitAfterOneShotOutputMock).toHaveBeenCalledWith(runtime);
-      expect(process.exitCode).toBe(1);
-    } finally {
-      process.exitCode = previousExitCode;
-    }
-  });
-
-  it("runs nested exec with ordered fallbacks and stored credentials by default", async () => {
-    await runCli(
-      "agent exec fix --cwd /tmp/project --model openai/gpt-5.6-luna --fallback anthropic/claude-sonnet-4-6 --fallback google/gemini-3.1-pro-preview --json".split(
-        " ",
-      ),
-    );
-    expect(agentCliCommandMock).not.toHaveBeenCalled();
-    expect(agentExecCommandMock).toHaveBeenCalledWith(
-      "fix",
-      expect.objectContaining({
-        cwd: "/tmp/project",
-        model: "openai/gpt-5.6-luna",
-        fallback: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
-        authEnvOnly: false,
-        isolated: false,
-        timeout: "600",
-        json: true,
-      }),
-      runtime,
-    );
-  });
-
   it.each([
     {
-      args: "agent --model openai/gpt-5.6-luna --timeout 30 exec fix".split(" "),
-      timeout: "30",
+      args: [
+        ..."agent --timeout 30 exec fix --timeout 120".split(" "),
+        "--config-override",
+        '{"tools":{"deny":["exec"]}}',
+        "--config-override",
+        '{"tools":{"deny":[]}}',
+      ],
+      timeout: "120",
     },
-    { args: "agent --timeout 30 exec fix --timeout 120".split(" "), timeout: "120" },
   ])("resolves parent and leaf exec options for $args", async ({ args, timeout }) => {
     await runCli(args);
     expect(agentExecCommandMock).toHaveBeenCalledWith(
       "fix",
-      expect.objectContaining({ timeout }),
+      expect.objectContaining({
+        timeout,
+        configOverride: ['{"tools":{"deny":["exec"]}}', '{"tools":{"deny":[]}}'],
+      }),
       runtime,
     );
     expect(agentCliCommandMock).not.toHaveBeenCalled();
   });
 
   it.each([
-    {
-      args: ["alpha"],
-      options: { name: "alpha", bind: [] },
-      workspace: undefined,
-      hasAutomationFlags: false,
-    },
-    {
-      args: "editor --role writer --json".split(" "),
-      options: { name: "editor", role: "writer", json: true, nonInteractive: false },
-      workspace: undefined,
-      hasAutomationFlags: false,
-    },
     {
       args: "beta --workspace /tmp/ws --bind telegram --bind discord:acct --non-interactive --json".split(
         " ",

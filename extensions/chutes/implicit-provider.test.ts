@@ -3,7 +3,6 @@ import { resolveOAuthApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { CHUTES_BASE_URL } from "./models.js";
-import { refreshChutesOAuthCredential } from "./oauth.js";
 
 const CHUTES_OAUTH_MARKER = resolveOAuthApiKeyMarker("chutes");
 
@@ -44,10 +43,36 @@ describe("chutes implicit provider auth mode", () => {
     expect(provider.envVars).toEqual(["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"]);
   });
 
-  it("registers plugin-owned OAuth refresh behavior", async () => {
+  it("renews an OAuth credential through the registered hook with caller config", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
-
-    expect(provider.refreshOAuth).toBe(refreshChutesOAuthCredential);
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        access_token: "renewed-access",
+        refresh_token: "rotated-refresh",
+        expires_in: 1800,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const credential = {
+      type: "oauth" as const,
+      provider: "chutes",
+      access: "old-access",
+      refresh: "old-refresh",
+      expires: 1,
+      clientId: "stored-client",
+      clientSecret: "synthetic-client-secret",
+    };
+    const renewed = await provider.refreshOAuth?.(credential, {
+      models: { providers: { chutes: { baseUrl: "https://proxy.example.com/v1", models: [] } } },
+    });
+    expect(renewed).toMatchObject({
+      ...credential,
+      access: "renewed-access",
+      refresh: "rotated-refresh",
+      expires: expect.any(Number),
+    });
+    expect(renewed?.expires).toBeGreaterThan(Date.now());
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.chutes.ai/idp/token");
   });
 
   it("does not publish a provider when no API key is resolved", async () => {

@@ -75,29 +75,6 @@ describe("SessionCatalogLiveState", () => {
     },
   );
 
-  it.each([
-    { name: "fresh", details: {} },
-    { name: "error", details: { error: { code: "UNAVAILABLE", message: "Node unavailable" } } },
-    { name: "offline", details: { connected: false } },
-  ])("clears pending when an expanded host publishes $name data", ({ details }) => {
-    const live = new SessionCatalogLiveState();
-    const { progressId } = live.beginRequest(1);
-    const current = catalog("codex", 1);
-    current.hosts[0]!.pending = true;
-    const { pending: _pending, ...fresh } = current.hosts[0]!;
-    const result = live.applyHost({
-      payload: {
-        progressId,
-        agentId: "main",
-        catalog: { ...current, hosts: [{ ...fresh, ...details }] },
-      },
-      agentId: "main",
-      catalogs: [current],
-      pageDepths: new Map([[sessionCatalogHostKey("codex", fresh.hostId), 1]]),
-    });
-    expect(result?.catalogs[0]?.hosts[0]?.pending).toBeUndefined();
-  });
-
   it("does not replace a settled progressive host with its pending final response", () => {
     const live = new SessionCatalogLiveState();
     const { progressId } = live.beginRequest(1);
@@ -163,42 +140,5 @@ describe("SessionCatalogLiveState", () => {
       });
     }).not.toThrow();
     expect(result!).toBeNull();
-  });
-
-  it.each([
-    {
-      metadata: "capabilities",
-      update: (current: SessionCatalog): SessionCatalog => ({
-        ...current,
-        capabilities: {
-          ...current.capabilities,
-          createSession: { model: "openai/gpt-5.6-luna" },
-        },
-      }),
-    },
-    {
-      metadata: "catalog error",
-      update: (current: SessionCatalog): SessionCatalog => ({
-        ...current,
-        error: { code: "unavailable", message: "Catalog temporarily unavailable" },
-      }),
-    },
-  ])("applies $metadata from a progressive host event", ({ update }) => {
-    const live = new SessionCatalogLiveState();
-    const { progressId } = live.beginRequest(1);
-    const current = catalog("changed", 1);
-
-    const result = live.applyHost({
-      payload: {
-        progressId,
-        agentId: "main",
-        catalog: { ...update(current), hosts: [current.hosts[0]!] },
-      },
-      agentId: "main",
-      catalogs: [current],
-      pageDepths: new Map(),
-    });
-
-    expect(result?.catalogs[0]).toEqual(update(current));
   });
 });

@@ -26,7 +26,7 @@ import {
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 const mainAgents: AgentsListResult = {
   defaultId: "main",
@@ -88,7 +88,6 @@ describe("sidebar routed-lineage freshness", () => {
       childSessions: [selected.key],
     };
     const initialParent = deferred<{ session: GatewaySessionRow }>();
-    const freshSelected = deferred<{ session: GatewaySessionRow }>();
     const request = vi.fn(async (method, raw) => {
       const params = raw && typeof raw === "object" ? raw : {};
       if (method === "sessions.list") {
@@ -100,7 +99,7 @@ describe("sidebar routed-lineage freshness", () => {
       if (method === "sessions.describe") {
         const key = "key" in params ? params.key : undefined;
         if (key === selected.key) {
-          return freshSelected.promise;
+          return { session: selected };
         }
         if (key === mainKey) {
           return initialParent.promise;
@@ -121,6 +120,10 @@ describe("sidebar routed-lineage freshness", () => {
 
       sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
       expect(sidebar.sessionData.childSessionRowsByParent).toEqual({});
+      expect(sidebar.sessionData.activeSessionLineageSelectedRow).toMatchObject({
+        key: selected.key,
+        sessionId: selected.sessionId,
+      });
       await waitForFast(() =>
         expect(request).toHaveBeenCalledWith(
           "sessions.list",
@@ -128,13 +131,9 @@ describe("sidebar routed-lineage freshness", () => {
         ),
       );
       await waitForFast(() => expect(sidebar.sessionData.sessionsResult?.sessions).toEqual([]));
-      await waitForFast(() =>
-        expect(request).toHaveBeenCalledWith("sessions.describe", { key: selected.key }),
-      );
       await sidebar.updateComplete;
       expect(row()).toBeNull();
 
-      freshSelected.resolve({ session: selected });
       initialParent.resolve({ session: parent });
       await waitForFast(() =>
         expect(sidebar.sessionData.activeSessionLineageRoot?.key).toBe(mainKey),
@@ -168,7 +167,6 @@ describe("sidebar routed-lineage freshness", () => {
       provider.remove();
       sessions.dispose();
       initialParent.resolve({ session: parent });
-      freshSelected.resolve({ session: selected });
       await sidebar.updateComplete;
     }
   });
@@ -348,7 +346,7 @@ describe("selected lineage after managed list admission", () => {
           if (params?.spawnedBy === p2) {
             return sessionsResult([current], 30);
           }
-          if (params?.involvingMe === true) {
+          if (params?.archived === "all") {
             managedReads += 1;
             return result();
           }
@@ -380,7 +378,8 @@ describe("selected lineage after managed list admission", () => {
       const { row, parent: parentOfSelected, expand } = sessionTree(sidebar, key);
       let originalLineage: Promise<void> | undefined;
       try {
-        await activateSessionMenuValue(sidebar, "involving-me");
+        // Status filtering owns a separate managed query without requiring involvement membership.
+        await activateSessionMenuValue(sidebar, "status:all");
         await waitForFast(() => {
           expect(managedReads).toBeGreaterThan(0);
           expect(sidebar.sessionData.sessionsLoading).toBe(false);
@@ -483,7 +482,7 @@ describe("selected lineage after managed list admission", () => {
 });
 
 describe("selected lineage after a full sessions.changed event", () => {
-  it.each(["filtered omitted", "unfiltered metadata"] as const)(
+  it.each(["status-filtered omitted", "unfiltered metadata"] as const)(
     "%s keeps accepted event fields visible after list refresh failures",
     async (mode) => {
       vi.useFakeTimers();
@@ -556,7 +555,7 @@ describe("selected lineage after a full sessions.changed event", () => {
           if (params?.spawnedBy === p2) {
             return result([current]);
           }
-          if (params?.involvingMe === true) {
+          if (params?.archived === "all") {
             if (failedLists) {
               managedFailures += 1;
               throw new Error("Synthetic managed refresh failure");
@@ -588,7 +587,8 @@ describe("selected lineage after a full sessions.changed event", () => {
       const { row, parent: directParent, expand } = sessionTree(sidebar, key);
       try {
         if (filtered) {
-          await activateSessionMenuValue(sidebar, "involving-me");
+          // Status filtering owns a separate managed query without requiring involvement membership.
+          await activateSessionMenuValue(sidebar, "status:all");
           await waitForFast(() => {
             expect(sidebar.sessionData.sessionsLoading).toBe(false);
             expect(sidebar.sessionData.sessionsResult?.sessions.map((entry) => entry.key)).toEqual([
@@ -677,7 +677,7 @@ describe("selected lineage after a full sessions.changed event", () => {
         // A retained parent query refreshes its changed member; reparenting
         // retires the old query before its scheduled refresh runs.
         expect(controllerChildReads).toBe(reparent ? 1 : 2);
-        if (mode === "filtered omitted") {
+        if (mode === "status-filtered omitted") {
           expect(sidebar.sessionData.sessionsResult?.sessions.map((entry) => entry.key)).toEqual([
             p1,
           ]);

@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { Socket } from "node:net";
 import type { Transform } from "node:stream";
 import { execa } from "execa";
+import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
 import { setProcessTimeout } from "../process-deadline.js";
 import { createExecaOutput } from "./execa-output.js";
 import {
@@ -24,6 +25,7 @@ export type BrokerExecaProcess = {
   child: ChildProcess;
   stdio: (Socket | null)[];
   result: Promise<BrokerExecaResult>;
+  groupStartedAt?: number | null;
   cancel: () => void;
   kill: (signal?: NodeJS.Signals | number) => boolean;
   outputDrained: (fd: number, error?: Error) => void;
@@ -70,6 +72,13 @@ export async function startBrokerExeca(
       throw await adoptAbandonedSpawnError(error);
     }
     const child = subprocess.nodeChildProcess;
+    // Capture before returning across an await: libuv may reap a short-lived leader.
+    const groupStartedAt =
+      child.pid &&
+      process.platform !== "win32" &&
+      (options.detached === true || options.killDescendants === true)
+        ? getProcessInstanceStartTime(child.pid)
+        : undefined;
     const stdio = [0, 1, 2].map((fd) => {
       if (fd === 0 && options.input !== undefined) {
         return null;
@@ -121,6 +130,7 @@ export async function startBrokerExeca(
       child,
       stdio,
       result,
+      groupStartedAt,
       cancel() {
         clearDeadline();
         controller.abort();

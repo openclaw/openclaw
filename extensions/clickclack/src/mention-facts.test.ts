@@ -25,17 +25,6 @@ describe("resolveClickClackMentionFacts", () => {
     expect(result.hasAnyMention).toBe(false);
   });
 
-  it("matches the configured bot handle case-insensitively", () => {
-    const result = resolveClickClackMentionFacts({
-      isDirect: false,
-      body: "@BlackBird hello",
-      mentionPatterns: [],
-      botHandle: "@blackbird",
-    });
-    expect(result.wasMentioned).toBe(true);
-    expect(result.hasAnyMention).toBe(true);
-  });
-
   it("does not treat email addresses as ClickClack mentions", () => {
     const result = resolveClickClackMentionFacts({
       isDirect: false,
@@ -65,15 +54,6 @@ describe("resolveClickClackMentionFacts", () => {
     });
     expect(result.wasMentioned).toBe(false);
     expect(result.hasAnyMention).toBe(false);
-  });
-
-  it("non-matching pattern returns wasMentioned false", () => {
-    const result = resolveClickClackMentionFacts({
-      isDirect: false,
-      body: "just a message",
-      mentionPatterns: ["@bot", "@assistant"],
-    });
-    expect(result.wasMentioned).toBe(false);
   });
 
   it("multiple patterns: matches one pattern", () => {

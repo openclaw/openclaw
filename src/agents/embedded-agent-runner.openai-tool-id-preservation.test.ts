@@ -99,8 +99,8 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
     );
     const firstId = callId(result[0]);
     const secondId = callId(result[3]);
-    expect(firstId).toMatch(/^call_[A-Za-z0-9_-]+$/);
-    expect(secondId).toMatch(/^call_[A-Za-z0-9_-]+$/);
+    expect(firstId).toMatch(/^call_[A-Za-z0-9_-]{1,59}\|fc_tmp_first$/);
+    expect(secondId).toMatch(/^call_[A-Za-z0-9_-]{1,59}\|fc_tmp_second$/);
     expect(secondId).not.toBe(firstId);
     expect(result[1]).toMatchObject({
       role: "toolResult",

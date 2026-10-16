@@ -13,9 +13,6 @@ export function registerSlackShortcutHandler(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
 }): void {
-  if (typeof params.ctx.app.shortcut !== "function") {
-    return;
-  }
   params.ctx.app.shortcut(/.+/, async (args: SlackShortcutHandlerArgs) => {
     const { ack, body } = args;
     await ack();
@@ -93,7 +90,7 @@ export function registerSlackShortcutHandler(params: {
       messageText: messageBody?.message.text,
       responseUrl: messageBody?.response_url,
     };
-    const route = runtimeContext.resolveSlackSystemEventRoute({
+    const route = await runtimeContext.resolveSlackSystemEventRoute({
       channelId,
       channelType: auth.channelType,
       senderId: userId,

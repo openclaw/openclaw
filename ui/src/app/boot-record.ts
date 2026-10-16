@@ -8,7 +8,6 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
 const BOOT_RECORD_MAX_BYTES = 64 * 1024;
 const BOOT_RECORD_MAX_AGE = 30 * 24 * 60 * 60 * 1000;
-let bootRecordGeneration = 0;
 type BootRecordChange = {
   scope?: string;
   external?: true;
@@ -178,14 +177,8 @@ export function readBootRecord(
 
 /** Cancel an owned publication without deleting a peer’s persisted admission. */
 export function retirePendingBootRecord(scope: string | undefined, owner: BootRecordOwner): void {
-  if (
-    pending &&
-    pending.record.scope === scope &&
-    sameBootRecordOwner(bootRecordOwner(pending.record), owner)
-  ) {
-    pending = undefined;
-    clearTimeout(timer);
-    timer = undefined;
+  if (pending && pending.scope === scope && sameBootRecordOwner(bootRecordOwner(pending), owner)) {
+    cancelPendingBootRecord();
   }
 }
 
@@ -212,7 +205,7 @@ export function clearBootRecords(scope?: string, owner?: BootRecordOwner): void 
     notifyBootRecordChange({ scope, retiredOwner: owner });
     return;
   }
-  bootRecordGeneration += 1;
+  cancelPendingBootRecord();
   notifyBootRecordChange({ scope });
   try {
     const storage = getSafeLocalStorage();
@@ -262,17 +255,20 @@ export function readOfflineStorageScope(host: {
 }
 
 let timer: ReturnType<typeof setTimeout> | undefined;
-let pending: { record: BootRecord; generation: number } | undefined;
+let pending: BootRecord | undefined;
 
-function flushBootRecord(): void {
+function cancelPendingBootRecord(): void {
+  pending = undefined;
   clearTimeout(timer);
   timer = undefined;
-  const write = pending;
-  pending = undefined;
-  if (!write || write.generation !== bootRecordGeneration) {
+}
+
+function flushBootRecord(): void {
+  const record = pending;
+  cancelPendingBootRecord();
+  if (!record) {
     return;
   }
-  const { record } = write;
   const storage = getSafeLocalStorage();
   const key = BOOT_RECORD_PREFIX + record.scope;
   try {
@@ -290,11 +286,9 @@ function flushBootRecord(): void {
     const json = JSON.stringify({ ...record, agents });
     if (new TextEncoder().encode(json).length > BOOT_RECORD_MAX_BYTES) {
       removeOwnedBootRecord(record.scope, bootRecordOwner(record));
-    } else {
-      storage?.setItem(key, json);
-      if (storage?.getItem(key) === json) {
-        notifyBootRecordChange({ scope: record.scope, replacement: bootRecordOwner(record) });
-      }
+    } else if (storage) {
+      storage.setItem(key, json);
+      notifyBootRecordChange({ scope: record.scope, replacement: bootRecordOwner(record) });
     }
   } catch {
     removeOwnedBootRecord(record.scope, bootRecordOwner(record));
@@ -303,7 +297,7 @@ function flushBootRecord(): void {
 
 export function persistBootRecord(record: BootRecord): void {
   clearTimeout(timer);
-  pending = { record, generation: bootRecordGeneration };
+  pending = record;
   timer = setTimeout(flushBootRecord, 500);
 }
 
@@ -326,12 +320,11 @@ if (
     // Replacement data never admits an account. Each consumer compares its own
     // owner; same-account tabs keep their live connection and pending publication.
     if (
-      (!scope || pending?.record.scope === scope) &&
-      (!retiredOwner ||
-        (pending && sameBootRecordOwner(retiredOwner, bootRecordOwner(pending.record)))) &&
-      !sameBootRecordOwner(replacement, pending ? bootRecordOwner(pending.record) : undefined)
+      (!scope || pending?.scope === scope) &&
+      (!retiredOwner || (pending && sameBootRecordOwner(retiredOwner, bootRecordOwner(pending)))) &&
+      !sameBootRecordOwner(replacement, pending ? bootRecordOwner(pending) : undefined)
     ) {
-      bootRecordGeneration += 1;
+      cancelPendingBootRecord();
     }
     notifyBootRecordChange({ scope, external: true, replacement, retiredOwner });
   });

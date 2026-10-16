@@ -11,7 +11,10 @@ import {
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -115,6 +118,7 @@ async function createSweep(
       },
     },
   };
+  setRuntimeConfigSnapshot(config);
   const narratives: CompletionInput[] = [];
   const complete = vi.fn(async (input: CompletionInput) => {
     if (!input.extraSystemPrompt?.includes("You are keeping a dream diary")) {
@@ -148,6 +152,7 @@ async function createSweep(
       agent,
       subagent: {
         complete,
+        forkSession: unexpectedSessionCall,
         run: unexpectedSessionCall,
         waitForRun: unexpectedSessionCall,
         getSessionMessages: unexpectedSessionCall,

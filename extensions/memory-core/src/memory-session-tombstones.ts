@@ -1,10 +1,42 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
   runSqliteImmediateTransactionSync,
   tableExists,
+  type SqliteDatabaseAdmissionKey,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+
+const tombstoneAdmission: SqliteDatabaseAdmissionKey<ReadonlyMap<string, string>> = {
+  name: "memory.session-tombstones",
+  schemaDependent: true,
+  // Facts only travel through the paired in-process database workers.
+  read: (value) => (value instanceof Map ? value : undefined),
+};
+
+function readMemorySessionTombstones(db: EngineConnection): ReadonlyMap<string, string> {
+  const admitted = getSqliteDatabaseAdmission(db, tombstoneAdmission);
+  if (admitted) {
+    return admitted;
+  }
+  const sessions = new Map<string, string>();
+  if (tableExists(db, "memory_session_tombstones")) {
+    const rows = executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<MemoryOriginDatabase>(db)
+        .selectFrom("memory_session_tombstones")
+        .select(["session_id", "agent_id"]),
+    ).rows;
+    for (const row of rows) {
+      sessions.set(row.session_id, row.agent_id);
+    }
+  }
+  publishSqliteDatabaseAdmission(db, tombstoneAdmission, sessions);
+  return sessions;
+}
 
 export function ensureMemorySessionTombstones(db: DatabaseSync): void {
   if (tableExists(db, "memory_session_tombstones")) {
@@ -19,23 +51,11 @@ export function ensureMemorySessionTombstones(db: DatabaseSync): void {
 }
 
 export function hasMemorySessionTombstone(
-  db: DatabaseSync,
+  db: EngineConnection,
   agentId: string,
   sessionId: string,
 ): boolean {
-  if (!tableExists(db, "memory_session_tombstones")) {
-    return false;
-  }
-  return (
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<MemoryOriginDatabase>(db)
-        .selectFrom("memory_session_tombstones")
-        .select("session_id")
-        .where("agent_id", "=", agentId)
-        .where("session_id", "=", sessionId),
-    ).rows.length > 0
-  );
+  return readMemorySessionTombstones(db).get(sessionId) === agentId;
 }
 
 type MemorySessionTombstoneRow = {
@@ -54,7 +74,7 @@ const TOMBSTONE_INSERT_BATCH_SIZE = 128;
 
 /** The caller owns schema admission; preserve the supplied connection and write boundary. */
 export function recordMemorySessionTombstonesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     agentId: string;
     sessionIds: readonly string[];
@@ -70,6 +90,7 @@ export function recordMemorySessionTombstonesInDatabase(
   const createdAt = params.createdAt ?? Date.now();
   return runSqliteImmediateTransactionSync(db, () => {
     const kysely = getNodeSqliteKysely<MemoryOriginDatabase>(db);
+    const sessions = new Map(readMemorySessionTombstones(db));
     let recorded = 0;
     for (let start = 0; start < sessionIds.length; start += TOMBSTONE_INSERT_BATCH_SIZE) {
       const result = executeSqliteQuerySync(
@@ -87,6 +108,11 @@ export function recordMemorySessionTombstonesInDatabase(
           .onConflict((conflict) => conflict.column("session_id").doNothing()),
       );
       recorded += Number(result.numAffectedRows ?? 0n);
+      for (const sessionId of sessionIds.slice(start, start + TOMBSTONE_INSERT_BATCH_SIZE)) {
+        if (!sessions.has(sessionId)) {
+          sessions.set(sessionId, params.agentId);
+        }
+      }
     }
     if (recorded > 0) {
       // A shadow index can have no published chunks yet. Its existing revision
@@ -99,6 +125,7 @@ export function recordMemorySessionTombstonesInDatabase(
           .where("id", "=", 1),
       );
     }
+    publishSqliteDatabaseAdmission(db, tombstoneAdmission, sessions);
     return recorded;
   });
 }

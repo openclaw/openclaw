@@ -24,8 +24,9 @@ it.each([
   { status: 500, reconnects: false, failureMethod: "tools/call" },
   { status: 404, reconnects: true, failureMethod: "tools/list" },
   { status: 500, reconnects: false, failureMethod: "tools/list" },
+  { status: 200, reconnects: true, failureMethod: "endpoint" },
 ])(
-  "handles legacy SSE $failureMethod POST $status without replaying a failed tool call",
+  "recovers legacy SSE $failureMethod ($status) without replaying a failed tool call",
   async ({ status, reconnects, failureMethod }) => {
     vi.useFakeTimers();
     const encoder = new TextEncoder();
@@ -43,11 +44,14 @@ it.each([
             start(controller) {
               streams.set(endpoint, controller);
               onAbort = () => {
-                streams.delete(endpoint);
-                controller.error(init?.signal?.reason);
+                if (streams.delete(endpoint)) {
+                  controller.error(init?.signal?.reason);
+                }
               };
               init?.signal?.addEventListener("abort", onAbort, { once: true });
-              controller.enqueue(encoder.encode(`event: endpoint\ndata: ${endpoint}\n\n`));
+              controller.enqueue(
+                encoder.encode(`retry: 1\nevent: endpoint\ndata: ${endpoint}\n\n`),
+              );
             },
             cancel() {
               streams.delete(endpoint);
@@ -127,8 +131,13 @@ it.each([
     try {
       expect((await runtime.getCatalog()).tools).toHaveLength(1);
       const originalTools = await toolBytes();
-      rejectNextRequest = true;
-      if (failureMethod === "tools/call") {
+      rejectNextRequest = failureMethod !== "endpoint";
+      if (failureMethod === "endpoint") {
+        const stream = streams.get("/messages/1");
+        streams.delete("/messages/1");
+        stream?.close();
+        await vi.advanceTimersByTimeAsync(1);
+      } else if (failureMethod === "tools/call") {
         await expect(runtime.callTool("legacy", "probe", { attempt: "expired" })).rejects.toThrow(
           `Error POSTing to endpoint (HTTP ${status}): Session not found`,
         );
@@ -155,9 +164,12 @@ it.each([
         await vi.advanceTimersByTimeAsync(5_000);
       }
 
-      await runtime.getCatalog();
-      await vi.advanceTimersByTimeAsync(0);
-      const activeEndpoint = `/messages/${reconnects ? 2 : 1}`;
+      if (failureMethod !== "endpoint") {
+        await runtime.getCatalog();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      const expectedSessions = failureMethod === "endpoint" ? 3 : reconnects ? 2 : 1;
+      const activeEndpoint = `/messages/${expectedSessions}`;
       await expect(
         runtime.callTool("legacy", "probe", { attempt: "after" }),
       ).resolves.toMatchObject({
@@ -170,7 +182,7 @@ it.each([
       if (failureMethod === "tools/list") {
         expect(lists).toEqual(["/messages/1", "/messages/1", activeEndpoint]);
       }
-      expect(sessionCount).toBe(reconnects ? 2 : 1);
+      expect(sessionCount).toBe(expectedSessions);
       expect(await toolBytes()).toBe(originalTools);
     } finally {
       await runtime.dispose();

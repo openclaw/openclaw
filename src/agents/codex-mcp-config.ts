@@ -307,21 +307,12 @@ export async function loadCodexBundleMcpThreadConfigCore(
     return mode === undefined || mode === "auto";
   });
   const mcpServers = buildCodexMcpServersConfig(preparedDataDirs.config, configuredGrants);
-  if (Object.keys(mcpServers).length === 0) {
-    return {
-      diagnostics,
-      evaluated: true,
-      staticServerNames,
-      userStaticServerNames,
-    };
-  }
+  const hasServers = Object.keys(mcpServers).length > 0;
   return {
-    configPatch: {
-      mcp_servers: mcpServers,
-    },
+    ...(hasServers ? { configPatch: { mcp_servers: mcpServers } } : {}),
     diagnostics,
     evaluated: true,
-    fingerprint: fingerprintCodexMcpServersConfig(mcpServers),
+    ...(hasServers ? { fingerprint: fingerprintCodexMcpServersConfig(mcpServers) } : {}),
     staticServerNames,
     userStaticServerNames,
   };

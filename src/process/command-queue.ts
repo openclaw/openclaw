@@ -17,10 +17,11 @@ import {
   validateCommandLaneGroupSpec,
 } from "./command-queue.capacity-groups.js";
 import {
-  createLaneQueue,
   dequeueLaneQueue,
   enqueueLaneQueue,
   type CommandLaneTaskMarker,
+  getDefaultLaneConcurrency,
+  getLaneState,
   getQueueState,
   type LaneState,
   normalizeLane,
@@ -33,6 +34,7 @@ import type {
   CommandQueueEnqueueOptions,
   CommandQueueTaskDeadline,
 } from "./command-queue.types.js";
+import { isExpectedRunCancellation } from "./expected-run-cancellation.js";
 import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -101,7 +103,10 @@ export function isCommandLaneTaskTimeoutError(err: unknown, lane?: string): bool
 }
 
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
-  return err instanceof Error && err.name === "LiveSessionModelSwitchError";
+  return (
+    (err instanceof Error && err.name === "LiveSessionModelSwitchError") ||
+    isExpectedRunCancellation(err)
+  );
 }
 
 function isQuietProbeLane(lane: string): boolean {
@@ -115,42 +120,19 @@ function isQuietProbeLane(lane: string): boolean {
 }
 
 function getLaneDepth(state: LaneState): number {
-  return state.queue.length + state.activeTaskIds.size;
-}
-
-function getDefaultLaneConcurrency(lane: string): number {
-  return lane.startsWith(SUBAGENT_LANE_PREFIX) && !lane.startsWith(SWARM_LANE_PREFIX)
-    ? (getQueueState().lanes.get(CommandLane.Subagent)?.maxConcurrent ?? 1)
-    : 1;
-}
-
-function getLaneState(lane: string): LaneState {
-  const queueState = getQueueState();
-  const existing = queueState.lanes.get(lane);
-  if (existing) {
-    return existing;
-  }
-  const created: LaneState = {
-    lane,
-    queue: createLaneQueue(),
-    activeTaskIds: new Set(),
-    maxConcurrent: getDefaultLaneConcurrency(lane),
-    draining: false,
-    generation: 0,
-  };
-  queueState.lanes.set(lane, created);
-  return created;
+  return state.queue.length + state.activeTasks.size;
 }
 
 function retireIdleScopedCommandLane(state: LaneState): void {
   if (
     state.draining ||
-    state.activeTaskIds.size > 0 ||
+    state.activeTasks.size > 0 ||
     state.queue.length > 0 ||
     (!state.lane.startsWith(SUBAGENT_LANE_PREFIX) &&
       (state.maxConcurrent !== 1 ||
         (!state.lane.startsWith("session:") &&
           !state.lane.startsWith("nested:") &&
+          !state.lane.startsWith("cli:") &&
           !state.lane.startsWith("context-engine-turn-maintenance:"))))
   ) {
     return;
@@ -333,7 +315,7 @@ function drainLane(
   state = getLaneState(lane),
 ): number {
   if (state.draining) {
-    if (state.activeTaskIds.size === 0 && state.queue.length > 0) {
+    if (state.activeTasks.size === 0 && state.queue.length > 0) {
       diag.warn(
         `drainLane blocked: lane=${lane} draining=true active=0 queue=${state.queue.length}`,
       );
@@ -345,19 +327,19 @@ function drainLane(
   try {
     while (
       started < maxStarts &&
-      state.activeTaskIds.size < state.maxConcurrent &&
+      state.activeTasks.size < state.maxConcurrent &&
       state.queue.length > 0 &&
       canAdmitInGroup(lane)
     ) {
       const entry = dequeueLaneQueue(state.queue) as QueueEntry;
       const waitedMs = Math.floor(performance.now()) - entry.enqueuedAt;
-      const activeBeforeStart = state.activeTaskIds.size;
+      const activeBeforeStart = state.activeTasks.size;
       const taskId = getQueueState().nextTaskId++;
       const taskGeneration = state.generation;
       // Commit the admission before invoking callbacks or logging. Both can
       // synchronously re-enter the queue, and the shared budget must already
       // account for this task when that nested admission is evaluated.
-      state.activeTaskIds.add(taskId);
+      state.activeTasks.set(taskId, entry.sessionTarget);
       started += 1;
       const startTime = Date.now();
       void (async () => {
@@ -384,7 +366,7 @@ function drainLane(
           // Admission diagnostics and task cleanup can throw too. Release and
           // pump exactly once, without letting an old generation free new work.
           if (taskGeneration === state.generation) {
-            state.activeTaskIds.delete(taskId);
+            state.activeTasks.delete(taskId);
             drainReadyCommandLane(lane, state);
           }
         }
@@ -392,9 +374,6 @@ function drainLane(
         .then(
           (result) => {
             entry.resolve(result);
-            diag.debug(
-              `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
-            );
           },
           (err: unknown) => {
             entry.reject(err);
@@ -577,7 +556,7 @@ export function enqueueCommandInLane<T>(
       onWait: onWait ? (...args) => runInAsyncContext(onWait, ...args) : undefined,
     };
     entry.queuedAheadAtEnqueue = enqueueLaneQueue(state.queue, entry);
-    entry.activeAheadAtEnqueue = state.activeTaskIds.size;
+    entry.activeAheadAtEnqueue = state.activeTasks.size;
     const signal = opts?.abortSignal;
     if (signal) {
       const onAbort = () => {
@@ -604,10 +583,21 @@ export function enqueueCommandInLane<T>(
   });
 }
 
-export function getQueueSize(lane: string = CommandLane.Main) {
-  const resolved = normalizeLane(lane);
-  const state = getQueueState().lanes.get(resolved);
-  return state ? getLaneDepth(state) : 0;
+export function getQueueSize(lane: string = CommandLane.Main, matches?: CommandLaneEntryFilter) {
+  const state = getQueueState().lanes.get(normalizeLane(lane));
+  if (!state) {
+    return 0;
+  }
+  if (!matches) {
+    return getLaneDepth(state);
+  }
+  let count = selectQueuedCommandEntries(state, matches).length;
+  for (const target of state.activeTasks.values()) {
+    if (matches(target)) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 export function getCommandLaneSnapshot(lane: string = CommandLane.Main): CommandLaneSnapshot {
@@ -616,7 +606,7 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
   const snapshot: CommandLaneSnapshot = {
     lane: state?.lane ?? resolved,
     queuedCount: state?.queue.length ?? 0,
-    activeCount: state?.activeTaskIds.size ?? 0,
+    activeCount: state?.activeTasks.size ?? 0,
     maxConcurrent: state?.maxConcurrent ?? getDefaultLaneConcurrency(resolved),
     draining: state?.draining ?? false,
     generation: state?.generation ?? 0,
@@ -637,7 +627,7 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
 export function listCommandLaneTotals() {
   return [...getQueueState().lanes.values()].map((state) => ({
     lane: state.lane,
-    activeCount: state.activeTaskIds.size,
+    activeCount: state.activeTasks.size,
     queuedCount: state.queue.length,
   }));
 }
@@ -648,7 +638,7 @@ export function listCommandLaneTotals() {
  */
 export function getCommandLaneActiveTaskIds(lane: string = CommandLane.Main): number[] {
   const state = getQueueState().lanes.get(normalizeLane(lane));
-  return state ? [...state.activeTaskIds] : [];
+  return state ? [...state.activeTasks.keys()] : [];
 }
 
 /** Return whether this exact lane task still owns an active queue slot. */
@@ -657,7 +647,7 @@ export function isCommandLaneTaskMarkerCurrent(marker: CommandLaneTaskMarker | u
     return false;
   }
   const state = getQueueState().lanes.get(normalizeLane(marker.lane));
-  return state?.generation === marker.generation && state.activeTaskIds.has(marker.taskId);
+  return state?.generation === marker.generation && state.activeTasks.has(marker.taskId);
 }
 
 export function getTotalQueueSize() {
@@ -687,26 +677,6 @@ export function countQueuedCommandsInLane(lane: string, matches: CommandLaneEntr
   return state ? selectQueuedCommandEntries(state, matches).length : 0;
 }
 
-/** Select queue entries before awaited Stop preparation can admit another turn. */
-export function prepareCommandLaneClear(lane: string, matches: CommandLaneEntryFilter) {
-  const cleaned = normalizeLane(lane);
-  const state = getQueueState().lanes.get(cleaned);
-  const entries = state ? selectQueuedCommandEntries(state, matches) : [];
-  return () => {
-    if (!state || getQueueState().lanes.get(cleaned) !== state) {
-      return 0;
-    }
-    let removed = 0;
-    for (const entry of entries) {
-      if (removeLaneQueueEntry(state.queue, entry)) {
-        removed += 1;
-        entry.reject(new CommandLaneClearedError(cleaned));
-      }
-    }
-    return removed;
-  };
-}
-
 export function clearCommandLane(
   lane: string = CommandLane.Main,
   matches?: CommandLaneEntryFilter,
@@ -717,7 +687,18 @@ export function clearCommandLane(
     return 0;
   }
   if (matches) {
-    return prepareCommandLaneClear(cleaned, matches)();
+    const entries = selectQueuedCommandEntries(state, matches);
+    if (getQueueState().lanes.get(cleaned) !== state) {
+      return 0;
+    }
+    let removed = 0;
+    for (const entry of entries) {
+      if (removeLaneQueueEntry(state.queue, entry)) {
+        removed += 1;
+        entry.reject(new CommandLaneClearedError(cleaned));
+      }
+    }
+    return removed;
   }
   const removed = state.queue.length;
   let entry: QueueEntry | undefined;
@@ -738,11 +719,11 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
   if (!state) {
     return 0;
   }
-  const released = state.activeTaskIds.size;
+  const released = state.activeTasks.size;
   state.generation += 1;
-  state.activeTaskIds.clear();
+  state.activeTasks.clear();
   state.draining = false;
-  // Clearing activeTaskIds may release multiple shared slots. Re-arbitrate the
+  // Clearing activeTasks may release multiple shared slots. Re-arbitrate the
   // whole group so the reset lane cannot reclaim them ahead of older siblings.
   drainReadyCommandLane(cleaned);
   return released;
@@ -758,7 +739,7 @@ export function resetAllLanes(): void {
   const lanesToDrain: string[] = [];
   for (const state of queueState.lanes.values()) {
     state.generation += 1;
-    state.activeTaskIds.clear();
+    state.activeTasks.clear();
     state.draining = false;
     if (state.queue.length > 0) {
       lanesToDrain.push(state.lane);

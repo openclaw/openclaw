@@ -1,5 +1,9 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   consumeCronCreatorAuthorityGrant,
   mintCronCreatorAuthorityGrant,
   resolveCronCreatorAuthorityGrantProvenance,
@@ -213,6 +217,8 @@ describe("Cron grant admission", () => {
   });
 
   it("exposes add but refuses incomplete capture and retired requester authority", async () => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(clearRuntimeConfigSnapshot);
     const runId = "remote-admin-capture";
     const { authority, caller, run } = admittedFixture(runId, "unknown", "control-ui-admin", true);
     caller.sessionKey = "agent:main:remote";

@@ -108,14 +108,6 @@ export async function prepareAgentRunDispatch(
     });
     return undefined;
   }
-  if (
-    params.abortForLifecycleRotation({
-      sessionKey: params.resolvedSessionKey,
-      agentId: params.activeSessionAgentId,
-    })
-  ) {
-    return undefined;
-  }
   if (params.restoredCronContinuationIdentity && !params.restoredCronContinuation) {
     params.io.emitAcceptance([
       false,
@@ -175,13 +167,12 @@ export async function prepareAgentRunDispatch(
           }),
           isAbortable: () => isEmbeddedAgentRunAbortableForRunId(params.runId),
           onRemoved: () => clearEmbeddedAgentRunAbortabilityForRunId(params.runId),
-          onQueueTimeout: (entry) => {
-            abortChatRunById(createChatAbortOps(params.context), {
+          onQueueTimeout: (entry) =>
+            void abortChatRunById(createChatAbortOps(params.context), {
               runId: params.runId,
               sessionKey: entry.sessionKey,
               stopReason: "timeout",
-            });
-          },
+            }),
           controlUiVisible,
           kind: "agent",
           lifecycleGeneration: params.lifecycleGeneration,
@@ -443,7 +434,16 @@ export async function prepareAgentRunDispatch(
   let subagentAdmission: Awaited<ReturnType<typeof prepareGatewaySubagentRun>>;
   try {
     subagentAdmission = await prepareGatewaySubagentRun({
-      ...params,
+      cfg: params.cfg,
+      client: params.client,
+      resolvedSessionKey: params.resolvedSessionKey,
+      activeSessionAgentId: params.activeSessionAgentId,
+      inputProvenance: params.inputProvenance,
+      request: params.request,
+      isOneShotModelRun: params.isOneShotModelRun,
+      runId: params.runId,
+      getAdmittedSessionId: params.getAdmittedSessionId,
+      context: params.context,
       onParentResumeAdopted: (entry) => {
         adoptedParentResume = entry;
       },
@@ -495,12 +495,10 @@ export async function prepareAgentRunDispatch(
     assertInputAdmissionCurrent?.();
     assertRequesterCurrent?.();
     followupCompletion?.assertCurrent();
-    if (followupSuccessor) {
-      if (!resumedTaskAdopted) {
-        followupSuccessor.assertCurrent();
-      } else if (!followupSuccessor.owner.ownsExecution(params.runId)) {
-        throw new Error("Follow-up input no longer owns its admitted execution.");
-      }
+    if (!resumedTaskAdopted) {
+      followupSuccessor?.assertCurrent();
+    } else if (followupSuccessor && !followupSuccessor.owner.ownsExecution(params.runId)) {
+      throw new Error("Follow-up input no longer owns its admitted execution.");
     }
     if (parentResume && resumedTaskAdopted && !terminal) {
       assertParentSubagentResumeSuccessorCurrent(parentResume, params.runId);
@@ -529,6 +527,7 @@ export async function prepareAgentRunDispatch(
       getAbortStopReason: () => activeRunAbort.entry?.abortStopReason ?? "rpc",
       deferTimeoutCompletion: activeRunAbort.deferTimeoutCompletion,
       admittedSessionId: params.getAdmittedSessionId(),
+      freshChildStorePath: params.freshChild ? lifecycleStorePath : undefined,
       resolvedThreadId,
     });
     if (userTurn.recorder) {
@@ -564,7 +563,19 @@ export async function prepareAgentRunDispatch(
   }
   try {
     // The transport request ends at acceptance; execution retains this exact caller.
-    capturedOperator = await retainGatewayOperatorRun({ ...params, entry: activeRunAbort.entry });
+    capturedOperator = await retainGatewayOperatorRun({
+      ...params,
+      entry: activeRunAbort.entry,
+      abortSession: params.resolvedSessionKey
+        ? {
+            cfg: params.cfg,
+            storePath: params.lifecycleStorePath,
+            entry: params.sessionEntry,
+            canonicalKey: params.resolvedSessionKey,
+            agentId: params.activeSessionAgentId,
+          }
+        : undefined,
+    });
     const operatorAdmission = revalidateAdmission(userTurn);
     if (operatorAdmission !== true) {
       return await operatorAdmission;

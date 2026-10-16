@@ -3,7 +3,11 @@
 // Regression for #137690: Telegram DM visible spawns failed because the policy
 // key (with account-id segment) was used as parentSessionKey, but the durable
 // store entry is persisted under a different key.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { AnyAgentTool } from "./common.js";
 
 const mocks = vi.hoisted(() => {
@@ -147,12 +151,17 @@ import { createOpenClawTools } from "../openclaw-tools.js";
 
 describe("createOpenClawTools sessions_spawn session-key selection", () => {
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     mocks.spawnToolOptions.mockClear();
     mocks.sendToolOptions.mockClear();
     mocks.subagentsToolOptions.mockClear();
     mocks.imageGenerateToolOptions.mockClear();
     mocks.videoGenerateToolOptions.mockClear();
     mocks.musicGenerateToolOptions.mockClear();
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   it("uses durable lineage keys while preserving policy-owned media tasks", () => {
@@ -182,7 +191,6 @@ describe("createOpenClawTools sessions_spawn session-key selection", () => {
     expect(mocks.subagentsToolOptions).toHaveBeenCalledWith(
       expect.objectContaining({
         agentSessionKey: durableKey,
-        callerPolicySessionKey: policyKey,
       }),
     );
     const subagentsCall = mocks.subagentsToolOptions.mock.calls[0]?.[0] as

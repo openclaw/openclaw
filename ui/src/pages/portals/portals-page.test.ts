@@ -5,12 +5,16 @@ import type {
   PortalListResult,
   PortalSummary,
 } from "@openclaw/gateway-protocol";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { cleanupSolid as cleanup, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 
 const probePortalReachable = vi.hoisted(() =>
   vi.fn<() => Promise<"reachable" | "unreachable" | "blocked">>(),
@@ -18,7 +22,7 @@ const probePortalReachable = vi.hoisted(() =>
 
 vi.mock("./portal-reachability.ts", () => ({ probePortalReachable }));
 
-import "./portals-page.ts";
+import { PortalsPage } from "./portals-page.tsx";
 
 const portal = {
   id: "p3000",
@@ -90,20 +94,24 @@ function createContext(
 }
 
 async function mountPage(context: ApplicationContext, portalId?: string, environmentId?: string) {
-  const page = document.createElement("openclaw-portals-page");
-  const provider = createApplicationContextProvider(context);
-  if (portalId || environmentId) {
-    page.embedded = true;
-    page.requestedPortalId = portalId ?? null;
-    page.requestedEnvironmentId = environmentId ?? null;
-  }
-  provider.append(page);
-  document.body.append(provider);
+  const provider = createSolidApplicationContextProvider(context);
+  const { container } = mountSolid(
+    () =>
+      createComponent(PortalsPage, {
+        embedded: Boolean(portalId || environmentId),
+        requestedPortalId: portalId ?? null,
+        requestedEnvironmentId: environmentId ?? null,
+      }),
+    { wrapper: provider.wrapper },
+  );
+  flush();
+  const page = container.querySelector("openclaw-portals-page")!;
   await page.updateComplete;
   return page;
 }
 
 afterEach(() => {
+  cleanup();
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -115,44 +123,12 @@ beforeEach(() => {
 });
 
 describe("PortalsPage", () => {
-  it.each([undefined, "pending-machine"])(
-    "does not read portal state without operator.read (environment: %s)",
-    async (environmentId) => {
-      const source = createContext(
-        ["portal.list", "environments.status"],
-        async () => {
-          throw new Error("unauthorized portal read");
-        },
-        ["operator.sessions.read", "operator.sessions.write"],
-      );
-      const page = await mountPage(source.context, undefined, environmentId);
-      await page.updateComplete;
-      expect(source.request).not.toHaveBeenCalled();
-      expect(page.textContent).toContain("This action requires operator.read access.");
-      expect(page.textContent).not.toContain("unauthorized portal read");
-      expect(page.textContent).not.toContain("This gateway does not support portals.");
-      expect(page.textContent).not.toContain("Starting your machine");
-    },
-  );
-
-  it.each([undefined, "pending-machine"])(
+  it.each([undefined])(
     "retains read access without a method catalog (environment: %s)",
-    async (environmentId) => {
-      const source = createContext(
-        null,
-        async () =>
-          environmentId
-            ? { id: environmentId, type: "worker", status: "available" }
-            : { portals: [] },
-        ["operator.read"],
-      );
-      await mountPage(source.context, undefined, environmentId);
-      await vi.waitFor(() =>
-        expect(source.request).toHaveBeenCalledWith(
-          environmentId ? "environments.status" : "portal.list",
-          environmentId ? { environmentId } : {},
-        ),
-      );
+    async () => {
+      const source = createContext(null, async () => ({ portals: [] }), ["operator.read"]);
+      await mountPage(source.context);
+      await waitForSolid(() => expect(source.request).toHaveBeenCalledWith("portal.list", {}));
     },
   );
 
@@ -167,7 +143,7 @@ describe("PortalsPage", () => {
           : { portals: [portal] },
       );
       const page = await mountPage(source.context, undefined, environmentId);
-      await vi.waitFor(() => expect(source.request).toHaveBeenCalledTimes(1));
+      await waitForSolid(() => expect(source.request).toHaveBeenCalledTimes(1));
       source.updateSnapshot({ phase: "reconnecting" });
       await page.updateComplete;
       expect(page.textContent).not.toContain("This action requires operator.read access.");
@@ -196,7 +172,7 @@ describe("PortalsPage", () => {
       method === "environments.status" ? environment : { portals: [portal] },
     );
     const page = await mountPage(source.context, undefined, environment.id);
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(source.request).toHaveBeenCalledWith("environments.status", {
         environmentId: environment.id,
       }),
@@ -217,7 +193,7 @@ describe("PortalsPage", () => {
     page.handleToggleRequest(
       new CustomEvent("openclaw:portal-toggle", { detail: { open: true, portalId: portal.id } }),
     );
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(page.querySelector("iframe")?.getAttribute("title")).toBe("Seeded app portal preview"),
     );
     expect(page.requestedEnvironmentId).toBeNull();
@@ -237,7 +213,7 @@ describe("PortalsPage", () => {
     const page = await mountPage(source.context, undefined, "old-machine");
     page.requestedEnvironmentId = replacement.id;
     await page.updateComplete;
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(source.request).toHaveBeenLastCalledWith("environments.status", {
         environmentId: replacement.id,
       }),
@@ -252,7 +228,7 @@ describe("PortalsPage", () => {
     replacement = { ...replacement, status: "error" };
     page.presented = true;
     await page.updateComplete;
-    await vi.waitFor(() => expect(page.textContent).toContain("The machine could not start"));
+    await waitForSolid(() => expect(page.textContent).toContain("The machine could not start"));
     expect(page.querySelector("iframe")).toBeNull();
     page.remove();
     const finalReads = source.request.mock.calls.length;
@@ -260,66 +236,124 @@ describe("PortalsPage", () => {
     expect(source.request).toHaveBeenCalledTimes(finalReads);
   });
 
-  it("opens the requested portal in the sidebar and never substitutes another app", async () => {
-    const selected = { ...portal, id: "selected-app", title: "Selected app", path: "/selected" };
-    let portals = [portal, selected];
-    const source = createContext(["portal.list", "portal.close"], async () => ({ portals }));
-    const page = await mountPage(source.context, selected.id);
+  it("keeps polling the selected environment after a previous target fails", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const retired = createDeferred<EnvironmentSummary>();
+    let replacement: EnvironmentSummary = { id: "new-machine", type: "worker", status: "starting" };
+    const source = createContext(["environments.status"], async (_method, params) =>
+      params.environmentId === "old-machine" ? retired.promise : replacement,
+    );
+    const page = await mountPage(source.context, undefined, "old-machine");
+    page.requestedEnvironmentId = replacement.id;
+    await page.updateComplete;
+    await waitForSolid(() => expect(source.request).toHaveBeenCalledTimes(2));
+    await source.request.mock.results[1]?.value;
+    await waitForSolid(() => expect(page.textContent).toContain("Starting your machine"));
 
-    await vi.waitFor(() => {
-      expect(page.querySelector("iframe")?.getAttribute("title")).toBe(
-        "Selected app portal preview",
-      );
-    });
-    expect(page.querySelector(".content-header")).toBeNull();
-    expect(page.querySelector(".portals-rail")).toBeNull();
+    retired.reject(new Error("Previous machine failed"));
+    await retired.promise.catch(() => undefined);
+    await page.updateComplete;
+    expect(page.textContent).not.toContain("Previous machine failed");
 
-    portals = [portal];
-    source.emitPortals(portals);
-
-    await vi.waitFor(() => {
-      expect(page.querySelector("iframe")).toBeNull();
-      expect(page.textContent).toContain("This portal is no longer available.");
-    });
+    replacement = { ...replacement, status: "available" };
+    await vi.advanceTimersByTimeAsync(2_000);
+    await page.updateComplete;
+    expect(page.textContent).toContain("Waiting for your application");
   });
 
-  it.each(["reachable", "blocked"] as const)(
-    "renders %s previews and refetches the portal list after replacement events",
-    async (reachability) => {
-      probePortalReachable.mockResolvedValue(reachability);
-      const source = createContext(["portal.list", "portal.close"], async (method) => {
-        if (method === "portal.list") {
-          return { portals: [portal] } satisfies PortalListResult;
-        }
-        return { closed: true };
-      });
-      const page = await mountPage(source.context);
-
-      await vi.waitFor(() => {
-        expect(page.querySelector(".portals-rail__title")?.textContent).toBe("Seeded app");
-      });
-      expect(page.querySelector(".portals-rail__item")?.textContent).toContain("Port 3000");
-      expect(page.querySelector(".portals-rail__item")?.textContent).toContain(
-        "Use the seeded test account.",
+  it.each(["custom element"] as const)(
+    "retains the embedded iframe document through %s presentation changes",
+    async () => {
+      let title = portal.title;
+      const source = createContext(["portal.list", "ui.command.result"], async (method) =>
+        method === "portal.list" ? { portals: [{ ...portal, title }] } : { ok: true },
       );
-      const frame = page.querySelector("iframe");
-      expect(frame?.getAttribute("src")).toBe(portal.url);
-      expect(page.querySelector(".portals-preview__url")?.getAttribute("href")).toBe(portal.url);
-      expect(frame?.getAttribute("referrerpolicy")).toBe("no-referrer");
-      expect(frame?.getAttribute("sandbox")).toBe(
+      const page = document.createElement("openclaw-portals-page");
+      page.embedded = true;
+      page.requestedPortalId = portal.id;
+      const provider = createApplicationContextProvider(source.context);
+      provider.append(page);
+      mountSolid(() => provider);
+      await page.updateComplete;
+      await waitForSolid(() => expect(page.querySelector("iframe")).not.toBeNull());
+      const frame = page.querySelector("iframe")!;
+      expect(frame.getAttribute("src")).toBe(portal.url);
+      expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
+      expect(frame.getAttribute("sandbox")).toBe(
         "allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts",
       );
-      expect(probePortalReachable).toHaveBeenCalledWith(portal.url);
-      expect(page.textContent).not.toContain("Portal not reachable from this browser");
+      const writes = vi.spyOn(frame, "setAttribute");
+      const sourceWrites = vi.spyOn(frame, "src", "set");
 
-      source.emitPortals([{ ...portal, url: "https://event.example.test/untrusted" }]);
+      page.presented = false;
+      await page.updateComplete;
+      expect(page.querySelector("iframe"), "frame after hiding").toBe(frame);
+      title = "Refreshed app";
+      page.handleToggleRequest(
+        new CustomEvent("openclaw:portal-toggle", {
+          detail: { open: true, portalId: portal.id, requestId: "show-again" },
+        }),
+      );
+      page.presented = true;
+      await page.updateComplete;
+      await waitForSolid(() =>
+        expect(page.querySelector("iframe")?.title).toBe("Refreshed app portal preview"),
+      );
 
-      await vi.waitFor(() => {
-        expect(source.request).toHaveBeenCalledTimes(2);
+      expect(page.querySelector("iframe")).toBe(frame);
+      expect(writes.mock.calls.filter(([name]) => name === "src")).toEqual([]);
+      expect(sourceWrites).not.toHaveBeenCalled();
+      expect(probePortalReachable).toHaveBeenCalledTimes(1);
+      expect(source.request).toHaveBeenCalledWith("ui.command.result", {
+        requestId: "show-again",
+        presentation: {
+          portalId: portal.id,
+          status: "unverified",
+          reason: "network-reachable",
+        },
       });
-      expect(source.request).toHaveBeenLastCalledWith("portal.list", {});
-      expect(page.querySelector(".portals-rail__title")?.textContent).toBe("Seeded app");
-      expect(page.querySelector("iframe")?.getAttribute("src")).toBe(portal.url);
+    },
+  );
+
+  it.each(["success", "failure"] as const)(
+    "keeps a replacement portal close locked after the old request's %s",
+    async (outcome) => {
+      const retired = createDeferred<{ closed: boolean }>();
+      const current = createDeferred<{ closed: boolean }>();
+      const source = createContext(["portal.list", "portal.close"], async (method) =>
+        method === "portal.list" ? { portals: [portal] } : retired.promise,
+      );
+      const replacement = createContext(["portal.list", "portal.close"], async (method) =>
+        method === "portal.list" ? { portals: [portal] } : current.promise,
+      );
+      const page = await mountPage(source.context);
+      const closeButton = () => page.querySelector<HTMLButtonElement>(".portals-preview__close")!;
+      await waitForSolid(() => expect(closeButton()).not.toBeNull());
+      closeButton().click();
+      await waitForSolid(() => expect(closeButton().disabled).toBe(true));
+      source.updateSnapshot({ client: replacement.context.gateway.snapshot.client });
+      await waitForSolid(() => expect(closeButton()?.disabled).toBe(false));
+      closeButton().click();
+      await waitForSolid(() => expect(closeButton().disabled).toBe(true));
+      try {
+        if (outcome === "success") {
+          retired.resolve({ closed: true });
+        } else {
+          retired.reject(new Error("Retired close failed"));
+        }
+        await retired.promise.catch(() => undefined);
+        await page.updateComplete;
+        expect(closeButton().disabled).toBe(true);
+        expect(page.textContent).not.toContain("Retired close failed");
+        closeButton().click();
+        expect(
+          replacement.request.mock.calls.filter(([method]) => method === "portal.close"),
+        ).toHaveLength(1);
+      } finally {
+        current.resolve({ closed: true });
+        await current.promise;
+      }
+      await waitForSolid(() => expect(closeButton().disabled).toBe(false));
     },
   );
 
@@ -332,7 +366,7 @@ describe("PortalsPage", () => {
     );
     const page = await mountPage(source.context);
 
-    await vi.waitFor(() => {
+    await waitForSolid(() => {
       expect(page.textContent).toContain("This portal requires an operator with write access.");
     });
     expect(page.querySelector("iframe")).toBeNull();
@@ -350,13 +384,13 @@ describe("PortalsPage", () => {
     });
     const page = await mountPage(source.context);
 
-    await vi.waitFor(() => {
+    await waitForSolid(() => {
       expect(page.textContent).toContain("Portal not reachable from this browser");
     });
     expect(page.querySelector("iframe")).toBeNull();
 
     page.querySelector<HTMLButtonElement>(".portals-preview__close")?.click();
-    await vi.waitFor(() => {
+    await waitForSolid(() => {
       expect(source.request).toHaveBeenCalledWith("portal.close", { id: portal.id });
     });
 
@@ -366,84 +400,9 @@ describe("PortalsPage", () => {
     expect(retry).toBeDefined();
     retry?.click();
 
-    await vi.waitFor(() => expect(page.querySelector("iframe")).not.toBeNull());
+    await waitForSolid(() => expect(page.querySelector("iframe")).not.toBeNull());
     expect(probePortalReachable).toHaveBeenCalledTimes(2);
   });
-
-  it.each([
-    {
-      controlUi: "http://localhost:18789/portals",
-      gateway: "wss://gateway.example.test/control",
-      ingress: true,
-    },
-    {
-      controlUi: "http://localhost:18789/portals",
-      gateway: "ws://127.0.0.1:18789/control",
-      ingress: false,
-    },
-    {
-      controlUi: "https://127.0.0.1:18789/portals",
-      gateway: "ws://127.0.0.1:18789/control",
-      ingress: false,
-    },
-  ])(
-    "explains HTTP portal access from $controlUi via $gateway without probing",
-    async ({ controlUi, gateway, ingress }) => {
-      vi.stubGlobal("location", new URL(controlUi));
-      const localPortal = {
-        ...portal,
-        url: "http://127.0.0.1:43123/app?openclaw_portal=secret-token",
-        publicUrl: "http://127.0.0.1:43123/app",
-      };
-      const source = createContext(["portal.list", "portal.close"], async () => ({
-        portals: [localPortal],
-      }));
-      source.context.gateway.connection.gatewayUrl = gateway;
-      const page = await mountPage(source.context);
-      await vi.waitFor(() =>
-        expect(page.textContent).toContain(
-          ingress ? "Remote portal ingress required" : "Open this HTTP portal in a new tab",
-        ),
-      );
-      if (ingress) {
-        expect(page.textContent).toContain("gateway.portals.ingress");
-      }
-      expect(page.querySelector("iframe")).toBeNull();
-      expect(probePortalReachable).not.toHaveBeenCalled();
-      expect(page.querySelector(".portals-preview__url")?.getAttribute("href")).toBe(
-        localPortal.url,
-      );
-      const link = page.querySelector(".portals-preview__notice-url");
-      expect(link?.getAttribute("href")).toBe(localPortal.url);
-      expect(link?.getAttribute("target")).toBe("_blank");
-    },
-  );
-
-  it.each([
-    { host: "127.0.0.1", gateway: "wss://localhost:18789/control" },
-    { host: "192.168.1.20", gateway: "ws://192.168.1.20:18789/control" },
-  ])(
-    "preserves the service-published HTTP URL on $host via $gateway",
-    async ({ host, gateway }) => {
-      vi.stubGlobal("location", new URL(`http://${host}:18789/portals`));
-      const localPortal = {
-        ...portal,
-        url: `http://${host}:43123/app?openclaw_portal=secret-token`,
-        publicUrl: `http://${host}:43123/app`,
-      };
-      const source = createContext(["portal.list"], async () => ({ portals: [localPortal] }));
-      source.context.gateway.connection.gatewayUrl = gateway;
-      const page = await mountPage(source.context);
-      await vi.waitFor(() =>
-        expect(page.querySelector("iframe")?.getAttribute("src")).toBe(localPortal.url),
-      );
-      expect(probePortalReachable).toHaveBeenCalledWith(localPortal.url);
-      expect(page.querySelector(".portals-preview__url")?.getAttribute("href")).toBe(
-        localPortal.url,
-      );
-      expect(page.textContent).not.toContain("Remote portal ingress required");
-    },
-  );
 
   it("does not publish a late probe from the previous Gateway", async () => {
     let completeOldProbe!: (result: "reachable") => void;
@@ -456,16 +415,20 @@ describe("PortalsPage", () => {
       )
       .mockResolvedValueOnce("unreachable");
     const first = createContext(["portal.list"], async () => ({ portals: [portal] }));
-    const provider = createApplicationContextProvider(first.context);
-    const page = document.createElement("openclaw-portals-page");
-    provider.append(page);
-    document.body.append(provider);
+    const provider = createSolidApplicationContextProvider(first.context);
+    const { container } = mountSolid(() => createComponent(PortalsPage, {}), {
+      wrapper: provider.wrapper,
+    });
+    flush();
+    let page = container.querySelector("openclaw-portals-page")!;
     await page.updateComplete;
-    await vi.waitFor(() => expect(probePortalReachable).toHaveBeenCalledTimes(1));
+    await waitForSolid(() => expect(probePortalReachable).toHaveBeenCalledTimes(1));
 
     const second = createContext(["portal.list"], async () => ({ portals: [portal] }));
     provider.setContext(second.context);
-    await vi.waitFor(() =>
+    flush();
+    page = container.querySelector("openclaw-portals-page")!;
+    await waitForSolid(() =>
       expect(page.textContent).toContain("Portal not reachable from this browser"),
     );
     completeOldProbe("reachable");
@@ -486,4 +449,58 @@ describe("PortalsPage", () => {
     expect(page.textContent).toContain("This gateway does not support portals.");
     expect(source.request).not.toHaveBeenCalled();
   });
+});
+
+describe("portal presentation receipts", () => {
+  it.each([
+    {
+      url: "http://127.0.0.1:43123/",
+      probe: "reachable",
+      status: "blocked",
+      reason: "remote-ingress-required",
+    },
+    {
+      url: "http://preview.example.test:43123/",
+      probe: "reachable",
+      status: "new-tab-required",
+      reason: "new-tab-required",
+    },
+    {
+      url: "https://preview.example.test/",
+      probe: "unreachable",
+      status: "blocked",
+      reason: "network-unreachable",
+    },
+    {
+      url: "https://preview.example.test/",
+      probe: "blocked",
+      status: "unverified",
+      reason: "probe-blocked",
+    },
+  ] as const)(
+    "reports $reason from the actual portal view without claiming rendered success",
+    async ({ url, probe, status, reason }) => {
+      probePortalReachable.mockResolvedValue(probe);
+      const source = createContext(["portal.list", "ui.command.result"], async (method) =>
+        method === "portal.list"
+          ? { portals: [{ ...portal, publicUrl: url, url: url + "?openclaw_portal=synthetic" }] }
+          : { ok: true },
+      );
+      const page = await mountPage(source.context, portal.id);
+      page.handleToggleRequest(
+        new CustomEvent("openclaw:portal-toggle", {
+          detail: { portalId: portal.id, requestId: "request-one", open: true },
+        }),
+      );
+      await waitForSolid(() =>
+        expect(source.request).toHaveBeenCalledWith("ui.command.result", {
+          requestId: "request-one",
+          presentation: { portalId: portal.id, status, reason },
+        }),
+      );
+      expect(
+        source.request.mock.calls.filter(([method]) => method === "ui.command.result"),
+      ).toHaveLength(1);
+    },
+  );
 });

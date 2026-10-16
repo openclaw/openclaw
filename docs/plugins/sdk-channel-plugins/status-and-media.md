@@ -53,8 +53,13 @@ still works for params intentionally shared across every exposed action.
 Channels that must expose a temporary public URL for a platform-side media
 fetch can use `createHostedOutboundMediaStore(...)` from
 `openclaw/plugin-sdk/outbound-media` with plugin state stores. Keep platform
-route parsing and token enforcement in the channel plugin; the shared helper
-only owns media loading, expiry metadata, chunk rows, and cleanup.
+route binding and token authentication in the channel plugin. For namespaced
+capability query parameters, `resolveHostedOutboundMediaRequest(req, res, prefix)`
+returns `false` for unrelated requests, `true` after rejecting ambiguous tokens
+or unsupported methods, or `{ url, id, token, method }` for the plugin to authenticate.
+It accepts only `GET` and `HEAD` with one `<prefix>_<24-character lowercase hex ID>`
+parameter. `resolveOutboundMediaAccess(params)` combines current `mediaAccess`
+with legacy local-root and reader parameters before loading.
 
 `prepareUrl({ mediaAccess })` forwards host-authorized local media access to
 the shared outbound loader. Hosted media capacity defaults to

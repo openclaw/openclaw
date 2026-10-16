@@ -49,7 +49,14 @@ const TLON_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
 
 export async function pokeUrbitChannel(
   deps: UrbitChannelDeps,
-  params: { app: string; mark: string; json: unknown; auditContext: string },
+  params: {
+    app: string;
+    mark: string;
+    json: unknown;
+    auditContext: string;
+    beforeRequest?: () => void;
+    timeoutMs?: number;
+  },
 ): Promise<number> {
   const pokeId = Date.now();
   const pokeData = {
@@ -64,7 +71,8 @@ export async function pokeUrbitChannel(
   const { response, release } = await putUrbitChannel(deps, {
     body: [pokeData],
     auditContext: params.auditContext,
-    timeoutMs: 30_000,
+    timeoutMs: params.timeoutMs,
+    beforeRequest: params.beforeRequest,
   });
 
   try {
@@ -123,7 +131,7 @@ export async function scryUrbitPath(
 
 async function openUrbitChannelStep(
   deps: UrbitChannelDeps,
-  params: { body: unknown; auditContext: string; operation: string },
+  params: { body: unknown; auditContext: string; operation: string; beforeRequest?: () => void },
 ): Promise<void> {
   const { response, release } = await putUrbitChannel(deps, { ...params, timeoutMs: 30_000 });
 
@@ -138,12 +146,13 @@ async function openUrbitChannelStep(
 
 export async function ensureUrbitChannelOpen(
   deps: UrbitChannelDeps,
-  params: { createBody: unknown; createAuditContext: string },
+  params: { createBody: unknown; createAuditContext: string; beforeRequest?: () => void },
 ): Promise<void> {
   await openUrbitChannelStep(deps, {
     body: params.createBody,
     auditContext: params.createAuditContext,
     operation: "Channel creation",
+    beforeRequest: params.beforeRequest,
   });
   await openUrbitChannelStep(deps, {
     body: [
@@ -158,5 +167,6 @@ export async function ensureUrbitChannelOpen(
     ],
     auditContext: "tlon-urbit-channel-wake",
     operation: "Channel activation",
+    beforeRequest: params.beforeRequest,
   });
 }

@@ -151,11 +151,12 @@ export function prepareIndentedCode(
       );
     },
     contextAt(index: number) {
+      const continuation = `x${source.charAt(index - 1) === "\n" ? "\n" : ""}`;
       const replacement = replacements.find(
         (entry) => entry.from < index && (index < entry.to || (entry.open && index === entry.to)),
       );
       if (replacement) {
-        return `${replacement.code.context}x${source.charAt(index - 1) === "\n" ? "\n" : ""}`;
+        return `${replacement.code.context}${continuation}`;
       }
       const at = context.length + index;
       const currentOwnership = (ownership ??= findCodeOwnership(parsed, {
@@ -167,7 +168,7 @@ export function prepareIndentedCode(
           const prefixLength = code.context.length;
           return at < code.ownerStart + prefixLength
             ? code.context.slice(0, at - code.ownerStart)
-            : `${code.context}x${source.charAt(index - 1) === "\n" ? "\n" : ""}`;
+            : `${code.context}${continuation}`;
         }
       }
       const paragraph = currentOwnership.paragraphs?.find(
@@ -176,13 +177,7 @@ export function prepareIndentedCode(
       if (!paragraph) {
         return "";
       }
-      const suffix =
-        at > paragraph.end
-          ? parsed.slice(paragraph.end, at)
-          : source.charAt(index - 1) === "\n"
-            ? "\n"
-            : "";
-      return `x${suffix}`;
+      return at > paragraph.end ? `x${parsed.slice(paragraph.end, at)}` : continuation;
     },
   };
 }

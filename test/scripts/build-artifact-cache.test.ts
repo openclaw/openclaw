@@ -90,12 +90,7 @@ function fixture(
   const ownedOutputRoot = noEmit ? undefined : path.join(root, outputRoot);
   const prepare = () => {
     fs.mkdirSync(path.join(root, outputRoot), { recursive: true });
-    const before = new BoundaryInputSnapshot(root);
-    before.signature(config, args, [], ownedOutputRoot);
-    const namespaceBefore = owner === "compiler" ? compilerSnapshot(root) : undefined;
-    namespaceBefore?.signature(config, args, [], ownedOutputRoot);
     fs.rmSync(path.join(root, inputReceipt), { force: true });
-    const startedAt = Date.now();
     const result = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8" });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const files = result.stdout
@@ -103,17 +98,18 @@ function fixture(
       .filter((line) => line.startsWith("TSFILE: "))
       .map((line) => portableRelativePath(root, line.slice(8).trim()))
       .toSorted();
-    return { before, namespaceBefore, startedAt, files };
+    return { files };
   };
   const seal = (run: ReturnType<typeof prepare>) => {
-    if (run.namespaceBefore) {
+    if (owner === "compiler") {
       const snapshot = compilerSnapshot(root);
       const { inputs }: { inputs: string[] } = JSON.parse(
         fs.readFileSync(path.join(root, inputReceipt), "utf8"),
       );
       return {
         version: ARTIFACT_CACHE_VERSION,
-        ...snapshot.seal(config, args, inputs, run.namespaceBefore, run.startedAt, ownedOutputRoot),
+        signature: snapshot.signature(config, args, inputs, ownedOutputRoot),
+        inputs,
         outputs: Object.fromEntries(run.files.map((file) => [file, snapshot.hash(file)])),
       };
     }
@@ -122,8 +118,6 @@ function fixture(
       args,
       inputReceipt,
       run.files,
-      run.before,
-      run.startedAt,
       ownedOutputRoot,
     );
   };
@@ -159,7 +153,7 @@ function fixture(
 }
 
 describe("native owner content records", () => {
-  it("retains upstream output topology when a producer snapshot is reused by a consumer", () => {
+  it("invalidates a linked declaration consumer when a source shadows its emitted types", () => {
     const f = fixture(false, "packages/sdk/dist");
     f.write("packages/sdk/package.json", '{"name":"fixture-sdk","type":"module"}');
     f.write("consumer.json", '{"extends":"./base.json","files":["consumer.ts"]}');
@@ -167,34 +161,14 @@ describe("native owner content records", () => {
       "consumer.ts",
       'import { value } from "fixture-sdk/dist/nested/value.js"; const expected: 1 = value;',
     );
-    fs.mkdirSync(path.join(f.root, "node_modules"), { recursive: true });
     fs.symlinkSync("../packages/sdk", path.join(f.root, "node_modules/fixture-sdk"), "dir");
-    const producer = f.prepare();
-    const shared = new BoundaryInputSnapshot(f.root);
-    shared.record(
-      f.config,
-      f.args,
-      "packages/sdk/dist/.inputs.json",
-      producer.files,
-      producer.before,
-      producer.startedAt,
-      f.outputRoot,
-    );
+    f.prepare();
     const config = "consumer.json";
     const metadata = ".artifacts/consumer.inputs.json";
     const args = f.compilerArgs(config, metadata);
-    shared.signature(config, args, []);
-    const startedAt = Date.now();
     const compiled = spawnSync(process.execPath, args, { cwd: f.root, encoding: "utf8" });
     expect(compiled.status, compiled.stdout + compiled.stderr).toBe(0);
-    const record = new BoundaryInputSnapshot(f.root).record(
-      config,
-      args,
-      metadata,
-      [metadata],
-      shared,
-      startedAt,
-    );
+    const record = new BoundaryInputSnapshot(f.root).record(config, args, metadata, [metadata]);
     const matches = () =>
       new BoundaryInputSnapshot(f.root).matchesReceipt(record, config, args, [metadata], metadata);
     expect(matches()).toBe(true);
@@ -268,7 +242,6 @@ describe("native owner content records", () => {
 
   it("ignores tool scratch churn under installed roots", () => {
     const f = fixture(true, "dist", roots, "compiler");
-    fs.mkdirSync(path.join(f.root, "node_modules"), { recursive: true });
     const run = f.prepare();
     // Sibling config loads mint these between the before and seal walks.
     f.write("node_modules/.vite-temp/vitest.config.ts.timestamp-1-a.mjs", "export default {};");
@@ -452,17 +425,6 @@ describe("native owner content records", () => {
       "Invalid boundary config",
     );
   });
-
-  it.each(["nested/value.js", "base.json", "pnpm-lock.yaml"])(
-    "cannot seal %s changed after native consumed it",
-    (file) => {
-      const f = fixture();
-      const run = f.prepare();
-      const target = path.join(f.root, file);
-      f.write(file, fs.readFileSync(target, "utf8") + "\n");
-      expect(() => f.seal(run)).toThrow(/changed during compilation/u);
-    },
-  );
 
   it("rejects overlapping synchronous cache snapshots without reclaiming their live owner", () => {
     const root = fs.realpathSync(roots.make("artifact-cache-lock-"));

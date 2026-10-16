@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { CostUsageSummary } from "../infra/session-cost-usage.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { ExpectedCliError } from "./failure-output.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
 type DiscoveredBeacon = Awaited<
@@ -245,44 +244,51 @@ describe("gateway-cli coverage", () => {
     );
   });
 
-  it("preserves the first partial usage-cost result", async () => {
-    const totals = {
-      input: 100,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 100,
-      totalCost: 0.1,
-      inputCost: 0.1,
-      outputCost: 0,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
-      missingCostEntries: 0,
-    };
-    const summary: CostUsageSummary = {
-      updatedAt: 1,
-      days: 7,
-      daily: [{ date: "2026-09-01", ...totals }],
-      totals,
-      cacheStatus: { status: "partial", cachedFiles: 1, pendingFiles: 2, staleFiles: 2 },
-    };
-    callGateway.mockResolvedValue(summary);
+  it.each([true])(
+    "preserves the first partial usage-cost result (unavailable: %s)",
+    async (unavailable) => {
+      const totals = {
+        input: 100,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 100,
+        totalCost: 0.1,
+        inputCost: 0.1,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+        ...(unavailable ? { usageReport: { state: "unavailable" as const } } : {}),
+      };
+      const summary: CostUsageSummary = {
+        updatedAt: 1,
+        days: 7,
+        daily: [{ date: "2026-09-01", ...totals }],
+        totals,
+        cacheStatus: { status: "partial", cachedFiles: 1, pendingFiles: 2, staleFiles: 2 },
+      };
+      callGateway.mockResolvedValue(summary);
 
-    await runGatewayCommand(["gateway", "usage-cost", "--all-agents", "--days", "7"]);
+      await runGatewayCommand(["gateway", "usage-cost", "--all-agents", "--days", "7"]);
 
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(firstMockArg(callGateway)).toMatchObject({
-      method: "usage.cost",
-      params: { days: 7, agentScope: "all" },
-      timeoutMs: 10_000,
-    });
-    const output = runtimeLogs.join("\n");
-    expect(output).toContain("Total: $0.10 · 100 tokens");
-    expect(output).toContain("Latest day: 2026-09-01 · $0.10 · 100 tokens");
-    expect(output).toContain(
-      "Usage totals may be incomplete (partial). Run this command again later.\nTotal: $0.10 · 100 tokens",
-    );
-  });
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(firstMockArg(callGateway)).toMatchObject({
+        method: "usage.cost",
+        params: { days: 7, agentScope: "all" },
+        timeoutMs: 10_000,
+      });
+      const output = runtimeLogs.join("\n");
+      const figures = unavailable
+        ? "unavailable (known subtotal: $0.10 · 100 tokens)"
+        : "$0.10 · 100 tokens";
+      expect(output).toContain(`Total: ${figures}`);
+      expect(output).toContain(`Latest day: 2026-09-01 · ${figures}`);
+      expect(output).toContain(
+        `Usage totals may be incomplete (partial). Run this command again later.\nTotal: ${figures}`,
+      );
+    },
+  );
 
   it("rejects combining --agent with --all-agents for usage-cost", async () => {
     await expectGatewayExit([
@@ -298,24 +304,6 @@ describe("gateway-cli coverage", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
       ok: false,
       error: { type: "cli_error", message: "Use --agent or --all-agents, not both" },
-    });
-    expect(runtimeErrors).toHaveLength(0);
-  });
-
-  it("preserves expected CLI machine output for ordinary Gateway command failures", async () => {
-    callGateway.mockRejectedValueOnce(
-      new ExpectedCliError({
-        message: "validation failed",
-        humanOutput: "human recovery guidance",
-        machineOutput: "machine recovery guidance\n",
-      }),
-    );
-
-    await expectGatewayExit(["gateway", "call", "health", "--json"]);
-
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
-      ok: false,
-      error: { type: "cli_error", message: "machine recovery guidance" },
     });
     expect(runtimeErrors).toHaveLength(0);
   });

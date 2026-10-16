@@ -9,7 +9,7 @@ import type {
   PluginHookToolKind,
   PluginToolMatcher,
 } from "./hook-types.js";
-import { getPluginSessionExtensionStateSync } from "./host-hook-state.js";
+import { getPluginSessionExtensionState } from "./host-hook-state.js";
 import type { PluginJsonValue, PluginTrustedToolPolicyRegistration } from "./host-hooks.js";
 import type {
   PluginRegistry,
@@ -255,20 +255,6 @@ export async function runTrustedToolPolicies(
       // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
       getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) => {
         const normalizedNamespace = namespace.trim();
-        if (!sessionExtensionStateCache.has(pluginId)) {
-          const config = ctx.sessionKey ? resolveSessionConfig() : undefined;
-          sessionExtensionStateCache.set(
-            pluginId,
-            config
-              ? getPluginSessionExtensionStateSync({
-                  cfg: config,
-                  pluginId,
-                  sessionKey: ctx.sessionKey,
-                  agentId: ctx.agentId,
-                })
-              : undefined,
-          );
-        }
         const pluginState = sessionExtensionStateCache.get(pluginId);
         if (!normalizedNamespace || !pluginState) {
           return undefined;
@@ -290,6 +276,20 @@ export async function runTrustedToolPolicies(
 
     let decision: Awaited<ReturnType<PluginTrustedToolPolicyRegistration["evaluate"]>>;
     try {
+      if (!sessionExtensionStateCache.has(pluginId)) {
+        const config = ctx.sessionKey ? resolveSessionConfig() : undefined;
+        sessionExtensionStateCache.set(
+          pluginId,
+          config
+            ? await getPluginSessionExtensionState({
+                cfg: config,
+                pluginId,
+                sessionKey: ctx.sessionKey,
+                agentId: ctx.agentId,
+              })
+            : undefined,
+        );
+      }
       decision = await policy.evaluate(buildEvent(adjustedParams), policyCtx);
     } catch {
       return trustedPolicyFailureResult(registration, "policy evaluation failed");

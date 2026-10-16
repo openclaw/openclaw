@@ -25,8 +25,6 @@ const mocks = vi.hoisted(() => ({
     (this: { options: AgentOptions; uri?: string }, options: unknown, handler: unknown) => boolean
   >(() => true),
   capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureHttpExchangeAsync>(),
-  captureAvailable: true,
-  directFactoryAvailable: true,
 }));
 const runtimeDeps = vi.hoisted(() => {
   class Dispatcher {
@@ -70,19 +68,8 @@ const runtimeDeps = vi.hoisted(() => {
 });
 vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
-  get captureHttpExchangeAsync() {
-    return mocks.captureAvailable ? mocks.capture : undefined;
-  },
+  captureHttpExchangeAsync: mocks.capture,
 }));
-vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
-  const sdk = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
-  return {
-    ...sdk,
-    get createHttp1Agent() {
-      return mocks.directFactoryAvailable ? sdk.createHttp1Agent : undefined;
-    },
-  };
-});
 vi.mock("undici", async (importOriginal) => ({
   ...(await importOriginal<typeof import("undici")>()),
   // Bun's bare shim cannot dispatch; both fetch and dispatcher must use the installed runtime.
@@ -125,8 +112,6 @@ describe("resolveDiscordRestFetch", () => {
     ]) {
       vi.stubEnv(key, undefined);
     }
-    mocks.captureAvailable = true;
-    mocks.directFactoryAvailable = true;
     mocks.capture.mockReset().mockResolvedValue(undefined);
     mocks.fetch.mockReset().mockResolvedValue(new Response("ok"));
     mocks.agent.mockReset();
@@ -137,7 +122,6 @@ describe("resolveDiscordRestFetch", () => {
     Reflect.set(globalThis, depsKey, runtimeDeps);
   });
   afterEach(() => {
-    mocks.captureAvailable = true;
     Reflect.deleteProperty(globalThis, depsKey);
     if (tempDir) {
       rmSync(tempDir, { recursive: true, force: true });
@@ -150,10 +134,9 @@ describe("resolveDiscordRestFetch", () => {
     return mocks.fetch.mock.calls[0]?.[1]?.dispatcher;
   }
 
-  it.each(["absent", "rejected"] as const)(
-    "delivers REST responses with %s optional async capture",
+  it.each(["present", "rejected"] as const)(
+    "delivers REST responses with %s async capture",
     async (capability) => {
-      mocks.captureAvailable = capability !== "absent";
       if (capability === "rejected") {
         mocks.capture.mockRejectedValue(new Error("capture write failed"));
       }
@@ -167,19 +150,15 @@ describe("resolveDiscordRestFetch", () => {
       expect(delivered).toBe(response);
       await expect(delivered.text()).resolves.toBe("delivered");
       expect(mocks.proxy.mock.calls[0]?.[0].uri).toBe("http://127.0.0.1:8080");
-      if (capability === "absent") {
-        expect(mocks.capture).not.toHaveBeenCalled();
-      } else {
-        expect(mocks.capture).toHaveBeenCalledWith(
-          expect.objectContaining({
-            url,
-            method: "POST",
-            requestBody: "message",
-            response,
-            meta: { subsystem: "discord-rest" },
-          }),
-        );
-      }
+      expect(mocks.capture).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url,
+          method: "POST",
+          requestBody: "message",
+          response,
+          meta: { subsystem: "discord-rest" },
+        }),
+      );
     },
   );
 
@@ -223,14 +202,12 @@ describe("resolveDiscordRestFetch", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("falls back to direct REST fetch for invalid env proxy on a supported older host", async () => {
-    mocks.directFactoryAvailable = false;
+  it("falls back to direct REST fetch for invalid env proxy", async () => {
     vi.stubEnv("https_proxy", "bad-proxy");
     const dispatcher = await request();
-    expect(mocks.agent).not.toHaveBeenCalled();
-    expect(mocks.envAgent).toHaveBeenCalledTimes(1);
-    const options = mocks.envAgent.mock.calls[0]?.[0];
-    expect(options).toMatchObject({ httpProxy: "", httpsProxy: "", noProxy: "*" });
+    expect(mocks.agent).toHaveBeenCalledTimes(1);
+    expect(mocks.envAgent).not.toHaveBeenCalled();
+    const options = mocks.agent.mock.calls[0]?.[0];
     expect(options?.allowH2).toBe(false);
     expect(typeof options?.connect?.lookup).toBe("function");
     dispatchRequest(dispatcher);

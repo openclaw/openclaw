@@ -1,3 +1,4 @@
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -40,7 +41,7 @@ export function readSessionCreationSnapshotInDatabase(
   sessionKey: string,
   label?: string,
 ): SessionCreationSnapshot {
-  return withSqlitePostCommitPublications(database.db, () =>
+  return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
     runSqliteDeferredTransactionSync(database.db, () => {
       const normalizedKey = normalizeStoreSessionKey(sessionKey);
       const keys = [normalizedKey, ...collectSessionEntryLookupKeys(sessionKey)];

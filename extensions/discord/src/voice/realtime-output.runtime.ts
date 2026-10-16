@@ -7,8 +7,6 @@ import {
   DISCORD_AUDIO_STARTED,
   DiscordAudioOutputStatus,
   getDiscordAudioOutputStatus,
-  releaseDiscordAudioInput,
-  retireDiscordAudioOutput,
   setDiscordAudioOutputStatus,
 } from "./audio-worker-protocol.js";
 import { DiscordOpusEncodeStream, createRealtimePcmToDiscordConverter } from "./audio.js";
@@ -126,14 +124,6 @@ export class DiscordRealtimeOutput {
         this.startPlayback();
       }, DISCORD_CONTINUOUS_START_DEADLINE_MS);
       this.startupTimer.unref?.();
-    }
-  }
-
-  appendAdmitted(sourcePcm: Buffer, audible: boolean): void {
-    try {
-      this.append(sourcePcm, audible);
-    } finally {
-      releaseDiscordAudioInput(this.params.clock);
     }
   }
 
@@ -271,9 +261,13 @@ export class DiscordRealtimeOutput {
           }
         }
       },
-      onRetiring: () =>
-        this.activity.snapshot().sinkAudioBytes <= this.playedPcmBytes &&
-        retireDiscordAudioOutput(this.params.clock),
+      onRetiring: () => {
+        if (this.activity.snapshot().sinkAudioBytes > this.playedPcmBytes) {
+          return false;
+        }
+        this.publishRetiring();
+        return true;
+      },
       onIdle: () => this.close(this.failed ? "output-pipeline-error" : "player-idle"),
       onError: this.params.onError,
     };
@@ -397,8 +391,7 @@ export class DiscordRealtimeOutput {
         if (
           !this.closed &&
           !this.activity.snapshot().streamEnding &&
-          !this.hasUnplayedAudibleAudio() &&
-          retireDiscordAudioOutput(this.params.clock)
+          !this.hasUnplayedAudibleAudio()
         ) {
           this.finish("continuous-idle", true);
         }

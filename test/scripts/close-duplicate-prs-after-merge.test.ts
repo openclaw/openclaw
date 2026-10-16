@@ -9,26 +9,30 @@ import {
   runDuplicateCloseWorkflow,
 } from "../../scripts/close-duplicate-prs-after-merge.mjs";
 
-function pr(params: {
-  body?: string;
-  files?: string[];
-  mergedAt?: string | null;
-  mergeCommit?: string;
-  number: number;
-  state?: string;
-  title?: string;
-}) {
+const repo = "openclaw/openclaw";
+const sourceFile = "ui/src/ui/chat/grouped-render.ts";
+const diff = (hunk: string, file = sourceFile) => `diff --git a/${file} b/${file}\n${hunk}`;
+function pr(number: number, body = "") {
   return {
-    body: params.body ?? "",
+    body,
     closingIssuesReferences: [],
-    files: (params.files ?? ["ui/src/ui/chat/grouped-render.ts"]).map((path) => ({ path })),
-    mergeCommit: params.mergeCommit ? { oid: params.mergeCommit } : null,
-    mergedAt: params.mergedAt ?? null,
-    number: params.number,
-    state: params.state ?? "OPEN",
-    title: params.title ?? `PR ${params.number}`,
-    url: `https://github.com/openclaw/openclaw/pull/${params.number}`,
+    files: [{ path: sourceFile }],
+    mergeCommit: null,
+    mergedAt: null,
+    number,
+    state: "OPEN",
+    title: `PR ${number}`,
+    url: `https://github.com/${repo}/pull/${number}`,
   };
+}
+const landed = {
+  ...pr(70532, "Fixes #70491"),
+  mergeCommit: { oid: "6415e35" },
+  mergedAt: "2026-04-23T17:13:32Z",
+  state: "MERGED",
+};
+function closePlan(candidate: ReturnType<typeof pr>, diffs: Map<number, string>) {
+  return buildDuplicateClosePlan({ candidates: [candidate], diffs, landed, repo });
 }
 
 describe("close duplicate PRs after merge", () => {
@@ -44,40 +48,17 @@ diff --git a/b.ts b/b.ts
 @@ -1 +5 @@
 -a
 +b`);
-
     expect(ranges.get("a.ts")).toEqual([{ start: 20, end: 23 }]);
     expect(ranges.get("b.ts")).toEqual([{ start: 5, end: 5 }]);
   });
 
   it("allows duplicate closure with overlapping hunks even without an explicit issue ref", () => {
-    const landed = pr({
-      body: "Fixes #70491",
-      mergeCommit: "6415e35",
-      mergedAt: "2026-04-23T17:13:32Z",
-      number: 70532,
-      state: "MERGED",
-    });
-    const candidate = pr({ number: 70530 });
+    const candidate = pr(70530);
     const diffs = new Map([
-      [
-        70532,
-        `diff --git a/ui/src/ui/chat/grouped-render.ts b/ui/src/ui/chat/grouped-render.ts
-@@ -402,8 +402,11 @@`,
-      ],
-      [
-        70530,
-        `diff --git a/ui/src/ui/chat/grouped-render.ts b/ui/src/ui/chat/grouped-render.ts
-@@ -402,8 +402,11 @@`,
-      ],
+      [70532, diff("@@ -402,8 +402,11 @@")],
+      [70530, diff("@@ -402,8 +402,11 @@")],
     ]);
-
-    const plan = buildDuplicateClosePlan({
-      candidates: [candidate],
-      diffs,
-      landed,
-      repo: "openclaw/openclaw",
-    });
-
+    const plan = closePlan(candidate, diffs);
     expect(plan).toStrictEqual([
       {
         action: "close",
@@ -89,109 +70,30 @@ Evidence: overlapping changed hunks; shared file(s): ui/src/ui/chat/grouped-rend
 Closing #70530 as a duplicate.`,
         evidence: {
           overlappingHunks: true,
-          sharedFiles: ["ui/src/ui/chat/grouped-render.ts"],
+          sharedFiles: [sourceFile],
           sharedIssues: [],
         },
       },
     ]);
   });
 
-  it("allows duplicate closure with a shared issue ref even when hunks drift", () => {
-    const landed = pr({
-      body: "Fixes #70491",
-      mergeCommit: "6415e35",
-      mergedAt: "2026-04-23T17:13:32Z",
-      number: 70532,
-      state: "MERGED",
-    });
-    const candidate = pr({ body: "Closes #70491", number: 70592 });
-    const diffs = new Map([
-      [
-        70532,
-        `diff --git a/ui/src/ui/chat/grouped-render.ts b/ui/src/ui/chat/grouped-render.ts
-@@ -402,8 +402,11 @@`,
-      ],
-      [
-        70592,
-        `diff --git a/ui/src/ui/chat/grouped-render.ts b/ui/src/ui/chat/grouped-render.ts
-@@ -286,8 +286,11 @@`,
-      ],
-    ]);
-
-    const plan = buildDuplicateClosePlan({
-      candidates: [candidate],
-      diffs,
-      landed,
-      repo: "openclaw/openclaw",
-    });
-
-    expect(plan[0]).toStrictEqual({
-      action: "close",
-      candidate,
-      comment: `Thanks for the fix. This is now covered by the landed #70532 / commit https://github.com/openclaw/openclaw/commit/6415e35.
-
-Evidence: shared issue(s): #70491; shared file(s): ui/src/ui/chat/grouped-render.ts.
-
-Closing #70592 as a duplicate.`,
-      evidence: {
-        overlappingHunks: false,
-        sharedFiles: ["ui/src/ui/chat/grouped-render.ts"],
-        sharedIssues: [70491],
-      },
-    });
-  });
-
   it("refuses candidates without shared issue or overlapping hunks", () => {
-    const landed = pr({
-      body: "Fixes #70491",
-      mergeCommit: "6415e35",
-      mergedAt: "2026-04-23T17:13:32Z",
-      number: 70532,
-      state: "MERGED",
-    });
-    const candidate = pr({ body: "Fixes #1", number: 1 });
+    const candidate = pr(1, "Fixes #1");
     const diffs = new Map([
-      [70532, "diff --git a/a.ts b/a.ts\n@@ -1 +1 @@"],
-      [1, "diff --git a/a.ts b/a.ts\n@@ -99 +99 @@"],
+      [70532, diff("@@ -1 +1 @@", "a.ts")],
+      [1, diff("@@ -99 +99 @@", "a.ts")],
     ]);
-
-    expect(() =>
-      buildDuplicateClosePlan({
-        candidates: [candidate],
-        diffs,
-        landed,
-        repo: "openclaw/openclaw",
-      }),
-    ).toThrow("Refusing to close #1");
+    expect(() => closePlan(candidate, diffs)).toThrow("Refusing to close #1");
   });
 
   it("dry-runs through gh reads without mutating", () => {
     const calls: string[][] = [];
+    const viewFlags = `--repo ${repo} --json number,title,body,state,mergedAt,mergeCommit,closingIssuesReferences,files,url`;
     const responses = new Map<string, string>([
-      [
-        "pr view 70532 --repo openclaw/openclaw --json number,title,body,state,mergedAt,mergeCommit,closingIssuesReferences,files,url",
-        JSON.stringify(
-          pr({
-            body: "Fixes #70491",
-            mergeCommit: "6415e35",
-            mergedAt: "2026-04-23T17:13:32Z",
-            number: 70532,
-            state: "MERGED",
-          }),
-        ),
-      ],
-      [
-        "pr view 70592 --repo openclaw/openclaw --json number,title,body,state,mergedAt,mergeCommit,closingIssuesReferences,files,url",
-        JSON.stringify(pr({ body: "Closes #70491", number: 70592 })),
-      ],
-      [
-        "pr diff 70532 --repo openclaw/openclaw --color=never",
-        "diff --git a/ui/src/ui/chat/grouped-render.ts b/ui/src/ui/chat/grouped-render.ts\n@@ -402,8 +402,11 @@",
-      ],
-      [
-        "pr diff 70592 --repo openclaw/openclaw --color=never",
-        "diff --git a/ui/src/ui/chat/grouped-render.ts b/ui/src/ui/chat/grouped-render.ts\n@@ -286,8 +286,11 @@",
-      ],
+      [`pr view 70532 ${viewFlags}`, JSON.stringify(landed)],
+      [`pr view 70592 ${viewFlags}`, JSON.stringify(pr(70592, "Closes #70491"))],
+      [`pr diff 70532 --repo ${repo} --color=never`, diff("@@ -402,8 +402,11 @@")],
+      [`pr diff 70592 --repo ${repo} --color=never`, diff("@@ -286,8 +286,11 @@")],
     ]);
     const runGh = (args: string[]) => {
       calls.push(args);
@@ -202,13 +104,19 @@ Closing #70592 as a duplicate.`,
       }
       return response;
     };
-
     const args = parseArgs(["--landed-pr", "70532", "--duplicates", "70592"], {
-      GITHUB_REPOSITORY: "openclaw/openclaw",
+      GITHUB_REPOSITORY: repo,
     });
     const plan = runDuplicateCloseWorkflow(args, runGh);
-
     expect(plan).toHaveLength(1);
+    expect(plan[0]).toMatchObject({
+      action: "close",
+      evidence: {
+        overlappingHunks: false,
+        sharedFiles: [sourceFile],
+        sharedIssues: [70491],
+      },
+    });
     expect(calls.map((call) => call.slice(0, 2).join(" "))).toEqual([
       "pr view",
       "pr view",
@@ -224,71 +132,40 @@ Closing #70592 as a duplicate.`,
       plan: [
         {
           action: "close",
-          candidate: pr({ number: 70592 }),
+          candidate: pr(70592),
           comment: "closing",
           evidence: { overlappingHunks: false, sharedFiles: [], sharedIssues: [70491] },
         },
       ],
-      repo: "openclaw/openclaw",
+      repo,
       runGh: (args: string[]) => {
         calls.push(args);
         return "";
       },
     });
-
+    const target = ["70592", "--repo", repo];
     expect(calls).toEqual([
-      [
-        "pr",
-        "edit",
-        "70592",
-        "--repo",
-        "openclaw/openclaw",
-        "--add-label",
-        "duplicate",
-        "--add-label",
-        "close:duplicate",
-      ],
-      ["pr", "comment", "70592", "--repo", "openclaw/openclaw", "--body", "closing"],
-      ["pr", "close", "70592", "--repo", "openclaw/openclaw"],
+      ["pr", "edit", ...target, "--add-label", "duplicate", "--add-label", "close:duplicate"],
+      ["pr", "comment", ...target, "--body", "closing"],
+      ["pr", "close", ...target],
     ]);
   });
 });
 
 describe("defaultRunGh", () => {
-  it("bounds each GitHub lookup with a timeout and SIGKILL", () => {
+  it.each([undefined, "body"])("bounds GitHub calls and forwards optional stdin: %s", (input) => {
+    const args = input ? ["pr", "edit", "123", "--add-label", "duplicate"] : ["pr", "view", "123"];
+    const options = input ? { input } : {};
     const execFileSyncImpl = vi.fn(() => "result");
-
-    const result = defaultRunGh(["pr", "view", "123"], {}, { execFileSyncImpl });
-
-    expect(result).toBe("result");
+    expect(defaultRunGh(args, options, { execFileSyncImpl })).toBe("result");
     expect(execFileSyncImpl).toHaveBeenCalledWith(
       "gh",
-      ["pr", "view", "123"],
+      args,
       expect.objectContaining({
+        ...options,
         encoding: "utf8",
         killSignal: "SIGKILL",
-        stdio: ["ignore", "pipe", "inherit"],
-        timeout: 60_000,
-      }),
-    );
-  });
-
-  it("forwards stdin input while keeping the timeout bound", () => {
-    const execFileSyncImpl = vi.fn(() => "ok");
-
-    defaultRunGh(
-      ["pr", "edit", "123", "--add-label", "duplicate"],
-      { input: "body" },
-      { execFileSyncImpl },
-    );
-
-    expect(execFileSyncImpl).toHaveBeenCalledWith(
-      "gh",
-      ["pr", "edit", "123", "--add-label", "duplicate"],
-      expect.objectContaining({
-        input: "body",
-        killSignal: "SIGKILL",
-        stdio: ["pipe", "pipe", "inherit"],
+        stdio: [input ? "pipe" : "ignore", "pipe", "inherit"],
         timeout: 60_000,
       }),
     );

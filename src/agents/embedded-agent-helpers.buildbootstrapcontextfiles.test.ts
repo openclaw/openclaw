@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import { describe, expect, it, vi } from "vitest";
+import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   buildBootstrapContextFiles,
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
-} from "./embedded-agent-helpers.js";
+} from "./embedded-agent-helpers/bootstrap.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
@@ -39,6 +41,32 @@ function renderMiddle(lines: string[], maxChars: number) {
 }
 
 describe("buildBootstrapContextFiles", () => {
+  it.each([1500, 3000])("keeps seeded workspace safety guidance within %i chars", (maxChars) => {
+    const template = fs.readFileSync(
+      new URL("../../docs/reference/templates/AGENTS.md", import.meta.url),
+      "utf-8",
+    );
+    const content = extractFrontmatterBlock(template)?.body.trimStart() ?? template;
+    const [injected] = buildBootstrapContextFiles([makeFile({ content })], { maxChars });
+
+    expect(injected?.content.length).toBeLessThanOrEqual(maxChars);
+    for (const instruction of [
+      "Don't share private data with people or services the user didn't ask for.",
+      "Confirm destructive or irreversible actions the user didn't ask for.",
+      "Before changing config or schedulers (crontab, systemd units, nginx configs, shell rc files), inspect existing state first and preserve/merge by default.",
+      "Prefer `trash` over `rm` - recoverable beats gone forever.",
+      ...(maxChars === 3000
+        ? [
+            "**Do freely:** anything the user asked for, including sending messages, emails, or posts on their behalf; read files, explore, organize, learn; search the web, check calendars; work within this workspace.",
+            "**Ask first:** public or outbound actions the user did not request.",
+            "Recommend paid services only with explicit spend approval.",
+          ]
+        : []),
+    ]) {
+      expect(injected?.content).toContain(instruction);
+    }
+  });
+
   it("skips empty or whitespace-only content", () => {
     const files = [makeFile({ content: "   \n  " })];
     expect(buildBootstrapContextFiles(files)).toStrictEqual([]);
@@ -57,6 +85,34 @@ describe("buildBootstrapContextFiles", () => {
     expect(result?.content.endsWith(content.slice(-25))).toBe(true);
     expect(warnings).toEqual([expect.stringMatching(/SOUL\.md.*limit 200/)]);
   });
+  it("warns once per path, content revision, and effective limit across context builds", () => {
+    const file = makeFile({ path: "/warning-revisions/AGENTS.md", content: "a".repeat(1000) });
+    const warn = vi.fn();
+    const build = (overrides: Partial<WorkspaceBootstrapFile> = {}, maxChars = 200) =>
+      buildBootstrapContextFiles([{ ...file, ...overrides }], { maxChars, warn });
+
+    // A diagnostics build without a logger must not consume the warning.
+    buildBootstrapContextFiles([file], { maxChars: 200 });
+    const first = build();
+    expect(build()).toEqual(first);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    const edited = build({ content: "b".repeat(1000) });
+    expect(edited).not.toEqual(first);
+    expect(build({ content: "b".repeat(1000) })).toEqual(edited);
+    expect(warn).toHaveBeenCalledTimes(2);
+    build({}, 300);
+    build({ path: "/other-workspace/AGENTS.md" });
+    expect(warn).toHaveBeenCalledTimes(4);
+    expect(build()).toEqual(first);
+    expect(warn).toHaveBeenCalledTimes(4);
+
+    // Total-budget changes alter the effective per-file limit too.
+    buildBootstrapContextFiles([file], { maxChars: 200, totalMaxChars: 150, warn });
+    buildBootstrapContextFiles([file], { maxChars: 200, totalMaxChars: 150, warn });
+    expect(warn).toHaveBeenCalledTimes(5);
+  });
+
   it.each([
     { name: "SOUL.md", maxChars: 200, head: 73, middle: 200, tail: 23 },
     { name: "AGENTS.md", maxChars: 600, head: 269, middle: 638, tail: 89 },

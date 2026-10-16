@@ -130,7 +130,7 @@ async function promptMatrixAllowFrom(params: {
         accountId,
         inputs: pending,
         kind: "user",
-      }).catch(() => []);
+      });
       for (const result of results) {
         if (result?.resolved && result.id) {
           resolvedIds.push(result.id);

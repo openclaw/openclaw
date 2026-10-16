@@ -13,7 +13,8 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
 import {
   applySessionEntryLifecycleMutation,
   appendTranscriptMessage,
@@ -28,7 +29,7 @@ import {
 import { readSessionTranscriptMessageEventPage } from "./session-accessor.sqlite-active-events.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
@@ -75,6 +76,7 @@ describe("SQLite session handle lifecycle", () => {
       sessionKey: "agent:main:handle-session",
       storePath: path.join(tempDirs.make("openclaw-session-handle-"), "sessions.json"),
     };
+    setRuntimeConfigSnapshot({ session: { store: scope.storePath } });
     await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     databasePath = resolveSqliteTargetFromSessionStorePath(scope.storePath).path!;
   });
@@ -83,6 +85,7 @@ describe("SQLite session handle lifecycle", () => {
     archiveMaterializationHook.afterMaterialize = undefined;
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   it("releases a transcript read after JSON parsing fails mid-stream", async () => {
@@ -139,8 +142,10 @@ describe("SQLite session handle lifecycle", () => {
         withTranscriptWriteLock(scope, async (transcript) => {
           const count = messages.length;
           const keys = messages.map(({ message }) => message.idempotencyKey);
-          const counter = trackSqliteStatementExecutions(database.db, ["reads"], (query) =>
-            query.startsWith("select ") ? "reads" : null,
+          const counter = trackSqliteStatementExecutions(
+            requireNativeSqliteDatabase(database.db),
+            ["reads"],
+            (query) => (query.startsWith("select ") ? "reads" : null),
           );
           try {
             const facts = await transcript.readMessageFacts({ idempotencyKeys: keys });
@@ -186,6 +191,49 @@ describe("SQLite session handle lifecycle", () => {
       }
     },
   );
+
+  it("reads assistant run candidates alongside older idempotency keys", async () => {
+    const messages = [
+      {
+        eventId: "old-key",
+        message: { role: "assistant", content: "old answer", idempotencyKey: "old-delivery" },
+      },
+      {
+        eventId: "run-input",
+        message: { role: "user", content: "question", idempotencyKey: "source-run:user" },
+      },
+      ...Array.from({ length: 20 }, (_, index) => ({
+        eventId: `tool-${index}`,
+        message: {
+          role: "toolResult",
+          content: "Unneeded tool output ".repeat(128),
+          __openclaw: { runId: "source-run" },
+        },
+      })),
+      {
+        eventId: "run-answer",
+        message: {
+          role: "assistant",
+          content: "delivered answer",
+          __openclaw: { runId: "source-run" },
+        },
+      },
+    ];
+    await persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
+    const facts = await withTranscriptWriteLock(scope, (transcript) =>
+      transcript.readMessageFacts({
+        idempotencyKeys: ["old-delivery"],
+        sourceRunId: "source-run",
+      }),
+    );
+    expect(facts.sourceEvents).toMatchObject([{ id: "run-answer" }]);
+    expect(facts.messagesByIdempotencyKey.get("old-delivery")).toEqual({
+      role: "assistant",
+      content: "old answer",
+      idempotencyKey: "old-delivery",
+    });
+    expect(facts.anchorsByIdempotencyKey.get("old-delivery")?.entryId).toBe("old-key");
+  });
   it.each([
     ["missing projection", "DELETE FROM session_transcript_index_state"],
     ["ahead projection", "UPDATE session_transcript_index_state SET indexed_seq = 100"],
@@ -219,7 +267,7 @@ describe("SQLite session handle lifecycle", () => {
 
       await withTranscriptWriteLock(scope, async (transcript) => {
         const before = await transcript.readEvents();
-        closeCachedOpenClawAgentDatabase(database, { eviction: true });
+        closeCachedOpenClawAgentDatabase(database);
         expect(database.db.isOpen).toBe(false);
         if (kind === "events") {
           await expect(transcript.readEvents()).resolves.toEqual(before);
@@ -258,9 +306,24 @@ describe("SQLite session handle lifecycle", () => {
     );
   });
 
-  it("does not run automatic maintenance on a replacement database handle", async () => {
-    const staleDashboardScope = {
+  it("retires automatic maintenance with its database owner before reopening", async () => {
+    const canonicalScope = {
       ...scope,
+      storePath: path.join(
+        tempDirs.make("openclaw-maintenance-retirement-"),
+        "agents",
+        "main",
+        "sessions",
+        "sessions.json",
+      ),
+    };
+    await replaceSessionEntry(canonicalScope, {
+      sessionId: canonicalScope.sessionId,
+      updatedAt: 1,
+    });
+    const retiredPath = resolveSqliteTargetFromSessionStorePath(canonicalScope.storePath).path;
+    const staleDashboardScope = {
+      ...canonicalScope,
       sessionId: "stale-dashboard",
       sessionKey: "agent:main:dashboard:stale",
     };
@@ -268,11 +331,11 @@ describe("SQLite session handle lifecycle", () => {
       sessionId: staleDashboardScope.sessionId,
       updatedAt: 1,
     });
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: retiredPath });
     const writerStarted = createDeferred();
     const writerRelease = createDeferred();
     const blockedWrite = patchSessionEntryCore(
-      scope,
+      canonicalScope,
       async () => {
         writerStarted.resolve();
         await writerRelease.promise;
@@ -280,24 +343,29 @@ describe("SQLite session handle lifecycle", () => {
       },
       { skipMaintenance: true },
     );
-    await writerStarted.promise;
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    const drains = [...SQLITE_SESSION_WRITER_QUEUES.values()].flatMap((queue) =>
-      queue.drainPromise ? [queue.drainPromise] : [],
-    );
-    expect(drains).not.toHaveLength(0);
+    try {
+      await writerStarted.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(loadSessionEntry(staleDashboardScope)?.archivedAt).toBeUndefined();
 
-    closeCachedOpenClawAgentDatabase(database, { eviction: true });
-    expect(database.db.isOpen).toBe(false);
-    const replacement = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-    writerRelease.resolve();
-    await Promise.all([blockedWrite, ...drains]);
+      expect(closeOpenClawAgentDatabaseByPath(retiredPath)).toBe(true);
+      expect(database.db.isOpen).toBe(false);
+      writerRelease.resolve();
+      await expect(blockedWrite).rejects.toThrow("Agent database execution admission is closed");
+      await closeOpenClawAgentDatabaseByPathAsync(retiredPath);
 
-    expect(replacement.db.isOpen).toBe(true);
-    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId });
-    expect(loadSessionEntry(staleDashboardScope)?.archivedAt).toBeUndefined();
+      const replacement = openOpenClawAgentDatabase({ agentId: "main", path: retiredPath });
+      expect(replacement.db.isOpen).toBe(true);
+      expect(loadSessionEntry(canonicalScope)).toMatchObject({
+        sessionId: canonicalScope.sessionId,
+      });
+      expect(loadSessionEntry(staleDashboardScope)?.archivedAt).toBeUndefined();
+    } finally {
+      writerRelease.resolve();
+      await blockedWrite.catch(() => undefined);
+    }
   });
 
   it.each(["cache eviction", "database retirement"] as const)(
@@ -314,7 +382,7 @@ describe("SQLite session handle lifecycle", () => {
               if (closure === "database retirement") {
                 expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
               } else {
-                closeCachedOpenClawAgentDatabase(planningDatabase, { eviction: true });
+                closeCachedOpenClawAgentDatabase(planningDatabase);
                 expect(planningDatabase.db.isOpen).toBe(false);
               }
               return { ...currentEntry!, label: "built after close" };
@@ -439,7 +507,7 @@ describe("SQLite session handle lifecycle", () => {
     const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     const closeHandle = vi.fn(() => {
       expect(database.db.isOpen).toBe(true);
-      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      closeCachedOpenClawAgentDatabase(database);
       expect(database.db.isOpen).toBe(false);
     });
     archiveMaterializationHook.afterMaterialize = closeHandle;

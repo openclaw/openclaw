@@ -9,7 +9,6 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
   retireSharedCodexAppServerClientIfCurrent,
-  resolveCodexNativeConfigFenceKey,
 } from "./shared-client.js";
 import { createClientHarness, waitForHarnessRequest } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -62,14 +61,11 @@ afterEach(async () => {
   await fs.rm(home, { recursive: true, force: true });
 });
 
-describe("guarded startup request lifetime", () => {
-  it("fork timeout preserves a peer and releases its fence on the exact late response", async () => {
+describe("startup request lifetime", () => {
+  it("fork timeout preserves a peer through the exact late response", async () => {
     const method = "thread/fork";
     const old = createHarness();
-    const replacement = createHarness();
-    vi.spyOn(CodexAppServerClient, "start")
-      .mockResolvedValueOnce(old.client)
-      .mockResolvedValueOnce(replacement.client);
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(old.client);
     expect(await acquire()).toBe(old.client);
     const peer = old.client.request("turn/start", { threadId: "peer" }, { timeoutMs: 5_000 });
     const peerFrame = await waitForHarnessRequest(old, "turn/start");
@@ -83,15 +79,6 @@ describe("guarded startup request lifetime", () => {
     const frame = await waitForHarnessRequest(old, method);
     expect(await startup).toMatchObject({ reason: "timed out", mayHaveWritten: true });
     expect(old.stdinDestroyed).toBe(false);
-    expect(await acquire()).toBe(replacement.client);
-
-    // A replacement's same-home startup must not overtake the old native work.
-    const blocked = replacement.client.request("thread/start", {}, { timeoutMs: 100 });
-    await expect(blocked).rejects.toMatchObject({ reason: "timed out", mayHaveWritten: false });
-    expect(replacement.writes.some((line) => JSON.parse(line).method === "thread/start")).toBe(
-      false,
-    );
-    expect(replacement.stdinDestroyed).toBe(false);
 
     old.send({ id: frame.id, result: { thread: { id: "abandoned" } } });
     old.send({ method: "thread/started", params: { thread: { id: "abandoned" } } });
@@ -105,21 +92,14 @@ describe("guarded startup request lifetime", () => {
     await expect(peer).resolves.toEqual({ turn: { id: "peer-turn" } });
     expect(old.stdinDestroyed).toBe(false);
 
+    retireSharedCodexAppServerClientIfCurrent(old.client);
     expect(releaseLeasedSharedCodexAppServerClient(old.client)).toBe(true);
     expect(old.stdinDestroyed).toBe(true);
     old.emitExit();
-    retireSharedCodexAppServerClientIfCurrent(old.client);
-    expect(await acquire()).toBe(replacement.client);
-    expect(replacement.stdinDestroyed).toBe(false);
-    expect(
-      replacement.writes.some((line) => JSON.parse(line).method === "thread/unsubscribe"),
-    ).toBe(false);
-    releaseLeasedSharedCodexAppServerClient(replacement.client);
-    releaseLeasedSharedCodexAppServerClient(replacement.client);
   });
 
   it.each(["response", "rpc error", "overload", "exit"])(
-    "an aborted written startup holds config until %s, without rechecking stale ownership",
+    "an aborted written startup settles on %s without rechecking stale ownership",
     async (settlement) => {
       const harness = createHarness();
       vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
@@ -154,12 +134,6 @@ describe("guarded startup request lifetime", () => {
           error: { code: settlement === "overload" ? -32001 : -32600, message: "rejected" },
         });
       }
-      const { acquireCodexNativeConfigFence } = await import("./native-config-fence.js");
-      const release = await acquireCodexNativeConfigFence(
-        resolveCodexNativeConfigFenceKey({ client: harness.client })!,
-        { timeoutMs: 1_000 },
-      );
-      release();
       expect(assertCurrent).toHaveBeenCalledTimes(calls);
       expect(
         harness.writes.filter((line) => JSON.parse(line).method === "thread/resume"),
@@ -187,6 +161,7 @@ describe("guarded startup request lifetime", () => {
     });
     expect(await startup).toMatchObject({ reason: "aborted", mayHaveWritten: true });
     expect(await pendingAcquire).toBe(old.client);
+    retireSharedCodexAppServerClientIfCurrent(old.client);
     expect(await acquire()).toBe(replacement.client);
     releaseLeasedSharedCodexAppServerClient(old.client);
     expect(old.stdinDestroyed).toBe(false);
@@ -201,26 +176,6 @@ describe("guarded startup request lifetime", () => {
     releaseLeasedSharedCodexAppServerClient(replacement.client);
   });
 
-  it("logical transport closure cannot release an unconfirmed native config fence", async () => {
-    const harness = createHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-    await acquire();
-    const startup = harness.client
-      .request("thread/start", {}, { timeoutMs: 100 })
-      .catch((error: unknown) => error);
-    await waitForHarnessRequest(harness, "thread/start");
-    expect(await startup).toMatchObject({ reason: "timed out" });
-    const { acquireCodexNativeConfigFence } = await import("./native-config-fence.js");
-    const key = resolveCodexNativeConfigFenceKey({ client: harness.client })!;
-    harness.client.close();
-    await expect(acquireCodexNativeConfigFence(key, { timeoutMs: 100 })).rejects.toThrow(
-      "timed out",
-    );
-    harness.emitExit();
-    const release = await acquireCodexNativeConfigFence(key, { timeoutMs: 1_000 });
-    release();
-    releaseLeasedSharedCodexAppServerClient(harness.client);
-  });
   it("preserves confirmed overload rejection when the response beats an expired timer", async () => {
     const harness = createHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);

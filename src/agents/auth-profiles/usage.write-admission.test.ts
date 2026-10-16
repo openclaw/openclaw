@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import * as configEnvVars from "../../config/config-env-vars.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
@@ -17,7 +18,6 @@ import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
 } from "../../state/openclaw-agent-write-admission.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -43,13 +43,16 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "./sqlite.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store-runtime.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
+import { withAuthProfileUsage } from "./usage-write.js";
 import { markAuthProfileFailure } from "./usage.js";
 
 const profileId = "fixture-provider:admission";
 const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
 
-function createStore(): AuthProfileStore {
+function createStore(): AuthProfileStore & {
+  profiles: Record<typeof profileId, AuthProfileCredential>;
+} {
   return {
     version: 1,
     profiles: {
@@ -83,7 +86,7 @@ it.each(["current", "relocated", "closed"] as const)(
         setRuntimeAuthProfileStoreSnapshot(store, agentDir);
         const pathname = openOpenClawAgentDatabase(options).path;
         closeOpenClawAgentDatabasesForTest(state.env.OPENCLAW_STATE_DIR);
-        clearOpenClawAgentIntegrityVerification(pathname, state.env);
+        revokeSqliteDatabaseAdmissionsForPath(pathname);
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
@@ -123,6 +126,13 @@ it.each(["current", "relocated", "closed"] as const)(
             settled: false,
             usage: undefined,
           });
+          let writerEntered = false;
+          const writer = runOpenClawAgentWriteAdmission(options, () => {
+            writerEntered = true;
+          });
+          await nextTurn();
+          expect(writerEntered).toBe(true);
+          await writer;
           if (owner === "relocated") {
             writeConfigMachineState(
               SHARED_AUTH_STORE_STATE_KEY,
@@ -184,15 +194,31 @@ it.each(["local", "legacy-shared"] as const)(
         );
         await entered.promise;
         let settled = false;
-        const update = markAuthProfileFailure({
+        const ready = createDeferredCore();
+        const update = withAuthProfileUsage(
           store,
           profileId,
-          reason: "auth",
-          agentDir: state.agentDir("voice"),
-        }).then(() => {
+          state.agentDir("voice"),
+          ({ record }) => {
+            const writing = record({
+              kind: "failure",
+              expectedProfile: store.profiles[profileId],
+              reason: "auth",
+              whamResult: null,
+              probeEligible: false,
+            });
+            ready.resolve();
+            return writing;
+          },
+        ).then(() => {
           settled = true;
         });
         void update.catch(() => {});
+        await awaitGateBeforeSettlement(
+          ready.promise,
+          update,
+          "Auth health did not reach recording",
+        );
         const nextWriter = runOpenClawAgentWriteAdmission(
           { agentId, path: database.path },
           () =>
