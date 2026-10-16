@@ -59,7 +59,6 @@ import {
 import { SidebarSnapshotController } from "./sidebar-snapshot-controller.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { Icon } from "./solid/icon.tsx";
-import { NewSessionMenu } from "./solid/new-session-link.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 import { SessionTitlePlaceholder } from "./solid/session-title-placeholder.tsx";
 import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
@@ -529,16 +528,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   renderSidebar(Sessions: () => JSX.Element): JSX.Element {
     const SidebarFrame = () => {
-      const rail = renderSidebarRail(this, () => (
-        <NewSessionMenu
-          basePath={this.basePath}
-          active={this.navigationVisible}
-          access={this.readNewSessionAccess()}
-          snapshotCards={this.sidebarSnapshot?.cards}
-          onShow={() => this.dismissTransientMenus()}
-          onOpen={(agentId) => this.requestOpenNewSession(agentId)}
-        />
-      ));
+      const rail = renderSidebarRail(this);
       const pages = renderSidebarPages(this);
       const toolbar = renderSessionListToolbar(this);
       const online = renderAppSidebarOnline(this);
