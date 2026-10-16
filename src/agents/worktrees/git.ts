@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import {
   createGitCommandError,
   enqueueGitRefMutation,
@@ -13,6 +14,7 @@ import {
   type GitBufferedCommandOptions,
   type GitCommandOptions,
 } from "../../infra/git-exec.js";
+import { gitCommandName } from "../../infra/git-network-retry.js";
 import { withGitRepositoryRepair } from "../../infra/git-repository-repair.js";
 import { hasGitWorkerContext, requestGitWorkerCommand } from "../../infra/git-worker-context.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
@@ -157,7 +159,12 @@ async function runOwnedGitCommand<
           // Fetch can prune refs and start maintenance; keep its follow-on writes owned.
           killProcessTree: options.killProcessTree ?? (args[0] === "fetch" && gitArgs === args),
         });
-      const result = await run();
+      // Registration and prompt-only indexes stay responsive. Full checkouts share
+      // the content budget; queueing must not spend the child execution timeout.
+      const result =
+        gitCommandName(gitArgs) === "read-tree" && gitArgs.includes("-u")
+          ? await withContentGitSlot(run, options.signal)
+          : await run();
       if (gitArgs !== args || args[0] !== "fetch" || result.code !== 128) {
         return result;
       }

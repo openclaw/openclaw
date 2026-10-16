@@ -7,6 +7,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import * as execRunner from "../../process/exec-runner.js";
 import * as processExec from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
@@ -27,6 +28,67 @@ import {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+it("queues a checkout burst behind content work without delaying metadata or spending execution budgets", async ({
+  signal,
+}) => {
+  const release = createDeferred();
+  const started = createDeferred();
+  const admitted: string[] = [];
+  let active = 0;
+  let maximum = 0;
+  const result: SpawnResult = {
+    stdout: "",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+  };
+  vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+    if (!argv.includes("-u")) {
+      return result;
+    }
+    expect(typeof options === "number" ? options : options.timeoutMs).toBe(300_000);
+    admitted.push(argv[argv.indexOf("-C") + 1]!);
+    maximum = Math.max(maximum, ++active);
+    started.resolve();
+    try {
+      await release.promise;
+      return result;
+    } finally {
+      active--;
+    }
+  });
+  const content = withContentGitSlot(() => release.promise);
+  const beforeRun = vi.fn();
+  const checkout = (cwd: string, abortSignal?: AbortSignal) =>
+    runGit(cwd, ["read-tree", "--reset", "--no-recurse-submodules", "-u", "HEAD"], {
+      timeoutMs: 300_000,
+      signal: abortSignal,
+      beforeRun,
+    });
+  const burst = Array.from({ length: 30 }, (_, index) => checkout(`checkout-${index}`));
+  const abort = new AbortController();
+  const canceled = checkout("canceled", abort.signal).catch((error: unknown) => error);
+  try {
+    await withinTest(started.promise, signal);
+    // Prompt preparation's index-only read and ordinary metadata must bypass this queue.
+    await runGit("metadata", ["rev-parse", "HEAD"]);
+    await runGit("prompt", ["read-tree", "--reset", "HEAD"]);
+    expect(admitted).toEqual(["checkout-0"]);
+    expect(beforeRun).toHaveBeenCalledOnce();
+    const reason = new Error("checkout canceled while waiting");
+    abort.abort(reason);
+    expect(await withinTest(canceled, signal)).toBe(reason);
+  } finally {
+    release.resolve();
+    await Promise.all([content, ...burst, canceled]);
+  }
+  expect(admitted).toEqual(Array.from({ length: 30 }, (_, index) => `checkout-${index}`));
+  expect(maximum).toBeLessThanOrEqual(2);
+  expect(beforeRun).toHaveBeenCalledTimes(30);
 });
 
 describe("Git ref mutation ownership", () => {

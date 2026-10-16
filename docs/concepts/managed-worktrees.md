@@ -129,6 +129,12 @@ The policy is: **squashed/merged first, then by age including unsaved data**. Cl
 
 Creation reserves a persisted slot before preparing files. Name and owner checks happen at that reservation; materialization, ignored-file provisioning, and setup then run independently of other creates. Publication atomically replaces the pending slot with a live record. Concurrent requests for the same owner wait and reuse its completed checkout. Capacity admission waits for an in-progress creation when its slot prevents admission; pending checkouts are never eviction candidates.
 
+Full Git checkout materialization shares the Gateway's two-process budget for
+content-heavy Git work. Bursts wait in order instead of starting every checkout
+at once; that queue wait does not consume the checkout command's five-minute
+execution timeout. Registration and prompt-file preparation remain available
+while full checkouts wait, so eligible first turns can still begin early.
+
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 
 Source custody inspects managed checkout and Git storage ownership once per operation. Destination protection reuses that inventory while reserving a slot, so ordinary repository creation does not rescan every managed repository under the allocation lease. The inventory ends with the operation; cleanup still checks live dependencies before deleting a checkout.
