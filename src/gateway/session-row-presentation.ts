@@ -42,10 +42,9 @@ type PresentationOptions = SessionRowPresentationOptions;
 
 type CapturedSessionRowPresentation = {
   row: GatewaySessionRow | null;
-  modelCache?: {
-    views: Map<string, Readonly<GatewaySessionRow>>;
-    signature: string;
-  };
+  record?: records.MaterializedRow;
+  views?: Map<string, Readonly<GatewaySessionRow>>;
+  signature?: string;
   work?: {
     input: PreparedSessionRowRender;
     publish: (row: GatewaySessionRow, encoded: string) => GatewaySessionRow;
@@ -551,14 +550,15 @@ export function prepareProjectedSessionPresentation(
         viewerFacts,
         canEnsure,
       ]);
-    const modelCache = views && signature !== undefined ? { views, signature } : undefined;
     const cached = signature === undefined ? undefined : views?.get(signature);
     if (cached) {
-      return { row: cached, modelCache };
+      return { row: cached, record, views, signature };
     }
     return {
       row: null,
-      modelCache,
+      record,
+      views,
+      signature,
       work: {
         input: {
           ...captureSessionRowPresentation(record, preparedRowContext, {
@@ -596,8 +596,8 @@ export function prepareProjectedSessionPresentation(
   };
   const projectCapturedModels = (
     row: GatewaySessionRow,
-    captured?: Pick<CapturedSessionRowPresentation, "modelCache">,
-  ) => projectModels(row, captured?.modelCache?.views, captured?.modelCache?.signature);
+    captured?: Pick<CapturedSessionRowPresentation, "views" | "signature">,
+  ) => projectModels(row, captured?.views, captured?.signature);
   const present = (
     record: records.MaterializedRow,
     options: PresentationOptions,
@@ -623,13 +623,12 @@ export function prepareProjectedSessionPresentation(
     },
     rowContext: preparedRowContext,
     projectModels: projectCapturedModels,
-    capture(query: records.Lookup, options: PresentationOptions = {}) {
+    capture(
+      query: records.Lookup,
+      options: PresentationOptions = {},
+    ): CapturedSessionRowPresentation {
       const record = projection.describe(query);
-      return {
-        ...(record ? captureRecord(record, options) : { row: null }),
-        record,
-        lifecycleRunId: record?.entry.lifecycleRunId,
-      };
+      return record ? captureRecord(record, options) : { row: null };
     },
     active,
     sharing,

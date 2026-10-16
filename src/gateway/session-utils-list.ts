@@ -487,9 +487,10 @@ export async function listProjectedSessions(params: {
       if (!capturedPage) {
         continue;
       }
-      const renderedRows = await page.render(
-        capturedPage.rows.flatMap((captured) => (captured.work ? [captured.work.input] : [])),
-      );
+      const pendingRows = capturedPage.rows.filter((captured) => captured.work);
+      const renderedRows = pendingRows.length
+        ? await page.render(pendingRows.map((captured) => captured.work!.input))
+        : [];
       if (!renderedRows) {
         continue;
       }
