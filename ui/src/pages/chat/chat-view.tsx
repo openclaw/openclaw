@@ -1,3 +1,4 @@
+import { dynamic } from "@solidjs/web";
 import type { Component } from "solid-js";
 import { createEffect, createMemo, createSignal, Show, untrack } from "solid-js";
 import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
@@ -8,11 +9,10 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-contract.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
 import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
-import { LitContent, emptyLegacyContent } from "../../lit/solid-content.tsx";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -32,15 +32,17 @@ import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-co
 import { ChatComposer } from "./components/chat-composer.tsx";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
-import { renderChatSelectionAnnotations } from "./components/chat-selection-annotations.ts";
-import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
-import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
+import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
+import { ChatSessionSuggestions } from "./components/chat-session-suggestions.solid.tsx";
+import { ChatSwarmProgress } from "./components/chat-swarm-progress.solid.tsx";
 import { ChatTaskSuggestionTray } from "./components/chat-task-suggestions.tsx";
 import {
-  renderTranscriptSearch,
+  getTranscriptState,
+  closeTranscriptSearch,
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
 import { ChatThread } from "./components/chat-thread-view.tsx";
+import { TranscriptSearch } from "./components/chat-transcript-search.tsx";
 import "../../components/resizable-divider.ts";
 export type { ChatProps } from "./chat-view-frame.ts";
 
@@ -128,20 +130,17 @@ function ChatFooterContent(input: ChatViewInput) {
           publication={input.props.githubPublication}
         />
       </Show>
-      <LitContent
-        value={renderChatSessionSuggestions({
-          suggestions: input.props.sessionSuggestions ?? [],
-          role: input.props.sessionSuggestionRole,
-          busyIds: input.props.sessionSuggestionBusyIds ?? new Set(),
-          archived: input.props.sessionSuggestionsArchived === true,
-          canResolve: input.props.canResolveSessionSuggestions === true,
-          onResolve: (suggestion, resolution) =>
-            input.props.onResolveSessionSuggestion?.(suggestion, resolution),
-        })}
+      <ChatSessionSuggestions
+        suggestions={input.props.sessionSuggestions ?? []}
+        role={input.props.sessionSuggestionRole}
+        busyIds={input.props.sessionSuggestionBusyIds ?? new Set()}
+        archived={input.props.sessionSuggestionsArchived === true}
+        canResolve={input.props.canResolveSessionSuggestions === true}
+        onResolve={(suggestion, resolution) =>
+          input.props.onResolveSessionSuggestion?.(suggestion, resolution)
+        }
       />
-      <Show when={input.props.swarm}>
-        <LitContent value={renderChatSwarmProgress(input.props.swarm!)} />
-      </Show>
+      <Show when={input.props.swarm}>{(swarm) => <ChatSwarmProgress {...swarm()} />}</Show>
       <Show when={input.application}>
         <openclaw-plugin-contributions
           prop:kind="composer"
@@ -198,11 +197,14 @@ function ChatComposerCompanion(input: ChatViewInput) {
         }
       />
       <Show when={!input.props.suggestionComposer}>
-        <LitContent
-          value={renderChatSelectionAnnotations({ ...input.props, disabled: !input.props.canSend })}
-        />
+        <ChatSelectionAnnotations {...input.props} disabled={!input.props.canSend} />
       </Show>
-      <LitContent value={input.props.composerRecovery ?? emptyLegacyContent} />
+      <Show when={input.props.composerRecovery}>
+        {(recovery) => {
+          const Recovery = dynamic(() => recovery().component);
+          return <Recovery {...recovery()} />;
+        }}
+      </Show>
     </div>
   );
 }
@@ -381,8 +383,16 @@ function ChatContent(input: { props: ChatProps }) {
                     prop:presented={presented()}
                   />
                 </Show>
-                <LitContent
-                  value={renderTranscriptSearch(input.props.paneId, frame().requestUpdate)}
+                <TranscriptSearch
+                  revision={frame()}
+                  state={getTranscriptState(input.props.paneId)}
+                  requestUpdate={frame().requestUpdate}
+                  onClose={() =>
+                    closeTranscriptSearch(
+                      getTranscriptState(input.props.paneId),
+                      frame().requestUpdate,
+                    )
+                  }
                 />
                 <div class="chat-main__conversation-frame">
                   <div

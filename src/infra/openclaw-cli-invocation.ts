@@ -2,7 +2,11 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
+import {
+  getEmbeddedStandaloneRuntimeRoot,
+  readStandaloneRuntimeManifest,
+  resolveOpenClawCliInvocation,
+} from "../../cli-invocation.mjs";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { resolveRuntimeArgs, resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
@@ -96,6 +100,17 @@ export function resolveCurrentOpenClawCliInvocation(
   } = {},
 ): OpenClawCliInvocation {
   const execPath = options.execPath ?? process.execPath;
+  const embeddedRoot =
+    execPath === process.execPath ? getEmbeddedStandaloneRuntimeRoot() : undefined;
+  const manifest = embeddedRoot ? undefined : readStandaloneRuntimeManifest(execPath);
+  const standaloneRoot =
+    embeddedRoot ??
+    (manifest ? path.resolve(path.dirname(execPath), manifest.runtime.path) : undefined);
+  if (standaloneRoot) {
+    return { ...resolveOpenClawCliInvocation({ execPath, args }), cwd: standaloneRoot };
+  }
+
+  // Only loose installations need entry discovery and source-loader preparation.
   const entry = resolveOpenClawCliEntryPath(options.argv1 ?? process.argv[1]);
   const cwd = options.cwd ?? tryProcessCwd();
   const entryPackageRoot = entry ? resolveOpenClawPackageRootSync({ argv1: entry }) : null;

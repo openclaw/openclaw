@@ -1,4 +1,3 @@
-// User turn transcript tests cover transcript extraction for user turns.
 import path from "node:path";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
@@ -16,6 +15,8 @@ import {
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { transcriptMessage } from "../config/sessions/transcript-message.test-support.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+// User turn transcript tests cover transcript extraction for user turns.
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { readPendingUserTurnTranscriptAdmission } from "./user-turn-transcript-admission.js";
 import {
@@ -540,12 +541,15 @@ describe("user turn transcript persistence", () => {
         agentId: target.agentId,
         path: admission.storePath,
       });
-      const work = trackSqliteStatementExecutions(db, ["fts", "size"], (sql) =>
-        /\bsession_transcript_fts\b/i.test(sql)
-          ? "fts"
-          : sql.includes("octet_length")
-            ? "size"
-            : null,
+      const work = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(db),
+        ["fts", "size"],
+        (sql) =>
+          /\bsession_transcript_fts\b/i.test(sql)
+            ? "fts"
+            : sql.includes("octet_length")
+              ? "size"
+              : null,
       );
       try {
         await recorder.confirmSteerTargetRunIdForPersistence?.("active-run");

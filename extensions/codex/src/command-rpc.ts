@@ -320,6 +320,7 @@ export async function codexControlRequest(
         };
   try {
     const controlRequestOptions = {
+      pluginConfig,
       timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
       assertCurrent: options.assertCurrent,
       assertCurrentAsync: options.assertCurrentAsync,

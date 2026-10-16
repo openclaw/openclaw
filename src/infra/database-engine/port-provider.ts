@@ -9,12 +9,14 @@ import {
   type DatabasePortProvider,
   type PortDescriptor,
 } from "./port-descriptor.js";
+import { statePortProvider } from "./state-port.js";
 import { teamReportsPortProvider } from "./team-reports-port.js";
 import { workboardPortProvider } from "./workboard-port.js";
 
 /** The only registration point for portable database families. */
 export const databasePortProviders: readonly DatabasePortProvider[] = [
   workboardPortProvider,
+  statePortProvider,
   logbookPortProvider,
   teamReportsPortProvider,
 ];
@@ -82,8 +84,8 @@ export function withDatabasePortPostgres<T>(
 ): Promise<T> {
   return withDatabasePortConnection(config, async (client) => {
     const rows = await client
-      .query<{ store: string; store_id: string }>(
-        `SELECT store, store_id FROM ${quote(anchor.namespace)}.openclaw_schema_meta`,
+      .query<{ store: string; store_id: string; version: string }>(
+        `SELECT store, store_id, version FROM ${quote(anchor.namespace)}.openclaw_schema_meta`,
       )
       .then(
         (result) => result.rows,
@@ -100,6 +102,6 @@ export function withDatabasePortPostgres<T>(
       throw new DatabasePortDataError("PostgreSQL anchor does not match its store metadata");
     }
     const { loadDatabasePortDescriptor } = await import("./port-provider-descriptor.js");
-    return run(client, await loadDatabasePortDescriptor(row.store, config));
+    return run(client, await loadDatabasePortDescriptor(row.store, config, Number(row.version)));
   });
 }

@@ -6,10 +6,10 @@ import type {
 } from "../../../src/shared/mcp-app-extensions.js";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { createMcpAppCatalog } from "../lib/mcp-app-catalog.ts";
 import { mcpAppRouteSearch } from "../lib/mcp-app-route.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { useMcpAppCatalog } from "../lib/reactive/mcp-app-catalog.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
@@ -61,7 +61,7 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
     sessionKey: props.sessionKey || context.gateway.snapshot.sessionKey || "",
     agentId: props.agentId || context.agentSelection.state.selectedId || undefined,
   });
-  const catalog = useMcpAppCatalog(context, target, () => props.surface === "global");
+  const catalog = createMcpAppCatalog(context, target, () => props.surface === "global");
   const entries = (server: McpAppDiscoveredServer) =>
     server.entrypoints.filter(({ entrypoint }) =>
       props.surface === "file"

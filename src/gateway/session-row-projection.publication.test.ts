@@ -27,6 +27,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as projectionWork from "./session-projection-work.js";
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
@@ -278,7 +279,9 @@ it("retains newer cached native metadata through reentrant identity publication"
     let stopRows = () => {};
     try {
       await list();
-      expect(Boolean(readCommittedSessionEntryCache(database.db))).toBe(true);
+      expect(
+        Boolean(readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))),
+      ).toBe(true);
       const originalGeneration = projection.capture({
         agentId: scope.agentId,
         key: scope.sessionKey,
@@ -342,7 +345,9 @@ it("publishes maintenance removals before row listeners recreate the key", async
         if (event.kind === "delete" && event.previous.sessionKeys.includes(scope.sessionKey)) {
           identities.push(`delete:${event.previous.sessionId}`);
           removalState.push({
-            cachedId: readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey)?.sessionId,
+            cachedId: readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))?.get(
+              scope.sessionKey,
+            )?.sessionId,
             storedId: loadSessionEntry(scope)?.sessionId,
           });
         } else if (
@@ -378,9 +383,11 @@ it("publishes maintenance removals before row listeners recreate the key", async
     });
     const diagnostics = {};
     try {
-      expect(readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey)?.sessionId).toBe(
-        "removed",
-      );
+      expect(
+        readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))?.get(
+          scope.sessionKey,
+        )?.sessionId,
+      ).toBe("removed");
       await runSqliteSessionReclamation({ plan, diagnostics });
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
       expect(callbackErrors).toEqual([]);

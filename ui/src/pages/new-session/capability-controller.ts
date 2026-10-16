@@ -12,7 +12,8 @@ import {
 } from "../chat/composer-capability-catalog.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 
-export class NewSessionCapabilityController {
+/** Synchronous tool intent survives renderer changes and is read directly at submission. */
+export class NewSessionCapabilities {
   private readonly skillCatalog: ComposerSkillCatalog;
   private toolOverridesValue: SessionToolOverrides | null = null;
   constructor(
@@ -38,12 +39,6 @@ export class NewSessionCapabilityController {
 
   reset() {
     this.toolOverridesValue = null;
-  }
-
-  restoreToolOverrides(toolOverrides: SessionToolOverrides | null | undefined) {
-    if (toolOverrides !== undefined) {
-      this.setToolOverrides(toolOverrides);
-    }
   }
 
   canStartAsDraft(context: ApplicationContext | undefined): boolean {

@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
@@ -143,7 +143,7 @@ export type SessionLifecyclePlanningOperations = {
 /** Private planning commands borrow the executor's admitted connection. */
 export function bindSqliteWorkerBackend(
   binding: { agentId: string },
-  context: { database: DatabaseSync; databasePath: string },
+  context: { database: EngineConnection; databasePath: string },
 ): SqliteWorkerBackend<SessionLifecyclePlanningOperations> {
   const database = getOpenClawAgentDatabaseIfOpen({
     agentId: binding.agentId,

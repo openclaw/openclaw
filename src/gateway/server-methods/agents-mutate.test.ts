@@ -113,7 +113,7 @@ const mocks = vi.hoisted(() => ({
   movePathToTrash: vi.fn(async (_pathname?: string) => "/trashed"),
   fsMkdir: vi.fn(async () => undefined),
   fsAppendFile: vi.fn(async () => {}),
-  fsReadFile: vi.fn(async () => ""),
+  fsReadFile: vi.fn<() => Promise<string>>(),
   fsStat: vi.fn(async (..._args: unknown[]) => null as import("node:fs").Stats | null),
   fsLstat: vi.fn(
     async (..._args: unknown[]) =>
@@ -669,9 +669,6 @@ async function expectUnsafeWorkspaceFile(method: "agents.files.get" | "agents.fi
 }
 
 beforeEach(() => {
-  mocks.fsReadFile.mockImplementation(async () => {
-    throw createEnoentError();
-  });
   mocks.fsStat.mockImplementation(async () => {
     throw createEnoentError();
   });
@@ -684,7 +681,6 @@ beforeEach(() => {
     async () =>
       ({
         stat: async () => makeFileStat(),
-        readFile: async () => Buffer.from(""),
         truncate: async () => {},
         writeFile: async () => {},
         close: async () => {},
@@ -1679,25 +1675,21 @@ describe("agents.delete", () => {
     expect(mocks.movePathToTrash).not.toHaveBeenCalled();
   });
 
-  it("returns not found when a concurrent delete wins the delete race", async () => {
-    let findCallCount = 0;
-    mocks.findAgentEntryIndex.mockImplementation(() => {
-      findCallCount += 1;
-      return findCallCount >= 2 ? -1 : 0;
-    });
-
-    const respond = await call("agents.delete", {
-      agentId: "test-agent",
-    });
-
-    expectNotFoundResponseAndNoWrite(respond);
-    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
-  });
-
   it("rejects invalid params (missing agentId)", async () => {
     const respond = await call("agents.delete", {});
 
     expectRespondErrorContaining(respond, "invalid");
+  });
+
+  it("returns not found after a previous deletion removed the agent", async () => {
+    const first = await call("agents.delete", { agentId: "test-agent", deleteFiles: false });
+    expectRespondOk(first, { ok: true });
+    mocks.writeConfigFile.mockClear();
+
+    const second = await call("agents.delete", { agentId: "test-agent", deleteFiles: false });
+
+    expectNotFoundResponseAndNoWrite(second);
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
   });
 });
 

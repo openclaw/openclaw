@@ -1,8 +1,22 @@
 import { afterEach, expect, it } from "vitest";
-import { getDatabaseEngineSelection, installDatabaseEngineSelection } from "./context.js";
+import {
+  getDatabaseEngineSelection,
+  installDatabaseEngineSelection,
+  withDatabaseEngineSelection,
+} from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 
 afterEach(resetDatabaseEngineSelectionForTest);
+
+it("isolates an offline target selection across awaits without replacing boot selection", async () => {
+  const input = { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" };
+  installDatabaseEngineSelection({ input });
+  await withDatabaseEngineSelection({ input: undefined }, async () => {
+    await Promise.resolve();
+    expect(getDatabaseEngineSelection()).toEqual({ input: undefined });
+  });
+  expect(getDatabaseEngineSelection()).toEqual({ input });
+});
 
 it("publishes one immutable selection to existing and new async callers", async () => {
   const readLater = async () => {

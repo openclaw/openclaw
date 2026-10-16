@@ -19,6 +19,8 @@ export {
   resolveEnvHttpProxyAgentOptions,
   shouldUseEnvHttpProxyForUrl,
 } from "../infra/net/proxy-env.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { hasEnvHttpProxyConfigured } from "../infra/net/proxy-env.js";
 export { getProxyUrlFromFetch, makeProxyFetch } from "../infra/net/proxy-fetch.js";
 export { createPinnedLookup } from "../infra/net/ssrf.js";
 export type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";

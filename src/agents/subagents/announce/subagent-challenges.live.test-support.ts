@@ -19,7 +19,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../../utils/messa
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import {
-  countPendingDescendantRunsFromRuns,
+  buildSubagentRunReadIndexFromRuns,
   listDescendantRunsForRequesterFromRuns,
 } from "../registry/subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "../registry/subagent-registry-state.js";
@@ -454,7 +454,8 @@ export async function runWithLiveSubagentGateway(
             const runs = getSubagentRunsSnapshotForRead(subagentRuns);
             // Cleanup precedes the requester's durable delivery acknowledgement.
             if (
-              countPendingDescendantRunsFromRuns(runs, sessionKey) === 0 &&
+              buildSubagentRunReadIndexFromRuns({ runs }).countPendingDescendantRuns(sessionKey) ===
+                0 &&
               listDescendantRunsForRequesterFromRuns(runs, sessionKey).every(
                 (run) =>
                   !run.requesterSettleWake ||

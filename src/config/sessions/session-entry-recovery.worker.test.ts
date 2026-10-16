@@ -21,6 +21,7 @@ import {
   iteratePendingExecNotificationEntriesInWorker,
   readPendingInputRecoveryEntriesInWorker,
 } from "./session-entry-read-maintenance.js";
+import { readSessionSendRecoveryPage } from "./session-pending-input-history.js";
 
 it("pages only pending exec owners without reading unrelated session entries or saved prompts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -74,6 +75,58 @@ it("pages only pending exec owners without reading unrelated session entries or 
   });
 });
 
+it("pages saved deliveries without unrelated or cancelled inputs and preserves live custody", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const scope = {
+      agentId: "main",
+      storePath: database.path,
+      env,
+      sessionKey: "agent:main:mixed-recovery",
+      sessionId: "mixed-recovery",
+    };
+    writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+    const receipts: SessionPendingInputReceipt[] = [];
+    try {
+      for (let index = 0; index < 24; index++) {
+        const receipt = expectDefined(
+          await stageSessionPendingInput(scope, {
+            runId: `input-${index}`,
+            message: {
+              role: "user",
+              content: `Synthetic input ${index}`,
+              timestamp: index,
+              idempotencyKey: `input-${index}:user`,
+              ...(index === 22 ? {} : { __openclaw: { sessionSendDelivery: { version: 1 } } }),
+            },
+            assertCurrent() {},
+          }),
+          "Expected pending input custody",
+        );
+        receipts.push(receipt);
+        if (index !== 21) {
+          receipt.finish(index === 23 ? "cancelled" : "interrupted");
+          await receipt.settled?.();
+        }
+      }
+      const newer = await readSessionSendRecoveryPage(scope);
+      const older = await readSessionSendRecoveryPage(scope, { before: newer.nextBefore });
+      expect(newer.items.map((item) => item.runId)).toEqual(
+        Array.from({ length: 20 }, (_, index) => `input-${index + 2}`),
+      );
+      expect(older.items.map((item) => item.runId)).toEqual(["input-0", "input-1"]);
+      expect(older.nextBefore).toBeUndefined();
+      expect(newer.items.at(-1)?.state).toBe("queued");
+      expect(newer.items.slice(0, -1).every((item) => item.state === "interrupted")).toBe(true);
+    } finally {
+      for (const receipt of receipts) {
+        receipt.finish("interrupted");
+      }
+      await Promise.all(receipts.map(async (receipt) => receipt.settled?.()));
+    }
+  });
+});
+
 it("skips an admitted store without optional pending-input storage", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -115,6 +168,7 @@ it("discovers only current recoverable inputs and observes writes after an empty
       "completed",
       "consumed",
       "old",
+      "ordinary",
     ]) {
       const target = scope(name);
       writeSessionEntry(database, target.sessionKey, { sessionId: target.sessionId, updatedAt: 1 });
@@ -129,6 +183,7 @@ it("discovers only current recoverable inputs and observes writes after an empty
             content: `Synthetic ${name} input`,
             timestamp: 1,
             idempotencyKey: `${name}:user`,
+            ...(name === "ordinary" ? {} : { __openclaw: { sessionSendDelivery: { version: 1 } } }),
           },
           trackCompletion,
           assertCurrent() {},
@@ -142,6 +197,9 @@ it("discovers only current recoverable inputs and observes writes after an empty
     try {
       expect(await readPendingInputRecoveryEntriesInWorker(store)).toEqual([]);
       await stage("queued");
+      const ordinary = await stage("ordinary");
+      ordinary.finish("interrupted");
+      await ordinary.settled?.();
       const interrupted = await stage("interrupted");
       interrupted.finish("interrupted");
       await interrupted.settled?.();

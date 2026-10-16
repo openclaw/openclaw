@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Match, Show, Switch, createEffect, createMemo, onCleanup, untrack } from "solid-js";
+import { For, Match, Show, Switch, createEffect, createMemo, untrack } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
@@ -26,18 +26,14 @@ import {
   type SessionRowBadgesParams,
 } from "../session-row-badge-presentation.ts";
 import type { resolveSidebarSessionSubtitle } from "../session-row-subtitle.ts";
-import { SessionRunVisibilityController } from "../session-run-visibility-controller.ts";
+import { createSessionRunVisibility as sessionRunVisibility } from "../session-run-visibility-controller.ts";
 import { ChannelAvatar } from "./channel-avatar.tsx";
 import { Icon } from "./icon.tsx";
 import { SessionOwnerAvatar, SessionOwnerChip } from "./session-owner-chip.tsx";
 import "../tooltip.ts";
 
 export type SessionRunVisibility = typeof sessionRunVisibility;
-export function sessionRunVisibility(): (element: Element) => void {
-  const controller = new SessionRunVisibilityController();
-  onCleanup(() => controller.disconnect());
-  return (element) => controller.connect(element);
-}
+export { sessionRunVisibility };
 
 function SessionAttentionIcon(props: { attention: SidebarSessionAttention }) {
   const parts = createMemo(() => sessionAttentionTooltipParts(props.attention, t));

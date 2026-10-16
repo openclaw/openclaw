@@ -1,4 +1,5 @@
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
+import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
@@ -16,6 +17,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
@@ -258,6 +260,30 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       authority = registerParams.collect
         ? undefined
         : await captureOperatorToolGatewayContinuationContext();
+      const operator = authority?.operatorAuthority;
+      let operatorRecoverySource: SubagentRunRecord["operatorRecoverySource"];
+      if (
+        operator?.recoverySnapshot &&
+        registerParams.completionRequesterSessionId &&
+        registerParams.requesterTurnRunId
+      ) {
+        try {
+          operatorRecoverySource = decodeGatewayOperatorRecoverySource({
+            version: 1,
+            agentId: requesterAgentId,
+            sessionKey: requesterSessionKey,
+            sessionId: registerParams.completionRequesterSessionId,
+            lifecycleRevision: registerParams.completionRequesterLifecycleRevision,
+            sourceRunId: registerParams.requesterTurnRunId,
+            snapshot: {
+              ...operator.recoverySnapshot,
+              scopes: intersectOperatorScopes(operator.recoverySnapshot.scopes, operator.scopes),
+            },
+          });
+        } catch {
+          // Oversized evidence must not block admission or become executable recovery authority.
+        }
+      }
       const assertCurrent = () => {
         options.assertCurrent?.();
         authority?.assertCurrent();
@@ -345,6 +371,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                   )
                 : undefined,
           });
+          entry.operatorRecoverySource = operatorRecoverySource;
           entry.requesterStorePath =
             previous?.requesterStorePath ??
             resolvePhysicalSessionStorePath(

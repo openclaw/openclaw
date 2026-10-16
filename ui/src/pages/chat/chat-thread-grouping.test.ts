@@ -209,6 +209,9 @@ describe("content classification", () => {
         key: `message:${index}`,
         message: entry,
       })),
+      {},
+      undefined,
+      true,
     );
     expect(collapseCompletedTurnWork(groups, { sessionKey, runWorking: false })).toMatchObject([
       { kind: "group", role: "user" },
@@ -432,4 +435,45 @@ describe("answer visibility across continuations", () => {
       ).toEqual(independent ? messages.slice(3) : []);
     }
   });
+});
+
+it("keeps thinking plus tool calls as activity and omits assistant rows with nothing to display", () => {
+  const items = buildCachedChatItems(
+    createProps({
+      messages: [
+        message("user", "Check the parent", 1_000),
+        message(
+          "assistant",
+          [
+            { type: "thinking", thinking: "Find the parent." },
+            { type: "toolCall", id: "list", name: "sessions_list", arguments: {} },
+          ],
+          2_000,
+        ),
+        message("assistant", [{ type: "thinking", thinking: "Nothing to say." }], 3_000),
+      ],
+    }),
+  );
+  expect(items.filter((item) => item.kind === "group").map((item) => item.role)).toEqual([
+    "user",
+    "tool",
+  ]);
+});
+
+it("retains prepared tool outcomes without content blocks as activity", () => {
+  const outcome = message("assistant", [], 1_000, {
+    activity: [
+      {
+        itemId: "read",
+        kind: "tool",
+        phase: "end",
+        name: "read",
+        title: "Read",
+        status: "blocked",
+      },
+    ],
+  });
+  expect(buildCachedChatItems(createProps({ messages: [outcome] }))).toMatchObject([
+    { kind: "group", role: "tool", messages: [{ message: outcome }] },
+  ]);
 });

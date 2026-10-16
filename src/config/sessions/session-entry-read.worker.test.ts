@@ -18,6 +18,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
@@ -98,11 +99,14 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
           });
         // Admit the physical file before measuring the requested row payload.
         expect(read().entries[0]?.entry).toMatchObject(entry);
-        const payloads = trackSqliteStatementExecutions(opened.value.db, ["entry"], (sql) =>
-          isSessionNodePayloadSelect(sql) ||
-          (sql.includes('from "session_nodes"') && sql.includes('"entry_json"'))
-            ? "entry"
-            : null,
+        const payloads = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(opened.value.db),
+          ["entry"],
+          (sql) =>
+            isSessionNodePayloadSelect(sql) ||
+            (sql.includes('from "session_nodes"') && sql.includes('"entry_json"'))
+              ? "entry"
+              : null,
         );
         try {
           for (const fields of [[], ["systemPromptReport"], ["sessionDiffBaseline"]] as const) {
@@ -194,11 +198,14 @@ it("publishes lifecycle snapshot admission only after commit and reuses it on th
         } finally {
           failingCommit.mockRestore();
         }
-        const queries = trackSqliteStatementExecutions(reader.db, ["validation"], (sql) =>
-          sql.includes("retained_window") ||
-          sql.includes('from "session_canonical_validation_pending"')
-            ? "validation"
-            : null,
+        const queries = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(reader.db),
+          ["validation"],
+          (sql) =>
+            sql.includes("retained_window") ||
+            sql.includes('from "session_canonical_validation_pending"')
+              ? "validation"
+              : null,
         );
         try {
           expect(read().entries[0]?.entry.sessionId).toBe("admitted-session");
@@ -373,7 +380,7 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
         });
         const exec = vi.spyOn(opened.value.db, "exec");
         const queries = trackSqliteStatementExecutions(
-          opened.value.db,
+          requireNativeSqliteDatabase(opened.value.db),
           ["boards", "entries"],
           (sql) => {
             if (/\bfrom "session_nodes"/iu.test(sql) && sql.includes('"entry_json"')) {
@@ -486,7 +493,7 @@ it("consumes admitted board absence for a cohort and observes first use and publ
             sessionKeys,
           });
         const queries = trackSqliteStatementExecutions(
-          opened.value.db,
+          requireNativeSqliteDatabase(opened.value.db),
           ["boards", "catalog"],
           (sql) =>
             /sqlite_master/iu.test(sql)
@@ -799,7 +806,11 @@ it("keeps durable delivery generations live only through same-generation writes"
         { ...scope, storePath: database.path },
         { identityId: "ordinary-member", addedBy: "owner", addedAt: 2 },
       );
-      const queries = trackSqliteStatementExecutions(database.db, ["all"], () => "all");
+      const queries = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["all"],
+        () => "all",
+      );
       try {
         authority.assertCurrent();
         // Native writers can share a handle with raw SDK writes; one final row read certifies it.

@@ -27,6 +27,7 @@ import {
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
+import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { isSessionTitlePending, resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import {
@@ -34,11 +35,26 @@ import {
   resolveUiSessionNavigationParentKey,
 } from "../../../lib/sessions/session-key.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
-import { presentedContent, type PresentationValue } from "../../../lit/presentation-binding.ts";
-import { LitContent, solidContent, emptyLegacyContent } from "../../../lit/solid-content.tsx";
-import { PaneDetails, type PaneDetailsProps } from "../chat-pane-header-view.tsx";
+import {
+  PaneDetails,
+  PaneHeaderPresence,
+  PaneHeaderSessionMenu,
+  PaneSubagentStop,
+  type PaneDetailsProps,
+} from "../chat-pane-header-view.tsx";
+import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { ChatPaneLayoutMenu, type ChatPaneLayoutMenuProps } from "./chat-header-panel-actions.tsx";
+import { ChatPanePlacement } from "./chat-pane-placement.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
+import {
+  ChatSessionPublicIndicator,
+  ChatSessionSharing,
+  type ChatSessionSharingProps,
+} from "./chat-session-sharing.solid.tsx";
+import {
+  ContinueInTerminalDialog,
+  type ContinueInTerminalDialogProps,
+} from "./continue-in-terminal-dialog.tsx";
 
 export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
 
@@ -81,12 +97,15 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   renameDisabledReason?: string;
   runningSubagentCount?: number;
   detailsControl?: PaneDetailsProps;
-  runAction?: unknown;
-  presence?: unknown;
-  sharingControl?: unknown;
-  publicAccessIndicator?: unknown;
-  placementControl?: unknown;
-  sessionMenuAction: unknown;
+  onOpenDetails?: (source: HTMLElement) => void;
+  conversationVisible?: boolean;
+  onToggleConversation?: () => void;
+  runAction?: Parameters<typeof PaneSubagentStop>[0];
+  presence?: Parameters<typeof PaneHeaderPresence>[0];
+  sharingControl?: ChatSessionSharingProps;
+  publicAccessIndicator?: ChatSessionSharingProps;
+  placementControl?: Parameters<typeof ChatPanePlacement>[0];
+  sessionMenuAction?: Parameters<typeof PaneHeaderSessionMenu>[0];
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
   onCommitRename: () => void;
@@ -96,6 +115,22 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   onOpenParentSession: (sessionKey: string) => void;
   onBranchSelect: (leafEntryId: string) => void;
 };
+
+export type ChatPaneHeaderPresentation = {
+  header: ChatPaneHeaderProps;
+  continueInTerminal?: ContinueInTerminalDialogProps;
+};
+
+export function PaneHeaderView(props: ChatPaneHeaderPresentation) {
+  return (
+    <>
+      <ChatPaneHeader {...props.header} />
+      <Show when={props.continueInTerminal}>
+        {(dialog) => <ContinueInTerminalDialog {...dialog()} />}
+      </Show>
+    </>
+  );
+}
 
 function revealLabel(platform: string | null): string {
   if (platform === "darwin") {
@@ -320,10 +355,10 @@ export function canRevealSessionWorkspace(params: {
   );
 }
 
-function ChatPaneHeader(props: ChatPaneHeaderProps) {
+export function ChatPaneHeader(props: ChatPaneHeaderProps) {
   const drawerLabel = () => (props.navDrawerOpen ? t("nav.collapse") : t("nav.expand"));
-  const hasSharingControl = () =>
-    props.sharingControl !== undefined && props.sharingControl !== emptyLegacyContent;
+  const hasSharingControl = () => props.sharingControl !== undefined;
+  const presented = usePanePresentation(() => props.presented);
   const incognito = () =>
     (props.incognito ?? props.session?.incognito) || isIncognitoSessionKey(props.session?.key);
 
@@ -380,7 +415,10 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
               </button>
             </openclaw-tooltip>
           </Show>
-          <IdentityCrumbs {...props} /> <LitContent value={props.publicAccessIndicator} />
+          <IdentityCrumbs {...props} />
+          <Show when={props.publicAccessIndicator}>
+            {(indicator) => <ChatSessionPublicIndicator {...indicator()} />}
+          </Show>
           {props.mergedChrome || hasSharingControl() ? undefined : (
             <StandalonePersonLink
               link={
@@ -412,40 +450,78 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
               prop:personActivity={props.personActivity}
             />
           ) : undefined}
-          <LitContent value={props.placementControl} />
+          <Show when={props.placementControl}>
+            {(placement) => <ChatPanePlacement {...placement()} />}
+          </Show>
           <Show when={!props.mergedChrome}>
-            <LitContent value={props.presence} />
+            <Show when={props.presence}>
+              {(presence) => <PaneHeaderPresence {...presence()} />}
+            </Show>
           </Show>
         </div>
         <div class="chat-pane__header-trailing">
+          <Show when={props.onToggleConversation}>
+            <button
+              type="button"
+              class="btn btn--ghost chat-pane__chat-toggle"
+              aria-pressed={props.conversationVisible ? "true" : "false"}
+              title={t(
+                props.conversationVisible ? "chat.sidePanel.hideChat" : "chat.sidePanel.showChat",
+              )}
+              onClick={() => props.onToggleConversation?.()}
+            >
+              <Icon name="messageSquare" />
+              <span>{t("chat.sidePanel.conversation")}</span>
+            </button>
+          </Show>
           <Show when={props.detailsControl !== undefined}>
             <PaneDetails {...props.detailsControl!} />
           </Show>
-          <LitContent
-            value={presentedContent(
-              props.presented,
-              solidContent(ChatPaneVersionsMenu, {
-                menu: {
-                  catalog: props.catalog,
-                  branches: props.branches,
-                  branchSwitchDisabledReason: props.branchSwitchDisabledReason,
-                  onBranchSelect: props.onBranchSelect,
-                },
-              }),
-            )}
-          />
+          {/* The observed row (and its menu) retires offline; cached Details stays local. */}
+          <Show
+            when={
+              !props.session &&
+              (props.mergedChrome || props.detailsControl?.externalTrigger) &&
+              props.onOpenDetails
+            }
+          >
+            <button
+              type="button"
+              class="chat-details-toggle"
+              onClick={(event) => props.onOpenDetails?.(event.currentTarget)}
+            >
+              <Icon name="listChecks" />
+              <span>{t("chat.sessionDetails.title")}</span>
+            </button>
+          </Show>
+          <Show when={presented()}>
+            <ChatPaneVersionsMenu
+              menu={{
+                catalog: props.catalog,
+                branches: props.branches,
+                branchSwitchDisabledReason: props.branchSwitchDisabledReason,
+                onBranchSelect: props.onBranchSelect,
+              }}
+            />
+          </Show>
           <div class="chat-pane__actions">
             <Show when={!props.narrow}>
               <RunningSubagents count={props.runningSubagentCount} />
             </Show>
-            <LitContent value={props.runAction} />
-            <LitContent value={props.sharingControl} />
+            <Show when={props.runAction}>{(action) => <PaneSubagentStop {...action()} />}</Show>
+            <Show when={props.sharingControl}>
+              {(sharing) => <ChatSessionSharing {...sharing()} />}
+            </Show>
             <Show when={props.mergedChrome}>
-              <LitContent value={props.sessionMenuAction} />
+              <Show when={props.sessionMenuAction}>
+                {(menu) => <PaneHeaderSessionMenu {...menu()} />}
+              </Show>
             </Show>
             <ChatPaneLayoutMenu {...props} mobile={props.mergedChrome} />
             <Show when={!props.mergedChrome}>
-              <LitContent value={props.sessionMenuAction} />
+              <Show when={props.sessionMenuAction}>
+                {(menu) => <PaneHeaderSessionMenu {...menu()} />}
+              </Show>
             </Show>
           </div>
         </div>
@@ -501,8 +577,6 @@ function RunningSubagents(props: { count?: number }) {
     </Show>
   );
 }
-export const renderChatPaneHeader = (props: ChatPaneHeaderProps) =>
-  solidContent(ChatPaneHeader, props);
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {

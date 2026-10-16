@@ -6,6 +6,7 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requ
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -19,6 +20,97 @@ import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("reveals Environment copy buttons on row hover, keyboard focus, and touch", async () => {
+    const sessionKey = "agent:main:details-copy";
+    for (const hasTouch of [false, true]) {
+      await suite.withPage(
+        { colorScheme: "dark", viewport: { width: 1728, height: 1000 }, hasTouch },
+        async ({ page }) => {
+          await installPlainHttpClipboardCapture(page);
+          await installMockGateway(page, {
+            sessionKey,
+            agentModel: "example/demo-model",
+            models: [{ id: "demo-model", name: "Demo model", provider: "example" }],
+            methodResponses: {
+              "sessions.list": chatSessionListResponse([
+                {
+                  key: sessionKey,
+                  kind: "direct",
+                  label: "Environment copy controls",
+                  createdActor: { type: "human", id: "ada", label: "Ada" },
+                  spawnedCwd: "/workspace/openclaw",
+                  worktree: {
+                    id: "copy-tree",
+                    repoRoot: "/workspace/openclaw",
+                    branch: "feature/copy-controls",
+                  },
+                  model: "demo-model",
+                  updatedAt: 1,
+                },
+              ]),
+            },
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          const details = page.locator(".chat-details");
+          const environment = details.locator(".chat-details__environment");
+          const pathButton = environment.getByRole("button", { name: "Copy path", exact: true });
+          const branchButton = environment.getByRole("button", {
+            name: "Copy branch name",
+            exact: true,
+          });
+          await pathButton.waitFor();
+          const opacity = (button: typeof pathButton) =>
+            button.evaluate((el) => getComputedStyle(el).opacity);
+          const capture = async (name: string) => {
+            const frame = await takeControlUiScreenshotFrame(page, details, [environment], {
+              animations: "disabled",
+              elements: [details],
+            });
+            await writeFile(path.join(suite.artifactDir, name), frame.elements[0]!.png);
+          };
+          if (!hasTouch) {
+            await capture("environment-copy-rest.png");
+            await expect.poll(() => opacity(pathButton)).toBe("0");
+            await expect.poll(() => opacity(branchButton)).toBe("0");
+            const restBounds = await pathButton.boundingBox();
+            await environment
+              .locator(".chat-details__row")
+              .filter({ has: page.getByRole("button", { name: "Copy path", exact: true }) })
+              .hover();
+            await expect.poll(() => opacity(pathButton)).toBe("1");
+            expect(await opacity(branchButton)).toBe("0");
+            expect(await pathButton.boundingBox()).toEqual(restBounds);
+            await capture("environment-copy-hover.png");
+            await page.mouse.move(0, 0);
+            await expect.poll(() => opacity(pathButton)).toBe("0");
+            await environment.locator(":scope > summary").focus();
+            await page.keyboard.press("Tab");
+            await expect
+              .poll(() => pathButton.evaluate((el) => el === document.activeElement))
+              .toBe(true);
+            expect(await opacity(pathButton)).toBe("1");
+            await page.keyboard.press("Tab");
+            await expect
+              .poll(() => branchButton.evaluate((el) => el === document.activeElement))
+              .toBe(true);
+            expect(await opacity(branchButton)).toBe("1");
+            await page.keyboard.press("Shift+Tab");
+            await page.keyboard.press("Enter");
+            await branchButton.focus();
+            await page.keyboard.press("Enter");
+          } else {
+            await expect.poll(() => opacity(pathButton)).toBe("1");
+            expect(await opacity(branchButton)).toBe("1");
+            await pathButton.tap();
+            await branchButton.tap();
+          }
+          await expect
+            .poll(() => copiedViaExec(page))
+            .toEqual(["/workspace/openclaw", "feature/copy-controls"]);
+        },
+      );
+    }
+  });
   it("docks Details in wide conversations and preserves manual intent, drafts, and independent scrolling", async () => {
     const sessionKey = "agent:main:details-progress";
     await suite.withPage(
@@ -239,6 +331,8 @@ suite.define(() => {
         };
         await geometry(true);
         expect(await details.locator(".chat-details__toolbar").count()).toBe(0);
+        expect(await details.locator(".chat-details__participants").count()).toBe(0);
+        expect(await details.locator(".chat-details__meta-actions").count()).toBe(0);
         const environment = details.locator(".chat-details__environment");
         expect(await environment.textContent()).toContain("openclaw");
         expect(await environment.textContent()).not.toContain(
@@ -270,7 +364,7 @@ suite.define(() => {
         await expect
           .poll(() =>
             details
-              .locator(".chat-details__participants > summary")
+              .locator(".chat-details__environment > summary")
               .evaluate((el) => el === document.activeElement),
           )
           .toBe(true);
@@ -397,7 +491,7 @@ suite.define(() => {
         await trigger.waitFor({ state: "hidden" });
         expect(await details.isVisible()).toBe(false);
         await page.getByRole("button", { name: "Panels", exact: true }).waitFor();
-        await selectChatLayoutAction(page, "Details");
+        await openChatDetails(page);
         await expect.poll(() => details.getAttribute("role")).toBe("dialog");
         await geometry(false);
         await capture("narrow.png");

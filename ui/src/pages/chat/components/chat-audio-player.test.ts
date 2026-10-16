@@ -127,7 +127,7 @@ describe("ChatAudioPlayer", () => {
     expect(player.querySelector(".chat-assistant-attachment-card__expand")).toBeNull();
   });
 
-  it("formats elapsed and total media time", async () => {
+  it("formats elapsed, total, and buffered media time from metadata", async () => {
     const player = await createPlayer("timing");
     expect(
       Array.from(player.querySelectorAll(".chat-audio-player__time span"), (item) =>
@@ -138,6 +138,10 @@ describe("ChatAudioPlayer", () => {
     const media = player.querySelector("audio")!;
     setMediaNumber(media, "currentTime", 65.9);
     setMediaNumber(media, "duration", 3_665);
+    Object.defineProperty(media, "buffered", {
+      configurable: true,
+      value: { length: 1, end: () => 1_832.5 },
+    });
     media.dispatchEvent(new Event("loadedmetadata"));
     await player.updateComplete;
 
@@ -146,6 +150,11 @@ describe("ChatAudioPlayer", () => {
         item.textContent?.trim(),
       ),
     ).toEqual(["1:05 / 61:05"]);
+    expect(
+      player
+        .querySelector<HTMLInputElement>(".chat-audio-player__seek")!
+        .style.getPropertyValue("--chat-audio-buffered"),
+    ).toBe("50%");
   });
 
   it("drives play, pause, seek, and keyboard state through the hidden audio element", async () => {
@@ -212,6 +221,13 @@ describe("ChatAudioPlayer", () => {
     const icon = player.querySelector(".chat-audio-player__volume svg polygon")!;
     icon.addEventListener("click", () => icon.remove(), { once: true });
     icon.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const media = player.querySelector("audio")!;
+    expect(media.muted).toBe(true);
+    const volume = player.querySelector<HTMLButtonElement>(".chat-audio-player__volume")!;
+    volume.click();
+    expect(media.muted).toBe(false);
+    volume.click();
+    expect(media.muted).toBe(true);
     await player.updateComplete;
     expect(player.querySelector("audio")!.muted).toBe(true);
     expect(player.onExpand).not.toHaveBeenCalled();

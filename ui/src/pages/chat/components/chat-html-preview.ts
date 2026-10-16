@@ -1,15 +1,17 @@
-import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
+import {
+  createLazyCustomElementRequests,
+  type LazyCustomElementRequests,
+} from "../../../app/lazy-custom-element.ts";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { emptyLegacyContent, type LegacyDirectiveResult } from "../../../lit/solid-content.tsx";
-import { renderHtmlPreview, renderHtmlPreviewSourceFallback } from "./chat-html-preview-view.tsx";
+import type { PreviewProps, SourceFallbackProps } from "./chat-html-preview-view.tsx";
 import type { SidebarContent, AttachmentSidebarRuntime } from "./chat-sidebar-content-types.ts";
 export type FileHtmlPreviewControls = {
   source: boolean;
-  presentation: LegacyDirectiveResult | typeof emptyLegacyContent;
-  sourceFallback?: LegacyDirectiveResult;
+  presentation: PreviewProps | null;
+  sourceFallback?: SourceFallbackProps;
   onToggle: () => void;
 };
 
@@ -33,14 +35,15 @@ export const htmlPreviewElement = {
 export class FileHtmlPreviewController {
   private source = false;
   private preview: string | null = null;
-  private readonly loader: LazyCustomElementRequestController;
+  private readonly loader: LazyCustomElementRequests;
 
   constructor(
     private readonly host: { requestUpdate(): void; readonly updateComplete?: Promise<unknown> },
     private readonly content: () => SidebarContent | null,
     private readonly text: () => string,
   ) {
-    this.loader = new LazyCustomElementRequestController(host);
+    this.loader = createLazyCustomElementRequests(host);
+    this.loader.subscribe(() => host.requestUpdate());
   }
 
   get file() {
@@ -103,8 +106,8 @@ export class FileHtmlPreviewController {
       onToggle: options.onToggle,
       presentation:
         this.preview === null
-          ? emptyLegacyContent
-          : renderHtmlPreview({
+          ? null
+          : {
               state: this.loader.visibleState,
               onRetry: () => this.loader.retry(),
               content: this.preview,
@@ -119,14 +122,14 @@ export class FileHtmlPreviewController {
               title: file.name,
               embedSandboxMode: options.mode,
               sessionFileSource: file.sessionFileSource,
-            }),
+            },
       sourceFallback: options.error
-        ? renderHtmlPreviewSourceFallback({
+        ? {
             error: options.error,
             stale: isStaleChunkImportError(options.error),
             onRetry: options.onRetry,
             text: this.text(),
-          })
+          }
         : undefined,
     };
   }

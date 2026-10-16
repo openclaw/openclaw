@@ -4,8 +4,13 @@ import {
   type DiagnosticModelCallContent,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { CodexAppServerRuntimeOptions, resolveCodexPluginsPolicy } from "./config.js";
+import type { CodexUsageProjection } from "./event-projector-usage.js";
 
 type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
+type ModelCallDiagnosticBase = Omit<
+  Extract<TrustedDiagnosticEventInput, { type: "model.call.started" }>,
+  "type"
+>;
 
 export function utf8JsonByteLength(value: unknown): number | undefined {
   try {
@@ -66,7 +71,7 @@ type CodexModelCallDiagnosticTool = {
 };
 
 export function createCodexModelCallDiagnosticEmitter(params: {
-  baseFields: Record<string, unknown>;
+  baseFields: ModelCallDiagnosticBase;
   capture: CodexModelCallDiagnosticCapture;
   tools: readonly CodexModelCallDiagnosticTool[];
   buildInputMessages: () => unknown;
@@ -107,14 +112,16 @@ export function createCodexModelCallDiagnosticEmitter(params: {
       return false;
     }
     terminalEmitted = true;
+    const event = {
+      ...params.baseFields,
+      durationMs: Math.max(0, now() - startedAt),
+      ...fields,
+      ...(requestPayloadBytes !== undefined ? { requestPayloadBytes } : {}),
+    };
     emitTrustedDiagnosticEventWithPrivateData(
-      {
-        type,
-        ...params.baseFields,
-        durationMs: Math.max(0, now() - startedAt),
-        ...fields,
-        ...(requestPayloadBytes !== undefined ? { requestPayloadBytes } : {}),
-      } as TrustedDiagnosticEventInput,
+      type === "model.call.error"
+        ? { ...event, type, errorCategory: fields.errorCategory ?? "error" }
+        : { ...event, type },
       buildPrivateData({ outputMessages }),
     );
     return true;
@@ -131,7 +138,7 @@ export function createCodexModelCallDiagnosticEmitter(params: {
         {
           type: "model.call.started",
           ...params.baseFields,
-        } as TrustedDiagnosticEventInput,
+        },
         buildPrivateData(),
       );
     },
@@ -140,6 +147,28 @@ export function createCodexModelCallDiagnosticEmitter(params: {
         "model.call.completed",
         result.lastAssistant ? [result.lastAssistant] : result.assistantTexts,
       );
+    },
+    emitResponseObserved(
+      this: void,
+      response: NonNullable<ReturnType<CodexUsageProjection["record"]>>,
+    ): void {
+      if (!started || terminalEmitted) {
+        return;
+      }
+      const { observationUnit: _unit, promptStats: _stats, ...baseFields } = params.baseFields;
+      const usage = response.usage;
+      emitTrustedDiagnosticEventWithPrivateData({
+        ...baseFields,
+        type: "model.response.observed",
+        timestampSource: "receipt",
+        usageSource: "native-normalized",
+        usageScope: "response",
+        upstreamRequestIdHash: fingerprintCodexLogValue(
+          "openclaw:codex:response-id:v1",
+          response.responseId,
+        ),
+        ...(usage ? { usage } : {}),
+      });
     },
     emitError(error: unknown, fields: { failureKind?: CodexModelCallFailureKind } = {}): void {
       if (

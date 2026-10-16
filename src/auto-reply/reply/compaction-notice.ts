@@ -59,9 +59,7 @@ export function resolveCompactionCompletionNotice(
   return {
     phase: "end",
     text:
-      result.compactionKind === "server-endpoint" &&
-      typeof before === "number" &&
-      typeof after === "number"
+      result.compactionKind === "server-endpoint" && before !== undefined && after !== undefined
         ? `🧹 Server-side compaction complete (${formatTokenCount(before)} → ${formatTokenCount(after)})`
         : undefined,
   };

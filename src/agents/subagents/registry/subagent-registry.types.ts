@@ -4,6 +4,7 @@ import type {
 } from "../../../config/sessions/session-entry-current.types.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { SubagentEndReason } from "../../../context-engine/types.js";
+import type { RestartRecoveryOperatorSource } from "../../../gateway/operator-run-recovery-source.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
@@ -48,6 +49,8 @@ export type SubagentCompletionRequest = {
   sessionEffects?: SubagentSessionEffects;
   completionSnapshot?: { resultText: string | null; capturedAt: number };
   terminalReply?: AgentRunTerminalReplySnapshot;
+  /** Explicitly settle a yielded run that no continuation can reach; kill is the only other exception. */
+  settleYielded?: true;
 };
 
 export type ContextEngineSubagentEndedParams = {
@@ -145,8 +148,6 @@ export type RequesterSettleWakeState = {
   rearmGeneration?: number;
   /** Reference to the conversation receipt for this presentation, not completion credit. */
   progressOperationId?: string;
-  /** Number of times this batch has been deferred due to unsettled descendants. */
-  deferralCount?: number;
   lastError?: string | null;
   /** Cleanup wanted to retire this row; defer deletion until the outbox resolves. */
   retireAfterSettle?: boolean;
@@ -173,6 +174,8 @@ type SubagentKillIntent = {
 };
 
 export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "collectorCompletion"> & {
+  /** Admission evidence only; restart continuation revalidates the live operator grant. */
+  operatorRecoverySource?: RestartRecoveryOperatorSource;
   /** Child identity stays fixed when recovery redirects transcript writes. */
   childSessionIdentity?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
   /** Exact requester attempt for cancellation, independent of completion messaging. */

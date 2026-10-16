@@ -263,9 +263,9 @@ export async function resolveOpenRouterVideoModelCapabilities(
     request: ctx.cfg?.models?.providers?.openrouter?.request,
     timeoutMs: ctx.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
   });
-  const model = payload.find((row) => {
-    const id = isRecord(row) ? normalizeOptionalString(row.id) : undefined;
-    return id !== undefined && id === ctx.model;
-  });
-  return isRecord(model) ? buildOpenRouterVideoModelCapabilities(model) : undefined;
+  const model = payload.find(
+    (row): row is Record<string, unknown> =>
+      isRecord(row) && normalizeOptionalString(row.id) === ctx.model,
+  );
+  return model ? buildOpenRouterVideoModelCapabilities(model) : undefined;
 }

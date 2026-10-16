@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { readSqliteSchemaCookie } from "../infra/sqlite-schema-contract.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -6,6 +8,7 @@ import {
 } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema, normalizeSchemaSql } from "../infra/sqlite-schema-sql.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { classifyOpenClawAgentDatabaseReadError } from "./openclaw-agent-db-read-error.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
@@ -62,7 +65,14 @@ function readDefinitions(
 }
 
 /** Require the canonical admission schema before consuming its pending work. */
-export function assertCanonicalSessionValidationSchema(database: DatabaseSync): void {
+export function assertCanonicalSessionValidationSchema(database: EngineConnection): void {
+  if (isPostgresSqlConnection(database)) {
+    const facts = getPostgresPhysicalFacts(database);
+    if (facts?.store !== "agent" || facts.version < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
+      throw new Error("Session canonical validation requires current PostgreSQL agent admission");
+    }
+    return;
+  }
   const schema = getAdmittedSqliteSchemaFacts(database);
   const cookie = schema?.schemaVersion ?? readSqliteSchemaCookie(database);
   if (typeof cookie !== "number") {
@@ -91,7 +101,11 @@ export function assertCanonicalSessionValidationSchema(database: DatabaseSync): 
 }
 
 /** Writable admission may carry this assertion from its validated physical sibling. */
-export function adoptCanonicalSessionValidationSchema(database: DatabaseSync): void {
+export function adoptCanonicalSessionValidationSchema(database: EngineConnection): void {
+  if (isPostgresSqlConnection(database)) {
+    assertCanonicalSessionValidationSchema(database);
+    return;
+  }
   const schema = getAdmittedSqliteSchemaFacts(database);
   if (!schema) {
     throw new Error("Canonical schema handoff requires admitted schema facts");

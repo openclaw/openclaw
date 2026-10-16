@@ -54,6 +54,7 @@ import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js"
 import { recoverInterruptedSubagentRow } from "./subagent-registry-restart-recovery.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
+  prepareSubagentRecoveryFixture,
   readSubagentSessionStore,
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
@@ -225,6 +226,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
         expect(log.warn.mock.calls).toEqual([]);
       });
     } finally {
+      // Stop recovery scheduling before closing the Gateway database owner.
+      await resetSubagentRegistryForTests({ persist: false });
       await fixture.settle();
       try {
         // A Gateway closes agent databases before retiring its shared-state owner.
@@ -587,6 +590,9 @@ describe("subagent orphan recovery — faithful restart path", () => {
         },
         completion: { required: true, resultText: null, capturedAt: now },
       });
+      if (owner === "original") {
+        await prepareSubagentRecoveryFixture(entry, { stateDir: fixture.stateDir });
+      }
       await addSubagentRunForTests(entry);
       if (owner === "original" || owner === "unclassified") {
         expect(
@@ -854,6 +860,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         },
       },
     });
+    await prepareSubagentRecoveryFixture(record, { stateDir: fixture.stateDir });
     await addSubagentRunForTests(record);
 
     await fixture.settle();

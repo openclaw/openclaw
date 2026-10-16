@@ -1,6 +1,6 @@
 import "../lib/toast-host.ts";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import { LazySettingsSidebar } from "../components/settings-sidebar-lazy.tsx";
 import { renderGatewayStatus } from "../components/solid/gateway-status.tsx";
 import { Icon } from "../components/solid/icon.tsx";
@@ -54,6 +54,7 @@ export function renderApplicationShell(host: ShellViewHost): SolidJSX.Element {
 
 function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
   let content!: HTMLElement;
+  const [navResizing, setNavResizing] = createSignal(false);
   const view = createMemo(() => {
     props.host.shellRevision();
     return readShellView(props.host);
@@ -109,7 +110,7 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
               view().collapsedControls && view().homePanelAvailable && !view().railAvailable,
             "shell--connection-status": Boolean(view().shellConnectionStatus),
             "shell--floating-attention": floatingSidebarAttentionVisible(view().floatingUpdateCard),
-            "shell--nav-resizing": (props.host.shellRevision(), props.host.navResizing),
+            "shell--nav-resizing": navResizing(),
           },
         ]}
         data-background-managed={
@@ -130,10 +131,8 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
           <openclaw-macos-titlebar-controls
             inert={view().navDrawerOpen}
             prop:historyOnly={view().settingsTakeover}
-            prop:canGoBack={(props.host.shellRevision(), props.host.nativeHistoryState.canGoBack)}
-            prop:canGoForward={
-              (props.host.shellRevision(), props.host.nativeHistoryState.canGoForward)
-            }
+            prop:canGoBack={props.host.nativeHistoryState().canGoBack}
+            prop:canGoForward={props.host.nativeHistoryState().canGoForward}
           />
         </Show>
         <Show when={!view().nativeEmbed}>
@@ -240,7 +239,6 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             <Show when={view().settingsTakeover} fallback={props.host.navigationSidebar}>
               <LazySettingsSidebar
                 loader={props.host.settingsSidebar}
-                revision={props.host.shellRevision()}
                 sidebarProps={view().settingsSidebarProps}
               />
             </Show>
@@ -262,14 +260,8 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             prop:maxRatio={(NAV_WIDTH_MAX + view().railWidth) / view().shellWidth}
             aria-valuetext={`${view().expandedNavWidth} pixels`}
             title={t("nav.resize")}
-            onResize-start={() => {
-              props.host.navResizing = true;
-              props.host.invalidate();
-            }}
-            onResize-end={() => {
-              props.host.navResizing = false;
-              props.host.invalidate();
-            }}
+            onResize-start={() => setNavResizing(true)}
+            onResize-end={() => setNavResizing(false)}
             onResize={(event: CustomEvent<{ splitRatio: number }>) =>
               props.host.resizeNavigation(event.detail.splitRatio)
             }
@@ -279,7 +271,6 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
           id="control-ui-main"
           class={[
             "content",
-            (props.host.shellRevision(), props.host.shellLayout.className),
             {
               "content--chat": view().chatLikeRoute,
               "content--workbench": view().workbenchRoute,
@@ -325,7 +316,6 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
           <Show when={view().embedNavigation}>
             <LazySettingsSidebar
               loader={props.host.settingsSidebar}
-              revision={props.host.shellRevision()}
               sidebarProps={view().settingsSidebarProps}
             />
           </Show>
@@ -421,7 +411,6 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
         </Show>
         <DevicePairSetup
           loader={props.host.devicePairSetup}
-          revision={props.host.shellRevision()}
           props={{
             open: view().overlaySnapshot.devicePairSetupOpen,
             lifecycle: view().overlaySnapshot.devicePairSetupLifecycle,
