@@ -1,5 +1,6 @@
+import type { ModelCatalogModel } from "@openclaw/model-catalog-core/model-catalog-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -9,11 +10,12 @@ import {
 import { resolveOAuthApiKeyMarker } from "./model-auth-markers.js";
 import {
   buildPreparedModelCatalogSnapshot,
+  type BuildPreparedModelCatalogParams,
   findModelCatalogEntry,
   loadManifestModelCatalog,
   modelSupportsVision,
 } from "./model-catalog.js";
-import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 
 type AugmentModelCatalogWithProviderPlugins =
@@ -38,19 +40,11 @@ function providerManifestSnapshot(params: {
   discovery: "static" | "refreshable" | "runtime";
   modelIds: string[];
   aliases?: string[];
-  modelAliases?: Record<string, string>;
 }): PluginMetadataSnapshot {
   const plugin = createPluginManifestRecordFixture({
     id: params.provider,
     origin: "bundled",
     providers: [params.provider],
-    ...(params.modelAliases
-      ? {
-          modelIdNormalization: {
-            providers: { [params.provider]: { aliases: params.modelAliases } },
-          },
-        }
-      : {}),
     modelCatalog: {
       aliases: Object.fromEntries(
         (params.aliases ?? []).map((alias) => [alias, { provider: params.provider }]),
@@ -67,17 +61,62 @@ function providerManifestSnapshot(params: {
   return createPluginMetadataSnapshotFixture({ plugins: [plugin] });
 }
 
-async function build(params: {
-  config?: OpenClawConfig;
-  entries?: ModelCatalogEntry[];
-  metadataSnapshot?: PluginMetadataSnapshot;
-  readOnly?: boolean;
-  includeProviderPluginAugmentation?: boolean;
-  providerOutcomes?: ModelCatalogSnapshot["providerOutcomes"];
-}) {
+function configuredModel(
+  id: string,
+  overrides: Partial<ModelDefinitionConfig> = {},
+): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: true,
+    input: ["text"],
+    maxTokens: 8192,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ...overrides,
+  };
+}
+
+function providerConfig(provider: string, entry: ModelProviderConfig): OpenClawConfig {
+  return { plugins: { enabled: false }, models: { providers: { [provider]: entry } } };
+}
+
+function fableManifest(extra: Partial<ModelCatalogModel> = {}) {
+  const model: ModelCatalogModel = {
+    id: "claude-fable-5",
+    contextWindow: 1_000_000,
+    contextWindows: [
+      { id: "200k", label: "200K", contextWindow: 200_000 },
+      { id: "1m", label: "1M", contextWindow: 1_000_000 },
+    ],
+    contextWindowDefault: "1m",
+    ...extra,
+  };
+  const modelCatalog = {
+    discovery: { anthropic: "refreshable" as const },
+    providers: { anthropic: { models: [model] } },
+  };
+  return createPluginMetadataSnapshotFixture({
+    plugins: [{ id: "anthropic", providers: ["anthropic"], origin: "bundled", modelCatalog }],
+  });
+}
+
+function fableEntry(extra: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
+  return {
+    id: "claude-fable-5",
+    name: "Claude Fable 5",
+    provider: "anthropic",
+    api: "anthropic-messages",
+    baseUrl: "https://api.anthropic.com",
+    ...extra,
+  };
+}
+
+async function build(
+  params: Partial<BuildPreparedModelCatalogParams> & { entries?: ModelCatalogEntry[] },
+) {
   return await buildPreparedModelCatalogSnapshot({
     agentDir: "/tmp/model-catalog-test",
-    authCredentials: {},
+    authCredentials: params.authCredentials ?? {},
     config: params.config ?? { plugins: { enabled: false } },
     metadataSnapshot: params.metadataSnapshot ?? metadataSnapshot,
     models: params.entries ?? [],
@@ -87,6 +126,21 @@ async function build(params: {
       ? { includeProviderPluginAugmentation: params.includeProviderPluginAugmentation }
       : {}),
   });
+}
+
+function customRoute(
+  id: string,
+  name: string,
+  extra: Partial<ModelCatalogEntry>,
+): ModelCatalogEntry {
+  return {
+    id,
+    name,
+    provider: "custom",
+    api: "openai-responses",
+    baseUrl: "https://route-a.example.test/v1",
+    ...extra,
+  };
 }
 
 describe("prepared model catalog builder", () => {
@@ -165,33 +219,11 @@ describe("prepared model catalog builder", () => {
   );
 
   it("carries manifest capability metadata into the prepared catalog", async () => {
-    const plugin = createPluginManifestRecordFixture({
-      id: "anthropic",
-      origin: "bundled",
-      providers: ["anthropic"],
-      modelCatalog: {
-        providers: {
-          anthropic: {
-            models: [
-              {
-                id: "claude-fable-5",
-                contextWindow: 1_000_000,
-                contextWindows: [
-                  { id: "200k", label: "200K", contextWindow: 200_000 },
-                  { id: "1m", label: "1M", contextWindow: 1_000_000 },
-                ],
-                contextWindowDefault: "1m",
-                thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
-                input: ["text", "image"],
-                mediaInput: { image: { maxBytes: 4096, tokenMode: "tile" } },
-              },
-            ],
-          },
-        },
-        discovery: { anthropic: "refreshable" },
-      },
+    const snapshot = fableManifest({
+      thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+      input: ["text", "image"],
+      mediaInput: { image: { maxBytes: 4096, tokenMode: "tile" } },
     });
-    const snapshot = createPluginMetadataSnapshotFixture({ plugins: [plugin] });
 
     expect(
       loadManifestModelCatalog({ config: {}, metadataSnapshot: snapshot }).find(
@@ -212,80 +244,31 @@ describe("prepared model catalog builder", () => {
   it.each([false, true])(
     "drops stale context choices after discovery (configured: %s)",
     async (configured) => {
-      const plugin = createPluginManifestRecordFixture({
-        id: "anthropic",
-        origin: "bundled",
-        providers: ["anthropic"],
-        modelCatalog: {
-          providers: {
-            anthropic: {
-              models: [
-                {
-                  id: "claude-fable-5",
-                  contextWindow: 1_000_000,
-                  contextWindows: [
-                    { id: "200k", label: "200K", contextWindow: 200_000 },
-                    { id: "1m", label: "1M", contextWindow: 1_000_000 },
-                  ],
-                  contextWindowDefault: "1m",
-                },
-              ],
-            },
-          },
-          discovery: { anthropic: "refreshable" },
-        },
-      });
       // Live provider discovery overlays the manifest row but replaces the
       // options list without restating a default.
       mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
-        {
-          id: "claude-fable-5",
-          name: "Claude Fable 5",
-          provider: "anthropic",
-          api: "anthropic-messages",
-          baseUrl: "https://api.anthropic.com",
+        fableEntry({
           contextWindow: 200_000,
           contextWindows: [{ id: "200k", label: "200K", contextWindow: 200_000 }],
-        },
+        }),
       ]);
       const snapshot = await build({
         config: configured
-          ? {
-              plugins: { enabled: false },
-              models: {
-                providers: {
-                  anthropic: {
-                    api: "anthropic-messages",
-                    baseUrl: "https://api.anthropic.com",
-                    models: [
-                      {
-                        id: "claude-fable-5",
-                        name: "Claude Fable 5",
-                        reasoning: true,
-                        input: ["text"],
-                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                        maxTokens: 8192,
-                      },
-                    ],
-                  },
-                },
-              },
-            }
+          ? providerConfig("anthropic", {
+              api: "anthropic-messages",
+              baseUrl: "https://api.anthropic.com",
+              models: [configuredModel("claude-fable-5", { name: "Claude Fable 5" })],
+            })
           : undefined,
-        metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [plugin] }),
+        metadataSnapshot: fableManifest(),
         entries: [
-          {
-            id: "claude-fable-5",
-            name: "Claude Fable 5",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            baseUrl: "https://api.anthropic.com",
+          fableEntry({
             contextWindows: [
               { id: "200k", label: "200K", contextWindow: 200_000 },
               { id: "1m", label: "1M", contextWindow: 1_000_000 },
             ],
             contextWindowDefault: "1m",
-          },
+          }),
         ],
         readOnly: false,
       });
@@ -366,28 +349,18 @@ describe("prepared model catalog builder", () => {
     ]);
 
     const snapshot = await build({
-      config: {
-        plugins: { enabled: false },
-        models: {
-          providers: {
-            openai: {
-              api: "openai-responses",
-              baseUrl: "https://api.openai.com/v1",
-              models: [
-                {
-                  id: "gpt-5.6-sol",
-                  name: "Configured GPT-5.6 Sol",
-                  contextWindow: 1_050_000,
-                  maxTokens: 128_000,
-                  reasoning: true,
-                  input: ["text", "image"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                },
-              ],
-            },
-          },
-        },
-      },
+      config: providerConfig("openai", {
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        models: [
+          configuredModel("gpt-5.6-sol", {
+            name: "Configured GPT-5.6 Sol",
+            contextWindow: 1_050_000,
+            maxTokens: 128_000,
+            input: ["text", "image"],
+          }),
+        ],
+      }),
       entries: [{ id: "gpt-5.4", name: "GPT-5.4", provider: "openai" }],
       metadataSnapshot: providerManifestSnapshot({
         provider: "openai",
@@ -401,29 +374,22 @@ describe("prepared model catalog builder", () => {
   });
 
   it("overlays exact configured metadata when discovery and config have opposite model order", async () => {
-    const models = ["Reader", "reader"].map<ModelDefinitionConfig>((id, index) => ({
-      id,
-      name: `Configured ${id}`,
-      contextWindow: 32_000 * (index + 1),
-      maxTokens: 4_096,
-      reasoning: index === 0,
-      thinkingLevelMap: { off: null, xhigh: "xhigh" },
-      input: index === 0 ? ["text", "image"] : ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    }));
+    const models = ["Reader", "reader"].map((id, index) =>
+      configuredModel(id, {
+        name: `Configured ${id}`,
+        contextWindow: 32_000 * (index + 1),
+        maxTokens: 4_096,
+        reasoning: index === 0,
+        thinkingLevelMap: { off: null, xhigh: "xhigh" },
+        input: index === 0 ? ["text", "image"] : ["text"],
+      }),
+    );
     const snapshot = await build({
-      config: {
-        plugins: { enabled: false },
-        models: {
-          providers: {
-            custom: {
-              baseUrl: "https://example.test/v1",
-              api: "openai-completions",
-              models: models.toReversed(),
-            },
-          },
-        },
-      },
+      config: providerConfig("custom", {
+        baseUrl: "https://example.test/v1",
+        api: "openai-completions",
+        models: models.toReversed(),
+      }),
       entries: models.map(({ id }) => ({
         id,
         name: `Discovered ${id}`,
@@ -465,20 +431,14 @@ describe("prepared model catalog builder", () => {
       api: "openai-responses",
       baseUrl: "https://account.example.test/v1",
     } as const;
-    const configured: ModelDefinitionConfig = {
-      id: "demo",
+    const configured = configuredModel("demo", {
       name: "Configured Demo",
       contextWindow: 32_000,
       maxTokens: 4096,
-      reasoning: true,
       input: ["text", "image"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       ...defaults,
-    };
-    const config: OpenClawConfig = {
-      plugins: { enabled: false },
-      models: { providers: { custom: { ...defaults, models: [configured] } } },
-    };
+    });
+    const config = providerConfig("custom", { ...defaults, models: [configured] });
     const snapshot = await build({
       config,
       entries: [{ provider: "custom", id: "demo", name: "Captured Demo", ...captured }],
@@ -513,59 +473,35 @@ describe("prepared model catalog builder", () => {
         first.id = "demo";
       }
       return [
-        {
-          id: "demo",
-          name: "Route B",
-          provider: "custom",
+        customRoute("demo", "Route B", {
           api: "openai-completions",
           baseUrl: "https://route-b.example.test/v1",
           thinkingLevelMap: { xhigh: "xhigh", max: "max" },
           compat: { supportsTools: false },
-        },
+        }),
       ];
     });
     const snapshot = await build({
-      config: {
-        plugins: { enabled: false },
-        models: {
-          providers: {
-            custom: {
-              api: "openai-responses",
-              baseUrl: "https://route-a.example.test/v1",
-              models: [
-                {
-                  id: "demo",
-                  name: "Configured Demo",
-                  contextWindow: 32_000,
-                  maxTokens: 4_096,
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                },
-              ],
-            },
-          },
-        },
-      },
+      config: providerConfig("custom", {
+        api: "openai-responses",
+        baseUrl: "https://route-a.example.test/v1",
+        models: [
+          configuredModel("demo", {
+            name: "Configured Demo",
+            contextWindow: 32_000,
+            maxTokens: 4_096,
+          }),
+        ],
+      }),
       entries: [
-        {
-          id: "spare",
-          name: "Earlier Route A",
-          provider: "custom",
-          api: "openai-responses",
-          baseUrl: "https://route-a.example.test/v1",
+        customRoute("spare", "Earlier Route A", {
           thinkingLevelMap: { xhigh: "high", max: "max" },
           compat: { supportsTools: false },
-        },
-        {
-          id: "demo",
-          name: "Route A",
-          provider: "custom",
-          api: "openai-responses",
-          baseUrl: "https://route-a.example.test/v1",
+        }),
+        customRoute("demo", "Route A", {
           thinkingLevelMap: { xhigh: null, max: null },
           compat: { supportsTools: true },
-        },
+        }),
       ],
       readOnly: false,
     });
@@ -599,8 +535,7 @@ describe("prepared model catalog builder", () => {
       return [];
     });
 
-    await buildPreparedModelCatalogSnapshot({
-      agentDir: "/tmp/model-catalog-test",
+    await build({
       authCredentials: {
         inherited: { type: "api_key", key: "test-api-key" },
         subscription: {
@@ -610,9 +545,7 @@ describe("prepared model catalog builder", () => {
           expires: Date.now() + 60_000,
         },
       },
-      config: { plugins: { enabled: false } },
-      metadataSnapshot,
-      models: [],
+      readOnly: false,
     });
 
     expect(resolvedKey).toBe("test-api-key");

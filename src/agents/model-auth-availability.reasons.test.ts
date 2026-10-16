@@ -7,7 +7,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 import {
@@ -17,6 +17,22 @@ import {
   routeResolverFactory,
 } from "./model-auth-availability.test-support.js";
 import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
+
+const catalogRef = { source: "store", provider: "default", id: "CATALOG_KEY" } as const;
+
+function configuredProvider(
+  provider: string,
+  options: Partial<ModelProviderConfig>,
+): OpenClawConfig & {
+  models: { providers: Record<string, ModelProviderConfig> };
+} {
+  const entry = { baseUrl: "https://acme.example/v1", models: [], ...options };
+  return { models: { providers: { [provider]: entry } } };
+}
+
+function readiness(cfg: OpenClawConfig, store = authStore()) {
+  return createModelAuthAvailabilityResolver({ cfg, authStore: store, env: {} });
+}
 
 describe("model auth unavailability reasons", () => {
   it.each([
@@ -43,21 +59,11 @@ describe("model auth unavailability reasons", () => {
     "preserves source ownership for $name",
     ({ key, literal, pending, snapshot, order, locked, available }) => {
       const sourceConfig = {
+        ...configuredProvider("acme", {
+          apiKey: literal ? key : pending ? "${PENDING_KEY}" : catalogRef,
+        }),
         ...(order ? { auth: { order: { acme: [] } } } : {}),
-        models: {
-          providers: {
-            acme: {
-              baseUrl: "https://acme.example/v1",
-              apiKey: literal
-                ? key
-                : pending
-                  ? "${PENDING_KEY}"
-                  : { source: "store", provider: "default", id: "CATALOG_KEY" },
-              models: [],
-            },
-          },
-        },
-      } satisfies OpenClawConfig;
+      };
       if (pending) {
         setConfigResolutionFacts(
           sourceConfig,
@@ -69,15 +75,11 @@ describe("model auth unavailability reasons", () => {
       }
       const runtimeConfig = {
         ...sourceConfig,
-        models: {
-          providers: {
-            acme: {
-              ...sourceConfig.models.providers.acme,
-              ...(snapshot === "unresolved" ? {} : { apiKey: key }),
-            },
-          },
-        },
-      } satisfies OpenClawConfig;
+        ...configuredProvider("acme", {
+          ...sourceConfig.models.providers.acme,
+          ...(snapshot === "unresolved" ? {} : { apiKey: key }),
+        }),
+      };
       const store = authStore({
         bound: { type: "api_key", provider: "other", key: "profile-key" },
       });
@@ -89,11 +91,11 @@ describe("model auth unavailability reasons", () => {
           ? structuredClone(sourceConfig)
           : runtimeConfig;
       if (snapshot === "foreign") {
-        cfg.models.providers.acme.baseUrl = "https://foreign.example/v1";
+        cfg.models.providers.acme!.baseUrl = "https://foreign.example/v1";
       }
       if (snapshot === "replaced") {
         const replacement = structuredClone(sourceConfig);
-        replacement.models.providers.acme.apiKey = {
+        replacement.models.providers.acme!.apiKey = {
           source: "store",
           provider: "default",
           id: "REPLACEMENT_KEY",
@@ -101,11 +103,10 @@ describe("model auth unavailability reasons", () => {
         setRuntimeConfigSnapshot(runtimeConfig, replacement);
       }
       try {
-        const result = createModelAuthAvailabilityResolver({
-          cfg,
-          authStore: store,
-          env: {},
-        }).evaluateModelAuth("acme", locked ? { pinnedProfileId: "bound" } : {});
+        const result = readiness(cfg, store).evaluateModelAuth(
+          "acme",
+          locked ? { pinnedProfileId: "bound" } : {},
+        );
         expect(result.availability).toBe(available);
         if (available === true) {
           expect(result.evidence).toBe("runtime");
@@ -182,10 +183,10 @@ describe("model auth unavailability reasons", () => {
   it("reports the earliest retry among viable cooling profiles, excluding invalid or permanently rejected profiles", () => {
     const until = Date.now() + 60_000;
     const store = authStore({
-      first: { type: "api_key", provider: "openai", key: "first-key" },
-      second: { type: "api_key", provider: "openai", key: "second-key" },
+      first: createApiKeyCredential("openai", "first-key"),
+      second: createApiKeyCredential("openai", "second-key"),
       invalid: { type: "token", provider: "openai", token: "expired-token", expires: 1 },
-      rejected: { type: "api_key", provider: "openai", key: "rejected-key" },
+      rejected: createApiKeyCredential("openai", "rejected-key"),
     });
     store.usageStats = {
       first: { cooldownUntil: until + 60_000 },
@@ -206,22 +207,13 @@ describe("model auth unavailability reasons", () => {
 
   it("hides a cooling inline key while preserving a healthy profile fallback", () => {
     const store = authStore();
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          "anthropic-local": {
-            apiKey: "demo-key",
-            baseUrl: "http://127.0.0.1:8000/v1",
-            models: [],
-          },
-        },
-      },
-    };
+    const cfg = configuredProvider("anthropic-local", {
+      apiKey: "demo-key",
+      baseUrl: "http://127.0.0.1:8000/v1",
+    });
     const availability = () =>
-      createModelAuthAvailabilityResolver({ cfg, authStore: store, env: {} }).evaluateModelAuth(
-        "anthropic-local",
-        { modelId: "demo-model" },
-      ).availability;
+      readiness(cfg, store).evaluateModelAuth("anthropic-local", { modelId: "demo-model" })
+        .availability;
 
     expect(availability()).toBe(true);
     store.usageStats = {
@@ -259,43 +251,26 @@ describe("model auth unavailability reasons", () => {
       ] as const;
       for (const { stats, reason, retryAt } of cases) {
         const store = authStore({
-          bound: { type: "api_key", provider: "anthropic", key: "test-key" },
+          bound: createApiKeyCredential("anthropic", "test-key"),
         });
         store.usageStats = {
           [source === "profile" ? "bound" : "inline-api-key:anthropic"]: stats,
         };
-        const cfg = {
-          models: {
-            providers: {
-              anthropic: {
-                auth: "api-key",
-                apiKey: source === "profile" ? "bound" : "inline-key",
-                baseUrl: "https://api.anthropic.com",
-                models: [],
-              },
-            },
-          },
-        } satisfies OpenClawConfig;
+        const cfg = configuredProvider("anthropic", {
+          auth: "api-key",
+          apiKey: source === "profile" ? "bound" : "inline-key",
+          baseUrl: "https://api.anthropic.com",
+        });
         if (source === "hydrated-inline") {
-          const sourceConfig: OpenClawConfig = {
-            models: {
-              providers: {
-                anthropic: {
-                  ...cfg.models.providers.anthropic,
-                  apiKey: { source: "store", provider: "default", id: "CATALOG_KEY" },
-                },
-              },
-            },
-          };
-          cfg.models.providers.anthropic.apiKey = "ollama-local";
+          const sourceConfig = configuredProvider("anthropic", {
+            ...cfg.models.providers.anthropic,
+            apiKey: catalogRef,
+          });
+          cfg.models.providers.anthropic!.apiKey = "ollama-local";
           setRuntimeConfigSnapshot(cfg, sourceConfig);
         }
         try {
-          const result = createModelAuthAvailabilityResolver({
-            cfg,
-            authStore: store,
-            env: {},
-          }).evaluateModelAuth("anthropic");
+          const result = readiness(cfg, store).evaluateModelAuth("anthropic");
           expect.soft(result, JSON.stringify(stats)).toMatchObject({
             availability: false,
             unavailableReason: reason,
