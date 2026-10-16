@@ -12,6 +12,8 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -23,6 +25,7 @@ import {
   requestContext,
   sessionReadHandlers,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
 import * as listWorker from "./session-list-worker.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
@@ -144,6 +147,85 @@ it("retries failed catalog renewal without blocking lists on its replacement", a
     } finally {
       failure.resolve(catalog);
       replacement.resolve(catalog);
+      projection.dispose();
+      release();
+    }
+  });
+});
+
+it("keeps row and default model facts current when a catalog publishes during worker selection", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {
+      agents: { entries: { main: {} }, defaults: { model: "unit-test/fixture" } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const key = "agent:main:dashboard:catalog-publication";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: key },
+      { sessionId: "catalog-publication", updatedAt: 1 },
+    );
+    const pluginRegistry = createEmptyPluginRegistry();
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
+    const catalog = (contextTokens: number) =>
+      new Map([
+        [
+          "main",
+          createPreparedGatewayModelCatalog({
+            entries: [{ provider: "unit-test", id: "fixture", name: "Fixture", contextTokens }],
+            pluginRegistry,
+            metadataSnapshot,
+          }),
+        ],
+      ]);
+    let catalogs = catalog(8_192);
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({
+      cfg,
+      getModelCatalog: async () => catalogs,
+    });
+    const selected = createDeferredCore();
+    const resume = createDeferredCore();
+    let pending: ReturnType<(typeof sessionReadHandlers)[string]> | undefined;
+    try {
+      await projection.ensureMaterialized();
+      const select = listWorker.selectSessionListPageInWorker;
+      vi.spyOn(listWorker, "selectSessionListPageInWorker").mockImplementationOnce(
+        async (...args) => {
+          const result = await select(...args);
+          selected.resolve();
+          await resume.promise;
+          return result;
+        },
+      );
+      const respond = vi.fn();
+      pending = sessionReadHandlers["sessions.list"]!({
+        req: { type: "req", id: "catalog-publication", method: "sessions.list" },
+        params: {},
+        client: null,
+        context: bindSessionRowProjection(requestContext(cfg), () => projection),
+        isWebchatConnect: () => false,
+        respond,
+      });
+      await selected.promise;
+      catalogs = catalog(16_384);
+      notifyPreparedModelRuntimePublication({
+        phase: "catalog-published",
+        modelFactsChanged: true,
+      });
+      await nextTurn();
+      expect(projection.state.modelCatalog).toBe(catalogs);
+      resume.resolve();
+      await pending;
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        true,
+        expect.objectContaining({
+          sessions: [expect.objectContaining({ key, contextTokens: 16_384 })],
+          defaults: expect.objectContaining({ contextTokens: 16_384 }),
+        }),
+      );
+    } finally {
+      resume.resolve();
+      await pending;
       projection.dispose();
       release();
     }

@@ -273,6 +273,7 @@ function createListWorker(projection: SessionRowProjection) {
             return (
               current.revision === state.revision &&
               current.cfg === state.cfg &&
+              current.modelCatalog === state.modelCatalog &&
               current.policyConfig === state.policyConfig &&
               current.rowContext.projectedAgentRuns === state.rowContext.projectedAgentRuns &&
               current.rowContext.projectedSubagentActivity ===
