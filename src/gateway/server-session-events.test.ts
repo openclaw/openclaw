@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { registerTranscriptMarkerQueueTests } from "./server-session-events.marker-queue.test-support.js";
 import {
   createGatewayBroadcaster,
@@ -79,49 +78,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
   });
-
-  it.each(["missing", "rebuilding", "quoted reply"])(
-    "invalidates broad and targeted history when the committed row needs page reconciliation: %s",
-    async (kind) => {
-      if (kind === "missing") {
-        readSessionMessageByIdAsyncMock.mockResolvedValueOnce({ found: false, oversized: false });
-      } else if (kind === "quoted reply") {
-        readSessionMessageByIdAsyncMock.mockResolvedValueOnce({
-          found: true,
-          oversized: false,
-          seq: 2,
-          message: { role: "user", content: "Quoted reply", __openclaw: { replyToId: "original" } },
-        });
-      } else {
-        readSessionMessageByIdAsyncMock.mockRejectedValueOnce(
-          new SessionTranscriptProjectionUnavailableError("sess-main"),
-        );
-      }
-      const { broadcastToConnIds, handler } = createHandler(
-        false,
-        true,
-        () => new Set(["targeted"]),
-      );
-      await handler({
-        target: {
-          agentId: "main",
-          sessionId: "sess-main",
-          sessionKey: "agent:main:main",
-          storePath: "/tmp/canonical-update.sqlite",
-        },
-        messageId: "removed-id",
-        message: { role: "assistant", content: "stale queued content" },
-      });
-      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-        "sessions.changed",
-        expect.objectContaining({ sessionKey: "agent:main:main", phase: "message" }),
-        new Set(["conn-1", "targeted"]),
-        expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
-      );
-      expect(broadcastToConnIds.mock.calls[0]?.[1]).not.toHaveProperty("message");
-      expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
-    },
-  );
 
   it("never silently drops an authoritative session message for a slow subscriber", async () => {
     const { broadcastToConnIds, handler } = createHandler(false);

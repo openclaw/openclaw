@@ -9,7 +9,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { LobsterdexView, type LobsterdexCopyFeedback } from "./view.tsx";
 import "../../styles/settings.css";
 
@@ -26,11 +26,7 @@ export function LobsterdexPage() {
   const cards = new Map<string, HTMLElement>();
   const context = useApplication();
   const branding = createMemo(() =>
-    projectSource(context.theme, {
-      read: (theme) => theme.branding,
-      subscribe: (theme, notify) => theme.subscribe(notify),
-      equality: Object.is,
-    }),
+    projectOwner(context.theme, (theme) => theme.branding, Object.is),
   );
   const entries = projectLobsterdex();
   const [copyFeedback, setCopyFeedback] = createSignal<LobsterdexCopyFeedback | null>(null);

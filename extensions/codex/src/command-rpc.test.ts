@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
-  replaceRuntimeAuthProfileStoreSnapshots,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -13,6 +12,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -91,7 +91,6 @@ describe("Codex command RPC helpers", () => {
     vi.stubEnv("CODEX_API_KEY", undefined);
     config = { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } };
     setRuntimeConfigSnapshot(config);
-    setAuthStore({ version: 1, profiles: {} });
     harness = createClientHarness();
     requestCodexAppServerJsonMock.mockReset();
     requestCodexAppServerJsonMock.mockResolvedValue(resumeResponse);
@@ -130,8 +129,16 @@ describe("Codex command RPC helpers", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  function setAuthStore(store: AuthProfileStore) {
-    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
+  async function setAuthStore(store: AuthProfileStore) {
+    const saved = await updateAuthProfileStoreWithLock({
+      agentDir,
+      stateDir: tempDir,
+      updater: (current) => {
+        Object.assign(current, store);
+        return true;
+      },
+    });
+    expect(saved).not.toBeNull();
   }
 
   function resume(options: Partial<CodexControlRequestOptions> = {}) {
@@ -291,7 +298,7 @@ describe("Codex command RPC helpers", () => {
               accountId: "control-account",
             }
           : { type, provider: "openai", token };
-      setAuthStore({
+      await setAuthStore({
         version: 1,
         profiles: { "openai:old": credential, "openai:ready": credential },
         order: { openai: ["openai:old", "openai:ready"] },
@@ -335,7 +342,7 @@ describe("Codex command RPC helpers", () => {
     const explicitStorePath = path.join(tempDir, "explicit", "sessions.json");
     const configuredStorePath = path.join(tempDir, "configured", "sessions.json");
     config.session = { store: configuredStorePath };
-    setAuthStore({
+    await setAuthStore({
       version: 1,
       profiles: {
         "openai:first": { type: "api_key", provider: "openai", key: "automatic-key" },

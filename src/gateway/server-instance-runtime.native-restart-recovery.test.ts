@@ -73,6 +73,7 @@ describe("cold restart recovery of native operator input", () => {
   it.each([
     "native source",
     "native steering",
+    "requester continuation after cohort settlement",
     "Control UI source",
     "unowned delegated source",
     "detached cron input",
@@ -154,6 +155,10 @@ describe("cold restart recovery of native operator input", () => {
             ? { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT }
             : { id: GATEWAY_CLIENT_IDS.MACOS_APP, mode: GATEWAY_CLIENT_MODES.UI },
         localOperator: scenario !== "Control UI source",
+        sourceRunId:
+          scenario === "requester continuation after cohort settlement"
+            ? "announce:requester-settle:main:parent:completed-child:yield-1"
+            : undefined,
         device: {
           deviceId: "native-recovery-device",
           publicKey: "synthetic-public-key",
@@ -199,6 +204,16 @@ describe("cold restart recovery of native operator input", () => {
           role: "user",
           content: "Finish the synthetic task",
           timestamp: 1,
+          ...(scenario === "requester continuation after cohort settlement"
+            ? {
+                provenance: {
+                  kind: "inter_session",
+                  sourceTool: "subagent_settle",
+                  sourceChannel: "internal",
+                  sourceSessionKey: "agent:main:subagent:completed-child",
+                },
+              }
+            : {}),
           ...(scenario === "detached cron input"
             ? { provenance: { kind: "internal_system", sourceTool: "cron" } }
             : {}),

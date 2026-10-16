@@ -1,6 +1,13 @@
 import type { Static } from "typebox";
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { ControlUiLinkReaderDescriptorSchema } from "../../packages/gateway-protocol/src/schema/control-ui-link-reader.js";
+export const LINK_READER_BADGE_TONES = [
+  "neutral",
+  "positive",
+  "negative",
+  "attention",
+  "accent",
+] as const;
 
 /** Passive link-reader models shared by plugins and the Control UI. */
 export type ControlUiLinkReaderMetadata = ControlUiLinkReaderDescriptor["linkReader"];
@@ -41,7 +48,7 @@ export type ControlUiLinkReaderPreview = {
   subtitle?: string;
   badge?: {
     label: string;
-    tone: "neutral" | "positive" | "negative" | "attention" | "accent";
+    tone: (typeof LINK_READER_BADGE_TONES)[number];
     /** Timestamp of the event represented by the badge, displayed instead of creation time. */
     timestamp?: string;
   };

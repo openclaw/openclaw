@@ -13,7 +13,7 @@ import type {
   SessionDiffFileTextLoader,
   SessionDiffLoader,
   SessionDiffOwner,
-} from "./session-diff-panel.ts";
+} from "./session-diff-panel.tsx";
 
 type SidebarFullMessageRequest = {
   sessionKey: string;

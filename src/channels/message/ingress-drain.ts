@@ -668,9 +668,17 @@ export function createChannelIngressDrain<
       }
       // The drain already selected this ordered lane head. The pending-only
       // update arbitrates competing claimants without rereading the backlog.
+      // Scheduling lanes may be per-event; only reconciliation may replace
+      // an existing transport identity checked by the monitor before delivery.
+      const claimLaneKey =
+        event.laneKey === undefined
+          ? options.deriveLaneKey?.(event)
+          : options.reconcileStoredLaneKey
+            ? selectedLaneKey
+            : event.laneKey;
       const claimed = await queue.claim(event.id, {
         ownerId,
-        laneKey: selectedLaneKey,
+        laneKey: claimLaneKey,
       });
       if (!claimed) {
         // A competing owner may still hold the head; its tail waits for the next pass.

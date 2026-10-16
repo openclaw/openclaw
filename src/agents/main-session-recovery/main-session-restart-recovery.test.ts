@@ -3754,7 +3754,7 @@ describe("main-session-restart-recovery", () => {
     expect(notices).toHaveLength(1);
   });
 
-  it("retries tombstoning after a transcript metadata conflict", async () => {
+  it("retries tombstoning on the next recovery pass after a transcript conflict", async () => {
     tmpDir = transcriptFixture.prepareRoot();
     const { sessionsDir, readEntry } = await makeMainSessionFixture({
       mainRestartRecovery: {
@@ -3771,6 +3771,10 @@ describe("main-session-restart-recovery", () => {
       code: "session-rebound",
       reason: "session metadata changed",
     });
+
+    await expectRecovery({ started: 0, settled: 0, failed: 1, skipped: 0 });
+    expect(readEntry()?.mainRestartRecovery?.tombstone).toBeUndefined();
+    expect(callGateway).not.toHaveBeenCalled();
 
     await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
 

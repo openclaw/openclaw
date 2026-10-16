@@ -207,6 +207,7 @@ describe("installFromValidatedNpmSpecArchive", () => {
       throw new Error("expected prerelease rejection");
     }
     expect(result.error).toContain("prerelease version 1.1.0-beta.1");
+    expect(result.error).toContain('Use "npm:@openclaw/test@beta"');
     expect(installFromArchive).not.toHaveBeenCalled();
   });
 

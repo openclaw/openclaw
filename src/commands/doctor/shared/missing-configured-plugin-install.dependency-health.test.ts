@@ -207,8 +207,8 @@ describe("configured npm dependency health and repair authority", () => {
           message: expect.stringContaining("required-runtime"),
           fixHint:
             scenario === "resolved-spec"
-              ? "Run `openclaw plugins install dependency-plugin@1.2.3 --force` to reinstall the configured plugin package."
-              : "Run `openclaw plugins install dependency-plugin@1.0.0 --force` to reinstall the configured plugin package.",
+              ? "Run `openclaw plugins install npm:dependency-plugin@1.2.3 --force` to reinstall the configured plugin package."
+              : "Run `openclaw plugins install npm:dependency-plugin@1.0.0 --force` to reinstall the configured plugin package.",
         });
         expect(configuredPluginInstallIssueToRepairEffect(issue)).toMatchObject({
           kind: "package",

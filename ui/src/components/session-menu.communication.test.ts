@@ -95,6 +95,7 @@ describe("session communication menu", () => {
     await menu.updateComplete;
     expect(choice(advanced, "send", "ask").getAttribute("aria-pressed")).toBe("true");
     expect(choice(advanced, "receive", "always").getAttribute("aria-pressed")).toBe("true");
+    expect(request.mock.calls.filter(([method]) => method === "sessions.describe")).toHaveLength(2);
   });
 
   it("retires pending settings on disconnect and reads the same session from the new connection", async () => {

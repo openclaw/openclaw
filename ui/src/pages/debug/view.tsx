@@ -1,4 +1,4 @@
-import { createMemo, For, Show, untrack } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
@@ -44,13 +44,13 @@ export type DebugProps = {
   onCall: () => void;
 };
 
-function CodeBlock(props: { title: string; value: unknown; format: () => string }) {
+const formatJson = (value: unknown) => JSON.stringify(value ?? {}, null, 2);
+
+function CodeBlock(props: { title: string; value: unknown; format?: (value: unknown) => string }) {
   // The highlighter escapes source text; preserve the generated nodes until that value changes.
-  const dependency = createMemo(() => props.value);
-  const content = createMemo(() => {
-    dependency();
-    return untrack(() => highlightJsonHtml(props.format()));
-  });
+  const value = createMemo(() => props.value);
+  const format = createMemo(() => props.format ?? formatJson);
+  const content = createMemo(() => highlightJsonHtml(format()(value())));
   return (
     <SanitizedHtml
       tag="pre"
@@ -142,11 +142,7 @@ export function DebugPageView(props: DebugProps) {
                 stacked
                 control={
                   <>
-                    <CodeBlock
-                      title={title()}
-                      value={props[key]}
-                      format={() => JSON.stringify(props[key] ?? {}, null, 2)}
-                    />
+                    <CodeBlock title={title()} value={props[key]} />
                   </>
                 }
               />
@@ -246,19 +242,15 @@ export function DebugPageView(props: DebugProps) {
             <Status kind="ok" label={t("common.ok")} />
             <CodeBlock
               title={`${props.callMethod}: ${t("common.ok")}`}
-              value={props.callResult}
-              format={() => props.callResult ?? ""}
+              value={props.callResult ?? ""}
+              format={String}
             />
           </div>
         </Show>
       </Section>
       <Section title={t("debug.modelsTitle")} description={t("debug.modelsSubtitle")}>
         <div class="settings-row settings-row--stacked">
-          <CodeBlock
-            title={t("debug.modelsTitle")}
-            value={props.models}
-            format={() => JSON.stringify(props.models, null, 2)}
-          />
+          <CodeBlock title={t("debug.modelsTitle")} value={props.models} />
         </div>
       </Section>
       <Section title={t("debug.eventLogTitle")} description={t("debug.eventLogSubtitle")}>
@@ -276,7 +268,7 @@ export function DebugPageView(props: DebugProps) {
                   <CodeBlock
                     title={event.event}
                     value={event.payload}
-                    format={() => formatEventPayload(event.payload)}
+                    format={formatEventPayload}
                   />
                 </>
               }
