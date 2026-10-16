@@ -12,26 +12,17 @@ import { workboardTestHost } from "../../test/host.setup.ts";
 import { waitForFast } from "../../test/wait-for.ts";
 import { WorkboardView } from "./view.tsx";
 
-const renderedViews = new Map<
-  HTMLElement,
-  { update: (props: WorkboardRenderProps) => void; dispose: () => void }
->();
+const renderedViews = new Set<() => void>();
 afterEach(() => {
-  for (const view of renderedViews.values()) {
-    view.dispose();
-  }
+  renderedViews.forEach((dispose) => dispose());
   renderedViews.clear();
 });
-type ControlUiSelectPickerProps = Parameters<ControlUiComponents["mountSelectPicker"]>[1];
-export type SelectPicker = HTMLElement & ControlUiSelectPickerProps;
+export type SelectPicker = HTMLElement & Parameters<ControlUiComponents["mountSelectPicker"]>[1];
 export type AgentPicker = HTMLElement & ControlUiAgentPickerProps;
 
-type WorkboardRenderProps = Parameters<typeof WorkboardView>[0];
-export function query<T extends Element = HTMLElement>(
-  root: ParentNode | null | undefined,
-  selector: string,
-): T {
-  return expectDefined(root?.querySelector<T>(selector), selector);
+type ViewProps = Parameters<typeof WorkboardView>[0];
+export function query<T extends Element = HTMLElement>(root: ParentNode | null, css: string): T {
+  return expectDefined(root?.querySelector<T>(css), css);
 }
 export function fill(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
   input.value = value;
@@ -47,17 +38,14 @@ export function queries(container: HTMLElement) {
     all: container.querySelectorAll.bind(container),
   };
 }
-export function createLoadedWorkboardState(host: WorkboardRenderProps["host"] = {}) {
-  const state = getWorkboardState(host);
-  state.loaded = true;
-  return { host, state };
-}
-
-export function createWorkboardRenderProps(
-  host: WorkboardRenderProps["host"],
-  overrides: Partial<WorkboardRenderProps> = {},
-): WorkboardRenderProps {
-  return {
+export function createWorkboardView(
+  overrides: Partial<ViewProps> = {},
+  host: ViewProps["host"] = {},
+  initialState: Partial<ReturnType<typeof getWorkboardState>> = {},
+) {
+  const state = Object.assign(getWorkboardState(host), { loaded: true }, initialState);
+  const container = document.createElement("div");
+  const props: ViewProps = {
     host,
     client: null,
     connected: true,
@@ -67,61 +55,41 @@ export function createWorkboardRenderProps(
     onRefresh: () => undefined,
     ...overrides,
   };
-}
-
-export function renderInto(container: HTMLElement, props: WorkboardRenderProps) {
-  workboardTestHost().connection.connected = props.connected;
-  if (!container.isConnected) {
-    document.body.append(container);
-  }
-  const mounted = renderedViews.get(container);
-  if (mounted) {
-    mounted.update(props);
-  } else {
-    const [current, setCurrent] = createSignal(props);
-    const [revision, setRevision] = createSignal(0);
-    const requestUpdate = () => {
-      current().onRequestUpdate?.();
-      setRevision((value) => value + 1);
-    };
-    const reactiveProps = new Proxy(props, {
-      get(_target, key) {
-        if (key === "revision") {
-          return revision();
-        }
-        if (key === "onRequestUpdate") {
-          return requestUpdate;
-        }
-        return Reflect.get(current(), key);
-      },
-      ownKeys() {
-        return [...new Set([...Reflect.ownKeys(current()), "revision", "onRequestUpdate"])];
-      },
-      getOwnPropertyDescriptor() {
-        return { configurable: true, enumerable: true };
-      },
-    });
-    const dispose = render(() => createComponent(WorkboardView, reactiveProps), container);
-    renderedViews.set(container, {
-      update(next) {
-        setCurrent(next);
-        setRevision((value) => value + 1);
-      },
-      dispose,
-    });
-  }
-  flush();
-}
-
-export function createWorkboardView(
-  overrides: Partial<WorkboardRenderProps> = {},
-  host: WorkboardRenderProps["host"] = {},
-) {
-  const { state } = createLoadedWorkboardState(host);
-  const container = document.createElement("div");
-  const props = createWorkboardRenderProps(host, overrides);
-  const renderView = (next: Partial<WorkboardRenderProps> = {}) =>
-    renderInto(container, { ...props, ...next });
+  let update: ((next: ViewProps) => void) | undefined;
+  const renderView = (next: Partial<ViewProps> = {}) => {
+    const renderedProps = { ...props, ...next };
+    workboardTestHost().connection.connected = renderedProps.connected;
+    if (!container.isConnected) {
+      document.body.append(container);
+    }
+    if (update) {
+      update(renderedProps);
+    } else {
+      const [current, setCurrent] = createSignal(renderedProps);
+      const [revision, setRevision] = createSignal(0);
+      const invalidate = () => setRevision((value) => value + 1);
+      const requestUpdate = () => {
+        current().onRequestUpdate?.();
+        invalidate();
+      };
+      const reactiveProps = new Proxy(renderedProps, {
+        get: (_target, key) =>
+          key === "revision"
+            ? revision()
+            : key === "onRequestUpdate"
+              ? requestUpdate
+              : Reflect.get(current(), key),
+        ownKeys: () => [...new Set([...Reflect.ownKeys(current()), "revision", "onRequestUpdate"])],
+        getOwnPropertyDescriptor: () => ({ configurable: true, enumerable: true }),
+      });
+      update = (value) => {
+        setCurrent(value);
+        invalidate();
+      };
+      renderedViews.add(render(() => createComponent(WorkboardView, reactiveProps), container));
+    }
+    flush();
+  };
   return { host, state, container, renderView, ...queries(container) };
 }
 

@@ -24,7 +24,46 @@ import {
 
 function mountPage(params?: Parameters<typeof mountWorkboardPage>[0]) {
   const page = mountWorkboardPage(params);
-  return { ...page, ...queries(page.container) };
+  return {
+    ...page,
+    state: page.workboard.state,
+    ...queries(page.container),
+    summary: page.fixture.host.components.mountSessionSummary,
+    error: () => visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent,
+    requests: (method: string) => page.request.mock.calls.filter(([name]) => name === method),
+    connect(connected = true) {
+      page.fixture.connection.connected = connected;
+      page.fixture.notify();
+    },
+  };
+}
+
+const metadataError = "Agent metadata temporarily unavailable";
+type Page = ReturnType<typeof mountPage>;
+function intercept(page: Page, method: string, response: () => unknown) {
+  const request = expectDefined(page.request.getMockImplementation(), "request implementation");
+  page.request.mockImplementation(async (name, params) =>
+    name === method ? response() : request(name, params),
+  );
+}
+function boardPage(
+  appearance: { name?: string; icon?: string; color?: string } = { name: "Planning" },
+) {
+  const page = mountPage({ boardId: "planning" });
+  intercept(page, "workboard.cards.list", () => ({
+    cards: [],
+    boards: [
+      {
+        id: "planning",
+        total: 0,
+        active: 0,
+        archived: 0,
+        byStatus: {},
+        ...appearance,
+      },
+    ],
+  }));
+  return page;
 }
 
 beforeEach(() => vi.useFakeTimers());
@@ -45,7 +84,7 @@ it("loads, refreshes, and searches cards through the plugin's authenticated host
   });
   fill(input, "Updated");
   await afterWorkboardUpdate(() => {
-    expect(page.workboard.state.query).toBe("Updated");
+    expect(page.state.query).toBe("Updated");
     expect(page.find(".workboard-filter-chip")?.textContent).toContain("Updated");
   });
   expect(page.find("#workboard-search-input")).toBe(input);
@@ -56,7 +95,7 @@ it("loads, refreshes, and searches cards through the plugin's authenticated host
   await afterWorkboardUpdate(() =>
     expect(document.activeElement).toBe(page.get<HTMLButtonElement>(".workboard-search-trigger")),
   );
-  expect(page.workboard.state.query).toBe("");
+  expect(page.state.query).toBe("");
 });
 
 it("keeps writer scope recoverable after the roster shrinks to one agent", async () => {
@@ -66,8 +105,7 @@ it("keeps writer scope recoverable after the roster shrinks to one agent", async
     createWorkboardCard({ id: "main-card", title: "Main agent task", agentId: "main" }),
     createWorkboardCard({ id: "writer-card", title: "Writer agent task", agentId: "writer" }),
   ]);
-  page.fixture.connection.connected = true;
-  page.fixture.notify();
+  page.connect();
   await afterWorkboardUpdate(() => expect(page.all(".workboard-card")).toHaveLength(2));
   page.fixture.host.agents.setScope(scope);
   page.agents([{ id: "main" }]);
@@ -98,28 +136,18 @@ it("clears filters without changing the global agent context", async () => {
     { id: "main", name: "Molty" },
     { id: "writer", name: "Writer" },
   ]);
-  page.cards([
-    createWorkboardCard({
-      id: "main-high",
-      title: "Molty high task",
-      agentId: "main",
-      priority: "high",
-    }),
-    createWorkboardCard({
-      id: "writer-urgent",
-      title: "Writer urgent task",
-      agentId: "writer",
-      priority: "urgent",
-    }),
-    createWorkboardCard({
-      id: "writer-low",
-      title: "Writer low task",
-      agentId: "writer",
-      priority: "low",
-    }),
-  ]);
-  page.fixture.connection.connected = true;
-  page.fixture.notify();
+  page.cards(
+    (
+      [
+        ["main-high", "Molty high task", "main", "high"],
+        ["writer-urgent", "Writer urgent task", "writer", "urgent"],
+        ["writer-low", "Writer low task", "writer", "low"],
+      ] as const
+    ).map(([id, title, agentId, priority]) =>
+      createWorkboardCard({ id, title, agentId, priority }),
+    ),
+  );
+  page.connect();
   await afterWorkboardUpdate(() => expect(page.all(".workboard-card")).toHaveLength(3));
   for (const priority of ["High", "Urgent"]) {
     page
@@ -128,7 +156,7 @@ it("clears filters without changing the global agent context", async () => {
       )
       .click();
     await afterWorkboardUpdate(() =>
-      expect(page.workboard.state.priorityFilter.size).toBe(priority === "High" ? 1 : 2),
+      expect(page.state.priorityFilter.size).toBe(priority === "High" ? 1 : 2),
     );
   }
   const picker = page.get<HTMLElement & ControlUiAgentPickerProps>(
@@ -154,7 +182,7 @@ it("clears filters without changing the global agent context", async () => {
       page.find('.workboard-filter-chip--mobile button[aria-label="Remove filter: Agent: Molty"]'),
     ).not.toBeNull();
   });
-  expect(page.workboard.state.priorityFilter.size).toBe(0);
+  expect(page.state.priorityFilter.size).toBe(0);
   page.get<HTMLButtonElement>('button[aria-label="Remove filter: Agent: Molty"]').click();
   expect(page.fixture.host.agents.setScope).toHaveBeenLastCalledWith(null);
   await afterWorkboardUpdate(() => {
@@ -170,9 +198,8 @@ it("suspends the session summary when its page is hidden and resumes on return",
   Object.assign(page.fixture.host.sessions, { rows: [session] });
   const card = createWorkboardCard({ sessionKey: session.key });
   page.cards([card]);
-  page.workboard.state.detailCardId = card.id;
-  page.fixture.connection.connected = true;
-  page.fixture.notify();
+  page.state.detailCardId = card.id;
+  page.connect();
   await openSessionTab(page);
   const summaries = () => [
     ...page.all<HTMLElement & { presented: boolean }>("[data-test-session-summary]"),
@@ -193,114 +220,92 @@ it("suspends the session summary when its page is hidden and resumes on return",
   );
 });
 
-it.each([
-  {
-    link: "subagent:workboard-default-writer",
-    key: "agent:writer:subagent:workboard-default-writer",
-  },
-])(
-  "resolves an open $link card independently of the filtered session roster",
-  async ({ link, key }) => {
-    const page = mountPage();
-    const session = createGatewaySession({ key, agentId: "writer" });
-    const primaryRows = [createGatewaySession({ key: "global", agentId: "main", kind: "global" })];
-    const observe = observeSessions(page, { sessions: [session], hasMore: false });
-    Object.assign(page.fixture.host.sessions, { rows: primaryRows });
-    const card = createWorkboardCard({ agentId: "main", sessionKey: link });
-    page.cards([card]);
-    page.workboard.state.detailCardId = card.id;
-    page.fixture.connection.connected = true;
-    page.fixture.notify();
+it("resolves an open card independently of the filtered session roster", async () => {
+  const link = "subagent:workboard-default-writer";
+  const key = `agent:writer:${link}`;
+  const page = mountPage();
+  const session = createGatewaySession({ key, agentId: "writer" });
+  const primaryRows = [createGatewaySession({ key: "global", agentId: "main", kind: "global" })];
+  const observe = observeSessions(page, { sessions: [session], hasMore: false });
+  Object.assign(page.fixture.host.sessions, { rows: primaryRows });
+  const card = createWorkboardCard({ agentId: "main", sessionKey: link });
+  page.cards([card]);
+  page.state.detailCardId = card.id;
+  page.connect();
 
-    await openSessionTab(page);
-    await afterWorkboardUpdate(() =>
-      expect(page.fixture.host.components.mountSessionSummary).toHaveBeenCalledWith(
-        expect.any(HTMLElement),
-        expect.objectContaining({ session: { sessionKey: key, agentId: "writer" } }),
-      ),
-    );
-    expect(observe).toHaveBeenCalledWith(
-      expect.objectContaining({
-        search: link,
-        archived: "all",
-        limit: 2,
-        includeGlobal: false,
-        includeUnknown: false,
-      }),
-      expect.any(Function),
-    );
-    expect(page.fixture.host.sessions.rows).toEqual(primaryRows);
-    expect(page.fixture.host.sessions.refresh).not.toHaveBeenCalled();
-    expectDefined(openSessionButton(page.container), "open resolved session").click();
-    expect(page.fixture.host.sessions.open).toHaveBeenCalledWith({
-      sessionKey: key,
-      agentId: "writer",
-    });
-  },
-);
+  await openSessionTab(page);
+  await afterWorkboardUpdate(() =>
+    expect(page.summary).toHaveBeenCalledWith(
+      expect.any(HTMLElement),
+      expect.objectContaining({ session: { sessionKey: key, agentId: "writer" } }),
+    ),
+  );
+  expect(observe).toHaveBeenCalledWith(
+    expect.objectContaining({
+      search: link,
+      archived: "all",
+      limit: 2,
+      includeGlobal: false,
+      includeUnknown: false,
+    }),
+    expect.any(Function),
+  );
+  expect(page.fixture.host.sessions.rows).toEqual(primaryRows);
+  expect(page.fixture.host.sessions.refresh).not.toHaveBeenCalled();
+  expectDefined(openSessionButton(page.container), "open resolved session").click();
+  expect(page.fixture.host.sessions.open).toHaveBeenCalledWith({
+    sessionKey: key,
+    agentId: "writer",
+  });
+});
 
-it.each(["unknown"] as const)(
-  "keeps a bare %s link unresolved despite an ambient roster owner",
-  async (key) => {
-    const page = mountPage();
-    const ambient = createGatewaySession({ key, kind: key, agentId: "main" });
-    const exact = createGatewaySession({ key: "agent:writer:existing", agentId: "writer" });
-    Object.assign(page.fixture.host.sessions, { rows: [ambient, exact] });
-    const observe = observeSessions(page, { sessions: [ambient], hasMore: false });
-    const card = createWorkboardCard({ agentId: "writer", sessionKey: key });
-    page.cards([card]);
-    page.fixture.connection.connected = true;
-    page.fixture.notify();
+it("keeps a bare unknown link unresolved despite an ambient roster owner", async () => {
+  const key = "unknown";
+  const page = mountPage();
+  const ambient = createGatewaySession({ key, kind: key, agentId: "main" });
+  const exact = createGatewaySession({ key: "agent:writer:existing", agentId: "writer" });
+  Object.assign(page.fixture.host.sessions, { rows: [ambient, exact] });
+  const observe = observeSessions(page, { sessions: [ambient], hasMore: false });
+  const card = createWorkboardCard({ agentId: "writer", sessionKey: key });
+  page.cards([card]);
+  page.connect();
 
-    await afterWorkboardUpdate(() =>
-      expect(page.find(".workboard-card")?.textContent).toContain("Unknown"),
-    );
-    expect(openSessionButton(page.container)).toBeUndefined();
-    expect(page.find('button[aria-label="Stop session"]')).toBeNull();
-    page.get<HTMLButtonElement>('button[aria-label="View details"]').click();
-    await afterWorkboardUpdate(() =>
-      expect(page.find(".workboard-detail .workboard-session-badge")?.textContent?.trim()).toBe(
-        "Ambiguous",
-      ),
-    );
-    expect(page.find(".workboard-detail__session-row")?.getAttribute("title")).toBe(
-      "Edit the card to select an exact session",
-    );
-    expect(observe).not.toHaveBeenCalled();
-    expect(page.fixture.host.components.mountSessionSummary).not.toHaveBeenCalled();
-    expect(openSessionButton(page.container)).toBeUndefined();
-    page.get<HTMLButtonElement>('.workboard-detail button[aria-label="Edit card"]').click();
-    await afterWorkboardUpdate(() => expect(sessionPicker(page.container)).toBeDefined());
-    const select = expectDefined(sessionPicker(page.container), "session link editor");
-    expect(select.value).toBe(key);
-    expect(select.options.map((option) => option.value)).toContain(exact.key);
-  },
-);
+  await afterWorkboardUpdate(() =>
+    expect(page.find(".workboard-card")?.textContent).toContain("Unknown"),
+  );
+  expect(openSessionButton(page.container)).toBeUndefined();
+  expect(page.find('button[aria-label="Stop session"]')).toBeNull();
+  page.get<HTMLButtonElement>('button[aria-label="View details"]').click();
+  await afterWorkboardUpdate(() =>
+    expect(page.find(".workboard-detail .workboard-session-badge")?.textContent?.trim()).toBe(
+      "Ambiguous",
+    ),
+  );
+  expect(page.find(".workboard-detail__session-row")?.getAttribute("title")).toBe(
+    "Edit the card to select an exact session",
+  );
+  expect(observe).not.toHaveBeenCalled();
+  expect(page.summary).not.toHaveBeenCalled();
+  expect(openSessionButton(page.container)).toBeUndefined();
+  page.get<HTMLButtonElement>('.workboard-detail button[aria-label="Edit card"]').click();
+  await afterWorkboardUpdate(() => expect(sessionPicker(page.container)).toBeDefined());
+  const select = expectDefined(sessionPicker(page.container), "session link editor");
+  expect(select.value).toBe(key);
+  expect(select.options.map((option) => option.value)).toContain(exact.key);
+});
 
 it.each([
-  {
-    name: "deletion-filtered",
-    owners: ["writer"],
-    hasMore: false,
-    totalCount: 2,
-    label: "Unknown",
-  },
-  {
-    name: "ambiguous",
-    owners: ["writer", "other"],
-    hasMore: false,
-    totalCount: 2,
-    label: "Ambiguous",
-  },
-  { name: "empty", owners: [], hasMore: false, totalCount: 0, label: "Unavailable" },
-])(
-  "keeps an $name linked-session query unresolved",
-  async ({ owners, hasMore, totalCount, label }) => {
+  ["deletion-filtered", ["writer"], 2, "Unknown"],
+  ["ambiguous", ["writer", "other"], 2, "Ambiguous"],
+  ["empty", [], 0, "Unavailable"],
+] as const)(
+  "keeps an %s linked-session query unresolved",
+  async (_name, owners, totalCount, label) => {
     const page = mountPage();
     const localKey = "subagent:workboard-default-unresolved";
     const observe = observeSessions(page, {
       sessions: owners.map((owner) => createGatewaySession({ key: `agent:${owner}:${localKey}` })),
-      hasMore,
+      hasMore: false,
       totalCount,
     });
     Object.assign(page.fixture.host.sessions, {
@@ -308,9 +313,8 @@ it.each([
     });
     const card = createWorkboardCard({ sessionKey: localKey });
     page.cards([card]);
-    page.workboard.state.detailCardId = card.id;
-    page.fixture.connection.connected = true;
-    page.fixture.notify();
+    page.state.detailCardId = card.id;
+    page.connect();
 
     await afterWorkboardUpdate(() => {
       expect(observe).toHaveBeenCalledOnce();
@@ -318,7 +322,7 @@ it.each([
         label,
       );
     });
-    expect(page.fixture.host.components.mountSessionSummary).not.toHaveBeenCalled();
+    expect(page.summary).not.toHaveBeenCalled();
 
     page.find<HTMLButtonElement>('button[aria-label="Edit card"]')!.click();
     await afterWorkboardUpdate(() => expect(sessionPicker(page.container)).toBeDefined());
@@ -345,21 +349,20 @@ it("releases the prior session query when another card takes the drawer", async 
     return { refresh: vi.fn(async () => undefined), dispose: releaseFirst };
   });
   page.cards([first, second]);
-  page.workboard.state.detailCardId = first.id;
-  page.fixture.connection.connected = true;
-  page.fixture.notify();
+  page.state.detailCardId = first.id;
+  page.connect();
   await afterWorkboardUpdate(() => expect(observe).toHaveBeenCalledOnce());
 
-  page.workboard.state.detailCardId = second.id;
+  page.state.detailCardId = second.id;
   page.workboard.notify();
   await openSessionTab(page);
   await afterWorkboardUpdate(() =>
-    expect(page.fixture.host.components.mountSessionSummary).toHaveBeenCalledWith(
+    expect(page.summary).toHaveBeenCalledWith(
       expect.any(HTMLElement),
       expect.objectContaining({ session: { sessionKey: `agent:writer:${secondKey}` } }),
     ),
   );
-  expect(page.fixture.host.components.mountSessionSummary).not.toHaveBeenCalledWith(
+  expect(page.summary).not.toHaveBeenCalledWith(
     expect.any(HTMLElement),
     expect.objectContaining({ session: { sessionKey: `agent:main:${firstKey}` } }),
   );
@@ -377,24 +380,19 @@ it("keeps failed metadata visible through card refreshes and recovers it with pa
   page.request.mockImplementation((method) =>
     method === "agents.list" && !metadataAvailable ? metadata.promise : request(method),
   );
-  page.fixture.connection.connected = true;
-  page.fixture.notify();
+  page.connect();
   await afterWorkboardUpdate(() => expect(page.container.textContent).toContain("Initial card"));
-  metadata.reject(new Error("Agent metadata temporarily unavailable"));
+  metadata.reject(new Error(metadataError));
   await afterWorkboardUpdate(() =>
-    expect(visibleToast(page.container)?.textContent).toContain(
-      "Agent metadata temporarily unavailable",
-    ),
+    expect(visibleToast(page.container)?.textContent).toContain(metadataError),
   );
 
   page.cards([createWorkboardCard({ title: "Updated card", agentId: "main" })]);
   page.fixture.emit("plugin.workboard.changed", { epoch: "current", revision: 1 });
   await afterWorkboardUpdate(() => expect(page.container.textContent).toContain("Updated card"));
-  expect(visibleToast(page.container)?.textContent).toContain(
-    "Agent metadata temporarily unavailable",
-  );
+  expect(visibleToast(page.container)?.textContent).toContain(metadataError);
   expect(page.find('.workboard-card [role="img"][aria-label="Configured operator"]')).toBeNull();
-  expect(page.request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(1);
+  expect(page.requests("agents.list")).toHaveLength(1);
 
   metadataAvailable = true;
   page.find<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
@@ -403,98 +401,61 @@ it("keeps failed metadata visible through card refreshes and recovers it with pa
       page.find('.workboard-card [role="img"][aria-label="Configured operator"]'),
     ).not.toBeNull(),
   );
-  expect(visibleToast(page.container)?.textContent ?? "").not.toContain(
-    "Agent metadata temporarily unavailable",
-  );
+  expect(visibleToast(page.container)?.textContent ?? "").not.toContain(metadataError);
   expect(page.container.textContent).toContain("Updated card");
-  expect(page.request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(2);
+  expect(page.requests("agents.list")).toHaveLength(2);
 });
 
 it("shows independent metadata and linked-session failures together", async () => {
   const page = mountPage();
   const card = createWorkboardCard({ sessionKey: "agent:main:unavailable-session" });
   page.cards([card]);
-  page.workboard.state.detailCardId = card.id;
-  const request = expectDefined(page.request.getMockImplementation(), "request implementation");
-  page.request.mockImplementation((method, params) =>
-    method === "agents.list"
-      ? Promise.reject(new Error("Agent metadata temporarily unavailable"))
-      : request(method, params),
-  );
+  page.state.detailCardId = card.id;
+  intercept(page, "agents.list", () => Promise.reject(new Error(metadataError)));
   vi.mocked(page.fixture.host.sessions.observe).mockImplementation((_query, listener) => {
     listener({ result: null, loading: false, error: "Linked session temporarily unavailable" });
     return { refresh: vi.fn(async () => undefined), dispose: vi.fn() };
   });
-  page.fixture.connection.connected = true;
-  page.fixture.notify();
+  page.connect();
 
   await afterWorkboardUpdate(() => {
-    const message = visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent;
-    expect(message).toContain("Agent metadata temporarily unavailable");
+    const message = page.error();
+    expect(message).toContain(metadataError);
     expect(message).toContain("Linked session temporarily unavailable");
   });
 });
 
 it("keeps page failures visible in the board editor and prioritizes its save failure", async () => {
-  const page = mountPage({ boardId: "planning" });
-  const request = expectDefined(page.request.getMockImplementation(), "request implementation");
-  page.request.mockImplementation(async (method, params) => {
-    if (method === "agents.list") {
-      throw new Error("Agent metadata temporarily unavailable");
-    }
-    if (method === "workboard.cards.list") {
-      return {
-        cards: [],
-        boards: [{ id: "planning", total: 0, active: 0, archived: 0, byStatus: {} }],
-      };
-    }
-    if (method === "workboard.boards.upsert") {
-      throw new Error("Board update denied");
-    }
-    return request(method, params);
+  const page = boardPage({});
+  intercept(page, "agents.list", () => {
+    throw new Error(metadataError);
   });
-  page.fixture.connection.connected = true;
-  page.fixture.notify();
+  intercept(page, "workboard.boards.upsert", () => {
+    throw new Error("Board update denied");
+  });
+  page.connect();
   const form = await openBoardEditor(page);
   await afterWorkboardUpdate(() => {
-    expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
-      "Agent metadata temporarily unavailable",
-    );
+    expect(page.error()).toBe(metadataError);
   });
   submitForm(form);
   await afterWorkboardUpdate(() => {
-    expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
-      "Board update denied",
-    );
+    expect(page.error()).toBe("Board update denied");
   });
 });
 
 it.each(["canWrite", "connected"] as const)(
   "preserves a board draft without saving when %s is revoked",
   async (capability) => {
-    const page = mountPage({ boardId: "planning" });
-    const request = expectDefined(page.request.getMockImplementation(), "request implementation");
-    page.request.mockImplementation(async (method, params) =>
-      method === "workboard.cards.list"
-        ? {
-            cards: [],
-            boards: [
-              { id: "planning", name: "Planning", total: 0, active: 0, archived: 0, byStatus: {} },
-            ],
-          }
-        : request(method, params),
-    );
-    page.fixture.connection.connected = true;
-    page.fixture.notify();
+    const page = boardPage();
+    page.connect();
     const form = await openBoardEditor(page);
     const name = query<HTMLInputElement>(form, "input");
     name.value = "Release planning";
     name.dispatchEvent(new Event("input", { bubbles: true }));
     page.fixture.connection[capability] = false;
     submitForm(form);
-    expect(
-      page.request.mock.calls.filter(([method]) => method === "workboard.boards.upsert"),
-    ).toHaveLength(0);
+    expect(page.requests("workboard.boards.upsert")).toHaveLength(0);
     page.fixture.notify();
     await afterWorkboardUpdate(() =>
       expect(form.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true),
@@ -518,22 +479,20 @@ it.each(["canWrite", "connected"] as const)(
 
 it("requires a canonical refresh after reconnect before mutations resume", async () => {
   const page = mountPage({ connected: true });
-  await afterWorkboardUpdate(() => expect(page.workboard.state.loaded).toBe(true));
-  page.fixture.connection.connected = false;
-  page.fixture.notify();
-  expect(page.workboard.state.mutationReadiness).toBe("canonical_reload_required");
+  await afterWorkboardUpdate(() => expect(page.state.loaded).toBe(true));
+  page.connect(false);
+  expect(page.state.mutationReadiness).toBe("canonical_reload_required");
   page.cards([createWorkboardCard({ title: "Reconnected card" })]);
-  page.fixture.connection.connected = true;
-  page.fixture.notify();
+  page.connect();
   await afterWorkboardUpdate(() =>
     expect(page.container.textContent).toContain("Reconnected card"),
   );
-  expect(page.workboard.state.mutationReadiness).toBe("ready");
+  expect(page.state.mutationReadiness).toBe("ready");
 });
 
 it("releases listeners and stops refreshes when its mount is disposed", async () => {
   const page = mountPage({ connected: true });
-  await afterWorkboardUpdate(() => expect(page.workboard.state.loaded).toBe(true));
+  await afterWorkboardUpdate(() => expect(page.state.loaded).toBe(true));
   page.dispose();
   const count = page.request.mock.calls.length;
   page.fixture.emit("plugin.workboard.changed", { epoch: "current", revision: 9 });
@@ -558,9 +517,8 @@ describe("selection reconciliation", () => {
       });
       page.cards([card]);
       page.fixture.host.agents.setScope("writer");
-      page.fixture.connection.connected = true;
-      page.fixture.notify();
-      await afterWorkboardUpdate(() => expect(page.workboard.state.loaded).toBe(true));
+      page.connect();
+      await afterWorkboardUpdate(() => expect(page.state.loaded).toBe(true));
       page.get<HTMLButtonElement>('button[aria-label="View details"]').click();
       await afterWorkboardUpdate(() => expect(page.find(".workboard-detail")).not.toBeNull());
       page.get<HTMLButtonElement>('.workboard-detail button[aria-label="Edit card"]').click();
@@ -568,8 +526,13 @@ describe("selection reconciliation", () => {
       const form = () => page.get<HTMLFormElement>(".workboard-draft");
       const title = query<HTMLInputElement>(form(), ".workboard-draft__title");
       const notes = query<HTMLTextAreaElement>(form(), ".workboard-draft__notes");
-      fill(title, "Submitted task");
-      fill(notes, "Keep these unsaved notes");
+      const values = () => ({
+        title: form().querySelector<HTMLInputElement>(".workboard-draft__title")?.value,
+        notes: form().querySelector<HTMLTextAreaElement>(".workboard-draft__notes")?.value,
+      });
+      const submitted = { title: "Submitted task", notes: "Keep these unsaved notes" };
+      fill(title, submitted.title);
+      fill(notes, submitted.notes);
       const pending = createDeferred<unknown>();
       let updateResult = pending.promise;
       const request = expectDefined(page.request.getMockImplementation(), "host request");
@@ -590,43 +553,30 @@ describe("selection reconciliation", () => {
         page.navigate("product");
       }
       await Promise.resolve();
-      const pendingTitle = page.find<HTMLInputElement>(".workboard-draft__title")?.value;
-      const pendingNotes = page.find<HTMLTextAreaElement>(".workboard-draft__notes")?.value;
-      const pendingBusy = form().getAttribute("aria-busy");
-      const enabledControls = [
-        ...form().querySelectorAll(
+      const pendingDraft = {
+        ...values(),
+        busy: form().getAttribute("aria-busy"),
+        enabled: form().querySelectorAll(
           "input:enabled, textarea:enabled, select:enabled, button:enabled",
-        ),
-      ];
+        ).length,
+      };
       pending.reject(new Error("Save unavailable; retry this edit."));
       await afterWorkboardUpdate(() => {
-        expect(page.workboard.state.draftSaving).toBe(false);
-        expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
-          "Save unavailable; retry this edit.",
-        );
+        expect(page.state.draftSaving).toBe(false);
+        expect(page.error()).toBe("Save unavailable; retry this edit.");
       });
 
-      expect(pendingTitle).toBe("Submitted task");
-      expect(pendingNotes).toBe("Keep these unsaved notes");
-      expect(pendingBusy).toBe("true");
-      expect(enabledControls).toHaveLength(0);
+      expect(pendingDraft).toEqual({ ...submitted, busy: "true", enabled: 0 });
       const toast = expectDefined(visibleToast(page.container), "retry guidance");
       expect(toast.closest('[inert], [aria-hidden="true"]')).toBeNull();
       expect(toast.closest("[data-test-dialog]")).toBe(form().closest("[data-test-dialog]"));
-      expect(form().querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
-        "Submitted task",
-      );
-      expect(form().querySelector<HTMLTextAreaElement>(".workboard-draft__notes")?.value).toBe(
-        "Keep these unsaved notes",
-      );
+      expect(values()).toEqual(submitted);
       const saved = { ...card, title: title.value, notes: notes.value, updatedAt: 2 };
       updateResult = Promise.resolve({ card: saved });
       submitForm(form());
-      await afterWorkboardUpdate(() => expect(page.workboard.state.draftOpen).toBe(false));
-      expect(
-        page.request.mock.calls.filter(([method]) => method === "workboard.cards.update"),
-      ).toHaveLength(2);
-      expect(page.workboard.state.cards.find((entry) => entry.id === card.id)).toMatchObject(saved);
+      await afterWorkboardUpdate(() => expect(page.state.draftOpen).toBe(false));
+      expect(page.requests("workboard.cards.update")).toHaveLength(2);
+      expect(page.state.cards.find((entry) => entry.id === card.id)).toMatchObject(saved);
       expect(page.find(".workboard-draft, .workboard-detail")).toBeNull();
       const main = page.get(".workboard-main");
       expect(main.textContent).not.toContain(saved.title);
@@ -641,8 +591,7 @@ describe("selection reconciliation", () => {
     vi.mocked(page.fixture.host.agents.refresh).mockRejectedValue(
       new Error("Agent metadata unavailable"),
     );
-    page.fixture.connection.connected = true;
-    page.fixture.notify();
+    page.connect();
     await afterWorkboardUpdate(() =>
       expect(page.find(".workboard-card")?.textContent).toContain(card.title),
     );
@@ -664,10 +613,10 @@ describe("selection reconciliation", () => {
 
   it("dismisses overlays outside main scope", async () => {
     const page = mountPage();
-    page.workboard.state.cards = [createWorkboardCard({ id: "writer-card", agentId: "writer" })];
+    page.state.cards = [createWorkboardCard({ id: "writer-card", agentId: "writer" })];
     page.fixture.host.agents.setScope("writer");
     await Promise.resolve();
-    Object.assign(page.workboard.state, {
+    Object.assign(page.state, {
       detailCardId: "writer-card",
       detailCommentBody: "Draft comment",
       draftOpen: true,
@@ -675,7 +624,7 @@ describe("selection reconciliation", () => {
     });
     page.fixture.host.agents.setScope("main");
     await Promise.resolve();
-    expect(page.workboard.state).toMatchObject({
+    expect(page.state).toMatchObject({
       detailCardId: null,
       detailCommentBody: "",
       draftOpen: false,
@@ -684,38 +633,17 @@ describe("selection reconciliation", () => {
 
   it("preserves a new-card draft across board navigation", async () => {
     const page = mountPage({ boardId: "ops" });
-    Object.assign(page.workboard.state, { draftOpen: true, draftTitle: "New operations task" });
+    Object.assign(page.state, { draftOpen: true, draftTitle: "New operations task" });
     page.navigate("product");
     await Promise.resolve();
-    expect(page.workboard.state.draftOpen).toBe(true);
-    expect(page.workboard.state.draftTitle).toBe("New operations task");
+    expect(page.state.draftOpen).toBe(true);
+    expect(page.state.draftTitle).toBe("New operations task");
   });
 });
 
 it("saves explicit appearance clearing without sending legacy null values", async () => {
-  const page = mountPage({ boardId: "planning" });
-  const request = expectDefined(page.request.getMockImplementation(), "request implementation");
-  page.request.mockImplementation(async (method, params) =>
-    method === "workboard.cards.list"
-      ? {
-          cards: [],
-          boards: [
-            {
-              id: "planning",
-              name: "Planning",
-              icon: "rocket",
-              color: "blue",
-              total: 0,
-              active: 0,
-              archived: 0,
-              byStatus: {},
-            },
-          ],
-        }
-      : request(method, params),
-  );
-  page.fixture.connection.connected = true;
-  page.fixture.notify();
+  const page = boardPage({ name: "Planning", icon: "rocket", color: "blue" });
+  page.connect();
   const form = await openBoardEditor(page);
   const picker = query<HTMLElement & Parameters<ControlUiComponents["mountAppearancePicker"]>[1]>(
     form,
