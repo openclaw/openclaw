@@ -31,8 +31,7 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import {
   captureSessionUpstreamLinkReadSource,
-  prepareSessionUpstreamLink,
-  readCurrentSessionUpstreamLink,
+  prepareSessionUpstreamPresence,
 } from "../../sessions/session-upstream-links-runtime.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -220,10 +219,22 @@ async function mutatePreparedSessionAtMessage({
   const initialSessionId = initial.entry.sessionId;
   const initialLifecycleRevision = initial.entry.lifecycleRevision;
   const upstreamContext = captureSessionUpstreamLinkReadSource();
-  const upstreamLink =
-    action === "fork"
-      ? await prepareSessionUpstreamLink(upstreamContext, initial.canonicalKey, initial.agentId)
-      : undefined;
+  let upstreamPresence: Awaited<ReturnType<typeof prepareSessionUpstreamPresence>>;
+  try {
+    upstreamPresence = await prepareSessionUpstreamPresence(
+      upstreamContext,
+      initial.canonicalKey,
+      initial.agentId,
+    );
+  } catch (error) {
+    if (error instanceof SessionMutationAuthorizationChangedError) {
+      throw error;
+    }
+    reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);
+    return;
+  }
+  using preparedUpstream = upstreamPresence;
+  const upstreamLink = action === "fork" ? preparedUpstream.link : undefined;
   assertMutationCurrent();
 
   const lifecycleIdentities = [
@@ -474,9 +485,7 @@ async function mutatePreparedSessionAtMessage({
         ),
       );
       const assertLocalUpstreamCurrent = () => {
-        if (
-          readCurrentSessionUpstreamLink(upstreamContext, current.canonicalKey, current.agentId)
-        ) {
+        if (preparedUpstream.current()) {
           throw upstreamChanged;
         }
       };

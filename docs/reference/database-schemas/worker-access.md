@@ -4605,9 +4605,10 @@ tombstones in one synchronous transaction. Transaction and commit grants recheck
 current caller authority. Only acknowledged results reach the Gateway broadcast;
 unknown outcomes never replay or fall back to host SQL. The request lifecycle joins
 accepted persistence before database teardown, independently of scheduler
-cancellation. Incognito uses the memory actor; durable atomic reset retains its
-existing row kernel. No
-schema, SDK, retention, durability, or update migration is required.
+cancellation. Incognito uses the memory actor. Durable single and batched resets
+clear the card in their existing worker transaction, preserving reset atomicity;
+the shared row kernel also serves exclusive maintenance and Doctor repair.
+No schema, SDK, retention, durability, or update migration is required.
 
 Native creation, adoption, compaction, and child-spawn signals use the existing shared-state
 writer. Their callers join recording before releasing their lifecycle; embedded
@@ -5131,20 +5132,20 @@ before deleting its own link; uncertain outcomes are never replayed. Session del
 removes its upstream link and signal state in the existing cleanup transaction,
 capturing one physical store and revoking ambient reads before yielding. The released
 synchronous upsert/delete SDK methods and native initializer's `link` method remain
-deprecated compatibility paths until the next Plugin SDK major. Schemas, stored
+deprecated compatibility paths through December 31, 2026. Schemas, stored
 data, retention, and update behavior are unchanged. See
 [await session upstream links](/plugins/sdk-migration/how-to-migrate#await-session-upstream-links).
 
-Gateway branch listing and fork selection prepare upstream links through the existing shared-state
-reader. Rewind and branch switch need no preliminary link lookup. Local history
-mutations check current link absence at transaction and commit; repository and
-native-harness preparation also retain their effect-boundary checks. These guards
-keep the original physical shared store and use current read-only admission, rather
-than opening a writable store for each lookup. A failed read is not link absence.
-The synchronous final-authority reads remain necessary while released SDK writers can change links without publishing complete revocation
-facts. Retiring them requires the next Plugin SDK major's writer cutover and
-complete source-revocation publication. Rollback and accepted-write settlement
-retain their original custody after forward authority is revoked.
+Gateway branch listing, fork, rewind, and branch switch prepare upstream links through
+the existing shared-state reader. Local history mutations check current link absence
+at their existing transaction, commit, repository, and native-harness effect boundaries
+without SQL. The preparation subscribes to committed presence facts before reading;
+a late read cannot replace a newer writer receipt. Upsert, delete, settlement, and
+session cleanup publish through the shared row kernels, including the deprecated
+synchronous SDK methods. These guards retain the captured admission, including its
+promotion when an initially absent database is created. A failed read or unknown
+write outcome is not link absence. Rollback and accepted-write
+settlement retain their original custody after forward authority is revoked.
 
 The reader connection retains one exact row or absence at the existing admitted
 read revision; writer receipts, schema changes, and close invalidate
