@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentCredentialMap } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
@@ -11,7 +11,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  createChatMetadataHarness,
+  createChatMetadataHarness as createHarness,
   createChatMetadataOwner,
   createDraftChatMetadataScope,
   createOpenAIChatMetadataConfig,
@@ -29,6 +29,31 @@ const credentials = (): AgentCredentialMap => ({
     expires: Date.now() + 30 * 60_000,
   },
 });
+type Harness = ReturnType<typeof createChatMetadataHarness>;
+function createChatMetadataHarness(...args: Parameters<typeof createHarness>) {
+  const harness = createHarness(...args);
+  onTestFinished(harness.runtime.stop);
+  return harness;
+}
+const createProjection = (models: ModelCatalogSnapshot["entries"]) => ({
+  modelCatalog: models,
+  models,
+});
+async function preparedHarness() {
+  const harness = createChatMetadataHarness();
+  await harness.refresh();
+  return harness;
+}
+function pauseProjection(harness: Harness, models?: ModelCatalogSnapshot["entries"]) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  harness.buildProjection.mockImplementationOnce(async ({ facts }) => {
+    entered.resolve();
+    await release.promise;
+    return createProjection(models ?? facts.modelCatalog.entries);
+  });
+  return { entered, release };
+}
 function openaiFixture(config?: OpenClawConfig, id = "gpt-5.6-luna") {
   const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
   const auth = credentials();
@@ -41,10 +66,7 @@ function openaiFixture(config?: OpenClawConfig, id = "gpt-5.6-luna") {
   );
   return { harness, owner, auth };
 }
-async function expectModel(
-  harness: ReturnType<typeof createChatMetadataHarness>,
-  model: Record<string, unknown>,
-) {
+async function expectModel(harness: Harness, model: Record<string, unknown>) {
   await expect(harness.read()).resolves.toMatchObject({ models: [model] });
 }
 
@@ -55,13 +77,9 @@ describe("gateway chat metadata runtime", () => {
     harness.getPreparedOwner.mockImplementation(() => {
       throw failure;
     });
-    try {
-      await expect(harness.refresh()).rejects.toBe(failure);
-      await expect(harness.read()).rejects.toBe(failure);
-      expect(harness.getPreparedOwner).toHaveBeenCalledOnce();
-    } finally {
-      await harness.runtime.stop();
-    }
+    await expect(harness.refresh()).rejects.toBe(failure);
+    await expect(harness.read()).rejects.toBe(failure);
+    expect(harness.getPreparedOwner).toHaveBeenCalledOnce();
   });
 
   test("notifies once per publication, including owner recovery, without an unavailable-read loop", async () => {
@@ -128,14 +146,7 @@ describe("gateway chat metadata runtime", () => {
 
   test("single-flights equivalent refresh bursts and reads", async () => {
     const harness = createChatMetadataHarness();
-    const releaseModels = createDeferred();
-    harness.buildProjection.mockImplementationOnce(async ({ facts }) => {
-      await releaseModels.promise;
-      return {
-        modelCatalog: facts.owner.modelCatalog.entries,
-        models: facts.owner.modelCatalog.entries,
-      };
-    });
+    const { release } = pauseProjection(harness);
 
     const refreshes = Array.from({ length: 128 }, () => harness.refresh());
     await Promise.all(refreshes);
@@ -146,7 +157,7 @@ describe("gateway chat metadata runtime", () => {
     await vi.waitFor(() => expect(harness.buildProjection).toHaveBeenCalledTimes(1));
     expect(harness.buildCommands).toHaveBeenCalledTimes(1);
 
-    releaseModels.resolve();
+    release.resolve();
     const [first, second] = await Promise.all([firstRead, secondRead]);
     expect(first).toEqual(second);
     expect(harness.buildCommands).toHaveBeenCalledTimes(1);
@@ -156,14 +167,16 @@ describe("gateway chat metadata runtime", () => {
   test.each(["metadata", "startup"] as const)(
     "serves published %s with only auth revision reads",
     async (surface) => {
-      const harness = createChatMetadataHarness();
-      await harness.refresh();
+      const harness = await preparedHarness();
       await harness.read();
-      harness.getPreparedOwner.mockClear();
-      harness.getPreparedAuthStore.mockClear();
+      const coldReads = [
+        harness.getPreparedOwner,
+        harness.getPreparedAuthStore,
+        harness.getSkillsVersion,
+        harness.getPluginRegistryVersion,
+      ];
+      coldReads.forEach((mock) => mock.mockClear());
       harness.getAuthStoreRevision.mockClear();
-      harness.getSkillsVersion.mockClear();
-      harness.getPluginRegistryVersion.mockClear();
 
       if (surface === "metadata") {
         const first = await harness.read();
@@ -178,12 +191,9 @@ describe("gateway chat metadata runtime", () => {
         expect(first?.metadata?.models).toEqual(first?.sessionModelCatalog);
       }
       expect(harness.buildProjection).toHaveBeenCalledTimes(1);
-      expect(harness.getPreparedOwner).not.toHaveBeenCalled();
-      expect(harness.getPreparedAuthStore).not.toHaveBeenCalled();
+      expect(coldReads.map((mock) => mock.mock.calls)).toEqual([[], [], [], []]);
       expect(harness.getAuthStoreRevision).toHaveBeenCalledWith("/tmp/first/agent");
       expect(harness.getAuthStoreRevision).toHaveBeenCalledWith(undefined);
-      expect(harness.getSkillsVersion).not.toHaveBeenCalled();
-      expect(harness.getPluginRegistryVersion).not.toHaveBeenCalled();
     },
   );
 
@@ -222,12 +232,8 @@ describe("gateway chat metadata runtime", () => {
     expect(harness.buildProjection).not.toHaveBeenCalled();
     await harness.read();
 
-    const release = createDeferred();
     const profileCatalog = [{ id: "profile-model", name: "Profile model", provider: "test" }];
-    harness.buildProjection.mockImplementationOnce(async () => {
-      await release.promise;
-      return { modelCatalog: profileCatalog, models: profileCatalog };
-    });
+    const { release } = pauseProjection(harness, profileCatalog);
     const canonical = harness.startup({ sessionEntry });
     await vi.waitFor(() => expect(harness.buildProjection).toHaveBeenCalledTimes(2));
     let settled = false;
@@ -276,10 +282,7 @@ describe("gateway chat metadata runtime", () => {
       expect(harness.buildProjection).toHaveBeenCalledTimes(2);
 
       const replacement = [{ id: "replacement", name: "Replacement", provider: "test" }];
-      harness.buildProjection.mockResolvedValueOnce({
-        modelCatalog: replacement,
-        models: replacement,
-      });
+      harness.buildProjection.mockResolvedValueOnce(createProjection(replacement));
       const canonical = await harness.startup(params);
       expect(canonical).toMatchObject(
         invalid === "neutral"
@@ -333,14 +336,12 @@ describe("gateway chat metadata runtime", () => {
       } finally {
         release.resolve();
         await reading;
-        await harness.runtime.stop();
       }
     },
   );
 
   test("reuses the prepared generation for an equivalent config replacement", async () => {
-    const harness = createChatMetadataHarness();
-    await harness.refresh();
+    const harness = await preparedHarness();
     const first = await harness.read();
 
     harness.setConfig({ agents: { entries: { main: {} } } });
@@ -569,14 +570,13 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("waits for replacement only for canonical metadata and session auth projections", async () => {
-    const harness = createChatMetadataHarness();
-    await harness.refresh();
+    const harness = await preparedHarness();
 
     harness.runtime.invalidate();
     const read = harness.read();
     const overriddenStartup = harness.startup({
       agentId: "main",
-      sessionEntry: { authProfileOverride: "test:session", authProfileOverrideSource: "user" },
+      sessionEntry: savedSelection(),
     });
     const draft = createDraftChatMetadataScope();
     const draftRead = harness.read(draft.params).catch((error: unknown) => error);
@@ -607,17 +607,10 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("rejects closed draft authority after projection without poisoning shared metadata", async () => {
-    const harness = createChatMetadataHarness();
-    await harness.refresh();
+    const harness = await preparedHarness();
     const shared = await harness.read();
     const draft = createDraftChatMetadataScope();
-    const entered = createDeferred();
-    const release = createDeferred();
-    harness.buildProjection.mockImplementationOnce(async ({ facts }) => {
-      entered.resolve();
-      await release.promise;
-      return { models: facts.modelCatalog.entries, modelCatalog: facts.modelCatalog.entries };
-    });
+    const { entered, release } = pauseProjection(harness);
     const reading = harness.read(draft.params).catch((error: unknown) => error);
     try {
       await Promise.race([entered.promise, reading]);
@@ -631,8 +624,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("rejects replacement waiters on failure and recovers on a later generation", async () => {
-    const harness = createChatMetadataHarness();
-    await harness.refresh();
+    const harness = await preparedHarness();
 
     harness.runtime.invalidate();
     const failedRead = harness.read();
@@ -649,24 +641,21 @@ describe("gateway chat metadata runtime", () => {
     await expectModel(harness, { id: "recovered" });
   });
 
-  test("omits failed command preparation without losing models", async () => {
+  test.each([
+    ["buildCommands", "skill scan failed"],
+    ["buildProjection", "startup projection failed"],
+  ] as const)("recovers models after %s fails", async (phase, message) => {
     const harness = createChatMetadataHarness();
-    harness.buildCommands.mockRejectedValueOnce(new Error("skill scan failed"));
-
+    harness[phase].mockRejectedValueOnce(new Error(message));
     await harness.refresh();
+    if (phase === "buildProjection") {
+      await expect(harness.read()).rejects.toThrow(message);
+    }
     const metadata = await harness.read();
-
-    expect(metadata.commands).toBeUndefined();
     expect(metadata.models).toEqual([expect.objectContaining({ id: "first" })]);
-  });
-
-  test("retries a failed on-demand projection without replacing the published facts", async () => {
-    const harness = createChatMetadataHarness();
-    harness.buildProjection.mockRejectedValueOnce(new Error("startup projection failed"));
-
-    await harness.refresh();
-    await expect(harness.read()).rejects.toThrow("startup projection failed");
-    await expectModel(harness, { id: "first" });
-    expect(harness.buildProjection).toHaveBeenCalledTimes(2);
+    if (phase === "buildCommands") {
+      expect(metadata.commands).toBeUndefined();
+    }
+    expect(harness.buildProjection).toHaveBeenCalledTimes(phase === "buildProjection" ? 2 : 1);
   });
 });

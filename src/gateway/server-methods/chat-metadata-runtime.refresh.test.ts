@@ -1,6 +1,6 @@
 import { createServer, get } from "node:http";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
-import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import { handleGatewayProbeRequest } from "../server-http-probes.js";
@@ -8,6 +8,22 @@ import {
   createChatMetadataHarness,
   createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
+
+function fleet() {
+  const config = { agents: { entries: { main: {}, second: {} } } };
+  const harness = createChatMetadataHarness(config);
+  const main = createChatMetadataOwner(config, "main-model");
+  let second: ReturnType<typeof createChatMetadataOwner> | undefined;
+  harness.getPreparedOwner.mockImplementation((params) =>
+    params?.agentId === "second" ? second : main,
+  );
+  return {
+    ...harness,
+    replaceSecond(id?: string) {
+      second = id ? createChatMetadataOwner(config, id) : undefined;
+    },
+  };
+}
 
 function holdPreparation(
   harness: ReturnType<typeof createChatMetadataHarness>,
@@ -65,61 +81,42 @@ describe("gateway chat metadata refresh", () => {
   });
 
   test("serves published agents independently of missing owners and adopts the recovered fleet", async () => {
-    const config = { agents: { entries: { main: {}, second: {} } } };
-    const harness = createChatMetadataHarness(config);
-    const mainOwner = createChatMetadataOwner(config, "main-model");
-    let secondOwner: ReturnType<typeof createChatMetadataOwner> | undefined;
-    harness.getPreparedOwner.mockImplementation((params) =>
-      params?.agentId === "second" ? secondOwner : mainOwner,
-    );
+    const harness = fleet();
+    onTestFinished(() => harness.runtime.stop());
 
-    try {
-      await harness.refresh();
-      await expect(harness.read()).resolves.toMatchObject({ models: [{ id: "main-model" }] });
+    await harness.refresh();
+    await expect(harness.read()).resolves.toMatchObject({ models: [{ id: "main-model" }] });
+    for (const [id, degraded] of [
+      [undefined, true],
+      ["second-model", false],
+      [undefined, false],
+    ] as const) {
+      harness.replaceSecond(id);
       setPreparedModelRuntimeStartupStatus({
-        degraded: true,
-        pendingAgents: ["second"],
-        stage: "workspace plugins; agent second",
+        degraded,
+        pendingAgents: degraded ? ["second"] : [],
+        ...(degraded ? { stage: "workspace plugins; agent second" } : {}),
       });
       await harness.refresh();
       await expect(harness.read()).resolves.toMatchObject({ models: [{ id: "main-model" }] });
-      await expect(harness.read({ agentId: "second" })).rejects.toThrow(
-        'prepared chat metadata is unavailable for agent "second"',
-      );
-
-      secondOwner = createChatMetadataOwner(config, "second-model");
-      setPreparedModelRuntimeStartupStatus({ degraded: false, pendingAgents: [] });
-      await harness.refresh();
-      await expect(harness.read()).resolves.toMatchObject({ models: [{ id: "main-model" }] });
-      await expect(harness.read({ agentId: "second" })).resolves.toMatchObject({
-        models: [{ id: "second-model" }],
-      });
-
-      secondOwner = undefined;
-      await harness.refresh();
-      await expect(harness.read()).resolves.toMatchObject({ models: [{ id: "main-model" }] });
-      await expect(harness.read({ agentId: "second" })).rejects.toThrow(
-        'prepared chat metadata is unavailable for agent "second"',
-      );
-    } finally {
-      await harness.runtime.stop();
+      const second = expect(harness.read({ agentId: "second" }));
+      if (id) {
+        await second.resolves.toMatchObject({ models: [{ id }] });
+      } else {
+        await second.rejects.toThrow('prepared chat metadata is unavailable for agent "second"');
+      }
     }
   });
 
   test.each(["commands", "projection"] as const)(
     "publishes without fleet preparation and serves health and another agent during slow %s",
     async (phase) => {
-      const config = { agents: { entries: { main: {}, second: {} } } };
-      const harness = createChatMetadataHarness(config);
-      const mainOwner = createChatMetadataOwner(config, "main-model");
-      let secondOwner = createChatMetadataOwner(config, "second-model");
-      harness.getPreparedOwner.mockImplementation((params) =>
-        params?.agentId === "second" ? secondOwner : mainOwner,
-      );
+      const harness = fleet();
+      harness.replaceSecond("second-model");
       await harness.refresh();
       expect(harness.buildCommands).not.toHaveBeenCalled();
       expect(harness.buildProjection).not.toHaveBeenCalled();
-      secondOwner = createChatMetadataOwner(config, "replacement-model");
+      harness.replaceSecond("replacement-model");
       const { entered, release } = holdPreparation(harness, phase, "second");
       const refresh = harness.refresh();
       let mainSettled = false;
@@ -135,8 +132,7 @@ describe("gateway chat metadata refresh", () => {
       try {
         await entered.promise;
         await nextEventLoopTurn();
-        expect(mainSettled).toBe(true);
-        expect(secondSettled).toBe(false);
+        expect({ mainSettled, secondSettled }).toEqual({ mainSettled: true, secondSettled: false });
         const address = server.address();
         if (!address || typeof address === "string") {
           throw new Error("health server did not bind a TCP port");
@@ -163,40 +159,37 @@ describe("gateway chat metadata refresh", () => {
   test("notifies settled catalog status without rebuilding metadata", async () => {
     const onChanged = vi.fn();
     const harness = createChatMetadataHarness(undefined, { onChanged });
+    onTestFinished(() => harness.runtime.stop());
     const owner = harness.getPreparedOwner()!;
     const catalog = owner.modelCatalog;
     const catalogChange = { modelCatalogChanged: true, authChanged: false, commandsChanged: false };
     const notify = () =>
       Promise.all([harness.refresh(), harness.refresh({ notifyIfUnchanged: true })]);
-    try {
-      await harness.refresh();
-      const original = await harness.read();
-      onChanged.mockClear();
-      catalog.pendingProviders = ["test"];
-      await harness.refresh();
-      expect(onChanged).not.toHaveBeenCalled();
+    await harness.refresh();
+    const original = await harness.read();
+    onChanged.mockClear();
+    catalog.pendingProviders = ["test"];
+    await harness.refresh();
+    expect(onChanged).not.toHaveBeenCalled();
 
-      catalog.pendingProviders = undefined;
-      await notify();
-      expect(onChanged).toHaveBeenCalledExactlyOnceWith(catalogChange);
-      expect(await harness.read()).toEqual(original);
-      expect(harness.getPreparedOwner()).toBe(owner);
-      expect(owner.modelCatalog).toBe(catalog);
-      expect(harness.buildCommands).toHaveBeenCalledOnce();
-      expect(harness.buildProjection).toHaveBeenCalledOnce();
-      await harness.refresh();
-      expect(onChanged).toHaveBeenCalledOnce();
+    catalog.pendingProviders = undefined;
+    await notify();
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith(catalogChange);
+    expect(await harness.read()).toEqual(original);
+    expect(harness.getPreparedOwner()).toBe(owner);
+    expect(owner.modelCatalog).toBe(catalog);
+    expect(harness.buildCommands).toHaveBeenCalledOnce();
+    expect(harness.buildProjection).toHaveBeenCalledOnce();
+    await harness.refresh();
+    expect(onChanged).toHaveBeenCalledOnce();
 
-      catalog.refreshFailed = true;
-      await notify();
-      expect(onChanged).toHaveBeenCalledTimes(2);
-      expect(onChanged).toHaveBeenLastCalledWith(catalogChange);
-      await harness.read();
-      expect(harness.buildCommands).toHaveBeenCalledTimes(2);
-      expect(harness.buildProjection).toHaveBeenCalledTimes(2);
-    } finally {
-      await harness.runtime.stop();
-    }
+    catalog.refreshFailed = true;
+    await notify();
+    expect(onChanged).toHaveBeenCalledTimes(2);
+    expect(onChanged).toHaveBeenLastCalledWith(catalogChange);
+    await harness.read();
+    expect(harness.buildCommands).toHaveBeenCalledTimes(2);
+    expect(harness.buildProjection).toHaveBeenCalledTimes(2);
   });
 });
 

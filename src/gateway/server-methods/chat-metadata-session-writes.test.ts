@@ -55,6 +55,19 @@ async function invokeMetadata(
   });
 }
 
+function publishedEntry(target: Parameters<typeof loadSessionEntry>[0]) {
+  return listSessionEntriesCore({ ...target, projection: "list" }).find(
+    (row) => row.sessionKey === target.sessionKey,
+  )?.entry;
+}
+
+function expectSuperseded(error: unknown, access = false) {
+  expect(error).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
+  expect(error).toMatchObject({
+    message: `${access ? "Chat metadata access" : "Session"} changed while preparing its metadata. Retry the request.`,
+  });
+}
+
 const cases = [
   { write: "tracked sibling update", allowed: true },
   { write: "raw sibling update", allowed: true },
@@ -146,28 +159,23 @@ it.each(
     await closeOpenClawAgentDatabasesAsync(state.root);
     expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     const database = openOpenClawAgentDatabase(selected);
+    const sql = database.db.prepare.bind(database.db);
     if (write.startsWith("legacy sibling")) {
       expect(loadSessionEntry(sibling)?.sessionId).toBe("sibling");
-      database.db
-        .prepare(
-          "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.owner', json(?), '$.participants', json(?), '$.participantCount', 1) WHERE session_key = ?",
-        )
-        .run(
-          JSON.stringify({ actor: { type: "human", id: "json-only-owner" } }),
-          JSON.stringify([{ identity: { type: "agent", id: "json-only-participant" } }]),
-          sibling.sessionKey,
-        );
+      sql(
+        "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.owner', json(?), '$.participants', json(?), '$.participantCount', 1) WHERE session_key = ?",
+      ).run(
+        JSON.stringify({ actor: { type: "human", id: "json-only-owner" } }),
+        JSON.stringify([{ identity: { type: "agent", id: "json-only-participant" } }]),
+        sibling.sessionKey,
+      );
       if (write.endsWith("owner")) {
-        database.db
-          .prepare("DELETE FROM session_participants WHERE session_key = ?")
-          .run(sibling.sessionKey);
+        sql("DELETE FROM session_participants WHERE session_key = ?").run(sibling.sessionKey);
         expect(loadSessionEntry(sibling)).not.toHaveProperty("participants");
       } else {
-        database.db
-          .prepare(
-            "UPDATE session_nodes SET owner_actor_type = NULL, owner_actor_id = NULL, owner_assigned_by_type = NULL, owner_assigned_by_id = NULL, owner_assigned_at = NULL WHERE session_key = ?",
-          )
-          .run(sibling.sessionKey);
+        sql(
+          "UPDATE session_nodes SET owner_actor_type = NULL, owner_actor_id = NULL, owner_assigned_by_type = NULL, owner_assigned_by_id = NULL, owner_assigned_at = NULL WHERE session_key = ?",
+        ).run(sibling.sessionKey);
         expect(loadSessionEntry(sibling)).not.toHaveProperty("owner");
       }
     }
@@ -199,11 +207,9 @@ it.each(
       }
     };
     const rawSelectedWrite = () =>
-      database.db
-        .prepare(
-          "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', 'raw') WHERE session_key = ?",
-        )
-        .run(selected.sessionKey);
+      sql(
+        "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', 'raw') WHERE session_key = ?",
+      ).run(selected.sessionKey);
     const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(async (scope) => {
       expect(scope.isCurrent?.()).toBe(true);
       const refresh = write.startsWith("overlapping")
@@ -226,9 +232,9 @@ it.each(
       } else if (write === "tracked sibling update") {
         await upsertSessionEntryCore(sibling, { label: "changed sibling" });
       } else if (write === "raw sibling update" || write === "sibling cache replacement") {
-        database.db
-          .prepare("UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = ?")
-          .run(sibling.sessionKey);
+        sql("UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = ?").run(
+          sibling.sessionKey,
+        );
         if (write === "sibling cache replacement") {
           listSessionEntriesCore({ ...sibling, projection: "list" });
         }
@@ -252,46 +258,37 @@ it.each(
           });
           sideWrite(writeTarget);
         }, writeTarget);
-      } else if (write.startsWith("canonical sibling") || write.startsWith("legacy sibling")) {
-        sideWrite(sibling);
-      } else if (write === "selected owner" || write === "selected participant") {
-        sideWrite(selected);
+      } else if (
+        write.startsWith("canonical sibling") ||
+        write.startsWith("legacy sibling") ||
+        write === "selected owner" ||
+        write === "selected participant"
+      ) {
+        sideWrite(write.startsWith("selected") ? selected : sibling);
       } else if (selectedParticipantChange) {
-        switch (write) {
-          case "selected participant repeat":
-            expect(recordSelected("a", 30)).toBe("updated");
-            break;
-          case "nested selected participant repeats":
+        if (write === "selected participant repeat") {
+          expect(recordSelected("a", 30)).toBe("updated");
+        } else if (write === "nested selected participant repeats") {
+          runOpenClawAgentWriteTransaction(() => {
+            recordSelected("a", 30);
             runOpenClawAgentWriteTransaction(() => {
-              recordSelected("a", 30);
-              runOpenClawAgentWriteTransaction(() => {
-                recordSelected("a", 40);
-                recordSelected("a", 50);
-              }, selected);
+              recordSelected("a", 40);
+              recordSelected("a", 50);
             }, selected);
-            break;
-          case "earlier selected participant first prompt":
-            recordSelected("b", 5);
-            break;
-          case "selected participant insert then repeat":
-          case "selected participant repeat then insert":
-          case "selected entry write then participant repeat":
-          case "selected participant repeat then entry write":
-            runOpenClawAgentWriteTransaction((current) => {
-              const repeat = () => recordSelected("a", 30);
-              const other = write.includes("entry write")
-                ? () => writeSelected(current, { label: "changed selected", updatedAt: 2 })
-                : () => recordSelected("c", 15);
-              const otherFirst =
-                write === "selected participant insert then repeat" ||
-                write === "selected entry write then participant repeat";
-              for (const operation of otherFirst ? [other, repeat] : [repeat, other]) {
-                operation();
-              }
-            }, selected);
-            break;
-          default:
-            throw new Error(`Unhandled selected participant change: ${write}`);
+          }, selected);
+        } else if (write === "earlier selected participant first prompt") {
+          recordSelected("b", 5);
+        } else {
+          runOpenClawAgentWriteTransaction((current) => {
+            const repeat = () => recordSelected("a", 30);
+            const other = write.includes("entry write")
+              ? () => writeSelected(current, { label: "changed selected", updatedAt: 2 })
+              : () => recordSelected("c", 15);
+            const otherFirst = write.endsWith("then repeat") || write.startsWith("selected entry");
+            for (const operation of otherFirst ? [other, repeat] : [repeat, other]) {
+              operation();
+            }
+          }, selected);
         }
       } else if (write.startsWith("rolled-back")) {
         const rollback = new Error("roll back side metadata");
@@ -312,12 +309,11 @@ it.each(
         ).toThrow(rollback);
       } else if (write.startsWith("raw ")) {
         runOpenClawAgentWriteTransaction(() => {
-          if (write.startsWith("raw before")) {
-            rawSelectedWrite();
-          }
-          sideWrite(sibling);
-          if (write.startsWith("raw after")) {
-            rawSelectedWrite();
+          const siblingWrite = () => sideWrite(sibling);
+          for (const operation of write.startsWith("raw before")
+            ? [rawSelectedWrite, siblingWrite]
+            : [siblingWrite, rawSelectedWrite]) {
+            operation();
           }
         }, selected);
       } else if (write === "tracked selected update") {
@@ -332,27 +328,22 @@ it.each(
               updatedAt: 2,
             });
           } else {
-            const beforeRow = current.db
-              .prepare("SELECT rowid, * FROM session_nodes WHERE session_key = ?")
-              .get(selected.sessionKey);
+            const prepare = current.db.prepare.bind(current.db);
+            const readRow = () =>
+              prepare("SELECT rowid, * FROM session_nodes WHERE session_key = ?").get(
+                selected.sessionKey,
+              );
+            const beforeRow = readRow();
             current.db.exec("CREATE TEMP TABLE saved_node AS SELECT * FROM session_nodes;");
-            current.db
-              .prepare("DELETE FROM session_nodes WHERE session_key = ?")
-              .run(selected.sessionKey);
-            current.db
-              .prepare("INSERT INTO session_nodes SELECT * FROM saved_node WHERE session_key = ?")
-              .run(selected.sessionKey);
+            prepare("DELETE FROM session_nodes WHERE session_key = ?").run(selected.sessionKey);
+            prepare("INSERT INTO session_nodes SELECT * FROM saved_node WHERE session_key = ?").run(
+              selected.sessionKey,
+            );
             if (write === "committed selected fully restored recreation") {
-              current.db
-                .prepare(
-                  "UPDATE session_nodes SET entry_valid = 1, rowid = ? WHERE session_key = ?",
-                )
-                .run(expectDefined(beforeRow?.rowid, "selected rowid"), selected.sessionKey);
-              expect(
-                current.db
-                  .prepare("SELECT rowid, * FROM session_nodes WHERE session_key = ?")
-                  .get(selected.sessionKey),
-              ).toEqual(beforeRow);
+              prepare(
+                "UPDATE session_nodes SET entry_valid = 1, rowid = ? WHERE session_key = ?",
+              ).run(expectDefined(beforeRow?.rowid, "selected rowid"), selected.sessionKey);
+              expect(readRow()).toEqual(beforeRow);
             }
             // The owning write publishes the recreated row's committed postimage.
             writeSelected(
@@ -375,21 +366,14 @@ it.each(
       return refresh ? await refresh : metadata;
     });
     const respond = vi.fn<RespondFn>();
-    const outcome = await Promise.resolve()
-      .then(() =>
-        invokeMetadata(
-          createDirectChatContext({
-            getRuntimeConfig: () => runtimeConfig,
-            readChatMetadata,
-          }),
-          selected.sessionKey,
-          respond,
-        ),
-      )
-      .then(
-        () => ({ error: undefined }),
-        (error: unknown) => ({ error }),
-      );
+    const error = await invokeMetadata(
+      createDirectChatContext({ getRuntimeConfig: () => runtimeConfig, readChatMetadata }),
+      selected.sessionKey,
+      respond,
+    ).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
     const after = loadSessionEntry(selected);
     expect(readChatMetadata).toHaveBeenCalledTimes(1);
     if (allowed) {
@@ -398,7 +382,7 @@ it.each(
       } else {
         expect(after).toEqual(before);
       }
-      expect(outcome.error).toBeUndefined();
+      expect(error).toBeUndefined();
       expect(respond).toHaveBeenCalledWith(true, metadata);
       if (write === "selected owner") {
         expect(after?.owner?.actor.id).toBe("other");
@@ -419,9 +403,7 @@ it.each(
       } else if (write === "canonical sibling participant") {
         expect(loadSessionEntry(sibling)?.participantCount).toBe(2);
       } else if (write.startsWith("legacy sibling")) {
-        const published = listSessionEntriesCore({ ...sibling, projection: "list" }).find(
-          (row) => row.sessionKey === sibling.sessionKey,
-        )?.entry;
+        const published = publishedEntry(sibling);
         if (write.endsWith("owner")) {
           expect(published?.owner?.actor.id).toBe("other");
           expect(published).not.toHaveProperty("participants");
@@ -431,31 +413,24 @@ it.each(
           expect(published).not.toHaveProperty("owner");
         }
         expect(
-          database.db
-            .prepare(
-              "SELECT json_extract(entry_json, '$.owner.actor.id') AS legacy_owner, json_array_length(entry_json, '$.participants') AS legacy_participants FROM session_nodes WHERE session_key = ?",
-            )
-            .get(sibling.sessionKey),
+          sql(
+            "SELECT json_extract(entry_json, '$.owner.actor.id') AS legacy_owner, json_array_length(entry_json, '$.participants') AS legacy_participants FROM session_nodes WHERE session_key = ?",
+          ).get(sibling.sessionKey),
         ).toEqual({ legacy_owner: "json-only-owner", legacy_participants: 1 });
       } else if (write.startsWith("compound")) {
-        const published = listSessionEntriesCore({ ...sibling, projection: "list" }).find(
-          (row) => row.sessionKey === writeTarget.sessionKey,
-        )?.entry;
-        expect(published).toMatchObject({ label: "compound update", updatedAt: 2 });
-        if (write.endsWith("owner")) {
-          expect(published?.owner?.actor.id).toBe("other");
-        } else {
-          expect(published?.participantCount).toBe(write.includes("new sibling") ? 1 : 2);
-        }
+        expect(publishedEntry(writeTarget)).toMatchObject({
+          label: "compound update",
+          updatedAt: 2,
+          ...(write.endsWith("owner")
+            ? { owner: { actor: { id: "other" } } }
+            : { participantCount: write.includes("new sibling") ? 1 : 2 }),
+        });
       }
     } else {
-      expect(outcome.error).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
-      expect(outcome.error).toMatchObject({
-        message:
-          write === "runtime config replacement" || write === "profile alias change"
-            ? "Chat metadata access changed while preparing its metadata. Retry the request."
-            : "Session changed while preparing its metadata. Retry the request.",
-      });
+      expectSuperseded(
+        error,
+        write === "runtime config replacement" || write === "profile alias change",
+      );
       expect(respond).not.toHaveBeenCalled();
     }
     if (selectedParticipantChange) {
@@ -472,10 +447,7 @@ it.each(
         participantCount: participantIds.length,
       };
       expect(after).toMatchObject(expected);
-      const published = listSessionEntriesCore({ ...selected, projection: "list" }).find(
-        (row) => row.sessionKey === selected.sessionKey,
-      )?.entry;
-      expect(published).toMatchObject(expected);
+      expect(publishedEntry(selected)).toMatchObject(expected);
       if (write !== "earlier selected participant first prompt") {
         expect(listSessionParticipantsReadOnly(selected).get(selected.sessionKey)).toContainEqual({
           identity: { type: "agent", id: "a" },
@@ -532,12 +504,11 @@ it.each([
         });
         await closeOpenClawAgentDatabasesAsync(state.root);
         const database = openOpenClawAgentDatabase(selected);
+        const sql = database.db.prepare.bind(database.db);
         const before = expectDefined(loadSessionEntry(selected), "selected entry");
         const readRow = () =>
           expectDefined(
-            database.db
-              .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
-              .get(selected.sessionKey),
+            sql("SELECT * FROM session_nodes WHERE session_key = ?").get(selected.sessionKey),
             "selected row",
           );
         const beforeRow = readRow();
@@ -593,15 +564,13 @@ it.each([
                 });
               }, selected);
             } else if (changeEntry) {
-              database.db
-                .prepare(
-                  "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
-                )
-                .run(
-                  `$.${field}`,
-                  field === "visibility" ? "draft" : "openai:replacement",
-                  selected.sessionKey,
-                );
+              sql(
+                "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
+              ).run(
+                `$.${field}`,
+                field === "visibility" ? "draft" : "openai:replacement",
+                selected.sessionKey,
+              );
             }
             if (!changeEntry || allowed) {
               expect(loadSessionEntry(selected)).toEqual(
@@ -646,21 +615,16 @@ it.each([
           const changed = await heldRead(true);
           if (!allowed) {
             expect(prepareProjection).not.toHaveBeenCalled();
-            expect(changed.error).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
-            expect(changed.error).toMatchObject({
-              message: "Session changed while preparing its metadata. Retry the request.",
-            });
+            expectSuperseded(changed.error);
             expect(changed.respond).not.toHaveBeenCalled();
-            await closeOpenClawAgentDatabasesAsync(state.root);
-            expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
-            return;
+          } else {
+            const fresh = vi.fn<RespondFn>();
+            await invoke(fresh);
+            // The fresh source agrees before checking the held request's result.
+            expect(fresh.mock.calls).toEqual(control.respond.mock.calls);
+            expect(changed.error).toBeUndefined();
+            expect(changed.respond.mock.calls).toEqual(control.respond.mock.calls);
           }
-          const fresh = vi.fn<RespondFn>();
-          await invoke(fresh);
-          // Fresh preparation agrees before asserting the held request, including on the old source.
-          expect(fresh.mock.calls).toEqual(control.respond.mock.calls);
-          expect(changed.error).toBeUndefined();
-          expect(changed.respond.mock.calls).toEqual(control.respond.mock.calls);
           await closeOpenClawAgentDatabasesAsync(state.root);
           expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
         } finally {

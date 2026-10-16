@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { vi } from "vitest";
+import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import {
   resolveUsableAgentCredentialModes,
   type AgentCredentialMap,
@@ -159,22 +160,27 @@ export function createChatMetadataHarness(
   let authStore: AuthProfileStore | undefined = { version: 1, profiles: {} };
   let authStoreRevision = 1;
   const invalidProjections = new WeakSet<object>();
-  const getPreparedOwner = vi.fn(
-    (_params?: GetPublishedPreparedModelCatalogOwnerParams): typeof owner | undefined => owner,
-  );
-  const getPreparedAuthStore = vi.fn(() => authStore);
-  const getAuthStoreRevision = vi.fn(() => authStoreRevision);
-  const getSkillsVersion = vi.fn(() => skillsVersion);
-  const getPluginRegistryVersion = vi.fn(() => pluginRegistryVersion);
-  const buildCommands = vi.fn(
-    async (_params: Parameters<ChatMetadataRuntimeDeps["buildCommands"]>[0]) => ({
-      commands: [{ name: `command-${skillsVersion}-${pluginRegistryVersion}` }],
-    }),
-  );
+  const deps = {
+    getPreparedOwner: vi.fn(
+      (_params?: GetPublishedPreparedModelCatalogOwnerParams): typeof owner | undefined => owner,
+    ),
+    getPreparedAuthStore: vi.fn(() => authStore),
+    getAuthStoreRevision: vi.fn(() => authStoreRevision),
+    getSkillsVersion: vi.fn(() => skillsVersion),
+    getPluginRegistryVersion: vi.fn(() => pluginRegistryVersion),
+    buildCommands: vi.fn(
+      async (_params: Parameters<ChatMetadataRuntimeDeps["buildCommands"]>[0]) => ({
+        commands: [{ name: `command-${skillsVersion}-${pluginRegistryVersion}` }],
+      }),
+    ),
+  };
   const buildProjection = vi.fn(async ({ facts }: { facts: ChatMetadataProjectionFacts }) => ({
     modelCatalog: facts.modelCatalog.entries,
     models: facts.modelCatalog.entries,
   }));
+  const readProjection = vi.fn(
+    (projection: { modelCatalog: ModelCatalogEntry[]; models?: ModelChoice[] }) => projection,
+  );
   const context = {
     getRuntimeConfig: () => config,
     loadGatewayModelCatalogSnapshot: async (params?: { readOnly?: boolean }) => {
@@ -200,12 +206,7 @@ export function createChatMetadataHarness(
     log: context.logGateway,
     ...gatewayRuntimeOptions,
     deps: {
-      getPreparedOwner,
-      getPreparedAuthStore,
-      getAuthStoreRevision,
-      getSkillsVersion,
-      getPluginRegistryVersion,
-      buildCommands,
+      ...deps,
       ...(useDefaultProjection
         ? {}
         : {
@@ -213,7 +214,7 @@ export function createChatMetadataHarness(
               const projection = await buildProjection(params);
               return {
                 modelCatalog: projection.modelCatalog,
-                read: () => ({ models: projection.models }),
+                read: () => ({ models: readProjection(projection).models }),
                 isCurrent: () => !invalidProjections.has(projection),
               };
             },
@@ -221,13 +222,9 @@ export function createChatMetadataHarness(
     },
   });
   return {
-    buildCommands,
+    ...deps,
     buildProjection,
-    getPluginRegistryVersion,
-    getAuthStoreRevision,
-    getPreparedAuthStore,
-    getPreparedOwner,
-    getSkillsVersion,
+    readProjection,
     invalidProjections,
     runtime,
     read: (params: Partial<Parameters<typeof runtime.read>[0]> = {}) =>
