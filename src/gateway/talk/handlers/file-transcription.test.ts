@@ -18,20 +18,13 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { cleanupTalkConnection } from "../session-registry.js";
 import { createTalkHandlerCaller } from "./handler-invocation.test-support.js";
 import { talkHandlers } from "./index.js";
-import {
-  expectRecordFields,
-  expectRespondError,
-  expectRespondOk,
-} from "./responses.test-support.js";
+import { expectRespondError, expectRespondOk } from "./responses.test-support.js";
 
+const localProvider = { baseUrl: "https://unused.invalid", models: [] };
 const cfg: OpenClawConfig = {
   models: {
     providers: {
-      "local-stt": {
-        baseUrl: "https://unused.invalid",
-        apiKey: "synthetic-fixture-key",
-        models: [],
-      },
+      "local-stt": { ...localProvider, apiKey: "synthetic-fixture-key" },
     },
   },
   tools: {
@@ -42,8 +35,11 @@ const cfg: OpenClawConfig = {
   },
 };
 
-function withAudioModels(models: MediaUnderstandingModelConfig[] | undefined): OpenClawConfig {
-  return { ...cfg, tools: { media: { ...cfg.tools?.media, models } } };
+function withAudioModels(
+  models: MediaUnderstandingModelConfig[] | undefined,
+  audio = cfg.tools?.media?.audio,
+): OpenClawConfig {
+  return { ...cfg, tools: { media: { audio, models } } };
 }
 
 function transcriptionFixture(config = cfg) {
@@ -88,6 +84,9 @@ function withFileProvider(
 ) {
   const requests: AudioTranscriptionRequest[] = [];
   const registry = createEmptyPluginRegistry();
+  const metadata: NonNullable<Parameters<typeof createPluginMetadataSnapshotFixture>[0]> = {
+    plugins: [{ id: "local-stt", contracts: { mediaUnderstandingProviders: ["local-stt"] } }],
+  };
   registry.mediaUnderstandingProviders.push({
     pluginId: "local-stt",
     source: "test",
@@ -102,6 +101,10 @@ function withFileProvider(
     },
   });
   if (streamingProvider) {
+    metadata.plugins.push({
+      id: "streaming-stt",
+      contracts: { realtimeTranscriptionProviders: ["streaming-stt"] },
+    });
     registry.realtimeTranscriptionProviders.push({
       pluginId: "streaming-stt",
       source: "test",
@@ -111,19 +114,7 @@ function withFileProvider(
   return withPluginRuntimeGenerationScope(
     {
       pluginRegistry: registry,
-      metadataSnapshot: createPluginMetadataSnapshotFixture({
-        plugins: [
-          { id: "local-stt", contracts: { mediaUnderstandingProviders: ["local-stt"] } },
-          ...(streamingProvider
-            ? [
-                {
-                  id: "streaming-stt",
-                  contracts: { realtimeTranscriptionProviders: ["streaming-stt"] },
-                },
-              ]
-            : []),
-        ],
-      }),
+      metadataSnapshot: createPluginMetadataSnapshotFixture(metadata),
     },
     () => run(requests),
   );
@@ -149,11 +140,7 @@ describe("configured file transcription through Talk RPCs", () => {
             },
           },
           talk: { agentId: "main" },
-          models: {
-            providers: {
-              "local-stt": { baseUrl: "https://unused.invalid", models: [] },
-            },
-          },
+          models: { providers: { "local-stt": localProvider } },
         };
         await state.writeConfig(config);
         const lease = acquireStateDatabaseSchemaLease(resolveOpenClawStateSqlitePath(state.env));
@@ -205,8 +192,7 @@ describe("configured file transcription through Talk RPCs", () => {
           const sessionId = (expectRespondOk(created) as { sessionId: string }).sessionId;
           await append(sessionId);
           expectRespondOk(await call("talk.session.close", { sessionId }));
-          expect(requests).toHaveLength(1);
-          expect(requests[0]?.apiKey).toBe("synthetic-researcher-key");
+          expect(requests).toMatchObject([{ apiKey: "synthetic-researcher-key" }]);
         });
       });
     },
@@ -220,24 +206,19 @@ describe("configured file transcription through Talk RPCs", () => {
     "uses context-provider readiness without requiring a hook: %j",
     async ({ configured, withHook }) => {
       const contexts: AudioTranscriptionConfigContext[] = [];
-      const config: OpenClawConfig = {
-        ...cfg,
-        tools: {
-          media: {
-            audio: { enabled: true, headers: { "x-source": "audio", "x-audio": "yes" } },
-            models: [
-              {
-                provider: "local-stt",
-                model: "whisper",
-                capabilities: ["audio"],
-                baseUrl: "https://speech.example/v1",
-                headers: { "x-source": "entry" },
-                profile: "local-stt:audio",
-              },
-            ],
+      const config = withAudioModels(
+        [
+          {
+            provider: "local-stt",
+            model: "whisper",
+            capabilities: ["audio"],
+            baseUrl: "https://speech.example/v1",
+            headers: { "x-source": "entry" },
+            profile: "local-stt:audio",
           },
-        },
-      };
+        ],
+        { enabled: true, headers: { "x-source": "audio", "x-audio": "yes" } },
+      );
       const { call } = transcriptionFixture(config);
       await withFileProvider(
         async () => {
@@ -290,7 +271,7 @@ describe("configured file transcription through Talk RPCs", () => {
     onTestFinished(() => release.resolve());
     await withFileProvider(
       async (requests) => {
-        const { call, append, events, context } = transcriptionFixture();
+        const { call, append, events } = transcriptionFixture();
         expectRespondOk(await call("talk.catalog"), {
           transcription: {
             ready: true,
@@ -332,8 +313,7 @@ describe("configured file transcription through Talk RPCs", () => {
         await closing;
         vi.useRealTimers();
         expectRespondOk(closed);
-        expect(requests).toHaveLength(1);
-        expect(requests[0]?.model).toBe("whisper");
+        expect(requests).toMatchObject([{ model: "whisper" }]);
         const audio = requests[0]?.buffer;
         expect(audio?.subarray(0, 4).toString()).toBe("RIFF");
         expect(audio?.readUInt32LE(24)).toBe(8000);
@@ -343,7 +323,6 @@ describe("configured file transcription through Talk RPCs", () => {
           expect.objectContaining({ type: "transcript", text: "Turn the lights on" }),
         );
         expect(events.at(-1)?.type).toBe("close");
-        cleanupTalkConnection("conn-1", context.logGateway);
       },
       async () => {
         transcribing.resolve();
@@ -403,14 +382,13 @@ describe("configured file transcription through Talk RPCs", () => {
         { provider: "local-stt", model: "large", capabilities: ["audio"], maxBytes },
         { provider: "local-stt", model: "vision", capabilities: ["image"], maxBytes: 65536 },
       ]);
-      const { create, append, context } = transcriptionFixture(config);
+      const { create, append } = transcriptionFixture(config);
       const sessionId = await create();
       expectRespondOk(await append(sessionId, (maxBytes - 44) / 2));
       expectRespondError(await append(sessionId, 1), {
         message: expect.stringContaining(`${maxBytes} byte limit`),
       });
       expect(requests).toHaveLength(0);
-      cleanupTalkConnection("conn-1", context.logGateway);
     });
   });
 
@@ -451,8 +429,8 @@ describe("configured file transcription through Talk RPCs", () => {
 
   it.each(["unknown provider", "missing credentials", "missing CLI", "malformed CLI"])(
     "does not advertise or admit file transcription with %s",
-    async (reason) => {
-      await withFileProvider(async (requests) => {
+    (reason) =>
+      withFileProvider(async (requests) => {
         const config: OpenClawConfig = {
           ...withAudioModels(
             reason === "unknown provider"
@@ -471,7 +449,7 @@ describe("configured file transcription through Talk RPCs", () => {
           ),
           models:
             reason === "missing credentials"
-              ? { providers: { "local-stt": { baseUrl: "https://unused.invalid", models: [] } } }
+              ? { providers: { "local-stt": localProvider } }
               : cfg.models,
         };
         const { call } = transcriptionFixture(config);
@@ -488,12 +466,11 @@ describe("configured file transcription through Talk RPCs", () => {
           message: expect.stringContaining("No configured audio transcription provider"),
         });
         expect(requests).toHaveLength(0);
-      });
-    },
+      }),
   );
 
-  it("advertises and uses a viable file fallback after an unknown provider", async () => {
-    await withFileProvider(async (requests) => {
+  it("advertises and uses a viable file fallback after an unknown provider", () =>
+    withFileProvider(async (requests) => {
       const config = withAudioModels([
         { provider: "missing-stt", model: "missing", capabilities: ["audio"] },
         { provider: "local-stt", model: "whisper", capabilities: ["audio"] },
@@ -510,60 +487,50 @@ describe("configured file transcription through Talk RPCs", () => {
         },
       });
       const sessionId = await create();
-      expectRecordFields({ sessionId }, { sessionId: expect.any(String) });
+      expect(sessionId).toEqual(expect.any(String));
       await append(sessionId);
       expectRespondOk(await call("talk.session.close", { sessionId }));
-      expect(requests).toHaveLength(1);
-      expect(requests[0]?.model).toBe("whisper");
-    });
-  });
+      expect(requests).toMatchObject([{ model: "whisper" }]);
+    }));
 
-  it.each([
-    { name: "explicit provider", params: { provider: "streaming-only" }, streaming: false },
-    { name: "explicit model", params: { model: "streaming-model" }, streaming: false },
-    { name: "configured streaming", params: {}, streaming: true },
-    { name: "no configured audio models", params: {}, streaming: false, unconfigured: true },
-    { name: "image-only media models", params: {}, streaming: false, imageOnly: true },
-  ])(
-    "preserves $name selection instead of falling back to file audio",
-    async ({ params, streaming, unconfigured, imageOnly }) => {
-      await withFileProvider(async (requests) => {
-        const config: OpenClawConfig = {
-          ...(unconfigured ? {} : cfg),
-          ...(imageOnly
-            ? {
-                agents: { ownership: "explicit", entries: { first: {}, second: {} } },
-                tools: {
-                  media: {
-                    models: [{ provider: "local-stt", model: "vision", capabilities: ["image"] }],
-                  },
-                },
-              }
-            : {}),
-          ...(streaming
-            ? {
-                plugins: {
-                  entries: {
-                    "voice-call": { config: { streaming: { provider: "streaming-only" } } },
-                  },
-                },
-              }
-            : {}),
-        };
-        const responded = await transcriptionFixture(config).call("talk.session.create", {
-          mode: "transcription",
-          ...params,
-        });
-        expectRespondError(responded, {
-          message: expect.stringContaining("transcription provider"),
-        });
-        expect(requests).toHaveLength(0);
-      });
+  it.each<{ name: string; config: OpenClawConfig; params?: Record<string, unknown> }>([
+    { name: "explicit provider", params: { provider: "streaming-only" }, config: cfg },
+    { name: "explicit model", params: { model: "streaming-model" }, config: cfg },
+    {
+      name: "configured streaming",
+      config: {
+        ...cfg,
+        plugins: {
+          entries: { "voice-call": { config: { streaming: { provider: "streaming-only" } } } },
+        },
+      },
     },
+    { name: "no configured audio models", config: {} },
+    {
+      name: "image-only media models",
+      config: {
+        ...withAudioModels(
+          [{ provider: "local-stt", model: "vision", capabilities: ["image"] }],
+          {},
+        ),
+        agents: { ownership: "explicit", entries: { first: {}, second: {} } },
+      },
+    },
+  ])("preserves $name selection instead of falling back to file audio", ({ params, config }) =>
+    withFileProvider(async (requests) => {
+      const responded = await transcriptionFixture(config).call("talk.session.create", {
+        mode: "transcription",
+        ...params,
+      });
+      expectRespondError(responded, {
+        message: expect.stringContaining("transcription provider"),
+      });
+      expect(requests).toHaveLength(0);
+    }),
   );
 
-  it("discards buffered audio when its connection closes before transcription starts", async () => {
-    await withFileProvider(async (requests) => {
+  it("discards buffered audio when its connection closes before transcription starts", () =>
+    withFileProvider(async (requests) => {
       const { call, create, append, context } = transcriptionFixture();
       const sessionId = await create();
       await append(sessionId);
@@ -571,11 +538,10 @@ describe("configured file transcription through Talk RPCs", () => {
       cleanupTalkConnection("conn-1", context.logGateway);
       await closing;
       expect(requests).toHaveLength(0);
-    });
-  });
+    }));
 
-  it("reports provider failures as a Talk error before closing the session", async () => {
-    await withFileProvider(
+  it("reports provider failures as a Talk error before closing the session", () =>
+    withFileProvider(
       async () => {
         const { call, create, append, events } = transcriptionFixture();
         const sessionId = await create();
@@ -592,6 +558,5 @@ describe("configured file transcription through Talk RPCs", () => {
       async () => {
         throw new Error("Local speech endpoint rejected audio");
       },
-    );
-  });
+    ));
 });

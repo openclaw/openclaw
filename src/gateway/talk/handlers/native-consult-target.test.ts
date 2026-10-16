@@ -117,6 +117,12 @@ function expectDenied(respond: ReturnType<typeof vi.fn>, details: Record<string,
   expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(details));
 }
 
+const participationRequired = {
+  details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
+};
+const steerRelay = (sessionId: string, handlers?: GatewayRequestHandlers) =>
+  dispatch("talk.session.steer", { sessionId, text: "status", mode: "status" }, handlers);
+
 function makeConsultBridge(submitToolResult = () => undefined) {
   return {
     connect: async () => undefined,
@@ -128,6 +134,56 @@ function makeConsultBridge(submitToolResult = () => undefined) {
     close: () => undefined,
     isConnected: () => true,
   };
+}
+
+type RunTargetParams = Parameters<typeof resolveOwnedActiveTalkRunTarget>[0];
+function runTarget(
+  sessionTarget: RunTargetParams["sessionTarget"],
+  scope: RunTargetParams["scope"] = { kind: "session" },
+  assertCurrent?: RunTargetParams["assertCurrent"],
+) {
+  return resolveOwnedActiveTalkRunTarget({
+    context,
+    clientConnId: client.connId,
+    sessionTarget,
+    scope,
+    assertCurrent,
+  });
+}
+
+function control(
+  target: Parameters<typeof controlRealtimeVoiceAgentRun>[0]["runTarget"],
+  text = "cancel",
+  options: Partial<Parameters<typeof controlRealtimeVoiceAgentRun>[0]> = {},
+) {
+  return controlRealtimeVoiceAgentRun({
+    sessionKey: "global",
+    runTarget: target,
+    text,
+    ...options,
+  });
+}
+
+function embeddedHandle(runId: string, abort = vi.fn()) {
+  return {
+    runId,
+    queueMessage: async () => undefined,
+    isStreaming: () => true,
+    isCompacting: () => false,
+    abort,
+  };
+}
+
+function configureProvider(provider: RealtimeVoiceProviderPlugin, supportsGatewayControl = true) {
+  mocks.resolveProvider.mockReturnValue({
+    provider,
+    providerConfig: {},
+    capabilities: {
+      ...mocks.capabilities,
+      handlesAgentConsult: true,
+      ...(supportsGatewayControl ? { supportsGatewayControl } : {}),
+    },
+  });
 }
 
 function registerRun(runId: string, sessionId: string, sessionKey = "global", agentId = "voice") {
@@ -226,15 +282,7 @@ beforeEach(async () => {
   Object.defineProperty(provider, Symbol.for("openclaw.internal.realtime-voice-provider.v1"), {
     value: { isBrowserSessionConfigured: () => true, cancelBrowserSession: async () => undefined },
   });
-  mocks.resolveProvider.mockReturnValue({
-    provider,
-    providerConfig: {},
-    capabilities: {
-      ...mocks.capabilities,
-      supportsGatewayControl: true,
-      handlesAgentConsult: true,
-    },
-  });
+  configureProvider(provider);
 });
 
 afterEach(async () => {
@@ -293,11 +341,7 @@ it("retains the opaque relay owner when Talk defaults change without a key", asy
   config = { ...config, talk: { agentId: "primary" } };
   setRuntimeConfigSnapshot(config);
   expectOk(
-    await dispatch("talk.session.steer", {
-      sessionId,
-      text: "status",
-      mode: "status",
-    }),
+    await steerRelay(sessionId),
     expect.objectContaining({ mode: "status", sessionKey: "global" }),
   );
 });
@@ -322,46 +366,30 @@ it("enforces the retained relay's sharing policy without a key", async () => {
     ...loadSessionEntry(scope)!,
     visibility: "read-only",
   });
-  expectDenied(
-    await dispatch("talk.session.steer", {
-      sessionId,
-      text: "status",
-      mode: "status",
-    }),
-    {
-      details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
-    },
-  );
+  expectDenied(await steerRelay(sessionId), participationRequired);
 });
 
 it("rejects retained relay mapping changes even when the physical store is unchanged", async () => {
   const { sessionId } = await createRelayCall();
   config = { ...config, session: { mainKey: "home" } };
   setRuntimeConfigSnapshot(config);
-  expectDenied(
-    await dispatch("talk.session.steer", { sessionId, text: "status", mode: "status" }),
-    {
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining("non-canonical persisted row"),
-    },
-  );
+  expectDenied(await steerRelay(sessionId), {
+    code: "INVALID_REQUEST",
+    message: expect.stringContaining("non-canonical persisted row"),
+  });
 });
 
 it("fences an opaque relay record replaced after authorization", async () => {
   const { sessionId } = await createRelayCall();
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const pending = dispatch(
-    "talk.session.steer",
-    { sessionId, text: "status", mode: "status" },
-    {
-      "talk.session.steer": async (request) => {
-        entered.resolve();
-        await release.promise;
-        await talkSessionHandlers["talk.session.steer"]!(request);
-      },
+  const pending = steerRelay(sessionId, {
+    "talk.session.steer": async (request) => {
+      entered.resolve();
+      await release.promise;
+      await talkSessionHandlers["talk.session.steer"]!(request);
     },
-  );
+  });
   await entered.promise;
   rememberUnifiedTalkSession(sessionId, { ...getUnifiedTalkSession(sessionId) });
   release.resolve();
@@ -373,17 +401,7 @@ it("fences an opaque relay record replaced after authorization", async () => {
 function registerOwnedEmbeddedRun(runId: string, sessionId: string) {
   const registration = registerRun(runId, sessionId);
   const abort = vi.fn();
-  setActiveEmbeddedRun(
-    sessionId,
-    {
-      runId,
-      queueMessage: async () => undefined,
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort,
-    },
-    "global",
-  );
+  setActiveEmbeddedRun(sessionId, embeddedHandle(runId, abort), "global");
   return { registration, abort };
 }
 
@@ -404,19 +422,8 @@ it("rechecks RPC sharing authorization after the control runtime import", async 
     context,
   });
   expect(authorization.error).toBeNull();
-  const runTarget = resolveOwnedActiveTalkRunTarget({
-    context,
-    clientConnId: client.connId,
-    sessionTarget: target,
-    scope: { kind: "session" },
-    assertCurrent: authorization.authorization!.assertCurrent,
-  });
-  const pending = controlRealtimeVoiceAgentRun({
-    sessionKey: "global",
-    runTarget,
-    text: "cancel",
-    mode: "cancel",
-  });
+  const targetRun = runTarget(target, undefined, authorization.authorization!.assertCurrent);
+  const pending = control(targetRun, "cancel", { mode: "cancel" });
   replaceSessionEntrySync(scope, {
     sessionId: "acl-session",
     updatedAt: 2,
@@ -425,9 +432,7 @@ it("rechecks RPC sharing authorization after the control runtime import", async 
   });
   try {
     await expect(pending).rejects.toMatchObject({
-      error: expect.objectContaining({
-        details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
-      }),
+      error: expect.objectContaining(participationRequired),
     });
     expect(abort).not.toHaveBeenCalled();
   } finally {
@@ -436,87 +441,72 @@ it("rechecks RPC sharing authorization after the control runtime import", async 
   }
 });
 
-it.each([
-  "replaced",
-  "agent",
-  "key",
-  "connection",
-  "signal",
-  "generation",
-  "cleanup",
-  "voice binding replaced",
-] as const)("fences %s Gateway registration while control preparation waits", async (change) => {
-  config.session = { scope: "global" };
-  const target = await prepareTalkSessionTarget(config, "main");
-  const runId = "captured-run";
-  const voiceScope = { agentId: target.agentId, sessionKey: target.sessionKey };
-  const voiceSessionId = await createOrResumeClientVoiceSession({
-    ...voiceScope,
-    origin: "client",
-  });
-  await registerClientVoiceConsultRun({ ...voiceScope, voiceSessionId, runId });
-  const { registration, abort } = registerOwnedEmbeddedRun(runId, "captured-session");
-  const runTarget = resolveOwnedActiveTalkRunTarget({
-    context,
-    clientConnId: client.connId,
-    sessionTarget: target,
-    scope: { kind: "voice-session", voiceSessionId },
-  });
-  expect(runTarget?.isCurrent()).toBe(true);
-  const preparing = createDeferredCore();
-  const prepared = createDeferredCore();
-  const control = controlRealtimeVoiceAgentRun({
-    sessionKey: "global",
-    runTarget,
-    text: "cancel",
-    mode: "cancel",
-    getToolAuthorityOverlay: () => ({
-      senderIsOwner: false,
-      disableTools: false,
-      traceAuthorized: false,
-    }),
-    prepareToolAuthorityOverlay: async () => {
-      preparing.resolve();
-      await prepared.promise;
-    },
-  });
-  await preparing.promise;
-  try {
-    const entry = context.chatAbortControllers.get(runId)!;
-    if (change === "replaced") {
-      context.chatAbortControllers.set(runId, { ...entry });
-    } else if (change === "agent") {
-      entry.agentId = "primary";
-    } else if (change === "key") {
-      entry.sessionKey = "agent:voice:another";
-    } else if (change === "connection") {
-      entry.ownerConnId = "another-client";
-    } else if (change === "generation") {
-      entry.lifecycleGeneration = "retired";
-    } else if (change === "cleanup") {
-      entry.registrationCleanupRequested = true;
-    } else if (change === "voice binding replaced") {
-      const replacementVoiceSessionId = await createOrResumeClientVoiceSession({
-        ...voiceScope,
-        origin: "client",
-      });
-      await registerClientVoiceConsultRun({
-        ...voiceScope,
-        voiceSessionId: replacementVoiceSessionId,
-        runId,
-      });
-    } else {
-      entry.controller = new AbortController();
+it.each<{ change: string; patch?: Partial<ReturnType<typeof registerRun>["entry"]> }>([
+  { change: "replaced" },
+  { change: "agent", patch: { agentId: "primary" } },
+  { change: "key", patch: { sessionKey: "agent:voice:another" } },
+  { change: "connection", patch: { ownerConnId: "another-client" } },
+  { change: "signal", patch: { controller: new AbortController() } },
+  { change: "generation", patch: { lifecycleGeneration: "retired" } },
+  { change: "cleanup", patch: { registrationCleanupRequested: true } },
+  { change: "voice binding replaced" },
+])(
+  "fences $change Gateway registration while control preparation waits",
+  async ({ change, patch }) => {
+    config.session = { scope: "global" };
+    const target = await prepareTalkSessionTarget(config, "main");
+    const runId = "captured-run";
+    const voiceScope = { agentId: target.agentId, sessionKey: target.sessionKey };
+    const voiceSessionId = await createOrResumeClientVoiceSession({
+      ...voiceScope,
+      origin: "client",
+    });
+    await registerClientVoiceConsultRun({ ...voiceScope, voiceSessionId, runId });
+    const { registration, abort } = registerOwnedEmbeddedRun(runId, "captured-session");
+    const targetRun = runTarget(target, { kind: "voice-session", voiceSessionId });
+    expect(targetRun?.isCurrent()).toBe(true);
+    const preparing = createDeferredCore();
+    const prepared = createDeferredCore();
+    const pending = control(targetRun, "cancel", {
+      mode: "cancel",
+      getToolAuthorityOverlay: () => ({
+        senderIsOwner: false,
+        disableTools: false,
+        traceAuthorized: false,
+      }),
+      prepareToolAuthorityOverlay: async () => {
+        preparing.resolve();
+        await prepared.promise;
+      },
+    });
+    await preparing.promise;
+    try {
+      const entry = context.chatAbortControllers.get(runId)!;
+      if (change === "replaced") {
+        context.chatAbortControllers.set(runId, { ...entry });
+      } else if (change === "voice binding replaced") {
+        const replacementVoiceSessionId = await createOrResumeClientVoiceSession({
+          ...voiceScope,
+          origin: "client",
+        });
+        await registerClientVoiceConsultRun({
+          ...voiceScope,
+          voiceSessionId: replacementVoiceSessionId,
+          runId,
+        });
+      } else {
+        Object.assign(entry, patch);
+      }
+      prepared.resolve();
+      expect(await pending).toMatchObject({ ok: false, active: false, reason: "no_active_run" });
+      expect(abort).not.toHaveBeenCalled();
+    } finally {
+      prepared.resolve();
+      await Promise.allSettled([pending]);
+      registration.cleanup();
     }
-    prepared.resolve();
-    expect(await control).toMatchObject({ ok: false, active: false, reason: "no_active_run" });
-    expect(abort).not.toHaveBeenCalled();
-  } finally {
-    prepared.resolve();
-    await Promise.allSettled([control]);
-    registration.cleanup();
-  }
-});
+  },
+);
 
 it("preserves status and cancellation for an owned queued chat.send reply", async () => {
   config.session = { scope: "global" };
@@ -530,18 +520,13 @@ it("preserves status and cancellation for an owned queued chat.send reply", asyn
   expectOk(respond);
   const sessionId = loadSessionEntry({ agentId: "voice", sessionKey: "global" })!.sessionId;
   const registration = registerRun("queued-talk", sessionId);
-  const operation = replyRunRegistry.begin({
+  const replyParams = {
     sessionKey: "global",
-    sessionId,
     resetTriggered: false,
     upstreamAbortSignal: registration.controller.signal,
-  });
-  const runTarget = resolveOwnedActiveTalkRunTarget({
-    context,
-    clientConnId: client.connId,
-    sessionTarget: await prepareTalkSessionTarget(config, "main"),
-    scope: { kind: "session" },
-  });
+  };
+  const operation = replyRunRegistry.begin({ ...replyParams, sessionId });
+  const targetRun = runTarget(await prepareTalkSessionTarget(config, "main"));
   const resolvedSessionId = "materialized-reply-session";
   context.chatAbortControllers.get("queued-talk")!.sessionId = resolvedSessionId;
   operation.updateSessionId(resolvedSessionId);
@@ -552,46 +537,26 @@ it("preserves status and cancellation for an owned queued chat.send reply", asyn
     voiceSessionId,
     runId: "queued-talk",
   });
-  const voiceTarget = resolveOwnedActiveTalkRunTarget({
-    context,
-    clientConnId: client.connId,
-    sessionTarget: await prepareTalkSessionTarget(config, "main"),
-    scope: { kind: "voice-session", voiceSessionId },
+  const voiceTarget = runTarget(await prepareTalkSessionTarget(config, "main"), {
+    kind: "voice-session",
+    voiceSessionId,
   });
   try {
     expect(voiceTarget?.isCurrent()).toBe(true);
-    expect(
-      await controlRealtimeVoiceAgentRun({
-        sessionKey: "global",
-        runTarget: voiceTarget,
-        text: "status",
-      }),
-    ).toMatchObject({ active: false });
-    expect(
-      await controlRealtimeVoiceAgentRun({
-        sessionKey: "global",
-        runTarget,
-        text: "status",
-        mode: "status",
-      }),
-    ).toMatchObject({ active: true, sessionId: resolvedSessionId });
+    expect(await control(voiceTarget, "status")).toMatchObject({ active: false });
+    expect(await control(targetRun, "status", { mode: "status" })).toMatchObject({
+      active: true,
+      sessionId: resolvedSessionId,
+    });
     expectOk(
       await dispatch("talk.client.steer", { sessionKey: "main", text: "status", mode: "status" }),
       expect.objectContaining({ active: true, sessionId: resolvedSessionId }),
     );
     const abortUnrelated = vi.fn();
-    const unrelated = {
-      runId: "queued-talk",
-      queueMessage: async () => undefined,
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort: abortUnrelated,
-    };
+    const unrelated = embeddedHandle("queued-talk", abortUnrelated);
     setActiveEmbeddedRun(resolvedSessionId, unrelated, "global");
     try {
-      expect(
-        await controlRealtimeVoiceAgentRun({ sessionKey: "global", runTarget, text: "cancel" }),
-      ).toMatchObject({ active: false, aborted: false });
+      expect(await control(targetRun)).toMatchObject({ active: false, aborted: false });
       expect(abortUnrelated).not.toHaveBeenCalled();
     } finally {
       clearActiveEmbeddedRun(resolvedSessionId, unrelated, "global");
@@ -602,18 +567,11 @@ it("preserves status and cancellation for an owned queued chat.send reply", asyn
     );
     expect(operation.abortSignal.aborted).toBe(true);
     expect(mocks.runEmbeddedAgent).not.toHaveBeenCalled();
-    expect(runTarget?.isCurrent()).toBe(false);
+    expect(targetRun?.isCurrent()).toBe(false);
     operation.complete();
-    const successor = replyRunRegistry.begin({
-      sessionKey: "global",
-      sessionId: resolvedSessionId,
-      resetTriggered: false,
-      upstreamAbortSignal: registration.controller.signal,
-    });
+    const successor = replyRunRegistry.begin({ ...replyParams, sessionId: resolvedSessionId });
     try {
-      expect(
-        await controlRealtimeVoiceAgentRun({ sessionKey: "global", runTarget, text: "cancel" }),
-      ).toMatchObject({ active: false, aborted: false });
+      expect(await control(targetRun)).toMatchObject({ active: false, aborted: false });
       expect(successor.abortSignal.aborted).toBe(false);
     } finally {
       successor.complete();
@@ -653,11 +611,7 @@ it("restores bounded relay history after the original voice provider finishes cl
       });
     },
   };
-  mocks.resolveProvider.mockReturnValue({
-    provider,
-    providerConfig: {},
-    capabilities: { ...mocks.capabilities, handlesAgentConsult: true },
-  });
+  configureProvider(provider, false);
   const original = await createRelayCall({ voice: "cove", capabilities: ["voice-selection"] });
   const originalRequest = requests[0];
   if (!originalRequest) {
@@ -707,20 +661,16 @@ it("restores bounded relay history after the original voice provider finishes cl
     expect(transcript[0]?.event).toMatchObject({
       message: { content: [{ type: "text", text: utterances[0]?.trim() }] },
     });
-    expect(transcript.slice(-2).map(({ event }) => event)).toEqual([
-      expect.objectContaining({
-        message: expect.objectContaining({
-          role: "user",
-          content: [{ type: "text", text: tailUser }],
+    expect(transcript.slice(-2).map(({ event }) => event)).toEqual(
+      [
+        ["user", tailUser],
+        ["assistant", tailAssistant],
+      ].map(([role, text]) =>
+        expect.objectContaining({
+          message: expect.objectContaining({ role, content: [{ type: "text", text }] }),
         }),
-      }),
-      expect.objectContaining({
-        message: expect.objectContaining({
-          role: "assistant",
-          content: [{ type: "text", text: tailAssistant }],
-        }),
-      }),
-    ]);
+      ),
+    );
 
     const replacement = await createRelayCall({
       voiceChangeId: changeId,
@@ -746,14 +696,10 @@ it("restores bounded relay history after the original voice provider finishes cl
     expect(instructions).toContain("HISTORY_ENTRY_19");
     expect(instructions).not.toContain("HISTORY_ENTRY_00");
     expect([...instructions.matchAll(/HISTORY_ENTRY_\d{2}/gu)].length).toBeLessThanOrEqual(16);
-    expect(
-      Buffer.byteLength(
-        instructions.slice(
-          configuredInstructions.length + 2 + REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS.length,
-        ),
-        "utf8",
-      ),
-    ).toBeLessThanOrEqual(8_000);
+    const history = instructions.slice(
+      configuredInstructions.length + 2 + REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS.length,
+    );
+    expect(Buffer.byteLength(history, "utf8")).toBeLessThanOrEqual(8_000);
 
     await expect(
       replacementRequest.runAgentConsult({ prompt: "What bicycle did I choose?" }),
