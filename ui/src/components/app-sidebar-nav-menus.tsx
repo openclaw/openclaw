@@ -26,7 +26,7 @@ export function renderSidebarMenuAction(
   return {
     id: value,
     label,
-    class: ["sidebar-customize-menu__item", options.className].filter(Boolean).join(" "),
+    class: ["sidebar-customize-menu__item", options.className],
     disabled: options.disabled,
     attributes: { title: options.title },
     icon: (
@@ -190,10 +190,8 @@ export function renderSidebarPluginNavigationMenu(params: {
         label: action.label,
         class: [
           "sidebar-customize-menu__item",
-          action.destructive ? "session-menu__item--destructive" : "",
-        ]
-          .filter(Boolean)
-          .join(" "),
+          { "session-menu__item--destructive": action.destructive },
+        ],
         variant: action.destructive ? "danger" : undefined,
         icon:
           action.icon && Object.hasOwn(iconData, action.icon) ? (

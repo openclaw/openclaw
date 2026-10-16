@@ -156,8 +156,10 @@ vi.mock("../../../infra/host-account-name.js", async (importOriginal) => ({
   resolveHostAccountName: resolveHostAccountNameMock,
 }));
 
+// mock-isolation: Ordinary connection tests do not use Enterprise identity or remote enrichment.
 vi.mock("../../github-user-identity.js", () => ({
   createAuthenticatedGitHubIdentitySync: createAuthenticatedGitHubIdentitySyncMock,
+  resolveTrustedEnterpriseGitHubAccountId: () => undefined,
 }));
 
 vi.mock("./auth-context.js", async (importOriginal) => {

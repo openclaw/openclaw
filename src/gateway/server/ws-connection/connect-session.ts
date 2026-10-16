@@ -25,7 +25,10 @@ import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-to
 import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
 import { prepareGatewayRecipientProfile } from "../../expected-profile.js";
 import { shouldUseGatewayOwnerProfile } from "../../gateway-owner-profile.js";
-import { createAuthenticatedGitHubIdentitySync } from "../../github-user-identity.js";
+import {
+  createAuthenticatedGitHubIdentitySync,
+  resolveTrustedEnterpriseGitHubAccountId,
+} from "../../github-user-identity.js";
 import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
 import {
   attachGatewayLocalUserIngress,
@@ -181,6 +184,11 @@ export async function attachAuthenticatedGatewayConnect(
       : connId
     : undefined;
   const authenticatedUserId = normalizeOptionalString(authResult.user);
+  const authenticatedFactoryGitHubAccountId = resolveTrustedEnterpriseGitHubAccountId({
+    authResult,
+    authConfig: context.configSnapshot.gateway?.auth,
+    config: context.configSnapshot,
+  });
   const tailscaleLogin = authResult.tailscaleIdentity
     ? classifyTailscaleLogin(authResult.tailscaleIdentity.login)
     : undefined;
@@ -405,6 +413,7 @@ export async function attachAuthenticatedGatewayConnect(
     authPolicy: state.authPolicy,
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
+    ...(authenticatedFactoryGitHubAccountId ? { authenticatedFactoryGitHubAccountId } : {}),
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,

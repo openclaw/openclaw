@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
@@ -453,7 +454,30 @@ describe("agent session streaming", () => {
       );
       expect(assistantMessages).toHaveLength(1);
       expect(messageText(assistantMessages[0])).toBe(streamedText);
-      expect(provider.providerRequests).toHaveLength(1);
+      const requestCountDetails =
+        provider.providerRequests.length === 1
+          ? undefined
+          : JSON.stringify(
+              provider.providerRequests.slice(0, 8).map((request, index) => {
+                const input = JSON.stringify(request.input ?? null);
+                return {
+                  index,
+                  model: typeof request.model === "string" ? request.model.slice(0, 128) : null,
+                  keys: Object.keys(request).toSorted().slice(0, 64),
+                  inputShape: Array.isArray(request.input)
+                    ? request.input.slice(0, 64).map((item) => ({
+                        role: typeof item?.role === "string" ? item.role.slice(0, 64) : null,
+                        type: typeof item?.type === "string" ? item.type.slice(0, 64) : null,
+                      }))
+                    : typeof request.input,
+                  toolsCount: Array.isArray(request.tools) ? request.tools.length : null,
+                  containsFixtureRequest: input.includes(REQUEST_MESSAGE),
+                  inputSha256: createHash("sha256").update(input).digest("hex"),
+                  bodySha256: createHash("sha256").update(JSON.stringify(request)).digest("hex"),
+                };
+              }),
+            );
+      expect(provider.providerRequests.length, requestCountDetails).toBe(1);
       expect(provider.transportRequests).toEqual([]);
     },
   );

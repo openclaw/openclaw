@@ -43,11 +43,6 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
-import {
-  ControllerHost,
-  SubscriptionsController,
-  viewState,
-} from "../../lib/subscriptions-controller.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
@@ -79,74 +74,25 @@ import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SidebarLayout } from "./sidebar-layout-types.ts";
 
-export abstract class ChatPaneBase extends ControllerHost {
-  private readonly changedProperties = new Map<PropertyKey, unknown>();
-  private completeUpdate: (() => void) | undefined;
-  private commitPromise: Promise<boolean> | undefined;
-  private lastCommittedProperties = new Map<PropertyKey, unknown>();
+export type ChatPaneInputChanges = {
+  sessionKey?: boolean;
+  inputRegion?: boolean;
+  draft?: boolean;
+  focusComposer?: boolean;
+};
 
-  get ownerDocument() {
-    return this.element.ownerDocument;
-  }
-  get renderRoot() {
-    return this.element;
-  }
-  querySelector: HTMLElement["querySelector"] = this.element.querySelector.bind(this.element);
-  querySelectorAll: HTMLElement["querySelectorAll"] = this.element.querySelectorAll.bind(
-    this.element,
-  );
-  closest: HTMLElement["closest"] = this.element.closest.bind(this.element);
-  contains(node: Node | null) {
-    return this.element.contains(node);
-  }
-  dispatchEvent(event: Event) {
-    return this.element.dispatchEvent(event);
-  }
-  addEventListener: HTMLElement["addEventListener"] = this.element.addEventListener.bind(
-    this.element,
-  );
-  removeEventListener: HTMLElement["removeEventListener"] = this.element.removeEventListener.bind(
-    this.element,
-  );
+/** Synchronous pane facts and domain resources; Solid owns publication and commits. */
+export abstract class ChatPaneStateOwner {
+  invalidate: () => void = () => {};
+  updateComplete: Promise<boolean> = Promise.resolve(true);
+  isConnected = false;
 
-  override requestUpdate(name?: PropertyKey, previous?: unknown): void {
-    if (name !== undefined && !this.changedProperties.has(name)) {
-      this.changedProperties.set(name, previous);
-    }
-    if (this.isConnected) {
-      this.commitPromise ??= new Promise<boolean>((resolve) => {
-        this.completeUpdate = () => resolve(true);
-      });
-    }
-    super.requestUpdate();
-  }
-
-  override get updateComplete(): Promise<boolean> {
-    return this.commitPromise ?? Promise.resolve(true);
-  }
-
-  prepareRender(): void {
-    this.chatState.prepareRender();
-    this.lastCommittedProperties = new Map(this.changedProperties);
-    this.changedProperties.clear();
-    this.willUpdate(this.lastCommittedProperties);
-  }
-
-  commitRender(): void {
-    const complete = this.completeUpdate;
-    this.completeUpdate = undefined;
-    this.commitPromise = undefined;
-    this.updated(this.lastCommittedProperties);
-    this.chatState.commitRender();
-    complete?.();
-  }
-
-  protected willUpdate(_changed: Map<PropertyKey, unknown>): void {}
-  protected updated(_changed: Map<PropertyKey, unknown>): void {}
+  abstract synchronizeInputs(changes: ChatPaneInputChanges): void;
+  abstract afterRender(focusComposerChanged: boolean): void;
   private paneLifecycleRoot: Element | null = null;
   // The first Solid render initializes hidden panes; later hidden work parks.
   private readonly handleVisibilityChange = () => {
-    this.requestUpdate();
+    this.invalidate();
     if (document.visibilityState !== "hidden") {
       return;
     }
@@ -165,14 +111,16 @@ export abstract class ChatPaneBase extends ControllerHost {
       requestChatPageUpdate(state);
     }
   };
-  connectedCallback() {
+  start() {
     if (this.chatState.disposed) {
       this.chatState = this.mountChatState();
     }
-    this.paneLifecycleRoot = this.closest("openclaw-app-shell") ?? this.element.parentElement;
+    this.paneLifecycleRoot =
+      this.element.closest("openclaw-app-shell") ?? this.element.parentElement;
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
-    super.connect();
+    this.isConnected = true;
     this.transcript.start();
+    this.refreshBoardSubscriptions();
     this.chatState.addCleanup(
       chatInputOwnerForContext(this.context).subscribe(() => this.activeChanged(this.active)),
     );
@@ -182,35 +130,35 @@ export abstract class ChatPaneBase extends ControllerHost {
         if (this.state) {
           this.reconcileWaitingApprovalSnapshot(snapshot.approvalQueue);
         }
-        this.requestUpdate();
+        this.invalidate();
       }) ?? (() => {}),
     );
     this.chatState.addCleanup(
       this.context.runtimeConfig?.subscribe(() => {
         this.refreshSwarmRoster();
-        this.requestUpdate();
+        this.invalidate();
       }) ?? (() => {}),
     );
-    this.addEventListener(
+    this.element.addEventListener(
       CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
       this.synchronizeForegroundTranscript,
     );
     this.paneLifecycleRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
 
-  disconnectedCallback() {
-    this.removeEventListener(
+  dispose() {
+    this.element.removeEventListener(
       CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
       this.synchronizeForegroundTranscript,
     );
     this.context?.connectionBootstrap.setForegroundPane(this, null);
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.chatState.dispose();
+    this.isConnected = false;
     this.transcript.dispose();
-    super.disconnect();
-    this.completeUpdate?.();
-    this.completeUpdate = undefined;
-    this.commitPromise = undefined;
+    this.stopBoardSubscriptions?.();
+    this.stopBoardSubscriptions = undefined;
+    this.subscribedBoardProvider = undefined;
     // A removed Home pane cannot bubble its final loading edge. Notify its
     // former shell so background history does not stay blocked on that pane.
     const paneRoot = this.paneLifecycleRoot;
@@ -219,23 +167,22 @@ export abstract class ChatPaneBase extends ControllerHost {
     paneRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
 
-  @viewState()
   mcpAppLaunch?: import("../../components/mcp-app-launch.ts").McpAppOpenDetail;
-  @viewState() paneId = "single";
-  @viewState() paneLabel?: string;
-  @viewState() presentationId = "single";
-  @viewState() chatMessagesBySession?: ChatMessageCache;
-  @viewState() sessionSnapshotStore?: SessionSnapshotStore;
+  paneId = "single";
+  paneLabel?: string;
+  presentationId = "single";
+  chatMessagesBySession?: ChatMessageCache;
+  sessionSnapshotStore?: SessionSnapshotStore;
   // Empty means unresolved route data: boot on the page state's default session
   // without canonicalizing until the container supplies a real key.
-  @viewState() sessionKey = "";
+  sessionKey = "";
   // This session-keyed pane retains its initial skeleton through URL canonicalization.
-  @viewState() routeLoadingSkeleton = false;
-  @viewState() agentId?: string;
-  @viewState() inputRegion: ChatInputRegion = "page";
-  @viewState() compact = false;
-  @viewState() onBackToSubagents?: () => void;
-  @viewState() workContext?: ChatWorkContext;
+  routeLoadingSkeleton = false;
+  agentId?: string;
+  inputRegion: ChatInputRegion = "page";
+  compact = false;
+  onBackToSubagents?: () => void;
+  workContext?: ChatWorkContext;
   // Route ownership settles after retained-pane preview; dashboard activity follows
   // the pane the user can already see so its warmed runtime paints immediately.
   private visuallyPresentedValue = true;
@@ -250,8 +197,8 @@ export abstract class ChatPaneBase extends ControllerHost {
     }
     const wasConversationPresented = this.conversationPresented;
     this.visuallyPresentedValue = value;
-    this.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-    this.requestUpdate("visuallyPresented", previous);
+    this.element.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    this.invalidate();
     this.notifyConversationPresentation(wasConversationPresented);
   }
   /** The pane's committed layout and both visual and route ownership permit idle warming. */
@@ -265,7 +212,7 @@ export abstract class ChatPaneBase extends ControllerHost {
   }
   private notifyConversationPresentation(wasPresented: boolean): void {
     if (wasPresented !== this.conversationPresented) {
-      this.dispatchEvent(
+      this.element.dispatchEvent(
         new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, { bubbles: true, composed: true }),
       );
     }
@@ -284,8 +231,8 @@ export abstract class ChatPaneBase extends ControllerHost {
     const wasConversationPresented = this.conversationPresented;
     this.headerPresentationGeneration += 1;
     this.presentedValue = value;
-    this.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-    this.requestUpdate("presented", previous);
+    this.element.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    this.invalidate();
     this.presentedChanged(value);
     this.notifyConversationPresentation(wasConversationPresented);
     this.synchronizeForegroundTranscript();
@@ -351,7 +298,7 @@ export abstract class ChatPaneBase extends ControllerHost {
       return;
     }
     this.activeValue = value;
-    this.requestUpdate("active", previous);
+    this.invalidate();
     this.activeChanged(this.active);
     this.synchronizeForegroundTranscript();
   }
@@ -363,35 +310,35 @@ export abstract class ChatPaneBase extends ControllerHost {
     this.headerSessionMutationAbortController.abort();
     this.headerSessionMutationAbortController = new AbortController();
   }
-  @viewState() draft?: string;
-  @viewState() focusComposer = false;
-  @viewState() dashboardExpanded = false;
-  @viewState() routeFace?: BoardFace;
-  @viewState() onFaceChange?: (paneId: string, sessionKey: string, face: BoardFace) => void;
-  @viewState() onFocusPane?: (paneId: string, intent?: "review-edit") => void;
+  draft?: string;
+  focusComposer = false;
+  dashboardExpanded = false;
+  routeFace?: BoardFace;
+  onFaceChange?: (paneId: string, sessionKey: string, face: BoardFace) => void;
+  onFocusPane?: (paneId: string, intent?: "review-edit") => void;
   onPaneSessionChange?: (
     paneId: string,
     nextSessionKey: string,
     options?: PaneSessionChangeOptions,
   ) => boolean | void;
-  @viewState() onSessionDeleted?: (
+  onSessionDeleted?: (
     paneId: string,
     sessionKey: string,
     replacementSessionKey: string,
     preserveDraft?: boolean,
   ) => void;
-  @viewState() narrow = false;
-  @viewState() mergedChrome = false;
-  @viewState() navDrawerOpen = false;
-  @viewState() onboarding = false;
-  @viewState() onOpenSplitView?: () => void;
-  @viewState() onSplitDown?: (paneId: string) => void;
-  @viewState() onSplitRight?: (paneId: string) => void;
-  @viewState() onClosePane?: (paneId: string) => void;
-  @viewState() boardProvider?: BoardProvider;
+  narrow = false;
+  mergedChrome = false;
+  navDrawerOpen = false;
+  onboarding = false;
+  onOpenSplitView?: () => void;
+  onSplitDown?: (paneId: string) => void;
+  onSplitRight?: (paneId: string) => void;
+  onClosePane?: (paneId: string) => void;
+  boardProvider?: BoardProvider;
 
-  private publishedRunActivity: ChatPaneBase["runActivity"] = null;
-  protected chatState: ReturnType<typeof createChatState<ChatPageHost>> = this.mountChatState();
+  private publishedRunActivity: ChatPaneStateOwner["runActivity"] = null;
+  chatState: ReturnType<typeof createChatState<ChatPageHost>> = this.mountChatState();
 
   private mountChatState() {
     return createChatState<ChatPageHost>(
@@ -408,7 +355,7 @@ export abstract class ChatPaneBase extends ControllerHost {
           return;
         }
         this.publishedRunActivity = activity;
-        this.dispatchEvent(new Event(CHAT_RUN_ACTIVITY_CHANGED_EVENT, { bubbles: true }));
+        this.element.dispatchEvent(new Event(CHAT_RUN_ACTIVITY_CHANGED_EVENT, { bubbles: true }));
       },
       (item) =>
         getTranscriptState(this.presentationId).transcriptRenderContext.onAsyncQuestionDiscard?.(
@@ -420,11 +367,9 @@ export abstract class ChatPaneBase extends ControllerHost {
   get runActivity() {
     return this.chatState.projectRunActivity(this.state);
   }
-  protected readonly composerCapabilities = new ChatComposerCapabilityHost(() =>
-    this.requestUpdate(),
-  );
+  protected readonly composerCapabilities = new ChatComposerCapabilityHost(() => this.invalidate());
   protected readonly transcript = createChatTranscript(
-    () => this.requestUpdate(),
+    () => this.invalidate(),
     () => this.paneId,
     {
       geometryEventTarget: this.element,
@@ -443,7 +388,7 @@ export abstract class ChatPaneBase extends ControllerHost {
 
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
-    this.requestUpdate();
+    this.invalidate();
   });
   protected questionPrompts: QuestionPrompt[] = [];
   protected state: ChatPageHost | undefined;
@@ -513,7 +458,7 @@ export abstract class ChatPaneBase extends ControllerHost {
   }
   /* Infinity until the first ResizeObserver tick so an unmeasured pane keeps
    * the wide side-by-side layout instead of flashing the stacked one. */
-  @viewState() protected paneWidth = Number.POSITIVE_INFINITY;
+  protected paneWidth = Number.POSITIVE_INFINITY;
   protected paneResizeObserver: ResizeObserver | null = null;
   protected connectedClient: GatewayBrowserClient | null = null;
   protected boardProviderLease: (BoardProviderLease & { cacheKey: string }) | undefined;
@@ -525,18 +470,18 @@ export abstract class ChatPaneBase extends ControllerHost {
   // SessionDataController's own epoch-scoped controller for the sidebar.
   protected headerSessionMutationAbortController = new AbortController();
 
-  @viewState() protected headerRenameValue = "";
-  @viewState() protected headerPlatform: string | null = null;
-  @viewState() protected headerCopiedAction: ChatPaneHeaderAction | null = null;
+  protected headerRenameValue = "";
+  protected headerPlatform: string | null = null;
+  protected headerCopiedAction: ChatPaneHeaderAction | null = null;
   protected continueInTerminalDialog: {
     qualifiedSessionKey: string;
     selectedGatewayUrl: string;
     clientGatewayUrl: string;
     scope: ChatPaneConnectionScope;
   } | null = null;
-  @viewState() protected headerPlacementMovingKey: string | null = null;
-  @viewState() protected headerPlacementReclaimingKey: string | null = null;
-  @viewState() protected headerPlacementRestartingKey: string | null = null;
+  protected headerPlacementMovingKey: string | null = null;
+  protected headerPlacementReclaimingKey: string | null = null;
+  protected headerPlacementRestartingKey: string | null = null;
   private presencePayloadValue: PresencePayload | undefined;
   protected get presencePayload(): PresencePayload | undefined {
     return this.presencePayloadValue;
@@ -566,7 +511,7 @@ export abstract class ChatPaneBase extends ControllerHost {
   }
   protected readonly sessionSharingHydrationTargets = new Map<string, string>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
-  @viewState() protected resetConfirmation:
+  protected resetConfirmation:
     | {
         scopeKey: string;
         promise: Promise<boolean>;
@@ -605,7 +550,6 @@ export abstract class ChatPaneBase extends ControllerHost {
     }
   };
   protected headerRenameInitialValue = "";
-  @viewState()
   protected headerRenameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null =
     null;
   protected headerCopiedTimer: number | null = null;
@@ -645,9 +589,9 @@ export abstract class ChatPaneBase extends ControllerHost {
   protected githubPublication: GitHubPublicationBinding | null = null;
   protected dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
   protected readonly dismissedWorkspaceConflictRefs = new Map<string, string>();
-  @viewState() protected catalogMessages: unknown[] = [];
-  @viewState() protected catalogLoading = false;
-  @viewState() protected loadingOlder = false;
+  protected catalogMessages: unknown[] = [];
+  protected catalogLoading = false;
+  protected loadingOlder = false;
   protected catalogCursor: string | undefined;
   protected catalogSession: SessionCatalogSession | null = null;
   protected catalogHost: SessionCatalogHost | null = null;
@@ -668,24 +612,29 @@ export abstract class ChatPaneBase extends ControllerHost {
   constructor(
     readonly element: HTMLElement,
     public context: ApplicationContext,
-  ) {
-    super();
-    void new SubscriptionsController(this)
-      .watch(
-        () => this.resolveBoardProvider(),
-        (provider, notify) => {
-          const unsubscribeSnapshot = provider.snapshot$.subscribe(notify);
-          const unsubscribeError = provider.loadError$.subscribe(notify);
-          return () => {
-            unsubscribeSnapshot();
-            unsubscribeError();
-          };
-        },
-      )
-      .effect(
-        () => this.resolveBoardProvider(),
-        (provider) => provider.events.subscribe((event) => this.handleBoardCommand(event)),
-      );
+  ) {}
+
+  private subscribedBoardProvider: BoardProvider | undefined;
+  private stopBoardSubscriptions: (() => void) | undefined;
+
+  refreshBoardSubscriptions(): void {
+    if (!this.isConnected) {
+      return;
+    }
+    const provider = this.resolveBoardProvider();
+    if (provider === this.subscribedBoardProvider) {
+      return;
+    }
+    this.stopBoardSubscriptions?.();
+    this.subscribedBoardProvider = provider;
+    const stopSnapshot = provider.snapshot$.subscribe(this.invalidate);
+    const stopError = provider.loadError$.subscribe(this.invalidate);
+    const stopEvents = provider.events.subscribe((event) => this.handleBoardCommand(event));
+    this.stopBoardSubscriptions = () => {
+      stopSnapshot();
+      stopError();
+      stopEvents();
+    };
   }
 
   protected abstract refreshSessionPullRequests(options?: {

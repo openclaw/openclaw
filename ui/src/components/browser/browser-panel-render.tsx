@@ -9,12 +9,12 @@ import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { BrowserPanel } from "./browser-panel-owner.ts";
 import { BrowserPanelTabs } from "./browser-panel-tabs.tsx";
 
 registerEnglishCatalog(registerBrowserEnglish);
 export type BrowserPanelDock = "bottom" | "right";
-type ControllerProps = { controller: BrowserPanelController };
+type ControllerProps = { controller: BrowserPanel };
 
 function BrowserIconButton(props: {
   label: string;
@@ -331,6 +331,7 @@ function NativeViewport(props: ControllerProps) {
 function ViewportContent(props: ControllerProps) {
   // Input queues belong to this viewport’s synchronous browser owner.
   const input = untrack(() => props.controller.input);
+  const remoteInput = () => (props.controller.native.activeTab ? undefined : input);
   onCleanup(() => {
     input.elements = {};
   });
@@ -396,7 +397,7 @@ function ViewportContent(props: ControllerProps) {
                 "bp-overlay--inspect": props.controller.mode === "inspect",
               },
             ]}
-            onClick={(event) => props.controller.handleStageClick(event)}
+            onClick={(event) => remoteInput()?.handleStageClick(event)}
             onPointerDown={(event) => props.controller.input.handleOverlayPointerDown(event)}
             onPointerMove={(event) => props.controller.handleOverlayPointerMove(event)}
             onPointerUp={(event) => props.controller.input.handleOverlayPointerUp(event)}
@@ -412,8 +413,8 @@ function ViewportContent(props: ControllerProps) {
               autocorrect="off"
               autocapitalize="off"
               spellcheck="false"
-              onClick={(event) => props.controller.handleStageClick(event)}
-              onContextMenu={(event) => props.controller.handleStageClick(event)}
+              onClick={(event) => remoteInput()?.handleStageClick(event)}
+              onContextMenu={(event) => remoteInput()?.handleStageClick(event)}
               onBeforeInput={(event) => props.controller.input.handleTextInput(event)}
               onInput={(event) => props.controller.input.handleTextInput(event)}
               onCompositionStart={() => props.controller.input.handleCompositionStart()}
@@ -446,6 +447,7 @@ export function BrowserPanelChrome(
 ) {
   // Resource callbacks retain this viewport's synchronous browser owner.
   const controller = untrack(() => props.controller);
+  const remoteInput = () => (controller.native.activeTab ? undefined : controller.input);
   let viewport!: HTMLDivElement;
   onSettled(() => {
     const observer =
@@ -458,7 +460,7 @@ export function BrowserPanelChrome(
         : undefined;
     observer?.observe(viewport);
     // SAFETY: Native wheel events are WheelEvents; cancel local scrolling before they bubble.
-    const handleWheel = (event: Event) => controller.handleWheel(event as WheelEvent);
+    const handleWheel = (event: Event) => remoteInput()?.handleWheel(event as WheelEvent);
     const stopWheel = listen(viewport, "wheel", handleWheel, { passive: false });
     return () => {
       observer?.disconnect();
@@ -528,8 +530,8 @@ export function BrowserPanelChrome(
             : undefined
         }
         tabindex="0"
-        onKeyDown={(event: KeyboardEvent) => props.controller.handleViewportKeydown(event)}
-        onPaste={(event: ClipboardEvent) => props.controller.handleViewportPaste(event)}
+        onKeyDown={(event: KeyboardEvent) => remoteInput()?.handleViewportKeydown(event)}
+        onPaste={(event: ClipboardEvent) => remoteInput()?.handleViewportPaste(event)}
         aria-busy={props.controller.loading ? "true" : "false"}
       >
         <ViewportContent controller={props.controller} />

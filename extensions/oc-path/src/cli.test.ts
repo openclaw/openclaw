@@ -502,6 +502,54 @@ describe("openclaw path CLI", () => {
   });
 
   describe("set", () => {
+    it("preserves an existing quoted frontmatter value when editing another field", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, "AGENTS.md");
+      const value = String.raw`C:\Tools\bin`;
+      writeFileSync(filePath, `---\nname: old\nnote: ${JSON.stringify(value)}\n---\n`);
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://AGENTS.md/[frontmatter]/name",
+        "new",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode, stderrText(rt)).toBe(0);
+      const frontmatter = readFileSync(filePath, "utf8").split("---")[1];
+      expect(parseYaml(frontmatter ?? "")).toEqual({ name: "new", note: value });
+    });
+
+    it.each([
+      { label: "quote delimiters", value: '"hello"' },
+      { label: "surrounding whitespace", value: "  hello\t" },
+    ])("preserves a frontmatter $label across separate CLI reads and edits", async ({ value }) => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, "AGENTS.md");
+      writeFileSync(
+        filePath,
+        "---\nnote: old\nother: original\n---\n\n## Tasks\n- Keep this item\n",
+      );
+      const options = { cwd: workspaceDir, json: true };
+      const target = "oc://AGENTS.md/[frontmatter]/note";
+      const set = createTestRuntime();
+      await pathSetCommand(target, value, options, set);
+      expect(set.exitCode, stderrText(set)).toBe(0);
+
+      const read = createTestRuntime();
+      await pathResolveCommand(target, options, read);
+      expect(read.exitCode, stderrText(read)).toBe(0);
+      expect(JSON.parse(stdoutText(read)).match.valueText).toBe(value);
+
+      const other = createTestRuntime();
+      await pathSetCommand("oc://AGENTS.md/[frontmatter]/other", "updated", options, other);
+      expect(other.exitCode, stderrText(other)).toBe(0);
+      const reread = createTestRuntime();
+      await pathResolveCommand(target, options, reread);
+      expect(reread.exitCode, stderrText(reread)).toBe(0);
+      expect(JSON.parse(stdoutText(reread)).match.valueText).toBe(value);
+      expect(readFileSync(filePath, "utf8")).toContain("## Tasks\n- Keep this item");
+    });
+
     it.each([
       ["1e-7", "1e-7"],
       ["2.5E+3", "2500"],

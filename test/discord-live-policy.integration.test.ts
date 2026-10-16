@@ -31,12 +31,13 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../src/test-utils/bundled-plugin-public-surface.js";
 import { createTestGatewayScheduler } from "../src/test-utils/gateway-scheduler-clock.js";
+import { createDeferred } from "./helpers/promise.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
 
 // mock-isolation: Keep durable ingress and policy admission real; stop before model execution.
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
-  dispatchChannelInboundTurn: vi.fn(async () => ({ dispatched: false })),
+  dispatchChannelInboundTurn: vi.fn<typeof dispatchChannelInboundTurn>(),
 }));
 
 const tempDirs = createTempDirTracker();
@@ -129,6 +130,11 @@ describe("Discord admission through Gateway policy publication", () => {
       },
       fetchGuild: async () => null,
     };
+    const dispatchStarted = createDeferred();
+    vi.mocked(dispatchChannelInboundTurn).mockImplementation(async () => {
+      dispatchStarted.resolve();
+      return { admission: { kind: "handled", reason: "test-fixture" }, dispatched: false };
+    });
     const admitted = () =>
       vi
         .mocked(dispatchChannelInboundTurn)
@@ -269,7 +275,8 @@ describe("Discord admission through Gateway policy publication", () => {
         },
       });
       await send("newly-allowed");
-      await waitForFast(() => expect(admitted()).toEqual(["newly-allowed"]));
+      await dispatchStarted.promise;
+      expect(admitted()).toEqual(["newly-allowed"]);
       channelId = "457";
       channelLookupStarted = false;
       let releaseChannelLookup!: () => void;

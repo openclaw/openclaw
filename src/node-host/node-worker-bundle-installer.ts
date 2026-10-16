@@ -465,7 +465,7 @@ export class NodeWorkerBundleInstaller {
         }
         params.signal?.throwIfAborted();
         this.#recordInstall(input.gatewayNamespace);
-        return structuredClone(input.build);
+        return input.build;
       } catch (error) {
         if (error instanceof NodeWorkerBundleInstallError) {
           throw error;

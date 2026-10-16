@@ -42,6 +42,7 @@ export function restoreEmptyV21StorageForHistoricalFixture(database: DatabaseSyn
     "transcript_events",
     "memory_index_chunks",
     "memory_embedding_cache",
+    "memory_entry_origins",
     "session_transcript_fts_rows",
     "session_entry_snapshots",
     "context_engine_turn_outbox",
@@ -63,6 +64,7 @@ export function restoreEmptyV21StorageForHistoricalFixture(database: DatabaseSyn
       ALTER TABLE session_nodes DROP COLUMN session_started_at;
       ALTER TABLE session_nodes DROP COLUMN has_optional_references;
     `);
+    database.exec("DROP INDEX idx_agent_session_windows_conversation");
     database.exec(OPENCLAW_AGENT_SCHEMA_V21_SQL);
     database.exec("COMMIT");
   } catch (error) {

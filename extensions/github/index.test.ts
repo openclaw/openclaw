@@ -17,8 +17,8 @@ vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({
 const date = "2026-09-13T12:00:00Z";
 const pullUrl = "https://github.com/octocat/repo/pull/1";
 const imageUrl = "https://user-images.githubusercontent.com/image.png";
-function registered() {
-  const fixture = createPluginRegistryFixture();
+function registered(config: Parameters<typeof createPluginRegistryFixture>[0] = {}) {
+  const fixture = createPluginRegistryFixture(config);
   registerVirtualTestPlugin({
     ...fixture,
     id: "github",
@@ -93,6 +93,36 @@ describe("GitHub plugin ownership and RPC migration", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+  });
+
+  it("advertises only the configured Enterprise host through a session-bound reader", () => {
+    const fixture = registered({
+      gateway: {
+        github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+      },
+    });
+    expect(fixture.registry.controlUiDescriptors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          descriptor: expect.objectContaining({
+            id: "github-session",
+            linkReader: expect.objectContaining({
+              hosts: ["ghe.example.test"],
+              sessionScoped: true,
+              previewMethod: "github.sessionPreview",
+              detailMethod: "github.sessionDetail",
+            }),
+          }),
+        }),
+      ]),
+    );
+    expect(fixture.registry.gatewayMethodDescriptors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "github.preview", profileAccess: "independent" }),
+        expect.objectContaining({ name: "github.sessionPreview", scope: "operator.read" }),
+      ]),
+    );
+    fixture.rollbackPluginGlobalSideEffects("github", fixture.registry.plugins[0]!);
   });
 
   it("registers read-scoped methods lazily and removes surfaces on deactivation", () => {
