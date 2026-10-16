@@ -22,6 +22,7 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
   createAcpRuntime,
+  createDispatchGate,
   createMockAcpSessionManager,
   resetDispatchSessionMocks,
 } from "./dispatch-from-config.test-support.js";
@@ -265,56 +266,76 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
-  it("suppresses late reply_dispatch sends when a hook ignores a dispatch abort", async () => {
-    const hookStarted = createDeferred();
-    const releaseHook = createDeferred();
-    const lateSendResults: boolean[] = [];
-
-    hookMocks.runner.runReplyDispatch.mockImplementation(
-      async (_eventUnknown: unknown, hookCtxUnknown: unknown) => {
-        const hookCtx = hookCtxUnknown as ReplyHookContext;
-        hookStarted.resolve();
-        await releaseHook.promise;
-        lateSendResults.push(
-          hookCtx.dispatcher.sendToolResult({ text: "late tool should not send" }),
-          hookCtx.dispatcher.sendBlockReply({ text: "late block should not send" }),
-          hookCtx.dispatcher.sendFinalReply({ text: "late final should not send" }),
-        );
-        return { handled: true, queuedFinal: false, counts: hookCtx.dispatcher.getQueuedCounts() };
-      },
-    );
-
-    const dispatcher = createDispatcher();
-    const ctx = createDiscordCtx("agent:main:reply-dispatch-abort", "hang in reply dispatch");
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
-      cfg: createDispatchConfig(),
-      dispatcher,
-      replyResolver: vi.fn(),
-    });
-
-    let operation: ReturnType<typeof createReplyOperation> | undefined;
-    try {
-      await hookStarted.promise;
-      operation = replyRunRegistry.get("agent:main:reply-dispatch-abort");
-      expect(operation?.ownerSettlement).toBeDefined();
-      expect(replyRunRegistry.abort("agent:main:reply-dispatch-abort")).toBe(true);
-
-      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
-      expect(replyRunRegistry.get("agent:main:reply-dispatch-abort")).toBe(operation);
-      expect(operation?.abortSignal.aborted).toBe(true);
-      expectNoReplies(dispatcher);
-
-      releaseHook.resolve();
-      await operation?.ownerSettlement;
-      expect(lateSendResults).toEqual([false, false, false]);
-      expectNoReplies(dispatcher);
-      expect(getActiveReplyRunCount()).toBe(0);
-    } finally {
-      releaseHook.resolve();
-      await Promise.allSettled([dispatchPromise, operation?.ownerSettlement]);
-    }
-  });
+  it.each([false, true])(
+    "suppresses late reply_dispatch sends after source abort (existing operation=%s)",
+    async (existing) => {
+      const sessionKey = "agent:main:reply-dispatch-abort";
+      const hook = createDispatchGate();
+      const hookCompleted = createDeferred();
+      const lateSendResults: boolean[] = [];
+      const abortStates: boolean[] = [];
+      let hookAbortSignal: AbortSignal | undefined;
+      hookMocks.runner.runReplyDispatch.mockImplementation(
+        async (_event: unknown, context: unknown) => {
+          const { dispatcher, abortSignal } = context as ReplyHookContext;
+          hookAbortSignal = abortSignal;
+          await hook.wait();
+          abortStates.push(abortSignal?.aborted === true);
+          lateSendResults.push(
+            dispatcher.sendToolResult({ text: "late tool should not send" }),
+            dispatcher.sendBlockReply({ text: "late block should not send" }),
+            dispatcher.sendFinalReply({ text: "late final should not send" }),
+          );
+          hookCompleted.resolve();
+          return { handled: true, queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+        },
+      );
+      let operation = existing ? createOperation(sessionKey, "active-session") : undefined;
+      const dispatcher = createDispatcher();
+      const dispatchPromise = dispatchReplyFromConfig({
+        ctx: createDiscordCtx(sessionKey, "hang in reply dispatch"),
+        cfg: createDispatchConfig(),
+        dispatcher,
+        replyResolver: vi.fn(),
+      });
+      try {
+        await hook.started;
+        operation ??= replyRunRegistry.get(sessionKey);
+        if (existing) {
+          expect(hookAbortSignal?.aborted).toBe(false);
+        }
+        if (!existing) {
+          expect(operation?.ownerSettlement).toBeDefined();
+        }
+        expect(replyRunRegistry.abort(sessionKey)).toBe(true);
+        expect(operation?.abortSignal.aborted).toBe(true);
+        if (existing) {
+          expect(hookAbortSignal?.aborted).toBe(true);
+        }
+        await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
+        if (existing) {
+          expect(operation?.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+        } else {
+          expect(replyRunRegistry.get(sessionKey)).toBe(operation);
+          expectNoReplies(dispatcher);
+        }
+        hook.resolve();
+        await hookCompleted.promise;
+        if (!existing) {
+          await operation?.ownerSettlement;
+        }
+        if (existing) {
+          expect(abortStates).toEqual([true]);
+        }
+        expect(lateSendResults).toEqual([false, false, false]);
+        expectNoReplies(dispatcher);
+        expect(getActiveReplyRunCount()).toBe(0);
+      } finally {
+        hook.resolve();
+        await Promise.allSettled([dispatchPromise, operation?.ownerSettlement]);
+      }
+    },
+  );
 
   it("keys bound ACP tail abort ownership to the source dispatch session", async () => {
     const sourceSessionKey = "agent:main:discord:channel:C1";
@@ -427,51 +448,75 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     }
   });
 
-  it("registers pre-dispatch abort ownership when diagnostics are disabled", async () => {
-    hookMocks.runner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "before_dispatch",
-    );
-    const beforeDispatchStarted = createDeferred();
-    const releaseBeforeDispatch = createDeferred();
-    hookMocks.runner.runBeforeDispatch.mockImplementation(async () => {
-      beforeDispatchStarted.resolve();
-      await releaseBeforeDispatch.promise;
-      return undefined;
-    });
-
-    const dispatcher = createDispatcher();
-    const ctx = createDiscordCtx(
-      "agent:main:diagnostics-disabled-abort",
-      "hang in before dispatch",
-    );
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
-      cfg: createDispatchConfig(false),
-      dispatcher,
-      replyResolver: vi.fn(),
-    });
-
-    let operation: ReturnType<typeof createReplyOperation> | undefined;
-    try {
-      await beforeDispatchStarted.promise;
-      operation = replyRunRegistry.get("agent:main:diagnostics-disabled-abort");
-      expect(operation?.ownerSettlement).toBeDefined();
-      expect(replyRunRegistry.abort("agent:main:diagnostics-disabled-abort")).toBe(true);
-
-      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
-      expect(replyRunRegistry.get("agent:main:diagnostics-disabled-abort")).toBe(operation);
-      expect(operation?.abortSignal.aborted).toBe(true);
-      expect(diagnosticMocks.logMessageProcessed).not.toHaveBeenCalled();
-
-      releaseBeforeDispatch.resolve();
-      await operation?.ownerSettlement;
-      expectNoReplies(dispatcher);
-      expect(getActiveReplyRunCount()).toBe(0);
-    } finally {
-      releaseBeforeDispatch.resolve();
-      await Promise.allSettled([dispatchPromise, operation?.ownerSettlement]);
-    }
-  });
+  it.each([false, true])(
+    "keeps pre-dispatch abort ownership on the source (native command=%s)",
+    async (native) => {
+      hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "before_dispatch");
+      const hook = createDispatchGate();
+      hookMocks.runner.runBeforeDispatch.mockImplementation(async () => {
+        await hook.wait();
+        return undefined;
+      });
+      const source = native
+        ? "agent:main:discord:slash:user-1"
+        : "agent:main:diagnostics-disabled-abort";
+      const target = "agent:main:discord:channel:target-1";
+      const ctx = native
+        ? buildTestCtx({
+            Provider: "discord",
+            Surface: "discord",
+            CommandSource: "native",
+            CommandTurn: { kind: "native", source: "native", authorized: true },
+            SessionKey: source,
+            CommandTargetSessionKey: target,
+            BodyForAgent: "hang before command source dispatch",
+          })
+        : createDiscordCtx(source, "hang in before dispatch");
+      const dispatcher = createDispatcher();
+      const dispatchPromise = dispatchReplyFromConfig({
+        ctx,
+        cfg: createDispatchConfig(native),
+        dispatcher,
+        replyResolver: vi.fn(),
+      });
+      let operation: ReturnType<typeof createReplyOperation> | undefined;
+      try {
+        if (native) {
+          await expect(
+            raceWithTimeoutResult(
+              hook.started.then(() => "started" as const),
+              100,
+              "pending" as const,
+            ),
+          ).resolves.toBe("started");
+        } else {
+          await hook.started;
+        }
+        operation = replyRunRegistry.get(source);
+        expect(operation?.ownerSettlement).toBeDefined();
+        if (native) {
+          expect(replyRunRegistry.abort(target)).toBe(false);
+        }
+        expect(replyRunRegistry.abort(source)).toBe(true);
+        await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
+        expect(replyRunRegistry.get(source)).toBe(operation);
+        if (native) {
+          expect(replyRunRegistry.get(target)).toBeUndefined();
+        }
+        expect(operation?.abortSignal.aborted).toBe(true);
+        if (!native) {
+          expect(diagnosticMocks.logMessageProcessed).not.toHaveBeenCalled();
+        }
+        hook.resolve();
+        await operation?.ownerSettlement;
+        expectNoReplies(dispatcher);
+        expect(getActiveReplyRunCount()).toBe(0);
+      } finally {
+        hook.resolve();
+        await Promise.allSettled([dispatchPromise, operation?.ownerSettlement]);
+      }
+    },
+  );
 
   it("suppresses handled before_dispatch final delivery after active source abort", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
@@ -503,69 +548,6 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-    expect(getActiveReplyRunCount()).toBe(0);
-  });
-
-  it("wires active source operation abort into pre-dispatch reply_dispatch hooks", async () => {
-    hookMocks.runner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "reply_dispatch",
-    );
-    const { promise: hookStartedPromise, resolve: hookStarted } = createDeferred();
-    const { promise: releaseHookPromise, resolve: releaseHook } = createDeferred();
-    const { promise: hookCompletedPromise, resolve: hookCompleted } = createDeferred();
-    const lateSendResults: boolean[] = [];
-    const abortStates: boolean[] = [];
-    let hookAbortSignal: AbortSignal | undefined;
-
-    hookMocks.runner.runReplyDispatch.mockImplementation(
-      async (_eventUnknown: unknown, hookCtxUnknown: unknown) => {
-        const hookCtx = hookCtxUnknown as ReplyHookContext;
-        hookAbortSignal = hookCtx.abortSignal;
-        hookStarted();
-        await releaseHookPromise;
-        abortStates.push(hookCtx.abortSignal?.aborted === true);
-        lateSendResults.push(
-          hookCtx.dispatcher.sendToolResult({ text: "late tool should not send" }),
-          hookCtx.dispatcher.sendBlockReply({ text: "late block should not send" }),
-          hookCtx.dispatcher.sendFinalReply({ text: "late final should not send" }),
-        );
-        hookCompleted();
-        return { handled: true, queuedFinal: false, counts: hookCtx.dispatcher.getQueuedCounts() };
-      },
-    );
-
-    const existingOperation = createOperation(
-      "agent:main:already-active-reply-dispatch",
-      "already-active-reply-dispatch-session",
-    );
-    const dispatcher = createDispatcher();
-    const ctx = createDiscordCtx(
-      "agent:main:already-active-reply-dispatch",
-      "reply dispatch while an operation is already active",
-    );
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
-      cfg: createDispatchConfig(),
-      dispatcher,
-      replyResolver: vi.fn(),
-    });
-
-    await hookStartedPromise;
-    // The hook signal composes the operation signal with lifecycle/upstream
-    // signals, so assert propagation instead of instance identity.
-    expect(hookAbortSignal?.aborted).toBe(false);
-    expect(replyRunRegistry.abort("agent:main:already-active-reply-dispatch")).toBe(true);
-    expect(existingOperation.abortSignal.aborted).toBe(true);
-    expect(hookAbortSignal?.aborted).toBe(true);
-
-    await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
-    expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-
-    releaseHook();
-    await hookCompletedPromise;
-    expect(abortStates).toEqual([true]);
-    expect(lateSendResults).toEqual([false, false, false]);
-    expectNoReplies(dispatcher);
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
@@ -799,70 +781,6 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       expect.objectContaining({ outcome: "skipped", reason: "reply_operation_aborted" }),
     );
     expect(getActiveReplyRunCount()).toBe(0);
-  });
-
-  it("keys native command pre-dispatch ownership to the source session", async () => {
-    // Contract: reply-run admission is source-keyed for native command turns.
-    // Command handlers still resolve the target via CommandTargetSessionKey /
-    // initialSessionStoreEntry; only the reply-operation key is source-owned
-    // so mid-run status/stop/etc. do not wait on the target's active run.
-    hookMocks.runner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "before_dispatch",
-    );
-    const beforeDispatchStarted = createDeferred();
-    const releaseBeforeDispatch = createDeferred();
-    hookMocks.runner.runBeforeDispatch.mockImplementation(async () => {
-      beforeDispatchStarted.resolve();
-      await releaseBeforeDispatch.promise;
-      return undefined;
-    });
-
-    const sourceSessionKey = "agent:main:discord:slash:user-1";
-    const targetSessionKey = "agent:main:discord:channel:target-1";
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      CommandSource: "native",
-      CommandTurn: { kind: "native", source: "native", authorized: true },
-      SessionKey: sourceSessionKey,
-      CommandTargetSessionKey: targetSessionKey,
-      BodyForAgent: "hang before command source dispatch",
-    });
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
-      cfg: createDispatchConfig(),
-      dispatcher,
-      replyResolver: vi.fn(),
-    });
-
-    let operation: ReturnType<typeof createReplyOperation> | undefined;
-    try {
-      await expect(
-        raceWithTimeoutResult(
-          beforeDispatchStarted.promise.then(() => "started" as const),
-          100,
-          "pending" as const,
-        ),
-      ).resolves.toBe("started");
-      operation = replyRunRegistry.get(sourceSessionKey);
-      expect(operation?.ownerSettlement).toBeDefined();
-      expect(replyRunRegistry.abort(targetSessionKey)).toBe(false);
-      expect(replyRunRegistry.abort(sourceSessionKey)).toBe(true);
-
-      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
-      expect(replyRunRegistry.get(sourceSessionKey)).toBe(operation);
-      expect(replyRunRegistry.get(targetSessionKey)).toBeUndefined();
-      expect(operation?.abortSignal.aborted).toBe(true);
-
-      releaseBeforeDispatch.resolve();
-      await operation?.ownerSettlement;
-      expectNoReplies(dispatcher);
-      expect(getActiveReplyRunCount()).toBe(0);
-    } finally {
-      releaseBeforeDispatch.resolve();
-      await Promise.allSettled([dispatchPromise, operation?.ownerSettlement]);
-    }
   });
 
   it("admits unauthorized native /stop on the source while the target has an active run", async () => {

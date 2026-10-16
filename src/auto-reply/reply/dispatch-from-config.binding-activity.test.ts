@@ -1,5 +1,4 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import { inspectRuntimeConversationBindingRoute } from "../../channels/plugins/binding-routing.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -15,6 +14,7 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
   createAcpRuntime,
+  createDispatchGate,
   describe0BeforeEach0,
   dispatchReplyFromConfig,
   globalBeforeAll0,
@@ -22,12 +22,46 @@ import {
 } from "./dispatch-from-config.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
+const readBinding = sessionBindingMocks.resolveByConversationAsync;
+const readBindingSync = sessionBindingMocks.resolveByConversation;
+const touch = sessionBindingMocks.touch;
+const claim = hookMocks.runner.runInboundClaimForPluginOutcome;
+const received = hookMocks.runner.runMessageReceived;
+const abortMessage = mocks.tryFastAbortFromMessage;
+
 beforeAll(globalBeforeAll0);
+
+const activityConversation = {
+  channel: "discord",
+  accountId: "default",
+  conversationId: "channel:activity",
+};
+
+function pluginBinding(bindingId: string, target: string, conversation = activityConversation) {
+  return createPluginBindingRecord({
+    bindingId,
+    targetSessionKey: `plugin-binding:test:${target}`,
+    conversation,
+    pluginRoot: "/tmp/test-plugin",
+  });
+}
+
+function rejectSyncBindingRead() {
+  readBindingSync.mockImplementation(() => {
+    throw new Error("dispatch must await binding reads");
+  });
+}
+
+function expectNotCalled(...callbacks: Array<{ mock: { calls: unknown[] } }>) {
+  for (const callback of callbacks) {
+    expect(callback).not.toHaveBeenCalled();
+  }
+}
 
 describe("dispatch binding activity settlement", () => {
   beforeEach(() => {
     describe0BeforeEach0();
-    mocks.tryFastAbortFromMessage.mockClear();
+    abortMessage.mockClear();
   });
 
   it.each([
@@ -42,40 +76,19 @@ describe("dispatch binding activity settlement", () => {
     async ({ mode, fail, aborted, stoppedSubagents }) => {
       setNoAbort();
       mockPluginBindingClaim();
-      const binding = createPluginBindingRecord({
-        bindingId: "binding-await-activity",
-        targetSessionKey: "plugin-binding:test:activity",
-        conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel:activity",
-        },
-        pluginRoot: "/tmp/test-plugin",
-      });
-      const lookup = createDeferred<typeof binding>();
-      const lookupStarted = createDeferred();
-      sessionBindingMocks.resolveByConversation.mockImplementation(() => {
-        throw new Error("dispatch must await binding reads");
-      });
-      sessionBindingMocks.resolveByConversationAsync
-        .mockResolvedValue(binding)
-        .mockImplementationOnce(() => {
-          lookupStarted.resolve();
-          return lookup.promise;
-        });
+      const binding = pluginBinding("binding-await-activity", "activity");
+      const lookup = createDispatchGate<typeof binding>();
+      rejectSyncBindingRead();
+      readBinding.mockResolvedValue(binding).mockImplementationOnce(lookup.wait);
       if (mode === "fast abort") {
-        mocks.tryFastAbortFromMessage.mockResolvedValue({
+        abortMessage.mockResolvedValue({
           handled: true,
           aborted,
           stoppedSubagents,
         });
       }
-      const mutation = createDeferred();
-      const started = createDeferred();
-      sessionBindingMocks.touch.mockImplementationOnce(() => {
-        started.resolve();
-        return mutation.promise;
-      });
+      const mutation = createDispatchGate();
+      touch.mockImplementationOnce(mutation.wait);
       const dispatcher = createDispatcher();
       const replyResolver = vi.fn(async () => ({ text: "should not run" }));
       const params = {
@@ -92,33 +105,25 @@ describe("dispatch binding activity settlement", () => {
         replyResolver,
       };
       const dispatch = dispatchReplyFromConfig(params);
-      await Promise.race([lookupStarted.promise, dispatch]);
-      expect(sessionBindingMocks.touch).not.toHaveBeenCalled();
-      expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
-      expect(hookMocks.runner.runMessageReceived).not.toHaveBeenCalled();
-      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      await Promise.race([lookup.started, dispatch]);
+      expectNotCalled(touch, claim, received, dispatcher.sendFinalReply);
       lookup.resolve(binding);
-      await started.promise;
-      expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
-      expect(hookMocks.runner.runMessageReceived).not.toHaveBeenCalled();
-      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      await mutation.started;
+      expectNotCalled(claim, received, dispatcher.sendFinalReply);
       if (fail) {
         const failure = expect(dispatch).rejects.toThrow("activity persistence failed");
         mutation.reject(new Error("activity persistence failed"));
         await failure;
-        expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
-        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        expectNotCalled(claim, dispatcher.sendFinalReply);
         if (mode === "fast abort") {
           await dispatchReplyFromConfig(params);
-          expect(mocks.tryFastAbortFromMessage).toHaveBeenCalledTimes(
-            aborted || stoppedSubagents > 0 ? 1 : 2,
-          );
+          expect(abortMessage).toHaveBeenCalledTimes(aborted || stoppedSubagents > 0 ? 1 : 2);
         }
       } else {
         mutation.resolve();
         await dispatch;
         if (mode === "plugin claim") {
-          expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledOnce();
+          expect(claim).toHaveBeenCalledOnce();
         } else {
           expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "⚙️ Agent was aborted." });
         }
@@ -146,19 +151,10 @@ describe("dispatch binding activity settlement", () => {
         setNoAbort();
         mockPluginBindingClaim();
       } else {
-        mocks.tryFastAbortFromMessage.mockResolvedValue({ handled: true, aborted: false });
+        abortMessage.mockResolvedValue({ handled: true, aborted: false });
       }
       const original: SessionBindingRecord = plugin
-        ? createPluginBindingRecord({
-            bindingId: "binding-owner-before",
-            targetSessionKey: "plugin-binding:test:before",
-            conversation: {
-              channel: "discord",
-              accountId: "default",
-              conversationId: "channel:activity",
-            },
-            pluginRoot: "/tmp/test-plugin",
-          })
+        ? pluginBinding("binding-owner-before", "before")
         : {
             bindingId: "binding-acp-before",
             targetSessionKey: "agent:main:acp:before",
@@ -181,24 +177,14 @@ describe("dispatch binding activity settlement", () => {
       };
       let current = original;
       if (!plugin) {
-        sessionBindingMocks.resolveByConversation.mockImplementation(() => {
-          throw new Error("dispatch must await binding reads");
-        });
+        rejectSyncBindingRead();
       }
-      sessionBindingMocks.resolveByConversationAsync.mockImplementation(async () => current);
-      const firstActivity = createDeferred();
-      const firstStarted = createDeferred();
-      const replacementActivity = createDeferred();
-      const replacementStarted = createDeferred();
-      sessionBindingMocks.touch
-        .mockImplementationOnce(() => {
-          firstStarted.resolve();
-          return firstActivity.promise;
-        })
-        .mockImplementationOnce(() => {
-          replacementStarted.resolve();
-          return replacementActivity.promise;
-        });
+      readBinding.mockImplementation(async () => current);
+      const firstActivity = createDispatchGate();
+      const replacementActivity = createDispatchGate();
+      touch
+        .mockImplementationOnce(firstActivity.wait)
+        .mockImplementationOnce(replacementActivity.wait);
       const dispatcher = createDispatcher();
       const replyResolver = vi.fn();
       const dispatch = dispatchReplyFromConfig({
@@ -213,21 +199,20 @@ describe("dispatch binding activity settlement", () => {
         dispatcher,
         ...(plugin ? {} : { replyResolver }),
       });
-      await Promise.race([firstStarted.promise, dispatch]);
+      await Promise.race([firstActivity.started, dispatch]);
       current = replacement;
       firstActivity.resolve();
-      await Promise.race([replacementStarted.promise, dispatch]);
-      expect(sessionBindingMocks.touch).toHaveBeenCalledTimes(2);
+      await Promise.race([replacementActivity.started, dispatch]);
+      expect(touch).toHaveBeenCalledTimes(2);
       if (plugin) {
-        expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
+        expect(claim).not.toHaveBeenCalled();
       } else {
-        expect(sessionBindingMocks.touch).toHaveBeenLastCalledWith(
+        expect(touch).toHaveBeenLastCalledWith(
           replacement.bindingId,
           undefined,
           replacement.conversation,
         );
-        expect(mocks.tryFastAbortFromMessage).not.toHaveBeenCalled();
-        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        expectNotCalled(abortMessage, dispatcher.sendFinalReply);
       }
       const failure =
         outcome === "complete"
@@ -247,12 +232,11 @@ describe("dispatch binding activity settlement", () => {
       }
       if (failure) {
         await failure;
-        expect(mocks.tryFastAbortFromMessage).not.toHaveBeenCalled();
-        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        expectNotCalled(abortMessage, dispatcher.sendFinalReply);
       } else {
         await dispatch;
         if (plugin) {
-          expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledExactlyOnceWith(
+          expect(claim).toHaveBeenCalledExactlyOnceWith(
             "openclaw-codex-app-server",
             expect.anything(),
             expect.objectContaining({
@@ -263,11 +247,11 @@ describe("dispatch binding activity settlement", () => {
             }),
           );
         } else {
-          expect(mocks.tryFastAbortFromMessage).toHaveBeenCalledOnce();
+          expect(abortMessage).toHaveBeenCalledOnce();
           expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
         }
       }
-      expect(sessionBindingMocks.touch).toHaveBeenCalledTimes(2);
+      expect(touch).toHaveBeenCalledTimes(2);
       if (!plugin) {
         expect(replyResolver).not.toHaveBeenCalled();
       }
@@ -347,19 +331,16 @@ describe("channel-derived ACP route admission", () => {
       const runtime = createAcpRuntime([{ type: "done" }]);
       acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
       let current: SessionBindingRecord | null = binding;
-      const started = createDeferred();
-      const release = createDeferred();
-      sessionBindingMocks.resolveByConversationAsync.mockImplementation(async () => current);
+      const activity = createDispatchGate();
+      readBinding.mockImplementation(async () => current);
       if (phase === "initial read") {
-        sessionBindingMocks.resolveByConversationAsync.mockImplementationOnce(async () => {
-          started.resolve();
-          await release.promise;
+        readBinding.mockImplementationOnce(async () => {
+          await activity.wait();
           return current;
         });
       } else {
-        sessionBindingMocks.touch.mockImplementationOnce(async () => {
-          started.resolve();
-          await release.promise;
+        touch.mockImplementationOnce(async () => {
+          await activity.wait();
         });
       }
       const dispatcher = createDispatcher();
@@ -375,17 +356,12 @@ describe("channel-derived ACP route admission", () => {
         () => ({ error: undefined }),
         (error: unknown) => ({ error }),
       );
-      await Promise.race([started.promise, result]);
+      await Promise.race([activity.started, result]);
       current =
         change === "removed"
           ? null
           : change === "plugin" || change === "plugin-metadata"
-            ? createPluginBindingRecord({
-                bindingId: "route-plugin",
-                targetSessionKey: "plugin-binding:test:replacement",
-                conversation: binding.conversation,
-                pluginRoot: "/tmp/test-plugin",
-              })
+            ? pluginBinding("route-plugin", "replacement", binding.conversation)
             : {
                 ...binding,
                 boundAt: change === "incarnation" ? 2 : binding.boundAt,
@@ -395,12 +371,9 @@ describe("channel-derived ACP route admission", () => {
       if (change === "plugin-metadata" && current) {
         current = { ...binding, metadata: current.metadata };
       }
-      release.resolve();
+      activity.resolve();
       expect((await result).error).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-      expect(runtime.runTurn).not.toHaveBeenCalled();
-      expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
-      expect(replyResolver).not.toHaveBeenCalled();
-      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      expectNotCalled(runtime.runTurn, claim, replyResolver, dispatcher.sendFinalReply);
     },
   );
 
@@ -412,7 +385,7 @@ describe("channel-derived ACP route admission", () => {
     async ({ bound, threadId, target }) => {
       const runtime = createAcpRuntime([{ type: "done" }]);
       acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
-      sessionBindingMocks.resolveByConversationAsync.mockImplementation(async (ref) =>
+      readBinding.mockImplementation(async (ref) =>
         bound && ref.conversationId === binding.conversation.conversationId ? binding : null,
       );
       await dispatchReplyFromConfig({

@@ -28,7 +28,11 @@ import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import { resetDispatchSessionMocks } from "./dispatch-from-config.test-support.js";
+import {
+  createMockAcpSessionManager,
+  createDispatchGate,
+  resetDispatchSessionMocks,
+} from "./dispatch-from-config.test-support.js";
 import {
   createDispatchMemorySession,
   dispatchMemorySessionScope,
@@ -44,6 +48,50 @@ let runAfterReplyOperationClear: typeof import("./reply-run-registry.js").runAft
 let resetReplyRunRegistry: typeof import("./reply-run-registry.test-support.js").testing.resetReplyRunRegistry;
 
 const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
+type DispatchInput = Parameters<typeof dispatchReplyFromConfig>[0];
+type PendingMemory = Awaited<ReturnType<typeof createDispatchMemorySession>>;
+
+function dispatch(
+  dispatcher: DispatchInput["dispatcher"],
+  replyResolver: DispatchInput["replyResolver"],
+  overrides: Omit<Partial<DispatchInput>, "dispatcher" | "replyResolver"> = {},
+) {
+  return dispatchReplyFromConfig({
+    ctx: createHookCtx(),
+    cfg: emptyConfig,
+    ...overrides,
+    dispatcher,
+    replyResolver,
+  });
+}
+
+function createPendingMemory(pending: ReturnType<typeof pendingFinalDelivery>) {
+  return createDispatchMemorySession({
+    sessionId: "session-1",
+    updatedAt: 1,
+    pendingFinalDelivery: pending,
+  });
+}
+
+function dispatchMemoryReply(
+  memory: PendingMemory,
+  dispatcher: DispatchInput["dispatcher"],
+  replyResolver: DispatchInput["replyResolver"],
+  internal = false,
+) {
+  return memory.run(() =>
+    withReplyDispatcher({
+      dispatcher,
+      run: () =>
+        dispatch(dispatcher, replyResolver, {
+          ctx: {
+            ...(internal ? createInternalHookCtx() : createHookCtx()),
+            SessionKey: memory.scope.sessionKey,
+          },
+        }),
+    }),
+  );
+}
 
 function pendingFinalDelivery(
   text: string,
@@ -128,19 +176,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     internalHookMocks.triggerInternalHook.mockReset().mockResolvedValue(undefined);
     sessionStoreMocks.updateSessionEntry.mockClear();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReset().mockImplementation(() => ({
+      ...createMockAcpSessionManager(),
       resolveSessionAsync: async () => ({ kind: "none" as const }),
-      getObservabilitySnapshot: () => ({
-        runtimeCache: { activeSessions: 0, idleTtlMs: 0, evictedTotal: 0 },
-        turns: {
-          active: 0,
-          queueDepth: 0,
-          completed: 0,
-          failed: 0,
-          averageLatencyMs: 0,
-          maxLatencyMs: 0,
-        },
-        errorsByCode: {},
-      }),
       runTurn: vi.fn(),
     }));
     agentEventMocks.onAgentEvent.mockReset().mockImplementation(() => () => {});
@@ -174,12 +211,11 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
           return null;
         },
         async () => {
-          const result = await dispatchReplyFromConfig({
-            ctx: { ...createHookCtx(), SessionKey: sessionKey, AgentId: "qa" },
-            cfg,
-            dispatcher: createDispatcher(),
-            replyResolver: async () => ({ text: "selected owner reply" }),
-          });
+          const result = await dispatch(
+            createDispatcher(),
+            async () => ({ text: "selected owner reply" }),
+            { ctx: { ...createHookCtx(), SessionKey: sessionKey, AgentId: "qa" }, cfg },
+          );
           expect(result.queuedFinal).toBe(true);
         },
       );
@@ -194,11 +230,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     } satisfies PluginHookReplyDispatchResult);
     const dispatcher = createDispatcher();
 
-    const result = await dispatchReplyFromConfig({
-      ctx: createHookCtx(),
+    const result = await dispatch(dispatcher, async () => ({ text: "model reply" }), {
       cfg: { ...emptyConfig, session: { sendPolicy: { default: "deny" } } },
-      dispatcher,
-      replyResolver: async () => ({ text: "model reply" }),
     });
 
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalled();
@@ -226,12 +259,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       return { text: "model reply" } satisfies ReplyPayload;
     });
 
-    await dispatchReplyFromConfig({
-      ctx: createHookCtx(),
-      cfg: emptyConfig,
-      dispatcher: createDispatcher(),
+    await dispatch(createDispatcher(), replyResolver, {
       replyOptions: { admittedSessionSettings },
-      replyResolver,
     });
 
     expect(hookMocks.runner.runReplyDispatch).not.toHaveBeenCalled();
@@ -247,11 +276,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   }) {
     vi.useFakeTimers();
     hookMocks.runner.hasHooks.mockReturnValue(false);
-    const memory = await createDispatchMemorySession({
-      sessionId: "session-1",
-      updatedAt: 1,
-      pendingFinalDelivery: params.pending,
-    });
+    const memory = await createPendingMemory(params.pending);
     const hookStarted = createDeferred();
     const deliver = vi.fn().mockResolvedValue(undefined);
     let hookCalls = 0;
@@ -266,18 +291,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       },
     });
     try {
-      const result = memory.run(() =>
-        withReplyDispatcher({
-          dispatcher,
-          run: () =>
-            dispatchReplyFromConfig({
-              ctx: { ...createInternalHookCtx(), SessionKey: memory.scope.sessionKey },
-              cfg: emptyConfig,
-              dispatcher,
-              replyResolver: async () => params.replies,
-            }),
-        }),
-      );
+      const result = dispatchMemoryReply(memory, dispatcher, async () => params.replies, true);
       await hookStarted.promise;
       await params.afterStall?.(memory);
       await vi.advanceTimersByTimeAsync(15_000);
@@ -335,13 +349,14 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         await memory.patch({ pendingFinalDelivery: newer });
       },
     });
-    expect(entry?.pendingFinalDelivery).toEqual(
-      pendingFinalDelivery("newer reply", { createdAt: 2, intentId: "newer-intent" }),
-    );
+    expect(entry?.pendingFinalDelivery).toEqual(newer);
   });
 
-  const createNoSendFailure = (retryable = true) =>
-    new PlatformMessageNotDispatchedError("offline", { cause: new Error("offline"), retryable });
+  const createNoSendFailure = () =>
+    new PlatformMessageNotDispatchedError("offline", {
+      cause: new Error("offline"),
+      retryable: true,
+    });
   const createPartialDelivery = () =>
     Object.assign(new Error("partial delivery", { cause: createNoSendFailure() }), {
       code: "CHANNEL_PARTIAL_DELIVERY",
@@ -354,11 +369,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   ] as const)("reconciles pending final delivery after %s", async (name, error, preserve) => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     const pending = pendingFinalDelivery("recoverable final reply");
-    const memory = await createDispatchMemorySession({
-      sessionId: "session-1",
-      updatedAt: 1,
-      pendingFinalDelivery: pending,
-    });
+    const memory = await createPendingMemory(pending);
     const dispatcher = createReplyDispatcher({
       deliver: async () => {
         throw error;
@@ -369,17 +380,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         }
       },
     });
-    await memory.run(() =>
-      withReplyDispatcher({
-        dispatcher,
-        run: () =>
-          dispatchReplyFromConfig({
-            ctx: { ...createHookCtx(), SessionKey: memory.scope.sessionKey },
-            cfg: emptyConfig,
-            dispatcher,
-            replyResolver: async () => pendingFinalReply("recoverable final reply"),
-          }),
-      }),
+    await dispatchMemoryReply(memory, dispatcher, async () =>
+      pendingFinalReply("recoverable final reply"),
     );
     expect(memory.read()?.pendingFinalDelivery).toMatchObject({
       ...pending,
@@ -391,13 +393,11 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     "clears %s final custody after pre-delivery cancellation",
     async (state) => {
       hookMocks.runner.hasHooks.mockReturnValue(false);
-      const memory = await createDispatchMemorySession({
-        sessionId: "session-1",
-        updatedAt: 1,
-        pendingFinalDelivery: pendingFinalDelivery("policy-suppressed reply", {
+      const memory = await createPendingMemory(
+        pendingFinalDelivery("policy-suppressed reply", {
           deliveries: [{ id: "delivery-1", state }],
         }),
-      });
+      );
       const deliver = vi.fn().mockResolvedValue(undefined);
       const dispatcher = createReplyDispatcher({
         deliver,
@@ -405,30 +405,23 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
           state === "delivered" && payload.text === "policy-suppressed reply" ? payload : null,
       });
 
-      const result = await memory.run(() =>
-        withReplyDispatcher({
-          dispatcher,
-          run: () =>
-            dispatchReplyFromConfig({
-              ctx: { ...createHookCtx(), SessionKey: memory.scope.sessionKey },
-              cfg: emptyConfig,
-              dispatcher,
-              replyResolver: async () => pendingFinalReply("policy-suppressed reply"),
-            }),
-        }),
+      const result = await dispatchMemoryReply(memory, dispatcher, async () =>
+        pendingFinalReply("policy-suppressed reply"),
       );
       const receipt = await dispatcher.waitForIdle();
       expect(memory.read()?.pendingFinalDelivery).toBeUndefined();
 
-      expect(result.queuedFinal).toBe(true);
       expect(deliver).not.toHaveBeenCalled();
       expect(receipt?.counts.final).toMatchObject({
         delivered: 0,
         cancelled: 2,
         failedBeforeSend: 0,
       });
-      expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
-      expect(result.noVisibleReplyFallbackEligible).toBe(true);
+      expect(result).toMatchObject({
+        queuedFinal: true,
+        noVisibleReplyFallbackDelivered: undefined,
+        noVisibleReplyFallbackEligible: true,
+      });
     },
   );
 
@@ -442,31 +435,25 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     let queuedOperation: ReturnType<typeof createReplyOperation> | undefined;
 
     try {
-      const result = await dispatchReplyFromConfig({
-        ctx: createHookCtx(),
-        cfg: emptyConfig,
-        dispatcher,
-        replyResolver: async () => {
-          const operation = replyRunRegistry.get("agent:test:session");
-          if (!operation) {
-            throw new Error("expected dispatch reply operation");
-          }
-          operation.fail("run_failed", new Error("provider failed"));
-          runAfterReplyOperationClear(operation, () => {
-            deliveryOrder.push("followup");
-            queuedOperation = createReplyOperation({
-              sessionKey: "agent:test:session",
-              sessionId: "queued-session",
-              resetTriggered: false,
-            });
+      const result = await dispatch(dispatcher, async () => {
+        const operation = replyRunRegistry.get("agent:test:session");
+        if (!operation) {
+          throw new Error("expected dispatch reply operation");
+        }
+        operation.fail("run_failed", new Error("provider failed"));
+        runAfterReplyOperationClear(operation, () => {
+          deliveryOrder.push("followup");
+          queuedOperation = createReplyOperation({
+            sessionKey: "agent:test:session",
+            sessionId: "queued-session",
+            resetTriggered: false,
           });
-          return { text: "first reply" };
-        },
+        });
+        return { text: "first reply" };
       });
 
       expect(result.queuedFinal).toBe(true);
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(deliver).toHaveBeenCalledWith({ text: "first reply" }, { kind: "final" });
+      expect(deliver).toHaveBeenCalledExactlyOnceWith({ text: "first reply" }, { kind: "final" });
       await vi.waitFor(() => {
         expect(queuedOperation).toBeDefined();
       });
@@ -478,160 +465,110 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     }
   });
 
-  it("releases a stalled finalizing dispatch and rejects its late reply", async () => {
-    vi.useFakeTimers();
-    const ownerStarted = createDeferred();
-    const releaseOwner = createDeferred();
-    const dispatcher = createDispatcher();
-    let successor: ReturnType<typeof createReplyOperation> | undefined;
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-
-    try {
-      const dispatchPromise = dispatchReplyFromConfig({
-        ctx: createHookCtx(),
-        cfg: emptyConfig,
-        dispatcher,
-        replyResolver: async () => {
+  it.each([false, true])(
+    "bounds finalization while preserving live TTS work (slow TTS=%s)",
+    async (slowTts) => {
+      vi.useFakeTimers();
+      const gate = createDispatchGate();
+      const dispatcher = createDispatcher();
+      const text = slowTts ? "reply with slow TTS" : "late reply";
+      let successor: ReturnType<typeof createReplyOperation> | undefined;
+      hookMocks.runner.hasHooks.mockReturnValue(false);
+      if (slowTts) {
+        ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (input: unknown) => {
+          await gate.wait();
+          return (input as { payload: ReplyPayload }).payload;
+        });
+      }
+      try {
+        const result = dispatch(dispatcher, async () => {
           const operation = replyRunRegistry.get("agent:test:session");
           if (!operation) {
             throw new Error("expected dispatch reply operation");
           }
           operation.freezeAbort();
-          ownerStarted.resolve();
-          await releaseOwner.promise;
-          return { text: "late reply" };
-        },
-      });
-
-      await ownerStarted.promise;
-      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
-      await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: false });
-
-      expect(replyRunRegistry.get("agent:test:session")).toBeUndefined();
-      successor = createReplyOperation({
-        sessionKey: "agent:test:session",
-        sessionId: "successor-session",
-        resetTriggered: false,
-      });
-
-      releaseOwner.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-      expect(replyRunRegistry.get("agent:test:session")).toBe(successor);
-    } finally {
-      releaseOwner.resolve();
-      successor?.complete();
-      await vi.runOnlyPendingTimersAsync();
-      expect(getActiveReplyRunCount()).toBe(0);
-      expect(vi.getTimerCount()).toBe(0);
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps bounded TTS fallback work alive past the default finalization lease", async () => {
-    vi.useFakeTimers();
-    const ttsStarted = createDeferred();
-    const releaseTts = createDeferred();
-    const dispatcher = createDispatcher();
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
-      ttsStarted.resolve();
-      await releaseTts.promise;
-      return (paramsUnknown as { payload: ReplyPayload }).payload;
-    });
-
-    try {
-      const dispatchPromise = dispatchReplyFromConfig({
-        ctx: createHookCtx(),
-        cfg: emptyConfig,
-        dispatcher,
-        replyResolver: async () => {
-          const operation = replyRunRegistry.get("agent:test:session");
-          if (!operation) {
-            throw new Error("expected dispatch reply operation");
+          if (!slowTts) {
+            await gate.wait();
           }
-          operation.freezeAbort();
-          return { text: "reply with slow TTS" };
-        },
-      });
+          return { text };
+        });
+        await gate.started;
+        await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
+        if (slowTts) {
+          const active = replyRunRegistry.get("agent:test:session");
+          expect(active).toBeDefined();
+          expect(active?.result).toBeNull();
+          expect(replyRunRegistry.abort("agent:test:session")).toBe(false);
+          gate.resolve();
+          await expect(result).resolves.toMatchObject({ queuedFinal: true });
+          expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text });
+          expect(replyRunRegistry.get("agent:test:session")).toBeUndefined();
+        } else {
+          await expect(result).resolves.toMatchObject({ queuedFinal: false });
+          expect(replyRunRegistry.get("agent:test:session")).toBeUndefined();
+          successor = createReplyOperation({
+            sessionKey: "agent:test:session",
+            sessionId: "successor-session",
+            resetTriggered: false,
+          });
+          gate.resolve();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+          expect(replyRunRegistry.get("agent:test:session")).toBe(successor);
+        }
+      } finally {
+        gate.resolve();
+        successor?.complete();
+        await vi.runOnlyPendingTimersAsync();
+        if (!slowTts) {
+          expect(getActiveReplyRunCount()).toBe(0);
+          expect(vi.getTimerCount()).toBe(0);
+        }
+        vi.useRealTimers();
+      }
+    },
+  );
 
-      await ttsStarted.promise;
-      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
-
-      const active = replyRunRegistry.get("agent:test:session");
-      expect(active).toBeDefined();
-      expect(active?.result).toBeNull();
-      expect(replyRunRegistry.abort("agent:test:session")).toBe(false);
-
-      releaseTts.resolve();
-      await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "reply with slow TTS" });
-      expect(replyRunRegistry.get("agent:test:session")).toBeUndefined();
-    } finally {
-      releaseTts.resolve();
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
-  });
-
-  it("dedupes equivalent non-streaming final payload entries for one turn", async () => {
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    const dispatcher = createDispatcher();
-    const replyPayload = {
-      text: "repeat once",
-      mediaUrls: ["file:///tmp/repeat.png"],
-      channelData: { telegram: { parseMode: "MarkdownV2" } },
-    } satisfies ReplyPayload;
-
-    const result = await dispatchReplyFromConfig({
-      ctx: createHookCtx(),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver: async () => [
-        replyPayload,
-        { ...replyPayload },
-        { ...replyPayload, videoAsNote: false },
-      ],
-    });
-
-    expect(result.queuedFinal).toBe(true);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(replyPayload);
-  });
-
+  const repeatedPayload: ReplyPayload = {
+    text: "repeat once",
+    mediaUrls: ["file:///tmp/repeat.png"],
+    channelData: { telegram: { parseMode: "MarkdownV2" } },
+  };
   it.each([
     {
-      name: "different native locations",
+      name: "dedupes equivalent non-streaming final payload entries",
+      replies: [
+        repeatedPayload,
+        { ...repeatedPayload },
+        { ...repeatedPayload, videoAsNote: false },
+      ],
+      expected: [repeatedPayload],
+    },
+    {
+      name: "preserves different native locations",
       replies: [
         { location: { latitude: 1, longitude: 2 } },
         { location: { latitude: 3, longitude: 4 } },
       ],
     },
     {
-      name: "normal and round videos sharing the same media",
+      name: "preserves normal and round videos sharing media",
       replies: [
         { mediaUrl: "file:///tmp/reply.mp4" },
         { mediaUrl: "file:///tmp/reply.mp4", videoAsNote: true },
       ],
     },
-  ] satisfies Array<{ name: string; replies: ReplyPayload[] }>)(
-    "preserves final payloads with $name",
-    async ({ replies }) => {
+  ] satisfies Array<{ name: string; replies: ReplyPayload[]; expected?: ReplyPayload[] }>)(
+    "$name",
+    async ({ replies, expected = replies }) => {
       hookMocks.runner.hasHooks.mockReturnValue(false);
       const dispatcher = createDispatcher();
-
-      const result = await dispatchReplyFromConfig({
-        ctx: createHookCtx(),
-        cfg: emptyConfig,
-        dispatcher,
-        replyResolver: async () => replies,
-      });
-
+      const result = await dispatch(dispatcher, async () => replies);
       expect(result.queuedFinal).toBe(true);
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
-      expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, replies[0]);
-      expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, replies[1]);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(expected.length);
+      for (const [index, payload] of expected.entries()) {
+        expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(index + 1, payload);
+      }
     },
   );
 });
