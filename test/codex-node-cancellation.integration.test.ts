@@ -9,12 +9,13 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import codexPlugin from "../extensions/codex/index.js";
-import codexManifest from "../extensions/codex/openclaw.plugin.json" with { type: "json" };
 import { invokeRegisteredNodeHostCommand } from "../src/node-host/plugin-node-host.js";
+import { loadPluginManifest } from "../src/plugins/manifest.js";
 import { createTestPluginRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
 import { runWithSpawnBroker } from "../src/process/spawn-broker/context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "../src/process/spawn-broker/host.js";
 import { isPidDefinitelyDead } from "../src/shared/pid-alive.js";
+import { resolveBundledPluginPublicModulePath } from "../src/test-utils/bundled-plugin-public-surface.js";
 import { createDeferred, withTestTimeout } from "./helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
@@ -57,10 +58,21 @@ it.skipIf(skipBrokerTests)(
     const registry = createTestPluginRegistry(
       createPluginRuntimeMock({ config: { current: () => config } }),
     );
+    const codexManifest = loadPluginManifest(
+      path.dirname(
+        resolveBundledPluginPublicModulePath({
+          pluginId: "codex",
+          artifactBasename: "openclaw.plugin.json",
+        }),
+      ),
+    );
+    if (!codexManifest.ok) {
+      throw new Error(codexManifest.error);
+    }
     const record = createPluginRecord({
       id: "codex",
       source: path.join(root, "index.js"),
-      nativeSessionCatalog: codexManifest.setup.nativeSessionCatalog,
+      nativeSessionCatalog: codexManifest.manifest.setup?.nativeSessionCatalog,
     });
     registry.registry.plugins.push(record);
     codexPlugin.register(registry.createApi(record, { config, pluginConfig }));

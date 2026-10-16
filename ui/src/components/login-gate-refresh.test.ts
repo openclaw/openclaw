@@ -10,7 +10,8 @@ import { gatePart, mountFailure } from "./login-gate.test-support.ts";
 const retry = recovery.retryStaleChunkReloadWhenReachable;
 let reload: ReturnType<typeof vi.fn<() => void>>;
 let probe: ReturnType<typeof vi.fn<() => Promise<{ ok: boolean }>>>;
-const refresh = (element: HTMLElement) => gatePart<HTMLButtonElement>(element, "failure-refresh");
+const refresh = (element: HTMLElement) =>
+  element.querySelector<HTMLButtonElement>(".login-gate__failure-refresh")!;
 const mountMismatch = () => mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
 const expectAttempt = () => expect(recovery.retryStaleChunkReloadWhenReachable);
 function deferredProbe() {

@@ -142,7 +142,11 @@ it("imports nullable and absent usage metadata and releases the runtime gate", a
 
 it.each([
   { name: "empty unversioned stub", socket: undefined, canonical: "missing" },
-  { name: "token-only stub", socket: { token: " fixture " }, canonical: "missing" },
+  {
+    name: "token-only stub",
+    socket: { path: undefined, token: " fixture " },
+    canonical: "missing",
+  },
   { name: "socket stub with valid policy", socket: oldSocket, canonical: "valid" },
   { name: "socket stub with invalid policy", socket: oldSocket, canonical: "invalid" },
 ])("retires $name", async ({ socket, canonical }) => {

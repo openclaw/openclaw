@@ -57,7 +57,7 @@ describe("legacy node-host Doctor migration", () => {
     return {
       env,
       stateDir,
-      migrate(hooks: MigrationHooks = {}) {
+      migrate(this: void, hooks: MigrationHooks = {}) {
         return migrateLegacyNodeHostConfig({
           detected: detectLegacyNodeHostConfig({ stateDir, doctorOnlyStateMigrations: true }),
           env,

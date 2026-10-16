@@ -37,10 +37,8 @@ const item: SidebarAttentionItem = {
 
 const container = document.createElement("div");
 const overlayDisposers: Array<() => void> = [];
-function find<K extends keyof HTMLElementTagNameMap>(selector: K): HTMLElementTagNameMap[K] | null;
-function find<T extends Element = HTMLElement>(selector: string): T | null;
 function find(selector: string) {
-  return container.querySelector(selector);
+  return container.querySelector<HTMLElement>(selector);
 }
 let dispose: (() => void) | undefined;
 function render(view: (() => JSX.Element) | null) {
@@ -67,7 +65,7 @@ it("renders a dismiss control only when the producer supplies the action", () =>
   expect(find(".sidebar-issues-panel__dismiss")).toBeNull();
   const onDismiss = vi.fn();
   render(() => <SidebarIssueItem item={item} handlers={{ ...shared, onDismiss }} />);
-  find<HTMLButtonElement>(".sidebar-issues-panel__dismiss")?.click();
+  find(".sidebar-issues-panel__dismiss")?.click();
   expect(onDismiss).toHaveBeenCalledOnce();
 });
 
@@ -109,9 +107,10 @@ describe("renderSidebarMentionItem", () => {
     const renderedExcerpt = find(".sidebar-mention-row__excerpt")!;
     expect(renderedExcerpt).toMatchObject({ textContent: excerpt, childElementCount: 0 });
     expect(renderedExcerpt.closest(".sidebar-issues-panel__body")).not.toBeNull();
-    await find<HTMLElement & { updateComplete: Promise<boolean> }>("openclaw-relative-time")
-      ?.updateComplete;
-    const details = find("details")!;
+    await container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-relative-time",
+    )?.updateComplete;
+    const details = container.querySelector("details")!;
     const summary = details.querySelector("summary")!;
     const title = summary.querySelector(".sidebar-issues-panel__entity")!;
     expect(title.textContent).toBe("Release notes");
@@ -124,7 +123,7 @@ describe("renderSidebarMentionItem", () => {
     expect(details).toMatchObject({ open: false });
     summary.click();
     expect(details.open).toBe(true);
-    const open = find<HTMLAnchorElement>("a[href]")!;
+    const open = container.querySelector<HTMLAnchorElement>("a[href]")!;
     expect(open.getAttribute("href")).toBe(pathname);
     expect(open.closest(".sidebar-issues-panel__body")).not.toBeNull();
     const nativeClick = vi.fn((event: MouseEvent) => {
@@ -152,13 +151,13 @@ describe("renderSidebarMentionItem", () => {
 
   it("disables repeated dismissal while leaving the session link usable", () => {
     const { onNavigate, onDismiss } = renderMention({ dismissing: true });
-    const dismiss = find<HTMLButtonElement>("[data-mention-id] button")!;
+    const dismiss = container.querySelector<HTMLButtonElement>("[data-mention-id] button")!;
     expect(dismiss).toMatchObject({ disabled: true });
     dismiss.click();
     expect(onDismiss).not.toHaveBeenCalled();
 
     find("summary")!.click();
-    find<HTMLAnchorElement>("a[href]")!.click();
+    find("a[href]")!.click();
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith("chat", navigation);
   });
 });
@@ -198,7 +197,7 @@ function renderUpdate(
       watchUpdateProgress: undefined,
     }),
   );
-  return find<UpdateCard>("openclaw-sidebar-update-card")!;
+  return container.querySelector<UpdateCard>("openclaw-sidebar-update-card")!;
 }
 const freshStatusCall = ["update.status", { refreshCheckout: true }, { timeoutMs: null }] as const;
 describe("renderSidebarUpdateSurface", () => {
@@ -321,7 +320,7 @@ describe("renderSidebarUpdateSurface", () => {
       const card = renderUpdate(context, () => dismiss(dismissal));
       await card.updateComplete;
       expect(container.textContent).toContain(state === "visible" ? "OpenClaw updated" : "3.0.0");
-      find<HTMLButtonElement>(".sidebar-issues-panel__dismiss")!.click();
+      find(".sidebar-issues-panel__dismiss")!.click();
       expect(dismiss).toHaveBeenCalledExactlyOnceWith(expected);
       expect(overlays.snapshot.updateRunAcknowledged).toBe(state === "acknowledged");
     },

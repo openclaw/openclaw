@@ -97,6 +97,7 @@ it(
             expect(self.profile.id).toBe("gateway-owner");
             const created = await client.request<{ key: string }>("sessions.create", {
               agentId: "main",
+              label: "Attach identity proof",
             });
             const runId = randomUUID();
             const params = {

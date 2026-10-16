@@ -27,8 +27,8 @@ import { HubTabs, type HubTabsProps } from "./solid/hub-tabs.tsx";
 import layoutCss from "../styles/layout.css?inline";
 import floatingCss from "../styles/sidebar-attention-floating.css?inline";
 
-function part<T extends HTMLElement = HTMLElement>(root: ParentNode, name: string) {
-  return root.querySelector<T>(`.sidebar-issues-panel__${name}`)!;
+function part(root: ParentNode, name: string) {
+  return root.querySelector<HTMLElement>(`.sidebar-issues-panel__${name}`)!;
 }
 const bounds = (target: Element | Range) => target.getBoundingClientRect();
 const style = (target: Element) => getComputedStyle(target);
@@ -145,7 +145,9 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
 
       setSelectedTab("approvals");
       flush();
-      const placeholder = part<HTMLButtonElement>(shell, "dismiss-shown");
+      const placeholder = shell.querySelector<HTMLButtonElement>(
+        ".sidebar-issues-panel__dismiss-shown",
+      )!;
       expect(placeholder.disabled).toBe(true);
       expect(placeholder.getAttribute("aria-hidden")).toBe("true");
       expect(style(placeholder).visibility).toBe("hidden");
@@ -171,7 +173,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
           row.getAttribute("data-mention-id"),
         ),
       ).toEqual(selectedTab === "system" ? [] : ["mention-a", "mention-b"]);
-      part<HTMLButtonElement>(shell, "dismiss-shown").click();
+      part(shell, "dismiss-shown").click();
 
       expect(vi.mocked(params.mentions.dismiss).mock.calls).toEqual(
         selectedTab === "system" ? [] : [[["mention-a"]]],

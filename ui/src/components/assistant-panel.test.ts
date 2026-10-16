@@ -737,14 +737,21 @@ describe("assistant panel", () => {
   });
 
   it("updates the panel mascot mood with shared sending state", async () => {
-    const { panel, store, dom } = await mountPanel();
-    store.messages = [message(1, "user", "Check this system")];
-    await update(panel, { custodianSuppressed: false, minimizeRequestId: 1 });
+    const { panel, store } = await mountPanel();
+    store.messages = [
+      { id: 1, role: "user", text: "Check this system", at: 1, question: null, step: null },
+    ];
+    panel.custodianSuppressed = false;
+    panel.minimizeRequestId = 1;
+    await panel.updateComplete;
 
     store.sending = true;
     store.setInput("status");
     await panel.updateComplete;
 
-    expect(dom.query(".assistant-panel-title openclaw-mascot")).toMatchObject({ mood: "thinking" });
+    expect(
+      panel.querySelector<HTMLElement & { mood: string }>(".assistant-panel-title openclaw-mascot")
+        ?.mood,
+    ).toBe("thinking");
   });
 });

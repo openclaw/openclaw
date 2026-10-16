@@ -472,10 +472,11 @@ describe("registered Discord metadata reads", () => {
   )("retains guild and wildcard channel restrictions for $action", async (read) => {
     fixture.discord.guilds = {};
     await expectRejected(dispatch(read.action, read.params), "not allowed", guildPath);
-    for (const policy of [
+    const policies: Array<NonNullable<NonNullable<DiscordConfig["guilds"]>[string]["channels"]>> = [
       { [current]: { enabled: true } },
       { "*": { enabled: true }, [sibling]: { enabled: false } },
-    ]) {
+    ];
+    for (const policy of policies) {
       setChannels(policy);
       await expectRejected(
         dispatch(read.action, read.params),

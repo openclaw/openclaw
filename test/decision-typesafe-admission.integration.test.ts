@@ -24,8 +24,7 @@ import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 it("lets admitted TypeSafe work finish after opt-out while preserving independent final-I/O guards", async () => {
   const loading = createDeferredCore();
   const release = createDeferredCore();
-  const proposed = { status: "proposed", shouldPruneTools: true };
-  // Exclude cold client/policy setup from the consumer's 500 ms budget.
+  // Prepare the real client outside the request deadline; suspend only its lazy import.
   const original = await vi.importActual("../extensions/typesafe/src/client.js");
   vi.doMock("../extensions/typesafe/src/client.js", async () => {
     loading.resolve();
@@ -55,13 +54,12 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
         });
       }),
   });
-  const config = (
-    decisionAssistance: boolean,
-    { hostname = "localhost", decisionModel = "typesafe/kev-latest" } = {},
-  ): OpenClawConfig => ({
-    agents: { defaults: { experimental: { decisionAssistance }, decisionModel } },
+  const config = (decisionAssistance: boolean): OpenClawConfig => ({
+    agents: {
+      defaults: { experimental: { decisionAssistance }, decisionModel: "typesafe/kev-latest" },
+    },
     plugins: {
-      entries: { typesafe: { config: { baseUrl: `http://${hostname}:${server.claim.port}` } } },
+      entries: { typesafe: { config: { baseUrl: "http://localhost:" + server.claim.port } } },
     },
   });
   const builder = createTestPluginRegistry(
@@ -69,10 +67,6 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
       config: { current: () => getRuntimeConfigSnapshot() ?? config(true) },
     }),
   );
-  const publish = (cfg: OpenClawConfig) => {
-    setRuntimeConfigSnapshot(cfg);
-    return cfg;
-  };
   const record = createPluginRecord({
     id: "typesafe",
     source: "/bundled/typesafe/index.ts",
@@ -107,7 +101,10 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
     );
     builder.registry.plugins.push(record);
     setActivePluginRegistry(builder.registry);
-    const initial = publish(config(true));
+    const initial = config(true);
+    setRuntimeConfigSnapshot(initial);
+    // Keep host policy initialization outside the 500 ms consumer budget;
+    // the suspended import and DNS below exercise admission, not cold setup.
     resolveProviderHttpRequestConfigWithOriginTrust({
       provider: "typesafe",
       baseUrl: "http://localhost:" + server.claim.port + "/v1",
@@ -115,30 +112,40 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
     });
     const pending = turn(initial);
     await loading.promise;
-    const disabledConfig = publish(config(false));
+    const disabledConfig = config(false);
+    setRuntimeConfigSnapshot(disabledConfig);
     release.resolve();
     const admitted = await pending;
     const admittedRequests = requests;
     const skipped = await turn(disabledConfig);
     expect(skipped).toMatchObject({ status: "skipped", shouldPruneTools: false });
     expect(requests).toBe(admittedRequests);
-    expect(await turn(publish(config(true)))).toMatchObject(proposed);
+    const allowedConfig = config(true);
+    setRuntimeConfigSnapshot(allowedConfig);
+    const allowed = await turn(allowedConfig);
+    console.info(
+      JSON.stringify({
+        admittedRequests,
+        allowedRequests: requests - admittedRequests,
+        admitted: admitted.status,
+        nextTurn: skipped.status,
+        allowed: allowed.status,
+      }),
+    );
+    expect(allowed).toMatchObject({ status: "proposed", shouldPruneTools: true });
     expect(requests - admittedRequests).toBe(1);
-    expect(admitted).toMatchObject(proposed);
+    expect(admitted).toMatchObject({ status: "proposed", shouldPruneTools: true });
     expect(admittedRequests).toBe(1);
 
-    // Suspend DNS to revoke authority at final I/O, then restore without erasing failures.
+    // Hold real DNS preparation. Labs opt-out permits admitted I/O; independent
+    // guards still reject it. Restoring config during cleanup must not erase an
+    // observed authority failure or poison shared provider health.
     const guardedFetch = ssrfRuntime.fetchWithSsrFGuard;
-    for (const [change, nextConfig, reason] of [
-      ["optout", config(false), null],
-      ["model", config(true, { decisionModel: "typesafe/changed-model" }), "disabled"],
-      ["authority", undefined, null],
-      ["provider-config", config(true, { hostname: "127.0.0.1" }), "retiring"],
-      ["secrets", undefined, "retiring"],
-    ] as const) {
+    for (const change of ["optout", "model", "authority", "provider-config", "secrets"] as const) {
       const resolving = createDeferredCore();
       const resolved = createDeferredCore();
-      const localConfig = publish(config(true));
+      setRuntimeConfigSnapshot(config(true));
+      const localConfig = getRuntimeConfigSnapshot()!;
       const before = requests;
       const originalError = new Error("synthetic authority closed");
       const intercepted = vi
@@ -175,19 +182,47 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
         await resolving.promise;
         if (change === "authority") {
           authorityError = originalError;
+        } else if (change === "provider-config") {
+          setRuntimeConfigSnapshot({
+            ...localConfig,
+            plugins: {
+              entries: {
+                typesafe: { config: { baseUrl: "http://127.0.0.1:" + server.claim.port } },
+              },
+            },
+          });
+        } else if (change === "secrets") {
+          clearSecretsRuntimeSnapshotState();
+          setRuntimeConfigSnapshot(localConfig);
         } else {
-          if (change === "secrets") {
-            clearSecretsRuntimeSnapshotState();
-          }
-          publish(nextConfig ?? localConfig);
+          setRuntimeConfigSnapshot({
+            ...localConfig,
+            agents: {
+              defaults: {
+                ...localConfig.agents!.defaults,
+                ...(change === "model"
+                  ? { decisionModel: "typesafe/changed-model" }
+                  : { experimental: { decisionAssistance: false } }),
+              },
+            },
+          });
         }
         resolved.resolve();
         const outcome = await captured;
         if (change === "authority") {
           expect(outcome).toEqual({ error: originalError });
+        } else if (change === "optout") {
+          expect(outcome).toMatchObject({
+            result: { status: "proposed", shouldPruneTools: true },
+          });
         } else {
           expect(outcome).toMatchObject({
-            result: reason ? { shouldPruneTools: false, status: "unavailable", reason } : proposed,
+            result: {
+              shouldPruneTools: false,
+              status: "unavailable",
+              reason:
+                change === "provider-config" || change === "secrets" ? "retiring" : "disabled",
+            },
           });
         }
         expect(requests - before).toBe(change === "optout" ? 1 : 0);
@@ -197,13 +232,18 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
             activeRequests: 0,
           });
         }
+        console.info(
+          JSON.stringify({ preparationRevocation: change, requests: requests - before }),
+        );
       } finally {
         resolved.resolve();
         authorityError = undefined;
         intercepted.mockRestore();
       }
     }
-    const explicit = createDecisionTool("main", { config: publish(config(false)) });
+    const optedOut = config(false);
+    setRuntimeConfigSnapshot(optedOut);
+    const explicit = createDecisionTool("main", { config: optedOut });
     expect(explicit).not.toBeNull();
     const beforeExplicit = requests;
     const evaluation = await explicit!.execute("explicit", {
@@ -215,6 +255,7 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
     });
     expect(evaluation.details).toMatchObject({ status: "ok" });
     expect(requests - beforeExplicit).toBe(1);
+    console.info(JSON.stringify({ explicitLabsOffRequests: requests - beforeExplicit }));
   } finally {
     release.resolve();
     prepareDecisionProviderReload(builder.registry, new Set([record.id]));

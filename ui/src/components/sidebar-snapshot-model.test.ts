@@ -40,7 +40,6 @@ it("keeps primary routing and header facts in the display snapshot without priva
     sharingRole: "owner" as const,
     hasActiveRun: true,
     activeModel: "stale-model",
-    incognito: false,
   };
   const roster = captureRoster([
     liveRow,
