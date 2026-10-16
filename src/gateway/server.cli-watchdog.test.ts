@@ -28,11 +28,9 @@ import * as gatewayFixture from "./test-helpers.e2e.js";
 type WatchdogCase = {
   name: string;
   behavior: "complete" | "stall" | "quiet" | "overall" | "cancel" | "ordered";
-  overallSeconds: number;
-  quietMs: number;
-  freezeMs: number;
-  outputFirst: boolean;
-  resume: boolean;
+  overallSeconds?: number;
+  quietMs?: number;
+  freezeMs?: number;
 };
 
 type WatchdogCompletion = { status: string; endedAt: number; error?: string };
@@ -41,56 +39,31 @@ const cases: WatchdogCase[] = [
   {
     name: "preserves a fresh CLI reply across a process freeze",
     behavior: "complete",
-    overallSeconds: 300,
-    quietMs: 40_000,
-    freezeMs: 60_000,
-    outputFirst: false,
-    resume: false,
   },
   {
     name: "ends a resumed CLI stall at the normal quiet deadline after thaw",
     behavior: "stall",
     overallSeconds: 0,
-    quietMs: 40_000,
-    freezeMs: 60_000,
-    outputFirst: true,
-    resume: true,
   },
   {
     name: "counts a short process pause against the quiet budget",
     behavior: "quiet",
     overallSeconds: 0,
-    quietMs: 40_000,
     freezeMs: 20_000,
-    outputFirst: false,
-    resume: false,
   },
   {
     name: "preserves the total active budget without hiding its later expiry",
     behavior: "overall",
     overallSeconds: 40,
     quietMs: 120_000,
-    freezeMs: 60_000,
-    outputFirst: false,
-    resume: false,
   },
   {
     name: "keeps the quiet deadline when output precedes an overdue timer",
     behavior: "ordered",
-    overallSeconds: 300,
-    quietMs: 40_000,
-    freezeMs: 0,
-    outputFirst: false,
-    resume: false,
   },
   {
     name: "still allows chat.abort to cancel the actual CLI turn",
     behavior: "cancel",
-    overallSeconds: 300,
-    quietMs: 40_000,
-    freezeMs: 0,
-    outputFirst: false,
-    resume: false,
   },
 ];
 
@@ -128,6 +101,8 @@ async function runWatchdogCase(
   signal: AbortSignal,
 ) {
   const { state, gateway, backends, token, controllerScript } = fixture;
+  const { overallSeconds = 300, quietMs = 40_000, freezeMs = 60_000 } = testCase;
+  const resume = testCase.behavior === "stall";
   const requestExecution = await observeGatewayRunExecution();
   const proof = state.path("proof", testCase.behavior);
   const nativeRoot = state.path("receipts", testCase.behavior);
@@ -293,22 +268,24 @@ async function runWatchdogCase(
                 ...backend.config,
                 reliability: {
                   watchdog: {
-                    fresh: { minMs: testCase.quietMs, maxMs: testCase.quietMs },
-                    resume: { minMs: testCase.quietMs, maxMs: testCase.quietMs },
+                    fresh: { minMs: quietMs, maxMs: quietMs },
+                    resume: { minMs: quietMs, maxMs: quietMs },
                   },
                 },
               },
             }),
           ),
       });
-      if (testCase.resume) {
-        const warm = await gateway.client.request<{ runId: string }>("chat.send", {
+      const send = (message: string) =>
+        gateway.client.request<{ runId: string; status: string }>("chat.send", {
           sessionKey,
-          message: "Warm up this session",
-          timeoutMs: testCase.overallSeconds * 1000,
+          message,
+          timeoutMs: overallSeconds * 1000,
           deliver: false,
           idempotencyKey: randomUUID(),
         });
+      if (resume) {
+        const warm = await send("Warm up this session");
         const warmResult = await gateway.client.request<{ status: string }>("agent.wait", {
           runId: warm.runId,
           timeoutMs: 15_000,
@@ -318,16 +295,7 @@ async function runWatchdogCase(
       outputs = 0;
       abortedAt = undefined;
       const acceptedAt = Date.now();
-      const accepted = await gateway.client.request<{ runId: string; status: string }>(
-        "chat.send",
-        {
-          sessionKey,
-          message: "Reply after resume.",
-          timeoutMs: testCase.overallSeconds * 1000,
-          deliver: false,
-          idempotencyKey: randomUUID(),
-        },
-      );
+      const accepted = await send("Reply after resume.");
       expect(accepted.status).toBe("started");
       await withTestTimeout(
         readyReceipt.promise,
@@ -339,7 +307,7 @@ async function runWatchdogCase(
         await fs.readFile(path.join(nativeRoot, "ready.json"), "utf8"),
       );
       expect(preparedContexts.size).toBeGreaterThan(0);
-      expect(ready.turns).toBe(testCase.resume ? 2 : 1);
+      expect(ready.turns).toBe(resume ? 2 : 1);
       await waitForOutputs(1);
       const pulse = async () => {
         const expected = outputs + 1;
@@ -411,9 +379,9 @@ async function runWatchdogCase(
         ]);
         expect(stopped).toBe("stopped");
         signal.throwIfAborted();
-        clock.jump(testCase.freezeMs);
+        clock.jump(freezeMs);
         thawedAt = clock.now();
-        if (!testCase.outputFirst) {
+        if (!resume) {
           clock.advance(0);
         }
         expect(abortedAt).toBeUndefined();
@@ -430,7 +398,7 @@ async function runWatchdogCase(
         } else {
           await waitForOutputs(2);
         }
-        if (testCase.outputFirst) {
+        if (resume) {
           clock.advance(0);
         }
         if (testCase.behavior === "complete") {

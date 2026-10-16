@@ -62,6 +62,33 @@ function responseScopes(response: Awaited<ReturnType<typeof connectReq>>): strin
   return (response.payload as { auth?: { scopes?: string[] } } | undefined)?.auth?.scopes;
 }
 
+type PresenceFrame = { type: string; event: string; payload: { presence: SystemPresence[] } };
+type PresenceSocket = Awaited<ReturnType<typeof openWs>>;
+const personTiming = {
+  onlineSince: expect.any(Number),
+  lastActivityAt: expect.any(Number),
+  timeZone: "Europe/Vienna",
+};
+const currentPerson = (instanceId: string) =>
+  listSystemPresence().find((entry) => entry.instanceId === instanceId)!;
+function nextPresence(ws: PresenceSocket, matches: (rows: SystemPresence[]) => boolean) {
+  return onceMessage<PresenceFrame>(
+    ws,
+    (frame) =>
+      frame.type === "event" && frame.event === "presence" && matches(frame.payload.presence),
+  );
+}
+function observePresence(ws: PresenceSocket) {
+  const events: SystemPresence[][] = [];
+  ws.on("message", (data) => {
+    const frame = JSON.parse(rawDataToString(data)) as PresenceFrame;
+    if (frame.type === "event" && frame.event === "presence") {
+      events.push(frame.payload.presence);
+    }
+  });
+  return events;
+}
+
 describe("gateway presence audience", () => {
   test("shares people only with readers and filters their session references across hello, RPC, and activity events", async () => {
     await configureGatewayAuth(
@@ -109,21 +136,16 @@ describe("gateway presence audience", () => {
     const identityDir = tempDirs.make("openclaw-presence-identities-");
 
     await withGatewayServer(async ({ port }) => {
-      for (const [sessionKey, profileId, visibility, incognito] of [
-        [sharedKey, creator.id, "shared", false],
-        [draftKey, creator.id, "draft", false],
-        [incognitoKey, creator.id, "shared", true],
-        [restrictedKey, restricted.id, "draft", false],
+      for (const [sessionKey, sessionId, profileId, visibility, incognito] of [
+        [sharedKey, sharedSessionId, creator.id, "shared", false],
+        [draftKey, draftSessionId, creator.id, "draft", false],
+        [incognitoKey, randomUUID(), creator.id, "shared", true],
+        [restrictedKey, randomUUID(), restricted.id, "draft", false],
       ] as const) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           {
-            sessionId:
-              sessionKey === sharedKey
-                ? sharedSessionId
-                : sessionKey === draftKey
-                  ? draftSessionId
-                  : randomUUID(),
+            sessionId,
             updatedAt: Date.now(),
             createdVia: "operator",
             createdActor: { type: "human", source: "profile", id: profileId },
@@ -144,21 +166,7 @@ describe("gateway presence audience", () => {
           ],
         },
       );
-      const sockets: Awaited<ReturnType<typeof openWs>>[] = [];
-      const observePresence = (ws: Awaited<ReturnType<typeof openWs>>) => {
-        const events: SystemPresence[][] = [];
-        ws.on("message", (data) => {
-          const frame = JSON.parse(rawDataToString(data)) as {
-            type: string;
-            event?: string;
-            payload: { presence: SystemPresence[] };
-          };
-          if (frame.type === "event" && frame.event === "presence") {
-            events.push(frame.payload.presence);
-          }
-        });
-        return events;
-      };
+      const sockets: PresenceSocket[] = [];
       const openRecipient = async (
         name: string,
         scopes: string[],
@@ -195,18 +203,8 @@ describe("gateway presence audience", () => {
       try {
         const watcher = await openRecipient("watcher", ["operator.admin"]);
         // Join publication itself: an RPC response can precede the coalescing window.
-        const firstConnect = onceMessage<{
-          type: string;
-          event: string;
-          payload: { presence: SystemPresence[] };
-        }>(
-          watcher.ws,
-          (frame) =>
-            frame.type === "event" &&
-            frame.event === "presence" &&
-            frame.payload.presence.some(
-              (entry) => entry.instanceId === "presence-idle" && entry.reason === "connect",
-            ),
+        const firstConnect = nextPresence(watcher.ws, (rows) =>
+          rows.some((entry) => entry.instanceId === "presence-idle" && entry.reason === "connect"),
         );
         const [idle] = await Promise.all([openRecipient("idle", ["operator.read"]), firstConnect]);
         expect
@@ -221,15 +219,9 @@ describe("gateway presence audience", () => {
             ok: true,
           });
         }
-        const idlePerson = listSystemPresence().find(
-          (entry) => entry.instanceId === "presence-idle",
-        )!;
+        const idlePerson = currentPerson("presence-idle");
         expect(idlePerson.watchedSessions).toBeUndefined();
-        expect(idlePerson).toMatchObject({
-          onlineSince: expect.any(Number),
-          lastActivityAt: expect.any(Number),
-          timeZone: "Europe/Vienna",
-        });
+        expect(idlePerson).toMatchObject(personTiming);
         const idleBefore = structuredClone(idlePerson);
         const now = vi.spyOn(Date, "now").mockReturnValue(idleBefore.ts + 1000);
         try {
@@ -238,7 +230,7 @@ describe("gateway presence audience", () => {
             // without a heartbeat interleaving with this unchanged-row check.
             ensureProfileForEmail(email);
             expect(
-              listSystemPresence().find((entry) => entry.instanceId === "presence-idle"),
+              currentPerson("presence-idle"),
               `${email} must preserve unrelated presence`,
             ).toEqual(idleBefore);
           }
@@ -249,21 +241,15 @@ describe("gateway presence audience", () => {
           sessionKeys: watchedKeys,
         });
         expect(declared).toMatchObject({ ok: true, payload: { sessionKeys: watchedKeys } });
-        const rawWatcher = listSystemPresence().find(
-          (entry) => entry.instanceId === watcherInstanceId,
-        );
+        const rawWatcher = currentPerson(watcherInstanceId);
         expect(rawWatcher?.watchedSessions).toEqual(watchedKeys);
         const { watchedSessions: _watchedSessions, ...person } = rawWatcher!;
         expect(person.user?.id).toBe(ensureProfileForEmail("watcher@example.com").id);
         expect(person.ts).toBeGreaterThan(0);
-        expect(person).toMatchObject({
-          onlineSince: expect.any(Number),
-          lastActivityAt: expect.any(Number),
-          timeZone: "Europe/Vienna",
-        });
+        expect(person).toMatchObject(personTiming);
 
         const recipients = [];
-        for (const scenario of [
+        for (const { name, scopes, allowed } of [
           { name: "creator", scopes: ["operator.read"], allowed: [sharedKey, draftKey] },
           { name: "reader", scopes: ["operator.read"], allowed: [sharedKey] },
           { name: "writer", scopes: ["operator.write"], allowed: [sharedKey] },
@@ -278,39 +264,37 @@ describe("gateway presence audience", () => {
           { name: "node", scopes: [], allowed: [] },
         ]) {
           const recipient = await openRecipient(
-            scenario.name,
-            scenario.scopes,
-            scenario.name === "node" ? "node" : "operator",
+            name,
+            scopes,
+            name === "node" ? "node" : "operator",
           );
-          const canRead = !["pairing", "node", "no-read"].includes(scenario.name);
+          const canRead = !["pairing", "node", "no-read"].includes(name);
           const listed = await rpcReq<{ sessions: Array<{ key: string }> }>(
             recipient.ws,
             "sessions.list",
             { agentId: "main" },
           );
-          expect(listed.ok, `${scenario.name} sessions.list scope`).toBe(canRead);
+          expect(listed.ok, `${name} sessions.list scope`).toBe(canRead);
           if (canRead) {
             expect(
               listed.payload?.sessions
                 .map((entry) => entry.key)
                 .filter((key) => watchedKeys.includes(key))
                 .toSorted(),
-              `${scenario.name} canonical sessions.list visibility`,
-            ).toEqual(scenario.allowed.filter((key) => key !== incognitoKey).toSorted());
-            const canReadDraft = scenario.allowed.includes(draftKey);
+              `${name} canonical sessions.list visibility`,
+            ).toEqual(allowed.filter((key) => key !== incognitoKey).toSorted());
+            const canReadDraft = allowed.includes(draftKey);
             const described = await rpcReq<{ session: { sessionId?: string } | null }>(
               recipient.ws,
               "sessions.describe",
               { key: draftKey },
             );
-            if (scenario.name === "restricted") {
-              expect(described.ok, `${scenario.name} sessions.describe scope`).toBe(false);
+            if (name === "restricted") {
+              expect(described.ok, `${name} sessions.describe scope`).toBe(false);
             } else {
-              expect(described, `${scenario.name} sessions.describe visibility`).toMatchObject({
+              expect(described, `${name} sessions.describe visibility`).toMatchObject({
                 ok: true,
-                payload: {
-                  session: canReadDraft ? { sessionId: draftSessionId } : null,
-                },
+                payload: { session: canReadDraft ? { sessionId: draftSessionId } : null },
               });
             }
             const transcript = await rpcReq<{ messages: Array<{ content?: unknown }> }>(
@@ -318,24 +302,24 @@ describe("gateway presence audience", () => {
               "sessions.get",
               { key: draftKey },
             );
-            if (scenario.name === "restricted") {
-              expect(transcript.ok, `${scenario.name} sessions.get scope`).toBe(false);
+            if (name === "restricted") {
+              expect(transcript.ok, `${name} sessions.get scope`).toBe(false);
             } else {
-              expect(transcript.ok, `${scenario.name} sessions.get visibility`).toBe(true);
+              expect(transcript.ok, `${name} sessions.get visibility`).toBe(true);
               expect(
                 transcript.payload?.messages.map((message) => message.content),
-                `${scenario.name} sessions.get transcript`,
+                `${name} sessions.get transcript`,
               ).toEqual(canReadDraft ? ["foreign draft transcript"] : []);
             }
           }
           const presence = await rpcReq(recipient.ws, "system-presence");
-          expect(presence.ok, `${scenario.name} system-presence scope`).toBe(canRead);
+          expect(presence.ok, `${name} system-presence scope`).toBe(canRead);
           const query = await rpcReq<PresenceQueryResult>(
             recipient.ws,
             "presence.query",
-            scenario.name === "reader" ? { include: ["devices", "network"] } : {},
+            name === "reader" ? { include: ["devices", "network"] } : {},
           );
-          expect(query.ok, `${scenario.name} presence.query scope`).toBe(canRead);
+          expect(query.ok, `${name} presence.query scope`).toBe(canRead);
           if (canRead) {
             expect(query.payload).toMatchObject({
               status: "ok",
@@ -345,10 +329,10 @@ describe("gateway presence audience", () => {
             const watcherPeople = query.payload?.people.filter(
               (entry) => entry.profileId === watcherProfile.id,
             );
-            expect(watcherPeople, `${scenario.name} reads one named person`).toEqual([
+            expect(watcherPeople, `${name} reads one named person`).toEqual([
               expect.objectContaining({ name: "Presence Watcher", online: true }),
             ]);
-            if (scenario.name === "reader") {
+            if (name === "reader") {
               expect(watcherPeople?.[0]).toMatchObject({
                 activity: {
                   at: person.connectionLastActivityAt,
@@ -384,7 +368,14 @@ describe("gateway presence audience", () => {
           } else {
             expect(query.payload).toBeUndefined();
           }
-          recipients.push({ ...recipient, ...scenario, canRead, rpcPresence: presence.payload });
+          recipients.push({
+            ...recipient,
+            name,
+            scopes,
+            allowed,
+            canRead,
+            rpcPresence: presence.payload,
+          });
         }
 
         const unauthenticated = await openWs(port, { origin: BROWSER_ORIGIN });
@@ -397,17 +388,13 @@ describe("gateway presence audience", () => {
         const activityClock = vi.spyOn(Date, "now").mockImplementation(() => readNow() + 30_000);
         const typingStartedAt = Date.now();
         const eventPromises = readers.map(({ ws }) =>
-          onceMessage<{ type: string; event: string; payload: { presence: SystemPresence[] } }>(
-            ws,
-            (frame) =>
-              frame.type === "event" &&
-              frame.event === "presence" &&
-              frame.payload.presence.some(
-                (entry) =>
-                  entry.instanceId === watcherInstanceId &&
-                  entry.lastActivityAt !== undefined &&
-                  entry.lastActivityAt >= typingStartedAt,
-              ),
+          nextPresence(ws, (rows) =>
+            rows.some(
+              (entry) =>
+                entry.instanceId === watcherInstanceId &&
+                entry.lastActivityAt !== undefined &&
+                entry.lastActivityAt >= typingStartedAt,
+            ),
           ),
         );
         // Own event rejections before the typing request can fail or time out.
@@ -424,9 +411,7 @@ describe("gateway presence audience", () => {
             )
             .then((response) => expect(response).toMatchObject({ ok: true })),
         ]).finally(() => activityClock.mockRestore());
-        const activeWatcher = listSystemPresence().find(
-          (entry) => entry.instanceId === watcherInstanceId,
-        )!;
+        const activeWatcher = currentPerson(watcherInstanceId);
         const { watchedSessions: _activeWatches, ...activePerson } = activeWatcher;
         expect(activePerson.lastActivityAt).toBeGreaterThanOrEqual(person.lastActivityAt!);
         expect(activeWatcher.watchedSessions).toEqual(watchedKeys);
@@ -474,16 +459,9 @@ describe("gateway presence audience", () => {
         const isLiveIdle = (entry: SystemPresence) =>
           entry.user?.id === idlePerson.user?.id && entry.reason !== "disconnect";
         const nextIdleRows = async (count: number) => {
-          const event = await onceMessage<{
-            type: string;
-            event: string;
-            payload: { presence: SystemPresence[] };
-          }>(
+          const event = await nextPresence(
             watcher.ws,
-            (frame) =>
-              frame.type === "event" &&
-              frame.event === "presence" &&
-              frame.payload.presence.filter(isLiveIdle).length === count,
+            (rows) => rows.filter(isLiveIdle).length === count,
           );
           return event.payload.presence.filter(isLiveIdle);
         };

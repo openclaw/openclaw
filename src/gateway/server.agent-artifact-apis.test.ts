@@ -1,4 +1,3 @@
-// Gateway agent and artifact API tests cover composed RPC behavior through a real server.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -168,11 +167,7 @@ describe("Gateway agent and artifact APIs", () => {
       `${JSON.stringify(
         {
           gateway: { auth: { mode: "token", token } },
-          agents: {
-            entries: {
-              main: { workspace: mainWorkspace },
-            },
-          },
+          agents: { entries: { main: { workspace: mainWorkspace } } },
         },
         null,
         2,
@@ -226,13 +221,24 @@ describe("Gateway agent and artifact APIs", () => {
     setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
     server = await startServer();
 
-    let client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${claim.port}`,
-      token,
-      clientDisplayName: "gateway agent artifact APIs",
-      scopes: [ADMIN_SCOPE, READ_SCOPE],
-      timeoutMs: 30_000,
-    });
+    const connect = (clientDisplayName: string) =>
+      connectGatewayClient({
+        url: `ws://127.0.0.1:${claim.port}`,
+        token,
+        clientDisplayName,
+        scopes: [ADMIN_SCOPE, READ_SCOPE],
+        timeoutMs: 30_000,
+      });
+    let client = await connect("gateway agent artifact APIs");
+    const expectRpc = async (
+      method: string,
+      params: Record<string, unknown>,
+      expected: unknown,
+    ) => {
+      await expect(client.request(method, params)).resolves.toMatchObject(expected);
+    };
+    const expectListed = (method: string, key: string, entry: Record<string, unknown>) =>
+      expectRpc(method, {}, { [key]: expect.arrayContaining([expect.objectContaining(entry)]) });
     cleanup.push(() => disconnectGatewayClient(client));
     const restartGateway = async (clientDisplayName: string) => {
       await disconnectGatewayClient(client);
@@ -241,13 +247,7 @@ describe("Gateway agent and artifact APIs", () => {
       clearRuntimeConfigSnapshot();
       clearConfigCache();
       server = await startServer();
-      client = await connectGatewayClient({
-        url: `ws://127.0.0.1:${claim.port}`,
-        token,
-        clientDisplayName,
-        scopes: [ADMIN_SCOPE, READ_SCOPE],
-        timeoutMs: 30_000,
-      });
+      client = await connect(clientDisplayName);
     };
 
     const createdEnvironment = await client.request<{
@@ -269,17 +269,16 @@ describe("Gateway agent and artifact APIs", () => {
     });
     expect(replayedEnvironment.id).toBe(createdEnvironment.id);
     expect(injectedWorkerService.createCount()).toBe(1);
-    await expect(client.request("environments.list", {})).resolves.toMatchObject({
-      environments: expect.arrayContaining([
-        expect.objectContaining({ id: createdEnvironment.id, status: "available" }),
-      ]),
+    const environmentParams = { environmentId: createdEnvironment.id };
+    await expectListed("environments.list", "environments", {
+      id: createdEnvironment.id,
+      status: "available",
     });
-    await expect(
-      client.request("environments.status", { environmentId: createdEnvironment.id }),
-    ).resolves.toMatchObject({ id: createdEnvironment.id, status: "available" });
-    await expect(
-      client.request("environments.destroy", { environmentId: createdEnvironment.id }),
-    ).resolves.toMatchObject({
+    await expectRpc("environments.status", environmentParams, {
+      id: createdEnvironment.id,
+      status: "available",
+    });
+    await expectRpc("environments.destroy", environmentParams, {
       id: createdEnvironment.id,
       status: "unavailable",
       worker: { state: "destroyed" },
@@ -306,21 +305,13 @@ describe("Gateway agent and artifact APIs", () => {
         idempotencyKey: "qa-environment-request-after-restart",
       },
     );
-    await expect(client.request("environments.list", {})).resolves.toMatchObject({
-      environments: expect.arrayContaining([
-        expect.objectContaining({
-          id: createdEnvironmentAfterRestart.id,
-          status: "available",
-        }),
-      ]),
+    await expectListed("environments.list", "environments", {
+      id: createdEnvironmentAfterRestart.id,
+      status: "available",
     });
-    await expect(client.request("agents.list", {})).resolves.toMatchObject({
-      agents: expect.arrayContaining([
-        expect.objectContaining({
-          id: createdAgent.agentId,
-          workspace: createdWorkspace,
-        }),
-      ]),
+    await expectListed("agents.list", "agents", {
+      id: createdAgent.agentId,
+      workspace: createdWorkspace,
     });
     await expect(
       client.request("agents.update", {
@@ -331,33 +322,31 @@ describe("Gateway agent and artifact APIs", () => {
 
     const fileContent = "# Artifact steward\n\nOwns durable artifact verification.\n";
     const expectedHash = createHash("sha256").update(fileContent).digest("hex");
-    await expect(
-      client.request("agents.files.set", {
-        agentId: createdAgent.agentId,
-        name: "AGENTS.md",
-        content: fileContent,
-      }),
-    ).resolves.toMatchObject({
-      ok: true,
-      file: { name: "AGENTS.md", content: fileContent, missing: false },
-    });
-    await expect(
-      client.request("agents.files.list", { agentId: createdAgent.agentId }),
-    ).resolves.toMatchObject({
-      files: expect.arrayContaining([
-        expect.objectContaining({
-          name: "AGENTS.md",
-          missing: false,
-          size: Buffer.byteLength(fileContent),
-        }),
-      ]),
-    });
+    const fileParams = { agentId: createdAgent.agentId, name: "AGENTS.md" };
+    await expectRpc(
+      "agents.files.set",
+      { ...fileParams, content: fileContent },
+      {
+        ok: true,
+        file: { name: "AGENTS.md", content: fileContent, missing: false },
+      },
+    );
+    await expectRpc(
+      "agents.files.list",
+      { agentId: createdAgent.agentId },
+      {
+        files: expect.arrayContaining([
+          expect.objectContaining({
+            name: "AGENTS.md",
+            missing: false,
+            size: Buffer.byteLength(fileContent),
+          }),
+        ]),
+      },
+    );
     const fileResult = await client.request<{
       file: { content: string; name: string; missing: boolean };
-    }>("agents.files.get", {
-      agentId: createdAgent.agentId,
-      name: "AGENTS.md",
-    });
+    }>("agents.files.get", fileParams);
     expect(fileResult.file).toMatchObject({
       name: "AGENTS.md",
       content: fileContent,
@@ -421,13 +410,7 @@ describe("Gateway agent and artifact APIs", () => {
     ).toBe(true);
 
     await disconnectGatewayClient(client);
-    client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${claim.port}`,
-      token,
-      clientDisplayName: "gateway artifact APIs after reload",
-      scopes: [ADMIN_SCOPE, READ_SCOPE],
-      timeoutMs: 30_000,
-    });
+    client = await connect("gateway artifact APIs after reload");
     type ArtifactList = {
       artifacts: Array<{
         id: string;
@@ -463,19 +446,14 @@ describe("Gateway agent and artifact APIs", () => {
         mimeType: fixture.mimeType,
         download: { mode: "url" },
       });
-      await expect(
-        client.request("artifacts.get", {
-          sessionKey,
-          artifactId: artifact?.id,
-        }),
-      ).resolves.toMatchObject({ artifact: { id: artifact?.id, sessionKey } });
+      const artifactParams = { sessionKey, artifactId: artifact?.id };
+      await expectRpc("artifacts.get", artifactParams, {
+        artifact: { id: artifact?.id, sessionKey },
+      });
 
       const download = await client.request<{ url: string; expiresAt: string }>(
         "artifacts.download",
-        {
-          sessionKey,
-          artifactId: artifact?.id,
-        },
+        artifactParams,
       );
       expect(download.url).toContain("mediaTicket=");
       expect(download.expiresAt).toBeTruthy();
@@ -507,12 +485,11 @@ describe("Gateway agent and artifact APIs", () => {
       }),
     ).rejects.toThrow('agent "artifact-agent" does not match session key agent "main"');
 
-    await expect(
-      client.request("agents.delete", {
-        agentId: createdAgent.agentId,
-        deleteFiles: false,
-      }),
-    ).resolves.toMatchObject({ ok: true, agentId: createdAgent.agentId });
+    await expectRpc(
+      "agents.delete",
+      { agentId: createdAgent.agentId, deleteFiles: false },
+      { ok: true, agentId: createdAgent.agentId },
+    );
     await restartGateway("gateway agent artifact APIs after delete");
     const finalAgents = await client.request<{ agents: Array<{ id: string }> }>("agents.list", {});
     expect(finalAgents.agents.map((entry) => entry.id)).not.toContain(createdAgent.agentId);
