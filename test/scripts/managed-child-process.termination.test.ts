@@ -1,8 +1,7 @@
-import { ChildProcess, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { createSyntheticChild, runFixtureCommand } from "./managed-child-process.test-support.js";
 
 const { spawn } = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -15,25 +14,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
-
-function createChild() {
-  const child = new ChildProcess();
-  let exitCode: number | null = null;
-  Object.defineProperties(child, {
-    pid: { value: 12345 },
-    exitCode: { get: () => exitCode },
-    stdout: { value: null, writable: true },
-    stderr: { value: null, writable: true },
-    stdio: { get: () => [child.stdin, child.stdout, child.stderr, null] },
-  });
-  return {
-    child,
-    exit: () => {
-      exitCode = 0;
-      child.emit("exit", 0, null);
-    },
-  };
-}
 
 describe("managed child termination facts", () => {
   it.each([
@@ -50,7 +30,7 @@ describe("managed child termination facts", () => {
     async ({ phase, rows, failed, reaped, accepted }) => {
       vi.useFakeTimers();
       vi.setSystemTime(1_000);
-      const { child, exit } = createChild();
+      const { child, exit } = createSyntheticChild();
       spawn.mockReturnValue(child);
       vi.spyOn(child, "kill").mockReturnValue(false);
       let signaled = false;
@@ -83,12 +63,8 @@ describe("managed child termination facts", () => {
           signal: null,
         };
       });
-      const command = runManagedCommand({
-        bin: "fixture",
+      const command = runFixtureCommand({
         platform: "darwin",
-        shell: false,
-        stdio: "ignore",
-        env: { TMPDIR: process.cwd() },
         requireProcessTreeExit: true,
         cleanupDrainTimeoutMs: 50,
         onReady: exit,
@@ -108,7 +84,7 @@ describe("managed child termination facts", () => {
   it.each(["SIGTERM", "SIGKILL"])(
     "retains POSIX %s failures through cleanup",
     async (failedSignal) => {
-      const { child } = createChild();
+      const { child } = createSyntheticChild();
       const groupError = Object.assign(new Error("group signal denied"), { code: "EPERM" });
       const childError = Object.assign(new Error("child signal denied"), { code: "EACCES" });
       const kill = vi.spyOn(child, "kill").mockImplementation((signal) => {
@@ -126,12 +102,8 @@ describe("managed child termination facts", () => {
       spawn.mockReturnValue(child);
       const abort = new AbortController();
       await expect(
-        runManagedCommand({
-          bin: "fixture",
+        runFixtureCommand({
           platform: "linux",
-          shell: false,
-          stdio: "ignore",
-          env: { TMPDIR: process.cwd() },
           signal: abort.signal,
           abortKillGraceMs: 0,
           cleanupDrainTimeoutMs: 0,
@@ -149,9 +121,7 @@ describe("managed child termination facts", () => {
   it.each(["exit", "missing PID", "alive"] as const)(
     "retains an unowned Windows tree after taskkill status 255 (%s)",
     async (state) => {
-      const { child, exit } = createChild();
-      child.stdout = new PassThrough();
-      child.stderr = new PassThrough();
+      const { child, exit } = createSyntheticChild("both");
       const kill = vi.spyOn(child, "kill").mockReturnValue(true);
       vi.spyOn(process, "kill").mockImplementation(() => {
         if (state === "missing PID") {
@@ -161,7 +131,10 @@ describe("managed child termination facts", () => {
       });
       spawn.mockReturnValue(child);
       const abort = new AbortController();
-      const outputClosed = Promise.all([once(child.stdout, "close"), once(child.stderr, "close")]);
+      const outputClosed = Promise.all([
+        once(child.stdout!, "close"),
+        once(child.stderr!, "close"),
+      ]);
       const runTaskkill = vi.fn(() => {
         if (state === "exit") {
           exit();
@@ -173,14 +146,10 @@ describe("managed child termination facts", () => {
         };
       });
       try {
-        const completed = runManagedCommand({
-          bin: "fixture",
+        const completed = runFixtureCommand({
           platform: "win32",
-          shell: false,
           // IPC callers bypass Job admission and exercise the unowned-tree contract.
           stdio: ["ignore", "pipe", "pipe", "ipc"],
-          // The synthetic child has no filesystem resources to retain on failure.
-          env: { TMPDIR: process.cwd() },
           runTaskkill,
           signal: abort.signal,
           onReady: () => abort.abort(),
@@ -218,8 +187,8 @@ describe("managed child termination facts", () => {
           });
         }
       } finally {
-        child.stdout.destroy();
-        child.stderr.destroy();
+        child.stdout!.destroy();
+        child.stderr!.destroy();
         await outputClosed;
       }
     },
