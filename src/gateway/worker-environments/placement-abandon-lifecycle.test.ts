@@ -32,34 +32,33 @@ it.each([
 ] as const)(
   "fences the old claim and retains exact cleanup ownership with $cleanup sibling cleanup and sharedHost=$sharedHost",
   async ({ cleanup, sharedHost }) => {
-    let placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    const harness = await createHarness(support.testState.stateDb, placements, {
-      workspacePath: support.testState.root,
-    });
+    const state = support.testState;
+    let placements = createWorkerSessionPlacementStore({ database: state.stateDb });
+    const harness = await createHarness(state.stateDb, placements, { workspacePath: state.root });
     const environmentId = harness.ready.environmentId;
     const deviceId = "paired-device";
     const build = {
       ...support.BOOTSTRAP_RECEIPT,
       protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
     };
-    support.testState.prepareInstallation = async () => ({
+    state.prepareInstallation = async () => ({
       ...support.BUNDLE_ARTIFACT,
       ...build,
     });
     async function seedDevice(id: string, isolation: boolean | null = true) {
-      await support.testState.store.createIntent({
+      await state.store.createIntent({
         environmentId: id,
         providerId: "device",
         profileId: `device:${deviceId}`,
         profileSnapshot: { settings: { device: deviceId }, executionMode: "worker-turn" },
         provisionOperationId: `provision:${id}`,
       });
-      await support.testState.store.transition({
+      await state.store.transition({
         environmentId: id,
         from: "requested",
         to: "provisioning",
       });
-      await support.testState.store.transition({
+      await state.store.transition({
         environmentId: id,
         from: "provisioning",
         to: "ready",
@@ -72,12 +71,14 @@ it.each([
       });
     }
     await seedDevice(environmentId, sharedHost);
-    const attached = await support.testState.store.transition({
-      environmentId,
-      from: "ready",
-      to: "attached",
-      patch: support.attachedPatch(environmentId, REQUEST.sessionId),
-    });
+    const attach = (id: string) =>
+      state.store.transition({
+        environmentId: id,
+        from: "ready",
+        to: "attached",
+        patch: support.attachedPatch(id, REQUEST.sessionId),
+      });
+    const attached = await attach(environmentId);
     expect(attached.sharedHost).toBe(sharedHost);
     const active = await harness.placements.seedActive(attached.ownerEpoch);
     if (active.state !== "active") {
@@ -94,13 +95,7 @@ it.each([
     };
     const replacementId = "worker-replacement";
     await seedDevice(replacementId);
-    const attachReplacement = () =>
-      support.testState.store.transition({
-        environmentId: replacementId,
-        from: "ready",
-        to: "attached",
-        patch: support.attachedPatch(replacementId, active.sessionId),
-      });
+    const attachReplacement = () => attach(replacementId);
     await expect(attachReplacement()).rejects.toThrow("already attached");
     const transport = nodeSupport.transport();
     const connectedNodes = await transport.listCurrentNodes();
@@ -113,8 +108,8 @@ it.each([
     const createTunnels = () =>
       createNodeWorkerTunnelManager({
         gatewayDeviceId: "gateway-fixture",
-        getEnvironment: (id) => support.testState.store.get(id),
-        listEnvironments: () => support.testState.store.list(),
+        getEnvironment: (id) => state.store.get(id),
+        listEnvironments: () => state.store.list(),
         getTransport: () => transport,
         launchNodeWorker: vi.fn(),
         validateWorkerTurn: (candidate) => placements.validateTurnClaim(candidate),
@@ -167,9 +162,9 @@ it.each([
     const restartDisconnectedService = async () => {
       // Shutdown defers the unreachable node's stop; durable ownership keeps the cleanup.
       await service.stop();
-      support.testState.service = undefined;
+      state.service = undefined;
       await support.reopenWorkerEnvironmentStore();
-      placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+      placements = createWorkerSessionPlacementStore({ database: state.stateDb });
       tunnels = createTunnels();
       service = createService();
     };
@@ -194,7 +189,7 @@ it.each([
           vi.mocked(transfer.close).mockRejectedValueOnce(cleanupFailure);
         }
       }
-      const credential = support.testState.store.getCredential(environmentId);
+      const credential = state.store.getCredential(environmentId);
       for (const binding of [
         { environmentId, ownerEpoch: attached.ownerEpoch, sessionId: "different-session" },
         { environmentId, ownerEpoch: attached.ownerEpoch + 1, sessionId: active.sessionId },
@@ -203,8 +198,8 @@ it.each([
           "owner changed before retirement",
         );
       }
-      expect(support.testState.store.getCredential(environmentId)).toEqual(credential);
-      expect(support.testState.store.get(environmentId)?.destroyRequestedAtMs).toBeNull();
+      expect(state.store.getCredential(environmentId)).toEqual(credential);
+      expect(state.store.get(environmentId)?.destroyRequestedAtMs).toBeNull();
       expect(placements.validateTurnClaim(claim)).toBe(true);
       let settled = false;
       let authorized = true;
@@ -247,14 +242,14 @@ it.each([
         expect.soft(outcome).toMatchObject({ state: "local", turnClaim: null });
       }
       expectClaimRevoked();
-      expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
+      expect(state.store.getCredential(environmentId)).toBeUndefined();
       await expect(service.acquireTurnCredential(claim)).rejects.toThrow(
         "claim is not authoritative",
       );
       expect(tunnels.status(environmentId)).toBe("stopped");
-      expect(support.testState.store.get(environmentId)).toMatchObject({
+      expect(state.store.get(environmentId)).toMatchObject({
         state: "attached",
-        destroyRequestedAtMs: support.testState.nowMs,
+        destroyRequestedAtMs: state.nowMs,
         ownerEpoch: attached.ownerEpoch,
         attachedSessionIds: [active.sessionId],
         nodeDeviceId: deviceId,
@@ -301,7 +296,7 @@ it.each([
         expect(await service.acknowledgeCredentialDelivery(grant)).toBe(true);
         await startTunnel(replacementId, replacement.ownerEpoch);
       }
-      const replacementCredential = support.testState.store.getCredential(replacementId);
+      const replacementCredential = state.store.getCredential(replacementId);
       await service.reconcileOnce();
       const count = multipleRetired ? 2 : 1;
       expect(invoke).toHaveBeenCalledTimes(count * 2);
@@ -337,13 +332,13 @@ it.each([
       });
       expect(destroy).toHaveBeenCalledOnce();
       if (replacement && replacementClaim) {
-        expect(support.testState.store.get(replacementId)).toMatchObject({
+        expect(state.store.get(replacementId)).toMatchObject({
           state: "attached",
           ownerEpoch: replacement.ownerEpoch,
           attachedSessionIds: [active.sessionId],
           destroyRequestedAtMs: null,
         });
-        expect(support.testState.store.getCredential(replacementId)).toEqual(replacementCredential);
+        expect(state.store.getCredential(replacementId)).toEqual(replacementCredential);
         expect({
           tunnel: tunnels.status(replacementId),
           claim: placements.validateTurnClaim(replacementClaim),

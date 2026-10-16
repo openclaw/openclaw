@@ -35,6 +35,7 @@ const noop = async () => undefined;
 const lengthHeader = (size: number, width = 4) =>
   Buffer.from(size.toString(16).padStart(width * 2, "0"), "hex");
 const frame = (body: Buffer, width = 4) => [lengthHeader(body.length, width), body];
+type WriteArgs = [bytes: Uint8Array, offset: number, length: number, position: number];
 
 function fixture(
   controller = new AbortController(),
@@ -111,10 +112,11 @@ describe("workspace upload byte stream", () => {
     const chunk = Buffer.alloc(1024 * 1024, 0x61);
     // Exercise the upload size limit without generating a 540 MiB Git text patch.
     chunk[0] = 0;
-    const fileBytes = 60 * chunk.length;
+    const chunks = Array.from({ length: 60 }, () => chunk);
+    const fileBytes = chunks.length * chunk.length;
     const hash = createHash("sha256");
-    for (let index = 0; index < 60; index += 1) {
-      hash.update(chunk);
+    for (const bytes of chunks) {
+      hash.update(bytes);
     }
     const sha256 = hash.digest("hex");
     const entries = Array.from({ length: 9 }, (_, index) => ({
@@ -129,9 +131,7 @@ describe("workspace upload byte stream", () => {
       yield* f.headers;
       for (const entry of entries) {
         yield lengthHeader(entry.size, 8);
-        for (let index = 0; index < 60; index += 1) {
-          yield chunk;
-        }
+        yield* chunks;
       }
     }
     diagnostics.stage("upload");
@@ -200,7 +200,7 @@ describe("workspace upload byte stream", () => {
         observeUploadFile((handle) => {
           const write = handle.write.bind(handle);
           vi.spyOn(handle, "write").mockImplementation(
-            (async (bytes: Uint8Array, offset: number, length: number, position: number) =>
+            (async (...[bytes, offset, length, position]: WriteArgs) =>
               await write(bytes, offset, Math.min(length, 3), position)) as FileHandle["write"],
           );
         });
@@ -225,10 +225,7 @@ describe("workspace upload byte stream", () => {
     const observed = observeUploadFile((handle) => {
       const write = handle.write.bind(handle);
       vi.spyOn(handle, "write").mockImplementationOnce((async (
-        bytes: Uint8Array,
-        offset: number,
-        length: number,
-        position: number,
+        ...[bytes, offset, length, position]: WriteArgs
       ) => {
         const result = await write(bytes, offset, Math.min(length, 3), position);
         written.resolve();

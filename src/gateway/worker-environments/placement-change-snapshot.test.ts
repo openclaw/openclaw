@@ -19,7 +19,6 @@ import {
   subscribeGatewayWorkerPlacementMetadataChanges,
 } from "../server-worker-placement-change-events.js";
 import { readWorkerPlacementIdentity } from "./placement-projector.js";
-import type { WorkerSessionPlacementChangeSnapshot } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { sessionIdentity } from "./placement-suite.test-support.js";
 import {
@@ -33,16 +32,6 @@ const changeContext = (subscribers: string[] = []) => ({
   chatAbortControllers: new Map(),
   getRuntimeConfig: () => ({}),
   getSessionEventSubscriberConnIds: () => new Set(subscribers),
-});
-const placementSnapshot = (
-  sessionId: string,
-  state: "failed" | "requested",
-  generation: number,
-) => ({
-  ...sessionIdentity(sessionId),
-  state,
-  generation,
-  updatedAtMs: 1000,
 });
 
 it("coalesces machine metadata bursts off thread and selects only correlated profile placements", async () => {
@@ -176,16 +165,20 @@ it.each(["cached", "fresh"] as const)(
         await store.startDispatch(sessionIdentity(sessionId));
       }
       const failed = await store.fail({ sessionId: "a", recoveryError: "synthetic failure" });
-      const expected: WorkerSessionPlacementChangeSnapshot[] = [
-        placementSnapshot("a", "failed", 2),
-        placementSnapshot("b", "requested", 1),
-      ];
+      const expected = (
+        [
+          ["a", "failed", 2],
+          ["b", "requested", 1],
+        ] as const
+      ).map(([sessionId, state, generation]) =>
+        Object.assign(sessionIdentity(sessionId), { state, generation, updatedAtMs: 1000 }),
+      );
       if (mode === "fresh") {
         await closeOpenClawStateDatabaseAsync();
       }
       requireNodeSqlite();
       const calls = observeMainThreadSql();
-      let before: WorkerSessionPlacementChangeSnapshot[];
+      let before: Awaited<ReturnType<typeof store.readChangeSnapshot>>;
       try {
         before = await store.readChangeSnapshot();
         expect(before).toEqual(expected);
@@ -232,6 +225,12 @@ it("reports committed changes and cold retirement without reporting reads, inclu
     const failed = await store.fail({ sessionId: "a", recoveryError: "synthetic failure" });
     const context = changeContext(["synthetic-client"]);
     const { broadcastToConnIds } = context;
+    const eventFor = (sessionId: string) => [
+      "sessions.changed",
+      expect.objectContaining({ reason: "placement", sessionKey: `agent:main:${sessionId}` }),
+      new Set(["synthetic-client"]),
+      expect.any(Object),
+    ];
     const reportingRead = vi.spyOn(store, "readChangeSnapshot");
     const warn = vi.fn();
     const publisher = (placements = store) =>
@@ -254,12 +253,7 @@ it("reports committed changes and cold retirement without reporting reads, inclu
         }),
       ).rejects.toBe(operationError);
       await flushPendingSessionsChangedEvents(context);
-      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-        "sessions.changed",
-        expect.objectContaining({ reason: "placement", sessionKey: "agent:main:b" }),
-        new Set(["synthetic-client"]),
-        expect.any(Object),
-      );
+      expect(broadcastToConnIds.mock.calls).toEqual([eventFor("b")]);
       broadcastToConnIds.mockClear();
       // Reopening drops the receipt replica: retirement must carry its own identity.
       await closeOpenClawStateDatabaseAsync();
@@ -277,12 +271,7 @@ it("reports committed changes and cold retirement without reporting reads, inclu
           }),
         ).resolves.toBe("retired");
         await flushPendingSessionsChangedEvents(context);
-        expect(broadcastToConnIds).toHaveBeenCalledWith(
-          "sessions.changed",
-          expect.objectContaining({ reason: "placement", sessionKey: "agent:main:a" }),
-          new Set(["synthetic-client"]),
-          expect.any(Object),
-        );
+        expect(broadcastToConnIds.mock.calls).toContainEqual(eventFor("a"));
       });
       expect((await reopenedStore.listAsync()).map((row) => row.sessionId)).toEqual(["b"]);
       expect(reportingRead).not.toHaveBeenCalled();

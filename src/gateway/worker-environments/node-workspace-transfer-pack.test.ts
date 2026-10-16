@@ -105,6 +105,10 @@ async function createGitTransfer() {
 describe("node workspace Git pack downloads", () => {
   it("imports and recaptures a Git workspace beyond the Windows path limit", async () => {
     const fixture = await createGitTransfer();
+    const {
+      token,
+      snapshot: { manifestRef },
+    } = fixture.prepared;
     const workspaceDir = path.join(fixture.root, "a".repeat(120), "b".repeat(120), "workspace");
     expect(workspaceDir.length).toBeGreaterThan(260);
     await fs.mkdir(workspaceDir, { recursive: true, mode: 0o700 });
@@ -114,14 +118,10 @@ describe("node workspace Git pack downloads", () => {
         environmentId: "environment",
         workspaceDir,
         manifestHome: fixture.root,
-        transfer: {
-          direction: "download",
-          token: fixture.prepared.token,
-          manifestRef: fixture.prepared.snapshot.manifestRef,
-        },
+        transfer: { direction: "download", token, manifestRef },
       });
     for (let attempt = 0; attempt < 2; attempt++) {
-      expect(await transfer()).toBe(fixture.prepared.snapshot.manifestRef);
+      expect(await transfer()).toBe(manifestRef);
       expect(await fs.readFile(path.join(workspaceDir, "input.txt"), "utf8")).toBe(
         "captured base\n",
       );
@@ -152,19 +152,13 @@ describe("node workspace Git pack downloads", () => {
     const unpacked = path.join(fixture.root, "unpacked");
     await fs.mkdir(unpacked);
     await requireGit(unpacked, ["init", "--quiet"]);
-    const indexed = await runCommandWithTimeout(["git", "-C", unpacked, "index-pack", "--stdin"], {
-      input: packs[0],
-      timeoutMs: 10_000,
-    });
-    expect(indexed.code).toBe(0);
+    const runGit = (args: string[], input?: Buffer) =>
+      runCommandWithTimeout(["git", "-C", unpacked, ...args], { input, timeoutMs: 10_000 });
+    expect(await runGit(["index-pack", "--stdin"], packs[0])).toMatchObject({ code: 0 });
     expect(
       await requireGit(unpacked, ["cat-file", "-t", prepared.snapshot.manifest.baseCommit!]),
     ).toBe("commit");
-    const newer = await runCommandWithTimeout(
-      ["git", "-C", unpacked, "cat-file", "-t", nextCommit],
-      { timeoutMs: 10_000 },
-    );
-    expect(newer.code).not.toBe(0);
+    expect((await runGit(["cat-file", "-t", nextCommit])).code).not.toBe(0);
 
     await fs.writeFile(path.join(localPath, "result.txt"), "accepted result\n");
     expect(await expectResponse(fixture.publish(prepared.snapshot.manifest.baseCommit))).toEqual(

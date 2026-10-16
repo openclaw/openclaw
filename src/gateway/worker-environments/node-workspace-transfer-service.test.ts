@@ -67,9 +67,8 @@ function injectUploadWriteFaults() {
 
     stagingRoot = path.dirname(args[0]);
     let injectShortWrite = true;
-    const injectedHandle = Object.create(handle) as typeof handle;
-    injectedHandle.close = handle.close.bind(handle);
-    injectedHandle.write = (async (
+    const write = handle.write.bind(handle);
+    vi.spyOn(handle, "write").mockImplementation((async (
       buffer: Buffer,
       offset = 0,
       length = buffer.byteLength - offset,
@@ -84,14 +83,14 @@ function injectUploadWriteFaults() {
         injectShortWrite = false;
         const writeLength = Math.max(1, Math.floor(length / 2));
         observedShortWrite ||= writeLength < length;
-        return await handle.write(buffer, offset, writeLength, position);
+        return await write(buffer, offset, writeLength, position);
       }
       const retryHook = beforeRetry;
       beforeRetry = undefined;
       await retryHook?.();
-      return await handle.write(buffer, offset, length, position);
-    }) as typeof handle.write;
-    return injectedHandle;
+      return await write(buffer, offset, length, position);
+    }) as typeof handle.write);
+    return handle;
   });
 
   return {
@@ -206,13 +205,11 @@ it("keeps a plain workspace transferable after durable result staging initialize
     const staged = await service.prepareSync(request);
     expect(staged.snapshot).toMatchObject({
       manifestRef: plain.snapshot.manifestRef,
-      manifest: {
-        baseCommit: null,
-        entries: expect.arrayContaining([
-          expect.objectContaining({ path: "input.txt", type: "file" }),
-        ]),
-      },
+      manifest: { baseCommit: null },
     });
+    expect(staged.snapshot.manifest.entries).toContainEqual(
+      expect.objectContaining({ path: "input.txt", type: "file" }),
+    );
 
     await git("add", "input.txt");
     await git(
@@ -405,25 +402,21 @@ it("streams workspace and changed results beyond worker credential expiry", asyn
       expect.objectContaining({ path: "result.txt", type: "file" }),
     );
     await workspaceFiles(uploaded.stagingRoot).expect("result.txt", "node result\n");
-    const invalidUploadToken = prepareUpload();
-    const invalidUpload = await postEmptyResult(invalidUploadToken);
+    const invalidUpload = await postEmptyResult(prepareUpload());
     expect(invalidUpload.status).toBe(413);
     await expect(invalidUpload.json()).resolves.toEqual({
       error: "workspace_transfer_limit",
     });
-    const replacementUploadToken = prepareUpload();
-    await service.revoke("environment-1", replacementUploadToken);
+    await service.revoke("environment-1", prepareUpload());
     writeFaults.failNextWrite(new Error("injected terminal upload write failure"));
-    const failedUploadToken = prepareUpload();
-    await expect(uploadResult(failedUploadToken)).rejects.toThrow(
+    await expect(uploadResult(prepareUpload())).rejects.toThrow(
       "workspace-transfer-invalid: gateway rejected workspace transfer payload (staging)",
     );
     expect(writeFaults.lastStagingRoot()).toBeDefined();
     await expect(fs.stat(writeFaults.lastStagingRoot()!)).rejects.toMatchObject({
       code: "ENOENT",
     });
-    const resetUploadToken = prepareUpload();
-    await service.revoke("environment-1", resetUploadToken);
+    await service.revoke("environment-1", prepareUpload());
     const acceptedToken = service.publishSnapshot("environment-1", {
       manifest: uploaded.current,
       manifestRef: uploaded.currentManifestRef,
@@ -437,8 +430,7 @@ it("streams workspace and changed results beyond worker credential expiry", asyn
     await service.revoke("environment-1", acceptedToken);
 
     const authorityRetry = writeFaults.blockNextRetry();
-    const retiredUploadToken = prepareUpload();
-    const retiredUpload = uploadResult(retiredUploadToken);
+    const retiredUpload = uploadResult(prepareUpload());
     try {
       await expect(retryOrUploadStatus(authorityRetry.started, retiredUpload)).resolves.toBe(
         "retrying",
