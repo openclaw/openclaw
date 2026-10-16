@@ -42,26 +42,19 @@ function resolveTestEndpointClass(baseUrl: string | undefined): string {
     "127.0.0.1": "local",
     localhost: "local",
   };
-  const exactClass = exactClasses[host];
-  if (exactClass) {
-    return exactClass;
-  }
-  if (
-    host.endsWith(".openai.azure.com") ||
-    host.endsWith(".services.ai.azure.com") ||
-    host.endsWith(".cognitiveservices.azure.com")
-  ) {
-    return "azure-openai";
-  }
+  const suffixClasses: Record<string, string> = {
+    ".openai.azure.com": "azure-openai",
+    ".services.ai.azure.com": "azure-openai",
+    ".cognitiveservices.azure.com": "azure-openai",
+    "openrouter.ai": "openrouter",
+    "opencode.ai": "opencode-native",
+    "xiaomimimo.com": "xiaomi-native",
+    "aiplatform.googleapis.com": "google-vertex",
+  };
   return (
-    (
-      [
-        ["openrouter.ai", "openrouter"],
-        ["opencode.ai", "opencode-native"],
-        ["xiaomimimo.com", "xiaomi-native"],
-        ["aiplatform.googleapis.com", "google-vertex"],
-      ] as const
-    ).find(([suffix]) => host.endsWith(suffix))?.[1] ?? "custom"
+    exactClasses[host] ??
+    Object.entries(suffixClasses).find(([suffix]) => host.endsWith(suffix))?.[1] ??
+    "custom"
   );
 }
 
@@ -69,27 +62,25 @@ function resolveTestCapabilities(
   input: AiProviderRequestPolicyInput,
 ): AiProviderRequestCapabilities {
   const endpointClass = resolveTestEndpointClass(input.baseUrl);
-  const provider = input.provider;
-  const knownProviderFamily =
-    provider === "moonshotai" || provider === "moonshotai-cn"
-      ? "moonshot"
-      : provider === "dashscope" || provider === "modelstudio" || provider === "qwen"
-        ? "modelstudio"
-        : provider === "openai" || provider === "azure-openai"
-          ? "openai-family"
-          : (provider ?? "unknown");
-  const usesConfiguredBaseUrl = endpointClass !== "default";
-  const usesKnownNativeOpenAIEndpoint =
-    endpointClass === "openai-public" ||
-    endpointClass === "openai" ||
-    endpointClass === "azure-openai";
+  const provider = input.provider ?? "unknown";
+  const families = new Map([
+    ["moonshotai", "moonshot"],
+    ["moonshotai-cn", "moonshot"],
+    ["dashscope", "modelstudio"],
+    ["modelstudio", "modelstudio"],
+    ["qwen", "modelstudio"],
+    ["openai", "openai-family"],
+    ["azure-openai", "openai-family"],
+  ]);
   return {
     endpointClass,
-    knownProviderFamily,
+    knownProviderFamily: families.get(provider) ?? provider,
     supportsNativeStreamingUsageCompat:
       endpointClass === "moonshot-native" || endpointClass === "modelstudio-native",
     supportsOpenAICompletionsStreamingUsageCompat: provider === "volcengine-plan",
-    usesExplicitProxyLikeEndpoint: usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint,
+    usesExplicitProxyLikeEndpoint: !["default", "openai-public", "openai", "azure-openai"].includes(
+      endpointClass,
+    ),
     allowsAnthropicServiceTier: false,
   };
 }
@@ -145,6 +136,13 @@ export function makeCompletionsModel(
     ...overrides,
   };
 }
+function namedModel(
+  id: string,
+  name: string,
+  overrides: Partial<Model<"openai-completions">> = {},
+) {
+  return makeCompletionsModel({ ...overrides, id, name });
+}
 
 export function makeCompletionsChunk(
   delta: unknown,
@@ -169,9 +167,7 @@ export function makeCompletionsChunk(
 }
 
 export function createDeepSeekCompletionsModel(): Model<"openai-completions"> {
-  return makeCompletionsModel({
-    id: "deepseek-v4-pro",
-    name: "DeepSeek V4 Pro",
+  return namedModel("deepseek-v4-pro", "DeepSeek V4 Pro", {
     provider: "deepseek",
     baseUrl: "https://api.deepseek.com",
     compat: { thinkingFormat: "deepseek" },
@@ -210,51 +206,36 @@ export function expectRecordFields(record: unknown, expected: Record<string, unk
   return actual;
 }
 
-export const openRouterModel = makeCompletionsModel({
-  id: "deepseek/deepseek-v4-flash",
-  name: "DeepSeek v4 Flash",
+export const openRouterModel = namedModel("deepseek/deepseek-v4-flash", "DeepSeek v4 Flash", {
   provider: "openrouter",
   baseUrl: "https://openrouter.ai/api/v1",
   contextWindow: 128_000,
 });
 
-export const openRouterAnthropicModel = makeCompletionsModel({
-  ...openRouterModel,
-  id: "anthropic/claude-sonnet-4.6",
-  name: "Claude Sonnet 4.6",
-});
+export const openRouterAnthropicModel = namedModel(
+  "anthropic/claude-sonnet-4.6",
+  "Claude Sonnet 4.6",
+  openRouterModel,
+);
 
-export const openRouterXaiModel = makeCompletionsModel({
-  ...openRouterModel,
-  id: "x-ai/grok-4.3",
-  name: "Grok 4.3",
-});
+export const openRouterXaiModel = namedModel("x-ai/grok-4.3", "Grok 4.3", openRouterModel);
 
-export const openAIModel = makeCompletionsModel({
-  id: "gpt-5.4-mini",
-  name: "GPT-5.4 Mini",
-});
+export const openAIModel = namedModel("gpt-5.4-mini", "GPT-5.4 Mini");
 
-export const nativeDeepSeekModel = makeCompletionsModel({
-  id: "deepseek-v4-flash",
-  name: "DeepSeek V4 Flash",
+export const nativeDeepSeekModel = namedModel("deepseek-v4-flash", "DeepSeek V4 Flash", {
   provider: "deepseek",
   baseUrl: "https://api.deepseek.com",
   contextWindow: 1_000_000,
   maxTokens: 384_000,
 });
 
-export const nativeZaiModel = makeCompletionsModel({
-  id: "glm-5.1",
-  name: "GLM 5.1",
+export const nativeZaiModel = namedModel("glm-5.1", "GLM 5.1", {
   provider: "zai",
   baseUrl: "https://api.z.ai/api/paas/v4",
   maxTokens: 131_072,
 });
 
-export const xiaomiModel = makeCompletionsModel({
-  id: "mimo-v2.5-pro",
-  name: "MiMo V2.5 Pro",
+export const xiaomiModel = namedModel("mimo-v2.5-pro", "MiMo V2.5 Pro", {
   provider: "xiaomi",
   baseUrl: "https://api.xiaomimimo.com/v1",
   contextWindow: 1_048_576,
@@ -267,29 +248,25 @@ export const customMiMoProxyModel = makeCompletionsModel({
   baseUrl: "https://proxy.example.com/v1",
 });
 
-export const customKimiProxyModel = makeCompletionsModel({
-  id: "moonshotai/kimi-k2.6",
-  name: "Kimi K2.6",
+export const customKimiProxyModel = namedModel("moonshotai/kimi-k2.6", "Kimi K2.6", {
   provider: "custom-openai-proxy",
   baseUrl: "https://proxy.example.com/v1",
   contextWindow: 262_144,
   maxTokens: 32_000,
 });
 
-export const staleKimiK27Model = makeCompletionsModel({
+export const staleKimiK27Model = namedModel("kimi-k2.7-code", "Kimi K2.7 Code", {
   ...customKimiProxyModel,
-  id: "kimi-k2.7-code",
-  name: "Kimi K2.7 Code",
   provider: "moonshot",
   baseUrl: "https://api.moonshot.ai/v1",
   reasoning: false,
 });
 
-export const customQwenReasoningModel = makeCompletionsModel({
-  ...customKimiProxyModel,
-  id: "Qwen3.6-35B-A3B",
-  name: "Qwen3.6 35B",
-});
+export const customQwenReasoningModel = namedModel(
+  "Qwen3.6-35B-A3B",
+  "Qwen3.6 35B",
+  customKimiProxyModel,
+);
 
 export function getAssistantMessage(params: { messages: unknown }) {
   expect(Array.isArray(params.messages)).toBe(true);
@@ -307,11 +284,7 @@ export function buildReplayParams(model: Model<"openai-completions">, thinkingSi
       messages: [
         { role: "user", content: "hello" },
         {
-          role: "assistant",
-          provider: model.provider,
-          api: model.api,
-          model: model.id,
-          stopReason: "stop",
+          ...createAssistantOutput(model),
           timestamp: 0,
           content: [
             {
@@ -330,9 +303,7 @@ export function buildReplayParams(model: Model<"openai-completions">, thinkingSi
   ) as { messages: unknown };
 }
 
-export const customReasoningProxyModel = makeCompletionsModel({
-  id: "my-proxy/r1-pro",
-  name: "Custom Reasoning Proxy",
+export const customReasoningProxyModel = namedModel("my-proxy/r1-pro", "Custom Reasoning Proxy", {
   provider: "custom-openai-proxy",
   baseUrl: "https://my-proxy.example.com/v1",
 });
