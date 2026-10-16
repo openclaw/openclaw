@@ -484,7 +484,9 @@ describe("registerTelegramNativeCommands /login", () => {
       const signal = params.signal;
       try {
         await new Promise<never>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener("abort", () => reject(new Error("Telegram stopped")), {
+            once: true,
+          });
         });
       } catch {
         await params.prompter.note("Trouble with device code login?", "OAuth help");

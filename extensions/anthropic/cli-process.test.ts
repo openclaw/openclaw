@@ -147,8 +147,9 @@ function observeChild(
 }
 
 function attachLiveSession(context: CliBackendExecuteContext) {
-  context.liveSession = harness.liveSession();
-  return context.liveSession.current;
+  const liveSession = harness.liveSession();
+  context.liveSession = liveSession;
+  return () => liveSession.current();
 }
 
 describe("Claude subprocess diagnostics through the direct CLI transport", () => {

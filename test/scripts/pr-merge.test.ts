@@ -329,7 +329,17 @@ describePosix("native squash attribution", () => {
     ],
   ])(
     "preserves REST squash defaults %s/%s for %i source commits",
-    (title, message, count, expected, { refresh, localFixup, override } = {}) => {
+    (
+      title,
+      message,
+      count,
+      expected,
+      {
+        refresh,
+        localFixup,
+        override,
+      }: { localFixup?: boolean; refresh?: boolean; override?: string } = {},
+    ) => {
       const result = prepareBody({
         restPreview: true,
         squashTitle: title,

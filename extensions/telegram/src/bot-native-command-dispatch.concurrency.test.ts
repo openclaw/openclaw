@@ -135,7 +135,9 @@ describe("Telegram commands during buffered message processing", () => {
         const stop = dispatch(groupCommand("/stop", 100), authorized);
         await wait(authorized ? Promise.all([controlEntered.promise, stop]) : stop);
         const expected = authorized ? ["ordinary run", command] : ["ordinary run"];
-        expect(bodies().toSorted()).toEqual(expected.toSorted());
+        expect(bodies().toSorted((a, b) => String(a).localeCompare(String(b)))).toEqual(
+          expected.toSorted((a, b) => a.localeCompare(b)),
+        );
         await wait(Promise.all([control, stop]));
         expect(active.participant.isSettled()).toBe(false);
         if (sameTopic && otherTopic) {
@@ -161,7 +163,9 @@ describe("Telegram commands during buffered message processing", () => {
           await sameTopic.settled("completed");
           expected.push("same-topic follow-up");
         }
-        expect(bodies().toSorted()).toEqual(expected.toSorted());
+        expect(bodies().toSorted((a, b) => String(a).localeCompare(String(b)))).toEqual(
+          expected.toSorted((a, b) => a.localeCompare(b)),
+        );
       } finally {
         await lifetime.close();
       }

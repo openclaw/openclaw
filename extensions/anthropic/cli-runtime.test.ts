@@ -26,7 +26,7 @@ import {
 import { executeClaudeCli } from "./cli.runtime.js";
 
 const harness = createCliTestHarness("openclaw-claude-protocol-");
-const createLiveSession = harness.liveSession;
+const createLiveSession = () => harness.liveSession();
 const INPUT = "synthetic user input";
 const SYSTEM = "synthetic operator instructions";
 const PRIVATE = "current private context";
@@ -279,7 +279,7 @@ describe("Claude native stdio boundary", () => {
       const context = await createContext(scenario, {
         requestToolPermission: permission(async () => decision),
       });
-      if (replayReceipts === false) {
+      if (!replayReceipts) {
         context.env.CLAUDE_FIXTURE_REPLAY_RECEIPTS = "0";
       }
       context.env.CLAUDE_FIXTURE_TASK_TYPE = taskType;
@@ -305,7 +305,7 @@ describe("Claude native stdio boundary", () => {
       for (const interim of records.filter((record) => record.type === "result").slice(0, -1)) {
         expect(interim).toHaveProperty("openclaw_interim_result", true);
       }
-      if (replayReceipts === false) {
+      if (!replayReceipts) {
         expect(records).not.toContainEqual(
           expect.objectContaining({ type: "user", isReplay: true }),
         );

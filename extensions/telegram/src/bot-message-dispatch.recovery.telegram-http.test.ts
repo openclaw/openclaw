@@ -103,7 +103,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       attempts = 0;
     installHook(({ kind, payload }) => {
       if (kind !== "final") {
-        return;
+        return undefined;
       }
       preparations += 1;
       const channelData = payload.channelData;
