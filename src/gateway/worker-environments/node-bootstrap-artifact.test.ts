@@ -292,6 +292,7 @@ describe("node bootstrap distribution", () => {
           modes.set(entry.path, entry.mode);
         },
       });
+      expect(entries).toContain("package/cli-parent-lifetime.mjs");
       expect(
         entries.some((entry) =>
           /(?:\.env|private\.ts|host-native|\.map|\.buildstamp)$/u.test(entry),

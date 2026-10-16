@@ -35,6 +35,7 @@ import {
   validatePostgresBindings,
   type BridgeReply,
   type BridgeCommand,
+  type PostgresResult,
 } from "./protocol.js";
 import { runPostgresTransactionSync } from "./transaction.js";
 
@@ -55,7 +56,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     url: string,
     readonly schema: string,
     readonly anchor: DatabaseSync,
-    storeId: string,
+    readonly storeId: string,
     options?: {
       lockTimeoutMs?: number;
       statementTimeoutMs?: number;
@@ -101,6 +102,10 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     return runPostgresTransactionSync(this, operation, options, ...modes);
   }
 
+  readRecoveryGeneration(lock = false): string {
+    return this.request({ operation: "recovery-generation", storeId: this.storeId, lock }, false);
+  }
+
   private loseConnection(): Error {
     if (!this.failure && this.outcomeUnknown) {
       // The write may have committed, so invalidate anchor caches before reconnecting.
@@ -126,7 +131,15 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     }
   }
 
-  private request(request: BridgeCommand, outcomeUnknown = true) {
+  private request(
+    request: Extract<BridgeCommand, { operation: "recovery-generation" }>,
+    outcomeUnknown?: boolean,
+  ): string;
+  private request(
+    request: Exclude<BridgeCommand, { operation: "recovery-generation" }>,
+    outcomeUnknown?: boolean,
+  ): PostgresResult;
+  private request(request: BridgeCommand, outcomeUnknown = true): PostgresResult | string {
     if (this.mainThread && request.operation !== "close") {
       assertEngineStoreExecutionAllowed();
     }
@@ -167,7 +180,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       }
       throw decodePostgresError(reply.error);
     }
-    return reply.result;
+    return "generation" in reply ? reply.generation : reply.result;
   }
 
   query(sql: string, parameters: readonly SQLInputValue[] = [], readBigInts = false) {

@@ -268,16 +268,15 @@ function buildCompactionSummaryHeaders(params: {
   };
 }
 
-function clampNonNegativeInt(value: unknown, fallback: number, max: number): number {
-  const normalized = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  return Math.min(max, Math.max(0, Math.floor(normalized)));
+function clampNonNegativeInt(value: number | undefined, fallback: number, max: number): number {
+  return Math.min(max, Math.max(0, Math.floor(value ?? fallback)));
 }
 
-function resolveRecentTurnsPreserve(value: unknown): number {
+function resolveRecentTurnsPreserve(value: number | undefined): number {
   return clampNonNegativeInt(value, DEFAULT_RECENT_TURNS_PRESERVE, MAX_RECENT_TURNS_PRESERVE);
 }
 
-function resolveQualityGuardMaxRetries(value: unknown): number {
+function resolveQualityGuardMaxRetries(value: number | undefined): number {
   return clampNonNegativeInt(
     value,
     DEFAULT_QUALITY_GUARD_MAX_RETRIES,
@@ -648,7 +647,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     let baseTurnPrefixMessages = stripRuntimeContextCustomMessages(
       preparation.turnPrefixMessages ?? [],
     );
-    const latestUnresolvedUserRequest = preparation.latestUnresolvedUserRequest ?? null;
+    const latestUnresolvedUserRequest = preparation.latestUnresolvedUserRequest;
     setCompactionSafeguardCancellation(ctx.sessionManager, undefined);
     const cancelCompaction = (reason: string, error?: unknown) => {
       setCompactionSafeguardCancellation(ctx.sessionManager, reason, error);
@@ -731,7 +730,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const structuredInstructions = buildCompactionStructureInstructions(
       customInstructions,
       summarizationInstructions,
-      latestUnresolvedUserRequest ?? undefined,
+      latestUnresolvedUserRequest,
     );
     let workspaceContextPromise: Promise<string> | undefined;
     const finalizeSummaryText = async (
@@ -854,9 +853,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           if (signal?.aborted) {
             throw err;
           }
-          log.warn(
-            `Compaction provider "${compactionProvider.id}" failed, falling back to LLM: ${formatErrorMessage(err)}`,
-          );
+          log.warn(`Compaction provider "${compactionProvider.id}" failed, falling back to LLM.`);
         }
       } else {
         log.warn(
@@ -1018,7 +1015,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 identifiers,
                 latestAsk: latestUserAsk,
                 latestAskInRetainedTurn: splitUserAsk !== null,
-                latestUnresolvedUserRequest: latestUnresolvedUserRequest ?? undefined,
+                latestUnresolvedUserRequest,
                 requiredAskContext,
                 identifierPolicy,
               }
@@ -1034,7 +1031,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           sourceSummaries: [historySummary, splitTurnSummaryLocal].filter(Boolean),
           identifiers,
           latestAsk: latestUserAsk,
-          latestUnresolvedUserRequest: latestUnresolvedUserRequest ?? undefined,
+          latestUnresolvedUserRequest,
           retainedTurnSummary: splitUserAsk !== null ? splitTurnSummaryLocal : undefined,
           identifierPolicy,
         });
@@ -1058,7 +1055,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               identifiers,
               latestAsk: latestUserAsk,
               latestAskInRetainedTurn: splitUserAsk !== null,
-              latestUnresolvedUserRequest: latestUnresolvedUserRequest ?? undefined,
+              latestUnresolvedUserRequest,
               requiredAskContext,
               identifierPolicy,
             },
@@ -1105,9 +1102,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         signal.throwIfAborted();
       }
       const message = formatErrorMessage(error);
-      log.warn(
-        `Compaction summarization failed; cancelling compaction to preserve history: ${message}`,
-      );
+      log.warn("Compaction summarization failed; cancelling compaction to preserve history.");
       return cancelCompaction(
         `Compaction safeguard could not summarize the session: ${message}`,
         error,

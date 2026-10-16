@@ -42,6 +42,10 @@ const TRAJECTORY_TOOL_CACHE_MAX_CHARS = 16_384;
 const TRAJECTORY_TOOL_CACHE_MAX_ENTRIES = 256;
 const toolParameterProjections = new Map<string, string>();
 const TRAJECTORY_PAYLOAD_PROJECTION = {
+  // Every JSON object needs at least two bytes. Avoid a second, smaller budget
+  // corrupting payloads that fit the event limit, including explicit bound markers.
+  maxNodes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES / 2,
+  maxKeys: TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS + 2,
   redactCredentials: false,
   omitField: (key) => key === "providerReplay",
   propertyScope: "enumerable",
@@ -68,6 +72,12 @@ const TRAJECTORY_RUNTIME_OVERSIZE_DROP_FIRST_DATA_KEYS = [
 const OVERSIZE_PRESERVED_DATA_KEYS = [
   "threadId",
   "turnId",
+  "itemId",
+  "toolCallId",
+  "name",
+  "status",
+  "success",
+  "isError",
   "timedOut",
   "yieldDetected",
   "aborted",

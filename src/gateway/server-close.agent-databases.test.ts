@@ -33,7 +33,7 @@ import {
   completeGatewayBootLifecycle,
   type GatewayBootLifecycleCompletion,
   readGatewayLastShutdownAsync,
-  recordGatewayBootStart,
+  beginGatewayBootLifecycle,
 } from "../infra/gateway-boot-lifecycle.js";
 import { settlePendingFinalDelivery } from "../infra/outbound/delivery-completion.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
@@ -655,8 +655,8 @@ it.skipIf(process.platform !== "linux")(
       const port = await fixture.reservePort();
       running = runGatewayLoop({
         lockPort: port,
-        beginBoot: (startedAtMs) => {
-          bootId = recordGatewayBootStart(fixture.state.env, startedAtMs);
+        beginBoot: async (startedAtMs) => {
+          bootId = (await beginGatewayBootLifecycle(fixture.state.env, startedAtMs)).id;
         },
         completeBoot,
         start: async (options) => {

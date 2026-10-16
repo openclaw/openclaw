@@ -6,7 +6,7 @@ import {
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { readTranscriptPayload } from "../../config/sessions/transcript-payload.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
-import { openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
+import { agentEngineSchema, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
 import { runWithAgentDatabaseMaintenanceAuthority } from "../../state/openclaw-agent-db-lease.js";
 import { AGENT_SCHEMA_COMPATIBILITY } from "../../state/openclaw-agent-db-schema-compatibility.js";
 import {
@@ -99,7 +99,20 @@ const agentSourceSearchPostData: NonNullable<PortDescriptor["postgresSourcePostD
   };
 };
 
-export async function loadAgentPortDescriptor(): Promise<PortDescriptor> {
+export async function loadAgentPortDescriptor(
+  sourceVersion = agentEngineSchema.version,
+): Promise<PortDescriptor> {
+  if (sourceVersion !== agentEngineSchema.version) {
+    const backup = agentEngineSchema.postgresMigrations?.find(
+      (step) => step.version === sourceVersion + 1,
+    )?.backup;
+    if (!backup || backup.version !== sourceVersion || backup.id !== "agent") {
+      throw new DatabasePortDataError(
+        `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
+      );
+    }
+    return backup;
+  }
   const catalog = agentPostgresRuntime.expectedCatalog;
   const columns = catalog.filter(
     (fact): fact is typeof fact & { value: PortTable["columns"][number] } => fact.kind === "column",

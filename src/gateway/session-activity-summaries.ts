@@ -38,6 +38,7 @@ import {
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   projectActivitySummaryEntry,
@@ -315,7 +316,7 @@ export function createSessionActivitySummaries(deps: {
     const ref = modelRef(state);
     const priorBackoff = ref ? modelBackoffs.get(ref) : undefined;
     let partial = false;
-    let ownedWork: Promise<string> | undefined;
+    const ownedWork = new AsyncWorkScope();
     try {
       if (!ref) {
         publish(state, "unavailable");
@@ -394,11 +395,12 @@ export function createSessionActivitySummaries(deps: {
             });
             return result.text;
           };
-          ownedWork = execute();
           text = truncateUtf16Safe(
             (
-              await racePromiseWithAbortSignal(ownedWork, controller.signal, (signal) =>
-                toErrorObject(signal.reason, "Activity recap cancelled"),
+              await racePromiseWithAbortSignal(
+                ownedWork.track(execute),
+                controller.signal,
+                (signal) => toErrorObject(signal.reason, "Activity recap cancelled"),
               )
             )
               .replace(/\s+/gu, " ")
@@ -519,8 +521,12 @@ export function createSessionActivitySummaries(deps: {
         });
       }
     } finally {
-      // Retain the slot until provider settlement, including after timeout or cancellation.
-      await ownedWork?.catch(() => undefined);
+      // Logical results can precede tracked cleanup. Retain this recap's slot
+      // through descendant settlement without draining its caller's scope.
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [ownedWork],
+        () => ownedWork.drain(),
+      );
       state.controller = undefined;
       state.inFlight = false;
       if (current(state) && (state.retryPending || (!state.retryAt && (partial || state.dirty)))) {
@@ -566,7 +572,8 @@ export function createSessionActivitySummaries(deps: {
       if (!current(state)) {
         continue;
       }
-      const work = run(state)
+      // The per-recap scope must not detach cleanup from inherited connection work.
+      const work = trackAsyncWork(() => run(state))
         .catch((error: unknown) => {
           log.debug("Activity recap background work failed", { error: formatErrorMessage(error) });
         })

@@ -825,7 +825,7 @@ describe("Codex diagnostics confirmation", () => {
     expect(upload).toHaveBeenCalledTimes(2);
     for (const target of targets) {
       expect(upload).toHaveBeenCalledWith(
-        undefined,
+        {},
         CODEX_CONTROL_METHODS.feedback,
         {
           classification: "bug",

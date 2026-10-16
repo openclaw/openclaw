@@ -136,6 +136,21 @@ function currentSource(fixture: Fixture) {
   };
 }
 
+function claimAnswer(
+  text: string,
+  options: Omit<Parameters<typeof claimPendingAgentQuestionAnswer>[0], "sessionKey" | "text"> = {},
+) {
+  return claimPendingAgentQuestionAnswer({ sessionKey, text, ...options });
+}
+
+function resolvedRequests(fixture: Fixture) {
+  return fixture.requests.filter((frame) => frame.method === "question.resolve");
+}
+
+function expectAnswer(result: unknown, text: string) {
+  expect(result).toMatchObject({ status: "answered", answers: { answers: { answer: [text] } } });
+}
+
 const ownerCases = [
   { owner: "harness", stage: "registration" },
   { owner: "harness", stage: "successive-refusals" },
@@ -185,9 +200,7 @@ describe("question dispatch ownership", () => {
       try {
         await requested.promise;
         await expect(
-          claimPendingAgentQuestionAnswer({
-            sessionKey,
-            text: "obsolete",
+          claimAnswer("obsolete", {
             authority: {
               kind: "source-bound",
               assertCurrent: () => {
@@ -197,13 +210,8 @@ describe("question dispatch ownership", () => {
           }),
         ).rejects.toThrow("retired source");
         expect(broker.list().questions).toHaveLength(1);
-        await expect(
-          claimPendingAgentQuestionAnswer({ sessionKey, text: "Continue" }),
-        ).resolves.toBe(true);
-        expect((await run).details).toMatchObject({
-          status: "answered",
-          answers: { answers: { answer: ["Continue"] } },
-        });
+        await expect(claimAnswer("Continue")).resolves.toBe(true);
+        expectAnswer((await run).details, "Continue");
       } finally {
         broker.stop();
         await run;
@@ -287,9 +295,7 @@ describe("question dispatch ownership", () => {
                   resolvedBy: "image-reply",
                   authority,
                 })
-              : claimPendingAgentQuestionAnswer({
-                  sessionKey,
-                  text: "obsolete",
+              : claimAnswer("obsolete", {
                   authority,
                   persist,
                 });
@@ -297,9 +303,7 @@ describe("question dispatch ownership", () => {
             if (stage !== "successive-refusals" && stage !== "successor-answer") {
               return error;
             }
-            return claimPendingAgentQuestionAnswer({
-              sessionKey,
-              text: "successor",
+            return claimAnswer("successor", {
               authority: successor.authority,
               persist: async () => {
                 successorPersisting.resolve();
@@ -325,22 +329,15 @@ describe("question dispatch ownership", () => {
           }
           if (stage === "successor-answer") {
             expect(await outcome).toBe(true);
-            expect(await question.run).toMatchObject({
-              status: "answered",
-              answers: { answers: { answer: ["successor"] } },
-            });
-            expect(
-              fixture.requests.filter((frame) => frame.method === "question.resolve"),
-            ).toHaveLength(1);
+            expectAnswer(await question.run, "successor");
+            expect(resolvedRequests(fixture)).toHaveLength(1);
             return;
           }
           expect(await outcome).toBeInstanceOf(Error);
           expect(persist).toHaveBeenCalledTimes(
             stage === "registration" || stage === "registration-cancel" ? 0 : 1,
           );
-          expect(fixture.requests.filter((frame) => frame.method === "question.resolve")).toEqual(
-            [],
-          );
+          expect(resolvedRequests(fixture)).toEqual([]);
           expect(fixture.manager.list()).toHaveLength(1);
           expect(fixture.backingRun.signal.aborted).toBe(false);
           let promptShown = false;
@@ -350,16 +347,11 @@ describe("question dispatch ownership", () => {
           await vi.waitFor(() => expect(promptShown).toBe(true));
           await prompt;
           await expect(
-            claimPendingAgentQuestionAnswer({
-              sessionKey,
-              text: "current",
+            claimAnswer("current", {
               authority: currentSource(fixture).authority,
             }),
           ).resolves.toBe(true);
-          expect(await question.run).toMatchObject({
-            status: "answered",
-            answers: { answers: { answer: ["current"] } },
-          });
+          expectAnswer(await question.run, "current");
         } finally {
           registration.release();
           persisted.resolve();
@@ -403,9 +395,7 @@ describe("question dispatch ownership", () => {
         const persist = vi.fn(async () => {});
         try {
           await Promise.all([fixture.waitStarted, question.showPrompt()]);
-          const attempt = claimPendingAgentQuestionAnswer({
-            sessionKey,
-            text: "custom answer",
+          const attempt = claimAnswer("custom answer", {
             persist,
             authority,
           });
@@ -423,14 +413,10 @@ describe("question dispatch ownership", () => {
             if (mode === "legacy-source") {
               expect(result).toBeInstanceOf(QuestionDispatchUnsupportedError);
             }
-            expect(fixture.requests.filter((frame) => frame.method === "question.resolve")).toEqual(
-              [],
-            );
+            expect(resolvedRequests(fixture)).toEqual([]);
             expect(persist).toHaveBeenCalledTimes(mode === "legacy-source" ? 0 : 1);
             expect(fixture.manager.list()).toHaveLength(1);
-            await expect(
-              claimPendingAgentQuestionAnswer({ sessionKey, text: "later ordinary" }),
-            ).resolves.toBe(true);
+            await expect(claimAnswer("later ordinary")).resolves.toBe(true);
           } else {
             expect(result).toBe(true);
             expect(persist).toHaveBeenCalledOnce();
@@ -451,7 +437,7 @@ describe("question dispatch ownership", () => {
       const { source, authority } = currentSource(fixture);
       await Promise.all([fixture.waitStarted, question.showPrompt()]);
       const hello = fixture.holdNextHello();
-      const attempt = claimPendingAgentQuestionAnswer({ sessionKey, text: "obsolete", authority });
+      const attempt = claimAnswer("obsolete", { authority });
       const outcome = attempt.catch((error: unknown) => error);
       await hello.entered;
       source.abort();
@@ -460,7 +446,7 @@ describe("question dispatch ownership", () => {
       await question.run;
       hello.release();
       expect(await outcome).toBeInstanceOf(Error);
-      expect(fixture.requests.filter((frame) => frame.method === "question.resolve")).toEqual([]);
+      expect(resolvedRequests(fixture)).toEqual([]);
       expect(fixture.manager.get(pending.id)?.answers).toEqual({
         answers: { answer: ["other surface"] },
       });
@@ -475,9 +461,7 @@ describe("question dispatch ownership", () => {
         const { source, authority } = currentSource(fixture);
         await Promise.all([fixture.waitStarted, question.showPrompt()]);
         const hello = fixture.holdNextHello();
-        const attempt = claimPendingAgentQuestionAnswer({
-          sessionKey,
-          text: "same answer",
+        const attempt = claimAnswer("same answer", {
           authority,
         });
         const outcome = attempt.catch((error: unknown) => error);
@@ -487,10 +471,7 @@ describe("question dispatch ownership", () => {
           fixture.manager.resolve(pending.id, { answers: { answer: ["same answer"] } }, "other", {
             resolutionId,
           });
-          expect(await question.run).toMatchObject({
-            status: "answered",
-            answers: { answers: { answer: ["same answer"] } },
-          });
+          expectAnswer(await question.run, "same answer");
           hello.fail();
           if (resolutionId === undefined) {
             expect(await outcome).toBeInstanceOf(QuestionAnswerUnconfirmedError);
@@ -499,9 +480,7 @@ describe("question dispatch ownership", () => {
           }
           expect(source.signal.aborted).toBe(false);
           expect(fixture.backingRun.signal.aborted).toBe(false);
-          expect(fixture.requests.filter((frame) => frame.method === "question.resolve")).toEqual(
-            [],
-          );
+          expect(resolvedRequests(fixture)).toEqual([]);
         } finally {
           hello.fail();
           fixture.backingRun.abort();
@@ -530,9 +509,7 @@ describe("question dispatch ownership", () => {
           fixture.dropNextResolveResponse();
           fixture.onResolved(() => source.abort());
           let settled = false;
-          const outcome = claimPendingAgentQuestionAnswer({
-            sessionKey,
-            text: "committed",
+          const outcome = claimAnswer("committed", {
             authority,
             persist,
           }).then(
@@ -563,10 +540,7 @@ describe("question dispatch ownership", () => {
             expect(await observedQuestion).toBeInstanceOf(Error);
           } else {
             expect(await outcome).toBe(true);
-            expect(await question.run).toMatchObject({
-              status: "answered",
-              answers: { answers: { answer: ["committed"] } },
-            });
+            expectAnswer(await question.run, "committed");
           }
           const resolves = fixture.requests.filter(
             (frame) =>
@@ -598,12 +572,10 @@ describe("question dispatch ownership", () => {
       try {
         await Promise.all([fixture.waitStarted, question.showPrompt()]);
         let settled = false;
-        outcome = claimPendingAgentQuestionAnswer({ sessionKey, text: "" }).catch(
-          (error: unknown) => {
-            settled = true;
-            return error;
-          },
-        );
+        outcome = claimAnswer("").catch((error: unknown) => {
+          settled = true;
+          return error;
+        });
         await vi.waitFor(() => expect(settled).toBe(true));
         expect(await outcome).toMatchObject({
           name: "GatewayClientRequestError",
@@ -611,9 +583,7 @@ describe("question dispatch ownership", () => {
           details: { reason: "QUESTION_INVALID_ANSWER" },
         });
         expect(fixture.manager.list()).toHaveLength(1);
-        await expect(claimPendingAgentQuestionAnswer({ sessionKey, text: "valid" })).resolves.toBe(
-          true,
-        );
+        await expect(claimAnswer("valid")).resolves.toBe(true);
         expect(await question.run).toMatchObject({ status: "answered" });
       } finally {
         fixture.backingRun.abort();
@@ -633,9 +603,7 @@ describe("question dispatch ownership", () => {
         const question = startQuestion(fixture, owner);
         await Promise.all([fixture.waitStarted, question.showPrompt()]);
         const hello = fixture.holdNextHello();
-        const outcome = claimPendingAgentQuestionAnswer({ sessionKey, text: "obsolete" }).catch(
-          (error: unknown) => error,
-        );
+        const outcome = claimAnswer("obsolete").catch((error: unknown) => error);
         try {
           await hello.entered;
           const pending = fixture.manager.list()[0]!;
@@ -650,9 +618,7 @@ describe("question dispatch ownership", () => {
           });
           hello.fail();
           expect(await outcome).toBe(false);
-          expect(fixture.requests.filter((frame) => frame.method === "question.resolve")).toEqual(
-            [],
-          );
+          expect(resolvedRequests(fixture)).toEqual([]);
         } finally {
           hello.fail();
           fixture.backingRun.abort();
@@ -683,9 +649,7 @@ describe("question dispatch ownership", () => {
       };
       const old = register();
       const hello = fixture.holdNextHello();
-      const attempt = claimPendingAgentQuestionAnswer({
-        sessionKey,
-        text: "old",
+      const attempt = claimAnswer("old", {
         authority: currentSource(fixture).authority,
       });
       const outcome = attempt.catch((error: unknown) => error);
@@ -695,19 +659,14 @@ describe("question dispatch ownership", () => {
       try {
         hello.release();
         expect(await outcome).toBeInstanceOf(Error);
-        expect(fixture.requests.filter((frame) => frame.method === "question.resolve")).toEqual([]);
+        expect(resolvedRequests(fixture)).toEqual([]);
         expect(fixture.manager.get(questionId)?.status).toBe("pending");
         await expect(
-          claimPendingAgentQuestionAnswer({
-            sessionKey,
-            text: "replacement",
+          claimAnswer("replacement", {
             authority: currentSource(fixture).authority,
           }),
         ).resolves.toBe(true);
-        expect(await answer).toMatchObject({
-          status: "answered",
-          answers: { answers: { answer: ["replacement"] } },
-        });
+        expectAnswer(await answer, "replacement");
       } finally {
         replacement.dispose();
       }

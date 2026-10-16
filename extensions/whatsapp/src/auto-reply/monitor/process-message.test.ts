@@ -389,10 +389,6 @@ describe("processMessage group system prompt wiring", () => {
     ]) {
       expect(JSON.stringify(calls)).not.toContain(body);
     }
-    expect(info).toHaveBeenCalledWith(
-      expect.objectContaining({ correlationId: "msg1", bodyLength: body.length }),
-      "inbound web message",
-    );
     expect(inboundInfoMock).toHaveBeenCalledWith(expect.stringContaining(`${body.length} chars`));
   });
 

@@ -308,6 +308,17 @@ describe("coalesceAgentRunFrames", () => {
       outcome: { kind: "completed", actionOwner: null },
     },
     {
+      name: "provider speech cannot replace a completed frame answer",
+      parts: [
+        group("assistant", "backing-answer", "run-1", { stopReason: "stop" }),
+        group("assistant", "spoken-readback", "run-1", {
+          stopReason: "stop",
+          __openclaw: { voiceTranscript: "provider-owned" },
+        }),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "backing-answer" } },
+    },
+    {
       name: "Codex reasoning mirror",
       parts: [
         group("assistant", "reasoning", "run-1", {

@@ -210,6 +210,7 @@ export async function prepareWorkerTurnPrompt(params: {
     runtimeModel: `${model.provider}/${model.id}`,
     systemPromptText,
     runAbortSignal: turn.abortSignal,
+    hasBaselineTools: () => projection.tools.length > 0,
     applyPromptBuildToolsAllow: (toolsAllow) => {
       const names = params.toolRuntime.applyPromptToolsAllow(toolsAllow);
       capabilityToolNames.clear();

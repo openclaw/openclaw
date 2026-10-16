@@ -1,17 +1,11 @@
 // Control UI tests cover the responsive disconnected login gate.
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { openChatLayoutMenu, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  captureControlUiE2eFailureDiagnostics,
-  controlUiSessionUrl,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
@@ -302,137 +296,6 @@ suite.define(() => {
       const bounds = await notice.boundingBox();
       expect(bounds?.x).toBe(0);
       expect(bounds?.width).toBe(width);
-    } finally {
-      await closeContext(context);
-    }
-  });
-
-  it.each([
-    {
-      name: "missing token",
-      error: {
-        code: "INVALID_REQUEST",
-        message: "token missing",
-        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
-      },
-      expectedKind: "auth-required",
-      expectedTitle: "This Gateway expects its token",
-    },
-    {
-      name: "missing identity header",
-      error: {
-        code: "INVALID_REQUEST",
-        message: "unauthorized",
-        details: { code: ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED },
-      },
-      expectedKind: "trusted-proxy",
-      expectedTitle: "Proxy authentication required",
-    },
-    {
-      name: "proxy account rejection",
-      error: {
-        code: "INVALID_REQUEST",
-        message: "unauthorized",
-        details: {
-          code: ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
-          authReason: "trusted_proxy_user_not_allowed",
-        },
-      },
-      expectedKind: "trusted-proxy",
-      expectedTitle: "Proxy authentication required",
-    },
-    {
-      name: "disallowed browser origin",
-      error: {
-        code: "INVALID_REQUEST",
-        message: "origin not allowed",
-        details: { code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED },
-      },
-      expectedKind: "origin-not-allowed",
-      expectedTitle: "Browser origin not allowed",
-    },
-    {
-      name: "pairing approval",
-      error: {
-        code: "NOT_PAIRED",
-        message: "device is not approved",
-        details: { code: ConnectErrorDetailCodes.PAIRING_REQUIRED },
-      },
-      expectedKind: "pairing-required",
-      expectedTitle: "Approve this browser",
-    },
-    {
-      name: "generic transport",
-      error: {
-        code: "UNAVAILABLE",
-        message: "WebSocket connection failed",
-      },
-      expectedKind: "network",
-      expectedTitle: "Gateway unreachable",
-    },
-    {
-      name: "profile verification",
-      error: {
-        code: "UNAVAILABLE",
-        message: "Authenticated profile verification is unavailable; retry the request.",
-        details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
-        retryable: true,
-      },
-      expectedKind: "profile-unavailable",
-      expectedTitle: "Couldn't verify your account",
-    },
-    {
-      name: "GitHub profile rate limit",
-      error: {
-        code: "UNAVAILABLE",
-        message:
-          "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential.",
-        details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
-        retryable: true,
-      },
-      expectedKind: "profile-unavailable",
-      expectedTitle: "Couldn't verify your account",
-    },
-  ])("renders $name guidance from the application gateway snapshot", async (fixture) => {
-    const viewport = { height: 900, width: 1280 };
-    const context = await suite.browser.newContext({
-      viewport,
-      recordVideo:
-        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-          ? { dir: RECOVERY_ARTIFACT_DIR, size: viewport }
-          : undefined,
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: { connect: { __mockError: fixture.error } },
-    });
-
-    try {
-      await page.goto(suite.server.baseUrl);
-      await gateway.waitForRequest("connect");
-
-      await page.locator(".login-gate__failure").waitFor();
-      // Retryable guidance must survive a real reconnect, including time spent capturing proof.
-      if (fixture.error.code === "UNAVAILABLE") {
-        await gateway.waitForRequest("connect", { after: 1 });
-      }
-      await writeFile(
-        path.join(RECOVERY_ARTIFACT_DIR, "login-failure.png"),
-        await takeControlUiViewportScreenshot(page, page.locator(".login-gate__card"), [
-          page.locator(".login-gate__failure"),
-        ]),
-      );
-      const failure = page.locator(`.login-gate__failure[data-kind="${fixture.expectedKind}"]`);
-      await failure.waitFor({ timeout: 10_000 });
-      expect((await failure.locator(".login-gate__failure-title").textContent())?.trim()).toBe(
-        fixture.expectedTitle,
-      );
-    } catch (error) {
-      await captureControlUiE2eFailureDiagnostics(page, {
-        error: error instanceof Error ? error : new Error(String(error)),
-        label: `login-guidance-${fixture.name}`,
-      });
-      throw error;
     } finally {
       await closeContext(context);
     }

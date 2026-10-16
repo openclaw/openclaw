@@ -36,6 +36,7 @@ import { createBackupSqliteSnapshotPlan } from "../backup-sqlite-snapshot.js";
 import * as recovery from "../database-port-recovery.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import * as snapshots from "../sqlite-snapshot.js";
+import { runPluginDoctorStateMigrationPlans } from "../state-migrations.plugin-doctor.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { withDatabaseEngineSelection } from "./context.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
@@ -117,6 +118,30 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
           ).run(`chunk-${index}`, cryptoValue);
         }
         await closeOpenClawStateDatabaseAsync();
+        const retainedEntries = files.map(sqliteEntries);
+        await expect(doctorDatabasePort({ to: "postgres", dryRun: true })).rejects.toThrow(
+          "Run openclaw doctor --fix first, then retry port. If a named plugin is disabled, enable it for repair.",
+        );
+        // Complete Doctor's retained-root scan before porting, then keep testing a disabled plugin.
+        const repairConfig: OpenClawConfig = {
+          ...config,
+          plugins: { entries: { matrix: { enabled: true } } },
+        };
+        await state.writeConfig(repairConfig);
+        const repaired = await runPluginDoctorStateMigrationPlans({
+          detected: {
+            stateDir: state.stateDir,
+            oauthDir: state.statePath("credentials"),
+            doctorOnlyStateMigrations: true,
+          },
+          config: repairConfig,
+          env: state.env,
+        });
+        expect(repaired.warnings).toEqual([]);
+        expect(repaired.completedPluginIds).toContain("matrix");
+        await closeOpenClawStateDatabaseAsync();
+        expect(files.map(sqliteEntries)).toEqual(retainedEntries);
+        await state.writeConfig(config);
         await run(state, files, config);
       } finally {
         vi.restoreAllMocks();

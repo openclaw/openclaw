@@ -126,7 +126,7 @@ async function managerFor(
 async function runMemoryCommand(args: string[]) {
   const { registerMemoryCli } = await vi.importActual<{
     registerMemoryCli: (program: Command, host: MemoryCliHost) => void;
-  }>("../../../extensions/memory-core/cli.js");
+  }>("../../../extensions/memory-core/runtime-api.js");
   const program = new Command().exitOverride();
   registerMemoryCli(program, host);
   await program.parseAsync(["memory", ...args], { from: "user" });

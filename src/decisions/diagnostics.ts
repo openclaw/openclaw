@@ -37,7 +37,7 @@ export function logDecisionEvaluation(params: {
   model?: string;
   facts: DecisionEvaluationFacts;
   started: number;
-  outcome?: DecisionOutcome;
+  outcome?: DecisionOutcome | import("./types-v2.js").DecisionOutcomeV2;
 }): void {
   const { options, facts, outcome } = params;
   if (

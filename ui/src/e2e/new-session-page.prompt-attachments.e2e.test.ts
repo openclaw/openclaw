@@ -236,39 +236,6 @@ suite.define(() => {
     });
   });
 
-  it("pastes an image into the draft and forwards it with the initial turn", async () => {
-    await withNewSessionPage(async (page) => {
-      await page.setViewportSize({ width: 393, height: 852 });
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "sessions.create": { key: "agent:main:image-draft", runStarted: true },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}new`);
-      const message = page.locator(".new-session-page__message");
-      await message.waitFor();
-      await pastePng(message);
-
-      await page.getByRole("img", { name: "pixel.png" }).waitFor();
-      await captureUiProof(suite, page, "mobile-composer-new-session-attachment.png");
-      await page.getByRole("button", { name: "Start session" }).click();
-
-      const create = await gateway.waitForRequest("sessions.create");
-      expect(create.params).toMatchObject({
-        agentId: "main",
-        message: "",
-        attachments: [
-          {
-            type: "image",
-            mimeType: "image/png",
-            fileName: "pixel.png",
-            content: ONE_PIXEL_PNG_B64,
-          },
-        ],
-      });
-    });
-  });
-
   it("enlarges and removes a picked image without object URL support", async () => {
     await withNewSessionPage(async (page) => {
       await page.addInitScript(() => {

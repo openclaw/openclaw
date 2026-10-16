@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -95,7 +96,7 @@ async function runCleanup(options: { dryRun?: boolean; yes?: boolean }) {
   const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
   await updateCleanupCommand({ ...options, json: true });
   expect(exit).not.toHaveBeenCalled();
-  const report = writeJson.mock.calls[0]?.[0] as {
+  const report = writeJson.mock.calls.at(-1)?.[0] as {
     status: string;
     artifacts: Array<{
       kind?: string;
@@ -182,6 +183,65 @@ it.each(["current", "pre-migration"] as const)(
         expect(fs.existsSync(directory)).toBe(item.outcome !== "candidate");
       }
       expect(fs.existsSync(path.join(root, UPDATE_CAPTURE_PRIVACY_MARKER))).toBe(true);
+    }, location);
+  },
+);
+
+it.each(["current", "pre-migration"] as const)(
+  "lists standalone Doctor captures and retires only older %s captures through cleanup",
+  async (location) => {
+    await withCaptureHistory(async (_captures, root) => {
+      const now = Date.now();
+      const doctors = [5, 4, 3, 2, 1].map((age) => {
+        const runId = `doctor-${randomUUID()}`;
+        const directory = writeCapture(root, runId, true);
+        fs.writeFileSync(
+          path.join(directory, "manifest.json"),
+          JSON.stringify({
+            schemaVersion: 2,
+            kind: "update-recovery",
+            generation: { kind: "baseline" },
+            databases: [],
+            runId,
+            installRoot: root,
+            stateDir: path.dirname(root),
+            configPath: path.join(root, "config.json"),
+            configPaths: [path.join(root, "config.json")],
+            creator: { host: "fixture", pid: 1, startIdentity: "1" },
+            drivers: [],
+            createdAt: new Date(now - age * 86_400_000).toISOString(),
+            roots: [path.join(root, "config.json")],
+            excludedRoots: [],
+            protectedPaths: [path.join(root, "config.json")],
+            entries: [
+              {
+                kind: "missing",
+                sourcePath: path.join(root, "config.json"),
+                sqlite: false,
+                directory: false,
+              },
+            ],
+          }),
+        );
+        return directory;
+      });
+      const preview = await runCleanup({ dryRun: true });
+      for (const [index, directory] of doctors.entries()) {
+        expect(preview.captures[directory]).toMatchObject({
+          outcome: index < 2 ? "candidate" : "protected",
+          reason: index < 2 ? "superseded-doctor-capture" : "retained-doctor-capture",
+        });
+        expect(preview.captures[directory]!.bytes).toBeGreaterThan(1000);
+        expect(fs.existsSync(directory)).toBe(true);
+      }
+      await runCleanup({ yes: true });
+      expect(doctors.map((directory) => fs.existsSync(directory))).toEqual([
+        false,
+        false,
+        true,
+        true,
+        true,
+      ]);
     }, location);
   },
 );

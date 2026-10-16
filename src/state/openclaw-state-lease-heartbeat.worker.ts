@@ -13,7 +13,7 @@ import {
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { exchangeSqliteDatabaseAdmissions } from "../infra/sqlite-worker-database-admission-relay.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { openStatePostgresReadConnection } from "./openclaw-state-db-engine.js";
+import { openExistingStatePostgresConnection } from "./openclaw-state-db-engine.js";
 import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import {
@@ -82,7 +82,7 @@ function startHeartbeat(
       Math.min(deadline, Number(Atomics.load(shared, state.expiresAt))) - Date.now();
     while (remaining() > 0 && Atomics.load(shared, state.status) === state.starting) {
       try {
-        const postgres = openStatePostgresReadConnection(params.path, params.expectedIdentity);
+        const postgres = openExistingStatePostgresConnection(params.path, params.expectedIdentity);
         if (postgres) {
           return {
             database: postgres.database.db,

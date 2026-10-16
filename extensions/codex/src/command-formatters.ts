@@ -1,4 +1,8 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  escapeChatDisplayText as escapeCodexChatText,
+  sanitizeChatDisplayText as sanitizeCodexTextForDisplay,
+} from "openclaw/plugin-sdk/string-normalization-runtime";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
@@ -10,6 +14,8 @@ import {
 import { isLikelyEmailAddress } from "./command-account-email.js";
 import type { CodexAccountAuthOverview } from "./command-account.js";
 import type { readCodexStatusProbes, SafeValue } from "./command-rpc.js";
+
+export { escapeCodexChatText };
 
 type CodexStatusProbes = Awaited<ReturnType<typeof readCodexStatusProbes>>;
 
@@ -225,32 +231,6 @@ function formatCodexAccountSummary(value: JsonValue | undefined): string {
 export function formatCodexTextForDisplay(value: string): string {
   const safe = sanitizeCodexTextForDisplay(value).trim();
   return safe || "<unknown>";
-}
-
-function sanitizeCodexTextForDisplay(value: string): string {
-  return value.replace(
-    /[\p{Cc}\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}]/gu,
-    "?",
-  );
-}
-
-export function escapeCodexChatText(value: string): string {
-  // Command output is public chat text. Escape markdown/control triggers and
-  // mention characters so Codex data cannot ping users or inject formatting.
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll("@", "\uff20")
-    .replaceAll("`", "\uff40")
-    .replaceAll("[", "\uff3b")
-    .replaceAll("]", "\uff3d")
-    .replaceAll("(", "\uff08")
-    .replaceAll(")", "\uff09")
-    .replaceAll("*", "\u2217")
-    .replaceAll("_", "\uff3f")
-    .replaceAll("~", "\uff5e")
-    .replaceAll("|", "\uff5c");
 }
 
 function escapeCodexChatTextPreservingAt(value: string): string {

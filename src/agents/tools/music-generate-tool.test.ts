@@ -488,7 +488,6 @@ describe("createMusicGenerateTool", () => {
     });
 
     let scheduledWork: (() => Promise<void>) | undefined;
-    const onAsyncTaskStarted = vi.fn();
     const tool = createMusicGenerateTool({
       config: {
         agents: {
@@ -510,7 +509,6 @@ describe("createMusicGenerateTool", () => {
       scheduleBackgroundWork: (work) => {
         scheduledWork = work;
       },
-      onAsyncTaskStarted,
     });
     if (!tool) {
       throw new Error("expected music_generate tool");
@@ -526,10 +524,6 @@ describe("createMusicGenerateTool", () => {
     expect(text).toContain("Background task started for music generation (task-123).");
     expect(text).toContain("Do not call music_generate again for this request.");
     expect(text).toContain("Timeout normalized: requested 1000ms; used 120000ms.");
-    expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
-    expect(onAsyncTaskStarted).toHaveBeenCalledWith(
-      "Music generation started; wait for the generated music completion event.",
-    );
     const details = detailsOf(result);
     expect(details.async).toBe(true);
     expect(details.status).toBe("started");
@@ -654,7 +648,6 @@ describe("createMusicGenerateTool", () => {
         requesterOrigin: { channel: "discord", to: "channel:1" },
         agentSessionKey: "agent:main:discord:direct:123",
         scheduleBackgroundWork: (work) => scheduled.push(work),
-        onAsyncTaskStarted: () => controller.abort(new Error("requester ended after acceptance")),
       }),
     );
     const result = await tool.execute(
@@ -662,6 +655,7 @@ describe("createMusicGenerateTool", () => {
       { prompt: "an accepted music" },
       controller.signal,
     );
+    controller.abort(new Error("requester ended after acceptance"));
 
     expect(result.details).toBeTypeOf("object");
     expect(detailsOf(result).status).toBe("started");

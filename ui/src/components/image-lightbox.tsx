@@ -2,6 +2,7 @@ import Panzoom, { type PanzoomObject } from "@panzoom/panzoom";
 import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { nativeListener } from "../lib/solid-native-listener.ts";
 import {
   downloadLightboxImage,
   externalLightboxImageUrl,
@@ -78,8 +79,6 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
     | undefined;
   const touchPointers = new Set<number>();
   let suppressDoubleClick = false;
-  let dialogElement: HTMLElement | undefined;
-  let stageElement: HTMLDivElement | undefined;
   const handleImageLoad = (event: Event) => {
     const target = event.currentTarget;
     if (target instanceof HTMLImageElement && target === image()) {
@@ -518,8 +517,6 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
     touchPointers.clear();
     slideAnimation?.cancel();
     motionQuery?.removeEventListener("change", handleMotionPreferenceChange);
-    dialogElement?.removeEventListener("keydown", handleKeydown, true);
-    stageElement?.removeEventListener("pointerdown", handleStagePointerDown, true);
     destroyPanzoom();
     originalUrlRequest += 1;
     revokeOriginalBlobUrl();
@@ -539,10 +536,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
             : t("chat.imageLightbox.label", { title: title() })
         }
         onModal-cancel={emitClose}
-        ref={(element) => {
-          dialogElement = element;
-          element.addEventListener("keydown", handleKeydown, true);
-        }}
+        ref={nativeListener("keydown", handleKeydown, true)}
       >
         <LightboxChrome
           title={title()}
@@ -566,10 +560,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
                   ? "stage stage--gallery"
                   : "stage"
             }
-            ref={(element) => {
-              stageElement = element;
-              element.addEventListener("pointerdown", handleStagePointerDown, true);
-            }}
+            ref={nativeListener("pointerdown", handleStagePointerDown, true)}
             onPointerMove={handleStagePointerMove}
             onPointerUp={handleStagePointerUp}
             onPointerCancel={handleStagePointerCancel}

@@ -25,6 +25,8 @@ export type ActivityOperationProps = {
 export type GroupedMessageOptions = {
   isStreaming: boolean;
   isForwarded?: boolean;
+  /** Search reveals matching transcript text inside disclosures. */
+  searchResult?: boolean;
   sessionKey?: string;
   presented?: boolean;
   transcriptVisible?: PresentationValue;

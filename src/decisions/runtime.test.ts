@@ -306,6 +306,8 @@ describe("registered decision capability", () => {
 
   it.each([
     { model: "fixture-v1", source: "agent-tool" },
+    { model: "fixture-v1@fixture:agent", source: "agent-tool" },
+    { model: "shortcut@fixture:agent", source: "direct-tool" },
     { model: "shortcut", source: "direct-tool" },
     { model: "shortcut", source: "unbound-operator" },
   ] as const)(

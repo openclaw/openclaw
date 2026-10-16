@@ -190,7 +190,9 @@ describe("session observer", () => {
     expect(prompt).toContain(toolCommand);
   });
 
-  it("coalesces live completions and cancels in-flight work for the terminal digest", async () => {
+  it("coalesces live completions and cancels in-flight work for the terminal digest", async ({
+    signal,
+  }) => {
     const first = createDeferred<ReturnType<typeof modelMessage>>();
     const second = createDeferred<ReturnType<typeof modelMessage>>();
     const completeModel = vi
@@ -198,29 +200,39 @@ describe("session observer", () => {
       .mockImplementationOnce(() => first.promise)
       .mockImplementationOnce(() => second.promise);
     const harness = createHarness({ completeModel });
-    startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(11_999);
-    expect(completeModel).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(completeModel).toHaveBeenCalledOnce();
+    try {
+      startAndAddToolNotes(harness.observer);
+      await vi.advanceTimersByTimeAsync(11_999);
+      expect(completeModel).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(completeModel).toHaveBeenCalledOnce();
 
-    addToolNotes(harness);
-    await vi.advanceTimersByTimeAsync(9_000);
-    expect(completeModel).toHaveBeenCalledOnce();
+      addToolNotes(harness);
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(completeModel).toHaveBeenCalledOnce();
 
-    first.resolve(modelMessage({ headline: "Starting the work", health: "on-track" }));
-    await flushObserver();
-    expect(completeModel).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(3_000);
-    await flushObserver();
-    expect(completeModel).toHaveBeenCalledTimes(2);
-    const terminalPublished = createDeferred();
-    harness.broadcastToConnIds.mockImplementationOnce(() => terminalPublished.resolve());
-    emitEvent(harness, "lifecycle", { phase: "end", endedAt: 30_000 });
-    expect(harness.completeModel.mock.calls[1]?.[0]?.abortSignal.aborted).toBe(true);
-    await terminalPublished.promise;
-    expect(completeModel).toHaveBeenCalledTimes(3);
-    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({ health: "done" });
+      first.resolve(modelMessage({ headline: "Starting the work", health: "on-track" }));
+      await flushObserver();
+      expect(completeModel).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await flushObserver();
+      expect(completeModel).toHaveBeenCalledTimes(2);
+      const terminalPublished = createDeferred();
+      harness.broadcastToConnIds.mockImplementationOnce(() => terminalPublished.resolve());
+      emitEvent(harness, "lifecycle", { phase: "end", endedAt: 30_000 });
+      expect(harness.completeModel.mock.calls[1]?.[0]?.abortSignal.aborted).toBe(true);
+      await flushObserver();
+      expect(completeModel).toHaveBeenCalledTimes(2);
+      second.resolve(modelMessage({ headline: "Canceled live result", health: "on-track" }));
+      await withinTest(terminalPublished.promise, signal);
+      expect(completeModel).toHaveBeenCalledTimes(3);
+      expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({ health: "done" });
+    } finally {
+      first.resolve(modelMessage({ headline: "Cleanup", health: "on-track" }));
+      second.resolve(modelMessage({ headline: "Cleanup", health: "on-track" }));
+      await harness.observer.disposeAsync();
+      activeHarnesses.delete(harness);
+    }
   });
 
   it("suspends when hidden and resumes on the next event after becoming visible", async () => {
@@ -384,7 +396,12 @@ describe("session observer digest budget", () => {
 
   it("stops live model attempts at the budget when requests are superseded", async () => {
     let utilityModelRef = "openai/gpt-a";
-    const completeModel = vi.fn(() => createDeferred<ReturnType<typeof modelMessage>>().promise);
+    const attempts: ReturnType<typeof createDeferred<ReturnType<typeof modelMessage>>>[] = [];
+    const completeModel = vi.fn(() => {
+      const attempt = createDeferred<ReturnType<typeof modelMessage>>();
+      attempts.push(attempt);
+      return attempt.promise;
+    });
     const harness = createHarness({
       completeModel,
       resolveUtilityModelRef: vi.fn(() => utilityModelRef),
@@ -398,6 +415,7 @@ describe("session observer digest budget", () => {
       emitEvent(harness, "tool", { phase: "start", name: "read", args: { attempt } });
       utilityModelRef = "openai/gpt-a";
       emitEvent(harness, "tool", { phase: "start", name: "read", args: { attempt } });
+      attempts.at(-1)?.resolve(modelMessage({ headline: "Superseded", health: "on-track" }));
       await flushObserver();
       if (attempt === 39) {
         break;

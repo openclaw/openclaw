@@ -320,7 +320,7 @@ export async function getApiKeyForModelCore(params: {
 
 export { applyLocalNoAuthHeaderOverride } from "./model-auth-markers.js";
 
-export function applySecretRefHeaderSentinels<T extends Model>(
+export function applySecretRefHeaderSentinels<T extends Pick<Model, "provider" | "headers">>(
   model: T,
   cfg: OpenClawConfig | undefined,
 ): T {

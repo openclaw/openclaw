@@ -107,36 +107,41 @@ describe("Mattermost send authority lifecycle", () => {
     );
   });
 
-  it("checks the operation fence before invoking a custom transport", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ id: "bot" }), {
-        headers: { "content-type": "application/json" },
-      }),
-    );
+  it("checks the operation fence before guarded dispatch", async () => {
+    const requests: string[] = [];
     const retirement = new Error("Mattermost sender retired");
     let current = true;
-    const client = createMattermostClient({
-      baseUrl: "http://localhost:8065",
-      botToken: "synthetic-custom-transport",
-      fetchImpl,
-      assertRequestCurrent: () => {
-        if (!current) {
-          throw retirement;
-        }
+    await withServer(
+      (request, response) => {
+        requests.push(request.url ?? "");
+        request.resume();
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ id: "bot" }));
       },
-    });
+      async (baseUrl) => {
+        const client = createMattermostClient({
+          baseUrl,
+          botToken: "synthetic-guarded-transport",
+          allowPrivateNetwork: true,
+          assertRequestCurrent: () => {
+            if (!current) {
+              throw retirement;
+            }
+          },
+        });
 
-    await expect(client.request("/users/me")).resolves.toEqual({ id: "bot" });
-    current = false;
-    await expect(
-      createMattermostPost(client, { channelId: "channel", message: "retired send" }),
-    ).rejects.toMatchObject({
-      constructor: PlatformMessageNotDispatchedError,
-      retryable: false,
-      cause: retirement,
-    });
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(fetchImpl.mock.calls[0]?.[1]).not.toHaveProperty("isMessagePost");
+        await expect(client.request("/users/me")).resolves.toEqual({ id: "bot" });
+        current = false;
+        await expect(
+          createMattermostPost(client, { channelId: "channel", message: "retired send" }),
+        ).rejects.toMatchObject({
+          constructor: PlatformMessageNotDispatchedError,
+          retryable: false,
+          cause: retirement,
+        });
+        expect(requests).toEqual(["/api/v4/users/me"]);
+      },
+    );
   });
 
   it.each([false, true])(

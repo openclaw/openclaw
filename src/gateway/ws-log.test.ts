@@ -330,49 +330,66 @@ describe("gateway ws log helpers", () => {
     },
   );
 
-  test.each(["assistant", "tool"])("keeps %s content out of verbose event logs", (stream) => {
-    setVerbose(true);
-    setGatewayWsLogStyle("full");
-    setLoggerOverride({ level: "silent", consoleLevel: "info" });
-    const output = vi.fn();
-    loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
-    const marker = "synthetic-private-content";
-    const summary = summarizeAgentEventForWsLog({
-      runId: "12345678-1234-1234-1234-123456789abc",
-      sessionKey: "agent:main:thread-1",
-      stream,
-      seq: 2,
-      data: {
-        text: marker,
-        meta: marker,
-        phase: "start",
-        name: "fetch",
-        toolCallId: "12345678-1234-1234-1234-123456789abc",
-        mediaUrls: ["a", "b"],
-      },
-    });
+  test.each(["assistant", "tool", "lifecycle", "compaction"])(
+    "keeps %s content out of verbose event logs",
+    (stream) => {
+      setVerbose(true);
+      setGatewayWsLogStyle("full");
+      setLoggerOverride({ level: "silent", consoleLevel: "info" });
+      const output = vi.fn();
+      loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+      const marker = "synthetic-private-content";
+      const summary = summarizeAgentEventForWsLog({
+        runId: "12345678-1234-1234-1234-123456789abc",
+        sessionKey: "agent:main:thread-1",
+        stream,
+        seq: 2,
+        data: {
+          text: marker,
+          meta: marker,
+          error: marker,
+          reason: marker,
+          outcome: "failed",
+          aborted: true,
+          phase: "start",
+          name: "fetch",
+          toolCallId: "12345678-1234-1234-1234-123456789abc",
+          mediaUrls: ["a", "b"],
+        },
+      });
 
-    logWs("out", "event", { event: "agent", ...summary });
+      logWs("out", "event", { event: "agent", ...summary });
 
-    expect(output).toHaveBeenCalled();
-    expect(JSON.stringify(output.mock.calls)).not.toContain(marker);
-    expect(summary).toMatchObject({
-      run: "12345678…9abc",
-      agent: "main",
-      session: "thread-1",
-      stream,
-      aseq: 2,
-      ...(stream === "assistant"
-        ? { media: 2, textChars: 25 }
-        : { tool: "start:fetch", call: "12345678…9abc" }),
-    });
-    expect(summary).not.toHaveProperty("text");
-    expect(output).toHaveBeenLastCalledWith(
-      expect.stringContaining(`${stream === "assistant" ? "textChars" : "metaChars"}=25`),
-    );
-  });
+      expect(output).toHaveBeenCalled();
+      expect(JSON.stringify(output.mock.calls)).not.toContain(marker);
+      expect(summary).toMatchObject({
+        run: "12345678…9abc",
+        agent: "main",
+        session: "thread-1",
+        stream,
+        aseq: 2,
+        ...(stream === "assistant"
+          ? { media: 2, textChars: 25 }
+          : stream === "tool"
+            ? { tool: "start:fetch", call: "12345678…9abc" }
+            : {
+                phase: "start",
+                aborted: true,
+                err: true,
+                ...(stream === "compaction" ? { outcome: "failed" } : {}),
+              }),
+      });
+      expect(summary).not.toHaveProperty("text");
+      expect(summary).not.toHaveProperty("error");
+      if (stream === "assistant" || stream === "tool") {
+        expect(output).toHaveBeenLastCalledWith(
+          expect.stringContaining(`${stream === "assistant" ? "textChars" : "metaChars"}=25`),
+        );
+      }
+    },
+  );
 
-  test("summarizeAgentEventForWsLog includes lifecycle errors with compact previews", () => {
+  test("summarizeAgentEventForWsLog marks lifecycle errors without error content", () => {
     const summary = summarizeAgentEventForWsLog({
       runId: "run-2",
       sessionKey: "agent:main:thread-1",
@@ -389,8 +406,8 @@ describe("gateway ws log helpers", () => {
     expect(summary.stream).toBe("lifecycle");
     expect(summary.phase).toBe("abort");
     expect(summary.aborted).toBe(true);
-    expect(summary.error).toBeTypeOf("string");
-    expect((summary.error as string).length).toBeLessThanOrEqual(120);
+    expect(summary.err).toBe(true);
+    expect(summary).not.toHaveProperty("error");
   });
 
   test("summarizeAgentEventForWsLog preserves invalid session keys and unknown-stream reasons", () => {

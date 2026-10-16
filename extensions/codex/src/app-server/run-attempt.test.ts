@@ -2328,7 +2328,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     const { sessionFile, workspaceDir } = createRunPaths();
     openRunSession(sessionFile).appendMessage(userMessage("previous request", Date.now()));
-    const { closeAndWait, events, retireSpy, state } = installCleanupTrackingClient();
+    const { closeAndWait, events, retireSpy } = installCleanupTrackingClient();
     const abortController = new AbortController();
     const removeAbortListener = vi.spyOn(abortController.signal, "removeEventListener");
     const params = createParams(sessionFile, workspaceDir);
@@ -2342,9 +2342,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(beforePromptBuild).toHaveBeenCalledTimes(2);
     expect(events).toContain("request:thread/start");
     expect(events).not.toContain("request:turn/start");
-    expect(retireSpy).toHaveBeenCalledOnce();
-    expect(retireSpy).toHaveBeenCalledWith(state.client);
-    expect(closeAndWait).toHaveBeenCalledOnce();
+    expect(retireSpy).not.toHaveBeenCalled();
+    expect(closeAndWait).not.toHaveBeenCalled();
     expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
   });
 
@@ -2387,10 +2386,9 @@ describe("runCodexAppServerAttempt", () => {
     expect(bindingCleanupFailures).toBe(1);
     expect(params.cleanupBundleMcpOnRunEnd).toBe(true);
     expect(events).toContain("request:turn/start");
-    expect(events).toContain("closeAndWait");
-    expect(retireSpy).toHaveBeenCalledOnce();
-    expect(retireSpy).toHaveBeenCalledWith(state.client);
-    expect(closeAndWait).toHaveBeenCalledOnce();
+    expect(events).not.toContain("closeAndWait");
+    expect(retireSpy).not.toHaveBeenCalled();
+    expect(closeAndWait).not.toHaveBeenCalled();
     expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
     expect(queueActiveRunMessageForTest("session-1", "after cleanup")).toBe(false);
   });

@@ -133,6 +133,73 @@ describe("broadcast transport retirement", () => {
     }
   });
 
+  it("visits only the session audience and refreshes it through subscription and connection changes", () => {
+    const legacy = controlledPeer("legacy");
+    const selected = controlledPeer("selected");
+    const denied = controlledPeer("denied");
+    const unrelated = Array.from({ length: 32 }, (_, index) => controlledPeer(`other-${index}`));
+    for (const peer of [selected, denied, ...unrelated]) {
+      peer.client.connect.caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+    }
+    denied.client.connect.scopes = [];
+    const clients = new GatewayClientRegistry([
+      legacy.client,
+      ...unrelated.map((peer) => peer.client),
+      selected.client,
+      denied.client,
+    ]);
+    const subscribers = createSessionMessageSubscriberRegistry();
+    for (const key of ["session-a", "session-b"]) {
+      subscribers.subscribe("selected", key);
+      subscribers.subscribe("denied", key);
+    }
+    let unrelatedVisits = 0;
+    for (const peer of unrelated) {
+      Object.defineProperty(peer.socket, "readyState", {
+        get: () => {
+          unrelatedVisits += 1;
+          return WebSocket.OPEN;
+        },
+      });
+    }
+    const { broadcast } = createGatewayBroadcaster({
+      clients,
+      sessionMessageSubscribers: subscribers,
+    });
+    const publish = () =>
+      broadcast("chat", { sessionKey: "session-a" }, { sessionKeys: ["session-a", "session-b"] });
+
+    publish();
+    expect(legacy.frames).toHaveLength(1);
+    expect(selected.frames).toHaveLength(1);
+    expect(denied.frames).toEqual([]);
+    expect(unrelatedVisits).toBe(0);
+
+    selected.client.connect.scopes = [];
+    publish();
+    expect(selected.frames).toHaveLength(1);
+    clients.delete(legacy.client);
+    subscribers.unsubscribeAll("selected");
+    subscribers.unsubscribeAll("denied");
+    publish();
+    expect(unrelatedVisits).toBe(0);
+    expect(legacy.frames).toHaveLength(2);
+
+    clients.delete(selected.client);
+    const replacement = controlledPeer("selected");
+    clients.add(replacement.client);
+    publish();
+    expect(replacement.frames).toHaveLength(1);
+    clients.clear();
+    selected.client.connect.scopes = ["operator.read"];
+    clients.add(selected.client);
+    publish();
+    expect(selected.frames).toHaveLength(1);
+    subscribers.subscribe("selected", "session-b");
+    publish();
+    expect(selected.frames).toHaveLength(2);
+  });
+
   it("shares encoded plugin events only after scope filtering and preserves recipient sequences", () => {
     const read = controlledPeer("read");
     const write = controlledPeer("write");

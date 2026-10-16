@@ -852,7 +852,6 @@ describe("createImageGenerateTool", () => {
       taskId: "task-image-123",
     });
     const scheduled: Array<() => Promise<void>> = [];
-    const onAsyncTaskStarted = vi.fn();
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
         config: configWithDefaults({
@@ -867,7 +866,6 @@ describe("createImageGenerateTool", () => {
         scheduleBackgroundWork: (work) => {
           scheduled.push(work);
         },
-        onAsyncTaskStarted,
       }),
     );
 
@@ -879,10 +877,6 @@ describe("createImageGenerateTool", () => {
 
     expect(generateImage).not.toHaveBeenCalled();
     expect(scheduled).toHaveLength(1);
-    expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
-    expect(onAsyncTaskStarted).toHaveBeenCalledWith(
-      "Image generation started; wait for the generated image completion event.",
-    );
     expect(resultText(result)).toContain("Background task started for image generation");
     const details = resultDetails(result);
     expect(details.async).toBe(true);
@@ -1060,7 +1054,6 @@ describe("createImageGenerateTool", () => {
       taskId: "task-cron-image",
     });
     const scheduled: Array<() => Promise<void>> = [];
-    const onAsyncTaskStarted = vi.fn();
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
         config: configWithDefaults({
@@ -1075,7 +1068,6 @@ describe("createImageGenerateTool", () => {
         scheduleBackgroundWork: (work) => {
           scheduled.push(work);
         },
-        onAsyncTaskStarted,
       }),
     );
 
@@ -1086,7 +1078,6 @@ describe("createImageGenerateTool", () => {
 
     expect(generateImage).not.toHaveBeenCalled();
     expect(scheduled).toHaveLength(1);
-    expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
     expect(resultText(result)).toContain("Background task started for image generation");
     expect(resultDetails(result).async).toBe(true);
     expect(resultDetails(result).runId).toEqual(expect.stringMatching(/^tool:image_generate:/));

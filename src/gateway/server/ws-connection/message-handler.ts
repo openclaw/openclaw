@@ -214,11 +214,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     let decoded: unknown;
     try {
       decoded = JSON.parse(rawDataToString(data));
-    } catch (err) {
+    } catch {
       setHandshakeState("failed");
-      setCloseCause("parse-error", { error: formatForLog(err) });
-      logGateway.error(`parse error: ${formatForLog(err)}`);
-      logWs("out", "parse-error", { connId, error: formatForLog(err) });
+      setCloseCause("parse-error", { error: "invalid JSON" });
+      logGateway.error("parse error: invalid JSON");
+      logWs("out", "parse-error", { connId, error: "invalid JSON" });
       close(1007, "invalid JSON");
       return;
     }

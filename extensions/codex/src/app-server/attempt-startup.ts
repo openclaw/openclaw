@@ -15,7 +15,6 @@ import {
   shouldRetireCodexStartupClient,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
-import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
 import { verifyStartupArtifact } from "./attempt-runtime-artifact.js";
 import { CodexAppServerStartupError, withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
@@ -194,8 +193,7 @@ export async function startCodexAttemptThread(params: {
           hostedAppsSupported: !isCodexResponsesOAuth(params.clientOptions.preparedAuth),
           scheduledRuntimeAuthority: params.buildAttemptParams().scheduledRuntimeAuthority,
         });
-        const { pluginThreadConfigRequired, resolvedPluginPolicy, enabledPluginConfigKeys } =
-          pluginStartupPolicy;
+        const { resolvedPluginPolicy } = pluginStartupPolicy;
         const mcpElicitationDelegationRequired =
           resolvedPluginPolicy?.enabled === true ||
           params.computerUseConfig.enabled ||
@@ -339,19 +337,6 @@ export async function startCodexAttemptThread(params: {
               appCacheKey: pluginAppCacheKey,
               scheduledRuntimeAuthority: attemptParams.scheduledRuntimeAuthority,
             });
-            embeddedAgentLog.debug(
-              "codex plugin thread config eligibility",
-              buildCodexPluginThreadConfigEligibilityLogData({
-                sessionId: attemptParams.sessionId,
-                sessionKey: attemptParams.sessionKey ?? "",
-                pluginThreadConfigRequired,
-                resolvedPluginPolicy,
-                enabledPluginConfigKeys,
-                pluginAppCacheKey,
-                startupAuthProfileId: startupRuntimeAuthProfileId,
-                appServer: params.appServer,
-              }),
-            );
             let startupSandboxEnvironment: CodexSandboxExecEnvironment | undefined;
             let startupSandboxEnvironmentAcquired = false;
             const releaseStartupSandboxEnvironment = async () => {

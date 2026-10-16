@@ -266,18 +266,25 @@ type AsyncSessionStateEventOptions = Pick<OpenClawStateDatabaseOptions, "path" |
   acpControl?: import("../acp/runtime/session-meta-control.types.js").AcpSessionControlConstraint;
 };
 
-/** Async producers settle the existing worker's event, notices, and bounded maintenance together. */
 export async function recordSessionStateEventAsync(
   input: SessionStateEventInput,
   options: AsyncSessionStateEventOptions = {},
 ): Promise<SessionStateEventRecord | undefined> {
+  return (await recordSessionStateEventsAsync([input], options))[0];
+}
+
+/** Record related signals in order under one worker transaction and maintenance pass. */
+export async function recordSessionStateEventsAsync(
+  inputs: readonly SessionStateEventInput[],
+  options: AsyncSessionStateEventOptions = {},
+): Promise<SessionStateEventRecord[]> {
+  if (inputs.length === 0) {
+    return [];
+  }
   const sessionEntryCurrent = options.sessionEntryCurrent;
   try {
     const context = options.context ?? captureOpenClawStateWorkerContext(options);
     const now = options.now ?? Date.now();
-    const event = structuredClone(input);
-    const expectedUpstream = options.expectedUpstream && structuredClone(options.expectedUpstream);
-    const acpControl = options.acpControl && structuredClone(options.acpControl);
     let preparedWatchers: PreparedSessionWatcherStorePaths | undefined;
     const assertCurrent = () => {
       options.assertCurrent?.();
@@ -286,28 +293,36 @@ export async function recordSessionStateEventAsync(
     return await runOpenClawStateWorkerOperation(
       context,
       async (scope) => {
-        if (!event.watcherStorePaths) {
-          preparedWatchers = await prepareSessionWatcherStorePaths(
-            event.watcherSessionKeys,
-            context.initializationEnvironment,
-          );
-          event.watcherStorePaths = preparedWatchers.paths;
-        }
+        const prepared = await prepareSessionWatcherStorePaths(
+          [
+            ...new Set(
+              inputs.flatMap((event) =>
+                event.watcherStorePaths ? [] : (event.watcherSessionKeys ?? []),
+              ),
+            ),
+          ],
+          context.initializationEnvironment,
+        );
+        preparedWatchers = prepared;
+        const events = inputs.map((event) => ({
+          ...event,
+          watcherStorePaths: event.watcherStorePaths ?? prepared.paths,
+        }));
         const recorded = await scope.execute({
           type: "sessionState.record",
           input: {
-            event,
+            events,
             now,
             onlyIfWatched: options.onlyIfWatched,
-            expectedUpstream,
-            acpControl,
+            expectedUpstream: options.expectedUpstream,
+            acpControl: options.acpControl,
             sessionEntryCurrentSource: sessionEntryCurrent?.source,
           },
         });
         for (const notice of recorded.notices) {
           enqueueSessionStateNotice(notice);
         }
-        if (recorded.row) {
+        if (recorded.rows.length > 0) {
           await pruneSessionStateEvents({
             context,
             now,
@@ -318,7 +333,7 @@ export async function recordSessionStateEventAsync(
               }),
           });
         }
-        return recorded.row ? rowToSessionStateEvent(recorded.row) : undefined;
+        return recorded.rows.map(rowToSessionStateEvent);
       },
       {
         assertCurrent,
@@ -339,7 +354,7 @@ export async function recordSessionStateEventAsync(
   } catch (error) {
     // A committed originating action and an uncertain signal must never be replayed.
     log.warn(`failed to record session state event: ${String(error)}`);
-    return undefined;
+    return [];
   }
 }
 
@@ -539,14 +554,13 @@ export async function recordSessionHumanDirectMessage(
   );
 }
 
-/** Seed the parent cursor at the child-spawn version. */
-export async function recordSubagentSpawned(params: {
+export function createSubagentSpawnedEvent(params: {
   childSessionKey: string;
   childRunId: string;
   requesterSessionKey: string;
   agentId: string;
-}): Promise<void> {
-  await recordSessionStateEventAsync({
+}): SessionStateEventInput {
+  return {
     sessionKey: params.childSessionKey,
     agentId: params.agentId,
     kind: "child_spawned",
@@ -556,5 +570,12 @@ export async function recordSubagentSpawned(params: {
     dedupeKey: `child-spawned:${params.childRunId}`,
     summary: "child session spawned",
     watcherSessionKeys: [params.requesterSessionKey],
-  });
+  };
+}
+
+/** Seed the parent cursor at the child-spawn version. */
+export async function recordSubagentSpawned(
+  params: Parameters<typeof createSubagentSpawnedEvent>[0],
+): Promise<void> {
+  await recordSessionStateEventAsync(createSubagentSpawnedEvent(params));
 }

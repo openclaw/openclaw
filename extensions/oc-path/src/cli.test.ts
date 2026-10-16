@@ -503,6 +503,57 @@ describe("openclaw path CLI", () => {
 
   describe("set", () => {
     it.each([
+      ["1e-7", "1e-7"],
+      ["2.5E+3", "2500"],
+      ["1e21", "1e+21"],
+    ])("writes YAML numeric value %s without changing its type", async (value, expected) => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, "workflow.yaml");
+      const before = "# settings\nrate: 1e-7\nlabel: keep\n";
+      writeFileSync(filePath, before);
+      const options = { file: filePath, json: true };
+      const address = "oc://workflow.yaml/rate";
+      const preview = createTestRuntime();
+      await pathSetCommand(address, value, { ...options, dryRun: true }, preview);
+      expect(preview.exitCode).toBe(0);
+      expect(readFileSync(filePath, "utf8")).toBe(before);
+
+      const write = createTestRuntime();
+      await pathSetCommand(address, value, options, write);
+      expect(write.exitCode).toBe(0);
+      const read = createTestRuntime();
+      await pathResolveCommand(address, options, read);
+      expect(read.exitCode).toBe(0);
+      expect(JSON.parse(stdoutText(read)).match).toMatchObject({
+        leafType: "number",
+        valueText: expected,
+      });
+      const after = readFileSync(filePath, "utf8");
+      expect(after).toContain("# settings\n");
+      expect(after).toContain("label: keep\n");
+    });
+
+    it.each(["1e", "1e999", "0x10", "1,5"])(
+      "refuses invalid YAML numeric value %s without writing",
+      async (value) => {
+        const workspaceDir = tempDirs.make("oc-path-cli-");
+        const filePath = join(workspaceDir, "workflow.yaml");
+        const before = "rate: 1e-7\n";
+        writeFileSync(filePath, before);
+        const runtime = createTestRuntime();
+        await pathSetCommand(
+          "oc://workflow.yaml/rate",
+          value,
+          { file: filePath, json: true },
+          runtime,
+        );
+        expect(runtime.exitCode).toBe(1);
+        expect(JSON.parse(stdoutText(runtime))).toMatchObject({ ok: false, reason: "parse-error" });
+        expect(readFileSync(filePath, "utf8")).toBe(before);
+      },
+    );
+
+    it.each([
       {
         eol: "\n",
         value: " first line\n  second line",

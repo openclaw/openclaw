@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import type { CodexPluginConfig } from "./app-server/config-contracts.js";
 import type { JsonValue } from "./app-server/protocol.js";
 import { formatRelativeDuration } from "./app-server/rate-limit-time.js";
 import {
@@ -50,7 +51,7 @@ export async function readCodexAccountAuthOverview(params: {
   ctx: PluginCommandContext;
   agentDir: string;
   authProfileId: string | null | undefined;
-  pluginConfig: unknown;
+  pluginConfig: CodexPluginConfig | undefined;
   safeCodexControlRequest: SafeCodexControlRequest;
   account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;

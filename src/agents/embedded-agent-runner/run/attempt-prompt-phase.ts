@@ -201,6 +201,7 @@ export async function runEmbeddedAttemptPromptPhase(
       runtimeModel: runtimeInfo.model,
       systemPromptText,
       runAbortSignal: input.runAbortController.signal,
+      hasBaselineTools: promptToolPolicy.hasBaselineTools,
       setActiveSessionSystemPrompt,
       applyPromptBuildToolsAllow: (toolsAllow, decisionIsCurrent) => {
         // Hook authority follows reachable capabilities, not just provider-visible controls.

@@ -7,7 +7,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { DiagnosticWorkerRetainedData } from "../infra/diagnostic-process-types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { estimateRetainedDataSize } from "../infra/retained-data-size.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { consumeLiveCatalogRefresh, recordLiveCatalogExpiry } from "./provider-catalog-expiry.js";
 
 type LiveCatalogCacheEntry<T> = {
@@ -17,9 +17,11 @@ type LiveCatalogCacheEntry<T> = {
 };
 
 const LIVE_CATALOG_CACHE_MAX_ENTRIES = 100;
-const liveCatalogCache = resolveGlobalSingleton(
+// Preserve the TTL cache across restarts and registry replacement, but release
+// its payloads when the final runtime closes.
+const liveCatalogCache = resolveGlobalMap<string, LiveCatalogCacheEntry<unknown>>(
   Symbol.for("openclaw.providerLiveCatalogCache"),
-  () => new Map<string, LiveCatalogCacheEntry<unknown>>(),
+  "close-only",
 );
 
 async function consumeLiveCatalog<T>(entry: LiveCatalogCacheEntry<T>, signal?: AbortSignal) {

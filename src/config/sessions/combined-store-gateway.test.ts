@@ -36,9 +36,9 @@ import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   applyGatewaySessionStoreAdmission,
-  loadCombinedSessionStoreForGatewayCore,
   type ResolvedGatewaySessionStoreTargets,
 } from "./combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.native.js";
 import { storeTargetKey } from "./combined-store-paths.js";
 import * as sessionAccessor from "./session-accessor.js";
 import {

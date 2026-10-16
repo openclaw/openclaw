@@ -494,7 +494,7 @@ export async function runBtwSideQuestion(
     let messages: Message[] = [];
     const inFlightPrompt = activeRunSnapshot?.inFlightPrompt;
     if (!cacheParityFork) {
-      if (Array.isArray(activeRunSnapshot?.messages) && activeRunSnapshot.messages.length > 0) {
+      if (activeRunSnapshot?.messages?.length) {
         messages = await toSimpleContextMessages({
           messages: activeRunSnapshot.messages,
           imageLimits,
