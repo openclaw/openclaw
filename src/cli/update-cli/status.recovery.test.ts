@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { updateStatusCommand } from "./status.js";
+import { updateStatusCommand as updateStatus } from "./status.js";
 // Prepare the lazy production graph during collection, not inside the first test timeout.
 import "../../infra/update-recovery-backup-status.js";
 
@@ -95,10 +95,7 @@ beforeEach(async () => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
-async function capture(
-  runId = "11111111-1111-4111-8111-111111111111",
-  createdAt = "2026-09-10T00:00:00.000Z",
-) {
+async function capture(runId = "11111111-1111-4111-8111-111111111111") {
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
   const manifest = {
     schemaVersion: 2,
@@ -112,7 +109,7 @@ async function capture(
     configPaths: [configPath],
     creator: { host: "fixture", pid: 1, startIdentity: "1" },
     drivers: [],
-    createdAt,
+    createdAt: "2026-09-10T00:00:00.000Z",
     roots: [stateDir],
     excludedRoots: [],
     protectedPaths: [configPath],
@@ -129,10 +126,11 @@ async function capture(
   await fs.writeFile(manifestPath, raw);
   return { manifest, directory, manifestPath, raw, manifestSha256: digest(raw) };
 }
+type Capture = Awaited<ReturnType<typeof capture>>;
 function result() {
   return mocks.writeJson.mock.lastCall?.[0];
 }
-async function readBaseline(c: Awaited<ReturnType<typeof capture>>) {
+async function readBaseline(c: Capture) {
   const { readUpdateRecoveryBaselineIdentity } =
     await import("../../infra/update-recovery-backup-reader.js");
   return readUpdateRecoveryBaselineIdentity({
@@ -144,26 +142,26 @@ async function readBaseline(c: Awaited<ReturnType<typeof capture>>) {
     assertCurrent: () => {},
   });
 }
-async function terminal(c: Awaited<ReturnType<typeof capture>>, status: "committed" | "restored") {
+async function terminal(c: Capture, status: "committed" | "restored") {
   await writeJson(path.join(c.directory, "outcome.json"), {
     status,
     manifestSha256: c.manifestSha256,
   });
 }
-function run(c: Awaited<ReturnType<typeof capture>>, status = "failed") {
+function run(c: Capture) {
   // Build through the production schema, not a widened cast of partial ledger state.
   return import("../../infra/update-run-schema.js").then(({ UpdateRunRecordSchema }) =>
     UpdateRunRecordSchema.parse({
       runId: c.manifest.runId,
       trigger: "cli",
-      status,
+      status: "failed",
       phase: "finished",
       createdAtMs: 1,
       updatedAtMs: 2,
       finishedAtMs: 2,
       confirmedAtMs: null,
       downtimeMs: null,
-      reason: status === "failed" ? "candidate-failed" : null,
+      reason: "candidate-failed",
       origin: {
         updateRecoveryCapture: {
           manifestSha256: c.manifestSha256,
@@ -183,7 +181,7 @@ function run(c: Awaited<ReturnType<typeof capture>>, status = "failed") {
 
 it("reports standalone Doctor captures as manual evidence", async () => {
   const c = await capture("doctor-11111111-1111-4111-8111-111111111111");
-  await updateStatusCommand({});
+  await updateStatus({});
   const output = printed();
   expect(output).toContain(c.manifestPath);
   expect(output).toContain("No repair outcome is recorded");
@@ -219,7 +217,7 @@ it.each([
         retained.set(name, await fs.readFile(pathname));
       }
     }
-    await updateStatusCommand({ json });
+    await updateStatus({ json });
     if (json) {
       expect(result()).not.toHaveProperty("recoverySetsError");
       expect(result().recoverySets).toEqual(
@@ -333,14 +331,13 @@ it.each([
       await fs.link(target, c.manifestPath);
     }
   }
-  await expect(updateStatusCommand({ json: fault !== "malformed-text" })).resolves.toBeUndefined();
+  await expect(updateStatus({ json: fault !== "malformed-text" })).resolves.toBeUndefined();
   if (fault === "malformed-text") {
     expect(printed()).toContain("Update recovery sets unavailable:");
   } else {
     expect(result()).toHaveProperty("availability");
     expect(result()).not.toHaveProperty("recoverySets");
-    expect(result().recoverySetsError).toBeTypeOf("string");
-    expect(result().recoverySetsError.length).toBeGreaterThan(0);
+    expect(result()).toMatchObject({ recoverySetsError: expect.stringMatching(/[\s\S]/) });
     if (fault === "durable-binding") {
       expect(result().recoverySetsError).toContain("identity changed");
     }
@@ -352,7 +349,7 @@ it.each([
 it("reports one failed set as unresolved and multiple failed sets as ambiguous", async () => {
   const c = await capture();
   mocks.readRun.mockResolvedValue(await run(c));
-  await updateStatusCommand({ json: true });
+  await updateStatus({ json: true });
   const unresolved = result().recoverySets[0];
   expect(unresolved.status).toBe("unresolved");
   expect(unresolved.nextAction).toContain(c.manifestPath);
@@ -371,7 +368,7 @@ it("reports one failed set as unresolved and multiple failed sets as ambiguous",
     [second.manifest.runId, await run(second)],
   ]);
   mocks.readRun.mockImplementation(async (id) => rows.get(id));
-  await updateStatusCommand({ json: true });
+  await updateStatus({ json: true });
   expect(result().recoverySets.map((s: { status: string }) => s.status)).toEqual([
     "ambiguous",
     "ambiguous",
@@ -410,7 +407,7 @@ it("validates forward resolution against retained generations without writing", 
     },
   };
   mocks.readRun.mockResolvedValue(row);
-  await updateStatusCommand({ json: true });
+  await updateStatus({ json: true });
   expect(result().recoverySets[0]).toMatchObject({ status: "forward-resolved" });
   expect(await fs.readdir(c.directory)).toEqual(["manifest.json"]);
   const candidate = {
@@ -420,24 +417,21 @@ it("validates forward resolution against retained generations without writing", 
   await fs.mkdir(path.join(c.directory, "candidate"));
   const raw = JSON.stringify(candidate);
   await fs.writeFile(path.join(c.directory, "candidate", "manifest.json"), raw);
-  await updateStatusCommand({ json: true });
+  await updateStatus({ json: true });
   expect(result().recoverySetsError).toContain("stale");
   row.origin.updateRecoveryCapture!.forwardResolution.binding.candidateSha256 = digest(raw);
-  await updateStatusCommand({ json: true });
+  await updateStatus({ json: true });
   expect(result().recoverySets[0].status).toBe("forward-resolved");
   const partial = path.join(c.directory, "candidate", "manifest.json.partial");
   await fs.copyFile(path.join(c.directory, "candidate", "manifest.json"), partial);
-  await updateStatusCommand({ json: true });
+  await updateStatus({ json: true });
   expect(result().recoverySetsError).toContain("incomplete publication");
   expect(await fs.readFile(partial, "utf8")).toBe(raw);
   await fs.unlink(partial);
-  await fs.writeFile(
-    path.join(c.directory, "candidate", "manifest.json"),
-    JSON.stringify({
-      ...candidate,
-      generation: { kind: "candidate", baselineSha256: "b".repeat(64) },
-    }),
-  );
-  await updateStatusCommand({ json: true });
+  await writeJson(path.join(c.directory, "candidate", "manifest.json"), {
+    ...candidate,
+    generation: { kind: "candidate", baselineSha256: "b".repeat(64) },
+  });
+  await updateStatus({ json: true });
   expect(result().recoverySetsError).toContain("generation identity changed");
 });
