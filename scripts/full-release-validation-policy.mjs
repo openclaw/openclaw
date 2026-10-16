@@ -420,6 +420,31 @@ export function classifyReleaseGhTransportError(error) {
   return TRANSIENT_GH_TRANSPORT_PATTERN.test(text) ? "transient" : "ambiguous";
 }
 
+// GitHub can persistently 5xx one page size of an attempt-jobs listing (for example a
+// rerun attempt carrying forward hundreds of jobs) while smaller pages of the same
+// listing succeed. Each size reads the complete paginated listing, so results never
+// mix page sizes; only the final size spends its caller's full transient-retry budget.
+const RELEASE_JOB_LISTING_PAGE_SIZES = [100, 50, 30];
+const GH_SERVER_ERROR_PATTERN = /\(HTTP 5[0-9][0-9]\)|^HTTP\/\d+(?:\.\d+)? 5[0-9][0-9]\b/mu;
+
+export function isReleaseGhServerError(error) {
+  return GH_SERVER_ERROR_PATTERN.test(releaseGhTransportErrorText(error));
+}
+
+export async function readReleaseJobListing(readListing) {
+  for (const [index, perPage] of RELEASE_JOB_LISTING_PAGE_SIZES.entries()) {
+    const smallerPageFallback = index < RELEASE_JOB_LISTING_PAGE_SIZES.length - 1;
+    try {
+      return await readListing(perPage, { smallerPageFallback });
+    } catch (error) {
+      if (!smallerPageFallback || !isReleaseGhServerError(error)) {
+        throw error;
+      }
+    }
+  }
+  throw new Error("release job listing page sizes exhausted");
+}
+
 export function isReleaseGhArtifactMissingError(error) {
   if (classifyReleaseGhTransportError(error) !== "ambiguous") {
     return false;
@@ -707,7 +732,7 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
       attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name),
     );
     const runningNames = new Set(
-      expected.effectiveRunStatus === "in_progress" &&
+      ["queued", "in_progress"].includes(expected.effectiveRunStatus) &&
         expectedAttempt === effectiveRunAttempt &&
         effectiveRunAttempt > plannedRunAttempt
         ? attempt.jobs
@@ -719,8 +744,9 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
       const job = normalizedAttemptJob(rawJob, expectedAttempt);
       // GitHub's runnerless queued copies can outlive the real rerun job. While
       // the latest rerun is active, retain its running job so collection stays
-      // pending; terminal evidence still requires the completed sibling. Mirrored
-      // steps do not identify a real runner.
+      // pending even when the aggregate run status still says queued. Terminal
+      // evidence still requires the completed sibling. Mirrored steps do not
+      // identify a real runner.
       const ghost = job.status === "queued" && !rawJob.runner_id && !rawJob.runner_name;
       const skipped = job.status === "completed" && job.conclusion === "skipped";
       if (skipped || (ghost && (completedNames.has(job.name) || runningNames.has(job.name)))) {
@@ -1581,20 +1607,7 @@ function releaseState(cancelled, activeRunIds, blockers, errors) {
   );
 }
 
-export function classifyReleaseSnapshot({
-  cancelled = false,
-  children,
-  extraBlockers = [],
-  extraErrors = [],
-  localFailures = [],
-}) {
-  const selected = children.filter((child) => child.selected);
-  const active = selected.filter(
-    (child) => child.runId && child.runAttempt && child.status !== "completed",
-  );
-  const childErrors = selected.flatMap((child) =>
-    (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
-  );
+function releaseChildBlockers(selected) {
   const childJobBlockers = selected.flatMap((child) =>
     child.jobs.filter(isFailedJob).map((job) => ({
       child: child.key,
@@ -1631,18 +1644,35 @@ export function classifyReleaseSnapshot({
       runId: child.runId,
       url: child.url,
     }));
+  return [...childJobBlockers, ...terminalBlockers];
+}
+
+export function classifyReleaseSnapshot({
+  cancelled = false,
+  children,
+  extraBlockers = [],
+  extraErrors = [],
+  localFailures = [],
+}) {
+  const selected = children.filter((child) => child.selected);
+  const active = selected.filter(
+    (child) => child.runId && child.runAttempt && child.status !== "completed",
+  );
+  const childErrors = selected.flatMap((child) =>
+    (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
+  );
+  const childBlockers = releaseChildBlockers(selected);
   const rawBlockers = [
     ...localFailures,
     ...extraBlockers,
     ...dispatchBlockers(selected),
-    ...childJobBlockers,
-    ...terminalBlockers,
+    ...childBlockers,
   ];
   const blockers = normalizeIssues(rawBlockers, "release_blocker");
   const errors = normalizeIssues([...extraErrors, ...childErrors], "orchestration_error");
 
   const activeRunIds = active.map((child) => String(child.runId)).toSorted();
-  const primary = [...childJobBlockers, ...terminalBlockers]
+  const primary = childBlockers
     .filter((issue) => issue.primaryAt)
     .toSorted((left, right) => String(left.primaryAt).localeCompare(String(right.primaryAt), "en"));
   return {
@@ -2418,26 +2448,53 @@ function verifyStateTransition(decision, drain, executionPlan) {
         "compatible collector evidence for the same execution plan is required",
     );
   }
-  if (
-    decision.state.startsWith("blocked_") &&
-    drain.state === "blocked_complete" &&
-    !decision.blockers.every((blocker) =>
-      drain.blockers.some(
-        (candidate) =>
-          JSON.stringify(candidate) === JSON.stringify(blocker) ||
-          // A verified newer attempt can replace a job URL while retaining the
-          // same blocker. Both URLs must belong to their accepted job evidence.
-          (executionPlan.attemptEvidenceVersion !== undefined &&
-            JSON.stringify({ ...candidate, url: blocker.url }) === JSON.stringify(blocker) &&
-            acceptedJobBlockerAttempt(drain, candidate) >
-              acceptedJobBlockerAttempt(decision, blocker)) ||
-          (blocker.kind === "workflow_failure" &&
-            candidate.kind === "job_failure" &&
-            ["child", "runId"].every((key) => candidate[key] === blocker[key])),
-      ),
-    )
-  ) {
-    throw new Error("diagnostic drain changed or removed a release decision blocker");
+  if (decision.state.startsWith("blocked_") && drain.state === "blocked_complete") {
+    // Display rows are capped and can shift as earlier-sorted jobs finish. The
+    // complete index owns retention; child evidence owns permitted replacements.
+    const transitionBlockers = (state) => [
+      ...state.blockers,
+      ...releaseChildBlockers(
+        Object.entries(state.children).map(([key, child]) =>
+          Object.assign({}, child, { key, jobs: child.timing.jobs }),
+        ),
+      ).map((issue) => normalizeIssue(issue, "release_blocker")),
+    ];
+    const previous = new Map(
+      transitionBlockers(decision).map((blocker) => [blockerIndex([blocker])[0], blocker]),
+    );
+    const current = transitionBlockers(drain);
+    const currentIndex = new Set(drain.blockerIndex);
+    const inconsistentDisplay = [decision, drain].some(
+      (state) =>
+        state.blockerCount !== null &&
+        blockerIndex(state.blockers).some((hash) => !state.blockerIndex.includes(hash)),
+    );
+    if (
+      inconsistentDisplay ||
+      !decision.blockerIndex.every((hash) => {
+        if (currentIndex.has(hash)) {
+          return true;
+        }
+        const blocker = previous.get(hash);
+        return (
+          blocker &&
+          current.some(
+            (candidate) =>
+              // A verified newer attempt can replace a job URL while retaining
+              // the same blocker. Both URLs belong to accepted job evidence.
+              (executionPlan.attemptEvidenceVersion !== undefined &&
+                JSON.stringify({ ...candidate, url: blocker.url }) === JSON.stringify(blocker) &&
+                acceptedJobBlockerAttempt(drain, candidate) >
+                  acceptedJobBlockerAttempt(decision, blocker)) ||
+              (blocker.kind === "workflow_failure" &&
+                candidate.kind === "job_failure" &&
+                ["child", "runId"].every((key) => candidate[key] === blocker[key])),
+          )
+        );
+      })
+    ) {
+      throw new Error("diagnostic drain changed or removed a release decision blocker");
+    }
   }
 }
 

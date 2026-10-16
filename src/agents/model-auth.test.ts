@@ -148,19 +148,18 @@ beforeAll(async () => {
     resolveModelAuthMode,
     resolveUsableCustomProviderApiKey,
   } = await import("./model-auth.js"));
+  const owner = await import("./auth-profiles/path-resolve.native.js");
+  owner.prepareSharedAuthStoreOwnershipForNative();
 });
 
-beforeEach(() => {
+function resetRuntimeAuthState() {
   clearRuntimeConfigSnapshot();
   clearRuntimeAuthProfileStoreSnapshots();
   setActiveDegradedSecretOwners([]);
-});
+}
 
-afterEach(() => {
-  clearRuntimeConfigSnapshot();
-  clearRuntimeAuthProfileStoreSnapshots();
-  setActiveDegradedSecretOwners([]);
-});
+beforeEach(resetRuntimeAuthState);
+afterEach(resetRuntimeAuthState);
 
 function secretRef(source: SecretRef["source"], id: string, provider: string): SecretRef {
   return { source, id, provider };
@@ -940,8 +939,6 @@ describe("applyLocalNoAuthHeaderOverride", () => {
       } as Model<"openai-completions">,
       {
         apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-        source: "models.providers.custom (synthetic local key)",
-        mode: "api-key",
       },
     );
 

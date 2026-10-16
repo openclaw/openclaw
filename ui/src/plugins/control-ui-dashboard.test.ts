@@ -370,20 +370,29 @@ describe("Plugin session dashboard", () => {
     );
     const { client } = createClient(widgets, tabs);
     const element = await mountDashboard({ sessionKey: "agent:main:workboard-tabs" }, client);
-    await vi.waitFor(() => expect(element.querySelector("wa-tab-group")).not.toBeNull());
-
-    element
-      .querySelector("wa-tab-group")
-      ?.dispatchEvent(
-        new CustomEvent("wa-tab-show", { bubbles: true, detail: { name: "research" } }),
-      );
+    await vi.waitFor(() =>
+      expect(element.querySelector('[role="tab"][data-board-tab-id="research"]')).not.toBeNull(),
+    );
+    element.querySelector<HTMLButtonElement>('[role="tab"][data-board-tab-id="research"]')!.click();
 
     await vi.waitFor(() =>
       expect(
-        element.querySelector('[data-board-tab-id="research"]')?.getAttribute("active"),
-      ).not.toBeNull(),
+        element.querySelector('[data-board-tab-id="research"]')?.getAttribute("aria-selected"),
+      ).toBe("true"),
     );
-    expect(element.querySelector('[data-board-tab-id="main"]')?.getAttribute("active")).toBeNull();
+    expect(element.querySelector('[data-board-tab-id="main"]')?.getAttribute("aria-selected")).toBe(
+      "false",
+    );
+    expect(
+      element
+        .querySelector('[data-widget-name="research-status"]')
+        ?.closest<HTMLElement>("openclaw-board-widget-cell")?.hidden,
+    ).toBe(false);
+    expect(
+      element
+        .querySelector('[data-widget-name="main-status"]')
+        ?.closest<HTMLElement>("openclaw-board-widget-cell")?.hidden,
+    ).toBe(true);
   });
 
   it("releases its provider through detached updates and reacquires only after reconnect", async () => {

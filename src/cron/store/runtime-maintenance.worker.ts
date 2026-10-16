@@ -50,16 +50,19 @@ export function maintainCronRunHistoryInWorker(
   const protectedJobs = new Set([...protectedJobIds, ...receipts.map((receipt) => receipt.jobId)]);
   const plan = planCronRunHistoryMaintenance(records, nowMs, protectedJobs);
   if (plan.reconciliations.length === 0 && !plan.prune) {
-    return { outcome: { reconciled: 0, pruned: 0 } };
+    return { outcome: { reconciled: 0, pruned: 0, nextSweepAtMs: plan.nextSweepAtMs } };
   }
   return runOpenClawStateWriteTransaction(
     ({ db }) => ({
-      outcome: applyCronRunHistoryMaintenanceInDatabase(
-        db,
-        plan,
-        nowMs,
-        prepareCronRunReceiptWriteSchema(db),
-      ),
+      outcome: {
+        ...applyCronRunHistoryMaintenanceInDatabase(
+          db,
+          plan,
+          nowMs,
+          prepareCronRunReceiptWriteSchema(db),
+        ),
+        nextSweepAtMs: plan.nextSweepAtMs,
+      },
     }),
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.history-maintenance" },

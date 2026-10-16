@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import type { BoardGetParams, BoardSnapshot } from "@openclaw/gateway-protocol";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -17,6 +18,7 @@ import {
 } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DashboardsPage } from "./dashboards-page.tsx";
+import { page as dashboardRoute } from "./route.ts";
 import type { DashboardsRouteData } from "./view.tsx";
 
 type DashboardsPageElement = HTMLElement;
@@ -125,7 +127,7 @@ describe("DashboardsPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("subscribes to the exact query and preserves rows while a new agent scope loads", async () => {
+  it("subscribes to the exact query and preserves owner rows through agent-scope and route updates", async () => {
     const runFrame = controlPreviewFrames();
     const selectionListeners = new Set<() => void>();
     const listListeners = new Map<string, (snapshot: SessionListSnapshot) => void>();
@@ -165,11 +167,20 @@ describe("DashboardsPage", () => {
       },
       agents: { state: { agentsList: null } },
     } as unknown as ApplicationContext;
+    const [seed, setSeed] = createSignal<DashboardsRouteData | undefined>(
+      routeData(row("agent:main:before", "Before")),
+    );
+    const route = await dashboardRoute.component();
     const mounted = mountSolid(
-      () => <DashboardsPage routeData={routeData(row("agent:main:before", "Before"))} />,
-      {
-        wrapper: createSolidApplicationContextProvider(context).wrapper,
-      },
+      () =>
+        route.renderSolid({
+          get data() {
+            return seed();
+          },
+          loaderPending: false,
+          presented: true,
+        }),
+      { wrapper: createSolidApplicationContextProvider(context).wrapper },
     );
     const element = mounted.container;
     flush();
@@ -226,6 +237,13 @@ describe("DashboardsPage", () => {
       error: null,
     });
     await waitForSolid(() => expect(element.textContent).toContain("Writer dashboard"));
+    setSeed(undefined);
+    flush();
+    expect(element.textContent).toContain("Writer dashboard");
+    setSeed(routeData(row("agent:main:stale-route", "Stale route")));
+    flush();
+    expect(element.textContent).toContain("Writer dashboard");
+    expect(element.textContent).not.toContain("Stale route");
     await settleDashboardPreviews(element, runFrame);
     retiredListener({
       result: result(row("agent:main:retired", "Retired")),
@@ -371,7 +389,7 @@ describe("DashboardsPage", () => {
     },
   );
 
-  it("filters by search and author and sorts visible cards by title", async () => {
+  it("renders the route host and filters by search and author and sorts cards by title", async () => {
     const data: DashboardsRouteData = {
       result: results([
         {
@@ -404,11 +422,15 @@ describe("DashboardsPage", () => {
         subscribeList: () => () => {},
       },
     } as unknown as ApplicationContext;
-    const { container: element } = mountSolid(() => <DashboardsPage routeData={data} />, {
-      wrapper: createSolidApplicationContextProvider(context).wrapper,
-    });
+    const route = await dashboardRoute.component();
+    const { container } = mountSolid(
+      () => route.renderSolid({ data, loaderPending: false, presented: true }),
+      { wrapper: createSolidApplicationContextProvider(context).wrapper },
+    );
     flush();
 
+    const element = container.querySelector<HTMLElement>("openclaw-dashboards-page")!;
+    expect(element).not.toBeNull();
     expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(3);
     expect(element.querySelector(".dashboard-preview")?.hasAttribute("inert")).toBe(true);
 

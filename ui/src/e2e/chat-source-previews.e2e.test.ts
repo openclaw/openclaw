@@ -59,7 +59,9 @@ suite.define(() => {
           expect(
             await checklist.evaluate((element) => {
               const id = element.getAttribute("aria-controls");
-              return Boolean(id && document.getElementById(id)?.matches("wa-popover"));
+              return Boolean(
+                id && document.getElementById(id)?.matches(".chat-source-popover[popover]"),
+              );
             }),
           ).toBe(true);
           expect(await checklist.textContent()).toContain("cycling.example.com");
@@ -101,7 +103,9 @@ suite.define(() => {
           });
           await checklist.click();
           await expect.poll(() => checklist.getAttribute("aria-expanded")).toBe("true");
-          const popover = page.locator(`wa-popover[data-source-url="${fixture.checklistUrl}"]`);
+          const popover = page.locator(
+            `[popover].chat-source-popover[data-source-url="${fixture.checklistUrl}"]`,
+          );
           await expect
             .poll(() => popover.locator(".chat-source-popover__excerpt").isVisible())
             .toBe(true);
@@ -136,7 +140,7 @@ suite.define(() => {
           await page.keyboard.press("Enter");
           await expect.poll(() => forecast.getAttribute("aria-expanded")).toBe("true");
           const forecastPopover = page.locator(
-            `wa-popover[data-source-url="${fixture.forecastUrl}"]`,
+            `[popover].chat-source-popover[data-source-url="${fixture.forecastUrl}"]`,
           );
           await forecastPopover.getByText("Search snippet", { exact: true }).waitFor();
           expect(await forecastPopover.textContent()).toContain(

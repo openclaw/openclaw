@@ -14,7 +14,7 @@ import {
   captureDeliveryQueueStateContext,
   pruneExpiredDeliveryQueueTombstones,
 } from "../infra/delivery-queue-sqlite.js";
-import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
+import { startDevicePairSetupMaintenance } from "../infra/device-bootstrap.js";
 import { formatErrorMessage as formatError } from "../infra/errors.js";
 import {
   createGatewayActiveWorkSnapshot,
@@ -139,6 +139,7 @@ export function startGatewayMaintenanceTimers(params: {
       id: `maintenance:${id}`,
       atMs: scheduler.now() + (immediate ? 0 : everyMs),
       everyMs,
+      phase: "maintenance",
       run,
     });
   };
@@ -165,9 +166,17 @@ export function startGatewayMaintenanceTimers(params: {
     // Inspection and admission commit are synchronous: no new work can enter
     // between them, and a busy tick never changes the admission phase.
     let invalidated = false;
-    const admission = tryBeginGatewaySuspendAdmission(() => {
-      invalidated = true;
-    });
+    const admission = tryBeginGatewaySuspendAdmission(
+      () => {
+        invalidated = true;
+      },
+      {
+        owner: "host-thaw-recovery",
+        leaseId: `host-thaw-${scheduler.now()}`,
+        caller: "maintenance:host-thaw",
+        reason: mode,
+      },
+    );
     if (!admission?.commit()) {
       return { status: "retry", reason: "admission-closed" };
     }
@@ -288,6 +297,7 @@ export function startGatewayMaintenanceTimers(params: {
       id: `maintenance:${id}`,
       atMs: mediaScheduler.now(),
       everyMs: DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS,
+      phase: "maintenance",
       run,
     });
   };
@@ -300,22 +310,19 @@ export function startGatewayMaintenanceTimers(params: {
       );
     }
   });
-  schedulePeriodic(
-    "device-pair-setup",
-    60_000,
-    () =>
-      pruneExpiredDevicePairSetupCompletions({ nowMs: scheduler.now() }).catch((error: unknown) => {
-        params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
-      }),
-    true,
-  );
+  startDevicePairSetupMaintenance({
+    scheduler,
+    onError: (error) => {
+      params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
+    },
+  });
 
   const skillUsageCleanup = registerSkillUsageTracking();
 
   schedulePeriodic("dedupe", 60_000, () => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = scheduler.now();
-    pruneExpiredArtifactDownloads(params.clients, now);
+    pruneExpiredArtifactDownloads(now);
     params.chatRunState.toolEventRecipients.pruneExpired(now);
     const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
       const keyRunId = key.slice(key.indexOf(":") + 1);
@@ -400,20 +407,7 @@ export function startGatewayMaintenanceTimers(params: {
       if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
         continue;
       }
-      if (entry.projectSessionTerminalPersistence) {
-        const lifecycleGeneration = entry.lifecycleGeneration?.trim();
-        const sessionKey = entry.sessionKey.trim();
-        const sessionId = entry.sessionId.trim();
-        if (entry.controlUiVisible !== false && lifecycleGeneration && sessionKey && sessionId) {
-          params.restartRecoveryCandidates.set(runId, {
-            runId,
-            lifecycleGeneration,
-            sessionKey,
-            sessionId,
-            observedAt: entry.projectSessionTerminalObservedAt,
-          });
-        }
-      } else if (entry.projectSessionActive !== false) {
+      if (!entry.projectSessionTerminalPersistence && entry.projectSessionActive !== false) {
         const aborted = abortChatRunById(params, {
           runId,
           sessionKey: entry.sessionKey,

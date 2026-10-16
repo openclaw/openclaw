@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { logVerbose } from "../globals.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
@@ -125,6 +126,14 @@ export function listWebSearchProviders(params?: {
   return resolveRuntimeWebSearchProviders({
     config,
   });
+}
+
+/** Prepare machine-owned discovery policy before enumerating runtime providers. */
+export async function listWebSearchProvidersAsync(params?: {
+  config?: OpenClawConfig;
+}): Promise<PluginWebSearchProviderEntry[]> {
+  await prepareBundledDiscoveryMode();
+  return listWebSearchProviders(params);
 }
 
 /** Lists plugin-configured web_search providers without runtime-only providers. */
@@ -301,6 +310,7 @@ async function resolveWebSearchCandidates(
     return [];
   }
 
+  await prepareBundledDiscoveryMode();
   const providers = loadSortedWebSearchProviders({
     config,
     search,
@@ -471,6 +481,7 @@ export async function prepareWebSearchConfiguration(
     agentDir: string,
   ) => Promise<AuthProfileStore> = ensureAuthProfileStoreWithoutExternalProfilesAsync,
 ): Promise<boolean> {
+  await prepareBundledDiscoveryMode();
   if (options.authStore) {
     return hasConfiguredWebSearchProvider(options);
   }

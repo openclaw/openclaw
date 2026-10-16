@@ -1,9 +1,12 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayPendingRequests } from "../../packages/gateway-client/src/pending-request.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { buildCapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import { assertClawsLabsEnabled, ClawsLabsDisabledError } from "../claws/labs-gate.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 
@@ -15,6 +18,40 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
 }));
 const { resolvePluginLifecycleGateway, resolvePluginBatchReload } =
   await import("./plugins-lifecycle-client.js");
+
+async function createPluginRefusalResponse(retryAfterMs = 1_000) {
+  const pending = new GatewayPendingRequests({
+    createRequestId: () => "plugin-refusal",
+    nowMs: Date.now,
+    createRequestError: (error) => new GatewayClientRequestError(error),
+  });
+  let requestId = "";
+  const response = pending.request(
+    {
+      send(data) {
+        const frame: unknown = JSON.parse(data);
+        if (!isRecord(frame) || typeof frame.id !== "string") {
+          throw new Error("Gateway request omitted its ID");
+        }
+        requestId = frame.id;
+      },
+    },
+    "plugins.setEnabled",
+  );
+  pending.handleResponse({
+    type: "res",
+    id: requestId,
+    ok: false,
+    error: {
+      code: "UNAVAILABLE",
+      message: "plugin lifecycle busy",
+      retryable: true,
+      retryAfterMs,
+      details: { mutationAccepted: false },
+    },
+  });
+  return await response.catch((error: unknown) => error);
+}
 
 describe("plugin lifecycle CLI transport", () => {
   beforeEach(() => {
@@ -51,12 +88,7 @@ describe("plugin lifecycle CLI transport", () => {
   });
 
   it("keeps lifecycle admission bounded even when admitted drain may wait indefinitely", async () => {
-    const busy = new GatewayClientRequestError({
-      code: "UNAVAILABLE",
-      message: "lifecycle busy",
-      retryable: true,
-      retryAfterMs: 600_000,
-    });
+    const busy = await createPluginRefusalResponse(600_000);
     mocks.call.mockRejectedValue(busy);
     const gateway = await resolvePluginLifecycleGateway();
     await expect(
@@ -67,6 +99,53 @@ describe("plugin lifecycle CLI transport", () => {
     ).rejects.toBe(busy);
     expect(mocks.call).toHaveBeenCalledOnce();
     await expect(waitForSignalExitBarriers()).resolves.toBeUndefined();
+  });
+
+  it("finishes a plugin mutation after an explicit pre-admission refusal", async () => {
+    vi.useFakeTimers();
+    try {
+      const applied = { runtime: { operationId: "after-contention", generation: 3 } };
+      mocks.call
+        .mockRejectedValueOnce(await createPluginRefusalResponse())
+        .mockResolvedValueOnce(applied);
+      const gateway = await resolvePluginLifecycleGateway();
+      const outcome = gateway!("plugins.setEnabled", { pluginId: "demo", enabled: false }).catch(
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await outcome).toEqual(applied);
+      expect(mocks.call).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { method: "plugins.reload", params: { plugins: [{ pluginId: "demo" }], waitForDrain: true } },
+    { method: "plugins.setEnabled", params: { pluginId: "demo", enabled: false } },
+  ])("cancels an unaccepted $method retry before another dispatch", async ({ method, params }) => {
+    vi.useFakeTimers();
+    try {
+      mocks.call
+        .mockRejectedValueOnce(await createPluginRefusalResponse())
+        .mockResolvedValueOnce({ runtime: { generation: 3 } });
+      const gateway = await resolvePluginLifecycleGateway();
+      let settled = false;
+      const outcome = gateway!(method, params)
+        .catch((error: unknown) => error)
+        .finally(() => {
+          settled = true;
+        });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      await waitForSignalExitBarriers();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await outcome).toMatchObject({ name: "AbortError" });
+      expect(mocks.call).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("selects offline execution only when no local owner exists", async () => {
@@ -99,6 +178,31 @@ describe("plugin lifecycle CLI transport", () => {
     },
   );
 
+  it("rechecks Labs after a pending plugin batch reload response", async () => {
+    let resolveReply!: (value: {
+      runtime: { operationId: string; generation: number; pluginIds: string[] };
+    }) => void;
+    mocks.call.mockReturnValue(
+      new Promise((resolve) => {
+        resolveReply = resolve;
+      }),
+    );
+    let labsEnabled = true;
+    const commitGuard = vi.fn(() =>
+      assertClawsLabsEnabled({ gateway: { controlUi: { experimental: { claws: labsEnabled } } } }),
+    );
+    const reload = await resolvePluginBatchReload();
+    const result = reload!([{ pluginId: "demo", installHash: "a".repeat(64) }], { commitGuard });
+
+    expect(mocks.call).toHaveBeenCalledOnce();
+    expect(commitGuard).not.toHaveBeenCalled();
+    labsEnabled = false;
+    resolveReply({ runtime: { operationId: "batch", generation: 2, pluginIds: ["demo"] } });
+
+    await expect(result).rejects.toBeInstanceOf(ClawsLabsDisabledError);
+    expect(commitGuard).toHaveBeenCalledOnce();
+  });
+
   it("does not select offline mutation when an existing owner cannot be inspected", async () => {
     const { readActiveGatewayLockIdentity, GatewayLockError } = await vi.importActual<
       typeof import("../infra/gateway-lock.js")
@@ -117,13 +221,38 @@ describe("plugin lifecycle CLI transport", () => {
     });
   });
 
-  it("propagates a lost reply without retrying a possibly committed mutation", async () => {
-    const failure = new Error("connection lost");
-    mocks.call.mockRejectedValue(failure);
-    const gateway = await resolvePluginLifecycleGateway();
-    await expect(gateway?.("plugins.uninstall", { pluginId: "demo" })).rejects.toBe(failure);
-    expect(mocks.call).toHaveBeenCalledOnce();
-  });
+  it.each(["lost-reply", "missing-admission-fact", "admitted", "unmarked-refusal"])(
+    "does not replay an uncertain plugin mutation (%s)",
+    async (outcome) => {
+      vi.useFakeTimers();
+      try {
+        const failure =
+          outcome === "lost-reply"
+            ? new Error("connection lost")
+            : new GatewayClientRequestError({
+                code: "UNAVAILABLE",
+                message: "plugin operation unavailable",
+                retryable: true,
+                retryAfterMs: 1_000,
+                ...(outcome === "admitted" || outcome === "unmarked-refusal"
+                  ? { details: { mutationAccepted: outcome === "admitted" } }
+                  : {}),
+              });
+        mocks.call
+          .mockRejectedValueOnce(failure)
+          .mockResolvedValueOnce({ runtime: { generation: 3 } });
+        const gateway = await resolvePluginLifecycleGateway();
+        const result = gateway!("plugins.uninstall", { pluginId: "demo" }).catch(
+          (error: unknown) => error,
+        );
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(await result).toBe(failure);
+        expect(mocks.call).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([{ method: "plugins.reload", params: { plugins: [{ pluginId: "demo" }] } }])(
     "retries $method consent using the inspected artifact's exact token",

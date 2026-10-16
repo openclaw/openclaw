@@ -1,17 +1,14 @@
-import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { resolveCloudProfileIconData } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
-import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { resolveMacFormFactorFromName } from "../../lib/mac-form-factor.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { SessionMenuItem, CloudProfileMenuItems } from "./cloud-target-view.tsx";
 import type { DevicePlacementOption } from "./device-placement.ts";
-import { onOwnPopoverEvent } from "./new-session-runtime.ts";
-import { PickerLabel } from "./picker-label.tsx";
+import { SessionPicker } from "./picker.tsx";
 import { environmentCapabilityLabels } from "./place-facts.ts";
 import type { WhereChipOptions } from "./where-chip.ts";
 function DevicePoolIcon() {
@@ -73,23 +70,23 @@ function MacDeviceIcon(props: { form: "laptop" | "mini" | "studio" }) {
     </svg>
   );
 }
-function environmentDeviceIcon(device?: DevicePlacementOption) {
-  const platform = device?.platform?.trim();
-  if (platform && !/^(?:darwin|macos|mac os(?: x)?)\b/i.test(platform)) {
-    return <Icon name="monitor" />;
-  }
-  const form = resolveMacFormFactorFromName(device?.label);
-  const icon =
-    form === "laptop" || form === "mini" || form === "studio" ? (
-      <MacDeviceIcon form={form} />
-    ) : undefined;
-  if (!icon) {
-    return <Icon name="monitor" />;
-  }
+function EnvironmentDeviceIcon(props: { device?: DevicePlacementOption }) {
+  const form = createMemo(() => {
+    const platform = props.device?.platform?.trim();
+    if (platform && !/^(?:darwin|macos|mac os(?: x)?)\b/i.test(platform)) {
+      return undefined;
+    }
+    const value = resolveMacFormFactorFromName(props.device?.label);
+    return value === "laptop" || value === "mini" || value === "studio" ? value : undefined;
+  });
   return (
-    <span class="new-session-page__device-icon" data-form={form}>
-      {icon}
-    </span>
+    <Show when={form()} fallback={<Icon name="monitor" />}>
+      {(current) => (
+        <span class="new-session-page__device-icon" data-form={current()}>
+          <MacDeviceIcon form={current()} />
+        </span>
+      )}
+    </Show>
   );
 }
 
@@ -108,60 +105,65 @@ function renderEnvironmentSkeletons(section: "devices" | "cloud") {
   );
 }
 
-function renderEnvironmentHeading(
-  label: string,
-  action: "connect-machine" | "manage-cloud-workers",
-  disabled: boolean,
-  onAction: (() => void) | undefined,
-) {
+function EnvironmentHeading(props: {
+  label: string;
+  action: "connect-machine" | "manage-cloud-workers";
+  disabled: boolean;
+  onAction: (() => void) | undefined;
+}) {
   return (
     <div class="new-session-page__environment-heading new-session-page__devices-heading">
-      <span>{label}</span>
-      {onAction ? (
+      <span>{props.label}</span>
+      <Show when={props.onAction}>
         <button
           type="button"
           class="new-session-page__connect-device"
-          data-action={action}
+          data-action={props.action}
           aria-label={t(
-            action === "connect-machine"
+            props.action === "connect-machine"
               ? "newSession.connectMachine"
               : "newSession.manageCloudWorkers",
           )}
-          disabled={disabled}
-          ref={nativeListener("click", onAction)}
+          disabled={props.disabled}
+          ref={nativeListener("click", () => props.onAction?.())}
         >
           <ConnectDeviceIcon />
         </button>
-      ) : undefined}
+      </Show>
     </div>
   );
 }
 
 export function WhereChip(props: { params: WhereChipOptions }) {
+  const kind = createMemo(() => props.params.state.kind);
+  const triggerIcon = createMemo(() =>
+    kind() === "hosted" ? (
+      <Icon name="cloud" />
+    ) : kind() === "cloud" ? (
+      <CloudProfileIcon
+        profile={props.params.state.cloudProfiles.find(
+          (profile) => profile.id === props.params.cloudProfileId,
+        )}
+      />
+    ) : kind() === "local" ? (
+      <Icon name="home" />
+    ) : kind() === "auto-device" ? (
+      <DevicePoolIcon />
+    ) : (
+      <EnvironmentDeviceIcon
+        device={props.params.state.devices.find(
+          (device) => device.deviceId === props.params.deviceId,
+        )}
+      />
+    ),
+  );
+  const gatewayIcon = <Icon name="home" />;
   const view = createMemo(() => {
     const cloudPresentation = resolveCloudProfileIconData(
       props.params.state.cloudProfiles.find(
         (profile) => profile.id === props.params.cloudProfileId,
       ),
     );
-    const icon =
-      props.params.state.kind === "hosted" ? (
-        <Icon name="cloud" />
-      ) : props.params.state.kind === "cloud" ? (
-        <CloudProfileIcon
-          profile={props.params.state.cloudProfiles.find(
-            (profile) => profile.id === props.params.cloudProfileId,
-          )}
-        />
-      ) : props.params.state.kind === "local" ? (
-        <Icon name="home" />
-      ) : props.params.state.kind === "auto-device" ? (
-        <DevicePoolIcon />
-      ) : (
-        environmentDeviceIcon(
-          props.params.state.devices.find((device) => device.deviceId === props.params.deviceId),
-        )
-      );
     const localName = props.params.gatewayName.trim() || t("newSession.local");
     const label = props.params.state.kind === "local" ? localName : props.params.state.label;
     const configurationSummary =
@@ -250,7 +252,6 @@ export function WhereChip(props: { params: WhereChipOptions }) {
       props.params.isAdmin && props.params.catalogLoading && cloudProfiles.length === 0;
     return {
       cloudPresentation,
-      icon,
       localName,
       label,
       configurationSummary,
@@ -269,297 +270,272 @@ export function WhereChip(props: { params: WhereChipOptions }) {
     };
   });
   return (
-    <>
-      <span class="new-session-page__select new-session-page__select--where">
-        <button
-          id="new-session-where-trigger"
-          type="button"
-          class={[
-            "new-session-page__trigger",
-            { "new-session-page__trigger--hiding": props.params.popoverHiding },
-          ]}
-          aria-label={`${t("newSession.where")}: ${view().label}${view().configurationSummary ? `, ${view().configurationSummary}` : ""}`}
-          aria-description={
-            props.params.state.kind === "cloud" && view().cloudPresentation.label
-              ? t("newSession.cloudWorkerProvider", { provider: view().cloudPresentation.label })
-              : undefined
-          }
-          data-cloud-profile={props.params.cloudProfileId || undefined}
-          data-hosted-runtime={props.params.state.hostedRuntimeId || undefined}
-          data-machine-class={props.params.machineClass || undefined}
-          data-os={props.params.os || undefined}
-          data-device-id={props.params.deviceId || undefined}
-          data-auto-device={props.params.autoDevice ? "true" : undefined}
-          aria-haspopup="dialog"
-          aria-expanded={props.params.popoverOpen ? "true" : "false"}
-          disabled={props.params.submitting || props.params.pendingPlacement}
-          ref={nativeListener("click", (event) => props.params.onGuardTransition(event))}
-        >
-          <PickerLabel
-            icon={view().icon}
-            label={view().label}
-            summary={view().configurationSummary}
-          />
-        </button>
-      </span>
-      <wa-popover
-        ref={syncPopoverLabel}
-        class="new-session-page__select new-session-page__where-popover new-session-page__picker-popover"
-        for="new-session-where-trigger"
-        placement="bottom-start"
-        without-arrow
-        onWa-show={onOwnPopoverEvent((event) => {
-          if (event.currentTarget instanceof WaPopover) {
-            // Let the positioning owner recompute the scroll budget on open and resize.
-            event.currentTarget.popup.autoSize = "vertical";
-            event.currentTarget.popup.autoSizePadding = 8;
-          }
-          props.params.onPopoverShow();
-        })}
-        onWa-hide={onOwnPopoverEvent(() => props.params.onPopoverHide())}
-        onWa-after-hide={onOwnPopoverEvent(() => props.params.onPopoverAfterHide())}
-      >
-        <div class="new-session-page__environment-layout">
-          <div class="new-session-page__picker-root new-session-page__environment-picker">
-            <label class="new-session-page__environment-search">
-              <span aria-hidden="true">
-                <Icon name="search" />
-              </span>
-              <input
-                type="search"
-                autofocus
-                aria-label={t("newSession.environmentSearchPlaceholder")}
-                placeholder={t("newSession.environmentSearchPlaceholder")}
-                value={props.params.environmentQuery}
+    <SessionPicker
+      kind="where"
+      label={`${t("newSession.where")}: ${view().label}`}
+      value={view().label}
+      icon={triggerIcon()}
+      summary={view().configurationSummary}
+      triggerAttributes={{
+        "aria-label": `${t("newSession.where")}: ${view().label}${view().configurationSummary ? `, ${view().configurationSummary}` : ""}`,
+        "aria-description":
+          props.params.state.kind === "cloud" && view().cloudPresentation.label
+            ? t("newSession.cloudWorkerProvider", { provider: view().cloudPresentation.label })
+            : undefined,
+        "data-cloud-profile": props.params.cloudProfileId || undefined,
+        "data-hosted-runtime": props.params.state.hostedRuntimeId || undefined,
+        "data-machine-class": props.params.machineClass || undefined,
+        "data-os": props.params.os || undefined,
+        "data-device-id": props.params.deviceId || undefined,
+        "data-auto-device": props.params.autoDevice ? "true" : undefined,
+      }}
+      state={props.params}
+    >
+      <div class="new-session-page__environment-layout">
+        <div class="new-session-page__picker-root new-session-page__environment-picker">
+          <label class="new-session-page__environment-search">
+            <span aria-hidden="true">
+              <Icon name="search" />
+            </span>
+            <input
+              type="search"
+              autofocus
+              aria-label={t("newSession.environmentSearchPlaceholder")}
+              placeholder={t("newSession.environmentSearchPlaceholder")}
+              value={props.params.environmentQuery}
+              disabled={view().busy}
+              onInput={(event: Event) => {
+                if (event.currentTarget instanceof HTMLInputElement) {
+                  props.params.onEnvironmentQueryInput(event.currentTarget.value);
+                }
+              }}
+            />
+          </label>
+          <div class="new-session-page__environment-list">
+            <Show when={view().showLocal || view().devices.length || view().showAuto}>
+              <EnvironmentHeading
+                label={t("newSession.yourDevices")}
+                action="connect-machine"
                 disabled={view().busy}
-                onInput={(event: Event) => {
-                  if (event.currentTarget instanceof HTMLInputElement) {
-                    props.params.onEnvironmentQueryInput(event.currentTarget.value);
-                  }
-                }}
+                onAction={props.params.isAdmin ? props.params.onConnectMachine : undefined}
               />
-            </label>
-            <div class="new-session-page__environment-list">
-              {view().showLocal || view().devices.length || view().showAuto
-                ? renderEnvironmentHeading(
-                    t("newSession.yourDevices"),
-                    "connect-machine",
-                    view().busy,
-                    props.params.isAdmin ? props.params.onConnectMachine : undefined,
-                  )
-                : undefined}
-              {view().showAuto ? (
-                <openclaw-tooltip
-                  class="new-session-page__environment-details"
-                  placement="right-start"
-                >
-                  <button
-                    type="button"
-                    class="session-menu__item new-session-page__environment-option"
-                    data-value="auto-device"
-                    data-popover="close"
-                    aria-pressed={props.params.autoDevice === true ? "true" : "false"}
-                    aria-description={view().autoHelp}
-                    disabled={
-                      view().busy ||
-                      (!props.params.autoDevice &&
-                        Boolean(props.params.state.autoDeviceDisabledReason))
-                    }
-                    ref={nativeListener("click", () => props.params.onSelectAutoDevice())}
-                  >
-                    <span class="session-menu__icon" aria-hidden="true">
-                      <DevicePoolIcon />
-                    </span>
-                    <span class="session-menu__text">{t("newSession.autoDeviceChoose")}</span>
-                    <span class="session-menu__check" aria-hidden="true">
-                      {props.params.autoDevice ? <Icon name="check" /> : undefined}
-                    </span>
-                  </button>
-                  <div slot="content" class="new-session-page__environment-card">
-                    <strong>{t("newSession.autoDeviceChoose")}</strong>
-                    <div class="new-session-page__card-row">
-                      <span class="new-session-page__card-icon" aria-hidden="true">
-                        <Icon name="info" />
-                      </span>
-                      <span>{view().autoHelp}</span>
-                    </div>
-                  </div>
-                </openclaw-tooltip>
-              ) : undefined}
-              {view().showLocal ? (
-                <SessionMenuItem
-                  item={{
-                    value: "gateway",
-                    label: view().localName,
-                    icon: <Icon name="home" />,
-                    summary: t("newSession.runsOnGateway"),
-                    compact: true,
-                    checked: props.params.state.kind === "local",
-                    disabled: Boolean(props.params.hostDisabledReason),
-                    title: props.params.hostDisabledReason,
-                    onSelect: () => props.params.onSelectDevice(""),
-                  }}
-                  submitting={view().busy}
-                />
-              ) : undefined}
-              <For each={view().devices} keyed={(device) => device.deviceId}>
-                {(device) => {
-                  const item = createMemo(() => {
-                    const current = device();
-                    return {
-                      value: `device:${current.deviceId}`,
-                      label: current.label,
-                      sub: current.subtitle,
-                      icon: environmentDeviceIcon(current),
-                      platform: current.platform ? prettifyPlatform(current.platform) : undefined,
-                      capabilityLabels: environmentCapabilityLabels(current.capabilities),
-                      hideDetails: current.hideDetails,
-                      remediation: current.remediation,
-                      capacityLabel:
-                        current.selectable && current.workerSlots
-                          ? t("newSession.concurrentSessionsValue", {
-                              used: String(
-                                current.workerSlots.total - current.workerSlots.available,
-                              ),
-                              total: String(current.workerSlots.total),
-                            })
-                          : undefined,
-                      compact: true,
-                      checked:
-                        props.params.state.kind === "device" &&
-                        props.params.deviceId === current.deviceId,
-                      disabled: !current.selectable,
-                      title: current.disabledReason,
-                      onSelect: () => props.params.onSelectDevice(device().deviceId),
-                    };
-                  });
-                  return <SessionMenuItem item={item()} submitting={view().busy} />;
-                }}
-              </For>
-              {view().showDeviceSkeletons ? renderEnvironmentSkeletons("devices") : undefined}
-              {view().hosted.length || view().showHostedSetup ? (
-                <div class="new-session-page__environment-heading">
-                  <span>{t("newSession.hosted")}</span>
-                </div>
-              ) : undefined}
-              {
-                <For each={view().hosted} keyed={(entry) => entry.id}>
-                  {(entry) => (
-                    <SessionMenuItem
-                      item={{
-                        value: `runtime:${entry().id}`,
-                        label: entry().label,
-                        icon: <Icon name="cloud" />,
-                        compact: true,
-                        summary: t("newSession.hostedHint"),
-                        selectedSummary: entry().model,
-                        checked: props.params.state.hostedRuntimeId === entry().id,
-                        disabled: Boolean(entry().disabledReason),
-                        title: entry().disabledReason,
-                        onSelect: () => props.params.onSelectHostedEnvironment?.(entry().id),
-                      }}
-                      submitting={view().busy}
-                    />
-                  )}
-                </For>
-              }
-              {view().showHostedSetup && props.params.hostedLoading ? (
-                <div role="status" class="new-session-page__environment-empty">
-                  {t("common.loading")}
-                </div>
-              ) : view().showHostedSetup &&
-                !view().hosted.some((entry) => entry.id === "agentsapi") ? (
-                <a
+            </Show>
+            {view().showAuto ? (
+              <openclaw-tooltip
+                class="new-session-page__environment-details"
+                placement="right-start"
+              >
+                <button
+                  type="button"
                   class="session-menu__item new-session-page__environment-option"
-                  href="https://docs.openclaw.ai/plugins/agentsapi"
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-description={t("newSession.hostedSetupHint")}
+                  data-value="auto-device"
+                  data-popover="close"
+                  aria-pressed={props.params.autoDevice === true ? "true" : "false"}
+                  aria-description={view().autoHelp}
+                  disabled={
+                    view().busy ||
+                    (!props.params.autoDevice &&
+                      Boolean(props.params.state.autoDeviceDisabledReason))
+                  }
+                  ref={nativeListener("click", () => props.params.onSelectAutoDevice())}
                 >
-                  <span class="session-menu__icon">
-                    <Icon name="info" />
+                  <span class="session-menu__icon" aria-hidden="true">
+                    <DevicePoolIcon />
                   </span>
-                  <span class="session-menu__text">{t("newSession.hostedSetup")}</span>
-                </a>
-              ) : undefined}
-              {view().cloudProfiles.length ||
-              view().showSuggestion ||
-              view().showMissingCloud ||
-              view().showCloudSkeletons
-                ? renderEnvironmentHeading(
-                    t("newSession.cloud"),
-                    "manage-cloud-workers",
-                    view().busy,
-                    props.params.isAdmin && !view().showCloudSkeletons && !view().showSuggestion
-                      ? props.params.onManageCloudWorkers
-                      : undefined,
-                  )
-                : undefined}
-              {view().showSuggestion ? (
-                <SessionMenuItem
-                  item={{
-                    value: "suggested-cloud",
-                    label: t("newSession.cloud"),
-                    icon: <CloudProfileIcon profile={props.params.suggestedProfile} />,
-                    compact: true,
-                    checked: false,
-                    disabled: Boolean(props.params.cloudDisabledReason),
-                    title: props.params.cloudDisabledReason,
-                    onSelect: () => props.params.onAdoptSuggestedProfile?.(),
-                  }}
-                  submitting={view().busy}
-                />
-              ) : undefined}
-              <CloudProfileMenuItems
-                params={{
-                  profiles: view().cloudProfiles,
-                  selectedId: props.params.cloudProfileId,
-                  selectedOs: props.params.state.selectedOsId,
-                  selectedMachine: props.params.state.selectedMachineId,
-                  onSelectOs: props.params.onSelectCloudOs,
-                  onSelectMachine: props.params.onSelectCloudMachine,
-                  submitting: view().busy,
-                  compact: true,
-                  disabled: Boolean(props.params.cloudDisabledReason),
-                  disabledReason: props.params.cloudDisabledReason,
-                  profileDisabledReason: props.params.cloudProfileDisabledReason,
-                  onSelect: props.params.onSelectCloudProfile,
-                }}
-              />
-              {view().showCloudSkeletons ? renderEnvironmentSkeletons("cloud") : undefined}
-              {view().showMissingCloud ? (
-                <SessionMenuItem
-                  item={{
-                    value: `cloud:${props.params.cloudProfileId}`,
-                    label: props.params.cloudProfileId,
-                    icon: <Icon name="cloud" />,
-                    description: t("newSession.catalogUnavailable"),
-                    compact: true,
-                    checked: true,
-                    disabled: true,
-                    title: t("newSession.catalogUnavailable"),
-                    onSelect: () => undefined,
-                  }}
-                  submitting={view().busy}
-                />
-              ) : undefined}
-              {!view().showLocal &&
-              view().devices.length === 0 &&
-              view().cloudProfiles.length === 0 &&
-              view().hosted.length === 0 &&
-              !view().showHostedSetup &&
-              !view().showMissingCloud &&
-              !view().showSuggestion &&
-              !view().showDeviceSkeletons &&
-              !view().showCloudSkeletons ? (
-                <div class="new-session-page__environment-empty" role="status">
-                  {t("newSession.environmentSearchEmpty")}
+                  <span class="session-menu__text">{t("newSession.autoDeviceChoose")}</span>
+                  <span class="session-menu__check" aria-hidden="true">
+                    {props.params.autoDevice ? <Icon name="check" /> : undefined}
+                  </span>
+                </button>
+                <div slot="content" class="new-session-page__environment-card">
+                  <strong>{t("newSession.autoDeviceChoose")}</strong>
+                  <div class="new-session-page__card-row">
+                    <span class="new-session-page__card-icon" aria-hidden="true">
+                      <Icon name="info" />
+                    </span>
+                    <span>{view().autoHelp}</span>
+                  </div>
                 </div>
-              ) : undefined}
-            </div>
+              </openclaw-tooltip>
+            ) : undefined}
+            {view().showLocal ? (
+              <SessionMenuItem
+                item={{
+                  value: "gateway",
+                  label: view().localName,
+                  icon: gatewayIcon,
+                  summary: t("newSession.runsOnGateway"),
+                  compact: true,
+                  checked: props.params.state.kind === "local",
+                  disabled: Boolean(props.params.hostDisabledReason),
+                  title: props.params.hostDisabledReason,
+                  onSelect: () => props.params.onSelectDevice(""),
+                }}
+                submitting={view().busy}
+              />
+            ) : undefined}
+            <For each={view().devices} keyed={(device) => device.deviceId}>
+              {(device) => {
+                const icon = <EnvironmentDeviceIcon device={device()} />;
+                const item = createMemo(() => {
+                  const current = device();
+                  return {
+                    value: `device:${current.deviceId}`,
+                    label: current.label,
+                    sub: current.subtitle,
+                    icon,
+                    platform: current.platform ? prettifyPlatform(current.platform) : undefined,
+                    capabilityLabels: environmentCapabilityLabels(current.capabilities),
+                    hideDetails: current.hideDetails,
+                    remediation: current.remediation,
+                    capacityLabel:
+                      current.selectable && current.workerSlots
+                        ? t("newSession.concurrentSessionsValue", {
+                            used: String(current.workerSlots.total - current.workerSlots.available),
+                            total: String(current.workerSlots.total),
+                          })
+                        : undefined,
+                    compact: true,
+                    checked:
+                      props.params.state.kind === "device" &&
+                      props.params.deviceId === current.deviceId,
+                    disabled: !current.selectable,
+                    title: current.disabledReason,
+                    onSelect: () => props.params.onSelectDevice(device().deviceId),
+                  };
+                });
+                return <SessionMenuItem item={item()} submitting={view().busy} />;
+              }}
+            </For>
+            {view().showDeviceSkeletons ? renderEnvironmentSkeletons("devices") : undefined}
+            {view().hosted.length || view().showHostedSetup ? (
+              <div class="new-session-page__environment-heading">
+                <span>{t("newSession.hosted")}</span>
+              </div>
+            ) : undefined}
+            {
+              <For each={view().hosted} keyed={(entry) => entry.id}>
+                {(entry) => (
+                  <SessionMenuItem
+                    item={{
+                      value: `runtime:${entry().id}`,
+                      label: entry().label,
+                      icon: <Icon name="cloud" />,
+                      compact: true,
+                      summary: t("newSession.hostedHint"),
+                      selectedSummary: entry().model,
+                      checked: props.params.state.hostedRuntimeId === entry().id,
+                      disabled: Boolean(entry().disabledReason),
+                      title: entry().disabledReason,
+                      onSelect: () => props.params.onSelectHostedEnvironment?.(entry().id),
+                    }}
+                    submitting={view().busy}
+                  />
+                )}
+              </For>
+            }
+            {view().showHostedSetup && props.params.hostedLoading ? (
+              <div role="status" class="new-session-page__environment-empty">
+                {t("common.loading")}
+              </div>
+            ) : view().showHostedSetup &&
+              !view().hosted.some((entry) => entry.id === "agentsapi") ? (
+              <a
+                class="session-menu__item new-session-page__environment-option"
+                href="https://docs.openclaw.ai/plugins/agentsapi"
+                target="_blank"
+                rel="noreferrer"
+                aria-description={t("newSession.hostedSetupHint")}
+              >
+                <span class="session-menu__icon">
+                  <Icon name="info" />
+                </span>
+                <span class="session-menu__text">{t("newSession.hostedSetup")}</span>
+              </a>
+            ) : undefined}
+            <Show
+              when={
+                view().cloudProfiles.length ||
+                view().showSuggestion ||
+                view().showMissingCloud ||
+                view().showCloudSkeletons
+              }
+            >
+              <EnvironmentHeading
+                label={t("newSession.cloud")}
+                action="manage-cloud-workers"
+                disabled={view().busy}
+                onAction={
+                  props.params.isAdmin && !view().showCloudSkeletons && !view().showSuggestion
+                    ? props.params.onManageCloudWorkers
+                    : undefined
+                }
+              />
+            </Show>
+            {view().showSuggestion ? (
+              <SessionMenuItem
+                item={{
+                  value: "suggested-cloud",
+                  label: t("newSession.cloud"),
+                  icon: <CloudProfileIcon profile={props.params.suggestedProfile} />,
+                  compact: true,
+                  checked: false,
+                  disabled: Boolean(props.params.cloudDisabledReason),
+                  title: props.params.cloudDisabledReason,
+                  onSelect: () => props.params.onAdoptSuggestedProfile?.(),
+                }}
+                submitting={view().busy}
+              />
+            ) : undefined}
+            <CloudProfileMenuItems
+              params={{
+                profiles: view().cloudProfiles,
+                selectedId: props.params.cloudProfileId,
+                selectedOs: props.params.state.selectedOsId,
+                selectedMachine: props.params.state.selectedMachineId,
+                onSelectOs: props.params.onSelectCloudOs,
+                onSelectMachine: props.params.onSelectCloudMachine,
+                submitting: view().busy,
+                compact: true,
+                disabled: Boolean(props.params.cloudDisabledReason),
+                disabledReason: props.params.cloudDisabledReason,
+                profileDisabledReason: props.params.cloudProfileDisabledReason,
+                onSelect: props.params.onSelectCloudProfile,
+              }}
+            />
+            {view().showCloudSkeletons ? renderEnvironmentSkeletons("cloud") : undefined}
+            {view().showMissingCloud ? (
+              <SessionMenuItem
+                item={{
+                  value: `cloud:${props.params.cloudProfileId}`,
+                  label: props.params.cloudProfileId,
+                  icon: <Icon name="cloud" />,
+                  description: t("newSession.catalogUnavailable"),
+                  compact: true,
+                  checked: true,
+                  disabled: true,
+                  title: t("newSession.catalogUnavailable"),
+                  onSelect: () => undefined,
+                }}
+                submitting={view().busy}
+              />
+            ) : undefined}
+            {!view().showLocal &&
+            view().devices.length === 0 &&
+            view().cloudProfiles.length === 0 &&
+            view().hosted.length === 0 &&
+            !view().showHostedSetup &&
+            !view().showMissingCloud &&
+            !view().showSuggestion &&
+            !view().showDeviceSkeletons &&
+            !view().showCloudSkeletons ? (
+              <div class="new-session-page__environment-empty" role="status">
+                {t("newSession.environmentSearchEmpty")}
+              </div>
+            ) : undefined}
           </div>
         </div>
-      </wa-popover>
-    </>
+      </div>
+    </SessionPicker>
   );
 }

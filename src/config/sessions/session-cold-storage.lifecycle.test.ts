@@ -28,11 +28,13 @@ import { buildConversationIdentity } from "./conversation-identity.js";
 import { resolveCurrentConversationSession } from "./conversation-registry.js";
 import {
   applySessionEntryLifecycleMutation,
+  createSessionEntryWithTranscript,
   forkSessionAtMessage,
   forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
   listSessionBranches,
   loadSessionEntry,
+  loadTranscriptEvents,
   loadTranscriptEventsSync,
   replaceSessionEntry,
   replaceSessionEntrySync,
@@ -51,6 +53,7 @@ import { applySessionEntryOperation } from "./session-accessor.sqlite-entry.js";
 import { forkSessionEntryFromParentTargetWithPatch } from "./session-accessor.sqlite-parent-session.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { trimSessionTranscriptForManualCompact } from "./session-accessor.transcript.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
@@ -63,6 +66,11 @@ import {
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { createManualCompactRecords } from "./transcript-message.test-support.js";
 import type { SessionEntry } from "./types.js";
+
+// mock-isolation: Explicit cold archival owns this suite; automatic age retention is tested separately.
+vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
+  kickSessionEntryMaintenanceAfterWrite: () => {},
+}));
 
 const tempDirs = createTempDirTracker();
 const stores: string[] = [];
@@ -87,6 +95,7 @@ let seed:
   | undefined;
 afterEach(async () => {
   vi.restoreAllMocks();
+  memorySessionActorOwners.reset();
   for (const storePath of stores.splice(0)) {
     await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: storePath });
   }
@@ -256,7 +265,7 @@ it.each([
   change: string;
   selectedRevision: string | undefined;
   patch: Partial<SessionEntry>;
-}[])("refuses native incognito compaction after $change", async ({ selectedRevision, patch }) => {
+}[])("refuses memory compaction after $change", async ({ selectedRevision, patch }) => {
   const agentId = "main";
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-incognito-compact-authority-") };
   const scope = {
@@ -266,17 +275,19 @@ it.each([
     sessionKey: "agent:main:dashboard:incognito-manual-compact",
     storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env }),
   };
-  stores.push(scope.storePath);
   const initialEntry = {
     sessionId: scope.sessionId,
     lifecycleRevision: selectedRevision,
     incognito: true as const,
     updatedAt: Date.now(),
   };
-  await replaceSessionEntry(scope, initialEntry);
   const records = createManualCompactRecords(scope.sessionId);
-  await replaceTranscriptEvents(scope, records);
-  replaceSessionEntrySync(scope, { ...initialEntry, ...patch });
+  await createSessionEntryWithTranscript(scope, () => ({
+    ok: true,
+    entry: initialEntry,
+    transcriptEvents: records,
+  }));
+  await replaceSessionEntry(scope, { ...initialEntry, ...patch });
   const entryBeforeCompact = loadSessionEntry(scope);
 
   await expect(
@@ -290,7 +301,7 @@ it.each([
     }),
   ).rejects.toThrow("Session changed before compaction. Retry.");
 
-  expect(loadTranscriptEventsSync(scope)).toEqual(records);
+  await expect(loadTranscriptEvents(scope)).resolves.toEqual(records);
   expect(loadSessionEntry(scope)).toEqual(entryBeforeCompact);
 });
 

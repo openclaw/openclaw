@@ -11,6 +11,7 @@ import type {
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
+import type { PreparedAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
@@ -98,6 +99,7 @@ type AgentHarnessLegacyAttemptResult = Omit<AgentHarnessCanonicalAttemptResult, 
 
 type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
+  | "thinkingExplicit"
   | "admittedRunContext"
   | "disableToolSearch"
   | "sessionReadScopeKey"
@@ -150,6 +152,7 @@ type AgentHarnessSettledTurnFinalizationParams<
 export type AgentHarnessSettledTurnFinalizationResult = {
   /** The single completed assistant answer produced by the isolated operation. */
   assistant: import("../../llm/types.js").AssistantMessage;
+  preparedTerminalReply?: PreparedAgentRunTerminalReply;
   /** Normalized usage for the finalization model call only. */
   usage?: import("../usage.js").NormalizedUsage;
   /** True when the harness already persisted the assistant into the application transcript. */
@@ -414,7 +417,7 @@ export type AgentHarnessSessionDeletionParams = {
 
 /**
  * Direct, unbound commit/rollback callbacks are deprecated and will be removed
- * in the next Plugin SDK major. Use createNativeSessionBindingLifecycleV2 for
+ * after an announced stable deprecation period. Use createNativeSessionBindingLifecycleV2 for
  * reversible stored bindings or createNativeSessionCommitFinalizer for
  * commit-only cleanup from openclaw/plugin-sdk/agent-harness-session-runtime.
  * Factory-produced participants remain supported by this contract.
@@ -477,6 +480,17 @@ export type AgentHarnessDescendantCancellationResult = {
   }>;
 };
 
+/** Activation-only native readiness check; it does not authorize a model turn. */
+type AgentHarnessSetupVerificationContext = {
+  config: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  workspaceDir: string;
+  signal: AbortSignal;
+  /** Revalidate the setup owner after awaits and before native I/O. */
+  assertCurrent: () => void;
+};
+
 type AgentHarnessContract<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
   TSideQuestionParams extends AgentHarnessSideQuestionParams = AgentHarnessSideQuestionParams,
@@ -504,6 +518,8 @@ type AgentHarnessContract<
    * host requirements.
    */
   contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
+  /** Native context management ignores OpenClaw Responses compaction tuning, not request policy. */
+  contextManagement?: "native";
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
   /** Core must reject containment this runtime cannot implement before invoking it. */
   executionEnvironment?: "host-only";
@@ -520,8 +536,15 @@ type AgentHarnessContract<
   conversationToolPolicyNativeTools?: readonly string[];
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   /**
+   * Verify a profileless, harness-owned setup candidate without a model turn.
+   * Resolve only after native credentials and the selected model are usable;
+   * throw on rejection. Core owns the resulting setup binding and rechecks it
+   * before activation. Other inference checks still execute a bounded turn.
+   */
+  verifySetup?(ctx: AgentHarnessSetupVerificationContext): Promise<void>;
+  /**
    * Synchronous private ownership read; no discovery, auth loading, or native connection setup.
-   * @deprecated Implement resolveSessionRuntimeOwnershipAsync; removed in the next Plugin SDK major.
+   * @deprecated Implement resolveSessionRuntimeOwnershipAsync. Supported through 2026-12-31.
    */
   resolveSessionRuntimeOwnership?(params: {
     config?: OpenClawConfig;

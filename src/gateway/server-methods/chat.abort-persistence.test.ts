@@ -69,7 +69,6 @@ vi.mock("../session-utils.js", async () => {
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...original,
-    loadSessionEntry: loadAbortSessionFixture,
     loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
       loadAbortSessionFixture(params.key, { agentId: params.agentId }),
   };

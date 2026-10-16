@@ -1,8 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
-import {
-  assertTransactionUsable,
-  runSqliteDeferredTransactionSync,
-} from "../../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -55,6 +53,7 @@ export function commitSessionLifecycleProjection(
       input.removalPlans,
       {
         resetScope: { agentId: input.agentId, path: database.path, env: options.env },
+        currentEntrySnapshot: publishActorEntry?.snapshot(),
         postimages,
         onArchived: (sessionKey, previous) => archivedPrevious.set(sessionKey, previous),
         onResetBoundary: ({
@@ -112,7 +111,7 @@ export function commitSessionLifecycleProjection(
         (plan) => plan.archivedEntries.length === 0 && plan.entryRemovals.length === 0,
       )
     ) {
-      publishActorEntry?.(postimages, candidate.publication);
+      publishActorEntry?.publish(postimages, candidate.publication);
     }
     const receipt = transferSessionEntryWorkerCandidate(database, admit, candidate);
     return receipt;
@@ -144,7 +143,7 @@ export type SessionLifecyclePlanningOperations = {
 /** Private planning commands borrow the executor's admitted connection. */
 export function bindSqliteWorkerBackend(
   binding: { agentId: string },
-  context: { database: DatabaseSync; databasePath: string },
+  context: { database: EngineConnection; databasePath: string },
 ): SqliteWorkerBackend<SessionLifecyclePlanningOperations> {
   const database = getOpenClawAgentDatabaseIfOpen({
     agentId: binding.agentId,
@@ -154,20 +153,26 @@ export function bindSqliteWorkerBackend(
   if (!database || database.db !== context.database || database.path !== context.databasePath) {
     throw new Error("Session lifecycle planning lost its canonical database owner");
   }
-  let closed = false;
-  const assertOpen = () => {
-    if (closed || !database.db.isOpen) {
-      throw new Error("Session lifecycle planning domain is closed");
-    }
-    assertTransactionUsable(database.db);
-  };
-  return {
+  return bindSqliteWorkerDatabase<SessionLifecyclePlanningOperations>(database.db, {
     execute(command) {
-      assertOpen();
       const prepare = () => {
         if (command.type === "prepare") {
           const input = command.input;
-          const store = readProjectedLifecycleStore(database, input);
+          const upsert = input.upserts[0];
+          const retained =
+            !input.allowCanonicalRepair &&
+            input.removals.length === 0 &&
+            input.upserts.length === 1 &&
+            upsert &&
+            !upsert.relatedSessionKeys?.length
+              ? prepareSessionActorEntryPatch(database, upsert.sessionKey.trim())?.snapshot()
+              : undefined;
+          // Related-parent builders still require their complete multi-entry projection.
+          const store =
+            retained &&
+            (upsert?.relatedSessionKeys === undefined || !retained.entry.parentSessionKey)
+              ? { [retained.sessionKey]: retained.entry }
+              : readProjectedLifecycleStore(database, input);
           const identity = readOpenClawAgentDatabaseIdentity(database).identity;
           return {
             store,
@@ -196,14 +201,5 @@ export function bindSqliteWorkerBackend(
         ? prepare()
         : runSqliteDeferredTransactionSync(database.db, prepare);
     },
-    assertSettled() {
-      assertOpen();
-      if (database.db.isTransaction) {
-        throw new Error("Session lifecycle planning left a transaction open");
-      }
-    },
-    close() {
-      closed = true;
-    },
-  };
+  });
 }

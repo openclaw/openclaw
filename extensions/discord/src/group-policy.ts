@@ -2,22 +2,22 @@ import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,
-  scopeKey,
   type GroupToolPolicyConfig,
   type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { DiscordConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAtHashSlug as normalizeDiscordSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
-
-// Length-prefixed segments keep arbitrary config keys, including slashes, collision-free.
-const guildScopeKey = (guildKey: string) => scopeKey(["guild", guildKey]);
-const channelScopeKey = (guildKey: string, channelKey: string) =>
-  scopeKey(["guild", guildKey], ["channel", channelKey]);
+import {
+  findDiscordChannelPolicyKey,
+  findDiscordGuildPolicyKey,
+  getDiscordChannelPolicyBinding,
+} from "./channel-policy-state.js";
 
 function resolveDiscordGuildKey(
   guilds: DiscordConfig["guilds"],
   groupSpace?: string | null,
+  accountId?: string | null,
 ): string | undefined {
   if (!guilds || Object.keys(guilds).length === 0) {
     return undefined;
@@ -25,6 +25,10 @@ function resolveDiscordGuildKey(
   const space = normalizeOptionalString(groupSpace) ?? "";
   if (space && guilds[space]) {
     return space;
+  }
+  const boundKey = findDiscordGuildPolicyKey(accountId, space);
+  if (boundKey !== undefined && guilds[boundKey]) {
+    return boundKey;
   }
   const normalized = normalizeDiscordSlug(space);
   if (normalized && guilds[normalized]) {
@@ -62,31 +66,42 @@ function resolveDiscordChannelKey(
   return groupChannel && channelEntries[channelSlug] ? channelSlug : undefined;
 }
 
-function resolveDiscordPolicyScope(params: ChannelGroupContext) {
+function resolveDiscordPolicyScope(params: ChannelGroupContext): {
+  tree: ScopeTree;
+  path: string[];
+} {
   const guilds =
     (params.accountId
       ? params.cfg.channels?.discord?.accounts?.[params.accountId]?.guilds
       : undefined) ?? params.cfg.channels?.discord?.guilds;
-  const tree: ScopeTree = { scopes: {} };
-  for (const [guildKey, guild] of Object.entries(guilds ?? {})) {
-    tree.scopes[guildScopeKey(guildKey)] = guild;
-    for (const [channelKey, channel] of Object.entries(guild.channels ?? {})) {
-      tree.scopes[channelScopeKey(guildKey, channelKey)] = channel;
-    }
-  }
   // Guild "*" is selected only after every guild candidate misses; matched guilds hide it.
   // Within the selected guild, channel fields still cascade to guild fields.
-  const guildKey = resolveDiscordGuildKey(guilds, params.groupSpace);
-  if (!guildKey) {
-    return { tree, path: [] };
+  const guildKey = resolveDiscordGuildKey(guilds, params.groupSpace, params.accountId);
+  const guild = guildKey ? guilds?.[guildKey] : undefined;
+  if (!guildKey || !guild) {
+    return { tree: { scopes: {} }, path: [] };
   }
-  const channelKey = resolveDiscordChannelKey(guilds?.[guildKey]?.channels, params);
+  const channels = guild.channels;
+  let channelKey = resolveDiscordChannelKey(channels, params);
+  if (channelKey !== params.groupId) {
+    // Resolved name keys bind to their channel id: the bound channel keeps its entry after a
+    // rename, and threads or other channels that share the name never select it.
+    const boundKey = params.groupId
+      ? findDiscordChannelPolicyKey(params.accountId, guildKey, params.groupId)
+      : undefined;
+    if (boundKey !== undefined && channels?.[boundKey]) {
+      channelKey = boundKey;
+    } else if (
+      channelKey !== undefined &&
+      getDiscordChannelPolicyBinding(params.accountId, guildKey, channelKey) !== undefined
+    ) {
+      channelKey = undefined;
+    }
+  }
+  const channel = channelKey !== undefined ? channels?.[channelKey] : undefined;
   return {
-    tree,
-    path: [
-      guildScopeKey(guildKey),
-      ...(channelKey !== undefined ? [channelScopeKey(guildKey, channelKey)] : []),
-    ],
+    tree: { scopes: { guild, ...(channel ? { channel } : {}) } },
+    path: channel ? ["guild", "channel"] : ["guild"],
   };
 }
 

@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import { runWithAgentToolSourceExecutionScope } from "../../agents/agent-tool-source-execution-guard.js";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -12,6 +17,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { runBeforeAgentReplyForTurn } from "../../plugins/before-agent-reply.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -25,8 +36,13 @@ import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
 const mocks = vi.hoisted(() => ({
   runSkillWorkshopReview: vi.fn(),
+  runEmbeddedAgent: vi.fn(),
   listWorkshopChanges: vi.fn(),
   postWorkshopChangeNotice: vi.fn(async () => {}),
+}));
+vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/embedded-agent.js")>()),
+  runEmbeddedAgent: mocks.runEmbeddedAgent,
 }));
 vi.mock("./review-run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./review-run.js")>()),
@@ -53,6 +69,98 @@ afterEach(async () => {
 });
 
 describe("runSkillExperienceReview", () => {
+  it("yields an in-flight review when interactive work starts", async () => {
+    const candidate = await createExperienceReviewCandidate(
+      "review-yield",
+      [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
+      { workspaceDir: state.workspaceDir, modelId: "gpt-test" },
+    );
+    setRuntimeConfigSnapshot(candidate.config);
+    const review = await vi.importActual<{ runSkillWorkshopReview: typeof runSkillWorkshopReview }>(
+      "./review-run.js",
+    );
+    mocks.runSkillWorkshopReview.mockImplementation(review.runSkillWorkshopReview);
+    const ownHandle = createEmbeddedRunHandle();
+    const interactiveHandle = createEmbeddedRunHandle({ abort: vi.fn() });
+    mocks.runEmbeddedAgent.mockImplementation(
+      async (params: Parameters<typeof runSkillWorkshopReview>[0]) => {
+        setActiveEmbeddedRun(params.sessionId, ownHandle, params.sessionKey);
+        try {
+          expect(params.abortSignal?.aborted).toBe(false);
+          setActiveEmbeddedRun("interactive-session", interactiveHandle, "agent:other:interactive");
+          expect(params.abortSignal?.aborted).toBe(true);
+          expect(interactiveHandle.abort).not.toHaveBeenCalled();
+          return { meta: { durationMs: 1, aborted: true } };
+        } finally {
+          clearActiveEmbeddedRun("interactive-session", interactiveHandle);
+          clearActiveEmbeddedRun(params.sessionId, ownHandle);
+        }
+      },
+    );
+    try {
+      await expect(runSkillExperienceReview(candidate)).rejects.toThrow("yielded to foreground");
+      expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
+    } finally {
+      mocks.runEmbeddedAgent.mockReset();
+    }
+  });
+
+  it("does not dispatch user reply hooks for a detached experience review", async () => {
+    const candidate = await createExperienceReviewCandidate(
+      "review-user-reply-hook",
+      [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
+      { workspaceDir: state.workspaceDir, modelId: "gpt-test" },
+    );
+    setRuntimeConfigSnapshot(candidate.config);
+    const handler = vi.fn(() => ({ handled: true }));
+    const reviewModel = vi.fn(() => ({ meta: { durationMs: 1 } }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_agent_reply", handler, eligibleTriggers: ["user"] },
+      ]),
+    );
+    try {
+      // Prove the registered hook can claim the foreground turn before reviewing it.
+      await expect(
+        runBeforeAgentReplyForTurn({
+          runId: "review-user-reply-hook",
+          trigger: candidate.ctx.foregroundPromptContext.trigger,
+          event: { cleanedBody: "Remember the verified procedure." },
+          context: { sessionKey: candidate.source.sessionKey },
+        }),
+      ).resolves.toEqual({ handled: true });
+      expect(handler).toHaveBeenCalledOnce();
+      handler.mockClear();
+
+      const review = await vi.importActual<{
+        runSkillWorkshopReview: typeof runSkillWorkshopReview;
+      }>("./review-run.js");
+      mocks.runSkillWorkshopReview.mockImplementation(review.runSkillWorkshopReview);
+      mocks.runEmbeddedAgent.mockImplementation(
+        async (params: Parameters<typeof runSkillWorkshopReview>[0]) => {
+          const admitted = await params.preparedRunAdmission.admit("embedded");
+          const hookResult = await runBeforeAgentReplyForTurn({
+            runId: params.runId,
+            trigger: params.trigger,
+            event: { cleanedBody: params.prompt },
+            context: { sessionKey: params.sessionKey, sessionId: params.sessionId },
+            assertCurrent: resolveAdmittedRunActiveAssertion(admitted, params.abortSignal),
+          });
+          return hookResult?.handled ? { meta: { durationMs: 1 } } : reviewModel();
+        },
+      );
+
+      await runSkillExperienceReview(candidate);
+
+      expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(handler).not.toHaveBeenCalled();
+      expect(reviewModel).toHaveBeenCalledOnce();
+    } finally {
+      mocks.runEmbeddedAgent.mockReset();
+      resetGlobalHookRunner();
+    }
+  });
+
   it("announces changes committed before the review run failed", async () => {
     const workspaceDir = state.workspaceDir;
     const candidate = await createExperienceReviewCandidate(

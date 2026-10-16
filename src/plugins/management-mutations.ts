@@ -14,7 +14,6 @@ import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { isDefaultClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { reportClawHubPluginInstallTelemetry } from "../infra/clawhub-packages.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { shortenHomePath } from "../utils.js";
 import {
@@ -199,6 +198,9 @@ export async function installManagedPlugin(
           },
         },
         onCapabilityConsent: params.onCapabilityConsent,
+        requireCapabilityConsent: params.clawManaged === true,
+        requireClawHubTrust: params.clawManaged === true,
+        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         beforePersistentEffect: params.beforePersistentEffect,
         ...(params.request.acknowledgeCapabilities
           ? { acknowledgeCapabilities: params.request.acknowledgeCapabilities }
@@ -221,14 +223,6 @@ export async function installManagedPlugin(
       try {
         warnings.push(...(installed.warnings ?? []));
         if (params.request.source === "clawhub" && installed.clawhub) {
-          if (!params.clawManaged && installed.clawhub.version) {
-            await markClawPackageIndependentlyOwned({
-              kind: "plugin",
-              source: "clawhub",
-              ref: installed.clawhub.clawhubPackage,
-              version: installed.clawhub.version,
-            });
-          }
           await reportClawHubPluginInstallTelemetry({
             baseUrl: installed.clawhub.clawhubUrl,
             packageName: installed.clawhub.clawhubPackage,

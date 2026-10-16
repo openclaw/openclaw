@@ -14,6 +14,7 @@ import { retainPreparedPluginGeneration } from "../../agents/prepared-model-runt
 import { registerPreparedModelRuntimePublicationListener } from "../../agents/prepared-model-runtime.publication-events.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import * as updateStartup from "../../infra/update-startup.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import * as pricing from "../../model-catalog/pricing.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../../model-catalog/remote-overlay.test-support.js";
 import { refreshRemoteModelCatalog } from "../../model-catalog/remote-refresh.js";
@@ -129,6 +130,11 @@ it.for([1, 2])(
         replyProvider(response);
       }
     });
+    let phase = "fixture setup";
+    const reportInterruptedPhase = () => {
+      console.warn(`[remote-catalog-test] v${schemaVersion} interrupted during ${phase}`);
+    };
+    signal.addEventListener("abort", reportInterruptedPhase, { once: true });
     try {
       endpoint.listen(0, "127.0.0.1");
       await once(endpoint, "listening");
@@ -211,7 +217,12 @@ it.for([1, 2])(
         },
       });
       setRemoteModelCatalogOverlaySourcesForTest({ bundledGeneratedAt });
-      expect((await refresh()).status).toBe("updated");
+      phase = "initial catalog refresh";
+      const initialRefresh = await refresh();
+      expect(initialRefresh.status, redactSensitiveText(JSON.stringify(initialRefresh))).toBe(
+        "updated",
+      );
+      phase = "Gateway startup";
       const { client, server } = await startGatewayWithClient({
         cfg,
         configPath: state.configPath,
@@ -232,6 +243,7 @@ it.for([1, 2])(
         return result;
       });
       try {
+        phase = "Gateway startup settlement";
         await server.startupSettled;
         const list = (refreshCatalog = false) =>
           client.request<ModelsListResult>("models.list", { view: "all", refresh: refreshCatalog });
@@ -280,6 +292,7 @@ it.for([1, 2])(
             expect(outcome.error).toMatchObject({ code: "UNAVAILABLE" });
           }
         };
+        phase = "initial catalog publication";
         expect(kimiIds(await list(true))).toContain("remote-first");
         // Remote rows can precede executable provider publication; admit only its completed pair.
         await waitForRows(
@@ -297,6 +310,7 @@ it.for([1, 2])(
           agentDir: state.agentDir(),
           workspaceDir: state.workspaceDir,
         };
+        phase = "retained runtime and catalog replacement";
         await using oldRun = await acquireAgentRunPreparedModelRuntime(input, {
           catalogMode: "static",
         });
@@ -426,6 +440,7 @@ it.for([1, 2])(
         ).toBe(7);
 
         const committedThread = providerThread;
+        phase = "catalog worker recovery";
         exitWorkerOnce = true;
         await settleInterrupted(list(true));
         await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
@@ -469,6 +484,7 @@ it.for([1, 2])(
         ).toBe(7);
 
         const beforeDisable = await client.request<{ hash: string }>("config.get", {});
+        phase = "catalog disablement";
         await client.request("config.patch", {
           baseHash: beforeDisable.hash,
           raw: JSON.stringify({ models: { catalogRefresh: { enabled: false } } }),
@@ -489,17 +505,20 @@ it.for([1, 2])(
         expect([oldModel.cost.input, newModel.cost.input]).toEqual([1, 7]);
         expect(unexpectedRestart).not.toHaveBeenCalled();
       } finally {
+        phase = "Gateway cleanup";
         commit.resolve();
         await disconnectGatewayClient(client);
         await server.close();
       }
     } finally {
+      phase = "fixture cleanup";
       endpoint.closeAllConnections();
       await new Promise<void>((resolve) => {
         endpoint.close(() => resolve());
       });
       setRemoteModelCatalogOverlaySourcesForTest();
       await state.cleanup();
+      signal.removeEventListener("abort", reportInterruptedPhase);
     }
   },
 );

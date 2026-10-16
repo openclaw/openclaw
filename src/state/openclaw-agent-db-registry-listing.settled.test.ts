@@ -8,7 +8,11 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "./openclaw-agent-db-registry-listing.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import {
+  listOpenClawRegisteredAgentDatabasesAsync,
+  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
+} from "./openclaw-agent-db-registry-listing.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -42,6 +46,30 @@ function createRegistry(malformed: boolean) {
   closeOpenClawStateDatabaseForTest();
   return options;
 }
+
+it("loads runtime registry rows off thread and observes committed registration changes", async () => {
+  const options = createRegistry(false);
+  const target = {
+    agentId: "worker",
+    path: path.join(options.env.OPENCLAW_STATE_DIR, "agents/worker/agent/openclaw-agent.sqlite"),
+    env: options.env,
+  };
+  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+  expect(await listOpenClawRegisteredAgentDatabasesAsync(options)).toEqual([]);
+  expect(prepare).not.toHaveBeenCalled();
+
+  registerOpenClawAgentDatabase(target);
+  prepare.mockClear();
+  expect(await listOpenClawRegisteredAgentDatabasesAsync(options)).toMatchObject([
+    { agentId: target.agentId, path: target.path },
+  ]);
+  expect(prepare).not.toHaveBeenCalled();
+
+  unregisterOpenClawAgentDatabase(target);
+  prepare.mockClear();
+  expect(await listOpenClawRegisteredAgentDatabasesAsync(options)).toEqual([]);
+  expect(prepare).not.toHaveBeenCalled();
+});
 
 it("discovers the published registry across overlapping creation and deletion", async () => {
   const options = createRegistry(false);
@@ -88,7 +116,7 @@ it("reuses registry admission across writes and unrelated pending migrations", (
       readRegisteredAgentDatabaseRows(db, options.path, artifactPreserving),
     );
   const probes = trackSqliteStatementExecutions(
-    db,
+    requireNativeSqliteDatabase(db),
     ["legacyWatches", "auditSchema", "registryCatalog"],
     (sql) =>
       sql.includes('from "session_watch_cursors"')
@@ -136,7 +164,12 @@ it("refuses a pending migration that changes agent database registry paths", () 
   db.exec(`PRAGMA user_version = 8;
     UPDATE schema_meta SET schema_version = 8;
     DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion';`);
-  expect(detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, options.path)).toContainEqual({
+  expect(
+    detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
+      requireNativeSqliteDatabase(db),
+      options.path,
+    ),
+  ).toContainEqual({
     kind: "agent-databases-relative-paths-v9",
     path: options.path,
   });
@@ -206,7 +239,7 @@ it.each([false, true])(
     try {
       readOpenClawStateReadOnlyLocation(
         ({ db }) => {
-          retained = db;
+          retained = requireNativeSqliteDatabase(db);
           const closeSpy = vi.spyOn(db, "close").mockImplementation(() => {
             throw failure;
           });

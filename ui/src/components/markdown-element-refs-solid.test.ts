@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../lit/presentation-binding.ts";
+import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../lib/presentation.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { linkReaderPrefetchRef, markdownBlocksRef } from "./markdown-element-refs-solid.ts";

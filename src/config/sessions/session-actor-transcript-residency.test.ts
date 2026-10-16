@@ -34,7 +34,9 @@ import {
   prepareSessionColdBatchInWorker,
   prepareSessionColdRestoreInWorker,
 } from "./session-cold-storage-worker.js";
+import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
+import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
 
 // mock-isolation: The fixture owns its database and transcript maintenance lifetime.
@@ -105,7 +107,7 @@ function contextFixture(f: Fixture) {
       },
     });
     const hot = f.read();
-    expect(replica.beginRead().install(hot)).toBe(true);
+    expect(replica.beginRead()(hot)).toBe(true);
     const retained = seedSessionActorTranscriptContext(
       undefined,
       hot,
@@ -127,6 +129,12 @@ function contextFixture(f: Fixture) {
         { entryIds: ["question", "answer"], includeWatermark: true },
       );
     },
+    canonicalAnchors() {
+      return readSessionTranscriptAnchorFactsInDatabase(f.database, f.scope, {
+        entryIds: ["question", "answer"],
+        includeWatermark: true,
+      });
+    },
     summary() {
       return readActivitySummaryBatchFromReplica({ scope: f.scope });
     },
@@ -139,6 +147,222 @@ function contextFixture(f: Fixture) {
     },
   };
 }
+
+it("keeps settled append bodies in receipts and storage without evicting navigation", async () => {
+  await withActor((f) => {
+    replace(f);
+    const other = { ...f.target, sessionKey: "agent:main:other-resident" };
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      writeSessionEntry(f.database, other.sessionKey, { sessionId: "other", updatedAt: 1 });
+    });
+    const warn = vi.fn();
+    f.hooks.transactionOptions = { logger: { warn }, slowTransactionHoldMs: 0 };
+    const events = Array.from({ length: 6 }, (_, index) => ({
+      type: "custom",
+      id: `large-metadata-${index}`,
+      parentId: index === 0 ? "answer" : `large-metadata-${index - 1}`,
+      timestamp: "2026-01-01T00:00:03Z",
+      customType: "openclaw.cache-ttl",
+      data: { snapshot: "synthetic".repeat(180_000) },
+    }));
+    for (const [index, event] of events.entries()) {
+      const outcome = f.mutate({
+        type: "session.actor.appendTranscriptEvent",
+        input: {
+          target: f.target,
+          commandId: event.id,
+          phaseId: "turn",
+          sessionId: f.scope.sessionId,
+          lifecycleRevision: null,
+          eventJson: JSON.stringify(event),
+        },
+      });
+      expect(outcome.kind).toBe("committed");
+      expect(warn).toHaveBeenLastCalledWith(
+        "slow SQLite transaction hold",
+        expect.objectContaining({
+          operation: "session.actor.appendTranscriptEvent",
+          context: {
+            payloadBytes: Buffer.byteLength(JSON.stringify(event)),
+            actorResident: index > 0,
+            actorTranscriptEvents: 3 + index,
+            actorActiveEvents: 2 + index,
+            actorReadMs: expect.any(Number),
+            actorApplyMs: expect.any(Number),
+            actorProjectionMs: expect.any(Number),
+            actorReceiptMs: expect.any(Number),
+            actorReceiptBytes: expect.any(Number),
+          },
+        }),
+      );
+      if (outcome.kind === "committed") {
+        expect(outcome.receipt.transcript.appendedEvents?.[0]?.event).toEqual(event);
+      }
+    }
+    const expectedBytes = [...transcript(f), ...events].reduce(
+      (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
+      0,
+    );
+    const reads = trackSqliteStatementExecutions(f.database.db, ["history"], (sql) =>
+      /^\s*select\b/iu.test(sql) && sql.includes('"transcript_events"') ? "history" : null,
+    );
+    let warm;
+    try {
+      f.read(other);
+      reads.counts.history = 0;
+      warm = f.read();
+      expect(reads.counts.history).toBe(0);
+      expect(warm.transcript.projection?.contextMetadata).toBeUndefined();
+    } finally {
+      reads.restore();
+    }
+    expect(
+      readTranscriptEventRows(f.database, f.scope.sessionId).map((row) =>
+        JSON.parse(row.eventJson),
+      ),
+    ).toEqual([...transcript(f), ...events]);
+    f.restartActor();
+    const cold = f.read();
+    expect(cold.transcript.modelContext).toEqual(warm.transcript.modelContext);
+    expect(cold.transcript.projection?.contextMetadata).toBeUndefined();
+    expect(
+      readSessionTranscriptBoundedActiveContextCore(f.scope, {
+        maxBytes: expectedBytes,
+        maxEvents: 100,
+      }).serializedBytes,
+    ).toBe(expectedBytes);
+  });
+});
+
+it.each(["warm", "restarted"] as const)(
+  "preserves tree cursors and complete append bodies in a %s actor",
+  async (residency) => {
+    await withActor((f) => {
+      const replayMessage = { ...question.message, idempotencyKey: "cursor-probe" };
+      const initial = transcript(f);
+      initial[1] = { ...question, message: replayMessage };
+      runSqliteImmediateTransactionSync(f.database.db, () => {
+        replaceSqliteTranscriptEventsInTransaction(f.database, f.scope, initial);
+      });
+      f.read();
+      const appendEvent = (event: Record<string, unknown> & { id: string }) => {
+        const outcome = f.mutate({
+          type: "session.actor.appendTranscriptEvent",
+          input: {
+            target: f.target,
+            commandId: event.id,
+            phaseId: "turn",
+            sessionId: f.scope.sessionId,
+            lifecycleRevision: null,
+            eventJson: JSON.stringify(event),
+          },
+        });
+        expect(outcome).toMatchObject({
+          kind: "committed",
+          receipt: { transcript: { appendedEvents: [{ event }] } },
+        });
+      };
+      let command = 0;
+      const appendMessage = (message: typeof replayMessage) => {
+        if (residency === "restarted") {
+          f.restartActor();
+        }
+        return f.mutate({
+          type: "session.actor.appendToolResult",
+          input: {
+            target: f.target,
+            commandId: `message-${command++}`,
+            phaseId: "turn",
+            append: {
+              kind: "message",
+              input: { scope: f.scope, messageJson: JSON.stringify(message), cwd: "/synthetic" },
+            },
+          },
+        });
+      };
+      const expectVisibleTail = (entryId: string) => {
+        expect(appendMessage(replayMessage)).toMatchObject({
+          kind: "committed",
+          value: {
+            kind: "message",
+            value: {
+              snapshot: {
+                ok: true,
+                value: {
+                  result: { appended: false, messageId: "question", message: replayMessage },
+                  visibleTail: { entryId },
+                },
+              },
+            },
+          },
+        });
+      };
+      const side = {
+        type: "custom",
+        id: "side",
+        parentId: "answer",
+        appendMode: "side",
+        customType: "synthetic-side-state",
+        data: { body: "Preserve the entire side payload. ".repeat(100) },
+      };
+      appendEvent(side);
+      expectVisibleTail("answer");
+      const leaf = {
+        type: "leaf",
+        id: "selected-leaf",
+        parentId: "side",
+        targetId: "question",
+        appendParentId: "answer",
+      };
+      appendEvent(leaf);
+      expectVisibleTail("question");
+      const continued = {
+        ...replayMessage,
+        content: "Continue the selected branch",
+        idempotencyKey: "continued",
+      };
+      expect(appendMessage(continued)).toMatchObject({
+        kind: "committed",
+        receipt: {
+          transcript: { appendedEvents: [{ event: { parentId: "answer", message: continued } }] },
+        },
+      });
+      const parentless = {
+        type: "custom",
+        id: "parentless",
+        customType: "synthetic-parentless-state",
+        data: { body: "Keep the missing parent field and this payload" },
+      };
+      appendEvent(parentless);
+      expectVisibleTail("parentless");
+      const following = {
+        ...replayMessage,
+        content: "Follow the parentless entry",
+        idempotencyKey: "following",
+      };
+      expect(appendMessage(following)).toMatchObject({
+        kind: "committed",
+        receipt: {
+          transcript: {
+            appendedEvents: [{ event: { parentId: "parentless", message: following } }],
+          },
+        },
+      });
+      expect(
+        readTranscriptEventRows(f.database, f.scope.sessionId).map((row) =>
+          JSON.parse(row.eventJson),
+        ),
+      ).toEqual([
+        ...initial,
+        side,
+        leaf,
+        expect.objectContaining({ type: "message", parentId: "answer", message: continued }),
+        parentless,
+        expect.objectContaining({ type: "message", parentId: "parentless", message: following }),
+      ]);
+    });
+  },
+);
 
 it("advances retained context through native actor appends and preserves it through bookkeeping", async () => {
   await withActor(async (f) => {
@@ -219,7 +443,10 @@ it("advances retained context through native actor appends and preserves it thro
         ),
       ).toBe(true);
       expect(context.read()?.snapshot.events).toHaveLength(5);
-      expect(context.anchors()?.watermark).toEqual(context.replica.read()!.transcript.watermark);
+      expect(context.anchors()).toBeUndefined();
+      expect(context.canonicalAnchors().watermark).toEqual(
+        context.replica.read()!.transcript.watermark,
+      );
       expect(context.summary()?.page.events).toHaveLength(4);
       expect(context.summary()?.page.events.at(-1)?.event).toMatchObject({
         id: "next-answer",
@@ -273,7 +500,8 @@ it("settles a resident correlation rewrite once and leaves rollback payloads unc
       runSqliteImmediateTransactionSync(f.database.db, rewrite);
       expect(publications).toHaveLength(1);
       expect(context.read()?.snapshot.events).toEqual([transcript(f)[0], rewritten, answer]);
-      expect(context.anchors()?.anchors.map((anchor) => anchor.entryId)).toEqual([
+      expect(context.anchors()).toBeUndefined();
+      expect(context.canonicalAnchors().anchors.map((anchor) => anchor.entryId)).toEqual([
         "question",
         "answer",
       ]);
@@ -337,7 +565,8 @@ it("invalidates retained context for nonactor content and topology writer classe
         replace(f);
         const before = context.seed();
         expect(context.read()?.snapshot.events).toEqual(transcript(f));
-        expect(context.anchors()?.anchors.map((anchor) => anchor.entryId)).toEqual([
+        expect(context.anchors()).toBeUndefined();
+        expect(context.canonicalAnchors().anchors.map((anchor) => anchor.entryId)).toEqual([
           "question",
           "answer",
         ]);
@@ -418,7 +647,7 @@ it("invalidates retained context for nonactor content and topology writer classe
         } else {
           expect(after.transcript.version.rawSeq).toBe(before.transcript.version.rawSeq! + 1);
         }
-        expect(context.replica.beginRead().install(after), change).toBe(true);
+        expect(context.replica.beginRead()(after), change).toBe(true);
         expect(context.read(), change).toBeUndefined();
         if (change === "rewrite" || change === "rewind" || change === "compaction") {
           const scope = { ...f.scope, sessionId: after.entry!.sessionId };
@@ -466,6 +695,12 @@ it("drops retained context on cold archival and leaves restoration to a fresh bo
     try {
       context.seed();
       const databaseOptions = { agentId: "main", path: f.database.path };
+      const readColdMetadata = () =>
+        readRetainedSessionEntryFacts(databaseOptions, {
+          sessionKeys: [f.target.sessionKey],
+          includeColdMetadata: true,
+        });
+      expect(readColdMetadata()?.coldArchives).toEqual([]);
       const beforeMs = Date.UTC(2030, 0, 1);
       const prepared = await prepareSessionColdBatchInWorker({
         databaseOptions,
@@ -495,6 +730,9 @@ it("drops retained context on cold archival and leaves restoration to a fresh bo
       expect(context.read()).toBeUndefined();
       expect(context.anchors()).toBeUndefined();
       expect(context.summary()).toBeUndefined();
+      expect(readColdMetadata()).toBeUndefined();
+      expect(context.replica.beginRead()(f.read())).toBe(true);
+      expect(readColdMetadata()).toBeUndefined();
       const plan = {
         kind: "cold-restore" as const,
         databaseOptions,
@@ -508,9 +746,12 @@ it("drops retained context on cold archival and leaves restoration to a fresh bo
       expect(context.read()).toBeUndefined();
       expect(context.anchors()).toBeUndefined();
       expect(context.summary()).toBeUndefined();
+      expect(readColdMetadata()).toBeUndefined();
       context.seed();
+      expect(readColdMetadata()?.coldArchives).toEqual([]);
       expect(context.read()?.snapshot.events).toEqual(transcript(f));
-      expect(context.anchors()?.anchors.map((anchor) => anchor.entryId)).toEqual([
+      expect(context.anchors()).toBeUndefined();
+      expect(context.canonicalAnchors().anchors.map((anchor) => anchor.entryId)).toEqual([
         "question",
         "answer",
       ]);

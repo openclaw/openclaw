@@ -172,9 +172,15 @@ databases and reports `state-migrated-no-rollback` with the snapshot location an
 Doctor recovery guidance. Without Doctor write evidence, rollback requires the
 last verified database generations to remain unchanged.
 Snapshot capture first settles local SQLite writers under maintenance ownership,
-so later writer shutdown is not mistaken for intervening writes. The installed
+so later writer shutdown is not mistaken for intervening writes. Under that
+ownership, capture copies each database file family privately instead of opening
+the source, so WAL files left by an exited writer are not mistaken for a change
+during capture. The installed
 updater owns this ordering; staging a newer candidate cannot change an
 already-running older updater.
+While those fingerprints are tracked, the new version's Doctor also reads databases
+through private copies for its schema checks. A Doctor that fails before writing
+therefore leaves the snapshots restorable, and the package rolls back.
 On Windows, an eligible capture first runs the same native SQLite exclusion check
 used by rollback. This settles any retained WAL before recording write fingerprints,
 so later check cleanup is not mistaken for another writer. If another connection
@@ -378,9 +384,10 @@ and use of your own account/tokens. Only an affirmative Yes proceeds. Enter, `n`
 cancellation, or 30 seconds without an answer skips the launch, prints a manual
 recovery command, and preserves diagnostics and the failed update's exit status.
 Explicit `openclaw triage` does not ask for this confirmation.
-JSON, `--yes`, and non-interactive update invocations can start one owned automatic
-repair after an eligible failure; other failures retain diagnostics and handoff
-commands. For diagnostic collection
+JSON, `--yes`, and update invocations without a TTY never start a repair agent.
+They save diagnostics and print `openclaw triage --run --update-result <path>`
+for explicit opt-in repair. Managed handoffs and foreground `gateway run` startup
+failures also collect diagnostics only. For diagnostic collection
 alone, use `openclaw triage --non-interactive`; add `--update-result <path>` to
 include a saved update-failure artifact. See [Triage](/cli/triage) for command
 formatting and installation targeting.

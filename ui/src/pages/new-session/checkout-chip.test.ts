@@ -1,6 +1,7 @@
 import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resolveCheckoutChip, type CheckoutChipOptions } from "./checkout-chip.ts";
 import { CheckoutChip } from "./checkout-chip.tsx";
 
@@ -135,12 +136,24 @@ describe("Checkout chip state", () => {
   it.each([
     { worktree: false, remotePlacement: false, repository: false },
     { worktree: true, remotePlacement: false, repository: false },
+    {
+      worktree: true,
+      remotePlacement: false,
+      repository: false,
+      currentCheckoutUnavailableReason: "Use an isolated worktree for this project and agent",
+    },
     { worktree: true, remotePlacement: true, repository: false },
     { worktree: false, remotePlacement: true, repository: true },
     { worktree: false, remotePlacement: true, repository: true, emptyBranches: true },
   ])(
     "offers explicit checkout choices (worktree=$worktree, remote=$remotePlacement, emptyBranches=$emptyBranches)",
-    ({ worktree, remotePlacement, repository, emptyBranches }) => {
+    async ({
+      worktree,
+      remotePlacement,
+      repository,
+      emptyBranches,
+      currentCheckoutUnavailableReason,
+    }) => {
       const onSelectWorktree = vi.fn();
       const onBaseRefInput = vi.fn();
       const onWorktreeNameInput = vi.fn();
@@ -148,6 +161,7 @@ describe("Checkout chip state", () => {
       const { container } = mountCheckout({
         state: { label: worktree ? "New worktree from main" : "feature" },
         remotePlacement,
+        currentCheckoutUnavailableReason,
         repository,
         folderLabel: "OpenClaw",
         worktree,
@@ -168,8 +182,6 @@ describe("Checkout chip state", () => {
         submitting: false,
         pendingPlacement: false,
         popoverOpen: true,
-        popoverHiding: false,
-        onGuardTransition: () => undefined,
         onPopoverShow: () => undefined,
         onPopoverHide: () => undefined,
         onPopoverAfterHide: () => undefined,
@@ -178,6 +190,14 @@ describe("Checkout chip state", () => {
         onWorktreeNameInput,
         onConfirm,
       });
+
+      await waitForSolid(() =>
+        expect(
+          container
+            .querySelector(".new-session-page__checkout-popover")
+            ?.getAttribute("data-phase"),
+        ).toBe("open"),
+      );
 
       if (worktree || repository) {
         const baseRef = container.querySelector("input")!;
@@ -202,7 +222,9 @@ describe("Checkout chip state", () => {
         inputs[0]!.dispatchEvent(new Event("input", { bubbles: true }));
         expect(onBaseRefInput).toHaveBeenCalledWith("release/next");
         inputs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-        container.querySelector("wa-popover")!.dispatchEvent(new CustomEvent("wa-after-hide"));
+        container
+          .querySelector(".new-session-page__checkout-popover")!
+          .dispatchEvent(new CustomEvent("overlay-after-hide"));
         expect(onConfirm).toHaveBeenCalledOnce();
         expect(container.textContent).toContain(
           "Clones OpenClaw on the selected runner. No Gateway checkout is created.",
@@ -214,10 +236,15 @@ describe("Checkout chip state", () => {
       const isolated = container.querySelector<HTMLButtonElement>('[data-value="worktree"]')!;
       expect(current.textContent).toContain("Current checkout");
       expect(current.querySelector(".session-menu__sub")?.textContent).toBe("feature");
+      expect(current.querySelector(".session-menu__description")?.textContent).toBe(
+        currentCheckoutUnavailableReason,
+      );
       expect(current.getAttribute("aria-pressed")).toBe(String(!worktree));
-      expect(current.disabled).toBe(remotePlacement);
+      expect(current.disabled).toBe(remotePlacement || Boolean(currentCheckoutUnavailableReason));
       expect(current.getAttribute("title")).toBe(
-        remotePlacement ? "Devices and cloud run in a worktree" : null,
+        remotePlacement
+          ? "Devices and cloud run in a worktree"
+          : (currentCheckoutUnavailableReason ?? null),
       );
       expect(isolated.textContent).toContain("New worktree");
       expect(isolated.textContent).toContain("Isolated copy of the repo");
@@ -228,7 +255,9 @@ describe("Checkout chip state", () => {
       expect(isolated.hasAttribute("data-popover")).toBe(false);
       current.click();
       isolated.click();
-      expect(onSelectWorktree.mock.calls).toEqual(remotePlacement ? [[true]] : [[false], [true]]);
+      expect(onSelectWorktree.mock.calls).toEqual(
+        remotePlacement || currentCheckoutUnavailableReason ? [[true]] : [[false], [true]],
+      );
 
       const fields = container.querySelectorAll<HTMLLabelElement>(".new-session-page__menu-field");
       expect(fields).toHaveLength(worktree ? 2 : 0);
@@ -269,14 +298,26 @@ describe("Checkout chip state", () => {
         (suggestions[1] as HTMLButtonElement).click();
         expect(onBaseRefInput).toHaveBeenLastCalledWith("release/next");
         name.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-        container.querySelector("wa-popover")!.dispatchEvent(new CustomEvent("wa-after-hide"));
+        container
+          .querySelector(".new-session-page__checkout-popover")!
+          .dispatchEvent(new CustomEvent("overlay-after-hide"));
         expect(onConfirm).toHaveBeenCalledOnce();
+        container.querySelector<HTMLButtonElement>("#new-session-checkout-trigger")!.click();
+        await waitForSolid(() =>
+          expect(
+            container
+              .querySelector(".new-session-page__checkout-popover")
+              ?.getAttribute("data-phase"),
+          ).toBe("open"),
+        );
         baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
         const branchWrites = onBaseRefInput.mock.calls.length;
         name.dispatchEvent(
           new KeyboardEvent("keydown", { key: "Enter", cancelable: true, bubbles: true }),
         );
-        container.querySelector("wa-popover")!.dispatchEvent(new CustomEvent("wa-after-hide"));
+        container
+          .querySelector(".new-session-page__checkout-popover")!
+          .dispatchEvent(new CustomEvent("overlay-after-hide"));
         expect(onBaseRefInput).toHaveBeenCalledTimes(branchWrites);
         expect(onConfirm).toHaveBeenCalledTimes(2);
         expect(container.textContent).toContain(
@@ -291,7 +332,7 @@ describe("Checkout chip state", () => {
     },
   );
 
-  it("shows the actual branch name and only confirms valid input", () => {
+  it("shows the actual branch name and only confirms valid input", async () => {
     const onConfirm = vi.fn();
     const onPopoverShow = vi.fn();
     const onPopoverHide = vi.fn();
@@ -313,8 +354,6 @@ describe("Checkout chip state", () => {
       submitting: false,
       pendingPlacement: false,
       popoverOpen: true,
-      popoverHiding: false,
-      onGuardTransition: vi.fn(),
       onPopoverShow,
       onPopoverHide,
       onPopoverAfterHide,
@@ -325,12 +364,38 @@ describe("Checkout chip state", () => {
     };
     const { container, update } = mountCheckout(params);
     const renderNamed = (worktreeName: string) => update({ ...params, worktreeName });
+    await waitForSolid(() =>
+      expect(
+        container.querySelector(".new-session-page__checkout-popover")?.getAttribute("data-phase"),
+      ).toBe("open"),
+    );
+    onPopoverShow.mockClear();
+
+    const trigger = container.querySelector<HTMLButtonElement>("#new-session-checkout-trigger")!;
+    expect(trigger.getAttribute("aria-controls")).toBe("new-session-checkout-popover");
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    trigger.click();
+    flush();
+    expect(onPopoverHide).toHaveBeenCalledOnce();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    trigger.click();
+    flush();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector(".new-session-page__checkout-popover")?.getAttribute("data-phase"),
+      ).toBe("open"),
+    );
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(onPopoverShow).toHaveBeenCalledOnce();
+    expect(onPopoverAfterHide).not.toHaveBeenCalled();
+    onPopoverShow.mockClear();
+    onPopoverHide.mockClear();
 
     expect(container.textContent).toContain(
       "Creates branch openclaw/picker-fixes in a separate checkout.",
     );
-    const suggestionPopup = container.querySelector("wa-popup")!;
-    for (const type of ["wa-show", "wa-hide", "wa-after-hide"]) {
+    const suggestionPopup = container.querySelector(".new-session-page__branch-popup")!;
+    for (const type of ["overlay-show", "overlay-hide", "overlay-after-hide"]) {
       suggestionPopup.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true }));
     }
     expect(onPopoverShow).not.toHaveBeenCalled();
@@ -340,10 +405,12 @@ describe("Checkout chip state", () => {
       .querySelectorAll("input")[1]!
       .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     suggestionPopup.dispatchEvent(
-      new CustomEvent("wa-after-hide", { bubbles: true, composed: true }),
+      new CustomEvent("overlay-after-hide", { bubbles: true, composed: true }),
     );
     expect(onConfirm).not.toHaveBeenCalled();
-    container.querySelector("wa-popover")!.dispatchEvent(new CustomEvent("wa-after-hide"));
+    container
+      .querySelector(".new-session-page__checkout-popover")!
+      .dispatchEvent(new CustomEvent("overlay-after-hide"));
     expect(onConfirm).toHaveBeenCalledOnce();
 
     renderNamed("Not Valid");
@@ -351,17 +418,5 @@ describe("Checkout chip state", () => {
       .querySelectorAll("input")[1]!
       .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(onConfirm).toHaveBeenCalledOnce();
-
-    renderNamed("picker-fixes");
-    document.body.append(container);
-    const name = container.querySelectorAll("input")[1]!;
-    name.focus();
-    name.setSelectionRange(0, 6);
-    name.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
-    const hide = new CustomEvent("wa-hide", { bubbles: true, cancelable: true });
-    container.querySelector("wa-popover")!.dispatchEvent(hide);
-    expect(hide.defaultPrevented).toBe(true);
-    expect(onPopoverHide).not.toHaveBeenCalled();
-    container.remove();
   });
 });

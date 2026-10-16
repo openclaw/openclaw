@@ -12,7 +12,7 @@ suite.define(() => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const panelRequests: string[] = [];
       page.on("request", (request) => {
-        if (new URL(request.url()).pathname.endsWith("/sidebar-attention-panel.runtime.ts")) {
+        if (new URL(request.url()).pathname.endsWith("/sidebar-attention-panel.runtime.tsx")) {
           panelRequests.push(request.url());
         }
       });

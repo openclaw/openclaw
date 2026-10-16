@@ -78,7 +78,7 @@ export function resolveNativeOpenAIResponsesWebSocketMode(
   if (transport !== "websocket" && transport !== "websocket-cached" && transport !== "auto") {
     return undefined;
   }
-  if (getAiTransportHost().requiresManagedTransport(model)) {
+  if (getAiTransportHost().requiresManagedTransport(model, "fetch")) {
     return undefined;
   }
   return supportsNativeOpenAIResponsesEndpoint(model) ? transport : undefined;
@@ -249,7 +249,8 @@ function createCachedWebSocketLease(
     entry,
     reusedConnection,
     steeringContinuation,
-    release: ({ keep } = {}) => {
+    release: (options = {}) => {
+      const { keep } = options;
       if (!keep || entry.socket.socket.readyState !== WEBSOCKET_OPEN_STATE) {
         invalidateOwnedWebSocketSession(cacheKey, entry);
         return;

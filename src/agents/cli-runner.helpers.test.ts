@@ -1,7 +1,6 @@
 /** Tests CLI runner prompt/image/system-prompt helper utilities. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,7 +20,6 @@ import {
   buildCliArgs,
   prepareCliPromptImagePayload,
   resolveCliRunQueueKey,
-  writeCliSystemPromptFile,
 } from "./cli-runner/helpers.js";
 import * as promptImageUtils from "./embedded-agent-runner/run/images.js";
 import * as toolImages from "./tool-images.js";
@@ -331,35 +329,6 @@ describe("writeCliImages", () => {
     } finally {
       envSnapshot.restore();
     }
-  });
-});
-
-describe("writeCliSystemPromptFile", () => {
-  it("writes stripped system prompts to a private temp file", async () => {
-    const written = await writeCliSystemPromptFile({
-      backend: {
-        command: "codex",
-        systemPromptFileConfigKey: "model_instructions_file",
-      },
-      systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-    });
-
-    try {
-      expect(written.filePath).toContain("openclaw-cli-system-prompt-");
-      await expect(fs.readFile(written.filePath ?? "", "utf-8")).resolves.toBe(
-        "Stable prefix\nDynamic suffix",
-      );
-    } finally {
-      await written.cleanup();
-    }
-    let err: unknown;
-    try {
-      await fs.access(written.filePath ?? "");
-    } catch (caught) {
-      err = caught;
-    }
-    expect(err).toBeInstanceOf(Error);
-    expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
   });
 });
 

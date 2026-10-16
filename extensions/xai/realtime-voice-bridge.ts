@@ -28,16 +28,13 @@ import { XaiRealtimePlaybackMarkOverflowError } from "./realtime-voice-protocol.
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 import { WebSocket } from "./ws-runtime.js";
 
-// The shipped 2026.9.6 host lacks async diagnostics; remove optionality when the minimum advances.
-const captureHost: Partial<Pick<typeof proxyCaptureSdk, "captureWsEventAsync">> = proxyCaptureSdk;
-
 export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements RealtimeVoiceBridge {
   readonly supportsToolResultContinuation = false;
 
   private readonly transport: RealtimeVoiceWebSocketTransport<XaiRealtimeEvent>;
   private pendingToolResults: Array<{
     callId: string;
-    result: unknown;
+    output: string;
     options?: RealtimeVoiceToolResultOptions;
   }> = [];
   private pendingUserMessages: string[] = [];
@@ -61,7 +58,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
           ...(proxyAgent ? { agent: proxyAgent } : {}),
         });
       },
-      capture: captureHost.captureWsEventAsync,
+      capture: proxyCaptureSdk.captureWsEventAsync,
       onOpen: () => {
         this.resetRealtimeSessionState({
           preserveToolCallState: config.sessionResumption === true && this.conversationId !== null,
@@ -138,14 +135,17 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     if (this.transport.lifecycle.phase() === "terminal" || options?.willContinue === true) {
       return;
     }
-    if (!this.isConnected()) {
-      let serialized: string;
-      try {
-        serialized = serializeXaiRealtimeToolResult(result);
-      } catch (error) {
+    const connected = this.isConnected();
+    let output: string;
+    try {
+      output = serializeXaiRealtimeToolResult(result);
+    } catch (error) {
+      if (!connected) {
         this.config.onError?.(error as Error);
-        throw error;
       }
+      throw error;
+    }
+    if (!connected) {
       if (this.pendingToolResults.length >= XAI_REALTIME_MAX_PENDING_TOOL_RESULTS) {
         const error = new Error(
           "xAI realtime voice pending tool result queue overflow during reconnect",
@@ -155,12 +155,12 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
       }
       this.pendingToolResults.push({
         callId,
-        result: JSON.parse(serialized) as unknown,
+        output,
         ...(options ? { options } : {}),
       });
       return;
     }
-    this.submitToolResultNow(callId, result, options);
+    this.submitToolResultNow(callId, output, options);
   }
 
   close(): void {
@@ -220,7 +220,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
       this.sendAudio(chunk);
     }
     for (const pending of this.pendingToolResults.splice(0)) {
-      this.submitToolResultNow(pending.callId, pending.result, pending.options);
+      this.submitToolResultNow(pending.callId, pending.output, pending.options);
     }
     for (const message of this.pendingUserMessages.splice(0)) {
       this.sendUserMessageNow(message);

@@ -1,9 +1,8 @@
 import { createEffect, createMemo, onSettled, untrack } from "solid-js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import { useSolidControllerHost } from "../lit/solid-controller-host.ts";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import {
   buildHomeWorkContext,
   subscribeChatWorkContext,
@@ -34,17 +33,26 @@ export type OpenClawAssistantPanelContent = SolidBridgeElement<Props>;
 export const AssistantPanelContent = defineSolidBridge<Props>(
   "openclaw-assistant-panel-content",
   (props, element): SolidJSX.Element => {
-    const { host, revision } = useSolidControllerHost(() => [props.store, props.context]);
     const store = () => props.store ?? custodianSessionStore;
-    new SubscriptionsController(host)
-      .watchStore(store)
-      .watch(
-        () => props.context,
-        (context, notify) => subscribeChatWorkContext(context, notify),
-      )
-      .watchStore(() => props.context?.sessions)
-      .watchStore(() => props.context?.agents)
-      .watchStore(() => props.context?.gateway);
+    const projection = createMemo(() =>
+      projectSource(
+        { store: store(), context: props.context },
+        {
+          read: (source) => source,
+          subscribe: (source, notify) => {
+            const stops = [
+              source.store.subscribe(notify),
+              source.context && subscribeChatWorkContext(source.context, notify),
+              source.context?.sessions.subscribe(notify),
+              source.context?.agents.subscribe(notify),
+              source.context?.gateway.subscribe(notify),
+            ];
+            return () => stops.forEach((stop) => stop?.());
+          },
+          equality: "revision",
+        },
+      ),
+    );
     onSettled(() => {
       element.dispatchEvent(
         new CustomEvent("assistant-custodian-store", { detail: untrack(store), bubbles: true }),
@@ -58,28 +66,19 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
         }
       },
     );
-    const variant = () => {
-      revision();
-      return store().activeVariant;
-    };
+    const variant = () => projection().read().store.activeVariant;
     const workContext = createMemo(() => {
-      revision();
+      const current = projection().read().context;
       return (
         props.sessionContext ??
-        (props.context
-          ? buildHomeWorkContext(
-              props.context,
-              props.pageRouteId,
-              props.pageSessionKey,
-              props.pageAgentId,
-            )
-          : undefined)
+        (current &&
+          buildHomeWorkContext(current, props.pageRouteId, props.pageSessionKey, props.pageAgentId))
       );
     });
     return (
       <>
-        {props.active ? (
-          props.destination !== "custodian" ? (
+        {props.active &&
+          (props.destination !== "custodian" ? (
             <openclaw-home-session
               prop:sessionKey={props.sessionKey}
               prop:agentId={props.agentId}
@@ -91,8 +90,7 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
               prop:onboarding={variant() === "onboarding"}
               prop:newAgentIntent={variant() === "new-agent"}
             />
-          )
-        ) : undefined}
+          ))}
       </>
     );
   },

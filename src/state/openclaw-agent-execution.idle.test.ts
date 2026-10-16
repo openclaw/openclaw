@@ -47,6 +47,7 @@ beforeEach(() => {
       run: async () => undefined,
       failure: () => undefined,
       isPrepared: () => false,
+      getPendingPreparation: () => undefined,
       captureClaim: () => {
         throw new Error("Unused native claim");
       },
@@ -106,7 +107,9 @@ it("keeps a shared creating owner out of idle eviction until its last borrower r
 });
 
 it("expires each executor independently and refreshes only the borrowed one", async () => {
-  await use("first");
+  const first = await use("first");
+  const terminal = vi.fn();
+  first.onTerminal(terminal);
   await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS / 2);
   await use("second");
   await use("first");
@@ -114,6 +117,7 @@ it("expires each executor independently and refreshes only the borrowed one", as
   expect(closedAgents()).toEqual([]);
   await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS / 2);
   expect(closedAgents()).toEqual(["first", "second"]);
+  expect(terminal).not.toHaveBeenCalled();
   await use("first");
   expect(opened).toHaveLength(3);
 });

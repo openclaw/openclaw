@@ -1,15 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import {
   createComposerContainer,
+  createComposerControlsFixture,
   createComposerProps as props,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 
 function questionPrompt(id: string, question: string): QuestionPrompt {
@@ -60,13 +60,13 @@ describe("composer question takeover", () => {
         sessionKey: "queue-test",
         draft: "Keep this draft",
         gatewayQuestionPrompts: [],
-        composerControls: html`<button type="button">Model</button>`,
+        composerControls: createComposerControlsFixture(),
         onRequestUpdate: vi.fn(),
       });
       composerProps.onDraftChange = (next) => {
         composerProps.draft = next;
       };
-      const draw = () => render(renderChatComposer(composerProps), container);
+      const draw = () => renderComposerInto(container, composerProps);
 
       draw();
       const progress = container.querySelector<HTMLDetailsElement>(

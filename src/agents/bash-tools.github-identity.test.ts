@@ -6,7 +6,8 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolvePreparedExecEnvironment } from "./bash-tools.exec-request-preparation.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
@@ -21,11 +22,16 @@ const snapshot = captureEnv([
   "GITHUB_TOKEN",
   "PREVIEW_SERVICE_TOKEN",
   "GIT_CONFIG_PARAMETERS",
+  "GIT_AUTHOR_NAME",
+  "GIT_AUTHOR_EMAIL",
+  "GIT_COMMITTER_NAME",
+  "GIT_COMMITTER_EMAIL",
 ]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const execFileAsync = promisify(execFile);
 afterEach(() => {
   snapshot.restore();
+  vi.unstubAllEnvs();
   storeMocks.readSecretStoreExecEnvironment.mockReset();
 });
 
@@ -69,7 +75,65 @@ function prepare(
 }
 
 describe("exec GitHub identity", () => {
+  it("keeps the executing agent's credentials when borrowing tool policy", async () => {
+    const root = tempDirs.make("native-exec-credential-owner-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const config = {
+      tools: { exec: { host: "gateway" as const, mode: "full" as const } },
+      agents: {
+        entries: {
+          worker: { tools: { github: { profileId: "ghp_11111111111111111111111111111111" } } },
+          policy: { tools: { github: { profileId: "ghp_22222222222222222222222222222222" } } },
+        },
+      },
+    };
+    const prepared = prepareGitHubToolEnvironment({ config, agentId: "worker" });
+    const profileDir = prepared.localIdentityEnv.GH_CONFIG_DIR!;
+    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      path.join(profileDir, "hosts.yml"),
+      "github.com:\n  oauth_token: synthetic-executing-agent\n",
+      { mode: 0o600 },
+    );
+    const tools = createOpenClawCodingTools({
+      agentId: "worker",
+      policyAgentId: "policy",
+      sessionKey: "agent:policy:main",
+      runSessionKey: "agent:worker:main",
+      config,
+      workspaceDir: root,
+      exec: { preparedStoreEnvironment: { env: {} }, notifyOnExit: false, allowBackground: false },
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: true,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
+      },
+    });
+    const tool = tools.find(({ name }) => name === "exec");
+    expect(tool).toBeDefined();
+    const script = path.join(root, "identity.cjs");
+    await fs.writeFile(
+      script,
+      'process.stdout.write(process.env.GH_TOKEN === "synthetic-executing-agent" ? "executing-agent" : "wrong-agent")',
+    );
+    const result = await tool!.execute("native-owner", {
+      command: [process.execPath, script].map((value) => JSON.stringify(value)).join(" "),
+    });
+    expect(result.details).toMatchObject({ status: "completed", aggregated: "executing-agent" });
+  });
+
   it("fetches missing partial-clone blobs without launching automatic maintenance", async () => {
+    // This fixture tests repository author inheritance, not the invoking session's override.
+    for (const key of [
+      "GIT_AUTHOR_NAME",
+      "GIT_AUTHOR_EMAIL",
+      "GIT_COMMITTER_NAME",
+      "GIT_COMMITTER_EMAIL",
+    ]) {
+      deleteTestEnvValue(key);
+    }
     const root = tempDirs.make("agent-git-maintenance-");
     const origin = path.join(root, "origin");
     const clone = path.join(root, "partial");

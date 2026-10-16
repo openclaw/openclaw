@@ -635,6 +635,8 @@ describe("embedded attempt phase lifecycle state", () => {
     "already aborted",
     "completion not requested",
     "prompt error",
+    "provider error",
+    "provider error without completed assistant",
     "eligible completion",
     "abort while queued",
   ] as const)("settles %s behind a held agent writer", async (scenario) => {
@@ -713,6 +715,14 @@ describe("embedded attempt phase lifecycle state", () => {
         } as never,
         {
           promptError: scenario === "prompt error" ? new Error("synthetic prompt error") : null,
+          currentAttemptAssistant: makeAgentAssistantMessage({
+            content: [],
+            stopReason: scenario.startsWith("provider error") ? "error" : "stop",
+          }),
+          currentAttemptCompletedAssistant:
+            scenario === "provider error"
+              ? makeAgentAssistantMessage({ content: [], stopReason: "error" })
+              : undefined,
           sessionIdUsed: target.sessionId,
           messagesSnapshot: [],
           lastCallUsage: undefined,
@@ -746,9 +756,11 @@ describe("embedded attempt phase lifecycle state", () => {
         expect(entries).toEqual(originalEntries);
       }
       expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
-      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].event.success).toBe(
-        scenario === "eligible completion" || scenario === "completion not requested",
-      );
+      if (!scenario.startsWith("provider error")) {
+        expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].event.success).toBe(
+          scenario === "eligible completion" || scenario === "completion not requested",
+        );
+      }
     } finally {
       release.resolve();
       await Promise.allSettled([heldWriter, afterTurn]);

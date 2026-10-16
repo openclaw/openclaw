@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { saveResponseMedia } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setMSTeamsRuntime } from "../runtime.js";
+import { getMSTeamsRuntime, setMSTeamsRuntime } from "../runtime.js";
 import {
   downloadMSTeamsBotFrameworkAttachments as downloadAttachments,
   isBotFrameworkPersonalChatId,
@@ -314,11 +315,12 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       {
         name: "attachment view content-length is invalid",
         init: { status: 200, headers: { "content-length": "0x3" } },
-        warning: "msteams botFramework attachmentView invalid content-length",
+        warning: "msteams botFramework attachmentView save failed",
       },
       {
         name: "attachment view exceeds maxBytes",
         init: { status: 200, headers: { "content-length": "11" } },
+        warning: "msteams botFramework attachmentView save failed",
       },
     ] as const)("preserves the stable outcome when $name cleanup rejects", async (scenario) => {
       const unhandledRejections: unknown[] = [];
@@ -347,6 +349,9 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         );
       });
       process.on("unhandledRejection", onUnhandledRejection);
+      const save = vi
+        .spyOn(getMSTeamsRuntime().channel.media, "saveResponseMedia")
+        .mockImplementation(saveResponseMedia);
 
       try {
         const media = await downloadMSTeamsBotFrameworkAttachment({
@@ -358,16 +363,13 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         expectUnavailableMedia(media, "att-1");
         expect(runtime.saveCalls).toHaveLength(0);
         expect(cancel).toHaveBeenCalledOnce();
-        if (scenario.warning) {
-          expect(warn).toHaveBeenCalledWith(scenario.warning, expect.any(Object));
-        } else {
-          expect(warn).not.toHaveBeenCalled();
-        }
+        expect(warn).toHaveBeenCalledWith(scenario.warning, expect.any(Object));
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
         expect(unhandledRejections).toStrictEqual([]);
       } finally {
+        save.mockRestore();
         process.off("unhandledRejection", onUnhandledRejection);
         expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
       }

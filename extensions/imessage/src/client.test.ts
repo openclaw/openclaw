@@ -158,6 +158,16 @@ describe("IMessageRpcClient LF framing", () => {
     expect(runtimeError).not.toHaveBeenCalled();
   });
 
+  it("reports malformed notifications without logging inbound content and keeps reading", () => {
+    child.stdout.write('private-inbound-message\n{"method":"next","params":{"text":"kept"}}\n');
+
+    expect(onNotification).toHaveBeenCalledExactlyOnceWith({
+      method: "next",
+      params: { text: "kept" },
+    });
+    expect(runtimeError).toHaveBeenCalledExactlyOnceWith("imsg rpc: failed to parse JSON response");
+  });
+
   it("keeps interleaved stdout/stderr decoder state independent and bypasses decoding strings", async () => {
     const pending = client.request("ping");
     const stdout = Buffer.from('{"id":1,"result":"\u20ac"}\n');

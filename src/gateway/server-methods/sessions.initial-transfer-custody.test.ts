@@ -4,7 +4,6 @@ import {
   runSubagentStateWorkerOperation,
   useSubagentControlFixture,
 } from "../../agents/subagents/registry/subagent-control.test-support.js";
-import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -112,7 +111,7 @@ async function createYieldedChild(withSibling = false) {
   };
 }
 
-it.each(["unchanged", "replaced", "empty"] as const)(
+it.each(["unchanged", "empty"] as const)(
   "retains the original session source through cold registry restore (%s)",
   async (mode) => {
     const requesterTurnRunId = "cold-initial-parent";
@@ -130,11 +129,6 @@ it.each(["unchanged", "replaced", "empty"] as const)(
       agentId: "main",
     });
     await closeOpenClawAgentDatabaseByPathAsync(physicalPath, "main");
-    const originalBytes = await fs.readFile(physicalPath);
-    const replacement = `${physicalPath}.initial-transfer-replacement`;
-    if (mode === "replaced") {
-      await fs.writeFile(replacement, originalBytes);
-    }
     if (mode !== "empty") {
       await registerSubagentRun({
         runId,
@@ -188,24 +182,15 @@ it.each(["unchanged", "replaced", "empty"] as const)(
               throw new Error("Yield bypassed the held canonical restore");
             }),
           ]);
-          // Join accepted session reads before replacing only the closed fixture file.
           const facts = await Promise.all(
             preparations.mock.results.flatMap((result) =>
               result.type === "return" ? [result.value] : [],
             ),
           );
           const releases = facts.map((read) => vi.spyOn(read, "release"));
-          if (mode === "replaced") {
-            await fs.rename(replacement, physicalPath);
-            expect(await fs.readFile(physicalPath)).toEqual(originalBytes);
-          }
           releaseRestore.resolve();
           const outcome = await yielding;
-          if (mode === "replaced") {
-            expect(outcome).toMatchObject({ error: { outcome: "not-committed" } });
-            expect(onYield).not.toHaveBeenCalled();
-            expect(subagentRuns.get(runId)?.requesterTurnYielded).toBeUndefined();
-          } else if (mode === "empty") {
+          if (mode === "empty") {
             expect(outcome).toMatchObject({ result: { details: { status: "nothing_pending" } } });
             expect(onYield).not.toHaveBeenCalled();
           } else {

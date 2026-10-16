@@ -20,13 +20,6 @@ const resolveOperatorRolePolicyForAssignmentMock = vi.fn();
 const isApprovalRecordVisibleToClientMock = vi.fn();
 const getOperatorApprovalDetailedMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../infra/device-pairing.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/device-pairing.js")>(
-    "../infra/device-pairing.js",
-  );
-  return actual;
-});
-
 vi.mock("../infra/device-pairing-worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/device-pairing-worker.js")>()),
   withCurrentDevicePairingSnapshot: async <T>(
@@ -34,7 +27,12 @@ vi.mock("../infra/device-pairing-worker.js", async (importOriginal) => ({
     prepare: (
       paired: import("../infra/device-pairing.types.js").PairedDevice[],
     ) => { start: () => T } | undefined,
-  ) => prepare(listDevicePairingMock().paired)?.start(),
+    preparePublication?: () => Promise<void>,
+  ) => {
+    const paired = listDevicePairingMock().paired;
+    await preparePublication?.();
+    return prepare(paired)?.start();
+  },
 }));
 
 vi.mock("../infra/push-web.js", () => ({
@@ -63,8 +61,10 @@ vi.mock("../state/user-preferences.js", async (importOriginal) => ({
   getUserPreferenceValues: getUserPreferenceValuesMock,
 }));
 
+// mock-isolation: Approval routing uses synthetic session facts without opening session stores.
 vi.mock("./session-sharing-preparation.js", () => ({
   prepareSessionMutationFacts: async () => ({
+    prepareRead: () => undefined,
     readCurrent: () => ({ target: null, membership: new Set<string>() }),
     release: () => {},
   }),

@@ -1,10 +1,10 @@
-/** Exact execution binding for owner-native outbound message lifecycle facts. */
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+/** Exact execution binding for owner-native outbound message lifecycle facts. */
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -23,7 +23,7 @@ type ExecutionBindingDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "execution_identity_contexts" | "outbound_message_execution_bindings"
 >;
-const ensuredTerminalBindingDatabases = new WeakSet<DatabaseSync>();
+const ensuredTerminalBindingDatabases = new WeakSet<EngineConnection>();
 
 export type MessageExecutionBinding = Readonly<{
   contextId: string;
@@ -44,7 +44,7 @@ export function selectMessageExecutionBinding(params: {
 }
 
 export function hasMessageExecutionBindingColumns(
-  db: DatabaseSync,
+  db: EngineConnection,
   tableName: "outbound_message_progress",
 ): boolean {
   return (
@@ -100,7 +100,7 @@ export function planMessageExecutionBinding(
 
 /** Confirm the exact retained admission row; run correlation alone never binds a receipt. */
 export function confirmMessageExecutionBinding(
-  db: DatabaseSync,
+  db: EngineConnection,
   token: ExecutionIdentityAdmissionToken | undefined,
 ): MessageExecutionBinding | undefined {
   if (!token || !tableExists(db, "execution_identity_contexts")) {
@@ -120,7 +120,7 @@ export function confirmMessageExecutionBinding(
 }
 
 function recordTerminalMessageExecutionBinding(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: MessageExecutionBinding & { eventId: string; runId: string },
 ): void {
   executeSqliteQuerySync(
@@ -137,7 +137,7 @@ function recordTerminalMessageExecutionBinding(
 }
 
 export function recordConfirmedTerminalMessageExecutionBinding(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { eventId: string | undefined; token?: ExecutionIdentityAdmissionToken },
 ): void {
   if (!params.eventId) {

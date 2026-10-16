@@ -39,6 +39,7 @@ import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js"
 import * as githubIdentities from "../../src/state/user-profile-github-identity.js";
 import { linkEmail, syncGitHubIdentity } from "../../src/state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../../src/test-utils/native-sqlite.js";
 import { trackSqliteStatementExecutions } from "../helpers/sqlite-statement-execution-counter.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -211,10 +212,14 @@ describe("session-share node commands", () => {
       await replaceSessionEntry(scope, entry);
       expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
       const { db } = openOpenClawAgentDatabase({ agentId: "main" });
-      const reads = trackSqliteStatementExecutions(db, ["inventory"], (sql) =>
-        sql.includes('from "session_nodes" order by "session_key"') && sql.includes('"entry_json"')
-          ? "inventory"
-          : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(db),
+        ["inventory"],
+        (sql) =>
+          sql.includes('from "session_nodes" order by "session_key"') &&
+          sql.includes('"entry_json"')
+            ? "inventory"
+            : null,
       );
       try {
         expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
@@ -272,12 +277,15 @@ describe("session-share node commands", () => {
         },
       );
       const { db } = openOpenClawAgentDatabase({ agentId: "main" });
-      const counter = trackSqliteStatementExecutions(db, ["transcript", "participants"], (sql) =>
-        /\bfrom\s+"?session_participants\b/i.test(sql)
-          ? "participants"
-          : /\btranscript_events\b/.test(sql)
-            ? "transcript"
-            : null,
+      const counter = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(db),
+        ["transcript", "participants"],
+        (sql) =>
+          /\bfrom\s+"?session_participants\b/i.test(sql)
+            ? "participants"
+            : /\btranscript_events\b/.test(sql)
+              ? "transcript"
+              : null,
       );
       try {
         expect((await source.list({ limit: 1 })).sessions).toMatchObject([
@@ -601,7 +609,7 @@ describe("session-share node commands", () => {
         );
       }
       const counter = trackSqliteStatementExecutions(
-        openOpenClawStateDatabase().db,
+        requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
         ["identities", "profiles"],
         (sql) =>
           /\bfrom\s+"?user_profile_identities\b/i.test(sql)

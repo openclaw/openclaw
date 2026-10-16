@@ -2,6 +2,7 @@ import type { SystemChangeEntry, SystemChangesListResult } from "@openclaw/gatew
 import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import "../../components/openclaw-mascot.ts";
+import type { SidebarAttentionElementAttributes } from "../../components/sidebar-attention-element.ts";
 import { channelSnapshotHasActiveChannel } from "../../lib/channels/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
@@ -9,11 +10,12 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectChannels } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import "../../styles/custodian.css";
 import { CustodianChangeHistory } from "./custodian-history.tsx";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
 import { CustodianSurface } from "./custodian-surface.tsx";
+import type { CustodianRouteData } from "./route.ts";
 
 type Props = { onboarding: boolean; newAgentIntent: boolean; store: CustodianSessionStore };
 type History = {
@@ -232,13 +234,17 @@ function CustodianPageContent(props: Props) {
   );
 }
 
-defineSolidBridge<Props>("openclaw-custodian-page", CustodianPageContent, {
-  properties: {
-    onboarding: { default: false, attribute: false },
-    newAgentIntent: { default: false, attribute: false },
-    store: { default: custodianSessionStore, attribute: false },
+export const CustodianPage = defineSolidBridge<Props>(
+  "openclaw-custodian-page",
+  CustodianPageContent,
+  {
+    properties: {
+      onboarding: { default: false, attribute: false },
+      newAgentIntent: { default: false, attribute: false },
+      store: { default: custodianSessionStore, attribute: false },
+    },
   },
-});
+);
 
 declare global {
   interface HTMLElementTagNameMap {
@@ -249,7 +255,20 @@ declare global {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-sidebar-attention": HTMLAttributes<HTMLElement>;
+      "openclaw-sidebar-attention": SidebarAttentionElementAttributes;
     }
   }
+}
+
+export function CustodianRoute(props: { data?: CustodianRouteData }) {
+  return (
+    <Show when={props.data}>
+      {(data) => (
+        <CustodianPage
+          onboarding={data().onboarding}
+          newAgentIntent={data().intent === "new-agent"}
+        />
+      )}
+    </Show>
+  );
 }

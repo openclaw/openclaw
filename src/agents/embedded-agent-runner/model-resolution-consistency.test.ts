@@ -18,6 +18,7 @@ const resolveHookModelSelectionMock = vi.hoisted(() =>
 const loadManifestMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn(() => undefined));
 const resolveEmbeddedCompactionThinkingLevelMock = vi.hoisted(() => vi.fn(() => "off"));
+const logWarnMock = vi.hoisted(() => vi.fn());
 
 const emptyModelRegistry = {
   find: vi.fn((_provider: string, _modelId: string) => null),
@@ -55,6 +56,9 @@ const resolveModelAsyncMock = vi.fn(
       authStorage: options?.authStorage ?? authStorage,
       modelRegistry: options?.modelRegistry ?? emptyModelRegistry,
     };
+    if (modelId === "missing-compaction-model") {
+      return { ...stores, error: "Provider-specific model resolution failed" };
+    }
     if (options?.allowBundledStaticCatalogFallback) {
       return {
         ...stores,
@@ -174,9 +178,13 @@ vi.mock("./compaction-runtime-context.js", () => ({
   resolveEmbeddedCompactionThinkingLevel: resolveEmbeddedCompactionThinkingLevelMock,
 }));
 
-vi.mock("./logger.js", () => ({
-  log: { warn: vi.fn() },
-}));
+vi.mock("./logger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./logger.js")>();
+  return {
+    ...actual,
+    log: { ...actual.log, warn: logWarnMock },
+  };
+});
 
 const { resolveEmbeddedRunModelSetup } = await import("./run/model-setup.js");
 const { prepareDirectCompactionAttempt } = await import("./direct-compaction-preparation.js");
@@ -196,6 +204,7 @@ function createPreparedModelRuntime(config: Record<string, unknown>) {
 
 describe("embedded model resolution consistency", () => {
   beforeEach(() => {
+    logWarnMock.mockClear();
     resolveHookModelSelectionMock.mockReset().mockImplementation(async ({ provider, modelId }) => ({
       provider,
       modelId,
@@ -354,6 +363,35 @@ describe("embedded model resolution consistency", () => {
         compactionThinkingDefault: "off",
       }),
     );
+  });
+
+  it("labels an unresolved compaction model independently of provider error text", async () => {
+    const config = {};
+    const preparedModelRuntime = createPreparedModelRuntime(config);
+    const compaction = await prepareDirectCompactionAttempt({
+      config,
+      provider: "test-provider",
+      model: "missing-compaction-model",
+      agentId: "main",
+      sessionId: "compact-session",
+      sessionKey: "agent:main:compact-session",
+      sessionFile: "agent:main:compact-session",
+      workspaceDir: preparedModelRuntime.workspaceDir,
+      preparedModelRuntime: preparedModelRuntime as never,
+    });
+
+    expect(compaction).toMatchObject({
+      ok: false,
+      result: {
+        ok: false,
+        compacted: false,
+        reason: "Provider-specific model resolution failed",
+      },
+    });
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("outcome=failed reason=compaction_model_unresolved "),
+    );
+    expect(logWarnMock).not.toHaveBeenCalledWith(expect.stringContaining(" detail="));
   });
 
   it("resolves route-bound thinking compatibility for the final model", () => {

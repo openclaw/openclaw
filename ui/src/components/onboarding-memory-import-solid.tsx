@@ -8,8 +8,8 @@ import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import "../styles/onboarding-memory-import.css";
 import "./modal-dialog.ts";
 
@@ -435,7 +435,7 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
           <ul>
             <For each={providers()}>{(provider) => <Provider provider={provider} />}</For>
           </ul>
-          <footer>
+          <openclaw-modal-actions class="onboarding-memory-import__actions">
             <For each={actions()}>
               {(action) => (
                 <button
@@ -459,7 +459,7 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
                 </button>
               )}
             </For>
-          </footer>
+          </openclaw-modal-actions>
         </section>
       </openclaw-modal-dialog>
     </Show>

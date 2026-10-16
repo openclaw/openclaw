@@ -188,18 +188,16 @@ describe("pending FaceTime dial persistence", () => {
     expect(backend.store.delete).not.toHaveBeenCalled();
   });
 
-  it("propagates a comparison transport failure without retrying or falling back", async () => {
+  it("propagates a comparison transport failure without retrying", async () => {
     const initial: StoredDial = { ...pendingDial(), callUUIDAliases: ["a-call"] };
     const backend = createBackend(initial);
     const failure = new Error("worker transport lost after dispatch");
     backend.store.compareAndApply.mockRejectedValueOnce(failure);
-    const deleteIf = vi.fn(async () => true);
-    const store = new PendingFaceTimeDialStore({ ...backend.store, deleteIf });
+    const store = new PendingFaceTimeDialStore(backend.store);
 
     await expect(store.clear("dial-a")).rejects.toBe(failure);
 
     expect(backend.store.compareAndApply).toHaveBeenCalledTimes(1);
-    expect(deleteIf).not.toHaveBeenCalled();
     expect(backend.store.delete).not.toHaveBeenCalled();
     expect(backend.current()).toEqual(initial);
   });

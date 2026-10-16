@@ -89,11 +89,8 @@ function createPublicationOwner(projection: SessionRowProjection) {
               },
               options,
             );
-            if (prepared.kind === "pending") {
+            if (prepared !== deferred) {
               return prepared;
-            }
-            if (prepared.value !== deferred) {
-              return { kind: "complete" as const, value: prepared.value };
             }
             // Prepared views expire synchronously; reacquire facts and authority after yielding.
             await yieldUntil;
@@ -142,7 +139,10 @@ export async function drainSessionEventPublications(projection: SessionRowProjec
 export async function withPreparedEventRow(
   projection: SessionRowProjection | undefined,
   query: { key: string; agentId: string; storePath?: string } | undefined,
-  publish: (read?: SessionRowReadView) => void,
+  publish: (
+    read?: SessionRowReadView,
+    ancestors?: ReturnType<SessionRowProjection["ancestorRows"]>,
+  ) => void,
 ) {
   if (!projection || !query) {
     publish();
@@ -152,7 +152,8 @@ export async function withPreparedEventRow(
     () => [query],
     (read) => {
       const record = read.describe(query);
-      const rows = record ? [record, ...(projection.ancestorRows(record, read) ?? [])] : [];
+      const ancestors = record ? projection.ancestorRows(record, read) : undefined;
+      const rows = record ? [record, ...(ancestors ?? [])] : [];
       const children = new Set<string>();
       for (const row of rows) {
         for (const group of row.materialized.row.swarm?.groups ?? []) {
@@ -166,7 +167,7 @@ export async function withPreparedEventRow(
       for (const key of children) {
         read.selectEntries({ key });
       }
-      publish(read);
+      publish(read, ancestors);
     },
     { includeAncestors: true },
   );

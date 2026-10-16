@@ -38,6 +38,7 @@ function placementStoreDefaults(
 ) {
   return {
     readChangeSnapshot: async () => readPlacements(),
+    subscribeChanges: () => () => {},
     readEnvironmentOwner: async (environmentId: string) =>
       readPlacements().find((placement) => placement.environmentId === environmentId),
     readProjection: async () => ({
@@ -46,6 +47,12 @@ function placementStoreDefaults(
     workspaceResultInstanceId: () => "gateway-test",
     getAsync: async (sessionId: string) =>
       readPlacements().find((placement) => placement.sessionId === sessionId),
+    getManyAsync: async (sessionIds: readonly string[]) =>
+      new Map(
+        readPlacements()
+          .filter((placement) => sessionIds.includes(placement.sessionId))
+          .map((placement) => [placement.sessionId, placement]),
+      ),
     listAsync: async () => readPlacements(),
     retireSessionPlacementAsync: vi.fn(async () => {}),
     pruneOrphanedWorkspaceReconciliations: async () => [],
@@ -58,6 +65,8 @@ beforeEach(() => {
   runtimeFactoryMocks.createDiskSpace.mockReturnValue({
     read: vi.fn(),
     version: vi.fn(() => 0),
+    invalidate: vi.fn(),
+    nextSweepAtMs: () => Infinity,
     sweep: vi.fn().mockResolvedValue(undefined),
   });
 });
@@ -90,6 +99,8 @@ describe("worker placement startup health lifetime", () => {
     const diskSpace = {
       read: vi.fn(),
       version: vi.fn(() => 0),
+      invalidate: vi.fn(),
+      nextSweepAtMs: () => time.clock.now() + 60_000,
       sweep: vi.fn(async () => {
         if (holdScheduledWork) {
           scheduledHealthStarted.resolve();
@@ -117,6 +128,8 @@ describe("worker placement startup health lifetime", () => {
       subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
+      isStopping: () => false,
+      beginClose: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
     };
     const warn = vi.fn();
@@ -148,7 +161,8 @@ describe("worker placement startup health lifetime", () => {
       expect(sidecar).not.toBeNull();
       expect(reconcileActive).not.toHaveBeenCalled();
       expect(diskSpace.sweep).toHaveBeenCalledOnce();
-      // The first scheduled pass joins the background startup retirement.
+      // Settle the background startup sweep before advancing its next deadline.
+      await setImmediate();
       await time.advanceBy(60_000);
       reconcileActive.mockClear();
       diskSpace.sweep.mockClear();
@@ -213,6 +227,8 @@ describe("worker placement startup health lifetime", () => {
         subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
         installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
         start: vi.fn(),
+        isStopping: () => false,
+        beginClose: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
       };
       const runtime = createGatewayWorkerPlacementRuntime({
@@ -261,7 +277,7 @@ describe("worker placement startup health lifetime", () => {
     },
   );
 
-  it("immediately retires absent sessions after readiness and drains retirement on stop", async () => {
+  it("defers unaccepted retirement when shutdown begins during its evidence read", async () => {
     const evidence = createDeferredCore<"absent">();
     const reconcileActive = vi.fn().mockResolvedValue(undefined);
     const retireSessionPlacementAsync = vi.fn(async () => {});
@@ -301,8 +317,9 @@ describe("worker placement startup health lifetime", () => {
       subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
+      isStopping: () => false,
       stop: vi.fn().mockResolvedValue(undefined),
-      stopNodeEnrollmentWaits: vi.fn(),
+      beginClose: vi.fn(),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
       initialPlacements: [],
@@ -343,11 +360,11 @@ describe("worker placement startup health lifetime", () => {
 
       await Promise.resolve();
       expect(repeatedStop).toBe(stopping);
-      expect(environments.stopNodeEnrollmentWaits).toHaveBeenCalledOnce();
+      expect(environments.beginClose).toHaveBeenCalledOnce();
       expect(environments.stop).not.toHaveBeenCalled();
       evidence.resolve("absent");
       await Promise.all([stopping, repeatedStop]);
-      expect(retireSessionPlacementAsync).toHaveBeenCalledOnce();
+      expect(retireSessionPlacementAsync).not.toHaveBeenCalled();
       expect(environments.stop).toHaveBeenCalledOnce();
       expect(unregisterSidecar).not.toHaveBeenCalled();
     } finally {
@@ -369,6 +386,8 @@ describe("worker placement startup health lifetime", () => {
       subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
+      isStopping: () => false,
+      beginClose: vi.fn(),
       stop: vi.fn().mockRejectedValueOnce(stopError).mockResolvedValueOnce(undefined),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
@@ -463,6 +482,8 @@ describe("worker placement startup health lifetime", () => {
                 return vi.fn();
               }),
               start: vi.fn(),
+              isStopping: () => false,
+              beginClose: vi.fn(),
               stop: vi.fn().mockResolvedValue(undefined),
             };
             const runtime = createGatewayWorkerPlacementRuntime({
@@ -582,11 +603,12 @@ describe("worker placement startup health lifetime", () => {
       }),
       start: vi.fn(),
       isStopping: () => environmentStopping,
-      stopNodeEnrollmentWaits: vi.fn(() => {
+      beginClose: vi.fn(() => {
         expect(dispatchOptions.isShuttingDown?.()).toBe(true);
         expect(environmentStopping).toBe(false);
         expect(environments.stop).not.toHaveBeenCalled();
-        events.push("enrollment:cancel");
+        environmentStopping = true;
+        events.push("environments:begin-close");
       }),
       stop: vi.fn(async () => {
         environmentStopping = true;
@@ -656,7 +678,7 @@ describe("worker placement startup health lifetime", () => {
     await Promise.all([guardedRecovery, stopping]);
     expect(events).toEqual([
       "recovery:start",
-      "enrollment:cancel",
+      "environments:begin-close",
       "environments:stop",
       "reconcile:core",
       "recovery:end",
@@ -821,7 +843,7 @@ describe("worker placement startup recovery authority", () => {
                 await moveDestinationMocks.resolveCanonicalSession.withImplementation(
                   () => ({
                     sessionId: "session-replaced",
-                    worktree: { id: "worktree-recovery" },
+                    worktree: { id: "worktree-recovery", branch: "fixture", repoRoot: root },
                   }),
                   async () => {
                     await expect(

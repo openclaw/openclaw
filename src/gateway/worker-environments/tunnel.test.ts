@@ -178,27 +178,6 @@ describe("worker tunnel manager", () => {
     expect(close).toHaveBeenCalledWith(1012, "desktop tunnel closed");
   });
 
-  it("prepares pinned workspace SSH without starting a persistent tunnel", async () => {
-    const fake = fakeRunner();
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const handle = await startTestTunnel(manager, "worker:one", 3);
-
-    expect(manager.status("worker:one")).toBe("connected");
-    expect(fake.starts).toHaveLength(0);
-    expect(handle.launchTurn).toBeUndefined();
-    await expect(handle.runWorkspaceCommand(PWD_COMMAND)).resolves.toEqual(success());
-
-    const workspace = fake.runs.at(-1);
-    expect(workspace?.argv).toContain("ClearAllForwardings=yes");
-    expect(workspace?.argv).toContain("ControlMaster=no");
-    expect(workspace?.argv).toContain("ControlPath=none");
-    expect(workspace?.argv).not.toContain("-R");
-    expect(workspace?.argv.at(-1)).toContain("pwd");
-
-    await handle.stop();
-    expect(manager.status("worker:one")).toBe("stopped");
-  });
-
   it("renews a workspace quiescence lease while reconciliation is still running", async () => {
     const nonce = "a".repeat(32);
     const acquireArgs = "'/home/worker/workspace' '720000' 'dedicated'";

@@ -49,17 +49,6 @@ function parseNodeParams(paramsJSON?: string | null): unknown {
   }
 }
 
-function fullConfigCatalogEnabled(config: unknown): boolean {
-  if (!isRecord(config) || !isRecord(config.plugins) || !isRecord(config.plugins.entries)) {
-    return true;
-  }
-  const entry = config.plugins.entries.opencode;
-  if (!isRecord(entry) || !isRecord(entry.config) || !isRecord(entry.config.sessionCatalog)) {
-    return true;
-  }
-  return entry.config.sessionCatalog.enabled !== false;
-}
-
 function isOpenCodeSessionCatalogEnabled(pluginConfig: unknown): boolean {
   return (
     !isRecord(pluginConfig) ||
@@ -83,7 +72,7 @@ function assertOpenCodeLocalAccess(hostId: string, allowProcessHomeFallback?: bo
 }
 
 function currentOpenCodeCatalogConfig(api: OpenClawPluginApi): OpenClawConfig {
-  return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
+  return api.runtime.config.current() as OpenClawConfig;
 }
 
 async function loadContinuableOpenCodeSession(
@@ -102,8 +91,8 @@ async function loadContinuableOpenCodeSession(
 }
 
 function createOpenCodeNodeHostBindings(api: OpenClawPluginApi) {
-  const available = ({ config, env }: { config: unknown; env: NodeJS.ProcessEnv }) =>
-    fullConfigCatalogEnabled(config) &&
+  const available = ({ config, env }: { config: OpenClawConfig; env: NodeJS.ProcessEnv }) =>
+    isOpenCodeSessionCatalogEnabled(config.plugins?.entries?.opencode?.config) &&
     Boolean(
       resolveNodeHostExecutable("opencode", {
         env: { ...env, PATHEXT: env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM" },

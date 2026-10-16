@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
+import { buildKnownAgentRunFailureReplyPayload } from "../../../auto-reply/reply/agent-runner-failure-reply.js";
 import { buildRealtimeVoiceAgentErrorProviderResult } from "../../../talk/agent-run-control.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
@@ -115,6 +116,28 @@ describe("assistant failure recovery", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("explains retry exhaustion without replacing the raw provider failure", async () => {
+    const providerError = "429 rate limit exceeded. Please try again in 221ms.";
+    const input = makeInput(providerError);
+    input.rateLimitRetriesExhausted = 9;
+    const failure = await expectFailure(input);
+    expect(failure).toMatchObject({
+      message: expect.stringContaining("9 automatic retries"),
+      rateLimitRetriesExhausted: 9,
+      reason: "rate_limit",
+      status: 429,
+      rawError: providerError,
+    });
+    expect(input.normalizedAttempt.attemptAssistant?.errorMessage).toBe(providerError);
+    expect(
+      buildKnownAgentRunFailureReplyPayload({
+        err: failure,
+        sessionCtx: {},
+        resolvedVerboseLevel: "off",
+      })?.text,
+    ).toContain("9 automatic retries");
   });
 
   it.each([

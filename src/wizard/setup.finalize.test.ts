@@ -19,6 +19,7 @@ import {
   type FinalizeArgs,
   type FinalizeArgsOverrides,
 } from "./setup.finalize.fixtures.test-support.js";
+import { readPin } from "./setup.finalize.runtime-pin.test-support.js";
 import {
   createRuntimeProbeResult,
   expectNoteContains,
@@ -32,8 +33,6 @@ type DefaultModelCatalogFacts = ReturnType<
   typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts
 >;
 
-const readPin = vi.hoisted(() => vi.fn());
-vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
 const runExec = vi.hoisted(() => vi.fn());
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
@@ -179,14 +178,6 @@ vi.mock("../commands/daemon-install-helpers.js", () => ({
 
 vi.mock("../commands/gateway-install-token.js", () => ({
   resolveGatewayInstallToken,
-}));
-
-vi.mock("../commands/daemon-runtime.js", () => ({
-  DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
-  GATEWAY_DAEMON_RUNTIME_OPTIONS: [
-    { value: "node", label: "Node" },
-    { value: "bun", label: "Bun 1.4+" },
-  ],
 }));
 
 vi.mock("../commands/health-format.js", () => ({
@@ -819,13 +810,13 @@ describe("finalizeSetupWizard", () => {
       typeof import("../commands/daemon-install-helpers.js")
     >("../commands/daemon-install-helpers.js");
     const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
     const discoverNode = vi
       .spyOn(runtimePaths, "resolvePreferredNodePath")
       .mockResolvedValue(undefined);
     const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
       status: "supported",
-      version: "1.4.2",
+      version: "1.4.3",
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       nodeSharedSqlite: false,
@@ -1240,7 +1231,7 @@ describe("finalizeSetupWizard", () => {
   it.each([undefined, "node"] as const)(
     "passes installed pin intent to the reinstall owner (explicit=%s)",
     async (daemonRuntime) => {
-      const pin = { runtime: "bun", path: "/opt/pinned/bun" };
+      const pin = { runtime: "bun", path: "/opt/pinned/bun" } as const;
       const expected = { revision: "pin-version", stored: true, pin };
       readPin.mockReturnValue(expected);
       let installed = true;
@@ -1301,14 +1292,13 @@ describe("finalizeSetupWizard", () => {
   );
 
   it.each([
-    { flow: "advanced", choice: "bun" },
     { flow: "advanced", choice: "node" },
     { flow: "quickstart", choice: "bun" },
   ] as const)(
     "reinstalls recorded Bun through $flow with choice=$choice",
     async ({ flow, choice }) => {
       const recordedPath = "/opt/recorded/bin/bun";
-      runExec.mockResolvedValue(createRuntimeProbeResult("1.4.2"));
+      runExec.mockResolvedValue(createRuntimeProbeResult("1.4.3"));
       gatewayServiceIsLoaded.mockResolvedValue(true);
       gatewayServiceReadCommand.mockResolvedValue({
         programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],

@@ -144,6 +144,7 @@ describe("CLI execution cancellation", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     setCliRunnerExecuteTestDeps({ getProcessSupervisor: restoreProcessSupervisor });
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -384,6 +385,28 @@ describe("CLI execution cancellation", () => {
 
     firstRun.cancel();
     await expect(firstRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+  });
+
+  it("reports the exact composed prompt the CLI receives", async () => {
+    const context = createRunContext({ runId: "cli-sent-prompt" });
+    context.preparedBackend.backend.command = "/bin/sh";
+    context.preparedBackend.backend.output = "jsonl";
+    context.preparedBackend.backend.jsonlDialect = "claude-stream-json";
+    context.promptContext = { prependContext: "red prefix", appendContext: "red suffix" };
+    context.backendResolved.textTransforms = { input: [{ from: "red", to: "blue" }] };
+    context.executionTarget = {
+      kind: "plugin",
+      async *execute() {
+        yield { type: "result", subtype: "success", result: "completed" };
+      },
+    };
+    const prompts: string[] = [];
+
+    await executePreparedCliRun(context, undefined, {
+      onPromptPrepared: (prompt) => prompts.push(prompt),
+    });
+
+    expect(prompts).toEqual(["blue prefix\n\nhello\n\nblue suffix"]);
   });
 
   it("passes plugin-owned system prompts without writing temporary files or exposing prompt argv", async () => {

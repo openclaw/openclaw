@@ -9,6 +9,7 @@ import {
   installMockGateway,
   startProductionControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { failControlUiModuleForDocuments } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const builds = useAutoCleanupTempDirTracker(afterAll);
@@ -172,25 +173,21 @@ enabled.define(() => {
     await enabled.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       await setBrowserFeatures(page, false);
       await page.clock.install();
-      let failures = 0;
       let recoveryRequests = 0;
       page.on("request", (request) => {
         if (new URL(request.url()).searchParams.has("openclaw_mount_recovery")) {
           recoveryRequests += 1;
         }
       });
-      await page.route("**/assets/unsupported-browser-*.js", async (route) => {
-        if (failures === 0) {
-          failures += 1;
-          await route.fulfill({ status: 503, body: "temporarily unavailable" });
-        } else {
-          await route.continue();
-        }
-      });
+      const failure = await failControlUiModuleForDocuments(
+        page,
+        /\/assets\/unsupported-browser-[^/]+\.js$/u,
+      );
       await page.goto(`${enabled.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
       await page.getByRole("heading", { name: "Browser guidance could not load" }).waitFor();
       await page.clock.runFor(30_000);
       expect(recoveryRequests).toBe(0);
+      expect(failure.documentCount()).toBe(1);
       const frame = await takeControlUiScreenshotFrame(
         page,
         page.locator("#openclaw-mount-fallback"),
@@ -200,7 +197,7 @@ enabled.define(() => {
       await writeFile(path.join(enabled.artifactDir, "unsupported-download-failed.png"), frame.png);
       await page.getByRole("button", { name: "Try again", exact: true }).click();
       await page.getByRole("heading", { name: "Update your browser to use OpenClaw" }).waitFor();
-      expect(failures).toBe(1);
+      expect(failure.documentCount()).toBe(2);
     });
   });
 

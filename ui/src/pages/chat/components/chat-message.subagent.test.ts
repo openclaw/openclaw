@@ -1,8 +1,7 @@
-import { render } from "lit";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { createChatThreadHarness } from "./chat-message-native.test-support.tsx";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -43,8 +42,10 @@ it.each([
     props.selectedSession = row;
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
+    const view = createChatThreadHarness(container, transcript);
+    onTestFinished(() => view.unmount());
     const rerender = async () => {
-      render(renderChatThread(props, transcript), container);
+      view.render(props);
       transcript.hostUpdated();
       await flushDeferredRowPrune();
     };
@@ -74,7 +75,9 @@ it("hides avatars for a subagent key before its session row loads", async () => 
   props.userName = "Example User";
   const transcript = createTestTranscript();
   const container = document.body.appendChild(document.createElement("div"));
-  render(renderChatThread(props, transcript), container);
+  const view = createChatThreadHarness(container, transcript);
+  onTestFinished(() => view.unmount());
+  view.render(props);
   transcript.hostUpdated();
   transcript.hostConnected();
   await flushDeferredRowPrune();

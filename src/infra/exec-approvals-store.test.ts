@@ -21,6 +21,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { createExecApprovalPolicySnapshot } from "./exec-approvals-allow-always.js";
 import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
 import type { ExecAuthorizationCommitInput } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
@@ -556,6 +557,77 @@ describe("exec approvals SQLite store", () => {
     }
     expect(loadExecApprovals().defaults?.security).toBe("allowlist");
   });
+
+  it.each(["usage", "one-shot", "allow-always"] as const)(
+    "fences concurrent %s writes only when they can change policy",
+    async (kind) => {
+      const entry = { id: "echo", pattern: "/usr/bin/echo" };
+      saveExecApprovals({ version: 1, agents: { main: { allowlist: [entry] } } });
+      const input: ExecAuthorizationCommitInput = {
+        agentId: "main",
+        matches: [entry],
+        command: "echo before",
+        authorization: {
+          source: "current-policy",
+          security: "allowlist",
+          ask: "on-miss",
+          allowlistSatisfied: true,
+        },
+      };
+      const assertCurrent = await commitExecAuthorizationLocked(input);
+      const failures: unknown[] = [];
+      const stages: string[] = [];
+      workerProbe.admission(workerAdmission, (request, grant, admit) => {
+        admit(request, grant);
+        stages.push(request.stage);
+        try {
+          assertCurrent();
+        } catch (error) {
+          failures.push(error);
+        }
+      });
+      const requests = [commitExecAuthorizationLocked({ ...input, command: "echo after" })];
+      if (kind !== "usage") {
+        requests.push(
+          commitExecAuthorizationLocked({
+            ...input,
+            authorization: {
+              ...input.authorization,
+              source: "explicit-approval",
+              policySnapshot: createExecApprovalPolicySnapshot({
+                file: loadExecApprovals(),
+                agentId: "main",
+              }),
+            },
+            allowAlwaysDecision:
+              kind === "one-shot"
+                ? { kind: "one-shot", reasons: ["prompt-only"] }
+                : { kind: "exact-command", commandText: "echo approved" },
+            command: "echo after",
+          }),
+        );
+      }
+      const next = await Promise.all(requests);
+      expect(stages).toEqual(["transaction", "commit"]);
+      expect(failures).toEqual(
+        kind === "allow-always"
+          ? [
+              expect.objectContaining({
+                message: "Exec approval policy is unavailable or changing before execution",
+              }),
+              expect.objectContaining({
+                message: "Exec approval policy is unavailable or changing before execution",
+              }),
+            ]
+          : [],
+      );
+      expect(assertCurrent).not.toThrow();
+      for (const guard of next) {
+        expect(guard).not.toThrow();
+      }
+      expect(loadExecApprovals().agents?.main?.allowlist?.[0]?.lastUsedCommand).toBe("echo after");
+    },
+  );
 
   it("does not batch authorizations across an intervening policy denial", async () => {
     const entry = { id: "echo", pattern: "/usr/bin/echo" };

@@ -12,12 +12,13 @@ import {
   untrack,
 } from "solid-js";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT } from "../../../components/panel-hosted-tabs.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
-import { LitContent, emptyLegacyContent } from "../../../lit/solid-content.tsx";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
+import { SidebarPanel as SidebarPanelView } from "../chat-pane-embedded-view.tsx";
 import {
   SIDEBAR_GEOMETRY_COMMIT_EVENT,
   SIDEBAR_MIN_HEIGHT_PX,
@@ -35,6 +36,7 @@ import {
   PanelTypeOption,
   sidebarPanelType,
   readRegionHostedTabs,
+  readRegionPanelHost,
 } from "./chat-sidebar-region-header.tsx";
 import type { RegionProps, RegionElement, RegionMethods } from "./chat-sidebar-region-types.ts";
 
@@ -194,6 +196,11 @@ function Region(props: RegionProps, host: RegionElement) {
       // A pane that merely loads this way has neither, and takes no focus.
       if (origin) {
         focusBeforeSideLock = origin;
+        // Content with an opening focus request owns entry. Focusing its tab here
+        // would look like newer input and cancel that request. Keep the return target.
+        if (props.sideFocusManaged) {
+          return;
+        }
         // A tab strip rendered just now is focusable from its next frame.
         if (focusFrame !== null) {
           cancelAnimationFrame(focusFrame);
@@ -284,10 +291,10 @@ function Region(props: RegionProps, host: RegionElement) {
         {(type) => (
           <div class="side-panel-empty side-panel-empty--type">
             <PanelEmptyState
-              icon={<LitContent value={type().icon} />}
+              icon={<Icon name={type().icon} />}
               heading={type().label}
               description={type().empty.description}
-              action={<LitContent value={type().empty.action} />}
+              action={type().empty.action}
             />
           </div>
         )}
@@ -314,13 +321,16 @@ function Region(props: RegionProps, host: RegionElement) {
               data-region={panel().id === props.layout.mainPanelId ? "main" : "side"}
               hidden={!isSidebarSlotVisible(props.layout, panel().slot)}
             >
-              <LitContent
-                value={
-                  sidebarPanelType(props.panelDefinitions, panel().slot).content ??
-                  emptyLegacyContent
-                }
+              <SidebarPanelView
+                definition={sidebarPanelType(props.panelDefinitions, panel().slot)}
               />
-              <Show when={sidebarPanelType(props.panelDefinitions, panel().slot).content == null}>
+              <Show
+                when={
+                  !sidebarPanelType(props.panelDefinitions, panel().slot).view &&
+                  sidebarPanelType(props.panelDefinitions, panel().slot).loadState === undefined &&
+                  sidebarPanelType(props.panelDefinitions, panel().slot).content == null
+                }
+              >
                 <Empty panel={panel()} />
               </Show>
             </div>
@@ -430,14 +440,13 @@ export const ChatSidebarRegion = defineSolidBridge<RegionProps, RegionMethods>(
       callbacks: { default: null, attribute: false },
       narrow: { default: false },
       sideFocusLocked: { default: false },
+      sideFocusManaged: { default: false },
       sideFocusOrigin: { default: undefined, attribute: false },
       availableWidth: { default: 0 },
     },
     methods: {
       deliverPanelEvent: (host, slot, event) => {
-        const panel = host.parentElement?.querySelector(
-          `[data-panel-slot="${slot}"]`,
-        )?.firstElementChild;
+        const panel = readRegionPanelHost(host, slot);
         if (
           !(panel instanceof HTMLElement) ||
           !("handleToggleRequest" in panel) ||

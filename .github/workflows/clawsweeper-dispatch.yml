@@ -46,11 +46,15 @@ jobs:
       ) }}
     # Admission runs before job concurrency, so an empty metadata edit cannot
     # cancel a useful dispatch. Other changes retain the receiver's policy.
+    # Each event kind owns its lane, as in the receiver's reference dispatcher:
+    # pull_request_target and review runs leave check runs on the PR head, and
+    # GitHub keeps counting a cancelled one there (UNSTABLE), so a comment or
+    # review must never cancel a PR event. Review activity runs are independent
+    # observations and never share a group; comments serialize per comment.
     concurrency:
-      group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}', github.repository, github.event.issue.number || github.event.pull_request.number || github.run_id) }}
+      group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}-{2}', github.repository, github.event_name, (github.event_name == 'pull_request_review' || github.event_name == 'pull_request_review_comment') && github.run_id || github.event.comment.id || github.event.issue.number || github.event.pull_request.number || github.run_id) }}
       cancel-in-progress: ${{ github.event_name == 'push' || github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
     env:
-      MAINTAINER_REVIEW_REQUIRED: ${{ (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association || github.event.issue.author_association) || (contains(github.event.pull_request.labels.*.name, 'maintainer') || contains(github.event.issue.labels.*.name, 'maintainer'))) && !(contains(github.event.pull_request.labels.*.name, 'clawsweeper:autofix') || contains(github.event.issue.labels.*.name, 'clawsweeper:autofix')) && !(contains(github.event.pull_request.labels.*.name, 'clawsweeper:automerge') || contains(github.event.issue.labels.*.name, 'clawsweeper:automerge')) }}
       HAS_CLAWSWEEPER_APP_PRIVATE_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY != '' }}
       CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
       SUPERSEDES_IN_PROGRESS: ${{ (github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review') && 'true' || 'false' }}
@@ -138,15 +142,9 @@ jobs:
         if: >-
           ${{
             env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true' &&
-            (
-              (github.event_name == 'pull_request_target' && env.MAINTAINER_REVIEW_REQUIRED != 'true' &&
-                (github.event.action == 'ready_for_review' ||
-                  (github.event.action == 'opened' && github.event.pull_request.draft == false))) ||
-              (env.MAINTAINER_REVIEW_REQUIRED == 'true' &&
-                (github.event_name == 'issues' || github.event_name == 'pull_request_target') &&
-                (github.event.action == 'opened' || github.event.action == 'ready_for_review') &&
-                github.event.pull_request.draft != true)
-            )
+            github.event_name == 'pull_request_target' &&
+            (github.event.action == 'ready_for_review' ||
+              (github.event.action == 'opened' && github.event.pull_request.draft == false))
           }}
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -157,51 +155,9 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-issues: write
 
-      - name: Explain maintainer review opt-in
-        if: >-
-          ${{
-            env.MAINTAINER_REVIEW_REQUIRED == 'true' &&
-            (github.event_name == 'issues' || github.event_name == 'pull_request_target') &&
-            (github.event.action == 'opened' || github.event.action == 'ready_for_review') &&
-            github.event.pull_request.draft != true &&
-            github.event.issue.locked != true && github.event.pull_request.locked != true &&
-            env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true'
-          }}
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ steps.pr_ack_token.outputs.token }}
-          TARGET_REPO: ${{ github.repository }}
-          ITEM_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
-          SOURCE_ACTION: ${{ github.event.action }}
-        run: |
-          set -euo pipefail
-          if [ -z "$GH_TOKEN" ]; then exit 0; fi
-          for ((page = 1; page <= 10; page++)); do
-            comments="$(gh api "repos/$TARGET_REPO/issues/$ITEM_NUMBER/comments?per_page=100&page=$page")"
-            jq -e 'type == "array"' <<< "$comments" >/dev/null
-            if jq -e --arg suffix " item=$ITEM_NUMBER -->" '
-              any(.[];
-                ((.user.login // "" | ascii_downcase) as $login |
-                  ["clawsweeper", "clawsweeper[bot]", "openclaw-clawsweeper[bot]"] | index($login)) and
-                ((.body // "") | contains("clawsweeper-maintainer-opt-in:")) and
-                ((.body // "") | contains($suffix)))' <<< "$comments" >/dev/null; then
-              exit 0
-            fi
-            if [ "$(jq length <<< "$comments")" -lt 100 ]; then
-              reminder="$(printf '%s\n' \
-                "<!-- clawsweeper-maintainer-opt-in:$SOURCE_ACTION item=$ITEM_NUMBER -->" \
-                'ClawSweeper reviews are opt-in for maintainers. If a review is required, finish the work and validation first, then comment `@clawsweeper review`. Please avoid repeated requests while a review is queued or running; agents should not request reviews automatically.')"
-              payload="$(jq -nc --arg body "$reminder" '{body:$body}')"
-              gh api "repos/$TARGET_REPO/issues/$ITEM_NUMBER/comments" --method POST --input - <<< "$payload"
-              exit 0
-            fi
-          done
-          echo "::notice::Maintainer reminder lookup reached its page limit; leaving comments untouched."
-
       - name: Acknowledge received pull request
         if: >-
           ${{
-            env.MAINTAINER_REVIEW_REQUIRED != 'true' &&
             github.event_name == 'pull_request_target' &&
             (
               github.event.action == 'ready_for_review' ||
@@ -347,13 +303,13 @@ jobs:
 
       - name: Setup supported Node runtime
         if: ${{ github.event_name == 'issues' || github.event_name == 'pull_request_target' }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
           package-manager-cache: false
 
       - name: Dispatch exact ClawSweeper review
-        if: ${{ env.MAINTAINER_REVIEW_REQUIRED != 'true' && (github.event_name == 'issues' || github.event_name == 'pull_request_target') }}
+        if: ${{ github.event_name == 'issues' || github.event_name == 'pull_request_target' }}
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           TARGET_REPO: ${{ github.repository }}

@@ -7,6 +7,7 @@ import { Client } from "pg";
 import { deriveMeetingTranscriptSummaryColumns } from "../../transcripts/store-columns.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
+import { readSqliteUserVersion } from "../sqlite-user-version.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { openEngineStore } from "./open.js";
 import { materializeDatabasePort, type PortDescriptor } from "./port.worker.js";
@@ -250,6 +251,7 @@ async function run() {
     }
     const restored = open();
     const reverse = await copyBack(destination.namespace, restored, descriptor);
+    assert.equal(readSqliteUserVersion(restored), descriptor.version);
     assert.deepEqual(canonical(restored, descriptor), before);
     assert.deepEqual(canonical(source, descriptor), before);
     assert.deepEqual(reverse, forward);
@@ -292,6 +294,24 @@ async function run() {
     assert.throws(
       () => identityRestored.prepare("INSERT INTO port_facts (summary_json) VALUES ('{}')").run(),
       /database or disk is full/,
+    );
+
+    // Export manifests retain deleted sequence highs even when an image is compacted.
+    identityRestored.exec("DELETE FROM sqlite_sequence");
+    const matchedStage = stage();
+    const matched = await materializeDatabasePort({
+      ...common,
+      source: { engine: "sqlite", db: identityRestored },
+      destination: matchedStage,
+      descriptor: identityDescriptor,
+      sourceAllocations: identityReverse.allocations,
+    });
+    assert.deepEqual(matched, identityReverse);
+    await assert.rejects(
+      client.query(
+        `INSERT INTO "${matchedStage.namespace}".port_facts (summary_json) VALUES ('{}')`,
+      ),
+      /reached maximum value/,
     );
 
     const derivedNul = open();

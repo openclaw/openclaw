@@ -489,7 +489,6 @@ describe("standalone relay wake-up", () => {
 
   it.each([
     ["remote Gateway", "wss://gateway.example.com/browser/extension", false],
-    ["secure loopback", "wss://localhost:18798/extension", false],
     ["automatic setup opt-out", "ws://127.0.0.1:18798/extension", true],
   ])("does not wake a daemon for %s", async (_label, relayUrl, nativeBootstrapDisabled) => {
     const harness = await loadBackground({

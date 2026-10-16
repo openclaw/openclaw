@@ -107,6 +107,8 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     expect(hookContext?.channel).toBeUndefined();
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed");
+    // No provider ran; diagnostic capture must not attribute the hook text to a model.
+    expect(result.meta.providerStarted).toBe(false);
   });
 
   it("passes the heartbeat queue and re-arms setup progress when its hook does not claim", async () => {

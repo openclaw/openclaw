@@ -1,4 +1,8 @@
-import { assertSyncTransactionResult, assertPostgresTransactionUsable } from "../sql-connection.js";
+import {
+  assertSyncTransactionResult,
+  assertPostgresTransactionUsable,
+  sqlPublicationAnchor,
+} from "../sql-connection.js";
 import type { PostgresSqlConnection } from "../sql-connection.js";
 import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
 import { deferSqliteWorkerCommitReceipt } from "../sqlite-worker-operation-admission.js";
@@ -20,7 +24,8 @@ export function runPostgresTransactionSync<T>(
 ): T {
   assertPostgresTransactionUsable(db);
   assertPostgresOperationCurrent();
-  return withSqlitePostCommitPublications(db.anchor, () => {
+  const anchor = sqlPublicationAnchor(db);
+  return withSqlitePostCommitPublications(anchor, () => {
     const nested = db.isTransaction && !reserved;
     try {
       if (nested) {
@@ -39,12 +44,14 @@ export function runPostgresTransactionSync<T>(
         db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
       } else {
         const scope = currentSqliteWorkerOperationAdmission.getStore();
-        if (!readOnly && scope?.active) {
-          deferSqliteWorkerCommitReceipt(db.anchor, {});
+        if (!readOnly && scope?.active && !scope.owner.pendingReceipts?.has(anchor)) {
+          // A domain's staged receipt already settles this commit with its typed facts.
+          deferSqliteWorkerCommitReceipt(anchor, {});
         }
         const commit = () => {
           assertPostgresOperationCurrent();
-          db.exec("COMMIT");
+          // End read snapshots without publishing the connection's COMMIT write receipt.
+          db.exec(readOnly ? "ROLLBACK" : "COMMIT");
         };
         if (options?.withCommit) {
           assertSyncTransactionResult(options.withCommit(commit));

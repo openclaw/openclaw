@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import {
@@ -47,7 +47,7 @@ function resolveNullablePatch<T>(
   return patch === undefined ? current : patch === null ? null : normalize(patch);
 }
 
-export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () => number) {
+export function createWorkerEnvironmentTransitionOps(db: EngineConnection, now: () => number) {
   return {
     refreshBootstrapReceipt(
       input: WorkerEnvironmentMutationInput<"refreshBootstrapReceipt">,

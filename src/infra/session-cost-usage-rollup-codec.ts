@@ -6,7 +6,7 @@ import { resolveZstdCodec } from "./zstd-codec.js";
 
 // Cache data is rebuildable. Semantic changes get a new version; old rows are
 // ignored and rebuilt instead of normalized through a runtime compatibility path.
-export const USAGE_COST_ROLLUP_VERSION = 7;
+export const USAGE_COST_ROLLUP_VERSION = 8;
 const USAGE_COST_ROLLUP_FORMAT_VERSION = 1;
 export const USAGE_COST_ROLLUP_SCOPE = "session-cost-usage-rollup-v3";
 const zstd = resolveZstdCodec();
@@ -102,7 +102,7 @@ export function decodeUsageCostRollupEnvelope(
       return undefined;
     }
     if (
-      (record.version !== USAGE_COST_ROLLUP_VERSION && record.version !== 6) ||
+      record.version !== USAGE_COST_ROLLUP_VERSION ||
       record.format !== USAGE_COST_ROLLUP_FORMAT_VERSION ||
       typeof record.pricingFingerprint !== "string" ||
       (pricingFingerprint !== undefined && record.pricingFingerprint !== pricingFingerprint) ||
@@ -122,6 +122,12 @@ export function decodeUsageCostRollupEnvelope(
       typeof record.body.utf16Length !== "number" ||
       !Number.isSafeInteger(record.body.utf16Length) ||
       record.body.utf16Length <= 0 ||
+      // The producer stores UTF-8 JSON and only chooses compression when smaller.
+      record.body.bytes < record.body.utf16Length ||
+      record.body.bytes > 3 * record.body.utf16Length ||
+      (record.body.encoding === "identity"
+        ? record.body.bytes !== record.body.storedBytes
+        : record.body.bytes <= record.body.storedBytes) ||
       typeof record.body.sha256 !== "string" ||
       !/^[0-9a-f]{64}$/.test(record.body.sha256)
     ) {
@@ -151,10 +157,28 @@ export function decodeUsageCostRollup(
   valueJson: string,
   pricingFingerprint: string,
   blob: Uint8Array | null,
-): UsageCostRollupEntry | undefined {
+): UsageCostRollupEntry | undefined;
+export function decodeUsageCostRollup(
+  valueJson: string,
+  pricingFingerprint: string,
+  blob: Uint8Array | null,
+  budget: { remainingBytes: number },
+): UsageCostRollupEntry | null | undefined;
+export function decodeUsageCostRollup(
+  valueJson: string,
+  pricingFingerprint: string,
+  blob: Uint8Array | null,
+  budget?: { remainingBytes: number },
+): UsageCostRollupEntry | null | undefined {
   const envelope = decodeUsageCostRollupEnvelope(valueJson, pricingFingerprint);
   if (!envelope || !blob || blob.byteLength !== envelope.body.storedBytes) {
     return undefined;
+  }
+  if (budget) {
+    if (envelope.body.bytes > budget.remainingBytes) {
+      return null;
+    }
+    budget.remainingBytes -= envelope.body.bytes;
   }
   try {
     const raw =

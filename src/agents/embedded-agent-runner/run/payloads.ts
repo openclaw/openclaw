@@ -16,17 +16,20 @@ import {
 } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import {
-  HEARTBEAT_TOKEN,
-  isSilentReplyPayloadText,
-  SILENT_REPLY_TOKEN,
-} from "../../../auto-reply/tokens.js";
+import { HEARTBEAT_TOKEN } from "../../../auto-reply/tokens.js";
+import { applyAssistantDeliveryDirectives } from "../../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
+import { readAssistantTextBlocksForPhase } from "../../../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleText } from "../../../shared/text/assistant-visible-text.js";
 import { trimTextPreservingCode } from "../../../shared/text/text-projection.js";
+import { extractTtsDirectiveFacts } from "../../../tts/directive-facts.js";
+import {
+  prepareAgentRunTerminalReply,
+  type PreparedAgentRunTerminalReply,
+} from "../../agent-run-terminal-reply.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
   classifyAssistantFailoverReason,
@@ -49,6 +52,7 @@ import {
 } from "../../embedded-agent-utils.js";
 import { isTimeoutErrorMessage } from "../../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
+import { renderRateLimitRetryExhaustion } from "../../failover/user-copy.js";
 import type { ReplyDeliveryState } from "../../reply-completion.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import {
@@ -59,6 +63,49 @@ import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 import { buildFailureWarning } from "./tool-error-warning.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
+function renderNativeAssistantReply(
+  assistant: AssistantMessage,
+  rawText: string,
+  preparedText: string,
+): string | undefined {
+  if (!Array.isArray(assistant.content) || assistant.content.length < 2) {
+    return undefined;
+  }
+  const finalBlocks = readAssistantTextBlocksForPhase(assistant, "final_answer");
+  const sourceBlocks = finalBlocks.length
+    ? finalBlocks
+    : readAssistantTextBlocksForPhase(assistant);
+  const prefixLength = rawText.endsWith(preparedText) ? rawText.length - preparedText.length : 0;
+  // Only project native parts when they still represent the authoritative prepared source.
+  if (
+    sourceBlocks.map((block) => block.text).join("") !== rawText ||
+    (prefixLength === 0 && !rawText.startsWith(preparedText))
+  ) {
+    return undefined;
+  }
+  const rendered = {
+    ...assistant,
+    content: assistant.content.map((block) => ({ ...block })),
+  };
+  if (rawText !== preparedText) {
+    // Map the prepared range before directives consume bytes from the native parts.
+    let remainingPrefix = prefixLength;
+    let remainingLength = preparedText.length;
+    for (const block of readAssistantTextBlocksForPhase(
+      rendered,
+      finalBlocks.length ? "final_answer" : undefined,
+    )) {
+      const removed = Math.min(remainingPrefix, block.text.length);
+      remainingPrefix -= removed;
+      block.text = block.text.slice(removed, removed + remainingLength);
+      remainingLength -= block.text.length;
+    }
+  }
+  // Native part boundaries carry fence context that is lost after joining the text.
+  applyAssistantDeliveryDirectives(rendered);
+  return extractAssistantVisibleText(rendered);
+}
+
 /**
  * Converts a completed embedded attempt into reply payloads for channels. This
  * is the boundary that suppresses duplicate source replies, filters raw API
@@ -67,6 +114,7 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
  */
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
+  preparedTerminalReply?: PreparedAgentRunTerminalReply;
   answerSegments?: EmbeddedAgentSubscribeState["answerSegments"];
   keptAnswer?: EmbeddedAgentSubscribeState["keptAnswer"];
   assistantMessageIndex?: number;
@@ -100,6 +148,7 @@ export function buildEmbeddedRunPayloads(params: {
   runAborted?: boolean;
   runStopReason?: string;
   deferAssistantTimeoutError?: boolean;
+  rateLimitRetriesExhausted?: number;
   didSendDeterministicApprovalPrompt?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
 }): ReplyPayload[] {
@@ -147,6 +196,7 @@ export function buildEmbeddedRunPayloads(params: {
     assistantMessageIndex: terminalMessageIndex,
     keptAnswer,
     sourceReplyDeliveryState,
+    rateLimitRetriesExhausted,
   }: Pick<
     typeof params,
     | "assistantTexts"
@@ -155,6 +205,7 @@ export function buildEmbeddedRunPayloads(params: {
     | "assistantMessageIndex"
     | "keptAnswer"
     | "sourceReplyDeliveryState"
+    | "rateLimitRetriesExhausted"
   >) => {
     // Delivery receipts span the attempt; canonical completion belongs to one input.
     const completedSourceReplyViaMessageTool =
@@ -195,11 +246,15 @@ export function buildEmbeddedRunPayloads(params: {
     if (sourceReplyDeliveryState === "pending") {
       return;
     }
-    const nonEmptyAssistantTexts = assistantTexts
-      .map((text) =>
-        sanitizeUserFacingText(sanitizeAssistantVisibleText(text), { errorContext: false }),
-      )
-      .filter((text) => text.trim().length > 0);
+    const assistantTextSources = assistantTexts
+      .map((rawText) => ({
+        rawText,
+        text: sanitizeUserFacingText(sanitizeAssistantVisibleText(rawText), {
+          errorContext: false,
+        }),
+      }))
+      .filter(({ text }) => text.trim().length > 0);
+    const nonEmptyAssistantTexts = assistantTextSources.map(({ text }) => text);
     const terminalAssistant =
       currentAssistant ?? (nonEmptyAssistantTexts.length === 1 ? undefined : lastAssistant);
     // The subscriber decides when an earlier completed answer stays the reply. Only the answer
@@ -240,6 +295,7 @@ export function buildEmbeddedRunPayloads(params: {
           ? undefined
           : lastAssistantErrored || rawErrorMessage
             ? (providerLoginRecovery?.hint ??
+              renderRateLimitRetryExhaustion(rateLimitRetriesExhausted) ??
               formatUserFacingAssistantErrorText(assistantForPayload, errorContext))
             : formatAssistantErrorText(assistantForPayload, errorContext)
         : undefined;
@@ -266,6 +322,7 @@ export function buildEmbeddedRunPayloads(params: {
                 providerFailure: {
                   reason: classifyAssistantFailoverReason(assistantForPayload, errorContext),
                   rawError: rawErrorMessage,
+                  rateLimitRetriesExhausted,
                 },
               }
             : {}),
@@ -303,12 +360,11 @@ export function buildEmbeddedRunPayloads(params: {
           ? normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"))
           : "";
       const shouldPreferRawAnswerText =
-        rawAnswerDirectiveState?.isSilent ||
-        (rawAnswerHasMedia &&
-          (!nonEmptyAssistantTexts.length ||
-            (normalizedAssistantTexts.length > 0 &&
-              normalizedAssistantTexts ===
-                normalizeTextForComparison(rawAnswerDirectiveState?.text ?? ""))));
+        rawAnswerHasMedia &&
+        (!nonEmptyAssistantTexts.length ||
+          (normalizedAssistantTexts.length > 0 &&
+            normalizedAssistantTexts ===
+              normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "")));
       // When streamed text lost media directives but the canonical assistant answer
       // still contains them, keep the raw answer so attachments are not dropped.
       const fallbackAnswerSourceText =
@@ -336,10 +392,41 @@ export function buildEmbeddedRunPayloads(params: {
             : fallbackAnswerDirectiveState
               ? [fallbackAnswerDirectiveState]
               : [];
-      for (const directives of answerDirectives) {
-        const { text: cleanedText, mediaUrls, mediaFailures, isSilent } = directives;
-        hasIntentionalSilentFinal = isSilent;
+      for (const [answerIndex, directives] of answerDirectives.entries()) {
+        const { mediaUrls, mediaFailures } = directives;
+        const existingPrepared =
+          assistantForPayload &&
+          assistantForPayload ===
+            (params.keptAnswer?.assistant ?? params.currentAssistant ?? params.lastAssistant)
+            ? params.preparedTerminalReply
+            : undefined;
+        const prepared =
+          existingPrepared ??
+          prepareAgentRunTerminalReply({
+            rawText:
+              fallbackRawAnswerText ||
+              assistantTextSources[answerIndex]?.rawText ||
+              directives.text,
+          });
+        const nativeReply = assistantForPayload
+          ? renderNativeAssistantReply(assistantForPayload, fallbackRawAnswerText, prepared.text)
+          : undefined;
+        const renderedText =
+          nativeReply ??
+          (existingPrepared
+            ? prepared.text
+            : assistantForPayload
+              ? extractAssistantVisibleText(assistantForPayload, (_text, final) =>
+                  final ? prepared.text : "",
+                )
+              : sanitizeUserFacingText(sanitizeAssistantVisibleText(prepared.text), {
+                  errorContext: false,
+                }));
         const ttsFacts = shouldUseCanonicalFinalAnswer ? storedDelivery?.tts : undefined;
+        const cleanedText = parseReplyDirectives(
+          ttsFacts ? extractTtsDirectiveFacts(renderedText).cleanedText : renderedText,
+        ).text;
+        hasIntentionalSilentFinal = prepared.terminalReply.disposition === "silent";
         const delivery = shouldUseCanonicalFinalAnswer
           ? {
               audioAsVoice: storedDelivery?.audioAsVoice,
@@ -486,9 +573,6 @@ export function buildEmbeddedRunPayloads(params: {
       }
       if (hasAudioAsVoiceTag && item.mediaUrls?.length) {
         payload.audioAsVoice = true;
-      }
-      if (payload.text && isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN)) {
-        payload.text = undefined;
       }
       return payload;
     })

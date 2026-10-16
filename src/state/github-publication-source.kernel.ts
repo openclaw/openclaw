@@ -10,10 +10,12 @@ import { validateCanonicalSessionRowEntry } from "../config/sessions/session-can
 import { listSessionMembersInDatabase } from "../config/sessions/session-sharing-store.kernel.js";
 import type { PersonalGitHubPublicationRow } from "../gateway/github-personal-publication-store.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { GitHubPublicationSourcePredicate } from "./github-publication-source-contract.js";
 import type {
   GitHubPublicationSourceFacts,
   GitHubPublicationSourceSelector,
+  GitHubPublicationSessionFacts,
 } from "./github-publication-source.types.js";
 import type { DB as AgentDB } from "./openclaw-agent-db.generated.js";
 import type { DB } from "./openclaw-state-db.generated.js";
@@ -59,12 +61,10 @@ function isGitHubPublicationSourceCurrent(
   );
 }
 
-/** Called only in worker custody; the caller reserves both databases through destination commit. */
-export function readGitHubPublicationSourceFacts(
+function readSessionFacts(
   sourceDb: DatabaseSync,
-  stateDb: DatabaseSync,
   selector: GitHubPublicationSourceSelector,
-): GitHubPublicationSourceFacts {
+): GitHubPublicationSessionFacts {
   // The source owner admitted this schema before minting the capability. Exact row
   // validation must not reopen canonical/schema admission while S8 holds reservations.
   const row = executeSqliteQueryTakeFirstSync(
@@ -84,7 +84,7 @@ export function readGitHubPublicationSourceFacts(
     ? validateCanonicalSessionRowEntry(row, parseSessionEntryJson(row, "list"), "read")
     : undefined;
   const members = listSessionMembersInDatabase({ db: sourceDb }, selector.sessionKey);
-  const facts: GitHubPublicationSourceFacts = {
+  return {
     entry: entry && {
       sessionId: entry.sessionId,
       lifecycleRevision: entry.lifecycleRevision,
@@ -98,6 +98,16 @@ export function readGitHubPublicationSourceFacts(
     },
     members,
   };
+}
+
+/** Shared-state facts remain transaction-held for both durable and memory session sources. */
+export function readGitHubPublicationSourceFacts(
+  source: DatabaseSync | GitHubPublicationSessionFacts,
+  stateDb: EngineConnection,
+  selector: GitHubPublicationSourceSelector,
+): GitHubPublicationSourceFacts {
+  const facts: GitHubPublicationSourceFacts =
+    "members" in source ? structuredClone(source) : readSessionFacts(source, selector);
   if (selector.repositoryWorkspaceId) {
     facts.repositoryWorkspace = readSessionRepositoryWorkspaceInDatabase(
       stateDb,
@@ -170,8 +180,8 @@ export function readGitHubPublicationSourceFacts(
 
 /** Equality is a source predicate, never a replacement for the requester's live capability. */
 export function assertGitHubPublicationSourceFacts(
-  sourceDb: DatabaseSync,
-  stateDb: DatabaseSync,
+  sourceDb: DatabaseSync | GitHubPublicationSessionFacts,
+  stateDb: EngineConnection,
   selector: GitHubPublicationSourceSelector,
   expected: GitHubPublicationSourceFacts,
 ): void {

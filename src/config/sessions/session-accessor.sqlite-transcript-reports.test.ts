@@ -18,6 +18,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
@@ -91,7 +92,7 @@ async function seedReports(stopReason: AssistantMessage["stopReason"] = assistan
       message: { role: "user", content: body },
     },
   ]);
-  const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+  const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: scope.agentId }).db);
   expect(
     db
       .prepare(
@@ -242,41 +243,6 @@ describe("SQLite report payload selection", () => {
       expect(
         await Promise.all([requested, other].map((target) => loadTranscriptEvents(target))),
       ).toEqual(before);
-    });
-  });
-
-  it("preserves native incognito reports and refuses an unrelated file-source restriction", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot({});
-      const native = { ...scope, sessionKey: "agent:main:dashboard:incognito-reports" };
-      await upsertSessionEntryCore(native, { sessionId: native.sessionId, updatedAt: 1 });
-      await replaceTranscriptEvents(native, [
-        { type: "session", id: native.sessionId, version: CURRENT_SESSION_VERSION },
-      ]);
-      const report = {
-        kind: "custom" as const,
-        customTypes: ["status"],
-        selectReport: () => ({ customType: "status", content: "native report", display: true }),
-      };
-      await expect(appendSessionTranscriptReport(native, report)).resolves.toEqual({
-        ok: true,
-        value: undefined,
-      });
-      const before = await loadTranscriptEvents(native);
-      await expect(
-        appendSessionTranscriptReport(native, report, {
-          sessionEntryCurrent: {
-            source: {
-              agentId: scope.agentId,
-              path: state.path("foreign.sqlite"),
-              databaseIdentity: "foreign",
-              sessionKey: native.sessionKey,
-            },
-            assertCurrent: () => {},
-          },
-        }),
-      ).rejects.toThrow("A file session source cannot authorize a process-held transcript report");
-      expect(await loadTranscriptEvents(native)).toEqual(before);
     });
   });
 
@@ -704,7 +670,9 @@ describe("SQLite report payload selection", () => {
         { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
         unreadable,
       ]);
-      const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+      const db = requireNativeSqliteDatabase(
+        openOpenClawAgentDatabase({ agentId: scope.agentId }).db,
+      );
       expect(
         db
           .prepare(
@@ -746,7 +714,9 @@ describe("SQLite report payload selection", () => {
         { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
         JSON.parse(raw),
       ]);
-      const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+      const db = requireNativeSqliteDatabase(
+        openOpenClawAgentDatabase({ agentId: scope.agentId }).db,
+      );
       const payload = prepareTranscriptPayload(db, raw);
       expect(payload.event_zstd).not.toBeNull();
       createTranscriptPayloadUpdater(db, scope.sessionId)({ ...payload, seq: 1 });

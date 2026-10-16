@@ -3,7 +3,7 @@ import { page } from "vitest/browser";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { SessionActivityController } from "./session-activity-controller.ts";
+import { createSessionActivity } from "./session-activity-owner.ts";
 import "../../styles/base.css";
 import "../../styles/components.css";
 import "../../styles/settings.css";
@@ -93,7 +93,7 @@ it.each([
     const request = vi.fn().mockResolvedValue(props.result);
     const client = { request } as unknown as GatewayBrowserClient;
     let retryCompletion = Promise.resolve();
-    const controller = new SessionActivityController(() =>
+    const controller = createSessionActivity(() =>
       renderSessionActivityViewSolid(
         {
           ...props,

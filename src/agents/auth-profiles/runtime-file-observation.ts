@@ -1,6 +1,5 @@
 import path from "node:path";
-import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
-import { resolveStateDir } from "../../config/paths.js";
+import { isMainThread } from "node:worker_threads";
 import { registerAgentDatabaseReaderCloser } from "../../infra/agent-database-readers.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-maintenance-context.js";
@@ -12,7 +11,6 @@ import {
 } from "./file-state.js";
 import type { createRuntimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
 import type { OwnedRuntimeSnapshot } from "./runtime-snapshot-selection.js";
-import { readAuthProfileRowsAtPath } from "./sqlite-read.js";
 import type { AuthProfileStore } from "./types.js";
 
 /** Observe persisted sources while snapshot publication stays with its existing owner. */
@@ -37,23 +35,19 @@ export function createRuntimeAuthProfileFileObservation({
   function recordRuntimeAuthProfilePersistedStore(
     databasePath: string,
     store: AuthProfileStore | null,
-    env: NodeJS.ProcessEnv = process.env,
   ): void {
     if (isArtifactPreservingStateRead() || getOpenClawDatabaseMaintenanceScope()) {
       return;
     }
     const identity = readAuthProfileDatabaseIdentity(databasePath);
-    if (!identity) {
+    // Workers retain physical-file observation, but native tasks reload their own rows.
+    if (!identity || !isMainThread) {
       return;
     }
-    const capturedEnv = cloneEnvWithPlatformSemantics(env);
-    capturedEnv.OPENCLAW_STATE_DIR = resolveStateDir(capturedEnv);
-    rowsCache.recordSource(databasePath, `${identity.key}:${identity.birthtime ?? ""}`, store, () =>
-      readAuthProfileRowsAtPath(databasePath, capturedEnv),
-    );
+    rowsCache.recordSource(databasePath, `${identity.key}:${identity.birthtime ?? ""}`, store);
   }
 
-  /** User-requested refresh reads persisted sources before observation delivers a change. */
+  /** Explicit refresh retires cached rows; the next owner read reloads persisted facts. */
   async function refreshRuntimeAuthProfileStoreSources(): Promise<void> {
     await refreshAuthProfileFileState();
     rowsCache.invalidateRows();
@@ -115,36 +109,27 @@ export function createRuntimeAuthProfileFileObservation({
   }
 
   registerAuthProfileFileChangeListener(
-    ({ directory, identityChanged, sourcesChanged, contentsChanged, createdPaths }) => {
+    ({ directory, identityChanged, sourcesChanged, createdPaths }) => {
       const unprovenCreation = createdPaths.some((pathname) => !rowsCache.hasSource(pathname));
-      // Coarse observation checks file facts without reopening unchanged auth sources.
-      if (!identityChanged && !sourcesChanged && !contentsChanged && !unprovenCreation) {
-        return Promise.resolve();
+      // In-process writes publish rows; file observation only retires replaced sources.
+      if (!identityChanged && !sourcesChanged && !unprovenCreation) {
+        return;
       }
-      if (identityChanged || sourcesChanged || unprovenCreation) {
-        const paths = [...snapshots].flatMap(([key, entry]) => {
-          const candidates = entry.legacyCandidates;
-          return path.dirname(key) === directory ||
-            (entry.owner.kind === "resolved" &&
-              path.dirname(entry.owner.sharedDatabasePath) === directory) ||
-            (sourcesChanged &&
-              candidates &&
-              [...candidates.local, ...candidates.shared].some(
-                (source) => path.dirname(source.path) === directory,
-              ))
-            ? [key]
-            : [];
-        });
-        invalidatePaths(paths);
-        refreshExternalAuthPaths(paths);
-      }
-      // Session writes share these files; only changed auth rows invalidate published credentials.
-      return rowsCache
-        .refreshChanged(directory)
-        .then(refreshExternalAuthPaths)
-        .catch((error: unknown) => {
-          reportCommittedInlineAuthFailure("Auth file observation refresh failed", error);
-        });
+      const paths = [...snapshots].flatMap(([key, entry]) => {
+        const candidates = entry.legacyCandidates;
+        return path.dirname(key) === directory ||
+          (entry.owner.kind === "resolved" &&
+            path.dirname(entry.owner.sharedDatabasePath) === directory) ||
+          (sourcesChanged &&
+            candidates &&
+            [...candidates.local, ...candidates.shared].some(
+              (source) => path.dirname(source.path) === directory,
+            ))
+          ? [key]
+          : [];
+      });
+      invalidatePaths(paths);
+      refreshExternalAuthPaths(paths);
     },
   );
 

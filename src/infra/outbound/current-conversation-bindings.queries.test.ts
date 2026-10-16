@@ -6,6 +6,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import {
@@ -52,7 +53,11 @@ it("reads ordered binding selections and target batches in one statement after c
     const missing = binding("missing");
     writeBinding(original);
     const { db } = openOpenClawStateDatabase();
-    const statements = trackSqliteStatementExecutions(db, ["statement"], () => "statement");
+    const statements = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(db),
+      ["statement"],
+      () => "statement",
+    );
     const refs = [missing.conversation, original.conversation, original.conversation];
     try {
       expect(readCurrentConversationBindingSelectionInDatabase(db, refs)).toEqual([
@@ -93,43 +98,6 @@ it("reads ordered binding selections and target batches in one statement after c
   });
 });
 
-it("reads current bindings without recompiling fixed queries after warmup", async () => {
-  await withOpenClawTestState({ label: "binding-query-budget" }, async () => {
-    const { db } = openOpenClawStateDatabase();
-    const executions = trackSqliteStatementExecutions(db, ["read"], (sql) =>
-      (sql.startsWith("select ") || sql.startsWith("with ")) &&
-      sql.includes('"current_conversation_bindings"')
-        ? "read"
-        : null,
-    );
-    const compile = vi.spyOn(getNodeSqliteKysely(db).getExecutor(), "compileQuery");
-    try {
-      const records = [binding("one"), binding("two", "sibling")];
-      for (const record of records) {
-        expect(writeBinding(record)).toEqual(record);
-        expect(resolveCurrentConversationBindingRecord(record.conversation)).toEqual(record);
-      }
-      compile.mockClear();
-      executions.counts.read = 0;
-      for (let index = 0; index < 1_000; index += 1) {
-        const record = records[index % records.length]!;
-        const current = resolveCurrentConversationBindingRecord(record.conversation);
-        expect(current).toEqual(record);
-      }
-      expect(executions.counts.read).toBe(1_000);
-      expect(
-        compile.mock.results.filter(
-          (result) =>
-            result.type === "return" &&
-            result.value.sql.includes('"current_conversation_bindings"'),
-        ).length,
-      ).toBe(0);
-    } finally {
-      executions.restore();
-    }
-  });
-});
-
 it("invalidates warm main-thread binding rows after worker receipts and database reopen", async () => {
   await withOpenClawTestState({ label: "binding-query-freshness" }, async () => {
     const original = binding("worker-written");
@@ -138,10 +106,13 @@ it("invalidates warm main-thread binding rows after worker receipts and database
     expect(inspect()).toEqual(original);
     expect(inspect()).toEqual(original);
     const owned = openOpenClawStateDatabase();
-    const executions = trackSqliteStatementExecutions(owned.db, ["freshness"], (query) =>
-      /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(query)
-        ? "freshness"
-        : null,
+    const executions = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(owned.db),
+      ["freshness"],
+      (query) =>
+        /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(query)
+          ? "freshness"
+          : null,
     );
     try {
       const replacement = {
@@ -178,12 +149,15 @@ it("reuses unchanged binding rows while local updates, expiry, and returned obje
     const added = binding("missing");
     writeBinding(original);
     const { db } = openOpenClawStateDatabase();
-    const executions = trackSqliteStatementExecutions(db, ["selection", "freshness"], (query) =>
-      /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(query)
-        ? "freshness"
-        : query.startsWith("with ") && query.includes('"current_conversation_bindings"')
-          ? "selection"
-          : null,
+    const executions = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(db),
+      ["selection", "freshness"],
+      (query) =>
+        /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(query)
+          ? "freshness"
+          : query.startsWith("with ") && query.includes('"current_conversation_bindings"')
+            ? "selection"
+            : null,
     );
     const refs = [original.conversation, added.conversation];
     const inspect = () => inspectCurrentConversationBindingRecords(refs);

@@ -218,6 +218,19 @@ set this capability on a harness that only sometimes owns authentication.
 This static bootstrap capability is distinct from ownership of an already-bound
 native session's model and connection.
 
+### Native setup verification
+
+For profileless Model Setup activation, a harness with `authBootstrap: "harness"`
+can implement `verifySetup(ctx): Promise<void>`. The context provides `config`,
+`provider`, `modelId`, `workspaceDir`, `signal`, and `assertCurrent()`.
+Import its type from `openclaw/plugin-sdk/agent-harness`.
+
+Confirm live access to the selected model without a turn; cached or bundled
+catalogs are insufficient. Recheck `assertCurrent()` before native I/O and
+after awaits, and close connections in `finally`. Core rechecks the hook and
+plugin artifacts before commit. Credential-backed routes and harnesses without
+the hook retain the normal inference probe.
+
 ### Bound native session ownership
 
 The optional `resolveSessionRuntimeOwnership({ config, agentId, sessionId,
@@ -352,8 +365,6 @@ native harnesses:
   for provider-aware tool schema policy
 - `runtimePlan.transcript.resolvePolicy(...)` for transcript sanitization and
   tool-call repair policy
-- `runtimePlan.delivery.isSilentPayload(...)` for shared `NO_REPLY` and media
-  delivery suppression
 - `runtimePlan.outcome.classifyRunResult(...)` for model fallback
   classification
 - `runtimePlan.observability` for resolved provider/model/harness metadata
@@ -361,6 +372,25 @@ native harnesses:
 Harnesses may use the plan for decisions that need to match OpenClaw behavior,
 but treat it as host-owned attempt state: do not mutate it or use it to switch
 providers/models inside a turn.
+
+Terminal reply preparation belongs to `agent-run-terminal-reply.ts`. Each terminal
+producer publishes `meta.terminalReply` and full prepared payloads; delivery and
+clients consume them without parsing text again. Only a whole final that trims
+to uppercase `NO_REPLY` is silent. Preparation strips one literal leading
+`NO_REPLY\n` and preserves the remainder as visible text, including a second
+`NO_REPLY`. Otherwise, a standalone `NO_REPLY` on the last non-empty line is
+removed and the preceding answer is delivered; whitespace around that final line
+is allowed. Wrapped, lowercase, punctuated, inline, and mid-text forms remain visible.
+Internal result-required turns need an actual completed current-source final
+result; progress mirrors do not satisfy that obligation.
+
+The sole producer entrypoint is `prepareAgentRunTerminalReply({ rawText })`,
+returning `{ text, terminalReply }`. It classifies the raw text before stripping
+one leading or trailing control line. Delivery consumers do not call this function. Deliver
+`text`, which retains the full prepared bytes, rather than the bounded snapshot
+text. A recorded visible result stays visible even if its text is `NO_REPLY`.
+Harnesses combining multiple visible answers combine their prepared snapshots
+and cap the aggregate metadata separately; never reparse the joined delivery text.
 
 For model-visible reply policy, `buildHarnessVisibleReplyGuidance` from
 `openclaw/plugin-sdk/agent-harness-runtime` accepts the prepared delivery mode,

@@ -1,20 +1,21 @@
-// Versioned exact-execution identity and run-discovery projections.
 import { type Static, Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+// Versioned exact-execution identity and run-discovery projections.
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const ExecutionIdentityRefSchema = Type.String({ minLength: 1, maxLength: 256 });
 const ExecutionIdentityDisplayLabelSchema = Type.String({ maxLength: 128 });
-const ExecutionIdentityEvidenceStateSchema = Type.Union([
-  Type.Literal("present"),
-  Type.Literal("absent"),
-  Type.Literal("unknown"),
-  Type.Literal("unsupported"),
+const ExecutionIdentityEvidenceStateSchema = stringLiteralUnion([
+  "present",
+  "absent",
+  "unknown",
+  "unsupported",
 ]);
-const ExecutionIdentityContextCoverageStateSchema = Type.Union([
-  Type.Literal("attribution-only"),
-  Type.Literal("unattributed"),
-  Type.Literal("unknown"),
-  Type.Literal("unsupported"),
+const ExecutionIdentityContextCoverageStateSchema = stringLiteralUnion([
+  "attribution-only",
+  "unattributed",
+  "unknown",
+  "unsupported",
 ]);
 const ExecutionIdentityDecisionCoverageStateSchema = Type.Union([
   Type.Literal("enforced"),
@@ -22,15 +23,15 @@ const ExecutionIdentityDecisionCoverageStateSchema = Type.Union([
 ]);
 const ExecutionIdentityRefArraySchema = Type.Array(ExecutionIdentityRefSchema, { maxItems: 16 });
 
-const ExecutionIdentityPrincipalKindSchema = Type.Union([
-  Type.Literal("person"),
-  Type.Literal("agent"),
-  Type.Literal("service"),
-  Type.Literal("schedule"),
-  Type.Literal("webhook"),
-  Type.Literal("system"),
-  Type.Literal("local-account"),
-  Type.Literal("runtime"),
+const ExecutionIdentityPrincipalKindSchema = stringLiteralUnion([
+  "person",
+  "agent",
+  "service",
+  "schedule",
+  "webhook",
+  "system",
+  "local-account",
+  "runtime",
 ]);
 
 export const PrincipalRefV1Schema = closedObject({
@@ -51,51 +52,47 @@ const SponsorFactV1Schema = closedObject({
   state: ExecutionIdentityEvidenceStateSchema,
 });
 
-const AssuranceKindSchema = Type.Union([
-  Type.Literal("durable-profile"),
-  Type.Literal("trusted-proxy"),
-  Type.Literal("tailscale-whois"),
-  Type.Literal("device-proof"),
-  Type.Literal("channel-admission"),
-  Type.Literal("local-process"),
-  Type.Literal("spawn-lineage"),
-  Type.Literal("worker-admission"),
-  Type.Literal("runtime-binding"),
-  Type.Literal("other"),
+const AssuranceKindSchema = stringLiteralUnion([
+  "durable-profile",
+  "trusted-proxy",
+  "tailscale-whois",
+  "device-proof",
+  "channel-admission",
+  "local-process",
+  "spawn-lineage",
+  "worker-admission",
+  "runtime-binding",
+  "other",
 ]);
 
 const AssuranceEvidenceV1Schema = closedObject({
   kind: AssuranceKindSchema,
   evidenceRef: ExecutionIdentityRefSchema,
-  strength: Type.Union([
-    Type.Literal("self-asserted"),
-    Type.Literal("boundary-verified"),
-    Type.Literal("cryptographic"),
-  ]),
+  strength: stringLiteralUnion(["self-asserted", "boundary-verified", "cryptographic"]),
 });
 
-const ExecutionIdentityIngressKindSchema = Type.Union([
-  Type.Literal("local-cli"),
-  Type.Literal("gateway-client"),
-  Type.Literal("channel"),
-  Type.Literal("api"),
-  Type.Literal("schedule"),
-  Type.Literal("webhook"),
-  Type.Literal("task"),
-  Type.Literal("subagent"),
-  Type.Literal("acp"),
-  Type.Literal("worker"),
-  Type.Literal("plugin"),
-  Type.Literal("recovery"),
-  Type.Literal("system"),
+const ExecutionIdentityIngressKindSchema = stringLiteralUnion([
+  "local-cli",
+  "gateway-client",
+  "channel",
+  "api",
+  "schedule",
+  "webhook",
+  "task",
+  "subagent",
+  "acp",
+  "worker",
+  "plugin",
+  "recovery",
+  "system",
 ]);
 
-const ExecutionIdentityRuntimeKindSchema = Type.Union([
-  Type.Literal("gateway"),
-  Type.Literal("embedded"),
-  Type.Literal("worker"),
-  Type.Literal("plugin-harness"),
-  Type.Literal("acp"),
+const ExecutionIdentityRuntimeKindSchema = stringLiteralUnion([
+  "gateway",
+  "embedded",
+  "worker",
+  "plugin-harness",
+  "acp",
 ]);
 
 export const ExecutionIdentityContextV1Schema = closedObject({
@@ -175,12 +172,7 @@ export const DecisionReceiptV1Schema = closedObject({
     summary: Type.Optional(Type.String({ maxLength: 512 })),
   }),
   decision: closedObject({
-    outcome: Type.Union([
-      Type.Literal("allowed"),
-      Type.Literal("denied"),
-      Type.Literal("not-applicable"),
-      Type.Literal("unknown"),
-    ]),
+    outcome: stringLiteralUnion(["allowed", "denied", "not-applicable", "unknown"]),
     reasonCode: ExecutionIdentityRefSchema,
   }),
   enforcement: closedObject({
@@ -202,11 +194,11 @@ export const DecisionReceiptV1Schema = closedObject({
 const DecisionReceiptDisplayProvenanceV1Schema = Type.Union([
   closedObject({
     state: Type.Literal("verified"),
-    producer: Type.Union([
-      Type.Literal("run-admission"),
-      Type.Literal("operator-approval"),
-      Type.Literal("message-delivery"),
-      Type.Literal("cron-lifecycle"),
+    producer: stringLiteralUnion([
+      "run-admission",
+      "operator-approval",
+      "message-delivery",
+      "cron-lifecycle",
     ]),
   }),
   closedObject({ state: Type.Literal("unverified") }),
@@ -312,7 +304,7 @@ export const AuditRunInspectResultSchema = closedObject({
   run: closedObject({
     runId: Type.Optional(ExecutionIdentityRefSchema),
     executionId: Type.Optional(ExecutionIdentityRefSchema),
-    status: Type.Union([Type.Literal("known"), Type.Literal("unknown")]),
+    status: stringLiteralUnion(["known", "unknown"]),
   }),
   identity: AuditRunIdentityV1Schema,
   decisionDisplays: Type.Array(DecisionReceiptDisplayV1Schema, { maxItems: 100 }),

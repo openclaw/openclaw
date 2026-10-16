@@ -1,7 +1,11 @@
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import * as transcriptWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -9,7 +13,7 @@ import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import * as repositoryWorkspaces from "../../state/session-repository-workspaces.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -19,11 +23,64 @@ import {
   type SessionRowProjection,
 } from "../session-row-projection.js";
 import * as rowInputs from "../session-utils-row.js";
+import { loadProjectSessionStore } from "./projects-session-store.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 import { initializeRepository, invokeProjectMethod } from "./projects.test-support.js";
 
+test("projects.list reuses durable metadata until a committed session change", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-reuse-" });
+  let projection: SessionRowProjection | undefined;
+  try {
+    const profile = ensureProfileForEmail("projects-reuse@example.test");
+    const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+    const target = { agentId: "main", sessionKey: "agent:main:recent" };
+    const entry = {
+      sessionId: "recent",
+      updatedAt: 100,
+      createdActor: { type: "human" as const, source: "profile" as const, id: profile.id },
+      spawnedCwd: "/work/before",
+    };
+    replaceSessionEntrySync(target, entry);
+    projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const list = () =>
+      invokeProjectMethod(
+        "projects.list",
+        {},
+        cfg,
+        ["operator.write"],
+        profile.id,
+        registeredProjectsHandlers,
+        projection,
+      );
+    expect(await list()).toMatchObject({
+      ok: true,
+      payload: { recents: [{ kind: "folder", folder: "/work/before", displayName: "before" }] },
+    });
+    const snapshot = loadProjectSessionStore(projection, []);
+    expect(Object.isFrozen(snapshot.store)).toBe(true);
+    await list();
+    expect(loadProjectSessionStore(projection, [])).toBe(snapshot);
+    replaceSessionEntrySync(target, { ...entry, updatedAt: 200, spawnedCwd: "/work/after" });
+    expect(await list()).toMatchObject({
+      ok: true,
+      payload: { recents: [{ kind: "folder", folder: "/work/after", displayName: "after" }] },
+    });
+    expect(snapshot.store[target.sessionKey]?.spawnedCwd).toBe("/work/before");
+    expect(loadProjectSessionStore(projection, []).store[target.sessionKey]?.spawnedCwd).toBe(
+      "/work/after",
+    );
+  } finally {
+    projection?.dispose();
+    await state.cleanup();
+  }
+});
+
 test("projects.list returns only the caller's deterministic resolved recents", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
+  const memoryLocation = {
+    agentId: "main",
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+  };
   let releaseCatalog: (() => void) | undefined;
   let projection: SessionRowProjection | undefined;
   try {
@@ -33,7 +90,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     const targetProfile = ensureProfileForEmail("target@example.test");
     const foreignProfile = ensureProfileForEmail("foreign@example.test");
     const actor = { type: "human" as const, source: "profile" as const, id: sourceProfile.id };
-    const repository = await getSessionRepositoryWorkspaceStore().create({
+    const repository = await repositoryWorkspaces.getSessionRepositoryWorkspaceStore().create({
       agentId: "main",
       sessionKey: "global",
       url: "https://github.com/octocat/hello-world.git",
@@ -93,11 +150,11 @@ test("projects.list returns only the caller's deterministic resolved recents", a
         spawnedCwd: "/work/private-bob",
       },
     );
-    replaceSessionEntrySync(
+    await replaceSessionEntry(
       {
         agentId: "main",
         sessionKey: "agent:main:dashboard:incognito-recent",
-        storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+        storePath: memoryLocation.path,
       },
       {
         sessionId: "incognito-recent",
@@ -264,6 +321,50 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     expect((afterPublication?.payload as { recents?: unknown[] } | undefined)?.recents).toEqual(
       tiedRecents,
     );
+    const findRepositories = repositoryWorkspaces.findSessionRepositoryWorkspaces;
+    const repositoryRead = vi
+      .spyOn(repositoryWorkspaces, "findSessionRepositoryWorkspaces")
+      .mockImplementationOnce(async (...args) => {
+        const result = await findRepositories(...args);
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: tiedKeys[0] },
+          {
+            sessionId: "tie-0",
+            updatedAt: 3_000,
+            createdActor: actor,
+            visibility: "draft",
+            spawnedCwd: "/work/tie-0",
+          },
+        );
+        const changed = projection!.capture({ agentId: "main", key: tiedKeys[0] })!;
+        expect(
+          projection!.readCapabilityEntry({
+            agentId: "main",
+            key: tiedKeys[0],
+            storePath: changed.storeTarget.storePath,
+          })?.entry?.visibility,
+        ).toBe("draft");
+        return result;
+      });
+    try {
+      expect(
+        await invokeProjectMethod(
+          "projects.list",
+          {},
+          cfg,
+          ["operator.write"],
+          targetProfile.id,
+          registeredProjectsHandlers,
+          projection,
+        ),
+      ).toMatchObject({
+        ok: false,
+        error: { message: expect.stringContaining("Project access changed") },
+      });
+      expect(repositoryRead).toHaveBeenCalled();
+    } finally {
+      repositoryRead.mockRestore();
+    }
     const anonymous = await invokeProjectMethod("projects.list", {}, cfg, ["operator.read"]);
     expect(anonymous?.payload).not.toHaveProperty("recents");
     const external = new (requireNodeSqlite().DatabaseSync)(openOpenClawStateDatabase().path);
@@ -287,6 +388,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
   } finally {
     projection?.dispose();
     releaseCatalog?.();
+    memorySessionActorOwners.closeDatabase(memoryLocation);
     await state.cleanup();
   }
 });

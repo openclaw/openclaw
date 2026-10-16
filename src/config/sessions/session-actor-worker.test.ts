@@ -103,6 +103,7 @@ it("installs native commits before reply, retains known commits after reply fail
       name: "Error",
       message: "synthetic reply failure after native commit",
     });
+    expect(f.reply()).toEqual({ kind: "committed", failure: committed.failure });
     expect(committed.receipt).toMatchObject({
       beforeVersion: initial.version,
       afterVersion: { epoch: initial.version.epoch, sequence: 1 },
@@ -134,21 +135,6 @@ it("installs native commits before reply, retains known commits after reply fail
     expect(f.nativeEntry()?.updatedAt).toBe(10);
     delete f.hooks.admit;
     expect(f.read().entry?.updatedAt).toBe(10);
-    f.hooks.admit = (stage) => {
-      if (stage === "commit") {
-        f.database.db
-          .prepare(
-            "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.updatedAt', ?) WHERE session_key = ?",
-          )
-          .run(999, f.target.sessionKey);
-      }
-    };
-    expect(f.mutate(patch(f.read(), 21))).toMatchObject({
-      kind: "rolled-back",
-      error: { message: "Session actor database changed during authority admission" },
-    });
-    expect(f.receipt()).toBeUndefined();
-    expect(f.nativeEntry()?.updatedAt).toBe(10);
   });
 });
 

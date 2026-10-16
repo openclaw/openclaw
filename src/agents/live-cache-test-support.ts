@@ -2,7 +2,7 @@ import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion
 /**
  * Shared helpers for live prompt-cache integration tests.
  */
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { completeSimple } from "../llm/stream.js";
 import type { Api, AssistantMessage, Model } from "../llm/types.js";
@@ -187,7 +187,7 @@ export async function resolveLiveDirectModelPool(params: {
   preferredModelIds: readonly string[];
 }): Promise<LiveResolvedModelPool> {
   const { resolveModelAsync } = await import("./embedded-agent-runner/model.js");
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const agentDir = resolveDefaultAgentDir(cfg);
   const { authStorage } = await discoverAuthStorageFacts(agentDir);
   const modelRegistry = await discoverModelsAsync(authStorage, agentDir, { config: cfg });

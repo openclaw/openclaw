@@ -1,50 +1,35 @@
-import { ContextConsumer } from "@lit/context";
-import type { ReactiveControllerHost } from "lit";
-import { applicationContext } from "../app/context.ts";
+import { createMemo, createSignal } from "solid-js";
 import { normalizeAgentTargetLabel } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { profileAvatarUrl, profileDirectory } from "../lib/profile-directory.ts";
-import { GatewayPageController } from "../lit/gateway-page-controller.ts";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import { sessionSelfOwner, type SessionOwnerOption } from "./session-owner-chip.ts";
+import { useOptionalApplication } from "../lib/reactive/context.ts";
+import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
+import { useGatewayPage } from "../lib/reactive/gateway-page.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
+import { sessionSelfOwner, type SessionOwnerOption } from "../lib/session-owner.ts";
 
 /** Assignment uses the Gateway directory, independently of session filters and presence. */
-export class SessionOwnerMenu {
-  private readonly context;
-  private readonly connection;
-  private searchGeneration = 0;
-  private opened = false;
-
-  constructor(host: ReactiveControllerHost & HTMLElement) {
-    this.context = new ContextConsumer(host, { context: applicationContext, subscribe: true });
-    this.connection = new GatewayPageController(host, {
-      getGateway: () => this.context.value?.gateway,
-      invalidateRequests: () => {
-        this.searchGeneration += 1;
-      },
-    });
-    new SubscriptionsController(host).watchStore(() => this.context.value?.agents);
-    new SubscriptionsController(host).watchStore(() => this.directory);
-  }
-
-  private get directory() {
-    const gateway = this.context.value?.gateway;
-    return gateway ? profileDirectory(gateway) : undefined;
-  }
-
-  readonly load = () => {
-    if (this.opened) {
-      this.searchGeneration += 1;
+export function createSessionOwnerMenu() {
+  const context = useOptionalApplication();
+  const agents = context ? projectAgents(context.agents) : undefined;
+  const identities = context ? projectOwner(context.agentIdentity, (owner) => owner) : undefined;
+  const profiles = context
+    ? projectOwner(profileDirectory(context.gateway), (directory) => directory)
+    : undefined;
+  const connection = useGatewayPage({ getGateway: () => context?.gateway });
+  const [searchGeneration, setSearchGeneration] = createSignal(0);
+  let opened = false;
+  const load = () => {
+    if (opened) {
+      setSearchGeneration((value) => value + 1);
     }
-    this.opened = true;
-    void this.directory?.load(true);
+    opened = true;
+    void profiles?.read().load(true);
   };
-
-  private ownerOptions() {
-    const context = this.context.value;
-    const self = sessionSelfOwner(context?.gateway.snapshot.selfUser);
+  const ownerOptions = createMemo(() => {
+    const self = sessionSelfOwner(connection.snapshot?.selfUser);
     // Keep a same-connection directory during refresh, never a previous Gateway's result.
-    const directory = this.directory?.result;
+    const directory = profiles?.read().result;
     const owners: SessionOwnerOption[] = (directory?.profiles ?? [])
       .filter((profile) => !profile.mergedInto && profile.id !== self?.id)
       .map((profile) => ({
@@ -58,8 +43,9 @@ export class SessionOwnerMenu {
           profile.id,
         avatarUrl: profileAvatarUrl(profile),
       }));
-    for (const agent of context?.agents.state.agentsList?.agents ?? []) {
-      const identity = context?.agentIdentity.get(agent.id);
+    const identityOwner = identities?.read();
+    for (const agent of agents?.read().agentsList?.agents ?? []) {
+      const identity = identityOwner?.get(agent.id);
       owners.push({
         type: "agent",
         id: agent.id,
@@ -82,20 +68,16 @@ export class SessionOwnerMenu {
       owners: [...new Map(owners.map((owner) => [owner.type + ":" + owner.id, owner])).values()],
       directory,
     };
-  }
-
-  get snapshot() {
-    const directory = this.directory;
+  });
+  const snapshot = createMemo(() => {
+    const directory = profiles?.read();
     return {
-      ...this.ownerOptions(),
-      searchGeneration: this.searchGeneration,
-      connected: Boolean(this.connection.capture()),
+      ...ownerOptions(),
+      searchGeneration: connection.epoch + searchGeneration(),
+      connected: Boolean(connection.snapshot && connection.capture()),
       loading: Boolean(directory?.loading),
       error: directory?.error,
     };
-  }
-
-  get multipleOwners(): boolean {
-    return this.ownerOptions().owners.length > 1;
-  }
+  });
+  return { load, snapshot, multipleOwners: () => ownerOptions().owners.length > 1 };
 }

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/clawrouter",
-  "version": "2026.10.2",
+  "version": "2026.10.4",
   "private": true,
   "description": "OpenClaw ClawRouter plugin",
   "type": "module",
@@ -18,7 +18,7 @@
       "build": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/clawrouter",
       "copy": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/clawrouter --copy",
       "buildOutputs": [
-        "openclaw.plugin.json"
+        "dist/openclaw.plugin.json"
       ]
     }
   },

@@ -38,7 +38,7 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import * as configCapture from "./update-command-config-snapshot.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
-import { createUpdateRunProgress } from "./update-command-run.js";
+import { completeUpdateCommandRun, createUpdateRunProgress } from "./update-command-run.js";
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -68,7 +68,7 @@ it.each([
   { restart: false, contention: false },
   { restart: false, contention: false, wrapped: true },
 ])(
-  "defers only operator-owned state contention ($restart, $contention, wrapped=$wrapped)",
+  "defers package replacement state handoff ($restart, contention=$contention, wrapped=$wrapped)",
   async ({ restart, contention, wrapped }) => {
     const { root, env } = await createDoctorFixture();
     const cause = contention
@@ -87,7 +87,7 @@ it.each([
       progress: { onStepComplete },
       onConfigSnapshot: vi.fn(),
     });
-    if (restart || !contention) {
+    if (restart) {
       await expect(operation).rejects.toBe(error);
     } else {
       const step = await operation;
@@ -101,11 +101,17 @@ it.each([
         },
       });
       expect(step && isFailedUpdateStep(step)).toBe(false);
-      expect(step?.advisory?.message).toContain("service owner");
       expect(step?.advisory?.message).toContain("openclaw update status");
       expect(step?.advisory?.message).toContain("openclaw doctor");
       expect(results).toEqual([step]);
       expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(step));
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const result = completeUpdateCommandRun(
+        { status: "ok", mode: "npm", root, steps: results, durationMs: 0 },
+        run,
+      );
+      expect(result.status).toBe("ok");
+      expect(getUpdateRun(run.runId, { env })?.status).toBe("succeeded");
     }
     expect(spawn).not.toHaveBeenCalled();
   },
@@ -406,7 +412,8 @@ it.each([
 
 it("leaves the run ledger unchanged while the activation Doctor child is pending", async () => {
   const { root, env } = await createDoctorFixture();
-  vi.useFakeTimers();
+  // Ledger receipts still need real worker scheduling and monotonic clocks.
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   const { runId } = createUpdateRun({ trigger: "control-ui" }, { env });
   expect(adoptUpdateRun(runId, { env }).origin.driver?.pid).toBe(process.pid);
   const spawned = createDeferredCore();

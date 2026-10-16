@@ -89,6 +89,7 @@ it("bounds concurrent discovery and preserves merge order when catalogs finish o
     vi.useFakeTimers();
     const entered = createDeferred();
     const delays = [60, 50, 40, 10, 10, 10];
+    const discoveryDurationMs = delays.reduce((total, delay) => total + delay, 0);
     const finished: number[] = [];
     const outcomes: ProviderCatalogOutcome[] = [];
     const started: number[] = [];
@@ -160,7 +161,7 @@ it("bounds concurrent discovery and preserves merge order when catalogs finish o
         awaitGateBeforeSettlement(entered.promise, operation, "Catalogs must start"),
         signal,
       );
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(discoveryDurationMs);
       const providers = await operation;
       expect(peak).toBe(4);
       expect(started).toEqual([0, 1, 2, 3, 4, 5]);
@@ -172,7 +173,7 @@ it("bounds concurrent discovery and preserves merge order when catalogs finish o
       });
       expect(lateStarted).toBe(true);
     } finally {
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(discoveryDurationMs);
       vi.useRealTimers();
       await operation;
     }

@@ -1,14 +1,22 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
-import { renderComposerQuestionDock } from "./chat-composer-question.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { questionPanelIn } from "./chat-question-card.test-support.ts";
 import type { ChatQuestionCard, QuestionPanelProps } from "./chat-question-card.ts";
 
+const mountedViews: ReturnType<typeof mountSolid>[] = [];
+
 afterEach(() => {
+  for (const view of mountedViews) {
+    view.unmount();
+  }
+  mountedViews.length = 0;
   document.body.replaceChildren();
   vi.doUnmock("./chat-question-panel.tsx");
   vi.restoreAllMocks();
@@ -29,7 +37,21 @@ it("defers the question controls, retries failed loading, and mounts only the cu
     return importOriginal();
   });
   const container = document.body.appendChild(document.createElement("div"));
-  render(renderComposerQuestionDock(null), container);
+  let updatePanel!: (value: QuestionPanelProps | null) => void;
+  const currentView = mountSolid(
+    () => {
+      const [panel, setPanel] = createSignal<QuestionPanelProps | null>(null);
+      updatePanel = setPanel;
+      return createComponent(ComposerQuestionDock, {
+        get panel() {
+          return panel();
+        },
+      });
+    },
+    { container },
+  );
+  mountedViews.push(currentView);
+  flush();
   expect(customElements.get("openclaw-chat-question-panel")).toBeUndefined();
   expect(load).not.toHaveBeenCalled();
 
@@ -47,7 +69,8 @@ it("defers the question controls, retries failed loading, and mounts only the cu
     },
     onSubmit,
   };
-  render(renderComposerQuestionDock(props), container);
+  updatePanel(props);
+  flush();
   const card = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
   await card.updateComplete;
   await loadStarted.promise;
@@ -87,10 +110,15 @@ it("defers the question controls, retries failed loading, and mounts only the cu
       drafts: new Map(),
     },
   };
-  render(renderComposerQuestionDock(current), container);
+  updatePanel(current);
+  flush();
   await card.updateComplete;
   const removed = document.body.appendChild(document.createElement("div"));
-  render(renderComposerQuestionDock(props), removed);
+  const removedView = mountSolid(() => createComponent(ComposerQuestionDock, { panel: props }), {
+    container: removed,
+  });
+  mountedViews.push(removedView);
+  flush();
   const removedCard = removed.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
   await removedCard.updateComplete;
   removed.remove();

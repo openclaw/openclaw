@@ -241,6 +241,22 @@ describe("execution identity context storage", () => {
         },
       ],
     });
+    prepareExecutionIdentityContextAtAdmission(facts("session-run"), {
+      ...database,
+      now: 102,
+      contextId: "context-third",
+      executionId: "execution-third",
+      runtimeInstanceId: "runtime-1",
+    });
+    const nextPage = await inspectExecutionIdentityRun(
+      { runId: "session-run", executionOffset: 2, executionLimit: 1 },
+      { ...database, now: 300 },
+    );
+    expect(nextPage.identity).toMatchObject({
+      state: "ambiguous",
+      candidates: [{ executionId: "execution-third", contextId: "context-third", createdAt: 102 }],
+    });
+    expect(nextPage).not.toHaveProperty("nextExecutionCursor");
   });
 
   it("confirms durable retries without manufacturing lost evidence", async () => {

@@ -1,12 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessageSync,
   loadSessionEntryReadOnly,
   readSessionTranscriptWatermark,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   disposeSessionReadContexts,
@@ -33,6 +36,8 @@ type FixtureRow = {
   row: Partial<GatewaySessionListRow> & { subject?: string };
   transcript?: boolean;
 };
+
+afterEach(() => memorySessionActorOwners.reset());
 
 async function withInventory(
   definitions: FixtureRow[],
@@ -78,7 +83,7 @@ async function withInventory(
     for (const [index, definition] of definitions.entries()) {
       const row = rows[index]!;
       const scope = scopes[index]!;
-      replaceSessionEntrySync(scope, {
+      const entry: SessionEntry = {
         sessionId: scope.sessionId,
         updatedAt: row.updatedAt ?? 0,
         label: row.label,
@@ -87,7 +92,12 @@ async function withInventory(
         visibility: "shared",
         createdActor: { type: "human", source: "profile", id: owner.id },
         ...(isIncognitoSessionKey(scope.sessionKey) ? { incognito: true } : {}),
-      });
+      };
+      if (isIncognitoSessionKey(scope.sessionKey)) {
+        await replaceSessionEntry(scope, entry);
+      } else {
+        replaceSessionEntrySync(scope, entry);
+      }
       if (!definition.transcript) {
         continue;
       }

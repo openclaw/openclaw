@@ -1,4 +1,5 @@
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
+import type { SessionAdmissionTransition } from "../../../config/sessions/session-admission-transition.types.js";
 import type { SessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { Model } from "../../../llm/types.js";
@@ -35,6 +36,8 @@ export type CompactionAccountingFact = Readonly<
         target: CompactionAccountingTarget;
         /** Present only when the host committed a successor session rotation. */
         previousSessionId?: string;
+        /** Ordered, host-committed identity changes; never inferred from a returned session ID. */
+        admissionTransitions?: readonly SessionAdmissionTransition[];
         /** Native-thread compaction leaves the host transcript unchanged. */
         hostCompactionCommitted?: boolean;
       }

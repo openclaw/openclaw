@@ -103,7 +103,8 @@ including awaited `lookup`, action-bound `withCurrent`, and the synchronous
 effect guard `assertLeaseCurrent`. Supply its `workerCodec`, record codec,
 acquisition/retention policy, errors, and timing. The old
 `createNativeSessionBindingLifecycle` and its synchronous store view remain
-deprecated compatibility until the next Plugin SDK major.
+deprecated compatibility through 2026-12-31, with removal in the first January
+2027 stable release.
 Pass host authority through `assertCurrent` and validate the expected generation
 in `assertRecordCurrent`. Leases coordinate storage; they grant no execution
 authority. Keep native cleanup after the host transaction commits.
@@ -114,14 +115,16 @@ Combine it with host authority for normal work. Cleanup may use retained lease
 ownership after host retirement, but must reject an expired, replaced, or closed
 lease even while the harness remains alive.
 
-Await `prepareNativeSessionGenerationAuthority`,
+Await `retainNativeSessionGenerationAuthority`,
 `reclaimNativeSessionGenerationWithAuthority`, and
-`resolveNativeSessionBindingWithAuthorityV2` to preserve the host generation and
+`resolvePreparedNativeSessionBinding` to preserve the host generation and
 predecessor across waits, adopting a verified predecessor before stale
-reclamation. The V2 resolver awaits `readBinding` and returns
-`{ binding, authority }`. A missing host entry permits an ephemeral session; a
+reclamation. The prepared resolver awaits `readBinding` and returns
+`{ binding, authority, release }`. Release the capture in `finally` after terminal
+cleanup; `authority.withLiveness` borrows that capture for cleanup with its own
+lifecycle check. A missing host entry permits an ephemeral session; a
 failed read cannot authorize a binding. The older generation helpers and the
-non-V2 `resolveNativeSessionBindingWithAuthority` retain synchronous binding
+released `resolveNativeSessionBindingWithAuthority` retain synchronous binding
 reads only for compatibility; see the
 [generation authority migration](/plugins/sdk-migration/compatibility-policy#native-session-generation-authority).
 

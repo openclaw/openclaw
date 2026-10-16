@@ -134,6 +134,10 @@ describe("model catalog refresh presentation", () => {
     flush();
     update(pending);
     await Promise.resolve();
+    const pickerDetails = container.querySelector("details")!;
+    pickerDetails.open = true;
+    pickerDetails.dispatchEvent(new Event("toggle"));
+    await Promise.resolve();
     const input = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
     const refresh = container.querySelector<HTMLButtonElement>("[data-chat-model-refresh] button");
     if (!input || !refresh) {

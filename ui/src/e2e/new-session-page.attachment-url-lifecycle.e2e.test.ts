@@ -118,25 +118,19 @@ suite.define(() => {
         await waitForCommittedNewSessionDraft(page, "", 1);
         // Synthetic paste leaves the pointer over the replacement remove button.
         await page.mouse.move(0, 0);
-        const agentDropdown = page.locator(".new-session-page__select--agent wa-dropdown");
+        const agentMenu = page.locator(".new-session-page__select--agent .agent-select__menu");
         await page.locator(".new-session-page__select--agent .agent-select__trigger").click();
         await expect
-          .poll(() =>
-            agentDropdown.evaluate(
-              (dropdown) => (dropdown as HTMLElement & { open: boolean }).open,
-            ),
-          )
+          .poll(() => agentMenu.evaluate((menu) => menu.matches(":popover-open")))
           .toBe(true);
         await navigate("new-session", "?agent=main&catalog=missing");
         await expect
           .poll(() =>
             page.evaluate(
               () =>
-                (
-                  document.querySelector(".new-session-page__select--agent wa-dropdown") as
-                    | (HTMLElement & { open: boolean })
-                    | null
-                )?.open ?? false,
+                document
+                  .querySelector(".new-session-page__select--agent .agent-select__menu")
+                  ?.matches(":popover-open") ?? false,
             ),
           )
           .toBe(false);

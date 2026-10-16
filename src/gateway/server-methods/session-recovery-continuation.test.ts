@@ -8,6 +8,7 @@ import {
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { useUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
@@ -20,11 +21,13 @@ import {
 } from "../test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const prepareProfiles = useUserProfileCatalogForTest();
 
 test.each(["membership", "identity"] as const)(
   "recovery continuation replays one active/completed turn but rejects changed destination %s",
   async (change) => {
     const { storePath } = await createSessionStoreDir();
+    await prepareProfiles();
     const { launchSessionRecoveryContinuation } =
       await import("./session-recovery-continuation.js");
     const sessionKey = "agent:main:dashboard:recovery-retry-authority";

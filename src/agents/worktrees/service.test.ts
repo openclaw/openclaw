@@ -50,7 +50,7 @@ function isWorktreeAdd(argv: readonly string[]): boolean {
 
 function expectCheckoutTimeouts(
   commandSpy: MockInstance<typeof commandRunner.runCommandWithTimeout>,
-  checkoutBases: string[],
+  checkoutBases: [string, string],
   networkTimeouts: number[] = [],
 ) {
   const gitCommands = commandSpy.mock.calls
@@ -59,10 +59,12 @@ function expectCheckoutTimeouts(
       checkout: isWorktreeAdd(argv) || (argv.includes("read-tree") && argv.includes("-u")),
       base: argv.at(-1),
       timeoutMs: typeof options === "number" ? options : options.timeoutMs,
+      noOutputTimeoutMs: typeof options === "number" ? undefined : options.noOutputTimeoutMs,
     }));
-  expect(gitCommands.filter((command) => command.checkout)).toEqual(
-    checkoutBases.map((base) => ({ checkout: true, base, timeoutMs: 300_000 })),
-  );
+  expect(gitCommands.filter((command) => command.checkout)).toEqual([
+    { checkout: true, base: checkoutBases[0], timeoutMs: 300_000, noOutputTimeoutMs: undefined },
+    { checkout: true, base: checkoutBases[1], timeoutMs: undefined, noOutputTimeoutMs: 300_000 },
+  ]);
   expect(
     new Set(gitCommands.filter((command) => !command.checkout).map((command) => command.timeoutMs)),
   ).toEqual(new Set([120_000, ...networkTimeouts]));
@@ -871,7 +873,17 @@ describe("ManagedWorktreeService", () => {
     it("gc retires an unchanged missing checkout", async () => {
       const created = await fixture("missing");
       await git(repo, "worktree", "remove", "--force", created.path);
-      expect(await service.gc()).toEqual({ ...completedGcResult, orphansRetired: 1 });
+      expect(await service.gc()).toEqual({
+        ...completedGcResult,
+        orphansRetired: 1,
+        packsRemoved: 0,
+        gitMaintenance: {
+          repoRoot: created.repoRoot,
+          stage: "completed",
+          packsBefore: 0,
+          packsAfter: 0,
+        },
+      });
       expect(getRegistryWorktree(env, created.id)).toEqual({ ...created, removedAt: now });
     });
 
@@ -940,7 +952,16 @@ describe("ManagedWorktreeService", () => {
         expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
           "retained user changes\n",
         );
-        expect(result).toEqual(completedGcResult);
+        expect(result).toEqual({
+          ...completedGcResult,
+          packsRemoved: 0,
+          gitMaintenance: {
+            repoRoot: liveIdentity.repoRoot,
+            stage: "completed",
+            packsBefore: 0,
+            packsAfter: 0,
+          },
+        });
       } finally {
         gate.inspect.resolve();
         gate.resume.resolve();

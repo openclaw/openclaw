@@ -7,8 +7,8 @@ import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-su
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 
-it.for(["snapshot-staging", "state-opening", "agent-opening"] as const)(
-  "releases completed callers while retaining the real SQLite %s owner",
+it.for(["snapshot-staging", "state-opening", "agent-opening", "history-close"] as const)(
+  "releases completed state while retaining the real SQLite %s owner",
   async (scenario, { signal }) => {
     const root = fixture.createTempDir("openclaw-sqlite-lifecycle-retention-");
     const result = await fixture.track(

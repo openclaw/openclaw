@@ -10,6 +10,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as backoff from "../../infra/backoff.js";
 import * as gitExec from "../../infra/git-exec.js";
+import * as gitWorker from "../../infra/git-worker.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
@@ -185,6 +186,23 @@ describe("managed worktree pending slots", () => {
       }
     },
   );
+
+  it("keeps Git dependency inspection outside capacity admission", async () => {
+    const run = gitWorker.runGitWorkerOperation;
+    vi.spyOn(gitWorker, "runGitWorkerOperation").mockImplementation(async (operation, options) => {
+      if (operation.type === "worktree.eviction-source") {
+        await stateLease.withOpenClawStateLeaseAsync(
+          { scope: WORKTREE_CREATE_LEASE_SCOPE, key: "capacity", leaseMs: 60_000, waitMs: 0 },
+          captureWorktreeRunEndContext(env),
+          async () => {},
+        );
+      }
+      return run(operation, options);
+    });
+    const created = await service.create({ repoRoot, name: "source-inspection", baseRef: "HEAD" });
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    expect(await readPendingWorktrees(env)).toEqual([]);
+  });
 
   it("keeps Git name discovery outside capacity admission", async ({ signal }) => {
     const entered = createDeferred();

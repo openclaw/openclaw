@@ -1,12 +1,11 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
+import type { SessionRestartResume } from "../../config/sessions/restart-resume.js";
 import type { ProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
+import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
-import {
-  respondChatSendAdmissionError,
-  runChatSendPreAdmission,
-} from "./chat-send-pre-admission.js";
+import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import {
   prepareChatSendNativeRuntimeRestriction,
@@ -39,9 +38,11 @@ export async function prepareAndAdmitChatSend(
     trustedSystemInput?: boolean;
     isDirectExternalUser?: boolean;
     goalResume?: SessionGoalOperation & { action: "resume" };
+    restartResume?: SessionRestartResume;
     providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   },
   diagnostics?: ChatSendDiagnostics,
+  releaseSessionStorage?: () => void,
 ) {
   const phase = diagnostics?.scope("admission");
   const assertCurrent =
@@ -61,6 +62,7 @@ export async function prepareAndAdmitChatSend(
     client,
     ...(options?.trustedSystemInput ? { trustedSystemInput: true } : {}),
     ...(options?.goalResume ? { goalResume: options.goalResume } : {}),
+    ...(options?.restartResume ? { restartResume: options.restartResume } : {}),
     ...(options?.providerReviewAcknowledgment
       ? { providerReviewAcknowledgment: options.providerReviewAcknowledgment }
       : {}),
@@ -78,7 +80,7 @@ export async function prepareAndAdmitChatSend(
     );
     return undefined;
   }
-  if (normalizedRequest.value.goalOperation) {
+  if (normalization instanceof Promise || normalizedRequest.value.goalOperation) {
     try {
       assertCurrent?.();
     } catch (error) {
@@ -141,7 +143,7 @@ export async function prepareAndAdmitChatSend(
   }
   let session: PreparedChatSendSession;
   try {
-    session = await qualifyChatSendSession(loadedSession.value);
+    session = await qualifyChatSendSession(loadedSession.value, releaseSessionStorage);
   } catch (error) {
     respondChatSendAdmissionError(error, respond);
     return undefined;
@@ -162,6 +164,7 @@ export async function prepareAndAdmitChatSend(
     hasCurrentClientAuthority,
     withPreparedCurrent: sessionMutationAuthorization?.withPreparedCurrent,
     followRegistration: sessionMutationAuthorization?.followRegistration,
+    diagnostics,
   });
   if (!admitted.ok) {
     return undefined;

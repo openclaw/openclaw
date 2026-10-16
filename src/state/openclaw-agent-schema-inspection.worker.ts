@@ -4,7 +4,6 @@ import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-databas
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
-import { adoptSqliteSchemaContracts } from "../infra/sqlite-schema-contract.js";
 import { withSqliteSourceReadDatabase } from "../infra/sqlite-source-handle.js";
 import {
   serializeAgentSchemaInspectionError,
@@ -17,7 +16,6 @@ import {
 } from "./openclaw-agent-schema-inspection.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import {
-  captureStateSchemaInspectionContracts,
   inspectStateDatabaseSchema,
   type StateSchemaInspectionInput,
 } from "./openclaw-state-schema-preflight.js";
@@ -43,7 +41,7 @@ process.on(
           type: "inspect-state";
           requestId: number;
           input: StateSchemaInspectionInput;
-          snapshot: AgentSchemaInspectionSnapshot;
+          snapshot?: AgentSchemaInspectionSnapshot;
         },
   ) => {
     if (request.type === "close") {
@@ -54,30 +52,35 @@ process.on(
     try {
       if (request.type === "inspect-state") {
         const { input, snapshot } = request;
-        adoptSqliteSchemaContracts(input.schemaContracts ?? []);
-        readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
-        const inspection = withSqliteSourceReadDatabase(
-          snapshot.pathname,
-          "snapshot",
-          (database) => {
-            readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
-            return inspectStateDatabaseSchema(database, input);
-          },
-          { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
-        );
-        readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
+        const inspect = (database: DatabaseSync) => inspectStateDatabaseSchema(database, input);
+        let inspection;
+        if (snapshot) {
+          readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
+          inspection = withSqliteSourceReadDatabase(
+            snapshot.pathname,
+            "snapshot",
+            (database) => {
+              readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
+              return inspect(database);
+            },
+            { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
+          );
+          readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
+        } else {
+          inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect)?.value;
+        }
         send({
           requestId,
           ok: true,
           inspection: null,
-          schemaContracts: captureStateSchemaInspectionContracts().filter(
-            (contract) =>
-              !input.schemaContracts?.some((prior) => prior.schemaSql === contract.schemaSql),
-          ),
-          stateInspection: {
-            ...inspection,
-            inspectionErrors: inspection.inspectionErrors.map(serializeAgentSchemaInspectionError),
-          },
+          stateInspection: inspection
+            ? {
+                ...inspection,
+                inspectionErrors: inspection.inspectionErrors.map(
+                  serializeAgentSchemaInspectionError,
+                ),
+              }
+            : null,
         });
         return;
       }

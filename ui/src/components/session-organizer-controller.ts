@@ -5,6 +5,7 @@ import {
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import { t } from "../i18n/index.ts";
+import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import {
   readSessionDragData,
   readSidebarSectionDragData,
@@ -33,9 +34,9 @@ import {
   type SidebarSessionPatch,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
+import { sidebarSessionHasArchiveDescendants } from "./session-menu-descendants.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller-types.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
 export type { SessionOrganizerControllerHost } from "./session-organizer-controller-types.ts";
 
@@ -98,21 +99,23 @@ export class SessionOrganizerController {
     return operations.patchSession(this.host, session, patch, scope, options);
   };
 
-  snoozeSessionWithUndo(session: SidebarRecentSession, snoozedUntil: number): Promise<void> {
+  snoozeSessionWithUndo(
+    session: SidebarRecentSession,
+    snoozedUntil: number,
+    rememberCustom = false,
+  ): Promise<void> {
     return this.runOperation((operations, scope) =>
-      operations.snoozeSessionWithUndo(this.host, session, snoozedUntil, scope),
+      operations.snoozeSessionWithUndo(this.host, session, { snoozedUntil, rememberCustom }, scope),
     );
   }
 
   archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
     return this.runOperation((operations, scope) =>
-      operations.archiveSessionWithUndo(this.host, session, scope),
-    );
-  }
-
-  archiveSessionTreeWithUndo(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.archiveSessionTreeWithUndo(this.host, session, scope),
+      operations.archiveSessionWithUndo(
+        this.host,
+        { ...session, hasArchiveDescendants: sidebarSessionHasArchiveDescendants(session) },
+        scope,
+      ),
     );
   }
 
@@ -541,7 +544,7 @@ export class SessionOrganizerController {
     if (!scope) {
       return;
     }
-    const dialog = await this.loadDialog(import("./session-group-defaults-dialog.ts"));
+    const dialog = await this.loadDialog(import("./session-group-defaults-dialog.tsx"));
     if (!dialog || !this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
@@ -741,21 +744,25 @@ export class SessionOrganizerController {
   setSessionsGrouping(grouping: SidebarSessionsGrouping) {
     this.host.sessionsGrouping = grouping;
     storeSidebarSessionsGrouping(grouping);
+    this.host.requestUpdate();
   }
 
   setSessionsShowCron(show: boolean) {
     this.host.sessionsShowCron = show;
     storeSidebarSessionsShowCron(show);
+    this.host.requestUpdate();
   }
 
   setSessionsShowPreview(show: boolean) {
     this.host.sessionsShowPreview = show;
     storeSidebarSessionsShowPreview(show);
+    this.host.requestUpdate();
   }
 
   setSessionsShowSystem(show: boolean) {
     this.host.sessionsShowSystem = show;
     storeSidebarSessionsShowSystem(show);
+    this.host.requestUpdate();
   }
 
   setSessionsStatusFilter(statusFilter: SidebarSessionStatusFilter) {

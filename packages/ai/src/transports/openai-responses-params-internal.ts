@@ -17,6 +17,7 @@ import { resolveOpenAIResponsesTextFormat } from "../providers/openai-response-f
 import { prepareResponsesTools } from "../providers/openai-responses-tools.js";
 import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
 import { hasResponsesWebSearchTool } from "../providers/openai-web-search-tools.js";
+import { clampMaxTokensToModel } from "../providers/simple-options.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { usesNativeOpenAICodexResponsesBackend } from "./openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
@@ -203,7 +204,7 @@ export function buildOpenAIResponsesParams(
   const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
   if (effectiveMaxTokens) {
     // Responses rejects output budgets below 16 tokens.
-    params.max_output_tokens = Math.max(effectiveMaxTokens, 16);
+    params.max_output_tokens = clampMaxTokensToModel(model, Math.max(effectiveMaxTokens, 16));
   }
   if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;

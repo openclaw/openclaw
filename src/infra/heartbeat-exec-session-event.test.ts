@@ -474,8 +474,16 @@ it.for(completionRoutingCases)(
                     { text: answer },
                     { text: "🧩 Active Memory: status=policy-disabled", isStatusNotice: true },
                   ]
-                : [{ text: testCase.reply === "quiet" ? "NO_REPLY" : answer }],
-            meta: { durationMs: 1 },
+                : testCase.reply === "quiet"
+                  ? []
+                  : [{ text: answer }],
+            meta: {
+              durationMs: 1,
+              terminalReply:
+                testCase.reply === "quiet"
+                  ? { disposition: "silent" }
+                  : { disposition: "visible", text: answer },
+            },
           };
         });
         try {

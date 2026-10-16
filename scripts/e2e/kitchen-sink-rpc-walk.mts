@@ -1096,6 +1096,9 @@ async function retryRpcCall(method: string, params: unknown, options: RpcCallOpt
 function isRetryableGatewayCallError(error: unknown) {
   const text = error instanceof Error ? error.message : String(error);
   return (
+    // Typed request errors carry the Gateway's own retry verdict, such as a
+    // cold `talk.catalog` read answering UNAVAILABLE while its snapshot warms.
+    asRecord(error).retryable === true ||
     isRetryableTransientNetworkError(error) ||
     text.includes("gateway starting") ||
     text.includes("gateway closed") ||

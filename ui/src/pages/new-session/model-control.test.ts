@@ -5,6 +5,7 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
 import { contextWith, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
+import * as modelTarget from "./model-target.ts";
 import { loadNewSessionPreference, replaceBrowserPreference } from "./preferences.ts";
 
 const luna = { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" };
@@ -30,6 +31,45 @@ afterEach(() => {
 });
 
 describe("new-session model controls", () => {
+  it("reuses runtime resolution until model inputs change, including mutable defaults", async () => {
+    const local = { id: "local", source: "model" as const };
+    const hosted = { id: "hosted", source: "model" as const };
+    const { control, context, request } = setup([
+      { ...luna, agentRuntime: local },
+      { ...sol, agentRuntime: hosted },
+    ]);
+    const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
+    control.load(context, "main", true, { agent });
+    await vi.waitFor(() => expect(control.resolveAgentRuntime()?.id).toBe("local"));
+    const resolve = vi.spyOn(modelTarget, "resolveDraftAgentRuntime");
+    for (let index = 0; index < 50; index += 1) {
+      expect(control.resolveAgentRuntime()?.id).toBe("local");
+    }
+    expect(resolve).not.toHaveBeenCalled();
+
+    agent.model.primary = "openai/gpt-5.6-sol";
+    expect(control.resolveAgentRuntime()?.id).toBe("hosted");
+    expect(resolve).toHaveBeenCalledTimes(1);
+    control.selectModel("openai/gpt-5.6-luna");
+    expect(control.resolveAgentRuntime()?.id).toBe("local");
+
+    control.selectModel("");
+    delete (agent as { model?: unknown }).model;
+    const defaults = context.sessions.state.result!.defaults!;
+    defaults.model = "gpt-5.6-sol";
+    defaults.modelProvider = "openai";
+    expect(control.resolveAgentRuntime()?.id).toBe("hosted");
+    defaults.model = "gpt-5.6-luna";
+    expect(control.resolveAgentRuntime()?.id).toBe("local");
+
+    request.mockResolvedValue({ models: [{ ...luna, agentRuntime: hosted }] });
+    control.invalidate();
+    control.load(context, "main", true, { agent });
+    await vi.waitFor(() => expect(control.resolveAgentRuntime()?.id).toBe("hosted"));
+    control.reset();
+    expect(control.resolveAgentRuntime()?.id).not.toBe("hosted");
+  });
+
   it("does not borrow a provider for an ambiguous draft target", async () => {
     const { control, context, draw, changed } = setup([
       {
@@ -348,7 +388,7 @@ describe("configured defaults", () => {
   function setupDefaults() {
     const state = contextWith(models);
     Object.assign(state.context, {
-      config: { current: { newSessionModelDefaults: "configured" } },
+      config: { ...state.context.config, current: { newSessionModelDefaults: "configured" } },
     });
     return state;
   }

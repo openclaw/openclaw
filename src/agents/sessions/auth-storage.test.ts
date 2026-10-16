@@ -8,12 +8,10 @@ import {
 } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import * as sdkDeprecation from "../../plugins/sdk-deprecation.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  createApiKeyCredential,
-  createAuthProfileStoreFixture,
-} from "../auth-profiles/credential-fixtures.test-support.js";
+import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtures.test-support.js";
 
 const providerOAuthMocks = vi.hoisted(() => ({
   login: vi.fn(),
@@ -76,6 +74,25 @@ describe("SQLite auth storage", () => {
     tempDirs.push(agentDir);
     return agentDir;
   }
+
+  it("initializes detached in-memory credentials without a legacy reload warning", () => {
+    const warn = vi.spyOn(sdkDeprecation, "warnPluginSdkDeprecation").mockImplementation(() => {});
+    onTestFinished(() => warn.mockRestore());
+    const credential = { type: "api_key" as const, key: "synthetic-initial-key" };
+    const storage = PublicAuthStorage.inMemory({ fixture: credential });
+    credential.key = "synthetic-mutated-key";
+
+    expect(storage.get("fixture")).toEqual({ type: "api_key", key: "synthetic-initial-key" });
+    expect(warn).not.toHaveBeenCalled();
+
+    storage.reload();
+    expect(warn).toHaveBeenCalledWith({
+      family: "auth-profile-sync-operations",
+      method: "AuthStorage.reload",
+      replacement: "AuthStorage.reloadAsync",
+    });
+    expect(storage.get("fixture")).toEqual({ type: "api_key", key: "synthetic-initial-key" });
+  });
 
   it("merges async SDK writes and reloads committed peer changes without host SQLite", async () => {
     await withOpenClawTestState(
@@ -358,6 +375,11 @@ describe("SQLite auth storage", () => {
     writePersistedAuthProfileStoreRaw(
       createAuthProfileStoreFixture({
         "openai:default": { type: "api_key", provider: "openai", keyRef },
+        "openai:work": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_WORK_KEY" },
+        },
         "xai:default": {
           type: "token",
           provider: "xai",
@@ -568,25 +590,6 @@ describe("SQLite auth storage", () => {
 
     await expect(storage.getApiKey("openai")).rejects.toThrow(
       "requires legacy credential migration",
-    );
-  });
-
-  it("ignores unresolved named profiles outside the provider-default facade", async () => {
-    const agentDir = makeAgentDir();
-    writePersistedAuthProfileStoreRaw(
-      createAuthProfileStoreFixture({
-        "openai:work": {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_WORK_KEY" },
-        },
-        "anthropic:default": createApiKeyCredential("anthropic", "fake-anthropic-key"),
-      }),
-      agentDir,
-    );
-
-    await expect(AuthStorage.forAgent(agentDir).getApiKey("anthropic")).resolves.toBe(
-      "fake-anthropic-key",
     );
   });
 

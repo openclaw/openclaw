@@ -7,9 +7,15 @@ import {
 import { retireSessionSqliteRecovery } from "../../commands/doctor-session-sqlite-retirement.js";
 import { readSourceConfigBestEffort } from "../../config/io.js";
 import { defaultRuntime, ExitError, writeRuntimeJson } from "../../runtime.js";
+import { updateMaintenanceError } from "./update-maintenance-error.js";
 
 function renderCleanup(report: RecoveryCleanupReport): void {
   defaultRuntime.log(`Recovery cleanup: ${report.stateDir}`);
+  if (report.missingOriginals > 0) {
+    defaultRuntime.log(
+      `Missing recovery originals: ${report.missingOriginals} (historical receipts retained; no bytes on disk).`,
+    );
+  }
   for (const item of report.artifacts) {
     defaultRuntime.log(
       `  ${item.outcome}: ${item.path} (${item.bytes} bytes; ${item.reason})${item.detail ? ` ${item.detail}` : ""}`,
@@ -95,10 +101,11 @@ export async function updateCleanupCommand(options: {
     if (error instanceof ExitError) {
       throw error;
     }
+    const message = String(updateMaintenanceError(error));
     if (options.json) {
-      writeRuntimeJson(defaultRuntime, { ...report, status: "blocked", error: String(error) });
+      writeRuntimeJson(defaultRuntime, { ...report, status: "blocked", error: message });
     } else {
-      defaultRuntime.error(String(error));
+      defaultRuntime.error(message);
     }
     defaultRuntime.exit(1);
   }

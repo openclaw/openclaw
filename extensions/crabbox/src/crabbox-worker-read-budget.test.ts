@@ -1,5 +1,7 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { WorkerProfile } from "openclaw/plugin-sdk/plugin-entry";
 import { expect, it } from "vitest";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import { CRABBOX_LIFECYCLE_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 import {
   createWarmProvider,
@@ -8,6 +10,49 @@ import {
 } from "./crabbox-worker-warm-image.test-support.js";
 
 const PROFILE = { ...WARM_PROFILE, warmImage: false };
+
+it("cancels inspection on owner shutdown without releasing command custody early", async () => {
+  const started = createDeferred<AbortSignal | undefined>();
+  const childClosed = createDeferred<void>();
+  const { provider, calls } = createWarmProvider(async ({ argv, options }) => {
+    if (argv[1] !== "inspect") {
+      return undefined;
+    }
+    started.resolve(options.signal);
+    await childClosed.promise;
+    return commandResult({
+      stdout: JSON.stringify({ id: LEASE_ID, state: "running", ready: true }),
+    });
+  });
+  const owner = new AbortController();
+  const reason = new Error("environment owner is shutting down");
+  const lease = { leaseId: LEASE_ID, profile: PROFILE, signal: owner.signal };
+  let settled = false;
+  const inspection = provider.inspect(lease).then(
+    (status) => {
+      settled = true;
+      return status;
+    },
+    (error: unknown) => {
+      settled = true;
+      return error;
+    },
+  );
+  try {
+    const childSignal = await started.promise;
+    owner.abort(reason);
+    expect(childSignal?.aborted).toBe(true);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    childClosed.resolve();
+    expect(await inspection).toBe(reason);
+    expect(calls.some(({ argv }) => argv[1] === "heartbeat")).toBe(false);
+  } finally {
+    childClosed.resolve();
+    await inspection;
+    await provider.dispose();
+  }
+});
 
 it("lets lifecycle inspection finish Crabbox's coordinator retry budget", async () => {
   const { provider, calls } = createWarmProvider();

@@ -75,6 +75,7 @@ suite.define(() => {
           ? createControlUiE2eArtifactDir("chat-composer-accessory-focus", artifactRoot)
           : undefined;
         if (artifactDir && triggerSelector.startsWith(".context-usage")) {
+          await composer.locator(".context-usage__popover").waitFor({ state: "visible" });
           const composerBox = await composer.boundingBox();
           const popoverBox = await composer.locator(".context-usage__popover").boundingBox();
           if (!composerBox || !popoverBox) {

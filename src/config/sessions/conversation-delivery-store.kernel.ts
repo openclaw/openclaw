@@ -5,6 +5,7 @@ import {
   executeSqliteQuerySync,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { assertConversationAuthority } from "./conversation-authority.js";
@@ -81,7 +82,7 @@ function mapRow(row: ConversationDeliveryRow): ConversationDeliveryRecord {
   };
 }
 
-const operationQuery = createSqliteQueryCache((database) => {
+const operationQuery = createSqliteQueryCache((database: EngineConnection) => {
   const db = getSessionKysely(database);
   return prepareSqliteQuerySync<string, ConversationDeliveryRow>(database, (parameter) =>
     // Session pruning removes only session_conversations. The canonical

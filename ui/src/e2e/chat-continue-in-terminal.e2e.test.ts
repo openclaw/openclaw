@@ -115,7 +115,7 @@ suite.define(() => {
         });
         await expect.poll(() => menuTrigger.getAttribute("aria-expanded")).toBe("false");
         await menuTrigger.press("Enter");
-        const dropdown = menuTrigger.locator("xpath=ancestor::wa-dropdown");
+        const dropdown = activePane.locator("openclaw-chat-header-session-menu");
         for (const label of sharedManagementActions) {
           await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
         }
@@ -216,7 +216,7 @@ suite.define(() => {
         });
         await menuTrigger.click();
         await expect.poll(() => menuTrigger.getAttribute("aria-expanded")).toBe("true");
-        const dropdown = menuTrigger.locator("xpath=ancestor::wa-dropdown");
+        const dropdown = activePane.locator("openclaw-chat-header-session-menu");
         for (const label of compactManagementActions) {
           await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
         }

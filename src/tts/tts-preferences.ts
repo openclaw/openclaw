@@ -12,6 +12,12 @@ const pendingPaths = resolveGlobalSingleton(
   () => new Map<string, Promise<PreparedTtsPreferences>>(),
 );
 
+/** Synchronous compatibility reads consume only the path already admitted by its owner. */
+export function getPreparedTtsPreferences(): PreparedTtsPreferences | undefined {
+  const admitted = getTtsMachinePathAdmission(resolveOpenClawStateSqlitePath());
+  return admitted ? preparePath(admitted.row?.value_json) : undefined;
+}
+
 /** Carry the machine-owned path through one turn; preference-file contents stay fresh. */
 export async function prepareTtsPreferences(): Promise<PreparedTtsPreferences> {
   const databasePath = resolveOpenClawStateSqlitePath();

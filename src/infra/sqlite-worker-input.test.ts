@@ -86,6 +86,7 @@ describe("SQLite worker staged input", () => {
     const replyTimings: Array<NonNullable<DiagnosticWorkerRequestFields["timing"]>> = [];
     const value = payload(72);
     const inputFrames: Array<{ visible: number; backing: number }> = [];
+    const dispatchedInputs: Uint8Array[] = [];
     const receivedFrames: Array<{ visible: number; backing: number; framed: boolean }> = [];
     const commands: SqliteWorkerRequest["type"][] = [];
     // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker below.
@@ -96,6 +97,9 @@ describe("SQLite worker staged input", () => {
       transferList,
     ) {
       commands.push(request.type);
+      if ("input" in request) {
+        dispatchedInputs.push(request.input);
+      }
       if (request.type === "execute-frame") {
         inputFrames.push({
           visible: request.input.byteLength,
@@ -130,6 +134,7 @@ describe("SQLite worker staged input", () => {
     expect(await admitted).toMatchObject({ writes: 1 });
     expect(commands.filter((kind) => kind === "execute-start")).toHaveLength(1);
     expect(inputFrames.length).toBeGreaterThan(1);
+    expect(dispatchedInputs.every((input) => input.byteLength === 0)).toBe(true);
     await waitForDiagnosticEventsDrained();
     expect(completed).toHaveLength(1);
     const appendTiming = completed[0]?.timing;

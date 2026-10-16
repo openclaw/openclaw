@@ -44,6 +44,7 @@ export function attachPluginApiFacades<T extends object>(
     },
     workflow: {
       enqueueNextTurnInjection: (...args) => api.enqueueNextTurnInjection(...args),
+      steerActiveRun: (...args) => api.steerActiveRun(...args),
       registerSessionSchedulerJob: (...args) => api.registerSessionSchedulerJob(...args),
       sendSessionAttachment: (...args) => api.sendSessionAttachment(...args),
       scheduleSessionTurn: (...args) => api.scheduleSessionTurn(...args),

@@ -2,6 +2,10 @@ import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtim
 import { setHostToolFactoryForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import {
   codexTestTurnIds,
@@ -42,17 +46,17 @@ const resolveCodexProviderWebSearchSupportForClientMock = vi.fn();
 type RequestScopeParams = {
   lease: { client?: unknown };
   options: { timeoutMs?: number; abandonSignal?: AbortSignal };
+  signal?: AbortSignal;
   run: (
     client: unknown,
-    requestOptions: () => { timeoutMs: number; signal?: AbortSignal; assertCurrent: () => void },
+    requestOptions: () => { timeoutMs: number; signal?: AbortSignal },
   ) => Promise<unknown>;
 };
 const withCodexAppServerClientRequestScopeMock = vi.fn(
   async (params: RequestScopeParams) =>
     await params.run(params.lease.client, () => ({
       timeoutMs: params.options.timeoutMs ?? 60_000,
-      signal: params.options.abandonSignal,
-      assertCurrent: () => {},
+      signal: params.signal ?? params.options.abandonSignal,
     })),
 );
 
@@ -362,6 +366,7 @@ function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionPa
 export function useSideQuestionTestSetup() {
   beforeEach(async () => {
     await nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    setRuntimeConfigSnapshot({});
     readCodexAppServerBindingMock.mockReset();
     isCodexAppServerNativeAuthProfileMock.mockReset();
     getSharedCodexAppServerClientMock.mockReset();
@@ -375,8 +380,7 @@ export function useSideQuestionTestSetup() {
       async (params: RequestScopeParams) =>
         await params.run(params.lease.client, () => ({
           timeoutMs: params.options.timeoutMs ?? 60_000,
-          signal: params.options.abandonSignal,
-          assertCurrent: () => {},
+          signal: params.signal ?? params.options.abandonSignal,
         })),
     );
     resolveCodexProviderWebSearchSupportForClientMock.mockResolvedValue("supported");
@@ -413,6 +417,7 @@ export function useSideQuestionTestSetup() {
 
   afterEach(async () => {
     await nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    clearRuntimeConfigSnapshot();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
     vi.unstubAllGlobals();

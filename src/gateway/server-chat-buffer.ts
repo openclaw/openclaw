@@ -158,6 +158,15 @@ export const updateBuffer = (
     commonEnd = previousEnd;
   } else {
     const limit = Math.min(previousEnd, end);
+    // Compare cumulative prefixes natively; corrections still need the full walk.
+    // Recheck the last code unit because an append can complete a surrogate pair.
+    if (
+      previous &&
+      end >= previousEnd &&
+      snapshot.text.slice(retainedOffset - sourceOffset, previousEnd - sourceOffset) === previous
+    ) {
+      commonEnd = previousEnd - 1;
+    }
     while (commonEnd < limit) {
       const point = previous.codePointAt(commonEnd - retainedOffset);
       if (point !== snapshot.text.codePointAt(commonEnd - sourceOffset)) {

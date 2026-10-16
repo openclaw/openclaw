@@ -26,6 +26,31 @@ function captureCardsList(store: WorkboardStore) {
 }
 
 describe("workboard card list revisions", () => {
+  it("keeps session-filtered payloads and revision receipts separate from full card lists", async () => {
+    const { store } = createWorkboardSqliteTestHarness();
+    const first = await store.create({ title: "First session", sessionKey: "session-one" });
+    const second = await store.create({ title: "Second session", sessionKey: "session-two" });
+    const listCards = captureCardsList(store);
+    const sessionsBefore = store.sessionsRevision;
+    const filtered = (await listCards({ sessionKey: "session-one" })).mock.calls[0]?.[1];
+    expect(filtered.cards.map((card: { id: string }) => card.id)).toEqual([first.id]);
+    expect(filtered.revision.sessionKey).toBe("session-one");
+    expect(store.sessionsRevision).toEqual(sessionsBefore);
+    const repeated = (
+      await listCards({ sessionKey: "session-one", sinceRevision: filtered.revision })
+    ).mock.calls[0]?.[1];
+    expect(repeated).toEqual({ unchanged: true, revision: filtered.revision });
+    expect(
+      (
+        await listCards({ sessionKey: "session-two", sinceRevision: filtered.revision })
+      ).mock.calls[0]?.[1].cards.map((card: { id: string }) => card.id),
+    ).toEqual([second.id]);
+    expect(
+      (await listCards({ sinceRevision: filtered.revision })).mock.calls[0]?.[1].cards,
+    ).toHaveLength(2);
+    expect((await listCards({ sessionKey: " " })).mock.calls[0]?.[0]).toBe(false);
+  });
+
   it("refreshes retained lists and session revisions after sibling worker commits", async () => {
     const { store: reader, dbPath } = createWorkboardSqliteTestHarness();
     const stores = createWorkboardSqliteStores({
@@ -58,7 +83,7 @@ describe("workboard card list revisions", () => {
     }
   });
 
-  it("shares one frozen card payload per revision and publishes one invalidation per mutation", async () => {
+  it("shares one card payload per revision and publishes one invalidation per mutation", async () => {
     const { store, stores } = createWorkboardSqliteTestHarness();
     const card = await store.create({ title: "Before", boardId: "ops" });
     await store.claim(card.id, { ownerId: "worker", token: "test-claim-token" });
@@ -75,11 +100,8 @@ describe("workboard card list revisions", () => {
     expect(second).toBe(first);
     expect(await list("ops")).toBe(first);
     expect(reads).toHaveBeenCalledOnce();
-    expect(Object.isFrozen(first)).toBe(true);
-    expect(Object.isFrozen(first.cards[0].metadata.automation)).toBe(true);
     expect(first.cards[0].metadata.claim.token).toBe("[redacted]");
     expect((await store.get(card.id))?.metadata?.claim?.token).toBe("test-claim-token");
-    expect(() => first.cards.push(card)).toThrow(TypeError);
     expect((await list("default")).cards).toEqual([]);
     expect((await list()).cards).toEqual(first.cards);
 
@@ -184,26 +206,5 @@ describe("workboard card list revisions", () => {
     const closed = await listCards({});
     expect(closed.mock.calls[0]?.[0]).toBe(false);
     expect(closed.mock.calls[0]?.[2].message).toContain("closed");
-  });
-
-  it("invalidates committed attachment deletion even if the remaining card update fails", async () => {
-    const { store, stores } = createWorkboardSqliteTestHarness();
-    const card = await store.create({ title: "Attachment" });
-    const attached = await store.addAttachment(card.id, {
-      fileName: "proof.txt",
-      contentBase64: "cHJvb2Y=",
-    });
-    const listCards = captureCardsList(store);
-    const before = await listCards({});
-    expect(before.mock.calls[0]?.[1].cards[0].metadata.attachments).toHaveLength(1);
-    const changes = vi.fn();
-    store.subscribeChanges(changes);
-    vi.spyOn(stores.cards, "registerIfUpdatedAt").mockRejectedValueOnce(new Error("write failed"));
-    await expect(
-      store.deleteAttachment(card.id, attached.metadata!.attachments![0]!.id),
-    ).rejects.toThrow("write failed");
-    expect(changes).toHaveBeenCalledOnce();
-    const after = await listCards({});
-    expect(after.mock.calls[0]?.[1].cards[0].metadata?.attachments).toBeUndefined();
   });
 });

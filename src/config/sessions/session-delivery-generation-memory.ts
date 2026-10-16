@@ -1,6 +1,7 @@
+import { isSessionLifecycleMutationActive } from "../../sessions/session-lifecycle-admission.js";
 import { assertSessionEntryCreationPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
-import type { SessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import type { CapturedSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import {
   SessionDeliveryGenerationRevokedError,
   SessionDeliveryGenerationUnavailableError,
@@ -11,21 +12,45 @@ import type {
 } from "./session-delivery-generation.types.js";
 
 /** Actor close owns revocation; every transport effect still reads current owner-held policy. */
-export function prepareMemorySessionGeneration(
-  binding: SessionActorStorageBinding,
+export async function prepareMemorySessionGeneration(
+  source: CapturedSessionActorStorageOwner,
   input: SessionGenerationFacts,
   onRevoked?: (reason: unknown) => void,
 ) {
+  const selected = source.binding;
+  const bound =
+    selected?.agentId === source.agentId &&
+    selected.path === source.path &&
+    selected.actor.target.sessionKey === input.sessionKey
+      ? selected.actor
+      : undefined;
+  const actor =
+    bound ??
+    (await source.owner?.acquireExisting(input.sessionKey, {
+      assertCurrent: () => source.authority.assertCurrent(),
+      assertReadable: () => source.authority.assertCurrent(),
+    }));
+  const releaseActor = () => {
+    if (!bound) {
+      void actor?.release();
+    }
+  };
   const readEntry = () => {
     try {
-      return binding.actor.snapshot(binding.authority)?.entry;
+      return actor?.snapshot(source.authority)?.entry;
     } catch (cause) {
       throw new SessionDeliveryGenerationUnavailableError({ cause });
     }
   };
-  const initial = readEntry();
-  if ((initial?.sessionId ?? null) !== input.sessionId) {
-    throw new SessionDeliveryGenerationRevokedError();
+  let initial: SessionGenerationEntry | undefined;
+  try {
+    initial = readEntry();
+    if ((initial?.sessionId ?? null) !== input.sessionId) {
+      throw new SessionDeliveryGenerationRevokedError();
+    }
+  } catch (error) {
+    releaseActor();
+    throw error;
   }
   let active = true;
   let creationBound = false;
@@ -52,7 +77,17 @@ export function prepareMemorySessionGeneration(
   };
   return {
     assertCurrent,
-    assertDeliveryCurrent: assertCurrent,
+    assertDeliveryCurrent() {
+      if (
+        isSessionLifecycleMutationActive(source.path, [
+          input.sessionKey,
+          input.sessionId ?? undefined,
+        ])
+      ) {
+        throw new SessionDeliveryGenerationUnavailableError();
+      }
+      assertCurrent();
+    },
     readSessionSettings() {
       const entry = readCurrent();
       return { permissionMode: entry?.permissionMode, toolOverrides: entry?.toolOverrides };
@@ -60,6 +95,7 @@ export function prepareMemorySessionGeneration(
     prepareRead: () => undefined,
     release() {
       active = false;
+      releaseActor();
     },
     bindCreation(
       operation: SessionEntryCreationOperation,
@@ -70,14 +106,14 @@ export function prepareMemorySessionGeneration(
       if (initial || creationBound) {
         throw new Error("Session creation admission changed; retry against the current session");
       }
-      const identity = binding.actor.target.database;
-      if (identity.kind !== "memory") {
+      const identity = actor?.target.database;
+      if (identity?.kind !== "memory") {
         throw new SessionDeliveryGenerationUnavailableError();
       }
       assertSessionEntryCreationPublication(operation, {
-        agentId: binding.agentId,
-        sessionKey: binding.actor.target.sessionKey,
-        paths: new Set([binding.path]),
+        agentId: source.agentId,
+        sessionKey: input.sessionKey,
+        paths: new Set([source.path]),
         databaseIdentity: identity.incarnation,
       });
       creationBound = true;

@@ -57,7 +57,7 @@ describe("Novita video generation provider", () => {
           providers: { novita: { baseUrl: "https://api.novita.ai/openai/v1", models: [] } },
         },
       },
-      durationSeconds: 9,
+      durationSeconds: 10,
       aspectRatio: "9:16",
       resolution: "1080P",
       providerOptions: {

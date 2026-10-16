@@ -5,7 +5,11 @@ import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
-import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  createSqliteDatabaseAdmissionCursor,
+  trackSqliteDatabaseAdmissionWorker,
+} from "./sqlite-database-admission.js";
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
@@ -94,28 +98,23 @@ export function createSqliteWorkerLifecycle({
     options.assertCurrent?.();
     options.signal?.throwIfAborted();
     const shareWorkers = explicitSqliteCloseReleasesNativeResources;
-    const hasEphemeral = Boolean(options.target) || [...slots].some((slot) => slot.ephemeral);
     const available = [...slots].filter(
       (slot) =>
-        !slot.ephemeral &&
-        !slot.failed &&
-        !slot.retiring &&
-        slot.runtimeGeneration === options.runtimeGeneration,
+        !slot.failed && !slot.retiring && slot.runtimeGeneration === options.runtimeGeneration,
     );
     // A retained updater cannot borrow another generation's carrier or evict its actors.
     // One extra slot belongs to the broker, not to each generation requesting one.
     const borrowedGenerationSlot =
       shareWorkers &&
-      !hasEphemeral &&
       options.runtimeGeneration !== undefined &&
       available.length === 0 &&
       slots.size >= limits.maxWorkers &&
       ![...slots].some((slot) => slot.borrowedGenerationSlot);
     if (
       !borrowedGenerationSlot &&
-      slots.size >= (shareWorkers || hasEphemeral ? limits.maxWorkers : limits.maxStores)
+      slots.size >= (shareWorkers ? limits.maxWorkers : limits.maxStores)
     ) {
-      if (options.target || !available.length || !shareWorkers) {
+      if (!available.length || !shareWorkers) {
         const retiring = [...slots].filter((slot) => Boolean(slot.failed || slot.retiring));
         if (retiring.length > 0) {
           await racePromiseWithAbortSignal(
@@ -142,7 +141,7 @@ export function createSqliteWorkerLifecycle({
   function createSlot(
     options: Pick<
       PreparedSqliteWorkerOpen,
-      "carrierUrl" | "runtimeGeneration" | "target" | "assertCurrent" | "signal"
+      "carrierUrl" | "runtimeGeneration" | "assertCurrent" | "signal"
     >,
     borrowedGenerationSlot: boolean,
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
@@ -153,6 +152,9 @@ export function createSqliteWorkerLifecycle({
     options.signal?.throwIfAborted();
     // Slot listeners share this closure scope; never capture the opening admission in it.
     const { carrierUrl } = options;
+    const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
+    // The Worker constructor inherits this exact synchronous snapshot.
+    captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
     const { worker, exited } = runInDetachedAsyncContext(() => ({
       worker: createCpuTrackedWorker(carrierUrl, {
         resourceLimits: { maxOldGenerationSizeMb: 512 },
@@ -164,7 +166,7 @@ export function createSqliteWorkerLifecycle({
     trackSqliteDatabaseAdmissionWorker(worker);
     const slot: Slot = {
       custody: new SqliteWorkerSlotCustody(),
-      ...(options.target ? { ephemeral: true as const } : {}),
+      databaseAdmissionCursor,
       runtimeGeneration: options.runtimeGeneration,
       ...(borrowedGenerationSlot ? { borrowedGenerationSlot: true as const } : {}),
       worker,
@@ -295,7 +297,11 @@ export function createSqliteWorkerLifecycle({
             actor.markNativeStopped();
           }
         } catch (error) {
-          errors.push(error);
+          // A close refused by an already failed slot never ran. Native exit owns
+          // its retirement; the original request still reports the slot failure.
+          if (error !== actor.slot.failed) {
+            errors.push(error);
+          }
           fail(actor.slot, error instanceof Error ? error : new Error(String(error)));
           await actor.slot.exit;
         }

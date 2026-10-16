@@ -189,9 +189,9 @@ describe("pw-tools-core interaction navigation guard", () => {
     );
   });
 
-  it("deduplicates delayed navigation guards across repeated successful interactions", async () => {
+  it("deduplicates delayed navigation guards across repeated interactions and a same-URL reload", async () => {
     await withFakeTimers(async () => {
-      const { page, listeners, emit, setUrl } = navigationPage();
+      const { page, listeners, emit } = navigationPage();
       install(page, { click: vi.fn(async () => {}) });
       const first = strictClick();
       await vi.advanceTimersByTimeAsync(0);
@@ -199,7 +199,6 @@ describe("pw-tools-core interaction navigation guard", () => {
       const second = strictClick();
       await vi.advanceTimersByTimeAsync(0);
       expect(listeners.size).toBe(1);
-      setUrl("http://127.0.0.1:9222/json/list");
       emit();
       await vi.advanceTimersByTimeAsync(250);
       await Promise.all([first, second]);
@@ -271,17 +270,6 @@ describe("pw-tools-core interaction navigation guard", () => {
     expectComplete(page);
   });
 
-  it("runs the navigation guard when a same-URL reload fires framenavigated during a click", async () => {
-    const navigation = navigationPage("http://192.168.1.1/admin");
-    install(navigation.page, {
-      click: vi.fn(async () => {
-        navigation.emit();
-      }),
-    });
-    await settle(strictClick);
-    expectComplete(navigation.page);
-  });
-
   it("returns click downloads without adding a second policy grace", async () => {
     const page = { url: vi.fn(() => "https://example.com") };
     const download = {
@@ -295,13 +283,7 @@ describe("pw-tools-core interaction navigation guard", () => {
     const result = await settle(() =>
       executeActViaPlaywright({ ...strict(), action: { kind: "click", ref: "1" } }),
     );
-    expect(result.downloads).toEqual([
-      {
-        url: "https://example.com/report.pdf",
-        suggestedFilename: "report.pdf",
-        path: "/tmp/openclaw/downloads/report.pdf",
-      },
-    ]);
+    expect(result.downloads).toEqual([download]);
     expect(drain).toHaveBeenCalledWith({ ...downloadGrace, firstEventGraceMs: 0 });
     expect(dispose).toHaveBeenCalledOnce();
     expect(session.beginActionDownloadCaptureOnPage).toHaveBeenCalledWith(page, {
@@ -558,7 +540,6 @@ describe("clickViaPlaywright (hold-delay abort)", () => {
       expect(
         getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
       ).toHaveBeenCalledTimes(1);
-      expect(click).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

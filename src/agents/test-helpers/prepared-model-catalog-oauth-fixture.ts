@@ -13,6 +13,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { createOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
 import { noteCommittedSharedAuthStoreOwnership } from "../auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
 import {
   loadPersistedAuthProfileStore,
   loadPersistedSharedAuthProfileStore,
@@ -67,6 +68,7 @@ export async function withHeldCatalogOAuthRefresh(
 ): Promise<void> {
   const { makeTempDir, signal } = params;
   const fixture = await createCatalogFixture(makeTempDir, 0);
+  prepareSharedAuthStoreOwnershipForNative(fixture.env);
   const profileId = `${PROVIDER_ID}:oauth`;
   const discoveryMarker = path.join(fixture.root, "oauth-discovery-started");
   const refreshFailure = path.join(fixture.root, "oauth-refresh-failure");

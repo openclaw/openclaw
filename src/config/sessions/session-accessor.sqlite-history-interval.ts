@@ -1,6 +1,7 @@
 import { sql, type Expression, type RawBuilder, type SqlBool } from "kysely";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../agents/internal-runtime-context.js";
 import { SOURCE_PAGE_MAX_BYTES } from "../../gateway/session-transcript-source-pages.js";
+import { engineIndexHint } from "../../infra/database-engine/index-hint.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -36,10 +37,10 @@ export function isVisibleHistoryNonMessageEventSql(
   valid: Expression<number>,
 ): RawBuilder<SqlBool> {
   return /* kysely-allow-raw: malformed selected custom messages are returned for the existing read refusal. */ sql<SqlBool>`(${type} IN ('compaction', 'reset', 'custom_message') AND CASE
-    WHEN ${type} IN ('compaction', 'reset') THEN 1
+    WHEN ${type} IN ('compaction', 'reset') THEN TRUE
     WHEN ${type} = 'custom_message' THEN
       ${valid} = 0 OR (${display} = 1 AND (${customType} IS NULL OR ${customType} != ${OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE}))
-    ELSE 0 END)`;
+    ELSE FALSE END)`;
 }
 
 export const historyNavigationValidSql =
@@ -64,7 +65,7 @@ function selectHistoricalDisplayEvents(
       .selectFrom("transcript_event_identities")
       .select(["session_id", "seq", "event_type"])
       .modifyEnd(
-        /* kysely-allow-raw: pin the canonical sequence lookup to avoid quadratic cold-history joins. */ sql`INDEXED BY idx_agent_transcript_event_identity_sequence`,
+        engineIndexHint(projection.database.db, "idx_agent_transcript_event_identity_sequence"),
       )
       .as("identity");
   const withIdentity = projection.hasUnindexedPrefix

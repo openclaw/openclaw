@@ -86,6 +86,8 @@ export async function repairDoctorAgentDeletionJournal(params: {
   if (params.shouldRepair) {
     const recovery = await quarantineAgentDeletionJournal({
       inventory: [...discovery.targets, ...discovery.retainedTargets, ...held],
+      configuredTargets:
+        params.preflight.agentDatabaseMigrationDiscovery?.configuredAgentDatabaseTargets ?? [],
       env: params.env,
     });
     if (recovery) {

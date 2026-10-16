@@ -508,11 +508,6 @@ function preparedSecretDegradationPayload(snapshot: PreparedSecretsRuntimeSnapsh
   return degradedSecretOwners.length > 0 ? { degradedSecretOwners } : {};
 }
 
-export function clearConfigSchemaResponseCacheForTests() {
-  invalidateGatewayRuntimeConfigSchema();
-  invalidateConfigGetResponseCache();
-}
-
 async function commitConfigRestartWrite(params: {
   requestParams: unknown;
   mode: ConfigRestartWriteMode;

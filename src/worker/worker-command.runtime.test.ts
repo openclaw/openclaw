@@ -1,13 +1,15 @@
 import { Console } from "node:console";
+import fs from "node:fs";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -23,6 +25,8 @@ import {
 } from "./worker-process-protocol.js";
 import { runWorkerProcess } from "./worker-process.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const managedRuntime = vi.hoisted(() => ({
   backgroundCount: 0,
@@ -603,6 +607,34 @@ describe("worker command lifetime gate", () => {
       expect(managedRuntime.close).toHaveBeenCalledOnce();
     },
   );
+
+  it("rejects a canonical device folder retargeted while worker environment setup waits", async () => {
+    const root = fs.realpathSync.native(tempDirs.make("worker-device-folder-"));
+    const folder = path.join(root, "folder");
+    const replacement = path.join(root, "replacement");
+    fs.mkdirSync(folder);
+    fs.mkdirSync(replacement);
+    const harness = managedHarness();
+    harness.launch.assignment.workspaceDir = folder;
+    harness.launch.assignment.workerContainmentRoot = folder;
+    const entered = createDeferred();
+    const resume = createDeferred();
+    vi.mocked(createWorkerRuntimeEnvironment).mockImplementationOnce(async () => {
+      entered.resolve();
+      await resume.promise;
+      return { stateDir: "/tmp/openclaw-managed-worker-state", close: managedRuntime.close };
+    });
+    const running = runWorkerCommand({ ...harness, managed: true });
+    const rejected = expect(running).rejects.toThrow("canonical workspace changed");
+    harness.send(buildWorkerProcessTurn(harness.launch, false, true));
+    await entered.promise;
+    fs.renameSync(folder, path.join(root, "original"));
+    fs.symlinkSync(replacement, folder, "dir");
+    resume.resolve();
+    await rejected;
+    expect(runWorkerDescriptor).not.toHaveBeenCalled();
+    expect(managedRuntime.close).toHaveBeenCalledOnce();
+  });
 
   it("rejects concurrent turns and aborts the admitted turn before closing state", async () => {
     const harness = managedHarness();

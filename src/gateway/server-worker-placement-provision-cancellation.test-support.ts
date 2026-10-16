@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
@@ -68,15 +68,14 @@ export function setupSessionFixture(request: WorkerSessionPlacementIdentity) {
       lifecycleRevision: "original",
       worktree: { id: "workspace", branch: "fixture", repoRoot: support.testState.root },
     };
-    const target = {
-      agentId: request.agentId,
-      canonicalKey: request.sessionKey,
-      store: { [request.sessionKey]: entry },
-      storeKeys: [request.sessionKey],
-      storePath: `${support.testState.root}/sessions.sqlite`,
+    const storePath = `${support.testState.root}/sessions.sqlite`;
+    const config = {
+      ...support.testState.config,
+      session: { ...support.testState.config.session, store: storePath },
     };
+    setRuntimeConfigSnapshot(config, config);
     await upsertSessionEntryCore(
-      { agentId: request.agentId, sessionKey: request.sessionKey, storePath: target.storePath },
+      { agentId: request.agentId, sessionKey: request.sessionKey, storePath },
       entry,
     );
     const targetReader = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
@@ -86,7 +85,11 @@ export function setupSessionFixture(request: WorkerSessionPlacementIdentity) {
       targetReader.resolveGatewaySessionStoreTargetInWorker,
     );
     const worktree = { id: "workspace", ownerId: request.sessionKey, path: support.testState.root };
-    const config = { ...support.testState.config, session: { store: target.storePath } };
+    const target = await targetReader.resolveGatewaySessionStoreTargetInWorker({
+      cfg: config,
+      key: request.sessionKey,
+      agentId: request.agentId,
+    });
     moveDestinationMocks.getRuntimeConfig.mockReturnValue(config);
     moveDestinationMocks.resolveGatewaySessionTarget.mockReturnValue(target);
     moveDestinationMocks.resolveCanonicalSession.mockReturnValue(entry);

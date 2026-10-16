@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Message } from "grammy/types";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { createStatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
@@ -15,16 +16,49 @@ import {
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { describe, expect, it, vi } from "vitest";
-import { defaultTelegramBotDeps } from "./bot-deps.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramDispatchHttpFixture } from "./bot-message-dispatch.telegram-http.test-support.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import { createTelegramMessageCache } from "./message-cache.js";
-import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { reactMessageTelegram } from "./send.js";
 import { resolveTelegramTestUpload } from "./send.telegram-http.test-support.js";
 import { wasSentByBot } from "./sent-message-cache.js";
+
+const observers = vi.hoisted(() => ({
+  draftStream: vi.fn<(stream: TelegramDraftStream) => void>(),
+  recordOutbound:
+    vi.fn<
+      (
+        params: Parameters<
+          typeof import("./outbound-message-context.js").recordOutboundMessageForPromptContext
+        >[0],
+      ) => Promise<void>
+    >(),
+}));
+vi.mock("./draft-stream.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./draft-stream.js")>();
+  return {
+    ...actual,
+    createTelegramDraftStream: (params: Parameters<typeof actual.createTelegramDraftStream>[0]) => {
+      const stream = actual.createTelegramDraftStream(params);
+      observers.draftStream(stream);
+      return stream;
+    },
+  };
+});
+vi.mock("./outbound-message-context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./outbound-message-context.js")>();
+  return {
+    ...actual,
+    recordOutboundMessageForPromptContext: async (
+      params: Parameters<typeof actual.recordOutboundMessageForPromptContext>[0],
+    ) => {
+      await observers.recordOutbound(params);
+      return await actual.recordOutboundMessageForPromptContext(params);
+    },
+  };
+});
 
 describe("Telegram quote selection and accepted reply targets through HTTP", () => {
   const http = createTelegramDispatchHttpFixture();
@@ -39,6 +73,10 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
   } = http;
   const hasReaction = (call: (typeof calls)[number], emoji: string) =>
     call.method === "setMessageReaction" && JSON.stringify(call.fields.reaction).includes(emoji);
+  beforeEach(() => {
+    observers.draftStream.mockReset();
+    observers.recordOutbound.mockReset().mockResolvedValue(undefined);
+  });
 
   it.each([
     { replyToMode: "first", target: "inbound" },
@@ -48,7 +86,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
   ] as const)(
     "preserves the $target final reply target after a $replyToMode progress card",
     async ({ replyToMode, target }) => {
-      const { createTelegramDraftStream } = await import("./draft-stream.js");
       const context = createContext();
       const chat = {
         id: -1001,
@@ -76,6 +113,9 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       const finalText = "The requested result is ready.";
       const finalTarget = target === "inbound" ? context.msg.message_id : 9001;
       const draftStreams: TelegramDraftStream[] = [];
+      observers.draftStream.mockImplementation((stream) => {
+        draftStreams.push(stream);
+      });
       await dispatchProgressTurn(
         async (options) => {
           await options?.onItemEvent?.({
@@ -111,14 +151,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
             text: finalText,
             // The synthetic resolver supplies the target normally added by applyReplyTagsToPayload.
             replyToId: String(finalTarget),
-          },
-          telegramDeps: {
-            ...defaultTelegramBotDeps,
-            createTelegramDraftStream: (params) => {
-              const stream = createTelegramDraftStream(params);
-              draftStreams.push(stream);
-              return stream;
-            },
           },
         },
       );
@@ -302,8 +334,10 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
   });
 
   it("replies to the inbound message after a first-mode preview releases its target", async () => {
-    const { createTelegramDraftStream } = await import("./draft-stream.js");
     const draftStreams: TelegramDraftStream[] = [];
+    observers.draftStream.mockImplementation((stream) => {
+      draftStreams.push(stream);
+    });
     const context = createContext();
     const inboundId = context.msg.message_id;
     const preview = "The requested result is ready, and I am completing the final explanation.";
@@ -343,14 +377,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         accountId: "sut",
         context,
         finalReply: { text: finalText, replyToCurrent: true },
-        telegramDeps: {
-          ...defaultTelegramBotDeps,
-          createTelegramDraftStream: (params) => {
-            const stream = createTelegramDraftStream(params);
-            draftStreams.push(stream);
-            return stream;
-          },
-        },
       },
     );
     await expect.poll(() => [...visibleMessages.values()], { timeout: 5_000 }).toEqual([finalText]);
@@ -478,6 +504,12 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         ReplyToIsQuote: true,
       });
       let failed = false;
+      observers.recordOutbound.mockImplementation(async (params) => {
+        if (params.promptContextProjection?.finalPart) {
+          failed = true;
+          throw new Error("history finalization unavailable");
+        }
+      });
       await dispatchProgressTurn(
         async () => {
           SessionManager.open(scope, state.stateDir).appendMessage(
@@ -495,16 +527,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           cfg: { session: { store: scope.storePath } },
           finalReply: { text: "Accepted quoted answer", replyToId: "9001" },
           allowErrors: true,
-          telegramDeps: {
-            ...defaultTelegramBotDeps,
-            recordOutboundMessageForPromptContext: async (params) => {
-              if (params.promptContextProjection?.finalPart) {
-                failed = true;
-                throw new Error("history finalization unavailable");
-              }
-              return recordOutboundMessageForPromptContext(params);
-            },
-          },
         },
       );
       expect(failed).toBe(true);
@@ -768,4 +790,43 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       "Terminal failure",
     ]);
   });
+
+  it.each(["first", "batched"] as const)(
+    "supplies one %s tool reply slot per turn and resets it for queued followups",
+    async (replyToMode) => {
+      let previousRef: { value: boolean } | undefined;
+      for (let turnIndex = 0; turnIndex < 2; turnIndex++) {
+        const context = createContext();
+        await dispatchProgressTurn(
+          async (options, channelOptions) => {
+            const ref = expectDefined(options?.hasRepliedRef, "dispatch tool reply state");
+            expect(ref).toEqual({ value: false });
+            expect(ref).toBe(channelOptions?.hasRepliedRef);
+            expect(ref).not.toBe(previousRef);
+
+            // The shared message-tool resolver owns consumption; dispatch owns reset.
+            ref.value = true;
+            expect(channelOptions?.hasRepliedRef?.value).toBe(true);
+
+            await expectDefined(
+              channelOptions?.onQueuedFollowupAdmitted,
+              "queued followup admission callback",
+            )();
+            expect(options?.hasRepliedRef).toBe(ref);
+            expect(ref.value).toBe(false);
+            ref.value = true;
+            previousRef = ref;
+          },
+          {
+            context,
+            mode: "off",
+            toolProgress: false,
+            replyToMode,
+            finalReply: { text: `Final answer ${turnIndex}.` },
+          },
+        );
+      }
+      expect([...visibleMessages.values()]).toEqual(["Final answer 0.", "Final answer 1."]);
+    },
+  );
 });

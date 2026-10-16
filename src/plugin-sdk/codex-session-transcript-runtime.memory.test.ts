@@ -1,10 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
-import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   captureCodexSessionContextReader,
   readCodexSessionContext,
+  validateCodexSessionTranscriptContextVersion,
 } from "./codex-session-transcript-runtime.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -19,22 +20,24 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
     throw new Error("Memory SDK context allocated a worker");
   }),
 }));
-const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
+const env = { OPENCLAW_STATE_DIR: "/synthetic/sdk-context" };
+const ownerScope = {
+  agentId: "main",
+  path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+};
 afterEach(() => {
-  for (const owner of owners.splice(0)) {
-    owner.close();
-  }
+  memorySessionActorOwners.closeDatabase(ownerScope);
 });
 
-it("reads the selected memory context and ends retained iterators at the disclosure boundary", async () => {
+it("acquires an unbound memory context and ends retained iterators at the disclosure boundary", async () => {
   const target = {
     agentId: "main",
-    storePath: "/synthetic/sdk-context",
+    storePath: ownerScope.path,
+    env,
     sessionId: "memory-context",
     sessionKey: "agent:main:dashboard:incognito-context",
   };
-  const owner = createMemorySessionActorOwner({ agentId: target.agentId, path: target.storePath });
-  owners.push(owner);
+  const owner = memorySessionActorOwners.get(ownerScope);
   const actor = await owner.acquire(
     { database: owner.identity, sessionKey: target.sessionKey },
     { assertCurrent() {}, assertReadable() {} },
@@ -70,11 +73,8 @@ it("reads the selected memory context and ends retained iterators at the disclos
       authority,
     ),
   );
-  const binding = { actor, authority, agentId: target.agentId, path: target.storePath };
   const controller = new AbortController();
-  const reader = runWithSessionActorStorage(binding, () =>
-    captureCodexSessionContextReader(target, controller.signal),
-  );
+  const reader = captureCodexSessionContextReader(target, controller.signal);
   if (!reader) {
     throw new Error("Missing bound memory context reader");
   }
@@ -85,9 +85,12 @@ it("reads the selected memory context and ends retained iterators at the disclos
   });
   const retained = await reader(target, (messages) => messages);
   expect([...retained]).toEqual([]);
-  expect(() =>
-    runWithSessionActorStorage(binding, () => readCodexSessionContext(target, () => undefined)),
-  ).toThrow("captureCodexSessionContextReader");
+  expect(() => readCodexSessionContext(target, () => undefined)).toThrow(
+    "captureCodexSessionContextReader",
+  );
+  expect(() => validateCodexSessionTranscriptContextVersion(target, undefined)).toThrow(
+    "captureCodexSessionContextReader",
+  );
   await expect(
     reader(target, async (messages) => {
       await Promise.resolve();
@@ -95,13 +98,11 @@ it("reads the selected memory context and ends retained iterators at the disclos
       expect(() => [...messages]).toThrow("Context disclosure revoked");
     }),
   ).rejects.toThrow("Context disclosure revoked");
-  const afterClose = runWithSessionActorStorage(binding, () =>
-    captureCodexSessionContextReader(target),
-  );
+  const afterClose = captureCodexSessionContextReader(target);
   await expect(
     afterClose!(target, async (messages) => {
       await Promise.resolve();
-      owner.close();
+      owner.closeSession(target.sessionKey);
       expect(() => [...messages]).toThrow();
     }),
   ).rejects.toThrow();

@@ -304,6 +304,9 @@ export function encodeChatHistoryResponsePage(
     ...page,
     messages: [],
     activity: undefined,
+    // Paging maps have already become response cursors; do not clone them onto the host.
+    pagination: undefined,
+    anchor: undefined,
     encodedResponse: {
       ...response,
       messages: new TextEncoder().encode(JSON.stringify(response.messages)),

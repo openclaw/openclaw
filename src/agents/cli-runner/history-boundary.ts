@@ -12,10 +12,7 @@ import {
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
-import {
-  captureIncognitoSessionHistoryBinding,
-  withIncognitoSessionActor,
-} from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import {
   sessionEntryCommitGuardOptions,
   composeSessionSourceAssertion,
@@ -83,30 +80,24 @@ async function prepareCliHistoryBoundaryOnce(
   const capturedAdmission = admission && structuredClone(admission);
   const assertRunCurrent = createCliRunCurrentAssertion(params);
   const assertOwned = captureOwnedTranscriptWriteAssertion(requested);
-  const incognito = captureIncognitoSessionHistoryBinding(requested);
-  let assertPhysicalSource = () => {};
-  const plan = incognito
-    ? await withIncognitoSessionActor(
-        incognito.actor,
-        () => {
-          assertPhysicalSource = incognito.authority.assertCurrent;
-          return planCliHistoryBoundary(
-            params,
-            identity,
-            { ...requested, storePath: incognito.actor.path },
-            capturedAdmission,
-            () => {
-              assertRunCurrent();
-              incognito.authority.assertCurrent();
-            },
-          );
-        },
-        params.abortSignal,
+  const memory = captureSessionActorStorageOwner(requested, {
+    assertCurrent: assertRunCurrent,
+    authorize() {},
+  });
+  let assertPhysicalSource = () => {
+    memory?.owner?.assertCurrent();
+    memory?.binding?.actor.assertReadable();
+  };
+  const plan = memory
+    ? await planCliHistoryBoundary(
+        params,
+        identity,
+        { ...requested, storePath: memory.path },
+        capturedAdmission,
+        assertRunCurrent,
       )
     : await withSessionTranscriptReadSource(
         requested,
-        () =>
-          planCliHistoryBoundary(params, identity, requested, capturedAdmission, assertRunCurrent),
         ({ scope, expectedIdentity, assertCurrent: assertReaderCurrent }) => {
           const target = { ...requested, storePath: scope.storePath };
           assertPhysicalSource = () => {
@@ -131,6 +122,7 @@ async function prepareCliHistoryBoundaryOnce(
   const { target, snapshot, watermark, boundary, allowed, writerRunId } = plan;
   const assertCurrent = composeSessionSourceAssertion([assertRunCurrent], (assertSource) => {
     assertSource();
+    memory?.authority.assertCurrent();
     assertPhysicalSource();
   });
   assertCurrent();
@@ -206,7 +198,7 @@ async function prepareCliHistoryBoundaryOnce(
     assertReadable: async () => {
       assertWriterCurrent();
       assertPhysicalSource();
-      const authority = incognito
+      const authority = memory
         ? undefined
         : (
             await readSessionTranscriptAnchorsAsync(
@@ -217,11 +209,13 @@ async function prepareCliHistoryBoundaryOnce(
           ).contextAuthority;
       assertWriterCurrent();
       assertPhysicalSource();
-      const stored = authority?.entry;
-      const current = incognito ? incognito.actor.sessions.readSteering(target.sessionKey) : stored;
-      const history = incognito?.actor.sessions.readCliHistory(target.sessionKey);
-      const proof = incognito ? history?.boundary : stored?.cliHistoryBoundary;
-      const tip = incognito ? history?.watermark : authority?.watermark;
+      const facts =
+        memory?.binding?.actor.target.sessionKey === target.sessionKey
+          ? memory.binding.actor.snapshot(memory.authority)
+          : memory?.owner?.readSession(target.sessionKey, memory.authority);
+      const current = memory ? facts?.entry : authority?.entry;
+      const proof = current?.cliHistoryBoundary;
+      const tip = memory ? facts?.transcript.watermark : authority?.watermark;
       if (
         !current ||
         current.sessionId !== target.sessionId ||
@@ -244,7 +238,10 @@ async function prepareCliHistoryBoundaryOnce(
     throw new Error("CLI history writer is no longer active");
   }
   bindAgentRunTerminalWriteContext(authority, {
-    run: (write) => runWithCliHistoryWriter(writer, write),
+    // Terminal bookkeeping keeps the admitted account/row facts after execution
+    // is cancelled. The transcript writer still checks those facts at commit.
+    run: (write) =>
+      runWithCliHistoryWriter({ ...writer, assertCurrent: assertPhysicalSource }, write),
   });
   return writer;
 }

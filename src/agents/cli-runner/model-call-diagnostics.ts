@@ -14,10 +14,7 @@ import {
   type DiagnosticEventPrivateData,
   type DiagnosticModelCallContent,
 } from "../../infra/diagnostic-events.js";
-import {
-  cloneDiagnosticContentValue,
-  resolveDiagnosticModelContentCapturePolicy,
-} from "../../infra/diagnostic-llm-content.js";
+import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import {
   createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
@@ -285,7 +282,6 @@ export function createClaudeCliModelCallDiagnostics(params: {
   prompt: string;
   systemPrompt?: string;
   transport: "paired-node-cli" | "stdio" | "stdio-live";
-  now?: () => number;
 }) {
   // Listener registration is process-stable after plugin startup. This attempt-local
   // snapshot avoids trace ids, capture buffers, and byte accounting when nobody consumes them.
@@ -297,7 +293,6 @@ export function createClaudeCliModelCallDiagnostics(params: {
     return undefined;
   }
 
-  const now = params.now ?? (() => Date.now());
   const capture = resolveDiagnosticModelContentCapturePolicy(
     params.context.params.config ?? params.context.contextEngineConfig,
   );
@@ -364,12 +359,12 @@ export function createClaudeCliModelCallDiagnostics(params: {
     const content: DiagnosticModelCallContent = {
       ...(capture.inputMessages
         ? {
-            inputMessages: cloneDiagnosticContentValue([
+            inputMessages: [
               {
                 role: "user",
                 content: [{ type: "text", text: captureBoundedText(params.prompt) }],
               },
-            ]),
+            ],
           }
         : {}),
       ...(capture.systemPrompt && params.systemPrompt
@@ -397,7 +392,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
     if (outputContentBudget.truncated) {
       appendOutputTruncationMarker(messages);
     }
-    return cloneDiagnosticContentValue(messages);
+    return messages;
   };
   const completedModelContent = (output?: CliOutput): DiagnosticModelCallContent | undefined => {
     const base = baseModelContent();
@@ -423,7 +418,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
         return;
       }
       started = true;
-      startedAt = now();
+      startedAt = Date.now();
       emitTrustedDiagnosticEventWithPrivateData(
         {
           type: "model.call.started",
@@ -443,7 +438,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
       if (!chunk) {
         return;
       }
-      firstCliOutputAt ??= now();
+      firstCliOutputAt ??= Date.now();
       if (stream === "stdout") {
         responseStreamBytes += knownByteLength ?? Buffer.byteLength(chunk, "utf8");
       }
@@ -480,7 +475,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
         {
           type: "model.call.completed",
           ...baseFields,
-          durationMs: Math.max(0, now() - startedAt),
+          durationMs: Math.max(0, Date.now() - startedAt),
           ...sizeTimingFields(),
           ...usageField(
             output.diagnosticUsage ?? observedTerminalUsage ?? output.usage ?? observedUsage,
@@ -503,7 +498,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
         {
           type: "model.call.error",
           ...baseFields,
-          durationMs: Math.max(0, now() - startedAt),
+          durationMs: Math.max(0, Date.now() - startedAt),
           errorCategory:
             (isFailoverError(error) ? error.reason : undefined) ??
             failureKind ??

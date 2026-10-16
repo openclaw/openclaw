@@ -6,7 +6,7 @@ import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { createSkillCommandLoaders } from "../../auto-reply/reply/skill-command-loaders.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { readWorkspaceSkillSources } from "../loading/workspace-skill-loader.js";
+import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";

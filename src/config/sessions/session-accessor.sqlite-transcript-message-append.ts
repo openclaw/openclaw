@@ -19,6 +19,7 @@ import {
   readTranscriptMessageAppendMetadataInTransaction,
 } from "./session-accessor.sqlite-transcript-anchor.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
+import { readTranscriptMessageByEventId } from "./session-accessor.sqlite-transcript-identity.js";
 import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
 import {
   isTranscriptEntryOnActivePathInTransaction,
@@ -27,7 +28,6 @@ import {
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
-  readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
   sanitizeTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";

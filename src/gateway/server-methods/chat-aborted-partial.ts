@@ -8,7 +8,10 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { loadGatewaySessionEntryReadOnlyInWorker, loadSessionEntry } from "../session-utils.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  loadIncognitoGatewaySessionEntryReadOnly,
+} from "../session-utils.js";
 import { broadcastChatError } from "./chat-broadcast.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -45,7 +48,9 @@ export function retainChatAbortSessionSnapshot(snapshot: ChatAbortSessionSnapsho
         try {
           return {
             ok: true,
-            value: loadSessionEntry(selected.canonicalKey, { agentId: selected.agentId }),
+            value: loadIncognitoGatewaySessionEntryReadOnly(selected.canonicalKey, {
+              agentId: selected.agentId,
+            }),
           };
         } catch (error) {
           return { ok: false, error };

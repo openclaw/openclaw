@@ -90,6 +90,39 @@ console.log(JSON.stringify({ readerImports: globalThis.readerImports, spawns, di
   expect(result.stderr).toBe("");
 });
 
+it("returns candidate reads larger than the reader's stdout buffer intact", async () => {
+  const root = tempDirs.make("openclaw-update-config-large-");
+  const dist = path.join(root, "dist");
+  await fs.mkdir(dist);
+  await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
+  // About 1 MB: well past macOS pipe and Linux socketpair buffers.
+  await fs.writeFile(
+    path.join(dist, "io.runtime-Candidate.mjs"),
+    `const snapshot = () => ({ valid: true, text: "🦞 café ".repeat(100_000) });
+export function createConfigIO() { return { loadConfig: snapshot, readConfigFileSnapshot: async () => snapshot() }; }
+export async function readConfigFileSnapshot() { return snapshot(); }
+export function readCurrentConfigForPolicyCheck() { return snapshot(); }
+`,
+  );
+  writeStableRootRuntimeAliases({ rootDir: root });
+  const script = `
+import assert from "node:assert/strict";
+const expected = { valid: true, text: "🦞 café ".repeat(100_000) };
+const reader = await import(${JSON.stringify(pathToFileURL(path.join(dist, "io.runtime.js")).href)});
+assert.deepEqual(await reader.readConfigFileSnapshot(), expected);
+assert.deepEqual(await reader.createConfigIO().readConfigFileSnapshot(), expected);
+assert.deepEqual(reader.readCurrentConfigForPolicyCheck(), expected);
+assert.deepEqual(reader.createConfigIO().loadConfig(), expected);
+`;
+  const result = spawnSync(node, ["--input-type=module", "--eval", script], {
+    encoding: "utf8",
+    timeout: 30_000,
+    env: { ...process.env, NODE_OPTIONS: "", OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+  });
+  expect(result.stderr).toBe("");
+  expect(result.status).toBe(0);
+});
+
 it("reports a reader exit without a result while withholding the reader's stderr", async () => {
   const root = tempDirs.make("openclaw-update-config-exit-");
   const dist = path.join(root, "dist");
@@ -127,7 +160,7 @@ console.log(JSON.stringify(warnings));
     Array.from(
       { length: 2 },
       () =>
-        "[update:warning:candidate-config-read-failed] Candidate config read failed: reader process exited with code 7 without a result. The existing service definition was left unchanged. Retry with the updated CLI.",
+        "[update:warning:candidate-config-read-failed] Candidate config read failed: reader process exited with code 7 without a result. The existing service definition was left unchanged. After the update finishes, run openclaw gateway install --force with the same --profile or --dev option as this update to refresh it.",
     ),
   );
 });
@@ -245,7 +278,7 @@ console.log(JSON.stringify(diagnostics));
   expect(result.stderr).toBe("");
   expect(JSON.parse(result.stdout)).toEqual({
     warnings: [
-      `[update:warning:candidate-config-read-failed] Candidate config read failed: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '${dependencyFile}' imported from ${path.join(dist, "io.runtime-Candidate.mjs")}. The existing service definition was left unchanged. Retry with the updated CLI.`,
+      `[update:warning:candidate-config-read-failed] Candidate config read failed: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '${dependencyFile}' imported from ${path.join(dist, "io.runtime-Candidate.mjs")}. The existing service definition was left unchanged. After the update finishes, run openclaw gateway install --force with the same --profile or --dev option as this update to refresh it.`,
     ],
     errors: [],
   });

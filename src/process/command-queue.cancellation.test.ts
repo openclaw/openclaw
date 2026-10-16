@@ -9,9 +9,9 @@ import {
   setCommandLaneConcurrency,
 } from "./command-queue.js";
 import {
-  createLaneQueue,
   dequeueLaneQueue,
   enqueueLaneQueue,
+  getLaneState,
   peekLaneQueue,
   type QueueEntry,
   removeLaneQueueEntry,
@@ -69,7 +69,7 @@ function measureCancellationWork(count: number) {
     proxies.set(proxy, proxy);
     return proxy;
   }
-  const queue = observe(createLaneQueue());
+  const queue = observe(getLaneState(`cancellation-work:${count}`).queue);
   const entries = Array.from({ length: count }, (_, index) => observe(makeEntry(index)));
   for (const entry of entries) {
     enqueueLaneQueue(queue, entry);
@@ -252,8 +252,30 @@ describe("queued command scheduling and cancellation", () => {
     await expect(active).resolves.toBe("active finished");
   });
 
+  it("clears selected session work while unrelated queued work keeps its order", async () => {
+    const lane = "session:selective-clear";
+    setCommandLaneConcurrency(lane, 0);
+    const started: string[] = [];
+    const enqueue = (sessionId: string) =>
+      enqueueCommandInLane(lane, async () => started.push(sessionId), {
+        sessionTarget: { sessionId },
+      });
+    const before = enqueue("before");
+    const selected = enqueue("selected");
+    const after = enqueue("after");
+    const rejection = expect(selected).rejects.toBeInstanceOf(CommandLaneClearedError);
+
+    expect(clearCommandLane(lane, (target) => target?.sessionId === "selected")).toBe(1);
+    expect(getCommandLaneSnapshot(lane).queuedCount).toBe(2);
+    setCommandLaneConcurrency(lane, 1);
+
+    await rejection;
+    await Promise.all([before, after]);
+    expect(started).toEqual(["before", "after"]);
+  });
+
   it("releases entry references before reentrant cancellation cleanup", () => {
-    const queue = createLaneQueue();
+    const queue = getLaneState("reentrant-cancellation").queue;
     const entries = [makeEntry(0), makeEntry(1), makeEntry(2)];
     for (const entry of entries) {
       enqueueLaneQueue(queue, entry);

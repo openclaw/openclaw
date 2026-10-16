@@ -2,7 +2,7 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
-import { Kbd, KeyboardShortcut, ShortcutText } from "./kbd.tsx";
+import { Kbd, KeyboardShortcut, ShortcutHint, ShortcutText } from "./kbd.tsx";
 
 afterEach(cleanup);
 
@@ -53,5 +53,13 @@ describe("Solid keyboard hints", () => {
     ));
     expect(view.container.textContent).toBe("/ first; / again");
     expect(view.container.querySelectorAll("kbd")).toHaveLength(2);
+  });
+
+  it("keeps a literal shortcut inline with its tooltip label", () => {
+    const view = render(() => (
+      <ShortcutHint label="Commands" combo={{ key: "/", modifiers: [] }} />
+    ));
+    expect(view.container.textContent).toBe("Commands (/)");
+    expect(view.container.querySelector("kbd")?.style.font).toBe("inherit");
   });
 });

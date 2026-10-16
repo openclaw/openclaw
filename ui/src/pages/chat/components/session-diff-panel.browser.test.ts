@@ -1,7 +1,7 @@
 import { createComponent } from "solid-js";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { SessionDiffPanel } from "./session-diff-panel.ts";
@@ -13,8 +13,8 @@ const root = "/workspace/investigating-why-a-pr-was-not-merged";
 afterEach(() => document.body.replaceChildren());
 
 describe.runIf(browserMode)("Review header layout", () => {
-  it("uses available width before truncating and preserves actions when narrowed", async () => {
-    const { page } = await import("vitest/browser");
+  it("uses available width before truncating and preserves keyboard access to sync actions", async () => {
+    const { page, userEvent } = await import("vitest/browser");
     await page.viewport(1200, 800);
     let panel!: HTMLElementTagNameMap["openclaw-session-diff"];
     mountSolid(() =>
@@ -69,6 +69,65 @@ describe.runIf(browserMode)("Review header layout", () => {
         expect(rect.right).toBeLessThanOrEqual(bounds.right);
         expect(rect.left).toBeGreaterThanOrEqual(label.getBoundingClientRect().right);
       });
+    }
+
+    const sync = panel.querySelector<HTMLButtonElement>(".session-diff__toolbar-button")!;
+    const view = panel.querySelector<HTMLButtonElement>(".session-diff__toolbar-icon")!;
+    await userEvent.click(sync);
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff-menu__surface")?.matches(":popover-open")).toBe(
+        true,
+      ),
+    );
+    const command = panel.querySelector<HTMLButtonElement>(
+      'button[aria-label="Copy sync command"]',
+    );
+    const checkout = panel.querySelector<HTMLButtonElement>('button[aria-label="Checkout path"]');
+    const branchCopy = panel.querySelector<HTMLButtonElement>('button[aria-label="Branch name"]');
+    expect(command).toBeInstanceOf(HTMLButtonElement);
+    expect(checkout).toBeInstanceOf(HTMLButtonElement);
+    expect(branchCopy).toBeInstanceOf(HTMLButtonElement);
+    await waitForSolid(() => expect(document.activeElement).toBe(command));
+    await userEvent.tab();
+    expect(document.activeElement).toBe(checkout);
+    await userEvent.tab();
+    expect(document.activeElement).toBe(branchCopy);
+
+    let returnedToSync = false;
+    sync.addEventListener(
+      "focus",
+      () => {
+        returnedToSync = true;
+      },
+      { once: true },
+    );
+    await userEvent.tab();
+    await waitForSolid(() => expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull());
+    expect(returnedToSync).toBe(true);
+    // Native Tab continues past the restored Sync trigger.
+    expect(document.activeElement).toBe(view);
+
+    const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    onTestFinished(() => writeText.mockRestore());
+    const fileMenu = panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")!;
+    fileMenu.focus();
+    await userEvent.keyboard("{Enter}");
+    const fileSurface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
+    await waitForSolid(() => expect(fileSurface.matches(":popover-open")).toBe(true));
+    const copyPath = fileSurface.querySelector<HTMLButtonElement>(
+      'button[aria-label="Copy Path"]',
+    )!;
+    await waitForSolid(() => expect(document.activeElement).toBe(copyPath));
+    for (const key of ["{Enter}", " "]) {
+      const calls = writeText.mock.calls.length;
+      await userEvent.keyboard(key);
+      await waitForSolid(() => {
+        expect(writeText).toHaveBeenCalledTimes(calls + 1);
+        expect(writeText).toHaveBeenLastCalledWith("added.ts");
+        expect(copyPath.disabled).toBe(false);
+      });
+      expect(fileSurface.matches(":popover-open")).toBe(true);
+      expect(document.activeElement).toBe(copyPath);
     }
   });
 });

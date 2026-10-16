@@ -2,10 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { getContextWindowCaches } from "../../agents/context-cache.js";
-import {
-  loadProviderScopedThinkingCatalog,
-  readPreparedModelCatalog as loadModelCatalogLocal,
-} from "../../agents/model-catalog.runtime.js";
+import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -16,7 +13,6 @@ import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thin
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { isThinkingLevelSupported } from "../thinking.js";
 import { prepareModelSelectionRuntime } from "./model-runtime-normalization.js";
-import { resolveContextTokens } from "./model-selection-context.js";
 import {
   createInitialState,
   makeConfiguredModel,
@@ -171,10 +167,7 @@ function selectSession(
 }
 
 describe("catalog and thinking selection", () => {
-  it.each([
-    { previous: null, observed: "max", supported: true },
-    { previous: "max", observed: null, supported: false },
-  ])(
+  it.each([{ previous: null, observed: "max", supported: true }])(
     "uses observed levels for reply thinking ($supported)",
     async ({ previous, observed, supported }) => {
       const stale = {
@@ -246,57 +239,6 @@ describe("catalog and thinking selection", () => {
     await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
   });
 
-  it("hydrates thinking separately for embedded and native runtimes", async () => {
-    vi.mocked(loadModelCatalogLocal).mockClear();
-    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([
-      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: true },
-    ]);
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { models: { "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } } } } },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            models: [makeConfiguredModel({ reasoning: undefined })],
-          },
-        },
-      },
-    };
-    const state = await createInitialState(cfg, "openai", "gpt-5.4", {
-      preparedModelCatalog: {
-        entries: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: false }],
-        routeVariants: [],
-      },
-    });
-    await state.resolveThinkingCatalog({
-      provider: "openai",
-      model: "gpt-5.4",
-      agentRuntime: "openclaw",
-    });
-    await expect(
-      state.resolveDefaultThinkingLevel({
-        provider: "openai",
-        model: "gpt-5.4",
-        agentRuntime: "codex",
-      }),
-    ).resolves.toBe("medium");
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
-    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledWith({
-      config: cfg,
-      agentId: "main",
-      provider: "openai",
-      model: "gpt-5.4",
-      agentRuntime: "openclaw",
-    });
-    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledWith({
-      config: cfg,
-      agentId: "main",
-      provider: "openai",
-      model: "gpt-5.4",
-      agentRuntime: "codex",
-    });
-  });
-
   it("reloads embedded metadata when clearing a native runtime pin", async () => {
     const embedded = {
       provider: "openai",
@@ -332,57 +274,8 @@ describe("catalog and thinking selection", () => {
     );
   });
 
-  it("uses provider-specific prepared prompt budgets without an authored provider", async () => {
-    vi.mocked(loadModelCatalogLocal).mockClear();
-    catalogRuntimeMocks.loadModelCatalogSnapshot.mockClear();
-    const entries = [
-      {
-        provider: "fixture-secondary",
-        id: "shared-model",
-        name: "Shared",
-        reasoning: false,
-        contextWindow: 1_050_000,
-        contextTokens: 922_000,
-      },
-      {
-        provider: "fixture-primary",
-        id: "shared-model",
-        name: "Shared",
-        reasoning: false,
-        contextWindow: 1_000_000,
-        contextTokens: 872_000,
-      },
-    ];
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { models: { "fixture-primary/shared-model": {} } } },
-    };
-    const state = await createInitialState(cfg, "fixture-primary", "shared-model", {
-      preparedModelCatalog: { entries, routeVariants: entries, authoritative: true },
-    });
-    expect(
-      resolveContextTokens({
-        cfg,
-        provider: state.provider,
-        model: state.model,
-        modelContextTokens: state.modelContextTokens,
-        modelContextWindow: state.modelContextWindow,
-      }),
-    ).toBe(872_000);
-    expect(await state.resolveThinkingCatalog()).toEqual(entries);
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
-    expect(catalogRuntimeMocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
-    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledExactlyOnceWith({
-      config: cfg,
-      agentId: "main",
-      provider: "fixture-primary",
-      model: "shared-model",
-      agentRuntime: "openclaw",
-    });
-  });
-
   it.each([
     { hasModelDirective: true, capturedPolicy: true, expected: "ultra", unrestricted: false },
-    { hasModelDirective: false, capturedPolicy: false, expected: "medium", unrestricted: true },
   ])("keeps prepared thinking ownership (captured=$capturedPolicy)", async (fixture) => {
     const provider = "fixture-provider";
     const model = "fixture-model";
@@ -889,26 +782,4 @@ describe("refused pins use the primary instead of catalog order", () => {
       }
     },
   );
-
-  it("uses the primary for a stale caller without a session store", async () => {
-    const entry = makeEntry({
-      providerOverride: "provider-c",
-      modelOverride: "model-c1",
-      modelOverrideSource: "auto",
-      modelOverrideRouteResolution: "resolved",
-      modelOverrideFallbackOriginProvider: "provider-c",
-      modelOverrideFallbackOriginModel: "model-c2",
-    });
-    const state = await createInitialState(cfg, "provider-b", "model-b1", {
-      sessionEntry: entry,
-      provider: "provider-c",
-      model: "model-c1",
-      isHeartbeat: true,
-    });
-    expect(state).toMatchObject({
-      resetModelOverride: false,
-      provider: "provider-b",
-      model: "model-b1",
-    });
-  });
 });

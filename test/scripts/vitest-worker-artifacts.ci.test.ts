@@ -5,6 +5,8 @@ import { setTimeout as tick } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect } from "vitest";
 import { isConstrainedCiCheckHost } from "../../scripts/lib/local-check-runtime.mts";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -12,6 +14,7 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { withinTest } from "../helpers/promise.js";
+import { runNodeScript } from "../helpers/run-node-script.js";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import {
   createControlledWorkerCompiler,
@@ -321,81 +324,127 @@ it
       name: "removes a shared generation after a borrower releases its generation claim and fails normally",
       claim: "released",
     },
-  ] as const)("$name", ({ claim }, { workerArtifacts, signal }) =>
-  workerArtifacts.fixtureLifetime.run(async () => {
-    const { node } = workerArtifacts.createFixtureCommands();
-    const directory = workerArtifacts.fixtureDirectory();
-    const fixture = createCiProbe(directory, true, claim === "temporary" ? undefined : claim);
-    const env = ciEnv(fixture.probe, 2);
-    // Deliberate TMP claims stay inside this fixture, never the enclosing test's owner.
-    const temp = path.join(directory, "tmp");
-    fs.mkdirSync(temp);
-    Object.assign(env, { TMPDIR: temp, TMP: temp, TEMP: temp });
-    const controlled = createControlledWorkerCompiler(directory, env);
-    const running = node(command, root, controlled.env);
-    try {
-      await withinTest(fixtureFileBeforeSettlement(receipts, fixture.ready, running), signal);
-      // Hold first-group until its sibling is borrowing, then join its own receipt.
-      fs.writeFileSync(fixture.startFirst, "start");
-      await withinTest(fixtureFileBeforeSettlement(receipts, fixture.firstReady, running), signal);
-      const observations = fixture.read();
-      const first = observations.find(({ group }) => group === "first-group")!;
-      const second = observations.find(({ group }) => group === "second-group")!;
-      expect(observations).toHaveLength(2);
-      expect(new Set(observations.map(({ generation }) => generation)).size).toBe(1);
-      await Promise.all([
-        waitForBorrowerExit(first.pid, signal),
-        waitForBorrowerExit(first.parent, signal),
-      ]);
-      expect(isProcessAlive(second.pid)).toBe(true);
-      expect(fs.existsSync(generationDirectory(first.generation))).toBe(true);
-      expect(fs.existsSync(first.includeFile)).toBe(true);
-      fs.writeFileSync(fixture.release, "finish");
-      const result = await withinTest(running, signal);
-      const compilerReceipts = controlled.read();
-      expect(compilerReceipts).toHaveLength(1);
-      console.log("Controlled compiler receipts", JSON.stringify(compilerReceipts));
-      expect(result.code).not.toBe(0);
-      if (claim === "temporary") {
-        expect(result.stdout + result.stderr).toContain("retained temporary namespace");
-        expect(result.stderr).toContain("borrower join failed");
-      } else {
-        expect(result.code).toBe(1);
-        expect(result.stdout + result.stderr).not.toContain("retained temporary namespace");
-        expect(result.stdout).toContain(
-          `[shard:first-group] end (exit ${claim === "released" ? 1 : 0})`,
+  ] as const)("$name", async ({ claim }, { workerArtifacts, signal }) => {
+  const deliberatelyRetained = claim !== "released";
+  const retainedRoot = deliberatelyRetained
+    ? fs.mkdtempSync(path.join(root, ".artifacts/worker-retention-proof-"))
+    : undefined;
+  if (retainedRoot) {
+    createVitestResourceOwner(retainedRoot);
+  }
+  const lifetime = retainedRoot
+    ? createFixtureLifetime(retainedRoot)
+    : workerArtifacts.fixtureLifetime;
+  try {
+    await lifetime.run(async () => {
+      const { node } = workerArtifacts.createFixtureCommands();
+      const directory = retainedRoot
+        ? lifetime.createTempDir("worker proof-", retainedRoot)
+        : workerArtifacts.fixtureDirectory();
+      const fixture = createCiProbe(directory, true, claim === "temporary" ? undefined : claim);
+      const env = ciEnv(fixture.probe, 2);
+      // Deliberate TMP claims stay inside this fixture, never the enclosing test's owner.
+      const temp = path.join(directory, "tmp");
+      fs.mkdirSync(temp);
+      Object.assign(env, { TMPDIR: temp, TMP: temp, TEMP: temp });
+      const controlled = createControlledWorkerCompiler(directory, env);
+      const running = retainedRoot
+        ? lifetime.track(
+            runNodeScript(command, controlled.env, undefined, {
+              cwd: root,
+              signal,
+              maxBuffer: 2 * 1024 * 1024,
+              requireProcessTreeExit: true,
+            }).then((result) => ({ ...result, code: result.status })),
+          )
+        : node(command, root, controlled.env);
+      try {
+        await withinTest(fixtureFileBeforeSettlement(receipts, fixture.ready, running), signal);
+        // Hold first-group until its sibling is borrowing, then join its own receipt.
+        fs.writeFileSync(fixture.startFirst, "start");
+        await withinTest(
+          fixtureFileBeforeSettlement(receipts, fixture.firstReady, running),
+          signal,
         );
-        expect(result.stdout).toContain("[shard:second-group] end (exit 0)");
-        if (claim === "pending") {
-          expect(result.stderr).toContain("Unreleased Vitest resource claim:");
-          expect(result.stderr).toContain("fixture resource join failed");
+        const observations = fixture.read();
+        const first = observations.find(({ group }) => group === "first-group")!;
+        const second = observations.find(({ group }) => group === "second-group")!;
+        expect(observations).toHaveLength(2);
+        expect(new Set(observations.map(({ generation }) => generation)).size).toBe(1);
+        await Promise.all([
+          waitForBorrowerExit(first.pid, signal),
+          waitForBorrowerExit(first.parent, signal),
+        ]);
+        expect(isProcessAlive(second.pid)).toBe(true);
+        expect(fs.existsSync(generationDirectory(first.generation))).toBe(true);
+        expect(fs.existsSync(first.includeFile)).toBe(true);
+        fs.writeFileSync(fixture.release, "finish");
+        const result = await withinTest(running, signal);
+        const compilerReceipts = controlled.read();
+        expect(compilerReceipts).toHaveLength(1);
+        console.log("Controlled compiler receipts", JSON.stringify(compilerReceipts));
+        expect(result.code).not.toBe(0);
+        if (deliberatelyRetained) {
+          expect(result.code).toBeNull();
+          expect(result.error).toMatchObject({
+            code: "EPROCESSGROUP_CLEANUP_FAILED",
+            processTreeState: "indeterminate",
+            cause: { message: "Managed cleanup owner reported unjoined work" },
+          });
+        }
+        if (claim === "temporary") {
+          expect(result.stdout + result.stderr).toContain("retained temporary namespace");
+          expect(result.stderr).toContain("borrower join failed");
         } else {
-          expect(result.stdout + result.stderr).toContain(
-            "ordinary failure after releasing generation claim",
+          if (claim === "released") {
+            expect(result.code).toBe(1);
+            expect(result.stdout + result.stderr).not.toContain("retained temporary namespace");
+          }
+          expect(result.stdout).toContain(
+            `[shard:first-group] end (exit ${claim === "released" ? 1 : 0})`,
           );
-          expect(result.stderr).not.toContain("[vitest-workers] retaining");
+          expect(result.stdout).toContain("[shard:second-group] end (exit 0)");
+          if (claim === "pending") {
+            expect(result.stderr).toContain("Unreleased Vitest resource claim:");
+            expect(result.stderr).toContain("fixture resource join failed");
+          } else {
+            expect(result.stdout + result.stderr).toContain(
+              "ordinary failure after releasing generation claim",
+            );
+            expect(result.stderr).not.toContain("[vitest-workers] retaining");
+          }
+        }
+        expect(fs.readFileSync(fixture.ready + ".read", "utf8")).toBe("read after sibling exit");
+        expect(fs.existsSync(generationDirectory(first.generation))).toBe(claim !== "released");
+        expect(fs.existsSync(path.dirname(first.includeFile))).toBe(claim !== "released");
+      } finally {
+        fs.writeFileSync(fixture.release, "finish");
+        await running;
+        const observations = fs.existsSync(fixture.observationsFile) ? fixture.read() : [];
+        // The CI command finishes only after both group completions and worker-run disposal.
+        for (const { pid, parent } of observations) {
+          expect(isProcessAlive(pid), `process still alive: ${pid}`).toBe(false);
+          expect(isProcessAlive(parent), `process still alive: ${parent}`).toBe(false);
+        }
+        if (!deliberatelyRetained) {
+          for (const run of new Set(observations.map(({ generation }) => generation))) {
+            fs.rmSync(generationDirectory(run), { recursive: true, force: true });
+          }
+          for (const scratch of new Set(
+            observations.map(({ includeFile }) => path.dirname(includeFile)),
+          )) {
+            fs.rmSync(scratch, { recursive: true, force: true });
+          }
         }
       }
-      expect(fs.readFileSync(fixture.ready + ".read", "utf8")).toBe("read after sibling exit");
-      expect(fs.existsSync(generationDirectory(first.generation))).toBe(claim !== "released");
-      expect(fs.existsSync(path.dirname(first.includeFile))).toBe(claim !== "released");
-    } finally {
-      fs.writeFileSync(fixture.release, "finish");
-      await running;
-      const observations = fs.existsSync(fixture.observationsFile) ? fixture.read() : [];
-      // The CI command finishes only after both group completions and worker-run disposal.
-      for (const { pid, parent } of observations) {
-        expect(isProcessAlive(pid), `process still alive: ${pid}`).toBe(false);
-        expect(isProcessAlive(parent), `process still alive: ${parent}`).toBe(false);
-      }
-      for (const run of new Set(observations.map(({ generation }) => generation))) {
-        fs.rmSync(generationDirectory(run), { recursive: true, force: true });
-      }
-      for (const scratch of new Set(
-        observations.map(({ includeFile }) => path.dirname(includeFile)),
-      )) {
-        fs.rmSync(scratch, { recursive: true, force: true });
-      }
+    });
+  } finally {
+    if (retainedRoot) {
+      // Missing handoff evidence cannot prove detached writers stopped. Keep the
+      // isolated negative fixture; its failure must not retain the enclosing test.
+      await expect(lifetime.cleanup()).rejects.toThrow("Fixture cleanup unverified");
+      expect(fs.existsSync(retainedRoot)).toBe(true);
+      console.log("Deliberately retained cleanup proof", retainedRoot);
     }
-  }),
-);
+  }
+});

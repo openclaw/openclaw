@@ -541,10 +541,12 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     vi.advanceTimersByTime(60_000);
     // Wall-clock expiry still lies ahead; only the timer could have retired this token.
     expect(minted.expiresAtMs).toBeGreaterThan(Date.now());
+    expect(vi.getTimerCount()).toBe(0);
+    // Only token expiry uses virtual time; socket rejection and teardown use real timers.
+    vi.useRealTimers();
     const observerUrl = new URL(harness.observerUrl);
     observerUrl.searchParams.set("token", minted.token);
     await expectUnauthorizedObserver(observerUrl.toString());
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("pauses and resumes unix-socket reads around websocket backpressure", async () => {

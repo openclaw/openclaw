@@ -31,18 +31,14 @@ import {
   restoreRetiredExactWorktree,
   requireExactWorktreeRepository,
 } from "./removal-git.js";
+import { resolveRepository, type ResolvedRepository } from "./repository-paths.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import {
   abortWorktreeRemoval,
   claimWorktreeRemoval,
   finalizeWorktreeRemoval,
 } from "./run-lease.js";
-import {
-  removeFailedWorktree,
-  resolveRepository,
-  withWorktreeSources,
-  type ResolvedRepository,
-} from "./service-preparation.js";
+import { removeFailedWorktree, withWorktreeSources } from "./service-preparation.js";
 import {
   exactStateRetirementSchema,
   type ExactStateRetirement,

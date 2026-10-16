@@ -220,6 +220,7 @@ describe("Gateway automatic account dispatch authority", () => {
         {
           layout: "state-only",
           prefix: "catalog-link-authority-",
+          prepareProfileCatalog: true,
           agentEnv: "main",
           env: WITHOUT_OPENAI_ENV_AUTH,
         },

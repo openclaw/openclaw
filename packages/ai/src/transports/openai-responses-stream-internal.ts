@@ -108,6 +108,7 @@ export async function processResponsesStream<TApi extends Api>(
         contentIndex: blocks.length,
         outputIndex: readResponsesOutputIndex(event),
       };
+      terminal.recordPendingReasoning(slot.contentIndex);
     } else if (item.type === "message") {
       const collapseCandidate = lastTextBlock;
       const block = collapseCandidate ? null : createTextBlock(item, "");
@@ -661,10 +662,7 @@ export async function processResponsesStream<TApi extends Api>(
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
         // Preserve reported accounting before rejecting unfinished tool calls.
-        terminal.finalizeResponse(event.response, event.type, Boolean(rejectedToolCall));
-        if (rejectedToolCall) {
-          throw output.errorMessage ? new Error(output.errorMessage) : rejectedToolCall.error;
-        }
+        terminal.finalizeResponse(event.response, event.type, rejectedToolCall);
         if (event.type === "response.completed" || output.stopReason === "length") {
           const items = event.response.output ?? [];
           const completeToolCall =
@@ -716,5 +714,7 @@ export async function processResponsesStream<TApi extends Api>(
         delete block.partialJson;
       }
     }
+    // Completed calls survive interrupted streams, using item.done reasoning if no terminal arrived.
+    terminal.releaseDeferredToolCompletions();
   }
 }

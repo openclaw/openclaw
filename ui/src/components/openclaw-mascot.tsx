@@ -1,7 +1,7 @@
 import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
 import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { MascotAnimator } from "./mascot-animator.ts";
 import { drawMascot } from "./mascot-canvas.ts";
 import {

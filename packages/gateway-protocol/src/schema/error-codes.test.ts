@@ -4,6 +4,8 @@ import { readSessionWorkspaceRecoveryRequiredError } from "../error-details.js";
 import {
   ErrorCodes,
   CronJobNotFoundErrorDetailsSchema,
+  ClawHubRiskAcknowledgementRequiredErrorDetailsSchema,
+  ClawReviewRequiredErrorDetailsSchema,
   GatewayErrorDetailCodes,
   GatewayErrorDetailsSchema,
   GitHubPublicationSelectionRejectedErrorDetailsSchema,
@@ -17,12 +19,53 @@ import {
   readMissingScopeError,
   readMissingScopeErrorDetails,
   readCronJobNotFoundError,
+  readClawHubRiskAcknowledgementRequiredError,
+  readClawReviewRequiredError,
   readGitHubPublicationSelectionRejectedError,
   UnknownAgentIdErrorDetailsSchema,
 } from "./error-codes.js";
 import { ErrorShapeSchema } from "./frames.js";
 
 describe("gateway error details", () => {
+  it("reads only structured ClawHub release consent warnings", () => {
+    const details = {
+      code: GatewayErrorDetailCodes.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED,
+      warning: "Security analysis is pending for this release.",
+    };
+    const error = { code: ErrorCodes.INVALID_REQUEST, message: "Consent required", details };
+
+    expect(Value.Check(ClawHubRiskAcknowledgementRequiredErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(readClawHubRiskAcknowledgementRequiredError(error)).toEqual(details);
+    expect(
+      readClawHubRiskAcknowledgementRequiredError({ ...error, code: ErrorCodes.UNAVAILABLE }),
+    ).toBeNull();
+    expect(
+      readClawHubRiskAcknowledgementRequiredError({
+        ...error,
+        details: { ...details, warning: "" },
+      }),
+    ).toBeNull();
+    expect(readClawHubRiskAcknowledgementRequiredError(new Error("Consent required"))).toBeNull();
+  });
+
+  it("distinguishes plugin and skill review requests from ordinary errors", () => {
+    for (const kind of ["plugin", "skill"] as const) {
+      const details = { code: GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED, kind };
+      const error = { code: ErrorCodes.INVALID_REQUEST, message: "Review required", details };
+      expect(Value.Check(ClawReviewRequiredErrorDetailsSchema, details)).toBe(true);
+      expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+      expect(readClawReviewRequiredError(error)).toEqual(details);
+      expect(readClawReviewRequiredError({ ...error, code: ErrorCodes.UNAVAILABLE })).toBeNull();
+    }
+    expect(
+      readClawReviewRequiredError({
+        code: ErrorCodes.INVALID_REQUEST,
+        details: { code: GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED, kind: "unknown" },
+      }),
+    ).toBeNull();
+  });
+
   it("validates and reads exact pending workspace recovery routes", () => {
     const details = {
       code: GatewayErrorDetailCodes.SESSION_WORKSPACE_RECOVERY_REQUIRED,

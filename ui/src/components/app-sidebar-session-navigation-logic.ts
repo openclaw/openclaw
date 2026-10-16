@@ -9,6 +9,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { resolveSessionChannelPresentation } from "../lib/session-channel.ts";
 import {
+  isSessionTitlePending,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
   resolveSessionWorkContext,
@@ -38,7 +39,7 @@ import {
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
-import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
+import { sidebarPluginTabs } from "./app-sidebar-nav-menus.tsx";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
   type SidebarRecentSession,
@@ -188,6 +189,7 @@ export function buildSidebarSessionNavigationState(input: {
       agentId: resolveUiSessionRowAgentId(row, defaultAgentId),
       sessionId: row.sessionId,
       displayName: row.displayName,
+      titlePending: isSessionTitlePending(row.key, row),
       incognito: row.incognito === true || isIncognitoSessionKey(row.key),
       createdActor: row.createdActor,
       owner: row.owner,
@@ -204,6 +206,9 @@ export function buildSidebarSessionNavigationState(input: {
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
       hasActiveRun: row.archived !== true && isSessionRunActive(row),
+      isRunVisuallyActive:
+        row.archived !== true &&
+        (context ? context.sessions.isRunVisuallyActive(row) : isSessionRunActive(row)),
       gatewayHasActiveRun: row.hasActiveRun,
       hasActiveSubagentRun: row.hasActiveSubagentRun,
       activeRunIds: row.archived === true ? undefined : row.activeRunIds,

@@ -182,7 +182,7 @@ describe("llama.cpp provider plugin", () => {
         label: "llama.cpp",
         normalizeToolSchemas: expect.any(Function),
         inspectToolSchemas: expect.any(Function),
-        reconcileLocalService: mocks.reconcileServer,
+        reconcileLocalService: expect.any(Function),
         auth: expect.arrayContaining([
           expect.objectContaining({ id: "local" }),
           expect.objectContaining({ id: "existing-server" }),

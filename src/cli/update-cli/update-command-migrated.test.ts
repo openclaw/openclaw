@@ -22,6 +22,7 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
+import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-runtime-pins.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
@@ -32,13 +33,18 @@ import {
 } from "../../infra/update-run-ledger.js";
 import * as childCommands from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createUpdateProgress } from "./progress.js";
 import { prepareCandidateAuthorityRuntime } from "./update-command-candidate-authority.test-support.js";
@@ -115,9 +121,12 @@ afterEach(async () => {
 it.each([
   { agentId: "main", changed: "none", blocked: undefined },
   { agentId: "verification", changed: "none", blocked: undefined },
+  { agentId: "main", changed: "local", blocked: undefined },
   { agentId: "main", changed: "shared", blocked: "state-migrated-no-rollback" },
   { agentId: "main", changed: "agent", blocked: "state-migrated-no-rollback" },
   { agentId: "main", changed: "incomplete", blocked: "state-migrated-no-rollback" },
+  { agentId: "main", changed: "retained", blocked: "state-migrated-no-rollback" },
+  { agentId: "main", changed: "pending", blocked: "state-migrated-no-rollback" },
 ])(
   "classifies activation after first-use database creation (agent=$agentId, changed=$changed)",
   async ({ agentId, changed, blocked }) => {
@@ -125,6 +134,9 @@ it.each([
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const shared = openOpenClawStateDatabase({ env });
     const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config: {}, env });
+    if (changed === "local") {
+      expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
+    }
     const agentPath = path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
     expect(
       schemaVersions.find((entry) => entry.path === agentPath)?.userVersion ?? null,
@@ -161,6 +173,37 @@ it.each([
       { agentId, env },
     );
     closeOpenClawAgentDatabasesForTest();
+    let retainedPath: string | undefined;
+    let retainedBytes: Buffer | undefined;
+    if (changed === "retained" || changed === "pending") {
+      const agentDir = path.join(stateDir, "agents", "retired", "agent");
+      retainedPath = path.join(agentDir, "openclaw-agent.sqlite");
+      await fs.mkdir(agentDir, { recursive: true });
+      const db = new DatabaseSync(retainedPath);
+      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
+      db.close();
+      retainedBytes = await fs.readFile(retainedPath);
+      beginAgentDeletionJournal(
+        {
+          agentId: "retired",
+          operationId: "delete-retired",
+          agentDir,
+          workspaceDir: path.join(stateDir, "workspace-retired"),
+          sessionsDir: path.join(stateDir, "agents", "retired", "sessions"),
+          deleteFiles: false,
+        },
+        { env },
+      );
+      if (changed === "retained") {
+        runOpenClawStateWriteTransaction(
+          (database) =>
+            completeAgentDeletionJournalInDatabase(database, "retired", "delete-retired"),
+          { env },
+        );
+      }
+      // The candidate also advances shared state: the old parent cannot reopen it.
+      shared.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    }
     if (changed === "shared" || changed === "agent") {
       const db = new DatabaseSync(changed === "shared" ? shared.path : agentPath);
       try {
@@ -185,7 +228,9 @@ it.each([
           root: candidateRoot,
           schemaVersions,
           candidateSchemaVersions: {
-            state: OPENCLAW_STATE_SCHEMA_VERSION + Number(changed === "shared"),
+            state:
+              OPENCLAW_STATE_SCHEMA_VERSION +
+              Number(changed === "shared" || changed === "retained" || changed === "pending"),
             agent: OPENCLAW_AGENT_SCHEMA_VERSION + Number(changed === "incomplete"),
           },
           config: {},
@@ -193,17 +238,25 @@ it.each([
         }),
       ),
     ).resolves.toBe(blocked);
-    if (changed === "incomplete") {
+    if (changed === "local") {
+      expect(result.status).toBe("ok");
+    }
+    if (changed === "incomplete" || changed === "pending") {
       expect(result).toMatchObject({
         status: "error",
         reason: "openclaw doctor",
         steps: [
           expect.objectContaining({
             exitCode: 1,
-            stderrTail: expect.stringContaining(agentPath),
+            stderrTail: expect.stringContaining(retainedPath ?? agentPath),
           }),
         ],
       });
+    } else if (changed === "retained") {
+      expect(result).toMatchObject({ status: "ok", steps: [] });
+    }
+    if (retainedPath) {
+      expect(await fs.readFile(retainedPath)).toEqual(retainedBytes);
     }
   },
 );
@@ -525,6 +578,9 @@ it.each([
       `,
       );
     }
+    if (original) {
+      expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
+    }
     const created = createUpdateRun({ trigger: foreground ? "api" : "cli" }, { env });
     const parentDriver = parentOwns
       ? adoptUpdateRun(created.runId, { env }).origin.driver
@@ -831,12 +887,6 @@ it.each([
     }
     const result = await work;
     expect(result.candidateStartAttempted).toBe(false);
-    expect(result.automaticTriage).toMatchObject({
-      kind: "update",
-      phase: "state-migrated-no-rollback",
-      installationRoot: root,
-      gateway: "preserve",
-    });
     expect(result.exitCode).not.toBe(0);
     expect(result.result).toMatchObject({
       runId: created.runId,

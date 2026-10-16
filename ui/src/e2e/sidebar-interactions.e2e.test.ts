@@ -250,9 +250,7 @@ suite.define(() => {
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.locator(".sidebar-agent-card__main").click();
-      await sidebar
-        .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="command:capabilities"]')
-        .click();
+      await sidebar.locator('.sidebar-agent-menu [data-value="command:capabilities"]').click();
 
       const textarea = page.locator(".agent-chat__composer-combobox > textarea");
       const input = textarea.locator("xpath=ancestor::*[contains(@class, 'agent-chat__input')][1]");
@@ -446,7 +444,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-      const menu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
+      const menu = sidebar.locator(".sidebar-agent-menu");
       const allSwitch = menu.getByRole("menuitem", { name: "Show all", exact: true });
       const mainSwitch = menu.getByRole("menuitem", { name: "Scheduled Automations", exact: true });
       const researchSwitch = menu.getByRole("menuitem", { name: "Research", exact: true });
@@ -463,7 +461,7 @@ suite.define(() => {
       await expect.poll(() => menu.getByText(/^New session —/).count()).toBe(0);
       await menu.evaluate(async (dropdown) => {
         await document.fonts.ready;
-        const surface = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+        const surface = dropdown;
         await Promise.all(surface.getAnimations().map((animation) => animation.finished));
       });
       const rowLayout = await menu.evaluate((dropdown) => {
@@ -505,9 +503,7 @@ suite.define(() => {
         .poll(() =>
           menu.evaluate((dropdown) => {
             const grid = dropdown.querySelector(".sidebar-agent-menu__agent-list");
-            const rows = [
-              ...dropdown.querySelectorAll("wa-dropdown-item.sidebar-agent-menu__agent-switch"),
-            ];
+            const rows = [...dropdown.querySelectorAll(".sidebar-agent-menu__agent-switch")];
             if (!grid || rows.length === 0) {
               return Number.NaN;
             }
@@ -632,18 +628,18 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       const trigger = sidebar.locator(".sidebar-agent-card__main");
       await trigger.click();
-      const menu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
+      const menu = sidebar.locator(".sidebar-agent-menu");
       const search = menu.getByRole("searchbox", { name: "Find an agent…" });
-      const rows = menu.locator(".sidebar-agent-menu__agent-list > wa-dropdown-item");
+      const rows = menu.locator('.sidebar-agent-menu__agent-list > [role^="menuitem"]');
       await expect.poll(() => rows.count()).toBe(41);
       await menu.evaluate(async (dropdown) => {
         await document.fonts.ready;
-        const surface = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+        const surface = dropdown;
         await Promise.all(surface.getAnimations().map((animation) => animation.finished));
       });
       const geometry = await menu.evaluate((dropdown) => {
         const list = dropdown.querySelector<HTMLElement>(".sidebar-agent-menu__agent-list")!;
-        const actions = [...dropdown.querySelectorAll<HTMLElement>(":scope > wa-dropdown-item")];
+        const actions = [...dropdown.querySelectorAll<HTMLElement>(':scope > [role^="menuitem"]')];
         return {
           scrolls: list.scrollHeight > list.clientHeight,
           actionsFit: actions.every((action) => {
@@ -674,7 +670,7 @@ suite.define(() => {
         .toBe(true);
       await search.fill("no-such-agent");
       await expect.poll(() => menu.getByRole("status").textContent()).toBe("No matching agents");
-      expect(await menu.locator(":scope > wa-dropdown-item").count()).toBe(4);
+      expect(await menu.locator(':scope > [role^="menuitem"]').count()).toBe(4);
       await search.fill("agent-39");
       await expect.poll(() => rows.count()).toBe(1);
       expect(

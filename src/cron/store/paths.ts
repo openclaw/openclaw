@@ -47,14 +47,25 @@ export function resolveCronJobsStorePathFromConfig(
   return resolveCronJobsStorePath(typeof store === "string" ? store : undefined, env, stateEnv);
 }
 
-/** Select the partition once through the shared reader before constructing Gateway cron. */
+/** Runtime path selection never opens SQLite on the caller's thread. */
+export async function resolveCronJobsStorePathAsync(
+  storePath?: string,
+  env: NodeJS.ProcessEnv = process.env,
+  stateEnv: NodeJS.ProcessEnv = env,
+): Promise<string> {
+  const selected = storePath?.trim() || (await readCronStoreStatePathAsync(stateEnv));
+  return resolveSelectedCronJobsStorePath(selected, env);
+}
+
 export async function resolveCronJobsStorePathFromConfigAsync(
   cfg: { cron?: unknown },
   env: NodeJS.ProcessEnv = process.env,
+  stateEnv: NodeJS.ProcessEnv = env,
 ): Promise<string> {
   const store = asOptionalRecord(cfg.cron)?.store;
-  const selected =
-    (typeof store === "string" ? store.trim() : undefined) ||
-    (await readCronStoreStatePathAsync(env));
-  return resolveSelectedCronJobsStorePath(selected, env);
+  return resolveCronJobsStorePathAsync(
+    typeof store === "string" ? store : undefined,
+    env,
+    stateEnv,
+  );
 }

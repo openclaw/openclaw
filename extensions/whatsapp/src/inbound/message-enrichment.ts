@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveWhatsAppMediaMaxBytes } from "../accounts.js";
 import { getStatusCode } from "../session-errors.js";
 import {
   describeReplyContext,
@@ -101,9 +102,7 @@ export async function enrichWhatsAppInboundMessage(params: {
   const nativeMedia = mediaKind ? { contentType: mediaType, kind: mediaKind } : undefined;
   let mediaFileName: string | undefined;
   let savedContentType: string | undefined;
-  const maxMb =
-    typeof params.mediaMaxMb === "number" && params.mediaMaxMb > 0 ? params.mediaMaxMb : 50;
-  const maxBytes = maxMb * 1024 * 1024;
+  const maxBytes = resolveWhatsAppMediaMaxBytes(params);
   const saveInboundMedia = (inboundMedia: Awaited<ReturnType<typeof downloadInboundMedia>>) => {
     if (!inboundMedia) {
       return;

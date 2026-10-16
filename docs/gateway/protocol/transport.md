@@ -59,6 +59,17 @@ Frame shapes:
 - Response: `{type:"res", id, ok, payload|error}`
 - Event: `{type:"event", event, payload, seq?, stateVersion?, recipientProfileId?}`
 
+Handler failures return a typed `UNAVAILABLE` response for the affected request
+and leave a healthy socket open. This includes connect preparation failures;
+a client whose connect failed must still complete a successful handshake before
+using the connection as an established session. An already admitted operator
+connection can continue to serve recovery RPCs even if its hello snapshot failed.
+Failures after hello delivery are logged without sending a second connect response.
+Malformed JSON closes with code `1007` and reason `invalid JSON`; handshake and
+authentication policy violations use their explicit policy close codes and reasons.
+A failed hello transport write closes with `1011` and reason
+`gateway hello delivery failed`.
+
 Live text uses append deltas after an initial recipient snapshot. The
 `chat.history` field `inFlightRun.text` restores only the current run's unpersisted
 assistant tail. Silent-reply suppression uses the full available source; the tail keeps existing directive and media normalization without being classified as a silent reply again. If the cap evicts source context, retained tail text stays visible conservatively. Cumulative snapshots or replacements that restore text evicted by the live buffer cap may redisplay committed text when ownership is unknown, preserving unsaved output.

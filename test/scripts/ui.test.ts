@@ -391,6 +391,91 @@ process.exitCode = ${expectedExit};\n`,
     `control-ui.build-${process.pid}-live`,
     `control-ui.build-${process.pid}-live.retired`,
   ];
+  it("invalidates a warm required-plugin cache when source metadata promises a new owner", () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-ui-required-cache-"));
+    copyUiFixture(root);
+    for (const file of [
+      "scripts/lib/build-artifact-cache.mts",
+      "scripts/lib/bundled-plugin-build-entries.mjs",
+      "scripts/lib/bundled-plugin-paths.mjs",
+      "scripts/lib/optional-bundled-clusters.mjs",
+      "scripts/lib/root-package-bundled-plugin-excludes.mjs",
+      "src/shared/non-packaged-plugin-dirs.ts",
+    ]) {
+      const destination = path.join(root, file);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.copyFileSync(file, destination);
+    }
+    const modules = path.join(root, "node_modules");
+    fs.symlinkSync(
+      path.dirname(createRequire(import.meta.url).resolve("@openclaw/fs-safe/package.json")),
+      path.join(modules, "@openclaw/fs-safe"),
+      "junction",
+    );
+    fs.mkdirSync(path.join(root, "extensions"));
+    writeUiPackageBin(modules, "dompurify", "export {};\n");
+    writeUiPackageBin(
+      modules,
+      "vite",
+      `
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+export async function runnerImport() {
+  return { module: { refreshControlUiBuildOutput() {}, resolveControlUiBuildInfo() { return {}; } } };
+}
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const out = process.argv[process.argv.indexOf("--outDir") + 1];
+  fs.mkdirSync(out, { recursive: true });
+  for (const file of ["index.html", "sw.js", ".build-inputs.json"]) fs.writeFileSync(path.join(out, file), "[]");
+  console.log("fixture-bundler-ran");
+}
+`,
+    );
+    for (const file of [
+      "check-control-ui-precompressed-assets.mts",
+      "check-control-ui-performance.mts",
+    ]) {
+      fs.writeFileSync(path.join(root, "scripts", file), "export {};\n");
+    }
+    const run = () => {
+      const result = spawnSync(testNodeExecPath, ["scripts/ui.js", "build"], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          BUILD_ALL_CACHE_ROOT: path.join(root, "cache"),
+          OPENCLAW_BUILD_CACHE: "1",
+          OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+          OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS: "1",
+          OPENCLAW_CONTROL_UI_BUILD_ID: "cache-test",
+          OPENCLAW_BUILD_TIMESTAMP: "2026-08-27T00:00:00.000Z",
+          GIT_COMMIT: "a".repeat(40),
+        },
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    expect(run()).toContain("fixture-bundler-ran");
+    expect(run()).toContain("reused content cache");
+    const plugin = path.join(root, "extensions/new-board");
+    fs.mkdirSync(plugin);
+    fs.writeFileSync(
+      path.join(plugin, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/new-board",
+        openclaw: { controlUi: "browser.ts" },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(plugin, "openclaw.plugin.json"),
+      JSON.stringify({ id: "new-board" }),
+    );
+    expect(run()).toContain("fixture-bundler-ran");
+  });
+
   it.each([
     {
       label: "b: Vite failure with stale output",

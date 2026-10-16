@@ -6,6 +6,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { retainSqliteDatabaseAdmissionLocation } from "../infra/sqlite-database-admission.js";
 import {
+  currentSqliteOperationTiming,
+  withSqliteReaderOwner,
+} from "../infra/sqlite-reader-lifecycle.js";
+import {
   clearOpenClawDatabaseQuarantine,
   readOpenClawDatabaseQuarantineFailure,
   recordOpenClawDatabaseQuarantine,
@@ -35,6 +39,46 @@ function createFixture() {
   record();
   return { env, pathname, record, storePath: resolveQuarantineStorePath(env) };
 }
+
+it.each([0, 1])("counts quarantine initialization from version %s once", (version) => {
+  const root = tempDirs.make("openclaw-quarantine-initialization-");
+  const env = { OPENCLAW_STATE_DIR: root };
+  const pathname = path.join(root, "agent.sqlite");
+  if (version === 1) {
+    const storePath = resolveQuarantineStorePath(env);
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    const database = nodeSqlite.openNodeSqliteDatabase(storePath);
+    try {
+      database.exec(`
+        CREATE TABLE quarantined_databases (
+          path TEXT NOT NULL PRIMARY KEY, kind TEXT NOT NULL, reason TEXT NOT NULL,
+          quarantined_at INTEGER NOT NULL, writer_app_version TEXT
+        ) STRICT;
+        PRAGMA user_version = 1;
+      `);
+    } finally {
+      database.close();
+    }
+  }
+  const record = () =>
+    withSqliteReaderOwner({ operation: "quarantine.record", ownerKind: "worker" }, () => {
+      expect(
+        recordOpenClawDatabaseQuarantine({
+          env,
+          path: pathname,
+          kind: "agent",
+          reason: "synthetic initialization",
+        }),
+      ).toBe(true);
+      return currentSqliteOperationTiming()?.transactions.count;
+    });
+  // Initialization and the decision each begin once; an admitted store only writes the decision.
+  expect(record()).toBe(2);
+  expect(record()).toBe(1);
+  expect(readPersistedQuarantineRow(pathname, { env })).toMatchObject({
+    reason: "synthetic initialization",
+  });
+});
 
 it("shares quarantine decisions while an admitted sibling remains open", () => {
   const fixture = createFixture();

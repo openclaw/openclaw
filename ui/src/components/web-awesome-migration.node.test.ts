@@ -38,9 +38,7 @@ describe("shared control ownership", () => {
     expect(
       matchingFiles(/<[a-z][^>]*\srole=["'](?:menu|menubar|menuitem|tab|tablist)["']/u, [
         "components/menu-surface.ts",
-        "components/web-awesome.ts",
         "components/panel-tab-strip-solid.ts",
-        "components/hub-tabs.ts",
         "components/solid/menu.ts",
         "components/solid/tabs.ts",
       ]),
@@ -58,7 +56,7 @@ describe("shared control ownership", () => {
     expect(matchingFiles(/<[a-z][^>]*\srole=["'](?:combobox|listbox|option)["']/u)).toEqual([
       "components/command-palette-view.ts",
       "components/multi-select.ts",
-      "components/select-picker.ts",
+      "components/select-picker-view.ts",
       "pages/chat/components/chat-composer-menu.ts",
       "pages/chat/components/chat-model-account-control.ts",
       "pages/chat/components/chat-model-picker-options.ts",

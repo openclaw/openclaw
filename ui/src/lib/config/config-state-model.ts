@@ -23,6 +23,7 @@ type RuntimeConfigGatewaySnapshot = {
   phase: ApplicationGatewayPhase;
   sessionKey: string;
   hello?: GatewayHelloOk | null;
+  pluginCapabilities?: { generation?: number } | null;
 };
 
 const initialConfigValue = <T>(value: T): T => value;

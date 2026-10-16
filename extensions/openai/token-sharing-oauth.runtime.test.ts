@@ -153,6 +153,53 @@ afterEach(async () => {
 });
 
 describe("ChatGPT token-sharing authorization", () => {
+  it.each([
+    { name: "delayed response", exp: 1_800_003_600, ttl: 3600, expected: 1_800_003_600_000 },
+    { name: "shorter relative lifetime", exp: 1_800_003_600, ttl: 60, expected: 1_800_000_720_000 },
+    { name: "already expired JWT", exp: 1_800_000_600, ttl: 3600, expected: 1_800_000_600_000 },
+    { name: "opaque token", exp: undefined, opaque: true, ttl: 3600, expected: 1_800_004_260_000 },
+    { name: "missing exp", exp: undefined, ttl: 3600, expected: 1_800_004_260_000 },
+    { name: "string exp", exp: "1800003600", ttl: 3600, expected: 1_800_004_260_000 },
+    { name: "fractional exp", exp: 1_800_003_600.5, ttl: 3600, expected: 1_800_004_260_000 },
+    { name: "negative exp", exp: -1, ttl: 3600, expected: 1_800_004_260_000 },
+    { name: "unsafe exp", exp: Number.MAX_SAFE_INTEGER, ttl: 3600, expected: 1_800_004_260_000 },
+  ])("bounds refreshed credential expiry: $name", async ({ exp, opaque, ttl, expected }) => {
+    const jwt = (payload: Record<string, unknown>) =>
+      `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.synthetic`;
+    const credential: OAuthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "synthetic-old-access",
+      refresh: "synthetic-refresh",
+      expires: 1_800_003_600_000,
+      clientId,
+      accountId: createHash("sha256")
+        .update(`${TOKEN_SHARING_ISSUER}\0${clientId}\0user-1`)
+        .digest("hex"),
+      issuer: TOKEN_SHARING_ISSUER,
+      tokenEndpoint: `${TOKEN_SHARING_ISSUER}/api/accounts/oauth/token`,
+      authFlow: TOKEN_SHARING_AUTH_FLOW,
+      idToken: jwt({ sub: "user-1" }),
+      grantedScope: TOKEN_SHARING_SCOPE,
+    };
+    request.mockResolvedValue({
+      response: Response.json({
+        access_token: opaque ? "synthetic-opaque-access" : jwt({ exp }),
+        expires_in: ttl,
+        token_type: "Bearer",
+      }),
+      release: async () => undefined,
+    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_660_000);
+    try {
+      const refreshed = await refreshTokenSharingCredential(credential);
+      expect(refreshed.expires).toBe(expected);
+      expect(refreshed.accountId).toBe(credential.accountId);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("delivers the remote browser URL before the sign-in note", async () => {
     const ctx = context();
     const visitBrowser = ctx.openUrl;

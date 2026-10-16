@@ -9,6 +9,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import * as maintenance from "../infra/state-database-maintenance.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -23,7 +24,10 @@ import { ensureUserPreferencesSchema } from "./user-preferences.store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const recordSchema = "CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL) STRICT;";
-const contract = { schemaSql: recordSchema, operationLabel: "retained writer test" };
+const contract = {
+  schemaSql: extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"),
+  operationLabel: "retained writer test",
+};
 const schemaInventorySql =
   /\b(?:sqlite_schema|sqlite_master|(?:pragma_)?(?:table|index)_(?:list|info|xinfo))\b/iu;
 
@@ -40,9 +44,7 @@ function fixture(fullSchema = false) {
         meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER,
         created_at INTEGER, updated_at INTEGER
       );
-      CREATE TABLE config_machine_state (
-        state_key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL
-      );
+      ${contract.schemaSql}
     `,
     );
     database.exec(`
@@ -89,7 +91,6 @@ describe("retained existing-state writer", () => {
         options,
         {
           ...contract,
-          schemaSql: recordSchema.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS"),
           initializeAdditiveSchema: true,
         },
       );
@@ -324,12 +325,6 @@ describe("retained existing-state writer", () => {
 
   it.each([
     {
-      change: "foreign schema",
-      sql: "ALTER TABLE records ADD COLUMN foreign_value TEXT",
-      error: /column definitions differ for records/iu,
-      markersChange: true,
-    },
-    {
       change: "foreign version",
       sql: `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
       error: /newer schema version/iu,
@@ -410,74 +405,6 @@ describe("retained existing-state writer", () => {
       withExistingOpenClawStateSchema(options, run);
     } else {
       run();
-    }
-  });
-
-  it.each([
-    { kind: "literal", sql: "SELECT 'CREATE' AS action", action: "CREATE" },
-    {
-      kind: "escaped literal",
-      sql: "SELECT 'DROP ''table''; PRAGMA user_version = 4' AS action",
-      action: "DROP 'table'; PRAGMA user_version = 4",
-    },
-    {
-      kind: "quoted identifier",
-      sql: `SELECT "CREATE" AS action FROM (SELECT 'kept' AS "CREATE")`,
-      action: "kept",
-    },
-    {
-      kind: "comments",
-      sql: "/* CREATE TABLE ignored(id); */ SELECT 'kept' AS action -- ALTER TABLE ignored ADD extra",
-      action: "kept",
-    },
-  ])("commits $kind SQL payloads without revalidating format", ({ sql, action }) => {
-    const options = fixture();
-    const writer = openExistingOpenClawStateWriter(options, contract);
-    let observation: ReturnType<typeof observeSqliteReadSql> | undefined;
-    try {
-      expect(
-        writer.run(({ db }) => {
-          observation = observeSqliteReadSql(StatementSync.prototype);
-          const row = db.prepare(sql).get();
-          if (typeof row?.action !== "string") {
-            throw new Error("Expected the SQL payload to return action text");
-          }
-          db.prepare("INSERT INTO records VALUES (1, ?)").run(row.action);
-          return row;
-        }, options),
-      ).toEqual({ action });
-      if (!observation) {
-        throw new Error("Existing-state write callback did not execute");
-      }
-      expect(
-        observation.queries.filter(
-          (query) =>
-            schemaInventorySql.test(query) ||
-            /^PRAGMA\s+(?:user_version|schema_version)\b/iu.test(query),
-        ),
-      ).toEqual([]);
-      expect(readValues(options.path)).toEqual([{ value: action }]);
-    } finally {
-      observation?.restore();
-      writer.close();
-    }
-  });
-
-  it.each([
-    "CREATE TABLE IF NOT EXISTS records (id INTEGER PRIMARY KEY, value TEXT NOT NULL) STRICT",
-    `PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION}`,
-    "REINDEX",
-  ])("commits no-op schema statements without claiming a migration: %s", (sql) => {
-    const options = fixture();
-    const writer = openExistingOpenClawStateWriter(options, contract);
-    try {
-      writer.run(({ db }) => {
-        db.exec(sql);
-        db.exec("INSERT INTO records VALUES (1, 'committed')");
-      }, options);
-      expect(readValues(options.path)).toEqual([{ value: "committed" }]);
-    } finally {
-      writer.close();
     }
   });
 

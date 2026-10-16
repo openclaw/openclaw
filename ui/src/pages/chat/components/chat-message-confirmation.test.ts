@@ -1,6 +1,6 @@
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, expect, it } from "vitest";
-import { solidContent } from "../../../lit/solid-content.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   dismissConfirmedActionPopovers,
   isConfirmedActionPopoverFocused,
@@ -16,8 +16,8 @@ it("tracks focused confirmation ownership through dismissal of another pane", ()
   const first = document.createElement("section");
   const second = document.createElement("section");
   document.body.append(first, second);
-  render(solidContent(RewindButton, { onRewind: () => {} }), first);
-  render(solidContent(RewindButton, { onRewind: () => {} }), second);
+  mountSolid(() => createComponent(RewindButton, { onRewind: () => {} }), { container: first });
+  mountSolid(() => createComponent(RewindButton, { onRewind: () => {} }), { container: second });
   first.querySelector<HTMLButtonElement>("button")!.click();
   expect(isConfirmedActionPopoverFocused(first)).toBe(true);
   expect(isConfirmedActionPopoverFocused(second)).toBe(false);

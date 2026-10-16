@@ -8,8 +8,12 @@ import {
   createGatewayHarness,
   createTestSessionCapability,
 } from "../../lib/sessions/session-capability.test-support.ts";
-import "./chat-pane.ts";
-import { createInitializationContext, createRenderTestChatPane } from "./chat-pane.test-support.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
+import {
+  createInitializationContext,
+  createRenderTestChatPane,
+  createPaneTestHost,
+} from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 export function createRefreshChatPane(client?: GatewayBrowserClient) {
@@ -42,6 +46,7 @@ export type TestChatPane = HTMLElement & {
   sessionKey: string;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;
+  handleTranscriptHistoryIntent: (event: Event) => void;
   historyAutoLoadBlocked: boolean;
   historyObserverArmed: boolean;
   syncHistoryObserver: () => void;
@@ -54,11 +59,16 @@ export type TestChatPane = HTMLElement & {
   currentReplyNavigationId: (sessionKey: string) => string | null;
   hasOlderMessages: () => boolean;
   loadingOlder: boolean;
+  presented: boolean;
+  visuallyPresented: boolean;
   resetOlderMessagesViewport: () => void;
   readonly updateComplete: Promise<boolean>;
   transcriptScrollTop: number | null;
   transcript: {
     activeSessionKey: string | null;
+    readonly isPositionSettled: boolean;
+    readonly isProgrammaticScroll: boolean;
+    readonly isMaintenanceScroll: boolean;
     readonly scrollElement: HTMLDivElement | null;
     revealMessage: (messageId: string) => boolean;
     scrollToOffset: (offset: number) => void;
@@ -92,7 +102,11 @@ export function createTestChatPane(params: {
     vi.spyOn(sessions, "listBranches").mockResolvedValue([]);
     onTestFinished(() => sessions.dispose());
   }
-  const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+  // SAFETY: The test host forwards the runtime surface declared by this fixture.
+  const pane = createPaneTestHost(
+    "openclaw-chat-runtime-test",
+    ChatPaneRuntime,
+  ) as unknown as TestChatPane;
   Object.defineProperty(pane, "isConnected", {
     configurable: true,
     value: true,
@@ -137,6 +151,7 @@ export function createTestChatPane(params: {
   pane.state = state;
   pane.connectedClient = params.client;
   pane.connectionGeneration = 4;
+  vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(true);
   return { pane, state, requestUpdate };
 }
 
@@ -163,7 +178,10 @@ export function appendChatThread(
   thread.className = "chat-thread";
   thread.scrollTop = options.scrollTop ?? 0;
   Object.defineProperty(thread, "clientHeight", { value: options.clientHeight ?? 500 });
-  Object.defineProperty(thread, "scrollHeight", { value: options.scrollHeight ?? 2_000 });
+  Object.defineProperty(thread, "scrollHeight", {
+    configurable: true,
+    value: options.scrollHeight ?? 2_000,
+  });
   pane.append(thread);
   vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
   return thread;

@@ -5,6 +5,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionInventory from "../../config/sessions/session-entry-read-runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -32,8 +33,9 @@ it("hands only deleted agent sessions to browser cleanup after their producers s
   await withOpenClawTestState({ label: "deletion-browser-scope" }, async (state) => {
     const cfg = {
       agents: { entries: { keeper: {}, doomed: {} } },
-      session: { store: state.path("agents/keeper/sessions/sessions.json") },
+      session: { store: state.path("shared-sessions.sqlite") },
     };
+    setRuntimeConfigSnapshot(cfg);
     vi.spyOn(sessionInventory, "readSessionEntrySummariesInWorker").mockResolvedValue([
       { sessionKey: "agent:doomed:idle", entry: { sessionId: "doomed-idle", updatedAt: 1 } },
       { sessionKey: "agent:keeper:live", entry: { sessionId: "keeper-live", updatedAt: 1 } },

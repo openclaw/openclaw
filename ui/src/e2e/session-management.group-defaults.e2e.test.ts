@@ -98,7 +98,10 @@ suite.define(() => {
           path: groupCwd,
           parent: "/home/peter",
           home: "/home/peter",
-          entries: [],
+          entries: Array.from({ length: 12 }, (_, index) => ({
+            name: `project-${index + 1}`,
+            path: `${groupCwd}/project-${index + 1}`,
+          })),
         },
         "sessions.create": { key: "agent:main:client-work", runStarted: true },
         "sessions.list": sessionsListResponse([]),
@@ -125,7 +128,6 @@ suite.define(() => {
       await group.locator(".sidebar-recent-sessions__head").hover();
       await group.getByRole("button", { name: "Group options for Client work" }).click();
       await page.getByRole("menuitem", { name: "New session defaults" }).click();
-      await page.evaluate(async () => customElements.whenDefined("wa-popover"));
       const dialog = page.locator(
         `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
       );
@@ -139,7 +141,7 @@ suite.define(() => {
         .poll(() => environment.getAttribute("data-session-group-environment"))
         .toBe("local");
       await expect
-        .poll(() => dialog.locator("wa-dropdown.session-group-defaults__mode-dropdown").count())
+        .poll(() => dialog.locator(".session-group-defaults__mode-dropdown").count())
         .toBe(0);
       await expect.poll(() => environment.getByRole("button").count()).toBe(0);
       const localEnvironment = environment.locator(".session-group-defaults__resolved-mode");
@@ -149,7 +151,7 @@ suite.define(() => {
       const folderTrigger = dialog.locator("#session-group-defaults-folder-trigger");
       await expect.poll(() => folderTrigger.getAttribute("aria-label")).toContain("peter");
       await folderTrigger.click();
-      const folderPicker = dialog.locator("wa-popover.session-group-defaults__folder-popover");
+      const folderPicker = dialog.locator(".oc-popover.session-group-defaults__folder-popover");
       await folderPicker.getByRole("button", { name: "Browse folders" }).click();
       expect((await gateway.waitForRequest("fs.listDir")).params).toEqual({
         path: initialGroupCwd,
@@ -166,7 +168,7 @@ suite.define(() => {
         await page.setViewportSize(viewport);
         await expect
           .poll(async () => {
-            const bounds = await folderPicker.locator(".new-session-page__browser").boundingBox();
+            const bounds = await folderPicker.boundingBox();
             return {
               horizontal: Boolean(
                 bounds && bounds.x >= 0 && bounds.x + bounds.width <= viewport.width,
@@ -177,6 +179,24 @@ suite.define(() => {
             };
           })
           .toEqual({ horizontal: true, vertical: true });
+        if (viewport.name === "landscape") {
+          await folderPicker.locator(".new-session-page__browser-head").hover();
+          await page.mouse.wheel(0, 600);
+          await expect
+            .poll(async () => {
+              const panel = await folderPicker.boundingBox();
+              const action = await folderPicker
+                .getByRole("button", { name: "Use this folder" })
+                .boundingBox();
+              return Boolean(
+                panel &&
+                action &&
+                action.y >= panel.y &&
+                action.y + action.height <= panel.y + panel.height,
+              );
+            })
+            .toBe(true);
+        }
         await captureUiProof(suite, page, `group-defaults-folder-picker-${viewport.name}.png`);
       }
       await folderPicker.getByRole("button", { name: "Use this folder" }).click();
@@ -192,7 +212,7 @@ suite.define(() => {
           text: await environment.textContent(),
         }))
         .toMatchObject({ state: "git" });
-      const modeDropdown = environment.locator("wa-dropdown.session-group-defaults__mode-dropdown");
+      const modeDropdown = environment.locator(".session-group-defaults__mode-dropdown");
       const modeTrigger = modeDropdown.locator("#session-group-defaults-mode-trigger");
       await expect.poll(() => modeTrigger.getAttribute("data-value")).toBe("local");
       await expect.poll(() => modeTrigger.textContent()).toContain("Current checkout");
@@ -201,7 +221,9 @@ suite.define(() => {
       const worktreeOption = modeDropdown.getByRole("menuitemradio", {
         name: /New worktree.*isolated Git worktree/i,
       });
-      await expect.poll(() => worktreeOption.locator('[slot="icon"]').count()).toBe(1);
+      await expect
+        .poll(() => worktreeOption.locator(".session-group-defaults__mode-option-icon").count())
+        .toBe(1);
       await page.keyboard.press("Escape");
       await expect.poll(() => modeTrigger.getAttribute("aria-expanded")).toBe("false");
       await expect
@@ -211,6 +233,15 @@ suite.define(() => {
       await modeTrigger.click();
       await worktreeOption.click();
       await expect.poll(() => modeTrigger.getAttribute("data-value")).toBe("worktree");
+      await modeTrigger.focus();
+      await page.keyboard.press("Enter");
+      await expect
+        .poll(() => worktreeOption.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("Escape");
+      await expect
+        .poll(() => modeTrigger.evaluate((element) => element === document.activeElement))
+        .toBe(true);
       await dialog.getByRole("button", { name: "Save" }).click();
       expect((await gateway.waitForRequest("sessions.groups.update")).params).toMatchObject({
         name: "Client work",
@@ -544,9 +575,9 @@ suite.define(() => {
       await expect
         .poll(() => page.locator("#new-session-project-trigger").textContent())
         .toContain("client-work");
-      expect(await page.locator(".new-session-page__message").inputValue()).toBe(
-        "wait for fresh defaults",
-      );
+      await expect
+        .poll(() => page.locator(".new-session-page__message").inputValue())
+        .toBe("wait for fresh defaults");
       expect(await page.locator(".new-session-page__catalog-unavailable").count()).toBe(0);
       await expect.poll(() => start.isEnabled()).toBe(true);
     } finally {
@@ -585,7 +616,7 @@ suite.define(() => {
         `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
       );
       await dialog.waitFor({ state: "visible" });
-      const modeDropdown = dialog.locator("wa-dropdown.session-group-defaults__mode-dropdown");
+      const modeDropdown = dialog.locator(".session-group-defaults__mode-dropdown");
       const modeTrigger = modeDropdown.locator("#session-group-defaults-mode-trigger");
       await modeTrigger.waitFor({ state: "visible" });
       await modeTrigger.click();
@@ -649,7 +680,9 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.groups.defaults");
       await group.locator(".sidebar-recent-sessions__head").hover();
       await group.getByRole("button", { name: "Group options for Client work" }).click();
-      const defaultsAction = page.locator('wa-dropdown-item[value="group-defaults"]');
+      const defaultsAction = page.locator(
+        '.sidebar-session-group-menu [data-value="group-defaults"]',
+      );
       await defaultsAction.waitFor({ state: "attached" });
       await expect.poll(() => defaultsAction.isDisabled()).toBe(true);
       expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
@@ -681,7 +714,9 @@ suite.define(() => {
 
       await group.locator(".sidebar-recent-sessions__head").hover();
       await group.getByRole("button", { name: "Group options for Client work" }).click();
-      const readyDefaultsAction = page.locator('wa-dropdown-item[value="group-defaults"]');
+      const readyDefaultsAction = page.locator(
+        '.sidebar-session-group-menu [data-value="group-defaults"]',
+      );
       await expect.poll(() => readyDefaultsAction.textContent()).not.toContain("Retry");
       await expect.poll(() => readyDefaultsAction.isEnabled()).toBe(true);
       await readyDefaultsAction.click();

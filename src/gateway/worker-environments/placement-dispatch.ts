@@ -4,6 +4,8 @@ import {
   RequiredWorkerProfileError,
 } from "../../config/required-worker-profile.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import { sessionLog } from "../session-log.js";
+import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
 import type { WorkerNodePlacementAuthority } from "./device-placement-eligibility.js";
 import { composePlacementAuthorization } from "./placement-authorization.js";
 import {
@@ -123,6 +125,12 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     signal?: AbortSignal,
     awaitRequestedHandoff?: (signal?: AbortSignal) => Promise<void>,
   ): Promise<WorkerActiveDispatchPlacement> => {
+    using diagnostics = startSlowRequestDiagnostics<string>(
+      sessionLog,
+      "slow placement dispatch",
+      "sessions.dispatch",
+      "admission",
+    );
     const assertCurrent = composePlacementAuthorization(authorize, () => {
       signal?.throwIfAborted();
       assertRequiredWorkerDispatch(getRuntimeConfig(), request);
@@ -178,7 +186,16 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           );
         }
       }
+      diagnostics?.mark("workspacePreparation");
       const workspace = await options.resolveWorkspace(request);
+      if (
+        workspace.kind === "device-folder" &&
+        (request.deviceId !== workspace.deviceId || request.executionMode !== "worker-turn")
+      ) {
+        throw new Error(
+          "Device folders require an explicit dispatch to their original paired device using the OpenClaw harness.",
+        );
+      }
       if (
         workspace.kind === "repository" &&
         !request.deviceId &&
@@ -221,6 +238,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           })
         : undefined;
       assertCurrent();
+      diagnostics?.mark("reserveClaim");
       const prepared = preparedIntent
         ? await startup.bindPreparedPlacement({
             request,
@@ -250,6 +268,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         ));
       reportPlacementTransition(onTransition, placement);
       assertCurrent();
+      if (!prepared) {
+        diagnostics?.mark("provision");
+      }
       const environment = prepared
         ? prepared.environment
         : await environments.createWithRequest({
@@ -265,6 +286,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             inheritedProfile: request.inheritedProfile,
           });
       return await startup.continueProvisionedDispatch({
+        markPhase: diagnostics?.mark,
         request,
         placement,
         environment,
@@ -276,6 +298,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         ...(prepared ? { admittedNode: prepared.admittedNode } : {}),
       });
     } catch (error) {
+      diagnostics?.mark("cleanup");
       if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
         throw error;
       }

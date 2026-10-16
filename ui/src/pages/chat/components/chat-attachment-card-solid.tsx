@@ -1,4 +1,4 @@
-import { createMemo } from "solid-js";
+import { createEffect, createMemo } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -21,9 +21,26 @@ export function AttachmentPreviewSkeleton() {
   );
 }
 
-export function CompactAttachmentCard(props: AttachmentCardHeaderOptions) {
+export function CompactAttachmentCard(
+  props: AttachmentCardHeaderOptions & {
+    elementRef?: (element: Element | undefined) => void;
+    onFocus?: () => void;
+  },
+) {
+  let element!: HTMLDivElement;
+  createEffect(
+    () => props.elementRef,
+    (ref) => {
+      ref?.(element);
+      return () => ref?.(undefined);
+    },
+  );
   return (
     <div
+      ref={(node) => {
+        element = node;
+      }}
+      onFocusIn={() => props.onFocus?.()}
       class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
       data-openable={props.onExpand ? "" : undefined}
       onClick={(event) => openAttachmentCardFromClick(event, props.onExpand)}
@@ -36,13 +53,6 @@ export function CompactAttachmentCard(props: AttachmentCardHeaderOptions) {
 export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
   const view = createMemo(() => prepareAttachmentCardHeader(props, t));
   const compactPreview = () => view().compactPreview;
-  const downloadClass = () => [
-    "chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost",
-    {
-      "chat-assistant-attachment-card__download--secondary": props.onExpand !== undefined,
-      skeleton: props.loading,
-    },
-  ];
   return (
     <div
       class={[
@@ -92,17 +102,18 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
         {props.onDownload ? (
           <button
             type="button"
-            class={downloadClass()}
+            class={view().downloadClass}
             disabled={props.downloadPending}
             aria-label={view().downloadTitle}
             title={view().downloadTitle}
             onClick={() => props.onDownload?.()}
           >
             <Icon name="download" />
+            {view().downloadLabel ? <span>{view().downloadLabel}</span> : null}
           </button>
         ) : props.downloadHref || props.downloadPending ? (
           <a
-            class={downloadClass()}
+            class={view().downloadClass}
             href={props.downloadPending ? undefined : props.downloadHref}
             aria-disabled={props.downloadPending ? "true" : undefined}
             tabindex={props.downloadPending && props.downloadPendingFocusable ? 0 : undefined}
@@ -114,6 +125,7 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
             title={view().downloadTitle}
           >
             <Icon name="download" />
+            {view().downloadLabel ? <span>{view().downloadLabel}</span> : null}
           </a>
         ) : null}
         {props.onExpand !== undefined ? (

@@ -1,7 +1,9 @@
-import { createMemo, createSignal, onCleanup, untrack } from "solid-js";
-import { solidTemplate } from "./chat-composer-controls.ts";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { createChatComposerContext } from "./chat-composer-frame.ts";
-import { getChatComposerState } from "./chat-composer-state.ts";
+import { createComposerPrediction } from "./chat-composer-prediction.ts";
+import { createComposerQuestionPanel } from "./chat-composer-question.tsx";
+import { getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.tsx";
 
@@ -45,22 +47,82 @@ export function ChatComposer(props: ChatComposerInput) {
   const currentProps = new Proxy(props, {
     get: (target, key) => (key === "onRequestUpdate" ? requestUpdate : Reflect.get(target, key)),
   });
+  const prediction = createComposerPrediction(() => {
+    const options = currentProps.composerPredictions;
+    const client = currentProps.gatewayClient;
+    if (!options || !client) {
+      return null;
+    }
+    return {
+      gateway: options.gateway,
+      client,
+      sessionKey: currentProps.sessionKey,
+      sessionId: currentProps.currentSessionId ?? null,
+      enabled: options.enabled,
+      eligible:
+        options.active &&
+        currentProps.connected &&
+        currentProps.canSend &&
+        !currentProps.submitDisabledReason &&
+        !currentProps.suggestionComposer &&
+        !currentProps.realtimeTalkActive &&
+        !state.composerComposing &&
+        !state.dictation?.active &&
+        !currentProps.goalDraftMode &&
+        !currentProps.replyTarget &&
+        !(currentProps.getDraft?.() ?? currentProps.draft) &&
+        !state.composerTextarea?.value &&
+        !(currentProps.getAttachments?.() ?? currentProps.attachments)?.length &&
+        !(currentProps.getPendingAttachmentReads?.() ?? currentProps.pendingAttachmentReads) &&
+        document.visibilityState !== "hidden",
+      idle: !isChatRunWorking(currentProps) && !currentProps.sending && !currentProps.queue.length,
+    };
+  });
+  const questionPanel = createComposerQuestionPanel(() => currentProps, state);
   const context = createMemo(() => {
     revision();
     // Lit owners can change local state without changing a prop's identity.
     void props.renderRevision;
     computingFrame = true;
     try {
-      return createChatComposerContext(currentProps);
+      return createChatComposerContext(currentProps, prediction, questionPanel());
     } finally {
       computingFrame = false;
     }
   });
+  createEffect(
+    () => [context().mentionDirectory, context().emojiEnabled, context().draftKey] as const,
+    ([directory, emojiEnabled, draftKey], previous) => {
+      state.mentionMenu.syncDirectory(directory);
+      if (!emojiEnabled || draftKey !== previous?.[2]) {
+        state.emojiMenu.close();
+      }
+    },
+  );
+  createEffect(
+    () => {
+      context();
+      return currentProps.composerPredictions;
+    },
+    () => untrack(() => prediction.sync()),
+  );
+  onSettled(() => listen(document, "visibilitychange", () => prediction.sync()));
   onCleanup(() => {
     disposed = true;
     state.textareaRef?.();
     state.composerInputRef?.();
   });
+  createEffect(
+    () => [context().clearSlashMenu, context().clearSkillMenu] as const,
+    ([slash, skill]) => {
+      if (slash) {
+        getChatComposerState(props.paneId).slashMenu.reset();
+      }
+      if (skill) {
+        getChatComposerState(props.paneId).skillMenu.reset();
+      }
+    },
+  );
   const fields = new Map(
     Object.keys(untrack(context)).map((key) => [
       key,
@@ -98,8 +160,4 @@ export function ChatComposer(props: ChatComposerInput) {
         Object.hasOwn(handlers, key) ? Reflect.get(handlers, key) : fields.get(String(key))?.(),
     }),
   );
-}
-
-export function renderChatComposer(props: ChatComposerProps) {
-  return solidTemplate(ChatComposer, { ...props, renderRevision: {} });
 }

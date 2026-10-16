@@ -1,8 +1,4 @@
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeMattermostMessagingTarget } from "../normalize.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -10,7 +6,6 @@ import {
   fetchMattermostChannel,
   fetchMattermostMe,
   type MattermostClient,
-  type MattermostFetch,
   type MattermostPost,
 } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -26,7 +21,6 @@ type ReactionParams = {
   accountId?: string | null;
   authorizedTarget?: string;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
-  fetchImpl?: MattermostFetch;
 };
 
 const BOT_USER_CACHE_TTL_MS = 10 * 60_000;
@@ -36,11 +30,10 @@ async function resolveBotUserId(
   client: MattermostClient,
   cacheKey: string,
 ): Promise<string | null> {
-  const rawNow = Date.now();
-  const now = asDateTimestampMs(rawNow);
+  const now = Date.now();
   const cached = botUserIdCache.get(cacheKey);
   if (cached) {
-    if (now !== undefined && cached.expiresAt > now) {
+    if (cached.expiresAt > now) {
       return cached.userId;
     }
     botUserIdCache.delete(cacheKey);
@@ -50,10 +43,7 @@ async function resolveBotUserId(
   if (!userId) {
     return null;
   }
-  const expiresAt = resolveExpiresAtMsFromDurationMs(BOT_USER_CACHE_TTL_MS, { nowMs: rawNow });
-  if (expiresAt !== undefined) {
-    botUserIdCache.set(cacheKey, { userId, expiresAt });
-  }
+  botUserIdCache.set(cacheKey, { userId, expiresAt: now + BOT_USER_CACHE_TTL_MS });
   return userId;
 }
 
@@ -149,7 +139,6 @@ async function runMattermostReaction(
   const client = createMattermostClient({
     baseUrl,
     botToken,
-    fetchImpl: params.fetchImpl,
     allowPrivateNetwork: resolved.config.network?.dangerouslyAllowPrivateNetwork === true,
   });
 

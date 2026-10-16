@@ -17,11 +17,9 @@ import {
 } from "./manager-cpu-worker-runtime.js";
 import { MemoryProviderLifecycle } from "./manager-provider-lifecycle.js";
 import type { MemoryRecallData } from "./manager-retrieval-read.js";
+import type { MemoryKeywordWorkerQuery } from "./manager-search-types.js";
 import { prepareExactPathMatcher, type ExactPathSpecificity } from "./manager-search.js";
-import type {
-  MemoryKeywordWorkerQuery,
-  MemoryKeywordWorkerResult,
-} from "./manager-search.worker.js";
+import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
 import {
   applyRetrievalRanking,
   prepareActiveProjectKeys,

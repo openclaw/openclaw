@@ -400,6 +400,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
           env,
           supervisorKeepsAlive: true,
           requirePluginHealth: false,
+          requireChannelHealth: false,
           settle: { probes: 12 },
         });
       } else {

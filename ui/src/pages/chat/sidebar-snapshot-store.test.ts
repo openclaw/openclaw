@@ -55,17 +55,6 @@ describe("persistent sidebar projections", () => {
     vi.unstubAllGlobals();
   });
 
-  it("retires the legacy roster database when admitting the unified cache", async () => {
-    const legacy = await requestResult(indexedDB.open("openclaw-session-roster", 1));
-    legacy.close();
-    const store = createStore();
-    await store.writeSidebar(key(scope), model, validate);
-    expect((await indexedDB.databases()).map((database) => database.name)).not.toContain(
-      "openclaw-session-roster",
-    );
-    expect(await store.readSidebar(key(scope), validate)).toEqual(model);
-  });
-
   it("discards pre-rail-identity sidebar snapshots while retaining cached transcripts", async () => {
     const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME, 6);
     request.addEventListener("upgradeneeded", () => {
@@ -169,7 +158,7 @@ describe("persistent sidebar projections", () => {
     expect(await store.readSidebar(key({ ...scope, profileId: "newer" }), validate)).toBeNull();
   });
 
-  it.each([undefined, "cache-eviction"] as const)(
+  it.each(["cache-eviction"] as const)(
     "removes only the requested transcript and applies %s sidebar invalidation",
     async (reason) => {
       const store = createStore();

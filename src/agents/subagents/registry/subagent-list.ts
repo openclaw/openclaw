@@ -1,7 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import { readSessionEntriesFromStoreInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
@@ -74,7 +73,7 @@ export function captureSubagentListReadContext(
   return {
     now,
     recentMinutes,
-    view: structuredClone(view),
+    view,
     childSessionsByController,
     pendingDescendants,
     execution,
@@ -86,7 +85,6 @@ export async function readSubagentListSessionEntries(
   context: SubagentListReadContext,
 ): Promise<Map<string, SessionEntry>> {
   const runs = [...context.view.active, ...context.view.recent];
-  const incognito = captureIncognitoSessionSource();
   const privateReads: Array<Promise<void>> = [];
   // Raw session keys can repeat across agents; keep each run's metadata separate.
   const entries = new Map<string, SessionEntry>();
@@ -98,7 +96,7 @@ export async function readSubagentListSessionEntries(
     if (!resolveSubagentChildAgentId(run)) {
       continue;
     }
-    if (incognito && isIncognitoSessionKey(run.childSessionKey)) {
+    if (isIncognitoSessionKey(run.childSessionKey)) {
       privateReads.push(
         loadSubagentSessionEntry({ ...run, cfg }).then((entry) => {
           if (entry) {

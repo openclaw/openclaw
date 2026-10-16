@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { readMainTableList } from "../infra/sqlite-strict.js";
@@ -19,6 +21,9 @@ export function repairOpenClawAgentDatabasePaths(
   database: Pick<OpenClawStateDatabase, "db" | "path">,
 ): { repaired: number; warnings: string[] } {
   const { db, path: pathname } = database;
+  if (isPostgresSqlConnection(db)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
   assertOpenClawStateDatabaseForMaintenance(db, { pathname });
   const active = readActiveUpdateRun(db);
   if (active) {

@@ -7,6 +7,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { subscribePlacementChanges } from "./placement-authority-owner.js";
 import { createPlacementLifecycleWorkerOps } from "./placement-lifecycle-store.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import { readPublishedPlacementProjection } from "./placement-read-publication.js";
@@ -16,6 +17,7 @@ import {
   projectWorkerSessionTurnClaim,
   required,
   type WorkerSessionPlacementRecord,
+  type WorkerSessionPlacementIdentity,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import type { WorkerSessionPlacementRetirement } from "./placement-retirement.js";
@@ -83,6 +85,9 @@ export function createWorkerSessionPlacementStore(
   };
 
   const store = {
+    subscribeChanges(listener: (placement: WorkerSessionPlacementIdentity) => void) {
+      return subscribePlacementChanges(context.admission.identity, listener);
+    },
     ...createPlacementReadStore({ path, withWorkspaceResultConflict }),
     ...createPlacementWorkspaceReservationOps(
       runtime,
@@ -216,8 +221,8 @@ export function createWorkerSessionPlacementStore(
       sessionIds: readonly string[],
       readOptions: { current?: boolean } = {},
     ): Promise<WorkerSessionPlacementProjection> {
-      const requestedIds = new Map(sessionIds.map((id) => [id, required(id, "session id")]));
-      const ids = [...new Set(requestedIds.values())];
+      const normalizedIds = sessionIds.map((id) => required(id, "session id"));
+      const ids = [...new Set(normalizedIds)];
       const conflicts = new Map(
         ids.flatMap((id) => {
           const conflict = workspaceResultConflicts.get(id);
@@ -254,13 +259,21 @@ export function createWorkerSessionPlacementStore(
         singleSessionId !== undefined && conflicts.size === 0
           ? await readPlacementProjection(path, singleSessionId, loadProjection)
           : await loadProjection();
-      const placements = new Map(projection.placements);
+      let placements: Map<string, WorkerSessionPlacementRecord> | undefined;
       for (const [id, captured] of conflicts) {
-        const record = placements.get(id);
+        const record = projection.placements.get(id);
         if (record && conflictSessionIds.has(id) && workspaceResultConflicts.get(id) === captured) {
-          placements.set(id, { ...record, workspaceResultConflict: captured.conflict });
+          (placements ??= new Map(projection.placements)).set(id, {
+            ...record,
+            workspaceResultConflict: captured.conflict,
+          });
         }
       }
+      if (sessionIds.every((id, index) => id === normalizedIds[index])) {
+        return placements ? { ...projection, placements } : projection;
+      }
+      // Stored session entries can retain whitespace even though placement keys are normalized.
+      const requestedIds = new Map(sessionIds.map((id, index) => [id, normalizedIds[index]!]));
       const byRequestedId = <T>(records: ReadonlyMap<string, T>) => {
         const requested = new Map<string, T>();
         for (const [original, normalized] of requestedIds) {
@@ -279,7 +292,7 @@ export function createWorkerSessionPlacementStore(
         );
       return {
         ...projection,
-        placements: byRequestedId(placements),
+        placements: byRequestedId(placements ?? projection.placements),
         moves: byRequestedId(projection.moves),
         pendingResults: byRequestedId(projection.pendingResults),
         workspaceJournalOwnerSessionIds: byRequestedSet(projection.workspaceJournalOwnerSessionIds),

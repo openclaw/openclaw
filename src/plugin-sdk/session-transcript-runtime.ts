@@ -25,7 +25,6 @@ import { normalizeVisibleDeltaLimits } from "../config/sessions/session-accessor
 import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
 import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -89,7 +88,7 @@ export {
   type SessionTranscriptCatalogPage,
 } from "../gateway/session-transcript-catalog.js";
 
-/** @deprecated Use readSessionTranscriptCatalogTitleAsync. Removed in the next Plugin SDK major. */
+/** @deprecated Await readSessionTranscriptCatalogTitleAsync. Final compatibility day: 2026-12-31. */
 export function readSessionTranscriptCatalogTitle(
   params: Parameters<typeof readLegacySessionTranscriptCatalogTitle>[0],
 ): string | undefined {
@@ -423,17 +422,14 @@ export async function appendAssistantMirrorMessageByIdentity(
   });
   const sourceRunId = params.sourceRunId;
   const scope = bindSessionTranscriptStoreScope(params, params.config);
-  const memory = getSessionActorStorageBinding(scope);
-  const binding = memory ? undefined : captureIncognitoSessionBinding(scope);
   return await withTranscriptWriteSequence(scope, async (locked) => {
+    const memory = getSessionActorStorageBinding(scope);
     params.signal?.throwIfAborted();
     const currentEntry = memory
       ? memory.actor.snapshot(memory.authority)?.entry
       : await readSessionEntryReadOnlyInWorker(
           scope,
           () => {
-            binding?.actor.assertCurrent();
-            binding?.admissionSignal?.throwIfAborted();
             params.signal?.throwIfAborted();
           },
           undefined,
@@ -478,7 +474,7 @@ export async function appendAssistantMirrorMessageByIdentity(
         );
       } else {
         let events: readonly SessionTranscriptEvent[];
-        if (binding) {
+        if (memory) {
           events = selectVisibleTranscriptEvents(await locked.readEvents());
         } else {
           try {
@@ -556,7 +552,7 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
   params: SessionTranscriptAppendMessageParams<TMessage> & {
     runId?: string;
     updateMode?: SessionTranscriptUpdateMode;
-    /** @deprecated Use preparation.prepareMessage outside the transaction; removed in the next Plugin SDK major. */
+    /** @deprecated Use preparation.prepareMessage outside the transaction. Final compatibility day: 2026-12-31. */
     prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
     /** Awaited after duplicate detection; undefined suppresses a fresh append. */
     prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
@@ -663,7 +659,7 @@ export async function publishSessionTranscriptUpdateByIdentity(
 
 /**
  * Runs transcript work under the write lock for the resolved scoped target.
- * @deprecated Use withSessionTranscriptWrite and preparation options; removed in the next Plugin SDK major.
+ * @deprecated Use withSessionTranscriptWrite and preparation options. Final compatibility day: 2026-12-31.
  */
 export async function withSessionTranscriptWriteLock<T>(
   params: SessionTranscriptWriteLockParams,

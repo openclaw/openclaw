@@ -3,9 +3,11 @@ import { spawn } from "node:child_process";
 import { getCompileCacheDir } from "node:module";
 import path from "node:path";
 import process from "node:process";
+import { resolveOpenClawCliInvocation } from "../cli-invocation.mjs";
 import {
   enableOpenClawCompileCache as enableInstallCompileCache,
   resolveOpenClawCompileCacheDirectory,
+  resolveOpenClawCompileCacheRespawnEnv,
 } from "../node-compile-cache.mjs";
 import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
 import {
@@ -70,8 +72,7 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
   };
   delete nextEnv.NODE_COMPILE_CACHE;
   return {
-    command: process.execPath,
-    args: [...process.execArgv, params.currentFile, ...argv.slice(2)],
+    ...resolveOpenClawCliInvocation({ entryPath: params.currentFile, args: argv.slice(2) }),
     env: nextEnv,
     detachForProcessTree: platform !== "win32" && !isTerminalInteractiveRespawnArgv(argv),
   };
@@ -82,6 +83,25 @@ export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   env?: NodeJS.ProcessEnv;
   prepareWriteError?: () => Promise<(message: string) => void | Promise<void>>;
 }): Promise<boolean> {
+  if (!isSourceEntry(params.currentFile) && isForegroundGatewayRunArgv(process.argv)) {
+    const env = resolveOpenClawCompileCacheRespawnEnv({
+      directory: resolveOpenClawCompileCacheDirectory({
+        installRoot: resolveEntryInstallRoot(params.currentFile),
+        env: params.env,
+        foregroundGateway: true,
+      }),
+      env: params.env,
+      foregroundGateway: true,
+    });
+    if (env) {
+      const { command, args } = resolveOpenClawCliInvocation({ entryPath: params.currentFile });
+      if (process.platform !== "win32" && process.execve) {
+        process.execve(command, [command, ...args], env);
+      }
+      const { runRespawnedChild } = await import("../node-runtime-recovery.mjs");
+      return runRespawnedChild(command, args, env);
+    }
+  }
   const plan = buildOpenClawCompileCacheRespawnPlan({
     currentFile: params.currentFile,
     compileCacheDir: getCompileCacheDir?.(),
@@ -123,6 +143,7 @@ export function enableOpenClawCompileCache(params: {
         foregroundGateway: isForegroundGatewayRunArgv(process.argv),
       }),
       env: params.env,
+      foregroundGateway: isForegroundGatewayRunArgv(process.argv),
     });
   }
 }

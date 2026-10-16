@@ -198,7 +198,7 @@ export async function runCliFallbackCandidate(
           });
         // The CLI owner must see explicit pins before provider scoping can discard them.
         const authProfileId = allowCliAuthProfileForwarding
-          ? resolveCliExecutionAuthProfileId({
+          ? await resolveCliExecutionAuthProfileId({
               cliExecutionProvider: params.cliExecutionProvider,
               authProfileProvider: params.provider,
               config: params.runtimeConfig,
@@ -403,7 +403,7 @@ export async function runCliFallbackCandidate(
             ...forkRunParams,
             authProfileId,
             mediaImageLayout: params.currentTurnImages.mediaImageLayout,
-            messageChannel: turn.followupRun.originatingChannel ?? undefined,
+            messageChannel: turn.followupRun.originatingChannel,
             messageProvider: hookMessageProvider,
             currentChannelId:
               turn.followupRun.originatingTo ?? turn.sessionCtx.OriginatingTo ?? turn.sessionCtx.To,

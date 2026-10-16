@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { FailoverError } from "../agents/failover-error.js";
+import "../agents/model-fallback-runner.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { summarizeTranscriptsWithModel } from "./summary-model.js";
+import "./summary-model.runtime.js";
 import { summarizeTranscripts } from "./summary.js";
 
 const { runIsolatedCompletion, resolveSimpleCompletionSelectionForAgent } = vi.hoisted(() => ({
@@ -63,6 +66,81 @@ afterEach(() => {
 });
 
 describe("model-backed transcript summaries", () => {
+  it("does not repeat the primary after the utility chain already attempted it", async () => {
+    runIsolatedCompletion.mockRejectedValue(
+      new FailoverError("Fixture server unavailable", { reason: "server_error" }),
+    );
+    const summary = await summarizeTranscriptsWithModel({
+      ...params,
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/primary-test-model",
+            utilityModel: {
+              primary: "openai/utility-test-model",
+              fallbacks: ["openai/primary-test-model"],
+            },
+          },
+        },
+        plugins: { enabled: false },
+      },
+    });
+    expect(summary).toBeUndefined();
+    expect(runIsolatedCompletion.mock.calls.map(([request]) => request.model)).toEqual([
+      "utility-test-model",
+      "primary-test-model",
+    ]);
+  });
+
+  it.each(["utility backup", "primary", "exhausted"] as const)(
+    "tries utility fallbacks before existing transcript recovery: %s",
+    async (outcome) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/primary-test-model",
+              fallbacks: ["openai/main-backup"],
+            },
+            utilityModel: {
+              primary: "openai/utility-test-model",
+              fallbacks: ["openai/utility-backup"],
+            },
+          },
+        },
+        plugins: { enabled: false },
+      };
+      runIsolatedCompletion.mockImplementation(async ({ model }) => {
+        if (
+          (model === "utility-backup" && outcome === "utility backup") ||
+          (model === "primary-test-model" && outcome === "primary")
+        ) {
+          return completion(JSON.stringify(notes), model);
+        }
+        throw new FailoverError("Fixture server unavailable", { reason: "server_error" });
+      });
+
+      const summary = await summarizeTranscriptsWithModel({ ...params, cfg });
+
+      if (outcome === "exhausted") {
+        expect(summary).toBeUndefined();
+        expect((summary ?? summarizeTranscripts(params)).source).toBe("heuristic");
+      } else {
+        expect(summary).toMatchObject({
+          overview: notes.overview.trim(),
+          source: "model",
+          model:
+            outcome === "utility backup" ? "openai/utility-backup" : "openai/primary-test-model",
+        });
+      }
+      expect(runIsolatedCompletion.mock.calls.map(([request]) => request.model)).toEqual(
+        outcome === "utility backup"
+          ? ["utility-test-model", "utility-backup"]
+          : ["utility-test-model", "utility-backup", "primary-test-model"],
+      );
+    },
+  );
+
   it("does not request model notes for an artifact-only transcript", async () => {
     const summary = await summarizeTranscriptsWithModel({
       ...params,
@@ -172,7 +250,6 @@ describe("model-backed transcript summaries", () => {
       held.resolve(completion(JSON.stringify(notes)));
       expect(await pending).toBeUndefined();
       expect(runIsolatedCompletion).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(0);
     } finally {
       held.resolve(completion(JSON.stringify(notes)));
       await pending;

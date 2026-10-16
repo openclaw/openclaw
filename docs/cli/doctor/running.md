@@ -21,6 +21,10 @@ must still check the process exit status: `Doctor complete.` records completion
 of the checks, but a subsequent crash remains a failed candidate-Doctor step
 during an update.
 
+If a native SQLite snapshot request fails, Doctor exits with an error even when
+an optional check defers its work. Resolve the reported snapshot or filesystem
+failure before retrying; a deferred check does not certify a successful inspection.
+
 ## Postures
 
 Doctor supports these postures:
@@ -112,7 +116,9 @@ stop at the deadline with a warning naming active root requests and cron runs;
 unknown custody is not a refusal. An owned service confirmed offline can receive
 the policy refresh without being started.
 
-During [automatic triage](/cli/triage#automatic-failure-handoff), repair can run
+Unattended update and Gateway startup failures collect
+[diagnostics only](/cli/triage#automatic-failure-handoff). An older, already admitted
+managed repair handoff can remain active across an upgrade. In that subtree, repair can run
 against an offline target when schema and maintenance locks permit it. If repair
 needs to stop the managed Gateway, Doctor refuses inside its automatic fixing
 subtree because that stop would cancel recovery. Use read-only diagnosis or safe

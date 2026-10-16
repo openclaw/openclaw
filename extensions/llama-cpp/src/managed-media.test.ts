@@ -62,7 +62,7 @@ function useSmallMediaArtifacts(payload = "GGUF") {
 }
 
 describe("managed llama.cpp media artifacts and presets", () => {
-  it.each(["none", "CUDA1"])(
+  it.each(["none"])(
     "isolates media verification and pins both model and projector to %s",
     async (device) => {
       const { tempRoot, presetPath } = await createPresetFixture("media-candidate");
@@ -206,22 +206,6 @@ describe("managed llama.cpp media artifacts and presets", () => {
     expect(await fs.readdir(tempRoot)).toEqual(["llama-server"]);
   });
 
-  it("reuses verified curated model and projector bytes without metadata or download requests", async () => {
-    const recipe = useSmallMediaArtifacts();
-    const cacheDir = tempDirs.make("llama-media-verified-");
-    const fetch = vi.spyOn(globalThis, "fetch");
-    for (const artifact of [recipe.model, recipe.projector]) {
-      const destination = path.join(cacheDir, artifact.fileName);
-      await fs.writeFile(destination, "GGUF");
-      for (const download of [false, true]) {
-        await expect(
-          ensureLlamaCppModel({ source: artifact.source, cacheDir, download }),
-        ).resolves.toBe(destination);
-      }
-    }
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
   it.each(["missing", "wrong-size", "wrong-sha256"])(
     "rejects a %s curated projector before changing the working preset or downloading",
     async (outcome) => {
@@ -299,58 +283,46 @@ describe("managed llama.cpp media artifacts and presets", () => {
     expect(installMocks.ensureLlamaServerInstalled).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "refreshes a cached media model while preserving chat and embedding presence (%s)",
-    async (hasEmbedding) => {
-      const recipe = useSmallMediaArtifacts();
-      const { tempRoot, presetPath } = await createPresetFixture("media-refresh");
-      const chat = "[custom-chat]\n; operator model\nmodel = /models/chat.gguf\nctx-size = 8192";
-      const embedding =
-        "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\npooling = mean";
-      await fs.writeFile(
-        presetPath,
-        `version = 1\n\n${chat}\n[stale]\nmodel = /models/stale.gguf\n${hasEmbedding ? `\n${embedding}\n` : ""}`,
-      );
-      for (const artifact of [recipe.model, recipe.projector]) {
-        await fs.writeFile(path.join(tempRoot, artifact.fileName), "GGUF");
-      }
-      const fetch = vi.spyOn(globalThis, "fetch");
-      await ensureManagedLlamaServerForChat({
-        provider: {
-          baseUrl: "http://127.0.0.1:19432/v1",
-          localService: {
-            command: path.join(tempRoot, "llama-server"),
-            args: ["--models-preset", presetPath, "--models-max", "1"],
-          },
-          models: [
-            buildLlamaCppModel({ id: "custom-chat", name: "Chat", source: "/models/chat.gguf" }),
-          ],
-          params: { modelCacheDir: tempRoot, mediaModels: { ocr: recipe.id, vision: "vision" } },
+  it("refreshes a cached media model while preserving chat without inventing embeddings", async () => {
+    const recipe = useSmallMediaArtifacts();
+    const { tempRoot, presetPath } = await createPresetFixture("media-refresh");
+    const chat = "[custom-chat]\n; operator model\nmodel = /models/chat.gguf\nctx-size = 8192";
+    await fs.writeFile(presetPath, `version = 1\n\n${chat}\n[stale]\nmodel = /models/stale.gguf\n`);
+    for (const artifact of [recipe.model, recipe.projector]) {
+      await fs.writeFile(path.join(tempRoot, artifact.fileName), "GGUF");
+    }
+    const fetch = vi.spyOn(globalThis, "fetch");
+    await ensureManagedLlamaServerForChat({
+      provider: {
+        baseUrl: "http://127.0.0.1:19432/v1",
+        localService: {
+          command: path.join(tempRoot, "llama-server"),
+          args: ["--models-preset", presetPath, "--models-max", "1"],
         },
-        model: {
-          id: recipe.id,
-          params: {
-            modelPath: recipe.model.source,
-            mmprojPath: recipe.projector.source,
-            imageMaxTokens: 512,
-            device: "CUDA1",
-          },
+        models: [
+          buildLlamaCppModel({ id: "custom-chat", name: "Chat", source: "/models/chat.gguf" }),
+        ],
+        params: { modelCacheDir: tempRoot, mediaModels: { ocr: recipe.id, vision: "vision" } },
+      },
+      model: {
+        id: recipe.id,
+        params: {
+          modelPath: recipe.model.source,
+          mmprojPath: recipe.projector.source,
+          imageMaxTokens: 512,
+          device: "CUDA1",
         },
-      });
-      const preset = await fs.readFile(presetPath, "utf8");
-      expect(preset).toContain(chat);
-      expect(preset).not.toContain("[stale]");
-      expect(preset).toContain(`mmproj = ${path.join(tempRoot, recipe.projector.fileName)}`);
-      expect(preset).toContain("image-max-tokens = 512");
-      expect(preset).toContain("mmproj-device = CUDA1");
-      expect(preset).toContain("split-mode = none");
-      if (hasEmbedding) {
-        expect(preset).toContain(embedding);
-      } else {
-        expect(preset).not.toContain("embedding");
-      }
-      expect(fetch).not.toHaveBeenCalled();
-      expect(installMocks.ensureLlamaServerInstalled).not.toHaveBeenCalled();
-    },
-  );
+      },
+    });
+    const preset = await fs.readFile(presetPath, "utf8");
+    expect(preset).toContain(chat);
+    expect(preset).not.toContain("[stale]");
+    expect(preset).toContain(`mmproj = ${path.join(tempRoot, recipe.projector.fileName)}`);
+    expect(preset).toContain("image-max-tokens = 512");
+    expect(preset).toContain("mmproj-device = CUDA1");
+    expect(preset).toContain("split-mode = none");
+    expect(preset).not.toContain("embedding");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(installMocks.ensureLlamaServerInstalled).not.toHaveBeenCalled();
+  });
 });

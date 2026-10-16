@@ -17,6 +17,7 @@ import {
 } from "../../../lib/release-version.mjs";
 import { stampFixtureVersion } from "../update-first-hop-package-fixtures.mjs";
 import { assertNoIncognitoArtifacts } from "./incognito-artifacts.mjs";
+import { provePublishedDriverScopedRestore } from "./published-driver-scoped-restore.mjs";
 import {
   assertPublishedDriverReclaimed,
   inspectPublishedDriverSqlite,
@@ -517,6 +518,14 @@ process.exitCode = await runCancelableCommand(async (signal) => {
           .includes("Enabling incremental SQLite reclamation once:"),
         "Second maintenance repeated conversion",
       );
+    }
+    if (process.env.OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE === "1") {
+      await run("stop-before-scoped-restore", path.join(bin, "systemctl"), [
+        "--user",
+        "stop",
+        "openclaw-gateway.service",
+      ]);
+      await provePublishedDriverScopedRestore({ state, env, artifacts, run, writeJson });
     }
     writeJson("summary", {
       driverVersion,

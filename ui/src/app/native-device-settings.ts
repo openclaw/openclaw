@@ -90,7 +90,7 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
   browser: z
     .object({
       chromeSetupActions: z.array(nativeChromeExtensionSetupActionSchema).optional(),
-      importAvailable: z.boolean().optional(), // local mode with Chrome-family cookies available
+      importAvailable: z.boolean().optional(), // local import action; discovery waits for user intent
       cookieSync: z
         .object({
           available: z.boolean(), // remote mode with an external CLI
@@ -387,7 +387,13 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
       throw new Error("This permission belongs to another device");
     }
     // Native revalidates the node identity immediately before requesting access.
-    await post({ type: "resolve-permission", request });
+    try {
+      await post({ type: "resolve-permission", request });
+    } finally {
+      if (isCurrent()) {
+        refresh();
+      }
+    }
   };
   return {
     get snapshot() {

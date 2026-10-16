@@ -1,7 +1,12 @@
 import path from "node:path";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { expect, it } from "vitest";
-import { retainCodexAppServerLiveThread } from "./client-runtime.js";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { expect, it, vi } from "vitest";
+import {
+  claimCodexAppServerLiveThread,
+  isCodexAppServerLiveThreadClaimed,
+  retainCodexAppServerLiveThread,
+} from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
 import type { RpcRequest } from "./protocol.js";
 import { tempDir, threadStartResult } from "./run-attempt-test-harness.js";
@@ -35,12 +40,137 @@ export function registerThreadPolicyRefreshTests({
   writeCodexAppServerBinding,
 }: PolicyRefreshFixtures) {
   it.each([
+    { nativeStatus: "systemError", outcome: "unloaded", sibling: true },
+    { nativeStatus: "idle", outcome: "unloaded", sibling: true },
+    { nativeStatus: "systemError", outcome: "timeout", sibling: true },
+    { nativeStatus: "idle", outcome: "timeout", sibling: false },
+    { nativeStatus: "systemError", outcome: "timeout", sibling: false },
+    { nativeStatus: "systemError", outcome: "abort", sibling: true },
+  ])(
+    "preserves managed $nativeStatus history across $outcome with sibling=$sibling",
+    async ({ nativeStatus, outcome, sibling }) => {
+      const sessionFile = path.join(tempDir, "managed-unload.jsonl");
+      const cwd = path.join(tempDir, "workspace");
+      const agentDir = path.join(tempDir, "agent");
+      const threadId = "managed-unload";
+      const response = threadStartResult(threadId);
+      const unsubscribed = createDeferred<void>();
+      const requests: RpcRequest[] = [];
+      const controller = new AbortController();
+      const abandonClient = vi.fn(async () => {});
+      const wire = await createLeasedLifecycleWireClient(
+        agentDir,
+        (request) => {
+          requests.push(request);
+          switch (request.method) {
+            case "config/read":
+              return { config: {}, origins: {}, layers: [] };
+            case "configRequirements/read":
+              return { requirements: null };
+            case "thread/start":
+            case "thread/resume":
+              return response;
+            case "thread/read":
+              return { thread: { ...response.thread, status: { type: nativeStatus } } };
+            case "thread/unsubscribe":
+              vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+              unsubscribed.resolve();
+              return { status: "unsubscribed" };
+            case "thread/inject_items":
+              return {};
+            default:
+              throw new Error(`unexpected method: ${request.method}`);
+          }
+        },
+        "stdio",
+      );
+      const common = {
+        client: wire.client,
+        params: { ...createParams(sessionFile, cwd), agentDir },
+        cwd,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        userMcpServersEnabled: false,
+        signal: controller.signal,
+        abandonClient,
+      };
+      const siblingOwner = sibling
+        ? await claimCodexAppServerLiveThread(wire.client, "sibling")
+        : undefined;
+      try {
+        const first = await startOrResumeThread({ ...common, developerInstructions: "old policy" });
+        await retainCodexAppServerLiveThread(
+          wire.client,
+          threadId,
+          undefined,
+          first.liveThreadConfigFingerprint,
+        );
+        const before = await readCodexAppServerBinding(sessionFile);
+        const resumed = startOrResumeThread({
+          ...common,
+          developerInstructions: "replacement policy",
+        });
+        const result =
+          outcome === "unloaded"
+            ? expect(resumed).resolves.toMatchObject({ threadId, lifecycle: { action: "resumed" } })
+            : expect(resumed).rejects.toThrow(
+                outcome === "abort"
+                  ? "cancel unload"
+                  : nativeStatus === "systemError" && !sibling
+                    ? "fresh client is required"
+                    : "did not confirm unloading",
+              );
+        await unsubscribed.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        wire.send({
+          method: "thread/status/changed",
+          params: { threadId: "sibling", status: { type: "notLoaded" } },
+        });
+        expect(requests.some(({ method }) => method === "thread/resume")).toBe(false);
+        if (outcome === "unloaded") {
+          wire.send({
+            method: "thread/status/changed",
+            params: { threadId, status: { type: "notLoaded" } },
+          });
+        } else if (outcome === "abort") {
+          controller.abort(new Error("cancel unload"));
+        } else {
+          await vi.advanceTimersByTimeAsync(2_000);
+        }
+        await result;
+        expect(requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);
+        if (outcome === "unloaded") {
+          expect(requests.find(({ method }) => method === "thread/resume")?.params).toMatchObject({
+            threadId,
+            developerInstructions: "replacement policy",
+          });
+          expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(threadId);
+        } else {
+          expect(requests.some(({ method }) => method === "thread/resume")).toBe(false);
+          expect(await readCodexAppServerBinding(sessionFile)).toEqual(before);
+        }
+        expect(abandonClient).toHaveBeenCalledTimes(
+          outcome === "timeout" && nativeStatus === "systemError" && !sibling ? 1 : 0,
+        );
+        if (sibling) {
+          expect(isCodexAppServerLiveThreadClaimed(wire.client, "sibling")).toBe(true);
+        }
+      } finally {
+        vi.useRealTimers();
+        await siblingOwner?.release("sibling");
+        releaseLeasedSharedCodexAppServerClient(wire.client);
+        wire.client.close();
+      }
+    },
+  );
+
+  it.each([
     { developerInstructions: "", fault: "none", transport: "stdio" as const },
-    ...["unload", "retirement failure"].map((fault) => ({
+    {
       developerInstructions: "replacement policy",
-      fault,
+      fault: "retirement failure",
       transport: "stdio" as const,
-    })),
+    },
   ])(
     "refreshes ordinary generic policy over $transport before admitting a resumed turn: $developerInstructions / $fault",
     async ({ developerInstructions, fault, transport }) => {
@@ -63,7 +193,7 @@ export function registerThreadPolicyRefreshTests({
             return {
               thread: {
                 ...response.thread,
-                status: { type: fault === "unload" ? "idle" : "notLoaded" },
+                status: { type: "notLoaded" },
               },
             };
           }
@@ -147,7 +277,7 @@ export function registerThreadPolicyRefreshTests({
 
   it.each([
     { nativeStatus: "idle", transport: "websocket" as const },
-    { nativeStatus: "systemError", transport: "stdio" as const },
+    { nativeStatus: "systemError", transport: "websocket" as const },
     { nativeStatus: "active", transport: "stdio" as const },
   ])(
     "keeps ordinary warm configuration honest over $transport across $nativeStatus",
@@ -204,7 +334,10 @@ export function registerThreadPolicyRefreshTests({
         },
         cwd: workspaceDir,
         dynamicTools: [],
-        appServer: createThreadLifecycleAppServerOptions(),
+        appServer: {
+          ...createThreadLifecycleAppServerOptions(),
+          start: { ...createThreadLifecycleAppServerOptions().start, transport },
+        },
         userMcpServersEnabled: false,
         signal: new AbortController().signal,
       };

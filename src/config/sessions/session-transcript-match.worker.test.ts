@@ -1,21 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { readSubagentRunAnnounceResultUsing } from "../../agents/subagents/announce/subagent-announce-result.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.js";
 import { findSessionTranscriptArchiveEventReadOnly } from "./session-accessor.sqlite-history.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import type { SessionTranscriptEventMatch } from "./session-history-read.types.js";
 import { findTranscriptEvent } from "./session-transcript-match.js";
+
+afterEach(() => memorySessionActorOwners.reset());
 
 it("keeps incognito matching in its process-owned store without creating disk state", async () => {
   await withOpenClawTestState({ label: "transcript-incognito-matching" }, async (state) => {
@@ -24,15 +25,11 @@ it("keeps incognito matching in its process-owned store without creating disk st
       env: state.env,
       sessionId: "private-answer",
       sessionKey: "agent:main:dashboard:incognito-matching",
-      storePath: state.statePath("unused-durable.sqlite"),
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
     };
     expect(scope.storePath.startsWith(state.root)).toBe(true);
     expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
     await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toBeUndefined();
-    await createSessionEntryWithTranscript(scope, () => ({
-      ok: true,
-      entry: { incognito: true, sessionId: scope.sessionId, updatedAt: 1 },
-    }));
     const answer = {
       type: "message",
       id: "private-final",
@@ -48,7 +45,11 @@ it("keeps incognito matching in its process-owned store without creating disk st
       id: "other-final",
       message: { ...answer.message, content: "other run", __openclaw: { runId: "other-run" } },
     };
-    await replaceTranscriptEvents(scope, [answer, unrelated]);
+    await createSessionEntryWithTranscript(scope, () => ({
+      ok: true,
+      entry: { incognito: true, sessionId: scope.sessionId, updatedAt: 1 },
+      transcriptEvents: [answer, unrelated],
+    }));
 
     await expect(
       findTranscriptEvent(scope, { kind: "visible-final", runId: "private-run" }),
@@ -61,7 +62,7 @@ it("keeps incognito matching in its process-owned store without creating disk st
     ).resolves.toBeUndefined();
     await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
 
-    await closeOpenClawAgentDatabasesAsync(state.root);
+    memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
     await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toBeUndefined();
     await expect(
       findSessionTranscriptArchiveEventReadOnly(scope, "private-run"),
@@ -206,9 +207,13 @@ it("keeps match filters and active anchors authoritative across worker payload e
           ...message,
         },
       });
-      const answer = assistant("answer", "completed-run");
+      const answer = assistant("answer", "completed-run", { display: true });
       const finalMirror = assistant("final-source-reply", "mirror-run", {
-        openclawDeliveryMirror: { kind: "message-tool-source-reply", final: true },
+        openclawDeliveryMirror: {
+          kind: "message-tool-source-reply",
+          sourceTurnId: "mirror-run",
+          final: true,
+        },
       });
       const deliveryMirror = assistant("delivery-mirror", "delivery-run", {
         idempotencyKey: "shared-key",

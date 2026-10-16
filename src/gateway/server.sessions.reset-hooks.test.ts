@@ -5,11 +5,17 @@ import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { listSessionEntriesCore, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesCore,
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { PluginHookSessionContext } from "../plugins/session-end-transcript.js";
 import { readAttachedSessionEndTranscriptSourceForTest } from "../plugins/session-end-transcript.test-support.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
@@ -494,7 +500,7 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
     );
 
     expect(reset.ok).toBe(true);
-    expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
+    expect(broadcast.mock.calls[0]?.[0]).toBe("socket.drain");
     expect(broadcast.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
         sessionKey: "global",
@@ -503,6 +509,15 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
       }),
     );
     expect(broadcast.mock.calls[0]?.[2]).toEqual(new Set(["conn-work"]));
+    expect(broadcast.mock.calls[1]?.[0]).toBe("sessions.changed");
+    expect(broadcast.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        sessionKey: "global",
+        agentId: "work",
+        reason: "reset",
+      }),
+    );
+    expect(broadcast.mock.calls[1]?.[2]).toEqual(new Set(["conn-work"]));
     const hookEvent = expectSingleCommandHookEvent("reset");
     expect(hookEvent.sessionKey).toBe("global");
     expect(hookEvent.context?.agentId).toBe("work");
@@ -511,41 +526,52 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
 
 test("sessions.reset of an incognito session broadcasts a delete, not a reset", async () => {
   await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      "incognito-chat": sessionStoreEntry("sess-incognito", { incognito: true }),
-    },
-  });
-  const broadcast = vi.fn();
-  const reset = await directSessionReq<{ ok: true; key: string; deleted?: boolean }>(
-    "sessions.reset",
-    { key: "incognito-chat", reason: "reset" },
-    {
-      context: {
-        broadcastToConnIds: broadcast,
-        getSessionEventSubscriberConnIds: () => new Set(["conn-incognito"]),
-      },
-    },
-  );
-
-  expect(reset.ok).toBe(true);
-  expect(reset.payload?.deleted).toBe(true);
-  const [, incognitoEndContext] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
-  expect(
-    readAttachedSessionEndTranscriptSourceForTest(incognitoEndContext as PluginHookSessionContext),
-  ).toEqual({
-    available: false,
-    reason: "incognito-deleted",
-  });
-  // The row is gone; only reason "delete" makes clients drop it and navigate away.
-  expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
-  expect(broadcast.mock.calls[0]?.[1]).toEqual({
-    sessionKey: reset.payload?.key,
+  const location = {
     agentId: "main",
-    sessionId: "sess-incognito",
-    reason: "delete",
-    ts: expect.any(Number),
-  });
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+  };
+  const sessionKey = "agent:main:dashboard:incognito-chat";
+  const scope = { agentId: "main", storePath: location.path, sessionKey };
+  try {
+    await upsertSessionEntryCore(scope, sessionStoreEntry("sess-incognito", { incognito: true }));
+    const broadcast = vi.fn();
+    const reset = await directSessionReq<{ ok: true; key: string; deleted?: boolean }>(
+      "sessions.reset",
+      { key: sessionKey, reason: "reset" },
+      {
+        context: {
+          broadcastToConnIds: broadcast,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-incognito"]),
+        },
+      },
+    );
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.deleted).toBe(true);
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    const [, incognitoEndContext] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
+    expect(
+      readAttachedSessionEndTranscriptSourceForTest(
+        incognitoEndContext as PluginHookSessionContext,
+      ),
+    ).toEqual({
+      available: false,
+      reason: "incognito-deleted",
+    });
+    // The row is gone; only reason "delete" makes clients drop it and navigate away.
+    expect(broadcast.mock.calls[0]?.[0]).toBe("socket.drain");
+    expect(broadcast.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ reason: "delete" }));
+    expect(broadcast.mock.calls[1]?.[0]).toBe("sessions.changed");
+    expect(broadcast.mock.calls[1]?.[1]).toEqual({
+      sessionKey: reset.payload?.key,
+      agentId: "main",
+      sessionId: "sess-incognito",
+      reason: "delete",
+      ts: expect.any(Number),
+    });
+  } finally {
+    memorySessionActorOwners.closeDatabase(location);
+  }
 });
 
 test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks against parent (#76957)", async () => {

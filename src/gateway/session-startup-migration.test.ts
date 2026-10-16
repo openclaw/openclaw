@@ -20,7 +20,6 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
-import { withCanonicalSessionValidationDeferral } from "../config/sessions/session-canonical-validation-deferral.js";
 import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -99,14 +98,12 @@ describe("runStartupSessionMaintenanceForTest", () => {
           const log = makeLog();
           await runStartupSessionMaintenanceForTest({ cfg, env, log });
           for (const agentId of agentIds) {
-            const read = withCanonicalSessionValidationDeferral(() =>
-              loadExactSessionEntryReadOnly({
-                agentId,
-                env,
-                sessionKey: `agent:${agentId}:first-turn`,
-              }),
-            );
-            expect(read).toEqual({ kind: "complete", value: undefined });
+            const read = loadExactSessionEntryReadOnly({
+              agentId,
+              env,
+              sessionKey: `agent:${agentId}:first-turn`,
+            });
+            expect(read).toBeUndefined();
             expect(
               withOpenClawAgentDatabaseReadOnly(hasPersistedOpenClawAgentCanonicalValidation, {
                 agentId,

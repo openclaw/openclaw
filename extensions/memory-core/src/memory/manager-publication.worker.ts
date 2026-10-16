@@ -1,20 +1,28 @@
 import type { DatabaseSync } from "node:sqlite";
+import type {
+  EngineConnection,
+  SearchSchema,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtensionFromPath,
   MEMORY_INDEX_VECTOR_TABLE,
+  stageMemoryIndexSchemaExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
+  isPostgresSqlConnection,
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
   loadSqliteVecExtension,
   stopMemorySqliteWalMaintenance,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { readOpenClawAgentDatabaseIdentity } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
-  assertTransactionUsable,
+  bindSqliteWorkerDatabase,
   admitSqliteSchema,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
+  getAdmittedSqliteSchemaFacts,
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
   requestSqliteWorkerOperationAdmission,
@@ -38,6 +46,7 @@ import {
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
 import { readMemoryIndex } from "./manager-index-read.js";
+import { bindPostgresMemoryPublication } from "./manager-publication-postgres.js";
 import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheHeader,
@@ -51,6 +60,7 @@ import {
   MEMORY_INDEX_WRITE_SCOPE,
 } from "./manager-publication-task.js";
 import { MEMORY_INDEX_META_KEY, readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
+import { admitMemoryVectorIndex } from "./manager-search-knn.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
@@ -154,10 +164,14 @@ export function bindSqliteWorkerBackend(
   input: MemoryPublicationConnection,
   context: {
     databasePath: string;
-    database: DatabaseSync;
+    database: EngineConnection;
+    admitSearchExtensions?: (definitions: Readonly<Record<string, SearchSchema>>) => void;
     admit(stage: "transaction" | "commit"): void;
   },
 ) {
+  if (isPostgresSqlConnection(context.database)) {
+    return bindPostgresMemoryPublication(context, "kind" in input ? input.stageId : undefined);
+  }
   const db = context.database;
   let pragmas = agentConnectionPragmas.get(db);
   if ("kind" in input && !pragmas) {
@@ -198,6 +212,7 @@ function createPublicationBackend(
   ownsConnection: boolean,
   admit: (stage: "transaction" | "commit") => void,
 ) {
+  const vectorIndex = admitMemoryVectorIndex(db);
   // Agent handles are admitted by the database owner; private shadows are checked once on open.
   if (!("kind" in input)) {
     assertMemoryShadowIdentity(databasePath, input.fileIdentity);
@@ -352,7 +367,7 @@ function createPublicationBackend(
         .onConflict((conflict) => conflict.column("key").doUpdateSet({ value })),
     );
   };
-  return {
+  return bindSqliteWorkerDatabase<MemoryPublicationOperations>(db, {
     async prepare(command) {
       if (command.type !== "vector.prepare") {
         return;
@@ -370,13 +385,17 @@ function createPublicationBackend(
       }
       loadedExtensions.set(db, loaded.extensionPath);
     },
-    assertSettled() {
-      assertTransactionUsable(db);
-      if (!db.isOpen || db.isTransaction) {
-        throw new Error("Memory publication left an unsettled native connection");
-      }
-    },
     execute(command) {
+      if (command.type === "database.reset") {
+        throw new Error("Worker memory reset requires PostgreSQL");
+      }
+      if (
+        command.type === "database.stage.start" ||
+        command.type === "database.stage.publish" ||
+        command.type === "database.stage.discard"
+      ) {
+        throw new Error("Connection-local memory staging requires PostgreSQL");
+      }
       if (command.type === "connection.inspect") {
         return "kind" in input
           ? {
@@ -406,7 +425,22 @@ function createPublicationBackend(
           if (result.ok) {
             admitSqliteSchema(db);
           }
-          return withFacts(result);
+          const published = withFacts(result);
+          return published.ok && "kind" in input
+            ? {
+                ...published,
+                value: {
+                  ...published.value,
+                  admission: {
+                    hasIndex: true,
+                    ftsAvailable: published.value.ftsAvailable,
+                    schemaVersion: getAdmittedSqliteSchemaFacts(db)?.userVersion,
+                    identity: readOpenClawAgentDatabaseIdentity({ db }),
+                    facts: published.facts,
+                  },
+                },
+              }
+            : published;
         } finally {
           if (db.isOpen) {
             db.exec(`PRAGMA foreign_keys = ${input.pragmas.foreign_keys}`);
@@ -500,6 +534,7 @@ function createPublicationBackend(
         }
         return withFacts(
           write(() => {
+            stageMemoryIndexSchemaExtension(db);
             stageOpenClawAgentDatabaseSchemaExtension(db);
             db.exec("DROP TABLE IF EXISTS chunks_vec");
             return { extensionPath: loadedPath, retiredLegacy: true };
@@ -519,12 +554,10 @@ function createPublicationBackend(
         loadExtension(command.input.state.extensionPath);
         return withFacts(
           write(() => {
+            stageMemoryIndexSchemaExtension(db);
             stageOpenClawAgentDatabaseSchemaExtension(db);
-            db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_VECTOR_TABLE}`);
-            db.exec(
-              `CREATE VIRTUAL TABLE ${MEMORY_INDEX_VECTOR_TABLE} USING vec0(\n` +
-                `  id TEXT PRIMARY KEY,\n  embedding FLOAT[${dimensions}]\n)`,
-            );
+            vectorIndex.capability.drop(vectorIndex.index);
+            vectorIndex.capability.create(vectorIndex.index, dimensions);
             if (meta && !meta.vectorDims && !hasIndexedChunks) {
               writeMeta(JSON.stringify({ ...meta, vectorDims: dimensions }));
             }
@@ -608,7 +641,7 @@ function createPublicationBackend(
     close() {
       discard();
     },
-  } satisfies SqliteWorkerBackend<MemoryPublicationOperations>;
+  });
 }
 
 function* readPublicationRows<Row extends MemorySourceIndexRow | MemoryEmbeddingCacheEntry>(

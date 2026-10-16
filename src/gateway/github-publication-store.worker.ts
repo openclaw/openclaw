@@ -5,6 +5,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type {
   GitHubPublicationReceiptTarget,
   GitHubPublicationRow,
@@ -41,11 +42,11 @@ type GitHubPublicationDatabase = Pick<
   | "github_publication_session_lifecycles"
   | "worker_session_placements"
 >;
-export const githubPublicationDatabase = (db: Parameters<typeof getNodeSqliteKysely>[0]) =>
+export const githubPublicationDatabase = (db: EngineConnection) =>
   getNodeSqliteKysely<GitHubPublicationDatabase>(db);
 
 export function readGitHubPublicationRequest(
-  db: Parameters<typeof getNodeSqliteKysely>[0],
+  db: EngineConnection,
   request: { requestId: string } | { sessionId: string; idempotencyKey: string },
 ): GitHubPublicationRow | undefined {
   const query = githubPublicationDatabase(db).selectFrom("github_publication_requests").selectAll();
@@ -61,7 +62,7 @@ export function readGitHubPublicationRequest(
 
 /** Retained publisher/target receipts identify reused PRs whose body keeps an older marker. */
 export function readKnownGitHubPublicationPullRequestUrlsInDatabase(
-  db: Parameters<typeof getNodeSqliteKysely>[0],
+  db: EngineConnection,
   row: GitHubPublicationReceiptTarget,
 ): string[] {
   const known = new Set(row.pull_request_url ? [row.pull_request_url] : []);
@@ -164,7 +165,7 @@ export function markSharedGitHubPublicationReportedInDatabase(
 }
 
 export function assertSharedGitHubPublicationClaimInDatabase(
-  db: Parameters<typeof getNodeSqliteKysely>[0],
+  db: EngineConnection,
   request: {
     claim: WorkerSessionTurnClaim;
     sessionKey: string;
@@ -247,7 +248,7 @@ export function claimGitHubPublicationExecutionInDatabase(
 
 /** Insert/replay shared intent inside the caller's admission transaction. */
 export function insertGitHubPublicationRequest(
-  db: Parameters<typeof getNodeSqliteKysely>[0],
+  db: EngineConnection,
   input: SharedGitHubPublicationInsert & { assertCurrent: () => void },
 ): GitHubPublicationRow {
   input.assertCurrent();

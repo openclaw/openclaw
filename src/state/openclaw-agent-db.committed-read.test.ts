@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
@@ -11,7 +13,6 @@ import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.
 import {
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
-  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db.js";
@@ -30,7 +31,8 @@ function readStamp(options: OpenClawAgentDatabaseOptions, behavior?: { allowExte
   return result.value;
 }
 
-function inWriterTransaction<T>(db: DatabaseSync, operation: () => T): T {
+function inWriterTransaction<T>(connection: EngineConnection, operation: () => T): T {
+  const db = requireNativeSqliteDatabase(connection);
   db.exec("BEGIN IMMEDIATE");
   try {
     return operation();
@@ -151,12 +153,13 @@ describe("committed agent database reads", () => {
         const options = { agentId: "main", env };
         const owner = openOpenClawAgentDatabase(options);
         owner.db.exec("UPDATE schema_meta SET updated_at = 101 WHERE meta_key = 'primary'");
-        const bytes = owner.db.serialize();
+        const db = requireNativeSqliteDatabase(owner.db);
+        const bytes = db.serialize();
         inWriterTransaction(owner.db, () => {
           owner.db.prepare(stampQuery).get();
           const reader = readStamp(options).db;
           // SQLite rejects replacement while the connection holds a transaction.
-          expect(() => owner.db.deserialize(bytes)).toThrow();
+          expect(() => db.deserialize(bytes)).toThrow();
           expect(reader.isOpen).toBe(false);
           expect(owner.db.isOpen).toBe(true);
           expect(owner.db.isTransaction).toBe(true);
@@ -235,23 +238,6 @@ describe("committed agent database reads", () => {
         expect(first.db.isOpen).toBe(false);
         expect(second.db.isOpen).toBe(false);
       });
-    });
-  });
-
-  it("keeps incognito reads on their sole process-owned connection", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const options = {
-        agentId: "main",
-        env,
-        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
-      };
-      const owner = openOpenClawAgentDatabase(options);
-      inWriterTransaction(owner.db, () => {
-        expect(readStamp(options).db === owner.db).toBe(true);
-        expect(owner.db.isTransaction).toBe(true);
-      });
-      expect(owner.db.isOpen).toBe(true);
-      expect(fs.existsSync(options.path)).toBe(false);
     });
   });
 

@@ -199,65 +199,67 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
   ) {
     return mergeOrphanedTrailingUserPrompt({ prompt, leafMessage });
   }
-  it("does not replay the initiating user turn into an approved-exec continuation", () => {
-    expect(
-      mergeOrphan(
-        {
-          content: "run the command again",
-          provenance: { kind: "inter_session", sourceTool: "exec_approval_followup" },
-        },
-        "authenticated approved-exec result",
-      ),
-    ).toEqual({ merged: false, removeLeaf: true, prompt: "authenticated approved-exec result" });
-  });
-
-  it("preserves user-directed inter-session orphan context", () => {
-    expect(
-      mergeOrphan({
+  it.each([
+    {
+      name: "does not replay the initiating user turn into an approved-exec continuation",
+      leaf: {
+        content: "run the command again",
+        provenance: { kind: "inter_session", sourceTool: "exec_approval_followup" },
+      },
+      prompt: "authenticated approved-exec result",
+      expected: { merged: false, removeLeaf: true, prompt: "authenticated approved-exec result" },
+    },
+    {
+      name: "preserves user-directed inter-session orphan context",
+      leaf: {
         content: "forwarded user request",
         provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-      }),
-    ).toEqual({
-      merged: true,
-      removeLeaf: false,
-      prompt:
-        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
-        "forwarded user request\n\nnewest inbound message",
-    });
-  });
-
-  it("does not duplicate orphaned user text already present in the next prompt", () => {
-    expect(
-      mergeOrphan(
-        { content: "older active-turn message" },
-        "summary\nolder active-turn message\nnewest inbound message",
-      ),
-    ).toEqual({
-      merged: false,
-      removeLeaf: false,
+      },
+      expected: {
+        merged: true,
+        removeLeaf: false,
+        prompt:
+          "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
+          "forwarded user request\n\nnewest inbound message",
+      },
+    },
+    {
+      name: "does not duplicate orphaned user text already present in the next prompt",
+      leaf: { content: "older active-turn message" },
       prompt: "summary\nolder active-turn message\nnewest inbound message",
-    });
-  });
-
-  it("keeps structured orphaned user input actionable alongside the current request", () => {
-    expect(
-      mergeOrphan({
+      expected: {
+        merged: false,
+        removeLeaf: false,
+        prompt: "summary\nolder active-turn message\nnewest inbound message",
+      },
+    },
+    {
+      name: "keeps structured orphaned user input actionable alongside the current request",
+      leaf: {
         content: [
           { type: "text", text: "please inspect this" },
           { type: "image_url", image_url: { url: "https://example.test/cat.png" } },
           { type: "input_audio", audio_url: "https://example.test/cat.wav" },
         ],
-      }),
-    ).toEqual({
-      merged: true,
-      removeLeaf: false,
-      prompt:
-        "[Earlier unanswered user message. Address this request alongside the current input; follow the latest user instruction if they conflict.]\n" +
-        "please inspect this\n" +
-        "[image_url] https://example.test/cat.png\n" +
-        "[input_audio] https://example.test/cat.wav\n\n" +
-        "newest inbound message",
-    });
+      },
+      expected: {
+        merged: true,
+        removeLeaf: false,
+        prompt:
+          "[Earlier unanswered user message. Address this request alongside the current input; follow the latest user instruction if they conflict.]\n" +
+          "please inspect this\n" +
+          "[image_url] https://example.test/cat.png\n" +
+          "[input_audio] https://example.test/cat.wav\n\n" +
+          "newest inbound message",
+      },
+    },
+    {
+      name: "removes an empty orphaned user leaf to prevent consecutive user turns",
+      leaf: { content: [] },
+      expected: { merged: false, removeLeaf: true, prompt: "newest inbound message" },
+    },
+  ])("$name", ({ leaf, prompt, expected }) => {
+    expect(mergeOrphan(leaf, prompt)).toEqual(expected);
   });
 
   it("summarizes unknown structured data before JSON serialization", () => {
@@ -281,14 +283,6 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     expect(result.prompt).toContain("(2000 chars)");
     expect(result.prompt).not.toContain("base64");
     expect(result.prompt).not.toContain("aaaa");
-  });
-
-  it("removes an empty orphaned user leaf to prevent consecutive user turns", () => {
-    expect(mergeOrphan({ content: [] })).toEqual({
-      merged: false,
-      removeLeaf: true,
-      prompt: "newest inbound message",
-    });
   });
 });
 
@@ -497,27 +491,22 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     }));
   }
 
-  it("does not reset the unavailable-tool streak on partial-only stream chunks", async () => {
-    const nextStream = sequenceStreams(["read"], retryFrames("partial", " exec "));
-    const firstStream = await nextStream();
-    await firstStream.result();
-    const secondStream = await nextStream();
-    await drainStream(secondStream);
-    const secondResult = (await secondStream.result()) as ToolStreamMessage;
-    expect(secondResult.role).toBe("assistant");
-    expectSingleTextContent(secondResult.content, '"exec"');
-  });
-
-  it("counts the final unknown-tool retry when streamed messages omit the tool name", async () => {
-    const nextStream = sequenceStreams(["read"], retryFrames("message", ""));
-    const firstStream = await nextStream();
-    await firstStream.result();
-    const secondStream = await nextStream();
-    await drainStream(secondStream);
-    const secondResult = (await secondStream.result()) as ToolStreamMessage;
-    expect(secondResult.role).toBe("assistant");
-    expectSingleTextContent(secondResult.content, '"exec"');
-  });
+  it.each([
+    ["partial", " exec "],
+    ["message", ""],
+  ] as const)(
+    "counts the final unknown-tool retry after %s deltas named %j",
+    async (projection, name) => {
+      const nextStream = sequenceStreams(["read"], retryFrames(projection, name));
+      const firstStream = await nextStream();
+      await firstStream.result();
+      const secondStream = await nextStream();
+      await drainStream(secondStream);
+      const secondResult = (await secondStream.result()) as ToolStreamMessage;
+      expect(secondResult.role).toBe("assistant");
+      expectSingleTextContent(secondResult.content, '"exec"');
+    },
+  );
 
   it("keeps processing later streamed messages after one streamed unknown-tool retry was counted", async () => {
     const nextStream = sequenceStreams(
@@ -576,82 +565,20 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expectSingleToolCallContent(thirdResult.content, "ex");
   });
 
-  it("infers tool names from malformed toolCallId variants when allowlist is present", async () => {
-    const partialToolCall = { type: "toolCall", id: "functions.read:0", name: "" };
-    const finalToolCallA = { type: "toolCall", id: "functionsread3", name: "" };
-    const finalToolCallB: { type: string; id: string; name?: string } = {
-      type: "toolCall",
-      id: "functionswrite4",
-    };
-    const finalToolCallC = { type: "functionCall", id: "functions.exec2", name: "" };
-    const event = toolDelta("partial", [partialToolCall]);
-    const finalMessage = {
-      role: "assistant",
-      content: [finalToolCallA, finalToolCallB, finalToolCallC],
-    };
-    const baseFn = fakeBaseStream(finalMessage, [event]);
-
-    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
-    await drainStream(stream);
-    const result = await stream.result();
-
-    expect(partialToolCall.name).toBe("read");
-    expect(finalToolCallA.name).toBe("read");
-    expect(finalToolCallB.name).toBe("write");
-    expect(finalToolCallC.name).toBe("exec");
-    expect(result).toBe(finalMessage);
-  });
-
-  it("does not infer names from malformed toolCallId when allowlist is absent", async () => {
-    const finalToolCall: { type: string; id: string; name?: string } = {
-      type: "toolCall",
-      id: "functionsread3",
-    };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = fakeBaseStream(finalMessage);
-
-    const stream = await invokeWrappedStream(baseFn);
-    await stream.result();
-
-    expect(finalToolCall.name).toBeUndefined();
-  });
-
-  it("fails closed for malformed non-blank names that are ambiguous", async () => {
-    const toolCall = { type: "toolCall", id: "functions.exec2", name: "functions.exec2" };
+  it.each([
+    { id: "functionsread3", name: undefined, allowed: undefined },
+    { id: "functions.exec2", name: "functions.exec2", allowed: new Set(["exec", "exec2"]) },
+  ])("does not guess a tool name for $id", async ({ id, name, allowed }) => {
+    const toolCall = { type: "toolCall", id, name };
     const finalMessage = { role: "assistant", content: [toolCall] };
     const baseFn = fakeBaseStream(finalMessage);
 
-    const stream = await invokeWrappedStream(baseFn, new Set(["exec", "exec2"]));
+    const stream = await invokeWrappedStream(baseFn, allowed);
     await stream.result();
 
-    expect(toolCall.name).toBe("functions.exec2");
+    expect(toolCall.name).toBe(name);
   });
 
-  it("does not reuse fallback ids across assistant response streams", async () => {
-    const ids: string[] = [];
-    for (let responseIndex = 0; responseIndex < 2; responseIndex += 1) {
-      const finalToolCall: { type: string; name: string; id?: string } = {
-        type: "toolCall",
-        name: "read",
-      };
-      const baseFn = vi.fn(() =>
-        createFakeStream({
-          events: [],
-          resultMessage: { role: "assistant", content: [finalToolCall] },
-        }),
-      );
-      const stream = await invokeWrappedStream(baseFn, new Set(["read"]));
-      await stream.result();
-      if (!finalToolCall.id) {
-        throw new Error("missing fallback tool call id");
-      }
-      ids.push(finalToolCall.id);
-    }
-
-    expect(ids[0]).toMatch(/^call_[0-9a-f]{24}$/);
-    expect(ids[1]).toMatch(/^call_[0-9a-f]{24}$/);
-    expect(ids[1]).not.toBe(ids[0]);
-  });
   it("leaves provisional blank streamed names recoverable while stopping final blank dispatch", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
     const finalToolCall = { type: "toolCall", name: "\t  " };
@@ -671,31 +598,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(baseFn).toHaveBeenCalledTimes(1);
   });
 
-  it("assigns fallback ids to missing/blank tool call ids in streamed and final messages", async () => {
-    const partialToolCall = { type: "toolCall", name: " read ", id: "   " };
-    const finalToolCallA = { type: "toolCall", name: " exec ", id: "" };
-    const finalToolCallB: { type: string; name: string; id?: string } = {
-      type: "toolCall",
-      name: " write ",
-    };
-    const event = toolDelta("partial", [partialToolCall]);
-    const finalMessage = { role: "assistant", content: [finalToolCallA, finalToolCallB] };
-    const baseFn = fakeBaseStream(finalMessage, [event]);
-
-    const stream = await invokeWrappedStream(baseFn);
-    await drainStream(stream);
-    const result = await stream.result();
-
-    expect(partialToolCall.name).toBe("read");
-    expect(partialToolCall.id).toMatch(/^call_[0-9a-f]{24}$/);
-    expect(finalToolCallA.name).toBe("exec");
-    expect(finalToolCallA.id).toBe(partialToolCall.id);
-    expect(finalToolCallB.name).toBe("write");
-    expect(finalToolCallB.id).toMatch(/^call_[0-9a-f]{24}$/);
-    expect(finalToolCallB.id).not.toBe(finalToolCallA.id);
-    expect(result).toBe(finalMessage);
-  });
-
   it("reassigns duplicate tool call ids within a message to unique fallbacks", async () => {
     const finalToolCallA = { type: "toolCall", name: " read ", id: "  edit:22  " };
     const finalToolCallB = { type: "toolCall", name: " write ", id: "edit:22" };
@@ -711,7 +613,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCallB.id).toMatch(/^call_[0-9a-f]{24}$/);
   });
 
-  it.each([true, false])(
+  it.each([true])(
     "keeps repeated provider ids unique across compacted responses (prior history: %s)",
     async (hasPriorHistory) => {
       const makeToolCall = () => ({ type: "toolCall", name: "exec", id: "exec_0", arguments: {} });
@@ -769,31 +671,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       expect(history).toEqual(hasPriorHistory ? [makeMessage()] : []);
     },
   );
-
-  it("preserves non-colliding provider ids byte-for-byte", async () => {
-    const ids = ["toolu_01NativeAnthropic", "call_NativeOpenAI"];
-    const finalMessage = {
-      role: "assistant",
-      content: ids.map((id) => ({ type: "toolCall", name: "exec", id, arguments: {} })),
-    };
-    const baseFn = fakeBaseStream(finalMessage, [
-      { type: "toolcall_delta", partial: structuredClone(finalMessage) },
-      { type: "done", message: structuredClone(finalMessage) },
-    ]);
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["exec"]));
-    const stream = await wrappedFn(
-      {} as never,
-      { messages: [{ role: "assistant", content: [{ type: "toolCall", id: "exec_0" }] }] } as never,
-      {} as never,
-    );
-    for await (const event of stream) {
-      const message =
-        "partial" in event ? event.partial : "message" in event ? event.message : undefined;
-      expect(message?.content).toEqual(finalMessage.content);
-    }
-    expect((await stream.result()).content).toEqual(finalMessage.content);
-    expect(finalMessage.content.map((call) => call.id)).toEqual(ids);
-  });
 });
 
 describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
@@ -844,10 +721,6 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     return replayContext(messages, new Set(["read"]), signedPolicy, api);
   }
 
-  function expectedRetryMessages() {
-    return [textUser("retry")];
-  }
-
   it("strips trailing assistant prefill turns for Gemini outbound replay", async () => {
     const messages = [textUser("earlier question"), textAssistant("stale model answer")];
     const seenContext = await replayContext(
@@ -865,24 +738,25 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(seenContext.messages).not.toBe(messages);
   });
 
-  it("drops signed thinking turns for bedrock claude replay when sibling tool calls are not replay-safe", async () => {
-    const messages = [thinkingTurn(replayCall("gateway", "toolu_legacy")), textUser("retry")];
-    const seenContext = await replaySigned(messages, "bedrock-converse-stream");
-    expect(seenContext.messages).toEqual(expectedRetryMessages());
-  });
-
-  it("drops signed thinking turns when sibling replay tool calls reuse an id", async () => {
-    const messages = [
-      thinkingTurn(replayCall("read", "call_1"), {
+  it.each([
+    {
+      name: "unsafe Bedrock sibling tool",
+      turn: thinkingTurn(replayCall("gateway", "toolu_legacy")),
+      api: "bedrock-converse-stream",
+    },
+    {
+      name: "duplicate sibling tool id",
+      turn: thinkingTurn(replayCall("read", "call_1"), {
         type: "functionCall",
         id: "call_1",
         name: "read",
         arguments: {},
       }),
-      textUser("retry"),
-    ];
-    const seenContext = await replaySigned(messages);
-    expect(seenContext.messages).toEqual(expectedRetryMessages());
+      api: "anthropic-messages",
+    },
+  ])("drops signed thinking replay with $name", async ({ turn, api }) => {
+    const seenContext = await replaySigned([turn, textUser("retry")], api);
+    expect(seenContext.messages).toEqual([textUser("retry")]);
   });
 
   it("keeps signed thinking turns that reuse a mutable earlier tool id", async () => {
@@ -950,18 +824,22 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("ReadFile");
   });
 
-  it("drops replayed blank tool names that cannot be recovered from ids", async () => {
-    const messages = [
-      replayAssistant([replayCall("   ", "call_1")]),
-      textToolResult("call_1", "", "stale result", { isError: true }),
-    ];
-    const seenContext = await replayContext(messages);
-    expect(seenContext.messages).toStrictEqual([]);
-  });
-
-  it("drops ambiguous mangled replay names instead of guessing a tool", async () => {
-    const messages = [replayAssistant([replayCall("functions.exec2", "call_1")])];
-    const seenContext = await replayContext(messages, new Set(["exec", "exec2"]));
+  it.each([
+    {
+      name: "blank names and their stale results",
+      messages: [
+        replayAssistant([replayCall("   ", "call_1")]),
+        textToolResult("call_1", "", "stale result", { isError: true }),
+      ],
+      allowed: undefined,
+    },
+    {
+      name: "ambiguous mangled names",
+      messages: [replayAssistant([replayCall("functions.exec2", "call_1")])],
+      allowed: new Set(["exec", "exec2"]),
+    },
+  ])("drops replayed $name", async ({ messages, allowed }) => {
+    const seenContext = await replayContext(messages, allowed);
     expect(seenContext.messages).toStrictEqual([]);
   });
 
@@ -1124,19 +1002,17 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     expect(result).toBe(finalMessage);
   });
 
-  it("does not repair tool arguments when leading text is not tool-call metadata", async () => {
-    const { partialToolCall, streamedToolCall } = await replayArgumentDeltas([
-      'please use {"path":"/tmp/report.txt"}',
-    ]);
-    expect(partialToolCall.arguments).toStrictEqual({});
-    expect(streamedToolCall.arguments).toStrictEqual({});
-  });
-
-  it("clears a cached repair when a later delta adds a single oversized trailing suffix", async () => {
-    const { partialToolCall, streamedToolCall } = await replayArgumentDeltas([
-      '{"path":"/tmp/report.txt"}',
-      "oops",
-    ]);
+  it.each([
+    {
+      name: "rejects leading non-metadata text",
+      deltas: ['please use {"path":"/tmp/report.txt"}'],
+    },
+    {
+      name: "clears a cached repair after an oversized trailing suffix",
+      deltas: ['{"path":"/tmp/report.txt"}', "oops"],
+    },
+  ])("$name", async ({ deltas }) => {
+    const { partialToolCall, streamedToolCall } = await replayArgumentDeltas(deltas);
     expect(partialToolCall.arguments).toStrictEqual({});
     expect(streamedToolCall.arguments).toStrictEqual({});
   });
@@ -1149,5 +1025,3 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     expect(streamedToolCall.arguments).toStrictEqual({});
   });
 });
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

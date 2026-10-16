@@ -31,6 +31,28 @@ describe("stale-while-revalidate cache", () => {
     expect(refresh).toHaveBeenCalledOnce();
   });
 
+  it("retires exact cached facts while sharing a replacement load", async () => {
+    const cache = createStaleWhileRevalidateCache<{ version: number }>({
+      maxEntries: 2,
+      ttlMs: 100,
+    });
+    const first = { version: 1 };
+    await cache.read("item", async () => first);
+    cache.deleteValue(first);
+    const pending = createDeferredCore<{ version: number }>();
+    const load = vi.fn(() => pending.promise);
+    const replacement = cache.read("item", load);
+    cache.deleteValue(first);
+    const follower = cache.read("item", load);
+    const current = { version: 2 };
+    pending.resolve(current);
+    expect(await replacement).toEqual({ value: current, stale: false });
+    expect(await follower).toEqual({ value: current, stale: false });
+    cache.deleteValue(first);
+    expect(await cache.read("item", load)).toEqual({ value: current, stale: false });
+    expect(load).toHaveBeenCalledOnce();
+  });
+
   it.each(["success", "failure"] as const)(
     "bounds superseded loads and keeps the replacement after an older %s",
     async (outcome) => {

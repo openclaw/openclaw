@@ -1,10 +1,6 @@
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { iterateSessionContextMessages } from "../../../packages/agent-core/src/harness/session/session.js";
-import {
-  isSyntheticMissingToolResult,
-  SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
-} from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { projectModelContextMessages } from "../../shared/model-context-message.js";
 import type { SessionActorMemoryHistoryScope } from "./session-actor-memory-history-projection.js";
@@ -16,10 +12,7 @@ import type {
   SessionTranscriptModelContext,
   SessionTranscriptContextSnapshot,
 } from "./session-history-read.types.js";
-import {
-  MODEL_CONTEXT_NAVIGATION_KEYS,
-  MODEL_MESSAGE_NAVIGATION_KEYS,
-} from "./session-model-context-navigation.js";
+import { projectSessionModelContextNavigation } from "./session-model-context-navigation.js";
 import { projectSessionModelContext } from "./session-model-context-read.js";
 import type { ContextEntry, ModelContextRequest } from "./session-model-context-window.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
@@ -75,72 +68,6 @@ export function selectSessionActorMemoryAdmittedWindow(
   return { ...window, events: window.events.filter((row) => row.rawSeq < admission.rawSeq) };
 }
 
-function pickNavigation(record: Record<string, unknown>, keys: readonly string[]) {
-  return Object.fromEntries(
-    keys.filter((key) => Object.hasOwn(record, key)).map((key) => [key, record[key]]),
-  );
-}
-function navigationEntry(entry: SessionTreeEntry): SessionTreeEntry {
-  const projected: Pick<SessionTreeEntry, "type" | "id" | "parentId" | "timestamp"> &
-    Record<string, unknown> = {
-    ...pickNavigation({ ...entry }, MODEL_CONTEXT_NAVIGATION_KEYS),
-    type: entry.type,
-    id: entry.id,
-    parentId: entry.parentId,
-    timestamp: entry.timestamp,
-  };
-  if (entry.type === "message") {
-    const message = entry.message;
-    const original: Record<string, unknown> = { ...message };
-    const calls =
-      "content" in message && Array.isArray(message.content)
-        ? message.content.flatMap((item) =>
-            isRecord(item) && ["toolCall", "toolUse", "functionCall"].includes(item.type)
-              ? [pickNavigation(item, ["type", "id", "name"])]
-              : [],
-          )
-        : [];
-    const details = isRecord(original.details) ? original.details : {};
-    const operatorKind =
-      original.customType === "openclaw.system-update" &&
-      (details.kind === "prompt-update" || details.kind === "runtime-context")
-        ? details.kind
-        : undefined;
-    projected.message = {
-      ...pickNavigation(original, MODEL_MESSAGE_NAVIGATION_KEYS),
-      content: calls,
-      command: "",
-      output: "",
-      providerReplay: {
-        type: isRecord(original.providerReplay) ? original.providerReplay.type : null,
-      },
-      details: {
-        [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: isSyntheticMissingToolResult({
-          isError: original.isError,
-          details: original.details,
-          content: original.content,
-        }),
-        ...(operatorKind ? { kind: operatorKind } : {}),
-      },
-    };
-  } else if (entry.type === "compaction" || entry.type === "branch_summary") {
-    projected.summary = "";
-  } else if (entry.type === "custom_message") {
-    projected.content = [];
-    if (
-      entry.customType === "openclaw.system-update" &&
-      isRecord(entry.details) &&
-      (entry.details.kind === "prompt-update" || entry.details.kind === "runtime-context")
-    ) {
-      projected.details = { kind: entry.details.kind };
-    }
-  } else if (entry.type === "custom" && entry.customType === "openclaw.system-prompt") {
-    projected.data = { restart: isRecord(entry.data) && entry.data.restart === true };
-  }
-  // SAFETY: Navigation preserves every entry discriminant and control field with empty payloads.
-  return projected as SessionTreeEntry;
-}
-
 /** Model payloads are detached only after the shared byte/frame selection has finished. */
 export function readSessionActorMemoryContext(
   window: SessionActorMemoryWindow,
@@ -172,7 +99,9 @@ export function readSessionActorMemoryContext(
       }
       const seq = rows[node.index]!.rawSeq;
       originalEntries.set(seq, node.entry);
-      return [{ ...navigationEntry(node.entry), parentId: node.parentId, seq }];
+      return [
+        { ...projectSessionModelContextNavigation(node.entry), parentId: node.parentId, seq },
+      ];
     }),
     tree.nodes,
   );

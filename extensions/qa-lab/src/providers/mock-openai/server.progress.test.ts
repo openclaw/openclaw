@@ -22,10 +22,6 @@ const ERROR_PROMPT =
   "Tool progress error QA check: read `denied.txt` before answering. After the read fails, reply exactly `PROGRESS_OK`.";
 const RUNNING_OUTPUT =
   "Command still running (session lucky-slug, pid 3128). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
-const INPUT_WAIT_OUTPUT =
-  "Process exited with code 7.\n\nNo new output for 16s; this session may be waiting for input. Use process write, send-keys, submit, or paste to provide input.";
-const TIMED_OUT_OUTPUT =
-  "\n\nProcess exited with code 0.\n\nThe command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.";
 
 const APPROVAL_OUTPUT =
   "Approval required (id abc123, full abc12345).\nHost: gateway\nCWD: /workspace\nCommand:\n```sh\ntrue\n```\nMode: foreground (interactive approvals available).\nBackground mode requires pre-approved policy (allow-always or ask=off).\nReply with: /approve abc123 allow-once|allow-always|deny\nIf the short code is ambiguous, use the full id in /approve.";
@@ -191,33 +187,6 @@ const FAILURE_ALLOWED_PROMPT = EXEC_PROMPT.replace(
 );
 
 describe("background command progress", () => {
-  it("polls warning-prefixed output until terminal before emitting the marker", async () => {
-    const results = [execResult(`Task warning\n\n${RUNNING_OUTPUT}`)];
-    const expectPoll = (response: { output: Record<string, unknown>[] }) => {
-      expect(response.output).toMatchObject([{ name: "process" }]);
-      expect(JSON.parse(String(response.output[0]?.arguments))).toMatchObject({
-        action: "poll",
-        sessionId: "lucky-slug",
-      });
-    };
-    expectPoll(await requestProgress("responses", EXEC_PROMPT, results));
-    for (const output of [
-      "Process exited with code 7.\n\nProcess still running.",
-      INPUT_WAIT_OUTPUT,
-    ]) {
-      results.push(pollResult(output));
-      expectPoll(await requestProgress("responses", EXEC_PROMPT, results));
-    }
-    results.push(
-      pollResult(
-        `${TIMED_OUT_OUTPUT}\n${RUNNING_OUTPUT.replace("lucky-slug", "other-session")}\n\nProcess exited with code 0.`,
-      ),
-    );
-    expect(await requestProgress("responses", EXEC_PROMPT, results)).toMatchObject({
-      output: [{ type: "message", content: [{ text: "PROGRESS_OK" }] }],
-    });
-  });
-
   it.each([
     [
       "single-newline exit-like stdout",

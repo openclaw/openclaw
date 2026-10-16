@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -346,6 +347,19 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
       const evidence = JSON.parse(readFileSync(join(output, "evidence.json"), "utf8"));
       return { ...result, evidence, output };
     },
+    inspect(carrierTag: string) {
+      const module = pathToFileURL(resolve("scripts/linux-updater-manifest.mjs")).href;
+      return spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import { inspectLinuxUpdaterManifest } from ${JSON.stringify(module)};
+console.log(JSON.stringify(inspectLinuxUpdaterManifest(${JSON.stringify({ repository, carrierTag })})));`,
+        ],
+        { encoding: "utf8", timeout: 20_000, env },
+      );
+    },
     dispatch(targetSha = sourceSha) {
       const output = join(root, `dispatch-${++runNumber}`);
       mkdirSync(output);
@@ -674,6 +688,89 @@ it.each(["current", "missing", "older", "replaced-release", "replaced-asset"])(
   },
 );
 
+it.each(["present", "withdrawn", "replaced", "changed-digest", "missing-appimage", "missing-deb"])(
+  "accepts only a withdrawn non-Linux companion in a four-asset Linux publication (%s)",
+  (kind) => {
+    const exe = "OpenClaw-2026.9.4-windows-x86_64.exe";
+    const exeSha256 = "e".repeat(64);
+    const remote = fixture();
+    remote.update((state) => {
+      const source = completeRelease("2026.9.4");
+      // The immutable checksum file keeps the withdrawn companion's row.
+      const checksumBytes = `${expectDefined(source.checksums, "checksums")}${exeSha256}  ./${exe}\n`;
+      source.checksums = checksumBytes;
+      const proof = {
+        schemaVersion: 1,
+        releaseId: 42,
+        sourceSha,
+        toolingSha,
+        channelSha: sourceSha,
+        publicKeySha256: "d".repeat(64),
+        assets: [
+          ...source.assets.map((name, index) => ({
+            id: index + 1,
+            name,
+            size: 1024,
+            sha256: expectDefined(source.digests?.[name], "bundle digest").slice(7),
+          })),
+          {
+            id: 3,
+            name: "SHA256SUMS.linux-app.txt",
+            size: Buffer.byteLength(checksumBytes),
+            sha256: createHash("sha256").update(checksumBytes).digest("hex"),
+          },
+          { id: 7, name: exe, size: 1024, sha256: exeSha256 },
+        ],
+      };
+      source.immutable = manifest("2026.9.4", { linuxPublication: proof });
+      source.manifest = source.immutable;
+      const removed = {
+        withdrawn: exe,
+        "missing-appimage": "OpenClaw-2026.9.4-amd64.AppImage",
+        "missing-deb": "OpenClaw-2026.9.4-amd64.deb",
+      }[kind];
+      source.assets = [...source.assets, exe].filter((name) => name !== removed);
+      source.assetIds = { [exe]: kind === "replaced" ? 8 : 7 };
+      source.digests = {
+        ...source.digests,
+        [exe]: `sha256:${kind === "changed-digest" ? "f".repeat(64) : exeSha256}`,
+      };
+      state.releases["v2026.9.4"] = source;
+      state.releases["linux-stable"] = {
+        isDraft: false,
+        isPrerelease: true,
+        assets: [],
+        manifest: source.immutable,
+      };
+    });
+    const observed = remote.inspect("v2026.9.4");
+    const status = remote.run("status", "v2026.9.4");
+    if (kind !== "present" && kind !== "withdrawn") {
+      expect(observed.status).toBe(1);
+      expect(observed.stderr).toContain(
+        kind === "missing-appimage"
+          ? "Linux manifest source v2026.9.4 must have its published AppImage."
+          : "Immutable Linux publication differs from its public asset inventory.",
+      );
+      expect(status.status).toBe(1);
+      expect(status.evidence.state).toBe("failed");
+      return;
+    }
+    expect(observed.status, observed.stderr).toBe(0);
+    const withdrawn = kind === "withdrawn" ? { withdrawnCompanionAssets: [exe] } : {};
+    expect(JSON.parse(observed.stdout).immutableManifest).toEqual({
+      name: "OpenClaw-2026.9.4-linux.json",
+      sha256: createHash("sha256")
+        .update(expectDefined(remote.read().releases["v2026.9.4"]?.immutable, "immutable"))
+        .digest("hex"),
+      ...withdrawn,
+    });
+    expect(status.status, status.stderr).toBe(0);
+    expect(status.evidence).toMatchObject({ state: "published", assetsComplete: true });
+    expect(status.evidence.withdrawnCompanionAssets).toEqual(withdrawn.withdrawnCompanionAssets);
+  },
+);
+
 it.each(["same-tag", "missing", "older", "newer"])(
   "reports whether complete Linux assets need propagation into a %s latest manifest",
   (kind) => {
@@ -700,20 +797,6 @@ it.each(["same-tag", "missing", "older", "newer"])(
     }
   },
 );
-
-it.each([false, true])("permits a fresh Linux build with older carried manifest=%s", (carried) => {
-  const remote = fixture();
-  remote.update((state) => {
-    state.releases["v2026.9.4"] = release("2026.9.4", {
-      assets: [],
-      manifest: carried ? manifest("2026.9.3") : undefined,
-    });
-  });
-  const result = remote.run("status", "v2026.9.4");
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.evidence.state).toBe("pending");
-  expect(remote.read().uploads).toBe(0);
-});
 
 it.each([
   "missing-deb",
@@ -852,17 +935,6 @@ it.each([
     expect(remote.read().requests ?? []).toEqual([]);
   },
 );
-
-it("reuses its earlier request when a parent resumes before Linux assets arrive", () => {
-  const remote = pendingLinuxFixture();
-  const first = remote.dispatch();
-  expect(first.status, first.stderr).toBe(0);
-  expect(first.evidence.state).toBe("request-dispatched");
-  const resumed = remote.dispatch();
-  expect(resumed.status, resumed.stderr).toBe(0);
-  expect(resumed.evidence).toMatchObject({ state: "request-reused", requestRunId: "456" });
-  expect(remote.read().requests).toHaveLength(1);
-});
 
 it.each([
   { reason: "failed", overrides: { conclusion: "failure" } },

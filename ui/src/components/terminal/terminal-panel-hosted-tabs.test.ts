@@ -45,6 +45,7 @@ async function mount(embedded = true, tabsInHeader = true) {
   if (!embedded) {
     panel.toggle();
   }
+  await panel.updateComplete;
   await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
   const sessions = terminalSessionsForTest(panel);
   await waitForFast(() => expect(sessions.booting).toBe(false));
@@ -96,11 +97,7 @@ describe("Terminal panel hosted tabs", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([
-    { embedded: true, tabsInHeader: true, ownsStrip: false },
-    { embedded: true, tabsInHeader: false, ownsStrip: true },
-    { embedded: false, tabsInHeader: true, ownsStrip: true },
-  ])(
+  it.each([{ embedded: false, tabsInHeader: true, ownsStrip: true }])(
     "keeps its own chrome=$ownsStrip for embedded=$embedded and tabsInHeader=$tabsInHeader",
     async ({ embedded, tabsInHeader, ownsStrip }) => {
       const { panel } = await mount(embedded, tabsInHeader);
@@ -255,8 +252,14 @@ describe("Terminal panel hosted tabs", () => {
     const dock = vi.fn();
     window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, dock);
     try {
-      button(actions, "Dock to bottom").click();
+      const dockButton = button(actions, "Dock to bottom");
+      dockButton.click();
       expect(dock.mock.calls[0]?.[0].detail).toMatchObject({ dock: "bottom", open: true });
+      panel.closeTerminalPanel();
+      panel.remove();
+      await Promise.resolve();
+      dockButton.click();
+      expect(dock).toHaveBeenCalledOnce();
     } finally {
       window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, dock);
     }

@@ -246,25 +246,36 @@ async function narrowestRailTabLabel(page: Page): Promise<number> {
     );
 }
 
-async function expectExpandedSidePanelFillsRegion(page: Page): Promise<void> {
+async function expectExpandedSidePanelFillsRegion(
+  page: Page,
+  placement: "main" | "side" = "main",
+): Promise<void> {
   const geometry = await page
-    .locator('.sidebar-region [data-region="main"]')
-    .evaluate((element) => {
+    .locator(`.sidebar-region [data-region="${placement}"]:not([hidden])`)
+    .evaluate((element, slot) => {
       const panel = element.getBoundingClientRect();
       const shell = element.closest(".sidebar-region");
       const region = shell?.getBoundingClientRect();
       const header = shell?.querySelector(".chat-pane__header")?.getBoundingClientRect();
+      const tabs =
+        slot === "side"
+          ? shell?.querySelector('[data-region-header="side"]')?.getBoundingClientRect()
+          : undefined;
       if (!region || !header) {
         throw new Error("Focused panel requires its task toolbar and sidebar region");
+      }
+      if (slot === "side" && !tabs) {
+        throw new Error("A full-width side panel keeps its tab strip below the task toolbar");
       }
       return {
         bottom: Math.abs(panel.bottom - region.bottom),
         left: Math.abs(panel.left - region.left),
         right: Math.abs(panel.right - region.right),
         top: Math.abs(header.top - region.top),
-        headerGap: Math.abs(panel.top - header.bottom),
+        headerGap: Math.abs(panel.top - (tabs?.bottom ?? header.bottom)),
+        tabGap: tabs ? Math.abs(tabs.top - header.bottom) : 0,
       };
-    });
+    }, placement);
   for (const delta of Object.values(geometry)) {
     expect(delta).toBeLessThanOrEqual(1);
   }
@@ -887,10 +898,13 @@ suite.define(() => {
         expect(companionGeometry.railBottom).toBeLessThanOrEqual(companionGeometry.bodyBottom + 1);
 
         const mainComposer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+        expect(await mainComposer.isVisible()).toBe(false);
+        await selectChatLayoutAction(page, "Minimize side panel");
         await mainComposer.click();
         expect(await mainComposer.evaluate((element) => element === document.activeElement)).toBe(
           true,
         );
+        await selectChatLayoutAction(page, "Side panel");
         const input = companion.getByRole("textbox", { name: "Ask in side chat" });
         await input.fill("Can I use side chat here?");
         await companion.getByRole("button", { name: "Ask", exact: true }).click();
@@ -908,7 +922,6 @@ suite.define(() => {
         await captureRichPanel(page, "rails-side-chat-mobile-light");
         await closeChatLayoutMenu(page);
 
-        await focusChatSidePanel(page);
         await expect
           .poll(() =>
             page
@@ -916,7 +929,7 @@ suite.define(() => {
               .evaluate((element) => getComputedStyle(element).display),
           )
           .toBe("none");
-        await expectExpandedSidePanelFillsRegion(page);
+        await expectExpandedSidePanelFillsRegion(page, "side");
         await captureRichPanel(page, "rails-tabs-mobile-light");
       },
     );

@@ -124,6 +124,8 @@ plugin code registered with `api.registerCliBackend(...)`.
 4. Parses output (JSON or plain text) and returns the final text.
 5. Persists session ids per backend so follow-ups reuse the same CLI session.
 
+Claude CLI startup hook events are consumed in order while initialization completes, so a burst of `SessionStart` hooks does not stall the first turn. Restricted runs continue to disable native hooks.
+
 Claude stream-json backends also emit live line-count progress while `write`,
 `edit`, and `apply_patch` arguments stream. Progress contains only the tool id,
 name, and added/removed line counts, with at most four updates per second per
@@ -189,6 +191,11 @@ an answer does not end the admitted turn or grant its background work another tu
 The `openclaw agent` command also has its own request deadline. Its 600-second fallback default applies to that command invocation, not to ordinary Gateway turns. See [`openclaw agent`](/cli/agent).
 
 ### Claude CLI specifics
+
+For channels that deliver one final reply per turn, a Claude Code Stop-hook
+rejection discards the rejected reply segment, including when Claude runs a tool
+before rewriting. A `NO_REPLY` rewrite stays silent. Ordinary tool-split replies
+still preserve substantive pre-tool text.
 
 Interrupted turns can retain ordinary partial prose. If an unfinished reply contains
 standalone tool-protocol markup outside a code example, OpenClaw discards that
@@ -392,6 +399,20 @@ have a separate revision from the active database.
 Incognito history uses a request-scoped memory index and never writes that index
 to disk. No migration or update repair is required.
 
+When a restricted completion turn runs in a separate Claude session, the next
+ordinary turn can resume a session that never saw that result. OpenClaw carries
+completion replies recorded since the last ordinary Claude reply into the resumed
+turn, including their prompts when saved. This uses the canonical transcript;
+it adds no stored state and survives Gateway restarts. The newest eight exchanges
+are included, with each string capped at 2,000 characters and labeled as historical
+records whose current facts should be verified. A completion that already ran in
+the bound session may appear once more as quoted context.
+
+This replay requires the resuming turn's [history account boundary](#history-account-boundaries).
+When that boundary withholds saved text, the metadata-only session-gap note counts
+the completion turns instead, with a `sessions_history` hint when that tool is
+available. Completion tool restrictions remain unchanged.
+
 ### History account boundaries
 
 Native session compatibility and permission to replay saved OpenClaw history are separate. Clearing or replacing a native binding does not establish ownership of older transcript rows. OpenClaw records a private account fingerprint and contiguous transcript coverage before an admitted CLI turn, then advances coverage with that turn’s stored transcript writes. It never stores credential values in this metadata.
@@ -569,6 +590,12 @@ The loopback bridge sends keepalive bytes while a tool response or notification
 stream is idle, so HTTP idle timeouts do not interrupt long-running tools. These
 bytes are not tool results or agent progress; client request deadlines and the
 current model attempt's timeout still apply.
+
+Each loopback response uses `Connection: close` so clients cannot reuse a pooled
+socket as the server closes it after an idle timeout. The connection closes only
+when the response ends; long-running tool responses and SSE notification streams
+remain open until completion or shutdown. Each later request opens a new loopback
+TCP connection.
 
 The shared listener remains available after the turn that first started it completes.
 Later calls use their own run's permissions and caller liveness, without retaining

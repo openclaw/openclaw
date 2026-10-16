@@ -70,39 +70,24 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (!entry) {
     return [];
   }
-  const flags: string[] = [];
-  const think = entry?.thinkingLevel;
-  if (typeof think === "string" && think.length > 0) {
-    flags.push(`think:${think}`);
+  const stringFlag = (label: string, value: unknown) =>
+    typeof value === "string" && value.length > 0 ? `${label}:${value}` : undefined;
+  let fastFlag: string | undefined;
+  if (entry.fastMode === "auto" || entry.fastMode === "ultrafast") {
+    fastFlag = `fast:${entry.fastMode}`;
+  } else if (typeof entry.fastMode === "boolean") {
+    fastFlag = entry.fastMode ? "fast" : "fast:off";
   }
-  const verbose = entry?.verboseLevel;
-  if (typeof verbose === "string" && verbose.length > 0) {
-    flags.push(`verbose:${verbose}`);
-  }
-  if (entry?.fastMode === "auto" || entry?.fastMode === "ultrafast") {
-    flags.push(`fast:${entry.fastMode}`);
-  } else if (typeof entry?.fastMode === "boolean") {
-    flags.push(entry.fastMode ? "fast" : "fast:off");
-  }
-  const reasoning = entry?.reasoningLevel;
-  if (typeof reasoning === "string" && reasoning.length > 0) {
-    flags.push(`reasoning:${reasoning}`);
-  }
-  const elevated = entry?.elevatedLevel;
-  if (typeof elevated === "string" && elevated.length > 0) {
-    flags.push(`elevated:${elevated}`);
-  }
-  if (entry?.systemSent) {
-    flags.push("system");
-  }
-  if (entry?.abortedLastRun) {
-    flags.push("aborted");
-  }
-  const sessionId = entry.sessionId;
-  if (typeof sessionId === "string" && sessionId.length > 0) {
-    flags.push(`id:${sessionId}`);
-  }
-  return flags;
+  return [
+    stringFlag("think", entry.thinkingLevel),
+    stringFlag("verbose", entry.verboseLevel),
+    fastFlag,
+    stringFlag("reasoning", entry.reasoningLevel),
+    stringFlag("elevated", entry.elevatedLevel),
+    entry.systemSent ? "system" : undefined,
+    entry.abortedLastRun ? "aborted" : undefined,
+    stringFlag("id", entry.sessionId),
+  ].filter((flag): flag is string => flag !== undefined);
 };
 
 function compareSessionCandidatesByUpdatedAt(
@@ -112,18 +97,28 @@ function compareSessionCandidatesByUpdatedAt(
   return (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0);
 }
 
-async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
+async function prepareSessionStatusDetails(
+  cfg: OpenClawConfig,
+  now: number,
+  candidates: readonly SessionEntrySummary[],
+) {
   const {
     classifySessionKey,
     resolveConfiguredStatusModelRef,
     resolveAuthoredModelContextTokens,
     resolveContextTokensForModel,
     resolveSessionRuntime,
+    readSessionRuntimeMetadata,
     resolveSessionModelRef,
     resolveStatusModelComparisonLabel,
     resolveStatusModelLookupRef,
     createStatusModelContextResolver,
   } = await loadStatusSummaryRuntimeModule();
+  // Read runtime metadata once for every displayed row, including overlapping windows.
+  const metadata = await readSessionRuntimeMetadata(cfg, candidates);
+  const metadataByCandidate = new Map(
+    candidates.map((candidate, index) => [candidate, metadata[index] ?? null]),
+  );
   const resolveModelContext = await createStatusModelContextResolver(cfg);
 
   const resolved = resolveConfiguredStatusModelRef({
@@ -150,9 +145,9 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
 
   // Aggregate rows reuse this request's completed agent projection, with independent DTOs.
   const sessionRows = new Map<SessionEntrySummary, SessionStatus>();
-  const buildSessionRows = async (candidates: SessionEntrySummary[]) =>
+  const buildSessionRows = async (rows: SessionEntrySummary[]) =>
     Promise.all(
-      candidates.map(async (candidate) => {
+      rows.map(async (candidate) => {
         const cached = sessionRows.get(candidate);
         if (cached) {
           return { ...cached, flags: [...cached.flags] };
@@ -209,13 +204,14 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
         // Session rows show the live selected model and warn for user-pinned
         // differences as well as runtime fallback selections (#96126).
-        const runtime = await resolveSessionRuntime({
+        const runtime = resolveSessionRuntime({
           cfg,
           entry,
           provider: lookupModel.provider,
           model: lookupModelId ?? "",
           agentId,
           sessionKey: key,
+          acpMeta: metadataByCandidate.get(candidate) ?? null,
         });
         const modelContext = await resolveModelContext(
           lookupModel.provider,
@@ -467,8 +463,6 @@ export async function getStatusSummary(
   );
   const now = Date.now();
 
-  const sessionDetails = includeSensitive ? await prepareSessionStatusDetails(cfg, now) : undefined;
-
   const sessionStores =
     options.sessionStores ??
     (await readStatusSessionStores(
@@ -477,6 +471,16 @@ export async function getStatusSummary(
       includeSensitive ? STATUS_RECENT_SESSION_LIMIT : 0,
       options.sessionRowProjection,
     ));
+  const recentCandidates = sortAndLimitBy(
+    sessionStores.recent,
+    STATUS_RECENT_SESSION_LIMIT,
+    compareSessionCandidatesByUpdatedAt,
+  );
+  const sessionDetails = includeSensitive
+    ? await prepareSessionStatusDetails(cfg, now, [
+        ...new Set([...recentCandidates, ...sessionStores.byAgent.flatMap(({ recent }) => recent)]),
+      ])
+    : undefined;
   const byAgent = await Promise.all(
     sessionStores.byAgent.map(async ({ agent, path, count, recent }) => ({
       agentId: agent.id,
@@ -489,15 +493,7 @@ export async function getStatusSummary(
       recent: sessionDetails ? await sessionDetails.buildSessionRows(recent) : [],
     })),
   );
-  const recent = sessionDetails
-    ? await sessionDetails.buildSessionRows(
-        sortAndLimitBy(
-          sessionStores.recent,
-          STATUS_RECENT_SESSION_LIMIT,
-          compareSessionCandidatesByUpdatedAt,
-        ),
-      )
-    : [];
+  const recent = sessionDetails ? await sessionDetails.buildSessionRows(recentCandidates) : [];
   const hostDesktopStatus =
     options.hostDesktopStatus ??
     (

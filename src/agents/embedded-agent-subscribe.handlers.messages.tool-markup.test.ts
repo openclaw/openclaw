@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
+import * as codeRegions from "../shared/text/code-regions.js";
 import { consumePendingAssistantReplyDirectivesIntoReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import { extractAssistantStreamSnapshot } from "./embedded-agent-subscribe.handlers.messages.snapshot.js";
 import {
@@ -18,7 +19,7 @@ const markup = [
   "<tool_call>exec<arg_key>command</arg_key><arg_value>[[reply_to:hidden]]\nMEDIA:/tmp/hidden.png</arg_value></tool_call>",
 ];
 
-describe.each(["ollama", "openai-completions", "openai-responses"] as const)(
+describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-responses"] as const)(
   "%s tool markup delivery",
   (api) => {
     function message(text: string) {
@@ -34,6 +35,36 @@ describe.each(["ollama", "openai-completions", "openai-responses"] as const)(
         content: [{ type: "text" as const, text }],
       };
     }
+
+    it("bounds Markdown parse work after quoted tool XML in token-sized deltas", async () => {
+      const context = createMessageUpdateContext();
+      const example = `\`\`\`xml\n${markup[2]}\n\`\`\`\n\n`;
+      const continuation = "Explanation.\n\n- Item\n\n```python\nprint('hello')\n```\n\n".repeat(
+        128,
+      );
+      const source = example + continuation;
+      const regions = vi.spyOn(codeRegions, "findCodeRegions");
+      try {
+        let text = "";
+        for (let offset = 0; offset < source.length; offset += 4) {
+          const delta = source.slice(offset, offset + 4);
+          text += delta;
+          const partial = message(text);
+          await updateMessage(context, {
+            message: partial,
+            assistantMessageEvent: { type: "text_delta", delta, partial, contentIndex: 0 },
+          });
+        }
+        expect(context.state.assistantStream?.text).toBe(source.trimEnd());
+        const parsedCharacters = regions.mock.calls.reduce(
+          (total, [parsed]) => total + parsed.length,
+          0,
+        );
+        expect(parsedCharacters).toBeLessThan(source.length * 8);
+      } finally {
+        regions.mockRestore();
+      }
+    });
 
     it("keeps markup context across adjacent text and whitespace blocks", () => {
       const partial = message("");

@@ -11,10 +11,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import {
-  listSessionReactions,
-  setSessionReactionAsync,
-} from "../../config/sessions/session-reaction-store.js";
+import { setSessionReactionAsync } from "../../config/sessions/session-reaction-store.js";
+import { listSessionReactions } from "../../config/sessions/session-reaction-store.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createCurrentPromptReaction } from "../../gateway/current-prompt-reaction.js";
 import {
@@ -126,11 +124,12 @@ describe("admitted WebChat prompt reactions", () => {
     return source;
   }
 
-  function mintForRecorder(
+  function mintTurn(
     input: ReturnType<typeof createUserTurnTranscriptRecorder>,
     executionRunId: string,
+    kind: { isHeartbeat?: boolean; internalEventExecution?: boolean } = {},
   ) {
-    const minted = mintReplyMessageActionTurnCapability(
+    return mintReplyMessageActionTurnCapability(
       {
         followupRun: {
           prompt: "Prompt",
@@ -147,16 +146,26 @@ describe("admitted WebChat prompt reactions", () => {
             messageProvider: "webchat",
             timeoutMs: 1000,
             blockReplyBreak: "message_end",
+            ...(kind.internalEventExecution && {
+              internalEventExecution: { onStarted() {}, onTerminal() {} },
+            }),
           },
         },
         sessionCtx: { Provider: "webchat", MessageSid: runId },
         opts: {
           dashboardReadAdmission: { ...scope, runId, assertCurrent: run.assertSourceCurrent },
         },
-        isHeartbeat: false,
+        isHeartbeat: kind.isHeartbeat === true,
       },
       executionRunId,
     );
+  }
+
+  function mintForRecorder(
+    input: ReturnType<typeof createUserTurnTranscriptRecorder>,
+    executionRunId: string,
+  ) {
+    const minted = mintTurn(input, executionRunId);
     if (!minted) {
       throw new Error("Expected a recorder-owned reaction capability");
     }
@@ -229,6 +238,37 @@ describe("admitted WebChat prompt reactions", () => {
     },
   );
 
+  it.each([
+    ["webchat", { isHeartbeat: true }],
+    ["discord", { internalEventExecution: true }],
+  ])(
+    "fails prompt reactions locally on a %s-routed run that mints no grant (%o)",
+    async (currentChannelProvider, kind) => {
+      const nextRunId = runId + "-next";
+      const grant = mintTurn(recorder, nextRunId, kind);
+      expect(grant).toBeUndefined();
+      const nextRun = tool({
+        currentChannelProvider,
+        runId: nextRunId,
+        messageActionTurnCapability: grant,
+      });
+      for (const args of [
+        {},
+        { channel: "WebChat" },
+        { target: "channel:external", messageId: "external-message" },
+      ]) {
+        await expect(execute(args, nextRun)).rejects.toThrow("No prompt here permits reactions");
+      }
+      expect(external).not.toHaveBeenCalled();
+      expect(broadcast).not.toHaveBeenCalled();
+      await execute(
+        { channel: "discord", target: "channel:external", messageId: "external-message" },
+        nextRun,
+      );
+      expect(external).toHaveBeenCalledOnce();
+    },
+  );
+
   it("commits the agent's current-prompt reaction and publishes only actual changes", async () => {
     const messageId = await persist();
     expect(messageId).not.toBe(runId);
@@ -253,7 +293,7 @@ describe("admitted WebChat prompt reactions", () => {
         result: added,
       }),
     ).toBe(false);
-    expect((await listSessionReactions(scope, { sessionId: scope.sessionId }))[messageId]).toEqual([
+    expect(listSessionReactions(scope, { sessionId: scope.sessionId })[messageId]).toEqual([
       {
         emoji: "👍",
         count: 2,
@@ -278,7 +318,7 @@ describe("admitted WebChat prompt reactions", () => {
     expect(removed.details).not.toHaveProperty("messageDelivery.sourceReplyDelivered");
     await execute({ remove: true }, selected);
     expect(broadcast).toHaveBeenCalledTimes(2);
-    expect((await listSessionReactions(scope, { sessionId: scope.sessionId }))[messageId]).toEqual([
+    expect(listSessionReactions(scope, { sessionId: scope.sessionId })[messageId]).toEqual([
       { emoji: "👍", count: 1, identities: [{ id: "human" }] },
     ]);
     expect(external).not.toHaveBeenCalled();
@@ -322,7 +362,7 @@ describe("admitted WebChat prompt reactions", () => {
     }
     expect(broadcast).not.toHaveBeenCalled();
     expect(external).not.toHaveBeenCalled();
-    expect(await listSessionReactions(scope, { sessionId: scope.sessionId })).toEqual({});
+    expect(listSessionReactions(scope, { sessionId: scope.sessionId })).toEqual({});
   });
 
   it("keeps source-reply-only tools send-only even with a current-prompt grant", async () => {
@@ -333,7 +373,7 @@ describe("admitted WebChat prompt reactions", () => {
     await expect(execute({ final: true }, selected)).rejects.toThrow('permit only action "send"');
     expect(broadcast).not.toHaveBeenCalled();
     expect(external).not.toHaveBeenCalled();
-    expect(await listSessionReactions(scope, { sessionId: scope.sessionId })).toEqual({});
+    expect(listSessionReactions(scope, { sessionId: scope.sessionId })).toEqual({});
   });
 
   it("honors the message action allowlist without widening the discovered schema", async () => {
@@ -371,7 +411,7 @@ describe("admitted WebChat prompt reactions", () => {
     expect(commitRequests).toBeGreaterThan(0);
     probe.mockRestore();
     expect(broadcast).not.toHaveBeenCalled();
-    expect(await listSessionReactions(scope, { sessionId: scope.sessionId })).toEqual({});
+    expect(listSessionReactions(scope, { sessionId: scope.sessionId })).toEqual({});
   });
 
   it.each(["run close", "revocation", "expiry"])(
@@ -395,7 +435,7 @@ describe("admitted WebChat prompt reactions", () => {
       await expect(execute({}, rebuilt)).rejects.toThrow();
       expect(broadcast).not.toHaveBeenCalled();
       expect(external).not.toHaveBeenCalled();
-      expect(await listSessionReactions(scope, { sessionId: scope.sessionId })).toEqual({});
+      expect(listSessionReactions(scope, { sessionId: scope.sessionId })).toEqual({});
     },
   );
 
@@ -464,7 +504,7 @@ describe("admitted WebChat prompt reactions", () => {
       );
       expect(result.details).toMatchObject({ messageId: queuedId, changed: true });
       expect(
-        (await listSessionReactions(scope, { sessionId: scope.sessionId }))[originalId],
+        listSessionReactions(scope, { sessionId: scope.sessionId })[originalId],
       ).toBeUndefined();
       sourceCurrent = false;
       await expect(
@@ -513,9 +553,7 @@ describe("admitted WebChat prompt reactions", () => {
     bindSource(steered);
     await steered.stageApproved?.({ runId: runId + "-steer", assertCurrent: () => {} });
     await execute({}, selected);
-    expect(
-      (await listSessionReactions(scope, { sessionId: scope.sessionId }))[originalId],
-    ).toBeDefined();
+    expect(listSessionReactions(scope, { sessionId: scope.sessionId })[originalId]).toBeDefined();
     expect(steered.getAdmissionReceipt()).toBeUndefined();
     const prepared = await steered.resolveMessage();
     if (!prepared) {
@@ -540,9 +578,7 @@ describe("admitted WebChat prompt reactions", () => {
     expect(steeredId).not.toBe(originalId);
     const result = await execute({}, selected);
     expect(result.details).toMatchObject({ messageId: steeredId, changed: true });
-    expect(
-      (await listSessionReactions(scope, { sessionId: scope.sessionId }))[originalId],
-    ).toHaveLength(1);
+    expect(listSessionReactions(scope, { sessionId: scope.sessionId })[originalId]).toHaveLength(1);
     sourceCurrent = false;
     await expect(execute({ remove: true }, selected)).rejects.toThrow(
       "Original prompt authority revoked",
@@ -555,7 +591,7 @@ describe("admitted WebChat prompt reactions", () => {
     await upsertSessionEntryCore(scope, { sessionId: "successor-session", updatedAt: 2 });
     await expect(execute({}, selected)).rejects.toThrow("session changed before reaction mutation");
     expect(broadcast).not.toHaveBeenCalled();
-    expect(await listSessionReactions(scope, { sessionId: "successor-session" })).toEqual({});
+    expect(listSessionReactions(scope, { sessionId: "successor-session" })).toEqual({});
   });
 
   it("keeps explicit external reactions separate and never substitutes the WebChat run ID", async () => {
@@ -586,8 +622,6 @@ describe("admitted WebChat prompt reactions", () => {
       "currentPromptReaction",
     );
     expect(broadcast).not.toHaveBeenCalled();
-    expect(
-      (await listSessionReactions(scope, { sessionId: scope.sessionId }))[messageId],
-    ).toBeUndefined();
+    expect(listSessionReactions(scope, { sessionId: scope.sessionId })[messageId]).toBeUndefined();
   });
 });

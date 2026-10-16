@@ -43,6 +43,7 @@ import type { HeartbeatDeps } from "./heartbeat-runner.js";
 import {
   readSessionStoreForTest,
   seedSessionStore,
+  setHeartbeatSilentCompletion,
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
@@ -129,6 +130,7 @@ function runProjectionWake(
   getReplyFromConfig: HeartbeatDeps["getReplyFromConfig"],
   wake: "exec-event" | "manual" | "cron" = "exec-event",
 ) {
+  setRuntimeConfigSnapshot(scenario.cfg);
   return runHeartbeatOnce({
     cfg: scenario.cfg,
     agentId: "main",
@@ -355,22 +357,28 @@ it.each(["automatic", "message_tool"] as const)(
       enqueueSystemEvent("Exec completed (already-handled, code 0) :: Previously reported output", {
         sessionKey: scenario.sessionKey,
       });
-      const reply = vi.fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>().mockResolvedValue(
-        visibleReplies === "automatic"
-          ? { text: "NO_REPLY" }
-          : createHeartbeatToolResponsePayload({
-              outcome: "done",
-              notify: false,
-              summary: "Result already handled; no new user-facing information.",
-            }),
-      );
+      const reply = vi
+        .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
+        .mockImplementation(async (_ctx, options) => {
+          if (visibleReplies === "automatic") {
+            setHeartbeatSilentCompletion(options);
+            return undefined;
+          }
+          return createHeartbeatToolResponsePayload({
+            outcome: "done",
+            notify: false,
+            summary: "Result already handled; no new user-facing information.",
+          });
+        });
 
       // The runner must offer silence and retire the event without publishing a recap.
       expect((await runProjectionWake(scenario, reply)).status).toBe("ran");
       const prompt = reply.mock.calls[0]?.[0].Body;
       expect(prompt).toContain("duplicate or superseded results");
       expect(prompt).toContain(
-        visibleReplies === "automatic" ? "reply NO_REPLY only" : "notify=false",
+        visibleReplies === "automatic"
+          ? "reply with exactly NO_REPLY as the entire final answer"
+          : "notify=false",
       );
       expect(await readProjectionMessages(scenario)).toEqual([]);
       expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);

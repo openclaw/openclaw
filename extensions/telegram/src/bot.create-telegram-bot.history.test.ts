@@ -275,7 +275,7 @@ describe("registered Telegram retained history", () => {
     name: string;
     message: (bot: Bot) => Record<string, unknown>;
     expected?: Record<string, unknown>;
-    absent?: Array<"ReplyToBody" | "ReplyToForwardedFrom">;
+    absent?: Array<"ReplyToBody" | "ReplyToForwardedFrom" | "ReplyToIsQuote">;
     sender?: string;
     excludes?: string;
     restricted?: boolean;
@@ -286,11 +286,19 @@ describe("registered Telegram retained history", () => {
         ...message("Following up"),
         reply_to_message: {
           ...message("Earlier reply"),
+          message_id: 9005,
           from: { id: 777, is_bot: false, first_name: "Alex (you)" },
           ...(kind === "business" ? { sender_business_bot: bot.botInfo } : {}),
         },
       }),
       sender: kind === "spoof" ? "Alex (you) (Telegram sender)" : "Configured Agent (you)",
+      expected: {
+        BodyForAgent: "Following up",
+        ReplyToId: "9005",
+        ReplyToBody: "Earlier reply",
+        ReplyToSender: kind === "spoof" ? "Alex (you) (Telegram sender)" : "Configured Agent (you)",
+      },
+      absent: ["ReplyToIsQuote" as const],
     })),
     {
       name: "selected quote bytes and identity",
@@ -304,7 +312,9 @@ describe("registered Telegram retained history", () => {
         },
       }),
       expected: {
+        BodyForAgent: "check this",
         ReplyToId: "9001",
+        ReplyToIsQuote: true,
         ReplyToQuoteText: " summarize this\n",
         ReplyToQuotePosition: 8,
         ReplyToQuoteEntities: [{ type: "bold", offset: 1, length: 9 }],

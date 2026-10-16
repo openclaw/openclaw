@@ -211,9 +211,11 @@ Never rewrite existing receipt IDs or history joins. Use one canonical row codec
 the new timed-key tag is only an encoding discriminator, never authority. Queued
 rows without a recoverable timed key, including old random IDs, become skipped
 with their marker cleared atomically. Keep `request_run_id` for acknowledged-run
-lookup and leave the natural deadline untouched: ordinary catch-up handles overdue
-schedules, while manual force cannot consume a future natural slot. Restore
-finalized history first, then recover queued/active rows before admitting new work.
+lookup. When catch-up finds a terminal receipt for the current scheduled slot,
+consume that slot by recomputing the next deadline in the request transaction;
+the recorded skip remains in history. Manual force cannot consume a future
+natural slot. Restore finalized history first, then recover queued/active rows
+before admitting new work.
 No Doctor format migration is necessary: Doctor already leaves running-marker
 recovery to scheduler startup (`src/commands/doctor/cron/index.ts:52`); its existing
 legacy-shape migrations remain the only normalization path. Preserve backups and

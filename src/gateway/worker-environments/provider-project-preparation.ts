@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { WorkerProjectPreparationIdentity } from "./preparation-identity.js";
+import type { WorkerProjectPreparationIdentity } from "./preparation-identity.schema.js";
 import { createWorkerProjectPreparation } from "./project-preparation.js";
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -24,7 +24,7 @@ export async function prepareWorkerProviderProject(params: {
           assertCurrent: params.requireCurrent,
           signal: params.signal,
           knownRecipe: preparation
-            ? () => ({ project, setupRecipe: preparation.setupRecipe, recipe: preparation.recipe })
+            ? () => ({ setupRecipe: preparation.setupRecipe, recipe: preparation.recipe })
             : undefined,
         })
       : undefined;

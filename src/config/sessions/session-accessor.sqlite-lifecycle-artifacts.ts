@@ -212,7 +212,7 @@ function* planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
 }
 
 /** Called inside the lifecycle writer FIFO; only candidate stores need writable preparation. */
-export async function prepareSessionLifecycleArtifactCleanup(
+export async function prepareSessionLifecycleArtifactCleanupForMaintenance(
   databaseOptions: OpenClawAgentDatabaseOptions,
   params: Parameters<typeof planSessionLifecycleArtifactCleanup>[1],
 ): Promise<LifecycleArtifactCleanupPlan> {

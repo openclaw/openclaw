@@ -272,6 +272,11 @@ describe("SQLite worker slots", () => {
         id: 1,
         key: "fixture",
         databasePath: "/state/openclaw.sqlite",
+        stateAccess: {
+          canonicalPath: "/state/openclaw.sqlite",
+          assertAccessAllowed() {},
+          assertReadAllowed() {},
+        },
         pathReferences: new Map(),
         moduleUrl: "file:///openclaw/dist/device-auth-store.sqlite.js",
         inputHash: "fixture",

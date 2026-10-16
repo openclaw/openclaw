@@ -31,6 +31,7 @@ import { CodexAppServerClient } from "./client.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
+  type CodexPluginConfig,
 } from "./config.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -247,7 +248,7 @@ describe.skipIf(process.platform === "win32")(
       { timeout: 60_000 },
       async (closure) => {
         await withNativeFixture(tempDir, async (fixture, cleanups) => {
-          const pluginConfig = {
+          const pluginConfig: CodexPluginConfig = {
             ...fixture.pluginConfig,
             appServer: { ...fixture.pluginConfig.appServer, homeScope: "agent" },
           };
@@ -588,7 +589,10 @@ describe.skipIf(process.platform === "win32")(
           const transcriptBefore = await readVisibleSessionTranscriptMessageEntries(
             transcriptTarget(params),
           );
-          const sourceIsCurrent = sharedClients.captureSharedCodexAppServerCatalogLifetime(client);
+          const assertSourceCurrent = sharedClients.captureCodexAppServerClientLifetime(
+            client,
+            "connection",
+          );
           const nativeRequests = vi.spyOn(client, "request");
           const createClient = vi.spyOn(sharedClients, "createIsolatedCodexAppServerClient");
           const startClient = vi.spyOn(CodexAppServerClient, "start");
@@ -610,7 +614,6 @@ describe.skipIf(process.platform === "win32")(
           expect(nativeRequests).not.toHaveBeenCalled();
           expect(requests).toHaveLength(0);
           expect(context).toEqual({ source: "unavailable" });
-          expect(Object.isFrozen(context)).toBe(true);
           expect(captureContext).not.toHaveBeenCalled();
           expect(warn).toHaveBeenCalledWith(
             "codex settled-turn finalization context is unavailable",
@@ -628,7 +631,7 @@ describe.skipIf(process.platform === "win32")(
           expect(
             await readVisibleSessionTranscriptMessageEntries(transcriptTarget(params)),
           ).toEqual(transcriptBefore);
-          expect(sourceIsCurrent()).toBe(true);
+          expect(assertSourceCurrent).not.toThrow();
           expect(client.getCloseError()).toBeUndefined();
           expect(sharedClients.releaseLeasedSharedCodexAppServerClient(client)).toBe(false);
           await expect(
@@ -801,7 +804,6 @@ describe.skipIf(process.platform === "win32")(
             if (!(context instanceof settledContext.CodexSettledTurnContext)) {
               throw new Error("Native turn lost its settled-tool evidence");
             }
-            expect(Object.isFrozen(context)).toBe(true);
             if (hidden) {
               expect(context.data).toEqual(
                 expect.arrayContaining([

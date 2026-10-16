@@ -15,26 +15,20 @@ const mocks = vi.hoisted(() => {
     parameters: { type: "object", properties: {} },
     execute: vi.fn(),
   });
-  const backgroundMediaTool = (name: string, options?: MediaGenerateToolOptions): AnyAgentTool => ({
+  const backgroundMediaTool = (name: string): AnyAgentTool => ({
     ...stubTool(name),
-    execute: async () => {
-      await options?.onAsyncTaskStarted?.("Media generation started.");
-      return { content: [{ type: "text", text: "Background task started." }], details: {} };
-    },
+    execute: async () => ({
+      content: [{ type: "text", text: "Background task started." }],
+      details: {},
+    }),
   });
   return {
     cron: vi.fn((_options: unknown) => stubTool("cron")),
     transcripts: vi.fn((_options: unknown) => stubTool("transcripts")),
     status: vi.fn((_options: unknown) => stubTool("session_status")),
-    image: vi.fn((options?: MediaGenerateToolOptions) =>
-      backgroundMediaTool("image_generate", options),
-    ),
-    music: vi.fn((options?: MediaGenerateToolOptions) =>
-      backgroundMediaTool("music_generate", options),
-    ),
-    video: vi.fn((options?: MediaGenerateToolOptions) =>
-      backgroundMediaTool("video_generate", options),
-    ),
+    image: vi.fn((_options?: MediaGenerateToolOptions) => backgroundMediaTool("image_generate")),
+    music: vi.fn((_options?: MediaGenerateToolOptions) => backgroundMediaTool("music_generate")),
+    video: vi.fn((_options?: MediaGenerateToolOptions) => backgroundMediaTool("video_generate")),
     textToSpeech: vi.fn<typeof import("../tts/tts.js").textToSpeech>(async () => ({
       success: true,
       audioPath: "/tmp/openclaw/tts-config-test.opus",
@@ -156,6 +150,7 @@ describe("createOpenClawTools context wiring", () => {
       "agent:main:main",
       "agent:main:qa-channel:default:direct:media-requester",
     ],
+    ["agent:main:policy", "agent:work:run", "agent:main:policy"],
   ])(
     "passes a separate durable requester key for background media from %s",
     async (agentSessionKey, runSessionKey, taskSessionKey) => {
@@ -163,8 +158,13 @@ describe("createOpenClawTools context wiring", () => {
         disableMessageTool: true,
         disablePluginTools: true,
         authProfileStore: { version: 1, profiles: {} },
-        config: mediaConfig,
+        config: {
+          ...mediaConfig,
+          agents: { ...mediaConfig.agents, entries: { main: {}, work: {} } },
+        },
         agentSessionKey,
+        sandboxAgentId: "main",
+        sandboxed: true,
         runSessionKey,
         onYield: vi.fn(),
       });
@@ -173,6 +173,9 @@ describe("createOpenClawTools context wiring", () => {
           expect.objectContaining({
             agentSessionKey: taskSessionKey,
             requesterRunSessionKey: runSessionKey,
+            sandboxSessionKey: agentSessionKey,
+            sandboxAgentId: "main",
+            requesterAgentId: runSessionKey.startsWith("agent:work:") ? "work" : "main",
           }),
           true,
         );

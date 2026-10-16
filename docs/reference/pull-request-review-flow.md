@@ -17,7 +17,7 @@ not replace maintainer judgment.
 
 ## Barnacle
 
-Barnacle is deterministic GitHub triage. It looks for known queue-management
+Barnacle applies fixed rules to GitHub triage. It looks for known queue-management
 cases and responds with labels, comments, or closures.
 
 Barnacle may act when:
@@ -181,14 +181,14 @@ workflow instead.
 ## Troubleshooting
 
 Maintainers can set `OPENCLAW_PR_TOOLING_ROOT` to a full checkout of this repository
-to source materialized `scripts/pr` dependencies independently of a canonical checkout parked
+to source materialized `scripts/pr` dependencies independently of a primary checkout parked
 on another branch. The environment setting takes precedence over
-`git config openclaw.pr.toolingRoot /path/to/tooling-checkout` in the canonical
+`git config openclaw.pr.toolingRoot /path/to/tooling-checkout` in the primary
 checkout; without either, dependency sourcing stays unchanged. Versions must
 match the wrapper's trust-anchor manifest. On mismatch, a separate clean `main`
 tooling checkout is fetched, fast-forwarded, and installed with
 `pnpm install --frozen-lockfile` once, then rechecked. Dirty or non-main tooling
-checkouts are refused with repair guidance; the canonical checkout is never
+checkouts are refused with repair guidance; the primary checkout is never
 refreshed. The setting applies at both dependency materialization handoffs;
 in-place wrappers keep their checkout's dependency context. Wrapper code selection
 and trust stay unchanged.

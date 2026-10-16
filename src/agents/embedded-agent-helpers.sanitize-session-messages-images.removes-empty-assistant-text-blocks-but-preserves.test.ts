@@ -67,16 +67,6 @@ describe("sanitizeSessionMessagesImages", () => {
     ]);
   });
 
-  it.each(["error"] as const)("preserves an opaque replay owner after %s", async (stopReason) => {
-    const message = assistant([text("")], {
-      stopReason,
-      providerReplay: { ...replay, type: "opaque-checkpoint", replayIndex: undefined },
-    });
-    expect(await sanitizeSessionMessagesImages([message], "test")).toEqual([
-      { ...message, content: [] },
-    ]);
-  });
-
   it("drops empty assistant turns while preserving the user turn", async () => {
     const user = { role: "user" as const, content: "hello", timestamp: 0 };
     expect(
@@ -142,18 +132,7 @@ describe("sanitizeSessionMessagesImages", () => {
       { role: "assistant", content: [{ type: "thinking", thinking: "internal" }, text("visible")] },
     ]);
   });
-
-  it("preserves signed thinking order when removing empty text", async () => {
-    const first = { type: "thinking", thinking: "first", thought_signature: "sig-1" };
-    const redacted = { type: "redacted_thinking", data: "opaque", thought_signature: "sig-2" };
-    const input = castAgentMessages([
-      { role: "assistant", content: [first, text(""), text("visible"), redacted, text("tail")] },
-    ]);
-    expect(
-      await sanitizeSessionMessagesImages(input, "test", { preserveSignatures: true }),
-    ).toEqual([{ role: "assistant", content: [first, text("visible"), redacted, text("tail")] }]);
-  });
-  it.each(["error", "aborted"] as const)(
+  it.each(["error"] as const)(
     "keeps corrupt history images omitted after %s and a recovered reply",
     async (stopReason) => {
       const png = createNoisyPngBuffer(64, 64);

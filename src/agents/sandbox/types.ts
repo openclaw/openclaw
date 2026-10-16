@@ -98,6 +98,8 @@ export type SandboxContext = {
   workspaceCwd?: string;
   backendId: SandboxBackendId;
   sessionKey: string;
+  /** Agent admitted by sandbox policy resolution, which may differ from the requester. */
+  agentId?: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;

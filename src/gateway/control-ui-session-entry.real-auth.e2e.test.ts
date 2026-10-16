@@ -122,12 +122,12 @@ function holdPreparedDocument() {
   const send = documentTransport.sendControlUiHtmlBody;
   const spy = vi
     .spyOn(documentTransport, "sendControlUiHtmlBody")
-    .mockImplementationOnce(async (req, res, body, isCurrent, staleRedirectPath) => {
+    .mockImplementationOnce(async (req, res, body, isCurrent) => {
       // Real file-worker read and index/path/CSP preparation have finished.
       // The production encoder and final live-authority check still own delivery.
       entered.resolve({ body, res, current: isCurrent?.() === true });
       await resume.promise;
-      await send(req, res, body, isCurrent, staleRedirectPath);
+      await send(req, res, body, isCurrent);
     });
   return { entered: entered.promise, resume: resume.resolve, restore: () => spy.mockRestore() };
 }
@@ -362,12 +362,10 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
     expect(probe.status).toBe(403);
     expectNoApp(probe);
     const document = await readHttp(port, entry, deniedEmail, signal);
-    expect(document.status).toBe(303);
-    expect(document.headers.location).toBe(privatePath);
+    expect(document.status).toBe(403);
+    expect(document.headers.location).toBeUndefined();
     expectNoApp(document);
-    const unavailable = await readHttp(port, document.headers.location!, deniedEmail, signal);
-    expect(unavailable.status).toBe(404);
-    expectNoApp(unavailable);
+    expect(document.body).toContain("Session unavailable");
   });
 
   it("ignores spoofed identity on anonymous canonical documents while protecting the handoff", async ({
@@ -427,13 +425,13 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
         expect(prepared.res.headersSent).toBe(false);
         held.resume();
         const response = await pending;
-        expect(response.status).toBe(303);
-        expect(response.headers.location).toBe(privatePath);
+        expect(response.status).toBe(403);
+        expect(response.headers.location).toBeUndefined();
         expect(response.headers["cache-control"]).toBe("no-store");
         expect(response.headers["content-encoding"]).toBeUndefined();
-        expect(response.headers["content-type"]).toBeUndefined();
+        expect(response.headers["content-type"]).toBe("text/plain; charset=utf-8");
         expect(response.headers["content-security-policy"]).toBeUndefined();
-        expect(response.body).toBe("");
+        expect(response.body).toContain("Session access changed");
         expectNoApp(response);
       } finally {
         held.resume();

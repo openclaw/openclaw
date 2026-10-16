@@ -13,7 +13,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { addSessionSuggestionInWorker as addSessionSuggestion } from "../../config/sessions/session-metadata-write.async.js";
+import { addSessionSuggestionInWorker } from "../../config/sessions/session-metadata-write.async.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -55,6 +55,8 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const mocks = getSessionSuggestionTestMocks();
 registerSessionSuggestionTestLifecycle(mocks);
+const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+
 beforeEach(() => mocks.afterSuggestionClaim.mockReset());
 // Register shared mocks before the handlers capture their presence dependency.
 const { sessionSuggestionHandlers } = await import("./sessions-suggestions.js");
@@ -63,11 +65,11 @@ describe("session suggestion visibility and role ceilings", () => {
   it.each(["policy", "profile", "disconnect", "session", "membership", "projection"] as const)(
     "rechecks %s after a delayed suggestion list reply",
     async (change) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await withOpenClawTestState(profileState, async () => {
         setRuntimeConfigSnapshot({});
         await upsertDefaultSuggestionSession();
         for (const authorId of ["alice", "bob"]) {
-          await addSessionSuggestion(
+          await addSessionSuggestionInWorker(
             { agentId: "main", sessionKey },
             { id: authorId, authorId, text: authorId },
           );
@@ -167,7 +169,7 @@ describe("session suggestion visibility and role ceilings", () => {
   );
 
   it("retains committed suggestion visibility through a tentative role relaxation", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState(profileState, async (state) => {
       setRuntimeConfigSnapshot({});
       const owner = ensureProfileForEmail("policy-suggestion-owner@example.test");
       const reader = ensureProfileForEmail("policy-suggestion-reader@example.test");
@@ -200,7 +202,7 @@ describe("session suggestion visibility and role ceilings", () => {
         ["own-idea", reader.id],
         ["other-idea", owner.id],
       ] as const) {
-        await addSessionSuggestion(
+        await addSessionSuggestionInWorker(
           { agentId: "main", sessionKey },
           {
             id,
@@ -249,7 +251,7 @@ describe("session suggestion visibility and role ceilings", () => {
   });
 
   it("enforces view, suggest, and hidden role ceilings while honoring explicit membership", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
       setRuntimeConfigSnapshot({});
       const ownerProfile = ensureProfileForEmail("suggestion-owner@example.test");
       const guestProfile = ensureProfileForEmail("suggestion-guest@example.test");
@@ -334,7 +336,7 @@ describe("session suggestion visibility and role ceilings", () => {
   });
 
   it("hides draft suggestions from members while owner and admin can list", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
       setRuntimeConfigSnapshot({});
       const draftKey = "agent:main:draft-suggestions";
       await upsertSessionEntryCore(
@@ -350,7 +352,7 @@ describe("session suggestion visibility and role ceilings", () => {
         { agentId: "main", sessionKey: draftKey },
         { identityId: "member", addedBy: "owner", expectedSessionId: "session-draft" },
       );
-      await addSessionSuggestion(
+      await addSessionSuggestionInWorker(
         { agentId: "main", sessionKey: draftKey },
         {
           id: "draft-suggestion",
@@ -417,7 +419,7 @@ describe("session suggestion visibility and role ceilings", () => {
   });
 
   it("keeps incognito suggestion and typing surfaces admin-only", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
       setRuntimeConfigSnapshot({});
       vi.useFakeTimers();
       const incognitoKey = "agent:main:dashboard:incognito-suggestions";
@@ -431,7 +433,7 @@ describe("session suggestion visibility and role ceilings", () => {
           visibility: "suggest",
         },
       );
-      await addSessionSuggestion(
+      await addSessionSuggestionInWorker(
         { agentId: "main", sessionKey: incognitoKey },
         {
           id: "incognito-suggestion",
@@ -526,7 +528,7 @@ describe("session suggestion store binding", () => {
   ] as const)(
     "dispatches a %s suggestion with %s through its original store",
     async (layout, resolution) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await withOpenClawTestState(profileState, async (state) => {
         const agentId = "ops";
         const incognito = layout === "incognito";
         const key = incognito
@@ -653,7 +655,7 @@ describe("suggestions queued behind provider review", () => {
   it.for(["add", "edit", "dismiss", "queue"] as const)(
     "preserves the lifecycle boundary for %s without replacing the session",
     async (action, { signal }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await withOpenClawTestState(profileState, async (state) => {
         setRuntimeConfigSnapshot({});
         const metadataWrites =
           await import("../../config/sessions/session-metadata-write.async.js");
@@ -683,7 +685,7 @@ describe("suggestions queued behind provider review", () => {
         const options = { ...scope, path: database.path };
         const id = "queued-provider-review-suggestion";
         if (action !== "add") {
-          await addSessionSuggestion(scope, {
+          await addSessionSuggestionInWorker(scope, {
             id,
             authorId: "owner",
             text: "Synthetic suggestion",

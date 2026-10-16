@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, Match, Show, Switch } from "solid-js";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { resolveStructuredDraftInitialValue } from "./config-form-structured-draft.ts";
-import { ConfigStructuredDraftHost } from "./config-form-structured-draft.tsx";
+import { ConfigStructuredDraft } from "./config-form-structured-draft.tsx";
 import { ConfigArray, ConfigObject } from "./config-form.node.collection.tsx";
 import { JsonTextarea } from "./config-form.node.json.tsx";
 import { NumberInput, SelectInput, TextInput } from "./config-form.node.scalar.tsx";
@@ -155,17 +155,15 @@ export function ConfigNode(props: { params: ConfigNodeRenderParams }): JSX.Eleme
           when={initialDraft() !== undefined}
           fallback={<ResolvedNode params={params()} node={node()} />}
         >
-          <ConfigStructuredDraftHost
+          <ConfigStructuredDraft
             class="cfg-structured-draft"
-            props={{
-              identity: JSON.stringify(
-                params().path.filter((segment) => typeof segment === "string"),
-              ),
-              sourceIdentity: params().sourceIdentity ?? params().value,
-              initialValue: initialDraft()!,
-              params: params(),
-              renderSolidNode: renderNode,
-            }}
+            identity={JSON.stringify(
+              params().path.filter((segment) => typeof segment === "string"),
+            )}
+            sourceIdentity={params().sourceIdentity ?? params().value}
+            initialValue={initialDraft()!}
+            params={params()}
+            renderNode={renderNode}
           />
         </Show>
       </Match>
@@ -259,74 +257,70 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
         : false;
   const onChange = (value: boolean) => props.params.onPatch(props.params.path, value);
   return (
-    <Show
-      when={
-        !props.params.isRequired && hintForPath(props.params.path, props.params.hints)?.placeholder
-      }
+    <Switch
       fallback={
-        <Show
-          when={props.params.compact}
-          fallback={
-            <Show
-              when={props.params.showLabel !== false}
-              fallback={
-                <FieldRow
-                  label={meta().label}
-                  help={meta().help}
-                  showLabel={false}
-                  control={
-                    <SettingsToggle
-                      checked={checked()}
-                      disabled={props.params.disabled}
-                      ariaLabel={meta().label}
-                      onChange={onChange}
-                    />
-                  }
-                />
-              }
-            >
-              <SettingsToggleRow
-                title={meta().label}
-                description={
-                  <>
-                    {meta().help}
-                    <Show when={meta().help && props.params.schema.default !== undefined}>
-                      <br />{" "}
-                    </Show>
-                    {renderSchemaDefaultDescription(props.params.schema, props.params.value)}
-                  </>
-                }
-                checked={checked()}
-                disabled={props.params.disabled}
-                onChange={onChange}
-              />
-            </Show>
+        <FieldRow
+          label={meta().label}
+          help={meta().help}
+          showLabel={false}
+          control={
+            <SettingsToggle
+              checked={checked()}
+              disabled={props.params.disabled}
+              ariaLabel={meta().label}
+              onChange={onChange}
+            />
           }
-        >
-          <FieldRow
-            label={meta().label}
-            help={meta().help}
-            showLabel={props.params.showLabel ?? true}
-            control={
-              <input
-                type="checkbox"
-                aria-label={meta().label}
-                aria-describedby={props.params.descriptionId}
-                checked={checked()}
-                disabled={props.params.disabled}
-                onChange={(event) => {
-                  if (onChange(event.currentTarget.checked) === false) {
-                    event.currentTarget.checked = checked();
-                  }
-                }}
-              />
-            }
-          />
-        </Show>
+        />
       }
     >
-      <SelectInput params={{ ...props.params, options: [true, false] }} />
-    </Show>
+      <Match
+        when={
+          !props.params.isRequired &&
+          hintForPath(props.params.path, props.params.hints)?.placeholder
+        }
+      >
+        <SelectInput params={{ ...props.params, options: [true, false] }} />
+      </Match>
+      <Match when={props.params.compact}>
+        <FieldRow
+          label={meta().label}
+          help={meta().help}
+          showLabel={props.params.showLabel ?? true}
+          control={
+            <input
+              type="checkbox"
+              aria-label={meta().label}
+              aria-describedby={props.params.descriptionId}
+              checked={checked()}
+              disabled={props.params.disabled}
+              onChange={(event) => {
+                if (onChange(event.currentTarget.checked) === false) {
+                  event.currentTarget.checked = checked();
+                }
+              }}
+            />
+          }
+        />
+      </Match>
+      <Match when={props.params.showLabel !== false}>
+        <SettingsToggleRow
+          title={meta().label}
+          description={
+            <>
+              {meta().help}
+              <Show when={meta().help && props.params.schema.default !== undefined}>
+                <br />{" "}
+              </Show>
+              {renderSchemaDefaultDescription(props.params.schema, props.params.value)}
+            </>
+          }
+          checked={checked()}
+          disabled={props.params.disabled}
+          onChange={onChange}
+        />
+      </Match>
+    </Switch>
   );
 }
 

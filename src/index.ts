@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 // Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { resolveOpenClawCliInvocation } from "../cli-invocation.mjs";
 import {
   enableOpenClawCompileCache,
   resolveOpenClawCompileCacheDirectory,
@@ -138,19 +139,27 @@ const compileCacheRespawnEnv =
   shouldRunCli &&
   !isForegroundGmailRunArgv(process.argv) &&
   !shouldKeepNativeHookRelayInProcess(process.argv, process.platform)
-    ? resolveOpenClawCompileCacheRespawnEnv({ directory: compileCacheDirectory })
+    ? resolveOpenClawCompileCacheRespawnEnv({
+        directory: compileCacheDirectory,
+        foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+      })
     : undefined;
 if (compileCacheRespawnEnv) {
-  const args = [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)];
+  const { command, args } = resolveOpenClawCliInvocation({
+    entryPath: fileURLToPath(import.meta.url),
+  });
   // External supervisors require the serving Gateway to retain its listener PID.
-  if (process.execve && isForegroundGatewayRunArgv(process.argv)) {
-    process.execve(process.execPath, [process.execPath, ...args], compileCacheRespawnEnv);
+  if (process.platform !== "win32" && process.execve && isForegroundGatewayRunArgv(process.argv)) {
+    process.execve(command, [command, ...args], compileCacheRespawnEnv);
   }
   const { runRespawnedChild } = await import("../node-runtime-recovery.mjs");
-  await runRespawnedChild(process.execPath, args, compileCacheRespawnEnv);
+  await runRespawnedChild(command, args, compileCacheRespawnEnv);
 }
 if (shouldRunCli && !compileCacheRespawnEnv) {
-  enableOpenClawCompileCache({ directory: compileCacheDirectory });
+  enableOpenClawCompileCache({
+    directory: compileCacheDirectory,
+    foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+  });
   const [
     { formatCliFailureLines, formatCliJsonFailure, isExpectedCliError },
     { isJsonOutputModeActive },

@@ -2,9 +2,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
@@ -108,19 +107,19 @@ function resolveLegacyApprovalRequestSessionDelivery(params: {
   }
   const parsed = parseAgentSessionKey(sessionKey);
   const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
-  const memory = getSessionActorStorageBinding({ sessionKey, agentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
+  const memory = captureSessionActorStorageOwner(
+    { sessionKey, agentId, storePath },
+    { assertCurrent() {}, authorize() {} },
+  );
   if (memory) {
-    const entry = memory.actor.snapshot(memory.authority)?.entry;
+    const entry =
+      memory.binding?.actor.target.sessionKey === sessionKey
+        ? memory.binding.actor.snapshot(memory.authority)?.entry
+        : memory.owner?.readSession(sessionKey, memory.authority)?.entry;
     return entry
       ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
       : null;
-  }
-  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-  const binding = captureIncognitoSessionBinding({ storePath, sessionKey });
-  if (binding) {
-    binding.admissionSignal?.throwIfAborted();
-    binding.actor.assertReadable();
-    return binding.actor.sessions.readDelivery(sessionKey) ?? null;
   }
   const entry = loadSessionEntryReadOnly({
     storePath,
@@ -291,16 +290,23 @@ export async function resolveApprovalRequestSessionDeliveryAsync(
   }
   const agentId =
     parseAgentSessionKey(sessionKey)?.agentId ?? params.request.request.agentId ?? "main";
-  const memory = getSessionActorStorageBinding({ sessionKey, agentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
+  const memory = captureSessionActorStorageOwner(
+    { sessionKey, agentId, storePath },
+    { assertCurrent() {}, authorize() {} },
+  );
   if (memory) {
-    const entry = memory.actor.snapshot(memory.authority)?.entry;
+    const entry =
+      memory.binding?.actor.target.sessionKey === sessionKey
+        ? memory.binding.actor.snapshot(memory.authority)?.entry
+        : memory.owner?.readSession(sessionKey, memory.authority)?.entry;
     return entry
       ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
       : null;
   }
   const entry = await readSessionEntryReadOnlyInWorker({
     agentId,
-    storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+    storePath,
     sessionKey,
     projection: "list",
     hydrateSkillPromptRefs: false,
@@ -318,7 +324,7 @@ function warnLegacyApprovalRouting(name: string): void {
   });
 }
 
-/** @deprecated Use resolveApprovalRequestAccountIdAsync; removed in a later release after stable deprecation. */
+/** @deprecated Use resolveApprovalRequestAccountIdAsync; final compatibility day: 2026-12-31. */
 export function resolveApprovalRequestAccountId(
   params: Parameters<typeof resolveApprovalRequestAccountIdFromDelivery>[0],
 ): ReturnType<typeof resolveApprovalRequestAccountIdFromDelivery> {
@@ -341,7 +347,7 @@ export async function resolveApprovalRequestAccountIdAsync(
   );
 }
 
-/** @deprecated Use resolveApprovalRequestChannelAccountIdAsync; removed in a later release after stable deprecation. */
+/** @deprecated Use resolveApprovalRequestChannelAccountIdAsync; final compatibility day: 2026-12-31. */
 export function resolveApprovalRequestChannelAccountId(
   params: Parameters<typeof resolveApprovalRequestChannelAccountIdFromDelivery>[0],
 ): ReturnType<typeof resolveApprovalRequestChannelAccountIdFromDelivery> {
@@ -366,7 +372,7 @@ export async function resolveApprovalRequestChannelAccountIdAsync(
   );
 }
 
-/** @deprecated Use doesApprovalRequestMatchChannelAccountAsync; removed in a later release after stable deprecation. */
+/** @deprecated Use doesApprovalRequestMatchChannelAccountAsync; final compatibility day: 2026-12-31. */
 export function doesApprovalRequestMatchChannelAccount(
   params: Parameters<typeof doesApprovalRequestMatchChannelAccountFromDelivery>[0],
 ): ReturnType<typeof doesApprovalRequestMatchChannelAccountFromDelivery> {
@@ -389,7 +395,7 @@ export async function doesApprovalRequestMatchChannelAccountAsync(
   );
 }
 
-/** @deprecated Use doesApprovalRequestSelectChannelAccountAsync; removed in a later release after stable deprecation. */
+/** @deprecated Use doesApprovalRequestSelectChannelAccountAsync; final compatibility day: 2026-12-31. */
 export function doesApprovalRequestSelectChannelAccount(
   params: Parameters<typeof doesApprovalRequestSelectChannelAccountFromDelivery>[0],
 ): ReturnType<typeof doesApprovalRequestSelectChannelAccountFromDelivery> {

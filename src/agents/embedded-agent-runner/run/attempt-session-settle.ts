@@ -72,28 +72,31 @@ export type EmbeddedAttemptSessionResources = {
 
 /** Keep retained review callbacks outside the attempt's tool-execution closure scope. */
 export function createEmbeddedAttemptSessionResources(signal: AbortSignal) {
-  const resources: EmbeddedAttemptSessionResources = {
+  let resources: EmbeddedAttemptSessionResources = {
     trajectoryRecorder: null,
     buildAbortSettlePromise: () => null,
   };
-  let live: EmbeddedAttemptSessionResources | undefined = resources;
   return {
-    resources,
+    get resources() {
+      return resources;
+    },
     reviewTranscript: () => {
-      if (!live?.session || signal.aborted) {
+      if (!resources.session || signal.aborted) {
         return undefined;
       }
       return buildExecAutoReviewTranscript({
-        messages: live.session.messages,
+        messages: resources.session.messages,
         userTurnOrigins: new Map(
-          live
+          resources
             .getUserTranscriptContexts?.()
             ?.map(({ runtimeMessage, transcriptMessage }) => [runtimeMessage, transcriptMessage]),
         ),
       });
     },
-    releaseReview: () => {
-      live = undefined;
+    takeForCleanup: () => {
+      const released = resources;
+      resources = { trajectoryRecorder: null, buildAbortSettlePromise: () => null };
+      return released;
     },
   };
 }
@@ -107,7 +110,10 @@ type CleanupEmbeddedAttemptSessionInput = EmbeddedAttemptSessionResources & {
   trajectoryEndRecorded: boolean;
   deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
   emitDiagnosticRunCompleted?: EmitDiagnosticRunCompleted;
-  state: Pick<EmbeddedAttemptExecutionState, "terminal" | "beforeAgentRunBlockedBy">;
+  state: Pick<
+    EmbeddedAttemptExecutionState,
+    "terminal" | "beforeAgentRunBlockedBy" | "diagnosticFinalResponse"
+  >;
 };
 
 export async function cleanupEmbeddedAttemptSessionPhase(
@@ -210,7 +216,11 @@ export async function cleanupEmbeddedAttemptSessionPhase(
             ? "aborted"
             : "completed",
     cleanupError ?? finalState.promptError,
-    beforeAgentRunBlocked ? { blockedBy: input.state.beforeAgentRunBlockedBy } : undefined,
+    beforeAgentRunBlocked
+      ? { blockedBy: input.state.beforeAgentRunBlockedBy }
+      : input.state.diagnosticFinalResponse
+        ? { finalResponse: input.state.diagnosticFinalResponse }
+        : undefined,
   );
 
   if (cleanupError) {

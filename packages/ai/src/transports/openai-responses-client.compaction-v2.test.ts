@@ -168,25 +168,7 @@ describe.each([
     expect(JSON.stringify(result.output)).toContain("real request");
   });
 
-  it("bounds retained multilingual input without reviving older users", async () => {
-    const result = await compact({
-      ...context,
-      messages: [
-        { role: "user", content: "oldest", timestamp: 1 },
-        { role: "user", content: "中".repeat(64_001), timestamp: 2 },
-      ],
-    });
-    expect(result.output).toHaveLength(2);
-    expect(JSON.stringify(result.output)).not.toContain("oldest");
-    expect(result.output[0]).toMatchObject({
-      content: [{ type: "input_text", text: "中".repeat(64_000) }],
-    });
-  });
-
   it.each<[string, unknown[]]>([
-    ["missing item", [completed()]],
-    ["duplicate item", [checkpoint(), checkpoint(), completed()]],
-    ["empty item", [checkpoint(""), completed()]],
     ["unfinished stream", [checkpoint()]],
     ["cancelled terminal", [checkpoint(), completed("cancelled")]],
     [
@@ -276,5 +258,31 @@ describe.each([
     ]);
     expect(JSON.stringify(requests[1]?.body)).toContain("opaque");
     expect(JSON.stringify(requests[1]?.body)).toContain("remember copper");
+  });
+});
+
+describe("managed V2 retained window and item validation", () => {
+  it("bounds retained multilingual input without reviving older users", async () => {
+    transport = createOpenAIResponsesTransportStreamFn();
+    const result = await compact({
+      ...context,
+      messages: [
+        { role: "user", content: "oldest", timestamp: 1 },
+        { role: "user", content: "中".repeat(64_001), timestamp: 2 },
+      ],
+    });
+    expect(result.output).toHaveLength(2);
+    expect(JSON.stringify(result.output)).not.toContain("oldest");
+    expect(result.output[0]).toMatchObject({
+      content: [{ type: "input_text", text: "中".repeat(64_000) }],
+    });
+  });
+  it.each<[string, unknown[]]>([
+    ["duplicate item", [checkpoint(), checkpoint(), completed()]],
+    ["empty item", [checkpoint(""), completed()]],
+  ])("rejects %s without adopting its checkpoint", async (_name, sequence) => {
+    transport = createOpenAIResponsesTransportStreamFn();
+    events = sequence;
+    await expect(compact()).rejects.toThrow();
   });
 });

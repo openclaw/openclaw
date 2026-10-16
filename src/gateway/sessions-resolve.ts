@@ -26,7 +26,7 @@ import { hasOperatorBoundary } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { invalidSessionRequest } from "./session-request-error.js";
-import { withReadySessionRows } from "./session-row-prepared-read.js";
+import { withReadySessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { authorizeIncognitoSessionTarget } from "./session-sharing-policy.js";
@@ -85,7 +85,7 @@ function sessionResolveCandidate(
   };
 }
 
-/** Prepare durable facts, then resolve and consume against current caller state without a yield. */
+/** Prepare session facts, then resolve and consume against current caller state without a yield. */
 export async function withPreparedSessionResolve<T>(
   params: Parameters<typeof resolveSessionKeyFromResolveParams>[0] & { isCurrent?: () => boolean },
   consume: (result: SessionsResolveResult) => T,
@@ -107,12 +107,14 @@ export async function withPreparedSessionResolve<T>(
     const label = parseSessionLabel(p.label);
     let lookup: Awaited<ReturnType<SessionRowProjection["readLookup"]>> | undefined;
     const topologyChanged = new Error("Session lookup topology changed");
-    const resolve = () => {
+    const resolve = (preparedRead: SessionRowReadView) => {
       assertCurrent();
       if (lookup && !lookup.isCurrent()) {
         throw topologyChanged;
       }
-      return consume(resolveSessionKeyFromResolveParams({ ...params, candidateKeys }));
+      return consume(
+        resolveSessionKeyFromResolveParams({ ...params, candidateKeys, preparedRead }),
+      );
     };
     while (true) {
       try {
@@ -148,7 +150,9 @@ export async function withPreparedSessionResolve<T>(
           },
           resolve,
           // Discovery needs current selection metadata, not every session's display row.
-          { selection: !key && candidateKeys === undefined },
+          {
+            selection: !key && candidateKeys === undefined ? { metadataOnly: true } : false,
+          },
         );
       } catch (error) {
         if (error === topologyChanged) {
@@ -175,6 +179,7 @@ export function resolveSessionKeyFromResolveParams(params: {
   /** Anonymous HTTP audience sees only current publication grants, never operator discovery. */
   publicOnly?: boolean;
   candidateKeys?: ReadonlySet<string>;
+  preparedRead?: SessionRowReadView;
 }): SessionsResolveResult {
   const { client, p, projection } = params;
   const noSessionFoundResult = (message: string): SessionsResolveResult =>
@@ -197,7 +202,7 @@ export function resolveSessionKeyFromResolveParams(params: {
         configuredAgentsOnly,
       },
       params.candidateKeys === undefined
-        ? selector
+        ? { ...selector, metadataPrepared: params.preparedRead !== undefined }
         : { candidateKeys: params.candidateKeys, metadataPrepared: true },
     );
   const configuredAgentIds = new Set(listAgentIds(cfg));
@@ -341,7 +346,10 @@ export function resolveSessionKeyFromResolveParams(params: {
     if (authorizeIncognitoSessionTarget({ client, sessionKey: key, target: null })) {
       return noSessionFoundResult(`No session found: ${key}`);
     }
-    const target = projection.describe({ agentId: requestedAgent.agentId, key });
+    const target = (params.preparedRead ?? projection).describe({
+      agentId: requestedAgent.agentId,
+      key,
+    });
     if (target?.entry) {
       const { entry } = target;
       const spawnedBy = typeof p.spawnedBy === "string" && p.spawnedBy.trim().length > 0;

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import {
   matchesAgentDatabaseReadCandidatePath,
   registerAgentDatabaseReaderCloser,
@@ -8,29 +9,32 @@ import {
 import { hasErrnoCode } from "../../infra/errno.js";
 import { observeOwnedDirectory } from "../../infra/owned-directory-observation.js";
 import {
+  captureSqliteReadOnlyWorkerScope,
+  readOnlyWorkerScope,
+} from "../../infra/sqlite-readonly-worker-context.js";
+import {
   inspectDatabasePathIdentitySync,
   readDatabasePathIdentity,
   databaseFileIdentityKey,
   readDatabaseIdentityBirthtime,
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../../process/spawn-broker/context.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-maintenance-context.js";
-import { waitForAuthProfileNativePublications } from "./store-update-commit.js";
 
 type FileChange = {
   directory: string;
   identityChanged: boolean;
   sourcesChanged: boolean;
-  contentsChanged: boolean;
   createdPaths: readonly string[];
 };
 type DirectoryState = {
   identities: Map<string, DatabasePathIdentity | undefined>;
   presence: Map<string, boolean>;
-  sourceVersions: Map<string, string | undefined>;
   observation: { close(): void };
+  publishChange: (change: FileChange) => Promise<void>;
   refresh?: Promise<void>;
   dirty: boolean;
 };
@@ -40,36 +44,8 @@ type FileChangeListener = (change: FileChange) => void | Promise<void>;
 const listeners = new Set<FileChangeListener>();
 const legacyNames = new Set(["auth-profiles.json", "auth-state.json", "auth.json", "oauth.json"]);
 
-function fileVersion(file: fs.BigIntStats | null | undefined): string | undefined {
-  return file === null
-    ? "missing"
-    : file && `${file.dev}:${file.ino}:${file.size}:${file.mtimeNs}:${file.ctimeNs}`;
-}
-
-function sourceVersion(
-  database: fs.BigIntStats | null | undefined,
-  wal: fs.BigIntStats | null | undefined,
-): string | undefined {
-  const databaseVersion = fileVersion(database);
-  const walVersion = fileVersion(wal);
-  return databaseVersion !== undefined && walVersion !== undefined
-    ? `${databaseVersion}/${walVersion}`
-    : undefined;
-}
-
 function missingFile(error: unknown): null | undefined {
   return hasErrnoCode(error, "ENOENT") ? null : undefined;
-}
-
-function initialSourceVersion(databasePath: string, canonicalPath: string): string | undefined {
-  const inspect = (pathname: string) => {
-    try {
-      return fs.statSync(pathname, { bigint: true });
-    } catch (error) {
-      return missingFile(error);
-    }
-  };
-  return sourceVersion(inspect(databasePath), inspect(`${canonicalPath}-wal`));
 }
 
 function retireDirectory(directory: string, state: DirectoryState): void {
@@ -88,7 +64,6 @@ registerAgentDatabaseReaderCloser((candidates, retainedPaths) => {
         )
       ) {
         state.identities.delete(databasePath);
-        state.sourceVersions.delete(databasePath);
       }
     }
     if (
@@ -110,25 +85,11 @@ function refreshDirectory(directory: string, state: DirectoryState): Promise<voi
     try {
       while (state.dirty && directories.get(directory) === state) {
         state.dirty = false;
-        await waitForAuthProfileNativePublications(
-          Array.from(state.identities.values()).flatMap((identity) =>
-            identity ? [identity.canonicalPath] : [],
-          ),
-        );
-        if (directories.get(directory) !== state) {
-          return;
-        }
         let identityChanged = false;
         const createdPaths: string[] = [];
         let sourcesChanged = false;
-        let contentsChanged = false;
         for (const [databasePath, previous] of state.identities) {
-          const [file, wal] = await Promise.all([
-            stat(databasePath, { bigint: true }).catch(missingFile),
-            stat(`${previous?.canonicalPath ?? databasePath}-wal`, { bigint: true }).catch(
-              missingFile,
-            ),
-          ]);
+          const file = await stat(databasePath, { bigint: true }).catch(missingFile);
           const current =
             file === undefined
               ? undefined
@@ -144,10 +105,6 @@ function refreshDirectory(directory: string, state: DirectoryState): Promise<voi
             state.dirty = true;
             continue;
           }
-          const version = sourceVersion(file, wal);
-          contentsChanged ||=
-            version === undefined || state.sourceVersions.get(databasePath) !== version;
-          state.sourceVersions.set(databasePath, version);
           if (current?.key !== previous?.key || current?.birthtime !== previous?.birthtime) {
             if (previous?.key.startsWith("path:") && current?.key.startsWith("file:")) {
               createdPaths.push(databasePath);
@@ -171,19 +128,12 @@ function refreshDirectory(directory: string, state: DirectoryState): Promise<voi
           }
         }
         if (state.identities.size || sourcesChanged) {
-          await Promise.all(
-            Array.from(listeners, (listener) =>
-              Promise.resolve(
-                listener({
-                  directory,
-                  identityChanged,
-                  sourcesChanged,
-                  contentsChanged,
-                  createdPaths,
-                }),
-              ),
-            ),
-          );
+          await state.publishChange({
+            directory,
+            identityChanged,
+            sourcesChanged,
+            createdPaths,
+          });
         }
       }
     } finally {
@@ -191,6 +141,31 @@ function refreshDirectory(directory: string, state: DirectoryState): Promise<voi
     }
   });
   return state.refresh;
+}
+
+function captureFileChangePublisher(): DirectoryState["publishChange"] {
+  const broker = getSpawnBroker();
+  const runWithReaders = captureSqliteReadOnlyWorkerScope();
+  const signal = readOnlyWorkerScope.getStore()?.controller.signal;
+  // Restore only host readers at publication, after physical file facts settle.
+  // A scan spanning a restart uses the current publisher, never old request authority.
+  return async (change) => {
+    if (signal?.aborted) {
+      return;
+    }
+    await runWithSpawnBroker(broker, () =>
+      runWithReaders(() =>
+        Promise.all(Array.from(listeners, (listener) => Promise.resolve(listener(change)))),
+      ),
+    );
+  };
+}
+
+/** Retained shared state survives a restart; its observers must use the new Gateway readers. */
+export function bindAuthProfileFileObservationReaders(): void {
+  for (const state of directories.values()) {
+    state.publishChange = captureFileChangePublisher();
+  }
 }
 
 function directoryState(directory: string): DirectoryState {
@@ -202,21 +177,21 @@ function directoryState(directory: string): DirectoryState {
   const state: DirectoryState = {
     identities,
     presence: new Map(),
-    sourceVersions: new Map(),
     dirty: false,
-    observation: observeOwnedDirectory(directory, (filename) => {
-      if (
-        filename === undefined ||
-        legacyNames.has(filename) ||
-        [...identities.keys()].some(
-          (databasePath) =>
-            filename === path.basename(databasePath) ||
-            filename === `${path.basename(databasePath)}-wal`,
-        )
-      ) {
-        void refreshDirectory(directory, state);
-      }
-    }),
+    publishChange: captureFileChangePublisher(),
+    observation: observeOwnedDirectory(
+      directory,
+      (filename) => {
+        if (
+          filename === undefined ||
+          legacyNames.has(filename) ||
+          [...identities.keys()].some((databasePath) => filename === path.basename(databasePath))
+        ) {
+          void refreshDirectory(directory, state);
+        }
+      },
+      { recoveryIntervalMs: 30_000 },
+    ),
   };
   directories.set(directory, state);
   return state;
@@ -230,10 +205,6 @@ export function readAuthProfileDatabaseIdentity(
   if (!state.identities.has(databasePath)) {
     const identity = inspectDatabasePathIdentitySync(databasePath);
     state.identities.set(databasePath, identity);
-    state.sourceVersions.set(
-      databasePath,
-      initialSourceVersion(databasePath, identity?.canonicalPath ?? databasePath),
-    );
   }
   return state.identities.get(databasePath);
 }
@@ -277,7 +248,7 @@ export function noteAuthProfileFileWrite(databasePath: string): void {
 }
 
 export function authProfileSourceExists(sourcePath: string): boolean {
-  if (isArtifactPreservingStateRead() || getOpenClawDatabaseMaintenanceScope()) {
+  if (!isMainThread || isArtifactPreservingStateRead() || getOpenClawDatabaseMaintenanceScope()) {
     return fs.existsSync(sourcePath);
   }
   const state = directoryState(path.dirname(sourcePath));
@@ -308,7 +279,7 @@ export async function refreshAuthProfileFileState(): Promise<void> {
   );
 }
 
-export function closeAuthProfileFileState(): void {
+function closeAuthProfileFileState(): void {
   for (const [directory, state] of directories) {
     retireDirectory(directory, state);
   }

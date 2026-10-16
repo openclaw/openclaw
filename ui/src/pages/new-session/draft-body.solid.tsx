@@ -6,10 +6,10 @@ import "../../styles/chat/text.css";
 import "../../styles/chat/grouped.css";
 import "../../styles/chat/working-indicator.css";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
-import { renderIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { parseMarkdownJson } from "../../components/markdown-json.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { IdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
@@ -17,10 +17,9 @@ import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveIdentityHue } from "../../lib/identity-avatar.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
 import {
-  renderChatAuthorAvatar,
-  renderUserAvatarSlot,
+  ChatAuthorAvatar,
+  UserAvatarSlot,
   resolveChatDefaultAvatarPlacement,
 } from "../chat/components/chat-author-avatar.ts";
 import { AssistantAttachments } from "../chat/components/chat-message-attachments-solid.tsx";
@@ -28,7 +27,7 @@ import { hasUserFileAttachments } from "../chat/components/chat-message-attachme
 import { MessageImages } from "../chat/components/chat-message-images-solid.tsx";
 import { projectMessageMedia } from "../chat/components/chat-message-media.ts";
 import { MessageJson, MessageMarkdown } from "../chat/components/chat-message-text-view.tsx";
-import { renderChatWorkingIndicator } from "../chat/components/chat-working-indicator.ts";
+import { ChatWorkingIndicator } from "../chat/components/chat-working-indicator.tsx";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 
 registerEnglishCatalog(registerNewSessionSetupEnglish);
@@ -50,7 +49,7 @@ export type NewSessionBodyProps = {
   onOpenImage: (item: ImageLightboxItem) => void;
 };
 
-export function newSessionAnnouncement(
+function newSessionAnnouncement(
   props: Pick<NewSessionBodyProps, "pendingMessage" | "completion" | "statusLabel">,
 ) {
   return props.pendingMessage
@@ -168,11 +167,9 @@ function NewSessionSubmission(props: {
       >
         <Show when={props.avatarPlacement === "gutter" ? normalized().sender : undefined}>
           {(sender) => (
-            <LitContent
-              value={renderIdentityAvatar(sender(), (view) =>
-                renderUserAvatarSlot(view, formatSenderLabel(sender()) ?? ""),
-              )}
-            />
+            <IdentityAvatar identity={sender()}>
+              {(view) => <UserAvatarSlot view={view()} label={formatSenderLabel(sender()) ?? ""} />}
+            </IdentityAvatar>
           )}
         </Show>
         <div class="chat-group-messages">
@@ -220,7 +217,7 @@ function NewSessionSubmission(props: {
         <Show when={normalized().sender && props.avatarPlacement === "footer"}>
           <div class="chat-group-footer">
             <div class="chat-group-footer__meta">
-              <LitContent value={renderChatAuthorAvatar(normalized().sender)} />
+              <ChatAuthorAvatar sender={normalized().sender} />
             </div>
           </div>
         </Show>
@@ -230,11 +227,9 @@ function NewSessionSubmission(props: {
           <Show
             when={props.completion}
             fallback={
-              <LitContent
-                value={renderChatWorkingIndicator(
-                  { kind: "reading-indicator", key, startedAt: props.message.timestamp },
-                  { startupLabel: props.statusLabel ?? t("newSession.starting") },
-                )}
+              <ChatWorkingIndicator
+                part={{ kind: "reading-indicator", key, startedAt: props.message.timestamp }}
+                options={{ startupLabel: props.statusLabel ?? t("newSession.starting") }}
               />
             }
           >

@@ -12,8 +12,10 @@ The Gateway store, capabilities, `lib/sessions/*` (reconciler, provenance, refre
 - Every adapter declares its equality contract. Mutable snapshots use `"revision"` (every owner notification publishes, including same-object mutations). Value comparators are only for immutable values. Never copy a mutable snapshot into a second writable store.
 - Changing a connection, agent, session, or query means `replaceSource()` with a **new scope object**. Never mutate a scope in place.
 - Subscribe to event owners directly. Invalidations, confirmations, handoffs, and Gateway events stay events, not latest-value signals; preserve the owner's ordering, replay, and completion contract.
-- `useApplication()` (from `lib/reactive/context.ts`) returns the same capability object Lit consumers get. Providing it never transfers ownership.
+- `useApplication()` (from `lib/reactive/context.ts`) returns the application capability object. Providing it never transfers ownership.
 - One projection per owner and scope. If you need data an owner doesn't publish, extend the owner, not the view.
+
+Projections are adopt-on-use: add just the thin domain wrapper in the same PR as its first production caller, and remove unadopted adapters. Do not restore event projections or lease machinery. Solid's `createProjection` derives a local readonly store; it does not replace `projectSource` or transfer domain authority. See [projections and local stores](idioms.md#projections-and-local-stores-have-different-jobs).
 
 ## Lifetimes
 

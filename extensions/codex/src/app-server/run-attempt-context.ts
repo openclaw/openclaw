@@ -99,6 +99,7 @@ export async function prepareCodexAttemptContext(
   };
   const hookContext = {
     runId: params.runId,
+    config: params.config,
     agentId: sessionAgentId,
     sessionKey: contextSessionKey,
     sessionId: params.sessionId,
@@ -142,6 +143,9 @@ export async function prepareCodexAttemptContext(
     await bootstrapHarnessContextEngine({
       hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
+      ...(runtimeParams.authoredContextTokenCap && effectiveContextTokenBudget
+        ? { tokenBudget: effectiveContextTokenBudget }
+        : {}),
       sessionId: runtimeParams.sessionId,
       sessionKey: contextSessionKey,
       sessionFile: runtimeParams.sessionFile,
@@ -223,6 +227,7 @@ export async function prepareCodexAttemptContext(
     developerInstructions: string;
     contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
     historyBootstrapItems: JsonValue[] | undefined;
+    historyDeltaItems: JsonValue[] | undefined;
     noEngineContinuityProjectionApplied: boolean;
   } = {
     promptText: params.prompt,
@@ -230,6 +235,7 @@ export async function prepareCodexAttemptContext(
     developerInstructions: baseDeveloperInstructions,
     contextEngineProjection: undefined,
     historyBootstrapItems: undefined,
+    historyDeltaItems: undefined,
     // Set by the no-engine continuity appliers; gates calibration recording so a
     // dense direct or active-engine prompt can never persist a density sample
     // that later shrinks continuity history it did not measure.

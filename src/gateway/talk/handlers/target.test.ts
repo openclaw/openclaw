@@ -120,7 +120,7 @@ async function dispatch(
 }
 
 beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "talk-target" });
+  state = await createOpenClawTestState({ label: "talk-target", prepareProfileCatalog: true });
   client = {
     ...sharingPolicyClient({ user: ensureProfileForEmail("listener@example.test").id }),
     connId: "talk-target-test",
@@ -494,7 +494,7 @@ describe("Talk target preparation through Gateway authorization", () => {
     expect(loadSessionEntry({ agentId: "voice", sessionKey: "agent:voice:main" })).toBeUndefined();
   });
 
-  it.each(["owner", "sharing", "incognito", "replacement"] as const)(
+  it.each(["sharing", "incognito", "replacement", "owner"] as const)(
     "rechecks %s after session preparation and before committing the voice call",
     async (change) => {
       if (change === "sharing") {

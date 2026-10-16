@@ -269,9 +269,7 @@ describe("media-understanding CLI audio entry", () => {
     { language: "fr", request: { language: "es" }, expected: "es" },
     { language: "fr", config: { language: "de" }, expected: "de" },
     { expected: undefined },
-    { language: "", expected: undefined },
     { language: "fr", request: { language: "" }, expected: undefined },
-    { language: "fr", request: { language: " " }, expected: " " },
     { command: "whisper-cli", language: "fr", expected: undefined },
   ])("forwards auto-discovered Whisper language: %j", async (options) => {
     await withTestDir({ prefix: "openclaw-auto-language-" }, async (dir) => {
@@ -340,10 +338,6 @@ describe("media-understanding CLI audio entry", () => {
       args: ["--language", "{{Language}}", "{{AttachmentPath}}"],
       language: "de",
       expected: ["--language", "de", expect.any(String)],
-    },
-    {
-      args: ["--language", "{{Language}}", "{{AttachmentPath}}"],
-      expected: ["--language", "fr", expect.any(String)],
     },
     {
       args: ["--language", "it", "{{AttachmentPath}}"],

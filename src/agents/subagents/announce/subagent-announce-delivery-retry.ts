@@ -65,7 +65,6 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
-  WRITER_CLAIM_REBOUND_ANNOUNCE_RE,
 ];
 
 function isWriterClaimReboundAnnounceError(error: unknown): boolean {
@@ -83,20 +82,15 @@ function hasAnnounceErrorMatch(error: unknown, matches: (candidate: unknown) => 
   ]).some(matches);
 }
 
-function hasWriterClaimReboundAnnounceError(error: unknown): boolean {
-  return hasAnnounceErrorMatch(error, isWriterClaimReboundAnnounceError);
-}
-
-function isPermanentNonWriterAnnounceError(error: unknown): boolean {
+function hasPermanentAnnounceError(error: unknown): boolean {
   return hasAnnounceErrorMatch(
     error,
     (candidate) =>
       isPlatformMessageRejectedError(candidate) ||
       isSessionTranscriptTurnMismatchErrorMessage(summarizeDeliveryError(candidate)) ||
-      (!isWriterClaimReboundAnnounceError(candidate) &&
-        PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((pattern) =>
-          pattern.test(summarizeDeliveryError(candidate)),
-        )),
+      PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((pattern) =>
+        pattern.test(summarizeDeliveryError(candidate)),
+      ),
   );
 }
 
@@ -112,11 +106,11 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
     return typedRetryability;
   }
 
-  if (isPermanentNonWriterAnnounceError(error)) {
+  if (hasPermanentAnnounceError(error)) {
     return false;
   }
 
-  if (hasWriterClaimReboundAnnounceError(error)) {
+  if (hasAnnounceErrorMatch(error, isWriterClaimReboundAnnounceError)) {
     return true;
   }
 
@@ -143,7 +137,7 @@ export function isPermanentAnnounceDeliveryError(error: unknown): boolean {
   if (typedRetryability !== undefined) {
     return !typedRetryability;
   }
-  return isPermanentNonWriterAnnounceError(error) || hasWriterClaimReboundAnnounceError(error);
+  return hasPermanentAnnounceError(error);
 }
 
 export function isIncompleteAnnounceAgentResultError(error: unknown): boolean {

@@ -74,6 +74,64 @@ function parts(input: string[]): string[][] {
 }
 
 type Expression = { sql: string; type: string };
+const navigationMembers = [
+  "version",
+  "modelBytes",
+  "modelWithoutCheckpointBytes",
+  "withoutCustomDataBytes",
+  "report",
+  "report.kind",
+  "navigation",
+  "reset",
+  "model",
+];
+function firstJsonMember(value: string, key: string): string {
+  return `(SELECT member.value FROM json_each(CASE WHEN json_typeof(${value}) = 'object' THEN ${value} ELSE '{}'::json END) WITH ORDINALITY AS member(key, value, position) WHERE member.key = ${literal(key)} ORDER BY member.position LIMIT 1)`;
+}
+function jsonMember(
+  table: string | undefined,
+  column: string,
+  path: string,
+  fn: string,
+): Expression {
+  const voice = table === "cache_entries" && column === '"value_json"';
+  const navigation = table === "transcript_events" && column === '"navigation_json"';
+  const member = /^'\$\.([A-Za-z]+(?:\.[A-Za-z]+)?)'$/.exec(path)?.[1];
+  const numeric = [
+    "version",
+    "modelBytes",
+    "modelWithoutCheckpointBytes",
+    "withoutCustomDataBytes",
+  ];
+  if (
+    !member ||
+    !(voice
+      ? ["agentId", "sessionKey", "origin", "status"].includes(member)
+      : navigation && navigationMembers.includes(member))
+  ) {
+    throw new Error(`Unsupported JSON predicate ${table}.${column} ${path}`);
+  }
+  // The CHECK's CTE selects first members; voice writers stringify unique keys.
+  const value = voice ? `(${column}::json -> ${literal(member)})` : quote(`j_${member}`);
+  const type = `json_typeof(${value})`;
+  const text = `(${value} #>> '{}')`;
+  const integer = `${type} = 'number' AND ${text} ~ '^-?[0-9]+$'`;
+  if (fn === "json_type") {
+    return {
+      sql: `CASE WHEN ${integer} THEN 'integer' WHEN ${type} = 'number' THEN 'real' ELSE ${type} END`,
+      type: "text",
+    };
+  }
+  if (navigation && numeric.includes(member)) {
+    // Only bounded integer comparisons consume these values. Larger integers cannot match.
+    return {
+      sql: `CASE WHEN ${integer} AND char_length(${text}) <= 20 THEN ${text}::numeric END`,
+      type: "bigint",
+    };
+  }
+  return { sql: `CASE WHEN ${type} = 'string' THEN ${text} END`, type: "text" };
+}
+
 function globRegex(pattern: string): string {
   let result = "\\A";
   for (let i = 0; i < pattern.length; i++) {
@@ -123,12 +181,31 @@ function expression(source: string, columns: Map<string, string>, table?: string
     }
   };
   const boolean = (value: Expression) => {
+    if (value.type === "bigint" && ["0", "1"].includes(value.sql)) {
+      return value.sql === "0" ? "FALSE" : "TRUE";
+    }
     if (value.type !== "boolean") {
       throw new Error("SQLite numeric truthiness is unsupported");
     }
     return value.sql;
   };
   function atom(): Expression {
+    if (take("CASE")) {
+      requireToken("WHEN");
+      const condition = boolean(or());
+      requireToken("THEN");
+      const yes = or();
+      const no = take("ELSE") ? or() : { sql: "NULL", type: "null" };
+      requireToken("END");
+      const bool = yes.type === "boolean" || no.type === "boolean";
+      if (!bool) {
+        compatible(yes, no);
+      }
+      return {
+        sql: `CASE WHEN ${condition} THEN ${bool ? boolean(yes) : yes.sql} ELSE ${bool ? boolean(no) : no.sql} END`,
+        type: bool ? "boolean" : yes.type,
+      };
+    }
     if (take("(")) {
       const value = or();
       requireToken(")");
@@ -155,7 +232,11 @@ function expression(source: string, columns: Map<string, string>, table?: string
       return { sql: "NULL", type: "null" };
     }
     if (take("(")) {
-      if (!/^(length|json_valid|cast|instr|char|substr|coalesce|trim|typeof)$/i.test(token)) {
+      if (
+        !/^(length|octet_length|json_valid|json_type|json_extract|ifnull|cast|instr|char|substr|coalesce|trim|typeof)$/i.test(
+          token,
+        )
+      ) {
         throw new Error(`Unsupported function ${token}`);
       }
       const value = or();
@@ -184,7 +265,10 @@ function expression(source: string, columns: Map<string, string>, table?: string
         if (point <= 0x10ffff && !(point >= 0xd800 && point <= 0xdfff)) {
           return { sql: literal(String.fromCodePoint(point)), type: "text" };
         }
-      } else if (name === "coalesce" && args.length >= 2) {
+      } else if ((name === "coalesce" || name === "ifnull") && args.length >= 2) {
+        if (args.some((arg) => arg.type === "boolean")) {
+          return { sql: `coalesce(${args.map(boolean).join(", ")})`, type: "boolean" };
+        }
         args.forEach((arg) => compatible(value, arg));
         return { sql: `coalesce(${args.map((arg) => arg.sql).join(", ")})`, type: value.type };
       } else if (
@@ -208,7 +292,17 @@ function expression(source: string, columns: Map<string, string>, table?: string
         if (second!.type === "text") {
           return { sql: `strpos(${first!.sql}, ${second!.sql})`, type: "bigint" };
         }
+      } else if (
+        ["json_type", "json_extract"].includes(name) &&
+        args.length === 2 &&
+        first!.type === "text" &&
+        second!.type === "text"
+      ) {
+        return jsonMember(table, first!.sql, second!.sql, name);
       } else if (args.length === 1) {
+        if (name === "octet_length" && ["text", "bytea"].includes(value.type)) {
+          return { sql: `octet_length(${value.sql})`, type: "bigint" };
+        }
         if (name === "length" && ["text", "bytea"].includes(value.type)) {
           return {
             sql: `${value.type === "text" ? "char_length" : "octet_length"}(${value.sql})`,
@@ -281,6 +375,12 @@ function expression(source: string, columns: Map<string, string>, table?: string
       compatible(left, low);
       compatible(left, high);
       sql = `${left.sql} ${negate ? "NOT " : ""}BETWEEN ${low.sql} AND ${high.sql}`;
+    } else if (take("LIKE")) {
+      const pattern = input[pos++];
+      if (left.type !== "text" || !["'%/%'", "'%\\%'"].includes(pattern ?? "")) {
+        throw new Error("Only archive path-separator LIKE guards are supported");
+      }
+      sql = `strpos(${left.sql}, ${literal(pattern!.slice(2, -2))}) ${negate ? "=" : ">"} 0`;
     } else if (take("GLOB")) {
       const pattern = input[pos++];
       if (left.type !== "text" || !pattern?.startsWith("'")) {
@@ -329,7 +429,7 @@ function expression(source: string, columns: Map<string, string>, table?: string
   return result;
 }
 
-type Item = {
+export type Item = {
   kind: string;
   table: string;
   name: string;
@@ -338,6 +438,7 @@ type Item = {
   reason?: string;
   category?: string;
   design?: string;
+  pendingCapability?: "search";
 };
 type Column = {
   name: string;
@@ -379,19 +480,19 @@ export function portTables(data: Catalog) {
   }));
 }
 
-function indexExpressions(indexSource: string, cols: Map<string, string>): string {
+function indexExpressions(indexSource: string, cols: Map<string, string>, table: string): string {
   const ts = tokens(indexSource);
   const on = ts.findIndex((token) => keyword(token, "ON"));
   const keys = group(ts, ts.indexOf("(", on));
   const terms = parts(keys.body).map((term) => {
     const order = /^(ASC|DESC)$/i.test(term.at(-1)!) ? term.pop()!.toUpperCase() : "ASC";
-    return `(${expression(term.join(" "), cols).sql}) ${order} NULLS ${order === "DESC" ? "LAST" : "FIRST"}`;
+    return `(${expression(term.join(" "), cols, table).sql}) ${order} NULLS ${order === "DESC" ? "LAST" : "FIRST"}`;
   });
   const where = ts.slice(keys.end + 1);
   if (where.length && !keyword(where.shift(), "WHERE")) {
     throw new Error("Unsupported index suffix");
   }
-  const predicate = where.length ? expression(where.join(" "), cols) : undefined;
+  const predicate = where.length ? expression(where.join(" "), cols, table) : undefined;
   if (predicate && predicate.type !== "boolean") {
     throw new Error("Non-boolean index predicate");
   }
@@ -477,6 +578,9 @@ function reportExcludedTable(ctx: Context, name: string, source: string, virtual
     item.category = "FTS sync";
     item.design = "tsvector + GIN; preserve tokenizer/ranking semantics separately";
   }
+  if (virtual || ctx.tableKinds.get(name) === "shadow") {
+    item.pendingCapability = "search";
+  }
 }
 
 function reportConflictPolicies(ctx: Context, { name, definitions }: TableMapping): void {
@@ -505,7 +609,8 @@ function mapColumns(ctx: Context, mapping: TableMapping, columns: Row[], rowidCo
       const value = translateObject(ctx, mapping, "default", colName, String(col.dflt_value), type);
       if (value.sql && !identity) {
         definition += ` DEFAULT ${value.sql}`;
-        defaultSql = value.sql;
+        // PostgreSQL drops DEFAULT NULL from pg_attrdef; absence has the same default.
+        defaultSql = value.sql === "NULL" ? null : value.sql;
       }
       if (identity && value.sql) {
         value.sql = null;
@@ -555,6 +660,21 @@ function mapChecks(ctx: Context, mapping: TableMapping, sqlTokens: string[]): vo
     const { body: check, end } = group(sqlTokens, i + 1);
     i = end;
     const item = translateObject(ctx, mapping, "check", String(id++), check.join(" "), "boolean");
+    if (item.sql && name === "transcript_events" && check.includes("json_extract")) {
+      const functionName = "openclaw_transcript_navigation_check";
+      const members = navigationMembers.map((member) => {
+        const value = member.split(".").reduce(firstJsonMember, "document");
+        return `${value} AS ${quote(`j_${member}`)}`;
+      });
+      ctx.record(
+        "function",
+        name,
+        functionName,
+        item.source,
+        `CREATE FUNCTION ${quote(functionName)}(navigation_json text) RETURNS boolean LANGUAGE sql IMMUTABLE AS $navigation$\nWITH input AS (SELECT CASE WHEN navigation_json IS JSON THEN navigation_json::json END AS document),\nmembers AS (SELECT ${members.join(",\n")} FROM input)\nSELECT ${item.sql} FROM members;\n$navigation$;`,
+      );
+      item.sql = `${quote(functionName)}("navigation_json")`;
+    }
     if (item.sql) {
       fields.push(`CHECK (${item.sql})`);
     }
@@ -599,7 +719,7 @@ function mapIndexes(ctx: Context, mapping: TableMapping, indexes: Row[]): void {
       table.indexes++;
     } else {
       try {
-        sql = `CREATE ${Number(index.unique) ? "UNIQUE " : ""}INDEX ${quote(indexName)} ON ${qualified(ctx, name)} ${indexExpressions(source, cols)};`;
+        sql = `CREATE ${Number(index.unique) ? "UNIQUE " : ""}INDEX ${quote(indexName)} ON ${qualified(ctx, name)} ${indexExpressions(source, cols, name)};`;
         table.indexes++;
       } catch (error) {
         reason = `Index omitted: ${error instanceof Error ? error.message : String(error)}`;
@@ -790,5 +910,10 @@ export function catalog(db: DatabaseSync, schema: string): Catalog {
   }
   reportNonTableObjects(ctx);
   resolveForeignKeys(ctx);
+  for (const item of ctx.result.objects) {
+    if (["virtual", "shadow"].includes(ctx.tableKinds.get(item.table) ?? "")) {
+      item.pendingCapability = "search";
+    }
+  }
   return ctx.result;
 }

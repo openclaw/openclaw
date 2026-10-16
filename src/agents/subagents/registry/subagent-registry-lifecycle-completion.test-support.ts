@@ -32,11 +32,7 @@ import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
-import {
-  bindSubagentRunRecord,
-  rowToSubagentRunRecord,
-  subagentRunRecordVersion,
-} from "./subagent-registry.store.codec.js";
+import { bindSubagentRunRecord, rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
@@ -63,11 +59,11 @@ function policyReceipt(
       if (!entry) {
         return [];
       }
-      const subagent = rowToSubagentRunRecord(bindSubagentRunRecord(entry))!;
+      const row = bindSubagentRunRecord(entry);
+      const subagent = rowToSubagentRunRecord(row)!;
       return [
         {
           subagent,
-          version: subagentRunRecordVersion(subagent)!,
           cleanupHandled: entry.cleanupHandled,
         },
       ];
@@ -388,6 +384,7 @@ export function makeSubagentCompletion(
     outcome: { status: "ok" },
     reason: SUBAGENT_ENDED_REASON_COMPLETE,
     triggerCleanup: false,
+    terminalReply: { disposition: "visible", text: "final completion reply" },
     ...overrides,
   };
 }
@@ -399,6 +396,7 @@ export function makeKilledSubagentCompletion(
   return makeSubagentCompletion(entry, {
     outcome: { status: "error", error: "agent run aborted" },
     reason: SUBAGENT_ENDED_REASON_KILLED,
+    terminalReply: undefined,
     ...overrides,
   });
 }
@@ -411,6 +409,7 @@ export function makeInterruptedSubagentCompletion(
     outcome: { status: "error", error: "restart interrupted run" },
     reason: SUBAGENT_ENDED_REASON_ERROR,
     recoverInterrupted: true,
+    terminalReply: undefined,
     ...overrides,
   });
 }

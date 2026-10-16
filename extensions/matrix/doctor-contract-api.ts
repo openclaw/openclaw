@@ -258,23 +258,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         if (!existing) {
           try {
-            await store.registerIfAbsent(key, credentials);
+            if (!(await store.registerIfAbsent(key, credentials))) {
+              throw new Error("Canonical state appeared during offline import.");
+            }
           } catch (error) {
             warnings.push(
               `Failed importing Matrix credentials for account ${source.accountId}: ${String(error)}; left legacy source in place`,
             );
             continue;
           }
-        }
-        const persisted = normalizeMatrixStoredCredentials(
-          await store.lookup(key),
-          source.accountId,
-        );
-        if (!persisted || JSON.stringify(persisted) !== JSON.stringify(credentials)) {
-          warnings.push(
-            `Failed verifying Matrix credentials for account ${source.accountId}; left legacy source in place`,
-          );
-          continue;
         }
         changes.push(`Migrated Matrix credentials for account ${source.accountId} to SQLite`);
         await archiveSource();
@@ -285,6 +277,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "matrix-inbound-dedupe-to-claimable-dedupe",
     label: "Matrix inbound dedupe markers",
+    sqliteOnly: { family: "state" },
     async detectLegacyState(params) {
       const sources = await collectMatrixInboundDedupeSources(params.stateDir);
       if (

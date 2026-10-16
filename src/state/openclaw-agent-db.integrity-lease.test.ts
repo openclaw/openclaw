@@ -40,7 +40,7 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 import { cleanupRetiredAgentDatabaseLease } from "./openclaw-agent-execution-cleanup.js";
-import { SQLITE_DATABASE_SEAL_SCHEMA } from "./openclaw-database-seal-schema.js";
+import { sqliteDatabaseSealSchemaFor } from "./openclaw-database-seal-schema.js";
 import {
   clearOpenClawDatabaseQuarantine,
   readOpenClawDatabaseQuarantineFailure,
@@ -188,12 +188,8 @@ it.each(process.platform === "win32" ? [false] : [false, true])(
     expect(await exited).toEqual([0, null]);
     const canonicalPath = fs.realpathSync(childPath);
     expect(
-      readSqliteCleanCloseSeal(
-        canonicalPath,
-        SQLITE_DATABASE_SEAL_SCHEMA,
-        fs.statSync(canonicalPath, { bigint: true }),
-      ),
-    ).toBeDefined();
+      readSqliteCleanCloseSeal(canonicalPath, fs.statSync(canonicalPath, { bigint: true })),
+    ).toMatchObject({ schemaIdentity: sqliteDatabaseSealSchemaFor("agent") });
   },
 );
 

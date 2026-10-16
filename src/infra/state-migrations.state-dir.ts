@@ -6,7 +6,6 @@ import {
   resolvePathPrefixSync,
   retainEntryForPublication,
 } from "@openclaw/fs-safe/advanced";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveProfileStateDir } from "../cli/profile-utils.js";
 import {
   assertNoRetiredOAuthSidecarsBeforeConfigRecovery,
@@ -25,6 +24,7 @@ import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-rea
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { resolveUserPath } from "./home-dir.js";
 import { migrationFileExists } from "./state-migrations.fs.js";
+import { resolveLegacyProfileMigrationExceptions } from "./state-migrations.profile-scope.js";
 import { listRetiredDeliveryQueueFiles } from "./state-migrations.retired-delivery-files.js";
 import { assertNoRetiredStateFiles } from "./state-migrations.retired-files.js";
 import { assertNoRetiredRuntimeStateFiles } from "./state-migrations.retired-runtime-files.js";
@@ -108,13 +108,16 @@ export function resolveLegacyProfileWorkspaceMigrationPaths(params: {
 }): { source: string; target: string } | undefined {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
-  const profile = env.OPENCLAW_PROFILE?.trim();
-  if (!profile || normalizeLowercaseStringOrEmpty(profile) === "default") {
+  const { profileWorkspace: source } = resolveLegacyProfileMigrationExceptions({ env, homedir });
+  if (!source) {
     return undefined;
   }
   const paths = {
-    source: path.join(resolveProfileStateDir("default", env, homedir), `workspace-${profile}`),
-    target: path.join(resolveProfileStateDir(profile, env, homedir), "workspace"),
+    source,
+    target: path.join(
+      resolveProfileStateDir(env.OPENCLAW_PROFILE ?? "default", env, homedir),
+      "workspace",
+    ),
   };
   return resolveConfiguredProfileWorkspace({ ...params, ...paths }) ? undefined : paths;
 }

@@ -40,7 +40,7 @@ export class PluginAdmittedWorkTimeoutError extends Error {
   ) {
     const ids = [...pluginIds].join(", ");
     super(
-      `plugin ${ids} admitted work did not settle within 60s; the previous plugin generation stays active. Use \`openclaw plugins reload ${[...pluginIds].join(" ")} --wait\` to wait until it finishes.`,
+      `plugin ${ids} admitted work did not settle within 60s; the previous plugin generation stays active. Use \`openclaw plugins reload ${[...pluginIds].join(" ")} --wait\` to wait until it finishes. If an agent turn holds this plugin, end that turn first or use the plugins tool with action reloadAndResume; waiting inside the same turn cannot make progress.`,
       { cause },
     );
     this.instances = instances;

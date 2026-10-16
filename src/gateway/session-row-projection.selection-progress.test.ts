@@ -1,4 +1,6 @@
+import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { CronJob } from "../cron/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -7,10 +9,17 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  identifiedClient,
+  listSessions,
+  requestContext,
+} from "./server-methods/sessions-read-cache.test-support.js";
 import { registerSessionAutomationSource } from "./session-automation-index.js";
 import * as membership from "./session-membership-projection.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import {
   canRetainSessionRowRuntimeOwnership,
   isPreparedSessionRowDatabaseFacts,
@@ -19,6 +28,124 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.for([
+  { name: "off-page", options: {}, first: "response", keys: ["agent:main:visible"] },
+  {
+    name: "selected",
+    options: { limit: 2 },
+    first: "off-page ownership",
+    keys: ["agent:main:visible", "agent:main:off-page"],
+  },
+  {
+    name: "search",
+    options: { search: "visible" },
+    first: "off-page ownership",
+    keys: ["agent:main:visible"],
+  },
+  {
+    name: "without Board",
+    options: { hasBoard: false },
+    first: "off-page ownership",
+    keys: ["agent:main:visible"],
+  },
+  {
+    name: "with Board",
+    options: { hasBoard: true },
+    first: "off-page ownership",
+    keys: [],
+  },
+])("preserves $name readiness when listing a sidebar page", async (scenario, { signal }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    const visible = { agentId: "main", sessionKey: "agent:main:visible" };
+    const offPage = { agentId: "main", sessionKey: "agent:main:off-page" };
+    replaceSessionEntrySync(visible, {
+      sessionId: "visible",
+      updatedAt: 2,
+      visibility: "shared",
+    });
+    const offPageEntry = {
+      sessionId: "off-page",
+      updatedAt: 1,
+      visibility: "shared" as const,
+      agentHarnessId: "sidebar-owner",
+      modelSelectionLocked: true,
+    };
+    replaceSessionEntrySync(offPage, offPageEntry);
+    const previousRegistry = captureActivePluginRegistrySnapshot();
+    const registry = createEmptyPluginRegistry();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let holdOwnership = false;
+    registry.agentHarnesses.push({
+      pluginId: "sidebar-owner",
+      source: "test",
+      harness: {
+        id: "sidebar-owner",
+        label: "Sidebar ownership fixture",
+        supports: () => ({ supported: true }),
+        async resolveSessionRuntimeOwnershipAsync({ assertCurrent }) {
+          if (holdOwnership) {
+            entered.resolve();
+            await release.promise;
+          }
+          assertCurrent();
+          return undefined;
+        },
+        async runAttempt() {
+          throw new Error("Listing sessions must not run a model");
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const abort = () => release.resolve();
+    signal.addEventListener("abort", abort, { once: true });
+    let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+    let reading: ReturnType<typeof listSessions> | undefined;
+    try {
+      projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const context = bindSessionRowProjection(requestContext(cfg), () => projection);
+      const client = identifiedClient("sidebar-viewer");
+      const request: SessionsListParams = { rowMode: "sidebar", limit: 1, ...scenario.options };
+      expect(
+        (
+          await listSessions({
+            context,
+            client,
+            request: { rowMode: "sidebar", limit: 1 },
+          })
+        ).sessions.map((row) => row.key),
+      ).toEqual([visible.sessionKey]);
+      const first = await projection.withSelectionPreparation(async () => {
+        holdOwnership = true;
+        replaceSessionEntrySync(offPage, { ...offPageEntry, label: "Renamed off-page" });
+        const started = performance.now();
+        reading = listSessions({ context, client, request, acceptsSerializedJson: true });
+        const winner = await Promise.race([
+          reading.then(() => "response" as const),
+          entered.promise.then(() => "off-page ownership" as const),
+        ]);
+        console.info("sidebar-page-readiness", {
+          scenario: scenario.name,
+          first: winner,
+          elapsedMs: performance.now() - started,
+        });
+        release.resolve();
+        const result = await reading;
+        expect(result.sessions.map((row) => row.key)).toEqual(scenario.keys);
+        return winner;
+      });
+      expect(first).toBe(scenario.first);
+    } finally {
+      release.resolve();
+      await Promise.allSettled(reading ? [reading] : []);
+      projection?.dispose();
+      restoreActivePluginRegistrySnapshot(previousRegistry);
+      signal.removeEventListener("abort", abort);
+    }
+  });
+});
 
 // Regression: a dirty row whose accepted facts carry opaque pinned-harness ownership must be
 // re-read by selection preparation. Skipping it left preparation pending forever, and the

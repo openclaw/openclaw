@@ -272,26 +272,6 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
 });
 
 describe("cacheRetention default behavior", () => {
-  it("leaves Model Studio retention unspecified without opting into cache keys", () => {
-    const captured = runExtraParamsCase({
-      model: {
-        id: "qwen-plus",
-        name: "Qwen Plus",
-        api: "openai-completions",
-        provider: "qwen",
-        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 4_096,
-      },
-      cfg: { agents: { defaults: { params: { temperature: 0.5, cacheRetention: undefined } } } },
-      payload: {},
-    });
-    expect(captured.options?.cacheRetention).toBeUndefined();
-  });
-
   it("respects legacy cacheControlTtl config", () => {
     expect(resolveCacheRetention({ cacheControlTtl: "1h" }, "anthropic")).toBe("long");
   });

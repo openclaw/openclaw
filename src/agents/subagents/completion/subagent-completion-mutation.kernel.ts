@@ -12,6 +12,7 @@ import {
 } from "../../../infra/session-delivery-queue.records.js";
 import { resolveEventSessionKey } from "../../../routing/session-key.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db-contract.js";
+import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAgentId,
@@ -34,10 +35,7 @@ import {
   rowToSubagentRunRecord,
 } from "../registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
-import {
-  subagentRunRowVersion,
-  type SubagentRunSqliteRow,
-} from "../registry/subagent-registry.store.row.js";
+import type { SubagentRunSqliteRow } from "../registry/subagent-registry.store.row.js";
 import {
   loadSubagentRunsForChildSessionFromSqlite,
   readSubagentRun,
@@ -70,7 +68,7 @@ const noMutation = (applied: boolean | null): SubagentCompletionMutationResult =
   queueIds: [],
 });
 
-/** Decode on the worker while retaining the committed row's CAS version. */
+/** Decode the committed row on the worker. */
 export function decodeSubagentCompletionRecord(
   row: SubagentRunSqliteRow,
   cleanupHandled?: boolean,
@@ -81,7 +79,6 @@ export function decodeSubagentCompletionRecord(
   );
   return {
     subagent,
-    version: expectDefined(subagentRunRowVersion(row), "subagent completion row version"),
     cleanupHandled,
   };
 }
@@ -144,6 +141,7 @@ function prepareBlockedSubagentCompletion(
   params: BlockSubagentCompletionRequest,
   now: number,
   subagent: SubagentRunRecord | null,
+  requesterOutcome?: SubagentAnnounceDeliveryResult,
 ): CompletionMutation | undefined {
   const generation = params.subagent.delivery?.generation ?? 1;
   if (
@@ -224,8 +222,10 @@ function prepareBlockedSubagentCompletion(
     subagent.suppressCompletionDelivery = true;
   }
   const text =
-    successful && !params.storeReplaced
-      ? "Subagent completion delivery is blocked: " + params.reason
+    successful &&
+    !params.storeReplaced &&
+    requesterOutcome?.reason !== "operator_authority_unavailable"
+      ? `Subagent completion delivery is blocked: ${params.reason} (run ${subagent.runId})`
       : null;
   const queued = text
     ? prepareClaimedSessionDelivery(
@@ -369,7 +369,8 @@ function mutateRequesterBatch(
         // A notice is one paused member's input, not settlement of its frozen cohort.
         if (
           params.outcome.storeReplaced ||
-          params.outcome.disposition === "intentional_non_delivery"
+          params.outcome.disposition === "intentional_non_delivery" ||
+          params.outcome.reason === "operator_authority_unavailable"
         ) {
           subagent.requesterSettleWake = undefined;
         }
@@ -413,6 +414,7 @@ function mutateRequesterBatch(
             },
             now,
             subagent,
+            params.outcome,
           );
           if (!blocked) {
             throw changedOwner();
@@ -444,24 +446,18 @@ function reconcileRequesterWake(
     const original = committed.entries.find(
       ({ subagent }) => subagent.runId === expected.runId,
     )?.subagent;
-    const originalCanonical = original && rowToSubagentRunRecord(bindSubagentRunRecord(original));
-    const expectedCanonical = rowToSubagentRunRecord(bindSubagentRunRecord(expected));
-    if (
-      !originalCanonical ||
-      !expectedCanonical ||
-      !sameRequesterSettleRunIdentity(originalCanonical, expectedCanonical)
-    ) {
+    if (!original || !sameRequesterSettleRunIdentity(original, expected)) {
       throw new Error("Requester wake reconciliation lost its original generation");
     }
     const row = readSubagentRunRow(database, expected.runId);
     if (
-      loadSubagentRunsForChildSessionFromSqlite(originalCanonical.childSessionKey, database).some(
+      loadSubagentRunsForChildSessionFromSqlite(original.childSessionKey, database).some(
         (candidate) =>
           matchesSubagentChildSessionOwner(
             candidate,
-            originalCanonical.childSessionKey,
-            resolveSubagentChildAgentId(originalCanonical),
-          ) && compareSubagentRunGeneration(candidate, originalCanonical) > 0,
+            original.childSessionKey,
+            resolveSubagentChildAgentId(original),
+          ) && compareSubagentRunGeneration(candidate, original) > 0,
       )
     ) {
       throw new Error("Requester wake reconciliation was superseded");
@@ -482,8 +478,8 @@ function reconcileRequesterWake(
       !row ||
       !current ||
       !intended ||
-      !sameRequesterSettleRunIdentity(current, originalCanonical) ||
-      !sameRequesterSettleRunIdentity(intended, originalCanonical) ||
+      !sameRequesterSettleRunIdentity(current, original) ||
+      !sameRequesterSettleRunIdentity(intended, original) ||
       current.pauseReason !== intended.pauseReason ||
       current.completionTarget !== intended.completionTarget ||
       current.expectsCompletionMessage !== intended.expectsCompletionMessage ||

@@ -17,6 +17,12 @@ import {
 import { SessionProviderReviewProjectionSchema } from "./sessions-provider-review.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
+/** Existing directory on a paired session host; never a Gateway-owned checkout. */
+export const SessionDeviceFolderSchema = closedObject({
+  deviceId: NonEmptyString,
+  path: Type.String({ minLength: 1, maxLength: 4096 }),
+});
+
 export const SessionPermissionModeSchema = Type.Union([
   Type.Literal("read-only"),
   Type.Literal("guarded"),
@@ -137,6 +143,8 @@ export const SessionRowSchema = Type.Object(
     /** Shared dashboard default; absent means split. */
     boardPresentation: Type.Optional(Type.Union([Type.Literal("split"), Type.Literal("expanded")])),
     displayName: Type.Optional(Type.String()),
+    /** A title request is currently in flight; runtime-only, never persisted. */
+    titlePending: Type.Optional(Type.Boolean()),
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
     channel: Type.Optional(Type.String()),
@@ -176,10 +184,12 @@ export const SessionRowSchema = Type.Object(
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(SessionRunStatusSchema),
     lastRunError: Type.Optional(Type.String()),
+    suppressErrorNotice: Type.Optional(Type.Boolean()),
     providerReview: Type.Optional(SessionProviderReviewProjectionSchema),
     /** Exact run that produced the latest terminal lifecycle projection. */
     lastRunId: Type.Optional(NonEmptyString),
     restartRecoveryStatus: Type.Optional(Type.Literal("tombstoned")),
+    restartRecoveryCycleId: Type.Optional(NonEmptyString),
     activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),
     parentSessionKey: Type.Optional(Type.String()),
@@ -197,6 +207,7 @@ export const SessionRowSchema = Type.Object(
     swarmGroupId: Type.Optional(Type.String()),
     /** Requester-owned execution counts; never child content or parent synthesis status. */
     swarm: Type.Optional(SessionSwarmSummarySchema),
+    deviceFolder: Type.Optional(SessionDeviceFolderSchema),
     worktree: Type.Optional(
       Type.Object({
         id: Type.String(),

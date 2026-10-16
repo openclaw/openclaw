@@ -11,6 +11,23 @@ read_when:
 wording differs from the original text. It chunks memory into small pieces and
 searches them with embeddings, keywords, or both.
 
+The built-in index supports SQLite and PostgreSQL agent databases. PostgreSQL
+search is experimental and uses engine-local text ranking, so scores and ordering
+can differ from SQLite. It requires `unaccent` for text search, `pg_trgm` for the
+trigram tokenizer, and `vector` for semantic search. Explicit
+`memory.search.provider: "none"` enables keyword-only search without `vector`;
+memory status reports this as `fts-only`. See
+[PostgreSQL memory search](/concepts/memory#postgresql-memory-search) for lifecycle
+behavior and [Database engines](/reference/database-engines#search-on-postgresql)
+for extension setup.
+
+The result-count argument is `maxResults` (an integer of at least 1). The tool
+also accepts `max_results` and `limit` as aliases. If several are supplied,
+`maxResults` takes precedence over `max_results`, which takes precedence over
+`limit`, regardless of argument order. Only the selected value is validated;
+an invalid higher-priority value is rejected rather than falling back to a valid
+alias. The advertised tool schema continues to use `maxResults`.
+
 When indexing Markdown, the builtin engine attaches a heading-only chunk to the
 following content chunk. This keeps short headings from taking search result slots
 on their own while preserving section context and source line references. A final
@@ -35,7 +52,7 @@ explicitly:
 {
   memory: {
     search: {
-      provider: "openai", // or "gemini", "voyage", "mistral", "bedrock", "local", "ollama", "lmstudio", "github-copilot", "openai-compatible"
+      provider: "openai", // or "gemini", "voyage", "mistral", "bedrock", "local", "ollama", "omlx", "lmstudio", "github-copilot", "openai-compatible"
     },
   },
 }
@@ -76,19 +93,22 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 
 ## Supported providers
 
-| Provider          | ID                  | Needs API key | Notes                             |
-| ----------------- | ------------------- | ------------- | --------------------------------- |
-| Bedrock           | `bedrock`           | No            | Uses the AWS credential chain     |
-| DeepInfra         | `deepinfra`         | Yes           | Default model `BAAI/bge-m3`       |
-| Gemini            | `gemini`            | Yes           | Supports image/audio indexing     |
-| GitHub Copilot    | `github-copilot`    | No            | Uses your Copilot subscription    |
-| Local             | `local`             | No            | Managed llama.cpp GGUF, ~0.3 GB   |
-| LM Studio         | `lmstudio`          | No            | Local/self-hosted server          |
-| Mistral           | `mistral`           | Yes           | Default model `mistral-embed`     |
-| Ollama            | `ollama`            | No            | Local/self-hosted server          |
-| OpenAI            | `openai`            | Depends       | API key or eligible Codex OAuth   |
-| OpenAI-compatible | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint |
-| Voyage            | `voyage`            | Yes           | Default model `voyage-4-large`    |
+| Provider                | ID                  | Needs API key | Notes                                   |
+| ----------------------- | ------------------- | ------------- | --------------------------------------- |
+| Bedrock                 | `bedrock`           | No            | Uses the AWS credential chain           |
+| DeepInfra               | `deepinfra`         | Yes           | Default model `BAAI/bge-m3`             |
+| Gemini                  | `gemini`            | Yes           | Supports image/audio indexing           |
+| GitHub Copilot          | `github-copilot`    | No            | Uses your Copilot subscription          |
+| Local                   | `local`             | No            | Managed llama.cpp GGUF, ~0.3 GB         |
+| LM Studio               | `lmstudio`          | No            | Local/self-hosted server                |
+| Mistral                 | `mistral`           | Yes           | Default model `mistral-embed`           |
+| Ollama                  | `ollama`            | No            | Local/self-hosted server                |
+| [oMLX](/providers/omlx) | `omlx`              | No            | Apple Silicon; explicit embedding model |
+| OpenAI                  | `openai`            | Depends       | API key or eligible Codex OAuth         |
+| OpenAI-compatible       | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint       |
+| Voyage                  | `voyage`            | Yes           | Default model `voyage-4-large`          |
+
+To move off Ollama, [llmman](/providers/llmman#advanced-configuration) serves the same `/api/embed`, so `provider: "ollama"` only needs a new `remote.baseUrl`.
 
 ## How search works
 
@@ -99,7 +119,7 @@ flowchart LR
     Q["Query"] --> E["Embedding"]
     Q --> T["Tokenize"]
     E --> VS["Vector search"]
-    T --> BM["BM25 search"]
+    T --> BM["Text search"]
     VS --> M["Weighted merge"]
     BM --> M
     M --> D["Recency and importance"]

@@ -22,11 +22,6 @@ export function resolvePluginHookDirs(params: {
     config: params.config,
     env: process.env,
   });
-  const registry = metadataSnapshot.manifestRegistry;
-  if (registry.plugins.length === 0) {
-    return [];
-  }
-
   const seen = new Set<string>();
   const resolved: PluginHookDirEntry[] = [];
 
@@ -35,12 +30,8 @@ export function resolvePluginHookDirs(params: {
     config: params.config,
     contribution: "hooks",
   })) {
-    for (const raw of roots) {
-      const trimmed = raw.trim();
-      if (!trimmed) {
-        continue;
-      }
-      const candidate = path.resolve(record.rootDir, trimmed);
+    for (const root of roots) {
+      const candidate = path.resolve(record.rootDir, root);
       if (seen.has(candidate)) {
         continue;
       }

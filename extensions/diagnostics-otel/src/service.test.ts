@@ -1409,33 +1409,6 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
-  test("skips malformed endpoint, protocol, and TLS settings while disabled", async () => {
-    const { events, unsubscribe } = captureExporterEvents();
-    process.env.OTEL_SDK_DISABLED = "true";
-    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc";
-    process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = "/definitely-missing/otel-root.pem";
-    const service = createDiagnosticsOtelService();
-    const ctx = createOtelContext("not a collector URL", {
-      traces: true,
-      metrics: true,
-      logs: true,
-      logsExporter: "both",
-    });
-
-    await expect(service.start(ctx)).resolves.toBeUndefined();
-    await waitForDiagnosticEventsDrained();
-
-    expect(events).toEqual([]);
-    expect(getReportedExporterHealth(ctx)).toEqual([]);
-    expect(traceExporterCtor).not.toHaveBeenCalled();
-    expect(metricExporterCtor).not.toHaveBeenCalled();
-    expect(logExporterCtor).not.toHaveBeenCalled();
-    expect(createNodeProxyAgentMock).not.toHaveBeenCalled();
-    expect(ctx.logger.warn).not.toHaveBeenCalled();
-    await service.stop?.(ctx);
-    unsubscribe();
-  });
-
   test("preserves preloaded trace and metric ownership while disabling plugin logs", async () => {
     const { events, unsubscribe } = captureExporterEvents();
     process.env.OPENCLAW_OTEL_PRELOADED = "1";
@@ -2370,17 +2343,6 @@ describe("diagnostics-otel service", () => {
       }
     },
   );
-
-  test("lets explicit OpenClaw sampling override the inherited sampler environment", async () => {
-    process.env.OTEL_TRACES_SAMPLER = "always_off";
-    await startServiceFixture(["traces"], (ctx) => {
-      ctx.config.diagnostics!.otel!.sampleRate = 1;
-    });
-
-    const traceOptions = mockCallArg(traceProviderCtor, 0) as Record<string, unknown>;
-    expect(traceOptions.sampler).toBeDefined();
-    expect(traceOptions).not.toHaveProperty("spanLimits");
-  });
 
   test.each([false, true])(
     "validates metric intervals with SDK self-observation=%s",

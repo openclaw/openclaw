@@ -28,9 +28,9 @@ import {
   loadSessionEntryReadOnly,
   type SessionAccessScope,
 } from "../../config/sessions/session-accessor.js";
+import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   getSessionEntryAsync,
@@ -114,9 +114,11 @@ async function runWithSessionWorkAdmission<T>(
   run: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const params = { ...input };
-  const source = captureIncognitoSessionSource(params);
-  if (source && !("kind" in source)) {
-    return source.actor.sessions.withSharedState(() => runAdmittedWork());
+  const memory = captureMemoryExactSessionReader(params, () => params.signal?.throwIfAborted());
+  if (memory) {
+    return admit(memory.read(params.sessionKey, "list"), () =>
+      memory.read(params.sessionKey, "list"),
+    );
   }
   return runAdmittedWork();
 
@@ -161,7 +163,7 @@ async function runWithSessionWorkAdmission<T>(
 
   async function admit(
     initialEntry: SessionEntry | undefined,
-    readDurableEntry: () => SessionEntry | undefined,
+    readCurrentEntry: () => SessionEntry | undefined,
   ): Promise<T> {
     const lifecycleAbortController = new AbortController();
     const admission = await beginSessionWorkAdmission({
@@ -175,16 +177,8 @@ async function runWithSessionWorkAdmission<T>(
           new Error("Agent work interrupted by a session lifecycle change."),
         ),
       assertAllowed: () => {
-        source?.admissionSignal?.throwIfAborted();
-        if (source && "kind" in source) {
-          source.assertCurrent();
-        }
-        const currentEntry = source
-          ? "kind" in source
-            ? undefined
-            : source.actor.sessions.readSharing(params.sessionKey)?.entry
-          : readDurableEntry();
-        if (source) {
+        const currentEntry = readCurrentEntry();
+        if (memory) {
           const changed = initialEntry
             ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
             : Boolean(currentEntry);

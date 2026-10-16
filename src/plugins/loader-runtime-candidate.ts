@@ -196,6 +196,7 @@ export function loadRuntimePluginCandidate(params: {
     });
   };
   const missingDependencyHint = resolveExternalPluginRuntimeDependencyRepairHint({
+    origin: candidate.origin,
     pluginId,
     packageName: candidate.packageName,
     packageBuild: candidate.packageManifest?.build,
@@ -444,6 +445,7 @@ export function loadRuntimePluginCandidate(params: {
   // Preserve the artifact that actually ran; metadata does not complete runtime registration.
   const artifactSelection = bindPluginRuntimeArtifactSelection(record, {
     ...artifactParams,
+    source: candidate.source,
     runtimeEntry: recovery
       ? runtimeCandidateEntry
       : resolvePluginRuntimeExecutionArtifact(runtimeCandidateEntry),

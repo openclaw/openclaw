@@ -134,10 +134,6 @@ const LATE_GLOBAL_BUILDERS = [
     "getSlackRuntime().channel.inbound.buildContext",
   ],
   [
-    "extensions/telegram/src/bot-deps.ts",
-    "getTelegramRuntime().channel.inbound\n      .buildContext",
-  ],
-  [
     "extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts",
     "getWhatsAppRuntime().channel.inbound.buildContext",
   ],
@@ -193,7 +189,7 @@ const SCOPED_BUILDER_HANDOFFS = [
   [
     "telegram",
     "extensions/telegram/src/bot-message.ts",
-    "buildContext ?? telegramDeps.buildChannelInboundEventContext",
+    "buildContext ?? buildChannelInboundEventContext",
   ],
   [
     "whatsapp",

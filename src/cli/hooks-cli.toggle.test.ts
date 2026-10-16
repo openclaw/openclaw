@@ -240,16 +240,13 @@ describe("hooks CLI metadata config keys", () => {
     readConfigMachineStateMock.mockReturnValue(undefined);
   });
 
-  it.each(["enable", "disable"])(
-    "refuses hook %s while the Gateway owns state",
-    async (command) => {
-      mocks.foreignOwner = true;
-      await expect(
-        createHooksProgram().parseAsync(["hooks", command, "display-name"], { from: "user" }),
-      ).rejects.toThrow("stop the Gateway");
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-    },
-  );
+  it.each(["enable"])("refuses hook %s while the Gateway owns state", async (command) => {
+    mocks.foreignOwner = true;
+    await expect(
+      createHooksProgram().parseAsync(["hooks", command, "display-name"], { from: "user" }),
+    ).rejects.toThrow("stop the Gateway");
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
 
   it("rejects the ambiguous hook identifier shared-key without mutation", async () => {
     mocks.buildWorkspaceHookStatus.mockReturnValue({

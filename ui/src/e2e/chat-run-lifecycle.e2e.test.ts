@@ -226,7 +226,9 @@ suite.define(() => {
 
     expect(await assistantGroup.count()).toBe(1);
     expect(await currentPage.locator(".chat-reading-indicator").count()).toBe(0);
-    expect(await assistantGroup.getByText("Working…", { exact: true }).count()).toBe(1);
+    expect(
+      await assistantGroup.getByText("Waiting for turn to start…", { exact: true }).count(),
+    ).toBe(1);
 
     const artifactDir = path.join(suite.artifactDir, "chat-single-turn-status");
     await currentPage.screenshot({
@@ -501,6 +503,8 @@ suite.define(() => {
     await composer.fill("keep this draft");
     // Deferred responses do not synthesize chat.abort lifecycle events.
     await gateway.resolveDeferred("chat.abort", { ok: true, aborted: true, runIds: [runId] });
+    await currentPage.locator(".chat-working-indicator").waitFor({ state: "visible" });
+    // An answer retires visual activity, not the accepted abort's run ownership.
     await gateway.emitGatewayEvent("chat", {
       sessionKey,
       runId,
@@ -518,9 +522,13 @@ suite.define(() => {
       hasText: "Interrupted",
     });
     expect(await interrupted.count()).toBe(0);
-    await currentPage.locator(".chat-working-indicator").waitFor({ state: "visible" });
+    await currentPage.locator(".chat-working-indicator").waitFor({ state: "detached" });
     expect(await composer.inputValue()).toBe("keep this draft");
     expect(await gateway.getRequests("chat.history")).toHaveLength(historyCount);
+    await composer.fill("");
+    await stop.waitFor({ state: "visible" });
+    await composer.fill("keep this draft");
+    expect(await interrupted.count()).toBe(0);
     await captureMockStopProof(currentPage, "mock-accepted-abort-before-terminal");
     await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "aborted" });
     await currentPage.locator(".chat-working-indicator").waitFor({ state: "detached" });
@@ -719,11 +727,13 @@ suite.define(() => {
     await expect
       .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())
       .toBe("2m 57s");
-    const workingLabel = currentPage.locator(".chat-working-indicator__status > .sr-only");
-    expect(await workingLabel.textContent()).toBe("Working…");
+    const workingLabel = currentPage.locator(".chat-working-indicator__status > span:first-child");
+    expect(await workingLabel.textContent()).toBe("Waiting for turn to start…");
     expect(
-      await currentPage.locator(".chat-working-indicator__status > span:not(.sr-only)").count(),
-    ).toBe(0);
+      await currentPage
+        .locator(".chat-working-indicator__status > span:not(.sr-only)")
+        .allTextContents(),
+    ).toEqual(["Waiting for turn to start…", "·"]);
   });
 
   it.each(["final", "error"] as const)(

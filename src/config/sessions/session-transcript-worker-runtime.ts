@@ -46,6 +46,8 @@ const historyPrewarms = new WeakMap<
 
 function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
   switch (input.kind) {
+    case "history-page":
+      return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
     case "transcript-hydration":
     case "current-turn-entry":
     case "recent-active-events":
@@ -53,8 +55,6 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
       return input.resolvedScope;
     case "transcript-anchors":
       return input.resolved;
-    case "session-row-backfill":
-      return input.params;
     case "session-activity-summary-source":
       return input.scope;
     default:
@@ -64,7 +64,7 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
 
 export function runSessionBranchSummaryWorkerRequest(
   request: SessionBranchSummaryReadRequest,
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ) {
   const { database, ...read } = request;
   return withSessionHistoryWorkerDatabase(
@@ -100,6 +100,7 @@ export async function prewarmSessionHistoryWorker(
         (owner) =>
           owner.prewarm({
             env: captureSessionTranscriptStorageEnvironment(options.env ?? process.env),
+            history: lane === historyLane,
           }),
         lane,
       ).then(
@@ -168,64 +169,75 @@ export function retainSessionHistoryWorkerDatabase(
           aborters: owned.aborters,
         },
         async (admit, requestLane) => {
-          // Reopened lanes check replacement before lending the next request a receipt.
-          const validation = captureOpenClawAgentDatabaseReadValidation(
-            database,
-            owned.nativeSequences.has(requestLane) ? "retained" : "admission",
-          );
           try {
-            const reply = await admit((requestSignal, remaining) =>
-              runWithSqliteDatabaseAdmissionTurn([database.path], () =>
-                requestLane.pool.run(
-                  () => {
-                    assertCurrent();
-                    const input = prepare();
-                    const projection = projectionTarget(input);
-                    owned.nativeSequences.set(requestLane, ++requestLane.nativeSequence);
-                    return {
-                      ...input,
-                      database,
-                      validation: validation?.validation,
-                      projectionReceipt: projection?.sessionId
+            const reply = await admit((requestSignal, remaining) => {
+              // A writer ahead of this read can renew the receipt during admission.
+              const validation = captureOpenClawAgentDatabaseReadValidation(
+                database,
+                owned.nativeSequences.has(requestLane) ? "retained" : "admission",
+              );
+              return runWithSqliteDatabaseAdmissionTurn(
+                [database.path],
+                () =>
+                  requestLane.pool.run(
+                    () => {
+                      assertCurrent();
+                      options.prepareRead?.();
+                      const input = prepare();
+                      const projection = projectionTarget(input);
+                      const projectionReceipt = projection?.sessionId
                         ? readSessionActorProjectionReceipt({
                             path: database.path,
                             sessionKey: projection.sessionKey,
                             sessionId: projection.sessionId,
                           })
-                        : undefined,
-                    } satisfies SessionTranscriptWorkerRequest;
-                  },
-                  {
-                    inputBytes: inputBytes + (validation?.inputBytes ?? 0),
-                    timeoutMs: remaining,
-                    signal: requestSignal,
-                    onRequest: onRequest
-                      ? (value, context) => {
-                          const effect = (async () => {
-                            context.signal.throwIfAborted();
-                            const response = await onRequest(value, context.signal);
-                            context.signal.throwIfAborted();
-                            return response ?? { input: null, timeoutMs };
-                          })();
-                          hostEffects.add(effect);
-                          owned.hostEffects.add(effect);
-                          const releaseEffect = () => {
-                            hostEffects.delete(effect);
-                            owned.hostEffects.delete(effect);
-                          };
-                          void effect.then(releaseEffect, releaseEffect);
-                          return effect;
-                        }
-                      : undefined,
-                    onExecutionSettled: ({ retired }) => {
-                      if (retired) {
-                        retirement = rotateDatabaseWorkers(requestLane);
-                      }
+                        : undefined;
+                      owned.nativeSequences.set(requestLane, ++requestLane.nativeSequence);
+                      return {
+                        ...input,
+                        database,
+                        validation: validation?.validation,
+                        projectionReceipt: projectionReceipt && {
+                          ...projectionReceipt,
+                          ...(input.kind === "history-page" && !projectionReceipt.entrySessionKey
+                            ? { contextOnly: true }
+                            : {}),
+                        },
+                      } satisfies SessionTranscriptWorkerRequest;
                     },
-                  },
-                ),
-              ),
-            );
+                    {
+                      inputBytes: inputBytes + (validation?.inputBytes ?? 0),
+                      timeoutMs: remaining,
+                      signal: requestSignal,
+                      onRequest: onRequest
+                        ? (value, context) => {
+                            const effect = (async () => {
+                              context.signal.throwIfAborted();
+                              const response = await onRequest(value, context.signal);
+                              context.signal.throwIfAborted();
+                              return response ?? { input: null, timeoutMs };
+                            })();
+                            hostEffects.add(effect);
+                            owned.hostEffects.add(effect);
+                            const releaseEffect = () => {
+                              hostEffects.delete(effect);
+                              owned.hostEffects.delete(effect);
+                            };
+                            void effect.then(releaseEffect, releaseEffect);
+                            return effect;
+                          }
+                        : undefined,
+                      onExecutionSettled: ({ retired }) => {
+                        if (retired) {
+                          retirement = rotateDatabaseWorkers(requestLane);
+                        }
+                      },
+                    },
+                  ),
+                [],
+                requestSignal,
+              );
+            });
             await retirement;
             const received =
               unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
@@ -237,8 +249,7 @@ export function retainSessionHistoryWorkerDatabase(
                 received.kind === "session-cleanup" ||
                 received.kind === "session-exact-entries" ||
                 received.kind === "session-entry-current" ||
-                received.kind === "session-runtime-target" ||
-                received.kind === "session-diagnostic-text") &&
+                received.kind === "session-runtime-target") &&
               received.source
             ) {
               knownSource = true;

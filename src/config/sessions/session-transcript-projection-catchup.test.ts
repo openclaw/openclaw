@@ -72,22 +72,18 @@ function publishPreparedBase(params: {
       params.databaseOptions,
     ),
   ).toBe(true);
-  expect(
-    runOpenClawAgentWriteTransaction((database) => {
-      const deleted = deletePreparedSessionTranscriptProjectionChunkInTransaction(database.db, {
-        claimId: params.claimId,
-        maxRowsPerTable: 512,
-        sessionId: params.sessionId,
-      });
-      expect(deleted).toEqual({ hasMore: false, owned: true });
-      return appendPreparedSessionTranscriptProjectionChunkInTransaction(database.db, {
-        activeRows: params.plan.activeRows,
-        claimId: params.claimId,
-        ftsRows: params.plan.ftsRows,
-        sessionId: params.sessionId,
-      });
-    }, params.databaseOptions),
-  ).toBe(true);
+  runOpenClawAgentWriteTransaction((database) => {
+    const deleted = deletePreparedSessionTranscriptProjectionChunkInTransaction(database.db, {
+      maxRowsPerTable: 512,
+      sessionId: params.sessionId,
+    });
+    expect(deleted).toEqual({ hasMore: false });
+    appendPreparedSessionTranscriptProjectionChunkInTransaction(database.db, {
+      activeRows: params.plan.activeRows,
+      ftsRows: params.plan.ftsRows,
+      sessionId: params.sessionId,
+    });
+  }, params.databaseOptions);
 }
 
 describe("session transcript projection append catch-up", () => {
@@ -160,7 +156,7 @@ describe("session transcript projection append catch-up", () => {
     },
   );
 
-  it.each(["append", "reset", "branch", "generation"])(
+  it.each(["append", "reset", "branch", "generation", "claim"])(
     "finalizes only an append-only source change (%s)",
     async (label) => {
       const fixture = await prepareDirtyProjection(label);
@@ -189,7 +185,13 @@ describe("session transcript projection append catch-up", () => {
         sessionId: fixture.scope.sessionId,
       });
       runOpenClawAgentWriteTransaction((database) => {
-        if (label === "generation") {
+        if (label === "claim") {
+          database.db
+            .prepare(
+              "UPDATE session_transcript_index_state SET updated_at = ? WHERE session_id = ?",
+            )
+            .run(claimId - 1, fixture.scope.sessionId);
+        } else if (label === "generation") {
           rotateTranscriptGenerationInTransaction(database, fixture.scope.sessionId);
         } else if (label !== "append") {
           appendTranscriptEventInTransaction(

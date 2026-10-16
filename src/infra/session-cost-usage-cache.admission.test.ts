@@ -29,8 +29,6 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "../state/openclaw-agent-db.js";
-import * as agentExecution from "../state/openclaw-agent-execution.js";
-import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import * as writerAdmission from "../state/openclaw-agent-write-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -43,20 +41,67 @@ import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { writeSessionCostUsageRollupInDatabase } from "./session-cost-usage-cache.kernel.js";
 import {
-  deleteSessionCostUsageRollupsExcept,
   isSessionCostUsageRefreshRunning,
   prepareSessionCostUsageRefreshLock,
 } from "./session-cost-usage-cache.sqlite.js";
-import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
+import {
+  pruneUsageCostRollupsForTest,
+  readSessionCostUsageRollupRows,
+} from "./session-cost-usage-cache.test-support.js";
+import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
 import { withSessionCostUsageWorkerDatabases } from "./session-cost-usage-worker-scope.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "./sqlite-database-admission.js";
 import * as integrityWorker from "./sqlite-integrity-worker.js";
+import { WorkerTaskPool } from "./worker-task-pool.js";
+import type { WorkerTaskInput, WorkerTaskOptions } from "./worker-task-pool.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawStateDatabaseForTest();
+});
+
+it("records all uncommitted rollups when a scan fails before publication", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-uncommitted-health";
+    const sessionFiles = ["a", "b"].map((id) => state.path(`${id}.jsonl`));
+    for (const file of sessionFiles) {
+      fs.writeFileSync(file, "{}\n");
+    }
+    // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the pool receiver.
+    const run = WorkerTaskPool.prototype.run;
+    const observer = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
+      this: WorkerTaskPool<unknown, unknown>,
+      input: WorkerTaskInput<unknown>,
+      options: WorkerTaskOptions<unknown>,
+    ) {
+      const onRequest = options.onRequest;
+      if (!onRequest) {
+        return run.call(this, input, options);
+      }
+      return run.call(this, input, {
+        ...options,
+        onRequest: async (_value, context) => {
+          // Exercise the host's scan-failure boundary without a wall-clock-dependent batch.
+          for (const sessionFile of sessionFiles) {
+            await onRequest({ kind: "refresh-session", input: { sessionFile } }, context);
+          }
+          throw new Error("synthetic scan failure");
+        },
+      });
+    });
+    try {
+      await expect(
+        refreshCostUsageCacheForAgent({ config: {}, agentId, sessionFiles }),
+      ).rejects.toThrow("synthetic scan failure");
+    } finally {
+      observer.mockRestore();
+    }
+    expect(readSessionCostUsageRollupRows(agentId)).toEqual([]);
+    const failures = await openUsageCostRefreshFailures(state.env).entries();
+    expect(failures.map(({ value }) => value.sessionFile).toSorted()).toEqual(sessionFiles);
+  });
 });
 
 it.each(["rollup", "prune"] as const)(
@@ -94,26 +139,31 @@ it.each(["rollup", "prune"] as const)(
       const before = readSnapshot();
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const reservation = runOpenClawAgentWorkerWrite({ agentId, path: databasePath }, async () => {
-        entered.resolve();
-        await release.promise;
-      });
+      const reservation = writerAdmission.runOpenClawAgentWorkerWrite(
+        { agentId, path: databasePath },
+        async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      );
       await entered.promise;
       let settled = false;
       const writing = (async () => {
         switch (operation) {
           case "rollup":
             expect(
-              await lock!.writeRollup({
-                rollupId: "session.jsonl",
-                valueJson: Buffer.from('{"totalTokens":2}'),
-                blob: null,
-                updatedAt: 2,
-              }),
+              await lock!.writeRollup([
+                {
+                  rollupId: "session.jsonl",
+                  valueJson: Buffer.from('{"totalTokens":2}'),
+                  blob: null,
+                  updatedAt: 2,
+                },
+              ]),
             ).toBe(true);
             break;
           case "prune":
-            await deleteSessionCostUsageRollupsExcept({
+            await pruneUsageCostRollupsForTest({
               agentId,
               databasePath,
               rows: before.rows,
@@ -139,7 +189,14 @@ it.each(["rollup", "prune"] as const)(
         expect(readSessionCostUsageRollupRows(agentId, databasePath)).toEqual(
           operation === "prune"
             ? []
-            : [{ key: "session.jsonl", valueJson: '{"totalTokens":2}', updatedAt: 2 }],
+            : [
+                {
+                  key: "session.jsonl",
+                  valueJson: '{"totalTokens":2}',
+                  updatedAt: 2,
+                  bodyBytes: 0,
+                },
+              ],
         );
       } finally {
         await lock?.release();
@@ -212,12 +269,14 @@ it.each([
           }
           try {
             expect(await lock.acquire()).toBe(true);
-            return await lock.writeRollup({
-              rollupId: "session.jsonl",
-              valueJson: Buffer.from('{"totalTokens":7}'),
-              blob: null,
-              updatedAt: 1,
-            });
+            return await lock.writeRollup([
+              {
+                rollupId: "session.jsonl",
+                valueJson: Buffer.from('{"totalTokens":7}'),
+                blob: null,
+                updatedAt: 1,
+              },
+            ]);
           } finally {
             await lock.release();
           }
@@ -256,7 +315,7 @@ it.each([
             expect(rows.map((row) => row.key)).toEqual([sessionFile]);
           } else {
             expect(rows).toEqual([
-              { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1 },
+              { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1, bodyBytes: 0 },
             ]);
           }
         }
@@ -393,11 +452,11 @@ it.for(["rollup", "prune"] as const)(
         blob: null,
         updatedAt: 1,
       };
-      expect(await owner.writeRollup(row)).toBe(true);
+      expect(await owner.writeRollup([row])).toBe(true);
       const before = readSessionCostUsageRollupRows(agentId, database.path);
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const held = runOpenClawAgentWorkerWrite(options, async () => {
+      const held = writerAdmission.runOpenClawAgentWorkerWrite(options, async () => {
         entered.resolve();
         await release.promise;
       });
@@ -406,7 +465,7 @@ it.for(["rollup", "prune"] as const)(
       const cancellation = new Error("Usage callback deadline expired");
       const writing =
         operation === "rollup"
-          ? owner.writeRollup({ ...row, rollupId: "canceled" }, controller.signal)
+          ? owner.writeRollup([{ ...row, rollupId: "canceled" }], controller.signal)
           : owner.pruneRows(before, controller.signal);
       const outcome = writing.then(
         () => undefined,
@@ -443,17 +502,19 @@ it("rejects a queued rollup after its refresh authority is revoked", async () =>
     expect(await owner.acquire()).toBe(true);
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const reservation = runOpenClawAgentWorkerWrite(options, async () => {
+    const reservation = writerAdmission.runOpenClawAgentWorkerWrite(options, async () => {
       entered.resolve();
       await release.promise;
     });
     await entered.promise;
-    const writing = owner.writeRollup({
-      rollupId: "revoked",
-      valueJson: Buffer.from("{}"),
-      blob: null,
-      updatedAt: 1,
-    });
+    const writing = owner.writeRollup([
+      {
+        rollupId: "revoked",
+        valueJson: Buffer.from("{}"),
+        blob: null,
+        updatedAt: 1,
+      },
+    ]);
     const rejected = expect(writing).rejects.toThrow("Refresh revoked");
     current = false;
     release.resolve();
@@ -467,55 +528,6 @@ it("rejects a queued rollup after its refresh authority is revoked", async () =>
     expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
   });
 });
-
-it.each(["rollup", "prune"] as const)(
-  "cancels a queued native usage %s before the writer settles",
-  async (operation) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      vi.spyOn(agentExecution, "supportsOpenClawAgentDatabaseExecution").mockReturnValue(false);
-      const agentId = "usage-queued-deadline";
-      const options = { agentId, env: state.env };
-      const database = openOpenClawAgentDatabase(options);
-      const owner = prepareSessionCostUsageRefreshLock(agentId, database.path, { env: state.env });
-      expect(await owner.acquire()).toBe(true);
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const reservation = runOpenClawAgentWorkerWrite(options, async () => {
-        entered.resolve();
-        await release.promise;
-      });
-      await entered.promise;
-      const admit = vi.spyOn(writerAdmission, "runOpenClawAgentWriteAdmission");
-      const controller = new AbortController();
-      const expired = new Error("usage host callback deadline expired");
-      const writing =
-        operation === "rollup"
-          ? owner.writeRollup(
-              {
-                rollupId: "expired",
-                valueJson: Buffer.from("{}"),
-                blob: null,
-                updatedAt: 1,
-              },
-              controller.signal,
-            )
-          : owner.pruneRows([], controller.signal);
-      const outcome = Promise.allSettled([writing]);
-      try {
-        // Check the queue boundary before awaiting: a missing signal fails without wedging cleanup.
-        expect(admit.mock.calls.at(-1)?.[4]).toBe(controller.signal);
-        controller.abort(expired);
-        expect(await outcome).toEqual([{ status: "rejected", reason: expired }]);
-        expect(readSessionCostUsageRollupRows(agentId, database.path)).toEqual([]);
-      } finally {
-        release.resolve();
-        await reservation;
-        await outcome;
-        await owner.release();
-      }
-    });
-  },
-);
 
 it("releases the acquired refresh lock after the caller changes its state directory", async () => {
   const originalRoot = tempDirs.make("openclaw-usage-lock-origin-");
@@ -580,7 +592,7 @@ it("keeps usage exclusion in its mixed-case Windows state root", async () => {
     );
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const reservation = runOpenClawAgentWorkerWrite(
+    const reservation = writerAdmission.runOpenClawAgentWorkerWrite(
       { ...options, path: database.path },
       async () => {
         entered.resolve();
@@ -670,7 +682,7 @@ it("finishes a foreground session write while pruning a cold existing usage stor
         admit(
           options,
           async () => {
-            if (!("target" in options) && options.path === storePath && priority !== "background") {
+            if (options.path === storePath && priority !== "background") {
               writerEntered.resolve();
             }
             return write();
@@ -760,17 +772,19 @@ it.each([
           expect(written.updatedAt).toBeLessThanOrEqual(writeFinishedAt);
         }
         expect(
-          await lock.writeRollup({
-            rollupId: "session.jsonl",
-            valueJson: Buffer.from('{"totalTokens":7}'),
-            blob: null,
-            updatedAt: 1,
-          }),
+          await lock.writeRollup([
+            {
+              rollupId: "session.jsonl",
+              valueJson: Buffer.from('{"totalTokens":7}'),
+              blob: null,
+              updatedAt: 1,
+            },
+          ]),
         ).toBe(true);
         const database = openOpenClawAgentDatabase({ agentId, path: storePath, env: state.env });
         expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry).toEqual(written);
         expect(readSessionCostUsageRollupRows(agentId, storePath)).toEqual([
-          { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1 },
+          { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1, bodyBytes: 0 },
         ]);
       } finally {
         await lock.release();
@@ -796,19 +810,21 @@ it("acquires a current usage writer after its captured executor retires", async 
         delivery: { kind: "none" },
       });
       expect(
-        await lock.writeRollup({
-          rollupId: "session.jsonl",
-          valueJson: Buffer.from('{"totalTokens":7}'),
-          blob: null,
-          updatedAt: 1,
-        }),
+        await lock.writeRollup([
+          {
+            rollupId: "session.jsonl",
+            valueJson: Buffer.from('{"totalTokens":7}'),
+            blob: null,
+            updatedAt: 1,
+          },
+        ]),
       ).toBe(true);
       const current = openOpenClawAgentDatabase({ agentId, path: storePath, env: state.env });
       expect(readExactSessionEntryRow(current, scope.sessionKey)?.entry.sessionId).toBe(
         entry.sessionId,
       );
       expect(readSessionCostUsageRollupRows(agentId, storePath)).toEqual([
-        { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1 },
+        { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1, bodyBytes: 0 },
       ]);
     } finally {
       await lock.release();
@@ -885,6 +901,38 @@ it("allows first session creation while a fresh usage refresh awaits acquisition
       expect(await isSessionCostUsageRefreshRunning(agentId, storePath)).toBe(false);
     } finally {
       await lock.release();
+    }
+  });
+});
+
+it("rolls back the entire rollup batch when a later row fails", async () => {
+  const stateDir = tempDirs.make("openclaw-usage-cache-batch-rollback-");
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    const agentId = "worker-1";
+    const { db } = openOpenClawAgentDatabase({ agentId });
+    const owner = prepareSessionCostUsageRefreshLock(agentId);
+    expect(await owner.acquire()).toBe(true);
+    await owner.pruneRows([]);
+    db.exec(`CREATE TRIGGER refuse_rollup_batch BEFORE INSERT ON cache_entries
+      WHEN NEW.key = 'second'
+      BEGIN SELECT RAISE(ABORT, 'rollup batch refused'); END;`);
+    const rows = ["first", "second"].map((rollupId) => ({
+      rollupId,
+      valueJson: new TextEncoder().encode("{}"),
+      blob: null,
+      updatedAt: 1,
+    }));
+    try {
+      await expect(owner.writeRollup(rows)).rejects.toThrow("rollup batch refused");
+      expect(readSessionCostUsageRollupRows(agentId)).toEqual([]);
+      db.exec("DROP TRIGGER refuse_rollup_batch");
+      expect(await owner.writeRollup(rows)).toBe(true);
+      expect(readSessionCostUsageRollupRows(agentId).map((row) => row.key)).toEqual([
+        "first",
+        "second",
+      ]);
+    } finally {
+      await owner.release();
     }
   });
 });

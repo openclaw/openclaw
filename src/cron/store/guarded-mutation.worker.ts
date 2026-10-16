@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
@@ -10,9 +10,10 @@ import { CronAgentDeletionBlockedError } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
+import type { CronStoredJob, CronStoreFile } from "../types.js";
 import { planCronJobMutation, resolveCronJobMutationSnapshot } from "./job-mutations.worker.js";
 import { readCronJobNamesInDatabase } from "./job-name.kernel.js";
-import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
+import { updateCronRuntimeRow } from "./row-codec.js";
 import { recordSkippedCronRequestInDatabase } from "./run-history.kernel.js";
 import {
   findActiveCronRunReceiptInDatabase,
@@ -20,29 +21,30 @@ import {
 } from "./run-receipt-store.js";
 import { retireCronRunTriggerStateInDatabase } from "./run-receipt-trigger-state.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
-import { loadCronRuntimeAuthorities } from "./runtime-authority-store.js";
 import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
 import { CronJobsStoreChangedError } from "./save-error.js";
-import { saveCronStoreChangesInDatabase, prepareCronStoreChanges } from "./save.kernel.js";
+import {
+  loadCronStoreForChanges,
+  saveCronStoreChangesInDatabase,
+  prepareCronStoreChanges,
+} from "./save.kernel.js";
 import type { PreparedCronStoreChanges } from "./save.types.js";
+import { projectCronJobStateThroughStorageCodec } from "./state-codec.js";
 import type { CronAdmittedStoreTransactionHooks } from "./transaction-hooks.types.js";
 
 type MutationInput = CronRuntimeWorkerOperations["cron.mutateJobs"]["input"];
 
-function loadCronMutationStore(db: DatabaseSync, storeKey: string) {
-  const rows = loadCronRows(db, storeKey);
-  const store = loadedCronStoreFromRows(rows).store;
-  loadCronRuntimeAuthorities({ db, storeKey, jobs: store.jobs });
-  return store;
-}
-
-function retireCronMutationTriggerState(db: DatabaseSync, storeKey: string, jobId: string): void {
+function retireCronMutationTriggerState(
+  db: EngineConnection,
+  storeKey: string,
+  jobId: string,
+  job: CronStoredJob | undefined,
+): void {
   const active = findActiveCronRunReceiptInDatabase({ database: db, storePath: storeKey, jobId });
   if (active) {
     retireCronRunTriggerStateInDatabase({ database: db, handle: active });
     return;
   }
-  const job = loadedCronStoreFromRows(loadCronRows(db, storeKey, new Set([jobId]))).store.jobs[0];
   const startedAtMs = job?.state.runningAtMs;
   if (!job || startedAtMs === undefined) {
     return;
@@ -61,7 +63,7 @@ function retireCronMutationTriggerState(db: DatabaseSync, storeKey: string, jobI
 }
 
 function applyCronReceiptMutation(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: MutationInput,
   changes: PreparedCronStoreChanges,
 ): void {
@@ -74,9 +76,7 @@ function applyCronReceiptMutation(
     if (!nextJob) {
       throw new Error("Cron schedule mutation has no target job");
     }
-    const current = loadedCronStoreFromRows(
-      loadCronRows(db, input.storeKey, new Set([mutation.jobId])),
-    ).store.jobs[0];
+    const current = changes.previousById.get(mutation.jobId);
     if (current?.state.runningAtMs !== undefined) {
       // Each committed edit must remain distinct when a passive editor observed an older run.
       nextJob.state.runningScheduleChangeId = randomUUID();
@@ -85,16 +85,21 @@ function applyCronReceiptMutation(
     }
   }
   if (mutation.triggerStateChanged) {
-    retireCronMutationTriggerState(db, input.storeKey, mutation.jobId);
+    retireCronMutationTriggerState(
+      db,
+      input.storeKey,
+      mutation.jobId,
+      changes.previousById.get(mutation.jobId),
+    );
   }
 }
 
 function cancelChangedQueuedRuns(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: MutationInput,
   changes: PreparedCronStoreChanges,
-  previousJobs: ReturnType<typeof loadCronMutationStore>["jobs"],
-  currentStore: ReturnType<typeof loadCronMutationStore>,
+  previousJobs: CronStoredJob[],
+  currentStore: CronStoreFile,
   receiptSchema: ReturnType<typeof prepareCronRunReceiptWriteSchema>,
 ): void {
   const currentJobs = new Map(currentStore.jobs.map((job) => [job.id, job]));
@@ -159,13 +164,22 @@ export function mutateCronJobsInWorker(
     input.snapshot,
     database.path,
   );
+  // Runtime postimages retain cleared fields as undefined; compare their persisted
+  // state without normalizing the observed definition or private authority.
+  const preconditionJob = input.preconditionJob
+    ? {
+        ...input.preconditionJob,
+        state: projectCronJobStateThroughStorageCodec(input.preconditionJob.state),
+      }
+    : undefined;
   let transactionRefusal: CronJobsStoreChangedError | undefined;
   try {
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
         try {
           const receiptSchema = prepareCronRunReceiptWriteSchema(db);
-          const previous = loadCronMutationStore(db, input.storeKey);
+          const inventory = loadCronStoreForChanges(db, input.storeKey);
+          const previous = inventory.store;
           if (input.agentId !== undefined && isAgentDeletionBlocked(input.agentId, {}, db)) {
             throw new CronAgentDeletionBlockedError(input.agentId);
           }
@@ -180,15 +194,22 @@ export function mutateCronJobsInWorker(
           ) {
             throw new CronJobsStoreChangedError(input.storeKey);
           }
-          // Compare the transported representation without rerunning an effectful host precondition.
-          if (
-            input.preconditionJob &&
-            !isDeepStrictEqual(
-              structuredClone(previous.jobs.find((job) => job.id === input.preconditionJob?.id)),
-              input.preconditionJob,
-            )
-          ) {
-            throw new CronJobsStoreChangedError(input.storeKey);
+          // Compare both state encodings (including legacy lastStatus) without
+          // rerunning an effectful host precondition or normalizing authority.
+          if (preconditionJob) {
+            const current = previous.jobs.find((job) => job.id === preconditionJob.id);
+            if (
+              !current ||
+              !isDeepStrictEqual(
+                {
+                  ...structuredClone(current),
+                  state: projectCronJobStateThroughStorageCodec(current.state),
+                },
+                preconditionJob,
+              )
+            ) {
+              throw new CronJobsStoreChangedError(input.storeKey);
+            }
           }
           const plan = planCronJobMutation(previous, input.jobMutation, mutationSnapshot);
           const changes = prepareCronStoreChanges(previous, plan.next);
@@ -205,6 +226,7 @@ export function mutateCronJobsInWorker(
             input.storeKey,
             input.storeKey,
             changes,
+            inventory,
             undefined,
             hooks,
           );

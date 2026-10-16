@@ -37,9 +37,6 @@ function readGroupMembers(groupId: number): GroupMember[] {
 }
 
 function retainAdoptedCleanup(rootPid: number, cleanupTimeoutMs: number): void {
-  if (!isSupported()) {
-    return;
-  }
   const deadline = performance.now() + Math.max(CLEANUP_DEADLINE_MS, cleanupTimeoutMs);
   let quietScans = 0;
   const tick = () => {
@@ -55,6 +52,10 @@ function retainAdoptedCleanup(rootPid: number, cleanupTimeoutMs: number): void {
       }
       if (member.ppid === process.pid && member.state === "Z") {
         try {
+          // Native first use can collect a process report; empty and live groups do not need it.
+          if (!isSupported()) {
+            return;
+          }
           if (inspectChildWaitState(member.pid).kind === "exited" && reapChild(member.pid)) {
             continue;
           }

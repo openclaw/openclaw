@@ -101,15 +101,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     return withFreshOpenClawAgentDatabaseReadOnly(operation, options, behavior);
   }
   if (isIncognitoOpenClawAgentSqlitePath(pathname, { agentId, env: options.env })) {
-    // Read-only misses must not create process-lifetime handles; only creation and
-    // write paths may materialize the process-held incognito database.
-    const database = getOpenClawAgentDatabaseIfOpen({ ...options, agentId });
-    if (database && behavior.allowExtension) {
-      throw new Error("Extension-capable read-only access is unavailable for incognito databases.");
-    }
-    return database
-      ? readOpenClawAgentDatabase(database, operation)
-      : { found: false, reason: "database-missing" };
+    return { found: false, reason: "database-missing" };
   }
   // Borrow only outside a transaction so readers see committed rows.
   // The writer owns reused handles; this call closes only fresh connections.

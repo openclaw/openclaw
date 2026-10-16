@@ -332,9 +332,23 @@ describe("models.list account service tiers", () => {
   );
 });
 
-it("publishes Daybreak restrictions through the real model catalog projection", async () => {
-  const ids = ["gpt-daybreak-blue-latest", "gpt-daybreak-red-latest"];
+it("publishes provider tier restrictions through the model catalog projection", async () => {
+  const ids = ["synthetic-priority-model", "synthetic-default-model"];
+  const pluginRegistry = createEmptyPluginRegistry();
+  pluginRegistry.providers.push({
+    pluginId: "openai",
+    source: "test",
+    provider: {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      resolveFastModeSupport: ({ modelId }) => modelId === ids[0],
+      resolveServiceTiers: ({ modelId }) =>
+        modelId === ids[0] ? ["default", "priority"] : ["default"],
+    },
+  });
   const context = createModelsListTestContext({
+    pluginRegistry,
     cfg: {
       agents: {
         defaults: {
@@ -349,7 +363,7 @@ it("publishes Daybreak restrictions through the real model catalog projection", 
     preparedAuthStore: {
       version: 1,
       profiles: {
-        "openai:daybreak-fixture": {
+        "openai:policy-fixture": {
           type: "api_key",
           provider: "openai",
           key: "synthetic-api-key",

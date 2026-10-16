@@ -239,12 +239,12 @@ describe("TOOLS.md migration", () => {
           mode === 0o640 &&
           !sourceTightened
         ) {
-          const readFile = handle.readFile.bind(handle);
-          vi.spyOn(handle, "readFile").mockImplementationOnce(async () => {
-            const content = await readFile();
+          const read = handle.read.bind(handle);
+          vi.spyOn(handle, "read").mockImplementationOnce(async (...readArgs) => {
+            const result = await read(...readArgs);
             await fs.chmod(fixture.toolsPath, 0o600);
             sourceTightened = true;
-            return content;
+            return result;
           });
         }
         return handle;

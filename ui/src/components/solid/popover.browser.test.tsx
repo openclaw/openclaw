@@ -8,6 +8,84 @@ import { Popover, type PopoverHandle } from "./popover.tsx";
 afterEach(cleanup);
 
 describe("Solid native popover", () => {
+  it("releases transient content while closed and opens with current data and focus", async () => {
+    const [value, setValue] = createSignal("First");
+    let handle!: PopoverHandle;
+    const view = render(() => (
+      <Popover
+        id="transient"
+        label="Transient"
+        lazy="while-open"
+        sameRoot
+        ref={(next) => (handle = next)}
+      >
+        <input autofocus aria-label="Current value" value={value()} />
+      </Popover>
+    ));
+    flush();
+    expect(handle.overlay.surface.querySelector("input")).toBeNull();
+    setValue("Second");
+    flush();
+    expect(handle.show()).toBe(true);
+    const input = view.getByRole("textbox") as HTMLInputElement;
+    expect(input.value).toBe("Second");
+    expect(document.activeElement).toBe(input);
+    await phase(handle.overlay.surface, "open");
+    expect(document.querySelectorAll(":popover-open")).toHaveLength(1);
+    expect(handle.hide()).toBe(true);
+    expect(handle.overlay.phase).toBe("closing");
+    expect(input.isConnected).toBe(true);
+    expect(handle.show()).toBe(true);
+    expect(view.getByRole("textbox")).toBe(input);
+    await phase(handle.overlay.surface, "open");
+    handle.hide();
+    await phase(handle.overlay.surface, "hidden");
+    expect(handle.overlay.surface.querySelector("input")).toBeNull();
+    setValue("Third");
+    flush();
+    handle.show();
+    expect((view.getByRole("textbox") as HTMLInputElement).value).toBe("Third");
+  });
+
+  it("keeps a pinned popover open outside and closes once with Escape", async () => {
+    let handle!: PopoverHandle;
+    const changes: boolean[] = [];
+    const view = render(() => (
+      <>
+        <Popover
+          id="pinned-popover"
+          label="Pinned details"
+          dismissOutsidePointer={false}
+          dismissOutsideFocus={false}
+          onOpenChange={(open) => changes.push(open)}
+          ref={(value) => (handle = value)}
+        >
+          <input aria-label="Pinned draft" />
+        </Popover>
+        <input aria-label="Outside" />
+      </>
+    ));
+    flush();
+    const button = view.getByRole("button", { name: "Pinned details" });
+    const outside = view.getByRole("textbox", { name: "Outside" });
+    await userEvent.click(button);
+    await phase(handle.overlay.surface, "open");
+    const input = view.getByRole("textbox", { name: "Pinned draft" });
+    await userEvent.fill(input, "Unsaved draft");
+    await userEvent.click(outside);
+    expect(handle.overlay.open).toBe(true);
+    expect(document.activeElement).toBe(outside);
+    input.focus();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(outside);
+    expect(handle.overlay.open).toBe(true);
+    expect(changes).toEqual([true]);
+    await userEvent.keyboard("{Escape}");
+    await phase(handle.overlay.surface, "hidden");
+    expect(changes).toEqual([true, false]);
+    expect(document.activeElement).toBe(button);
+  });
+
   it("lets a focused control consume Escape before dismissing the popover", async () => {
     let handle!: PopoverHandle;
     const view = render(() => (

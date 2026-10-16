@@ -13,7 +13,6 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import {
   BASE_HEAD,
   BRANCH,
@@ -62,7 +61,7 @@ describe("Gateway GitHub publication", () => {
         }
       });
       expect(warning).toHaveBeenCalledExactlyOnceWith(
-        "Plugin publication-compat-diagnostic: deferOrphanedRequests is deprecated; use deferOrphanedRequestsAsync instead. This method no longer performs publication work; use its replacement. It will be removed in a later release after stable deprecation.",
+        "Plugin publication-compat-diagnostic: deferOrphanedRequests is deprecated; use deferOrphanedRequestsAsync instead. This method no longer performs publication work; use its replacement. Final compatibility day: 2026-12-31. Removal ships in the first January 2027 stable release; no SDK major is required.",
         { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
       );
     } finally {
@@ -466,11 +465,10 @@ describe("Gateway GitHub publication", () => {
     const fallback = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
       const command = argv.join(" ");
-      if (command === "git rev-parse --verify HEAD^{commit}") {
-        return commandResult(`${"f".repeat(40)}\n`);
-      }
-      if (command === "git show -s --format=%B HEAD") {
-        return commandResult("A later local commit\n");
+      if (command === "git show -s --no-show-signature --format=%H%n%T%n%P%n%B HEAD") {
+        return commandResult(
+          `${"f".repeat(40)}\n${WORKSPACE_TREE}\n${OLD_HEAD}\nA later local commit\n`,
+        );
       }
       return await fallback(argv, options);
     });
@@ -510,7 +508,8 @@ describe("Gateway GitHub publication", () => {
         title: "Publish once",
       };
 
-      const lifecycleDenied = createDeferred();
+      const lifecycleAttempted = createDeferred();
+      let duplicatePending = false;
       const prepareLifecycle = publicationLifecycles.prepareGitHubPublicationSessionLifecycle;
       const observeLifecycle = vi
         .spyOn(publicationLifecycles, "prepareGitHubPublicationSessionLifecycle")
@@ -520,9 +519,10 @@ describe("Gateway GitHub publication", () => {
             readCurrent() {
               try {
                 return authority.readCurrent();
-              } catch (error) {
-                lifecycleDenied.resolve();
-                throw error;
+              } finally {
+                if (duplicatePending) {
+                  lifecycleAttempted.resolve();
+                }
               }
             },
           };
@@ -549,49 +549,18 @@ describe("Gateway GitHub publication", () => {
           duplicateReply.release();
           await withinTest(duplicateSettled.promise, signal);
         }
+        duplicatePending = admission === "pending";
         releaseRepository();
-        if (admission === "pending") {
-          await withinTest(Promise.race([lifecycleDenied.promise, ...requests]), signal);
-          expect(
-            commands.filter(
-              (argv) =>
-                argv.includes("commit-tree") || argv.includes("push") || argv.includes("POST"),
-            ),
-          ).toEqual([]);
-          const row = database.db
-            .prepare(
-              "SELECT request_id, status FROM github_publication_requests WHERE idempotency_key = ?",
-            )
-            .get(request.idempotencyKey);
-          expect(row).toMatchObject({ request_id: expect.any(String), status: "publishing" });
-          duplicateReply.release();
-          const outcomes = await Promise.allSettled(requests);
-          expect(outcomes[0]).toEqual({
-            status: "rejected",
-            reason: expect.any(GitHubPublicationRecoveryPendingError),
-          });
-          // The duplicate can join the interrupted attempt or resume after its lease settles.
-          for (const outcome of outcomes.slice(1)) {
-            if (outcome.status === "fulfilled") {
-              expect(outcome.value).toMatchObject({
-                status: "published",
-                requestId: row?.request_id,
-              });
-            } else {
-              expect(outcome.reason).toBeInstanceOf(GitHubPublicationRecoveryPendingError);
-            }
-          }
-          await first.resumeSessionRequests();
-          expect(await first.requestForSessionV2(request)).toMatchObject({
-            status: "published",
-            requestId: row?.request_id,
-          });
-        } else {
-          await expect(Promise.all(requests)).resolves.toEqual([
-            expect.objectContaining({ status: "published" }),
-            expect.objectContaining({ status: "published" }),
-          ]);
+        if (duplicatePending) {
+          await withinTest(Promise.race([lifecycleAttempted.promise, ...requests]), signal);
         }
+        // Release the duplicate's native settlement before joining either caller.
+        duplicateReply.release();
+        // A duplicate admission cannot revoke the immutable lifecycle binding.
+        await expect(Promise.all(requests)).resolves.toEqual([
+          expect.objectContaining({ status: "published" }),
+          expect.objectContaining({ status: "published" }),
+        ]);
       } finally {
         releaseRepository();
         duplicateReply?.release();
@@ -600,7 +569,7 @@ describe("Gateway GitHub publication", () => {
         observeLifecycle.mockRestore();
       }
 
-      expect(mocks.resolveRepository).toHaveBeenCalledTimes(admission === "pending" ? 2 : 1);
+      expect(mocks.resolveRepository).toHaveBeenCalledOnce();
       expect(commands.filter((argv) => argv.includes("commit-tree"))).toHaveLength(1);
       const fetchIndex = commands.findIndex((argv) => argv.includes("fetch"));
       const commitIndex = commands.findIndex((argv) => argv.includes("commit-tree"));
@@ -755,21 +724,16 @@ describe("Gateway GitHub publication", () => {
         ) {
           return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: BASE_HEAD }));
         }
-        if (command === "git show -s --format=%B HEAD") {
+        if (command === "git show -s --no-show-signature --format=%H%n%T%n%P%n%B HEAD") {
           return commandResult(
-            bodyOnlyCredit
-              ? `Resume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\n\nThe line above is quoted attribution.\n\nOpenClaw-Publication: ${requestId}\n`
-              : `Resume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\nOpenClaw-Publication: ${requestId}\n`,
+            `${NEW_HEAD}\n${WORKSPACE_TREE}\n${OLD_HEAD}\n` +
+              (bodyOnlyCredit
+                ? `Resume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\n\nThe line above is quoted attribution.\n\nOpenClaw-Publication: ${requestId}\n`
+                : `Resume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\nOpenClaw-Publication: ${requestId}\n`),
           );
-        }
-        if (command === "git rev-parse HEAD^{tree}") {
-          return commandResult(`${WORKSPACE_TREE}\n`);
         }
         if (command.endsWith("write-tree")) {
           return commandResult(`${WORKSPACE_TREE}\n`);
-        }
-        if (command === "git rev-parse HEAD^") {
-          return commandResult(`${OLD_HEAD}\n`);
         }
         if (command === "git config --local --includes --bool --get extensions.worktreeConfig") {
           return commandResult("", 1);
@@ -861,6 +825,50 @@ describe("Gateway GitHub publication", () => {
     },
   );
 
+  it("reports an in-run publication notice into the requesting run", async () => {
+    await persistPublicationTestSession();
+    const runtime = createGitHubPublicationRuntime({
+      placements: createWorkerSessionPlacementStore({
+        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
+      }),
+      loadSessionRuntime: async () => {
+        const sessionUtils = await import("./session-utils.js");
+        const worker = await import("./session-utils-store-worker.js");
+        return {
+          resolveCanonicalSessionEntryFromStoreKeys:
+            sessionUtils.resolveCanonicalSessionEntryFromStoreKeys,
+          resolveGatewaySessionStoreTargetInWorker: worker.resolveGatewaySessionStoreTargetInWorker,
+        };
+      },
+      warn: (message) => {
+        throw new Error(message);
+      },
+    });
+
+    const result = await runtime.coordinator.requestForSessionV2({
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      idempotencyKey: "publish-during-run",
+      expectedRunId: "run-publishing",
+    });
+    expect(result.status).toBe("published");
+    await runtime.reconcilePublications();
+
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+    });
+    expect(publicationTranscriptMessages(events, result.requestId)).toEqual([
+      expect.objectContaining({
+        message: expect.objectContaining({
+          __openclaw: expect.objectContaining({ runId: "run-publishing" }),
+        }),
+      }),
+    ]);
+    expect(await runtime.coordinator.listUnreportedResultsAsync()).toEqual([]);
+  });
+
   it("projects an accepted worker publication exactly once across transcript-report restart", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
@@ -888,10 +896,11 @@ describe("Gateway GitHub publication", () => {
     await persistClaimPublicationWorkspace();
     const loadSessionRuntime = async () => {
       const runtime = await import("./session-utils.js");
+      const worker = await import("./session-utils-store-worker.js");
       return {
         resolveCanonicalSessionEntryFromStoreKeys:
           runtime.resolveCanonicalSessionEntryFromStoreKeys,
-        resolveGatewaySessionStoreTargetInWorker: runtime.resolveGatewaySessionStoreTargetInWorker,
+        resolveGatewaySessionStoreTargetInWorker: worker.resolveGatewaySessionStoreTargetInWorker,
       };
     };
     const warnings: string[] = [];

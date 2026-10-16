@@ -376,7 +376,7 @@ describe("Code Mode guest execution", () => {
     },
   );
 
-  it("keeps an explicit tool error's text when its details carry no message", async () => {
+  it("preserves returned tool failures while catching thrown tool errors", async () => {
     const h = createCodeModeHarness();
     const reason = "Start the Gateway with visitor-access enabled before managing visitors.";
     const errorTool = (name: string, text: string, details: unknown) =>
@@ -390,20 +390,49 @@ describe("Code Mode guest execution", () => {
       errorTool("no_details", "Gateway unavailable.", undefined),
       errorTool("blank_message", "Visitor store is locked.", { error: true, message: " " }),
       errorTool("structured", "Rendered failure.", { status: "failed", error: "structured" }),
+      pluginToolWithExecute("throw_error", "Throw", async () => {
+        throw new Error("Tool execution threw.");
+      }),
     ];
     applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...tools] });
+    const exec = expectDefined(h.tools[0], "exec");
+    expect(exec.description).toContain(
+      "Thrown tool errors are catchable. Returned values may instead report failure. Follow the tool's result contract, and inspect possible effects before retrying.",
+    );
     const result = resultDetails(
-      await expectDefined(h.tools[0], "exec").execute("tool-error-text", {
-        code: "return [await flag_only(), await no_details(), await blank_message(), await structured()];",
+      await exec.execute("tool-error-text", {
+        code: `
+          let returnedCaught = false;
+          let values;
+          try {
+            values = [await flag_only(), await no_details(), await blank_message(), await structured()];
+          } catch {
+            returnedCaught = true;
+          }
+          let thrownMessage;
+          try {
+            await throw_error();
+          } catch (error) {
+            thrownMessage = error.message;
+          }
+          return { values, returnedCaught, thrownMessage };
+        `,
       }),
     );
     expect(result.status, JSON.stringify(result)).toBe("completed");
-    expect(result.value).toEqual([
-      { error: true, message: reason },
-      { message: "Gateway unavailable." },
-      { error: true, message: "Visitor store is locked." },
-      { status: "failed", error: "structured" },
-    ]);
+    expect(result.value).toEqual({
+      values: [
+        { error: true, message: reason },
+        { message: "Gateway unavailable." },
+        { error: true, message: "Visitor store is locked." },
+        { status: "failed", error: "structured" },
+      ],
+      returnedCaught: false,
+      thrownMessage: "Tool execution threw.",
+    });
+    for (const tool of tools) {
+      expect(tool.execute).toHaveBeenCalledOnce();
+    }
   });
 
   async function executeSource(args: Record<string, unknown>) {

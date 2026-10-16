@@ -11,7 +11,7 @@ import type {
 } from "../infra/state-migrations.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership-preflight.js";
 import {
   createConfigPreflightSnapshotReader,
   type ConfigPreflightSnapshotRead,
@@ -209,6 +209,7 @@ async function runDoctorConfigPreflightOperation(
     }
   }
   let postConvergenceStateConfig: OpenClawConfig | undefined;
+  let pluginConvergenceWarnings: string[] = [];
   if (stateDirMigrations) {
     const refreshed = await prepareDoctorMigrationPlugins({
       cfg: automaticConfigRepair?.config ?? baseConfig,
@@ -225,9 +226,10 @@ async function runDoctorConfigPreflightOperation(
           inspection,
         ),
     });
-    configSnapshotRead = refreshed;
+    pluginConvergenceWarnings = refreshed.warnings;
+    configSnapshotRead = refreshed.snapshotRead;
     pluginMetadata.invalidate();
-    snapshot = refreshed.snapshot;
+    snapshot = refreshed.snapshotRead.snapshot;
     baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     automaticConfigRepair = await planAdmittedConfigRepair(snapshot);
     // Core migrations use the validated runtime projection; plugins retain source locators.
@@ -367,6 +369,7 @@ async function runDoctorConfigPreflightOperation(
   return {
     snapshot,
     baseConfig,
+    ...(pluginConvergenceWarnings.length > 0 ? { warnings: pluginConvergenceWarnings } : {}),
     rosterMigrationSource,
     ...(rosterMigrationOwnerId ? { rosterMigrationOwnerId } : {}),
     ...(deferredPluginMigrations.length > 0 ? { deferredPluginMigrations } : {}),

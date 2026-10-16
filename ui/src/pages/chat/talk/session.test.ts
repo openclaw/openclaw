@@ -401,7 +401,12 @@ describe("RealtimeTalkSession", () => {
 
     await session.start();
 
-    expect(request).toHaveBeenNthCalledWith(1, "talk.catalog", {}, requestTimeoutOptions);
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "talk.catalog",
+      { sessionKey: "main" },
+      requestTimeoutOptions,
+    );
     expect(request).toHaveBeenNthCalledWith(
       2,
       "talk.client.create",

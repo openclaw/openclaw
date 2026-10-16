@@ -25,6 +25,7 @@ import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-pr
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
+import { applyModelServingContextLimit } from "./model-serving-context.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import {
   copyPreparedModelFullCatalogAuth,
@@ -67,7 +68,7 @@ export async function prepareFullCatalogFacts(
     const observedProviders = new Set(
       catalogSource.providerOutcomes?.map(({ provider }) => normalizeProviderId(provider)),
     );
-    const templateModelRegistry = await discoverModelsAsync(templateAuthStorage, input.agentDir, {
+    let templateModelRegistry = await discoverModelsAsync(templateAuthStorage, input.agentDir, {
       config: input.config,
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
       pluginMetadataSnapshot,
@@ -81,6 +82,18 @@ export async function prepareFullCatalogFacts(
         ),
       ),
     });
+    if (catalogSource.servingLimits?.size) {
+      // Serving observations are acquisition facts, not models.json/config fields.
+      // Reuse the registry's immutable publication projection so forks and worker
+      // serialization preserve them after every authored metadata overlay.
+      const published = new Map<string, Model[]>();
+      for (const model of templateModelRegistry.getAll()) {
+        const models = published.get(model.provider) ?? [];
+        models.push(applyModelServingContextLimit(model, catalogSource.servingLimits));
+        published.set(model.provider, models);
+      }
+      templateModelRegistry = templateModelRegistry.fork(templateAuthStorage, published);
+    }
     const catalogModels = templateModelRegistry.getAll();
     const snapshot = await buildPreparedModelCatalogSnapshot({
       agentDir: input.agentDir,

@@ -1,5 +1,6 @@
 // Memory Core owns detached search-time index maintenance lifecycle.
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import type { MemoryReindexRetryState } from "./manager-sync-base.js";
 import { MEMORY_SYNC_DEFERRED, type MemorySyncOutcome } from "./manager-sync-outcome.js";
@@ -9,6 +10,7 @@ type MemorySearchMaintenanceManager = {
   takeReindexRetryStateForMaintenance(): MemoryReindexRetryState;
   sync(params: { reason: string; force?: boolean }): Promise<void>;
   status(): { dirty?: boolean; lastSyncError?: string };
+  statusAsync?(): Promise<{ dirty?: boolean; lastSyncError?: string }>;
   close(): Promise<void>;
 };
 
@@ -47,7 +49,7 @@ export async function runMemorySearchMaintenance(params: {
       // lease, and the next shadow build starts from the newest live revision.
       await manager.sync({ reason: params.reason, force: true });
     }
-    const status = manager.status();
+    const status = await readMemorySearchManagerStatus(manager);
     if (status.dirty === true) {
       // Return remaining work, including edits skipped by a completed full rebuild.
       const remaining = manager.takeReindexRetryStateForMaintenance();

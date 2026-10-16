@@ -5,7 +5,7 @@ import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_RUN_ACTIVITY_CHANGED_EVENT,
 } from "../pages/chat/chat-history-events.ts";
-import type { ChatPaneBase } from "../pages/chat/chat-pane-base.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import type { ChatRunUiStatus } from "../pages/chat/run-lifecycle.ts";
 import type { ApplicationContext } from "./context.ts";
 import {
@@ -69,7 +69,7 @@ export function connectControlUiFavicon(
     synchronizeScope();
     const snapshot = context.gateway.snapshot;
     let working = false;
-    for (const pane of shell.querySelectorAll<ChatPaneBase>("openclaw-chat-pane")) {
+    for (const pane of shell.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")) {
       const activity = pane.runActivity;
       const completion = activity?.completion;
       const unseen = completion && !seenCompletions.has(completion);
@@ -104,7 +104,7 @@ export function connectControlUiFavicon(
           continue;
         }
         if (isSessionRunActive(row)) {
-          working = true;
+          working ||= context.sessions.isRunVisuallyActive(row);
           nextActive.set(row.key, row.sessionId);
         } else if (
           row.status === "done" &&

@@ -1,16 +1,15 @@
 import { createMemo, Show } from "solid-js";
-import { icons } from "../../components/icons.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
-import {
-  ChatComposerPlusMenu,
-  type renderChatComposerPlusMenu,
-  type ChatComposerCapabilityMenuProps,
-  type ChatComposerPlusMenuView,
-} from "../chat/components/chat-composer-plus-menu.tsx";
+import { ChatComposerPlusMenu } from "../chat/components/chat-composer-plus-menu.tsx";
+import type {
+  ChatComposerPlusMenuProps,
+  ChatComposerCapabilityMenuProps,
+  ChatComposerPlusMenuView,
+} from "../chat/components/chat-composer-plus-menu.types.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 
 registerNewSessionSetupEnglish();
@@ -26,7 +25,7 @@ type NewSessionComposerCapabilityOptions = {
     capabilityMenuOpen: boolean;
     capabilityMenuView: ChatComposerPlusMenuView;
   };
-  requestUpdate: () => void;
+  onChange: () => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
 };
 
@@ -56,9 +55,9 @@ export function NewSessionDraftVisibility(props: { options: NewSessionComposerCa
 
 export function NewSessionPlusMenu(props: {
   options: NewSessionComposerCapabilityOptions;
-  attachments: Parameters<typeof renderChatComposerPlusMenu>[0]["attachments"];
+  attachments: ChatComposerPlusMenuProps["attachments"];
 }) {
-  const menu = createMemo((): Parameters<typeof renderChatComposerPlusMenu>[0] => {
+  const menu = createMemo((): ChatComposerPlusMenuProps => {
     const options = props.options;
     const disabled = options.submitting || options.messageLocked === true;
     const controller = options.textareaController;
@@ -74,7 +73,7 @@ export function NewSessionPlusMenu(props: {
             {
               value: "new-session-draft",
               label: t("newSession.draft"),
-              icon: icons.pencil,
+              icon: "pencil",
               checked: options.visibility === "draft",
               disabled,
               title: t("newSession.draftDescription"),
@@ -87,11 +86,11 @@ export function NewSessionPlusMenu(props: {
         if (!open) {
           controller.capabilityMenuView = "root";
         }
-        options.requestUpdate();
+        options.onChange();
       },
       onViewChange: (view) => {
         controller.capabilityMenuView = view;
-        options.requestUpdate();
+        options.onChange();
       },
     };
   });
@@ -99,7 +98,7 @@ export function NewSessionPlusMenu(props: {
 }
 
 export function NewSessionSelectionStatus(props: { options: NewSessionComposerCapabilityOptions }) {
-  const count = () => countSessionToolOverrides(props.options.toolOverrides);
+  const count = createMemo(() => countSessionToolOverrides(props.options.toolOverrides));
   return (
     <Show when={count() > 0}>
       <button
@@ -109,7 +108,7 @@ export function NewSessionSelectionStatus(props: { options: NewSessionComposerCa
         onClick={() => {
           props.options.textareaController.capabilityMenuView = "root";
           props.options.textareaController.capabilityMenuOpen = true;
-          props.options.requestUpdate();
+          props.options.onChange();
         }}
       >
         {t(count() === 1 ? "chat.composer.overrides.countOne" : "chat.composer.overrides.count", {

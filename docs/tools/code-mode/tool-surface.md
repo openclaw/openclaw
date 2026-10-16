@@ -255,6 +255,16 @@ returns `waiting` again, parking starts a fresh snapshot TTL.
 - the selected executor cannot resume (for example, its worker exited or QuickJS restore fails).
 - a QuickJS checkpoint would exceed `maxSnapshotBytes`. Ordinary oversized successful output is truncated and remains successful.
 
+An unavailable or expired ID is not evidence that earlier actions had no effect.
+Review the earlier `exec` and `wait` results before continuing; do not replay the
+original operation just because its continuation is no longer resumable. If another
+`wait` is already resuming the same run, use that wait’s result instead of starting
+a concurrent wait.
+
+A background shell `sessionId` is not a Code Mode `runId`. When the native process
+tool is available, the diagnostic names its callable so you can poll that same
+shell session with `action: "poll"` in a new `exec`. Do not launch the command again.
+
 ## Tool catalog
 
 The hidden catalog includes tools after effective policy filtering, in this

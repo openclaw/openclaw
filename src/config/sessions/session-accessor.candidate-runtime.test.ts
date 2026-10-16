@@ -25,7 +25,6 @@ it("keeps an unbound incognito read in its process-local store", async () => {
 
 it("keeps candidate order and observes a committed replacement through the worker", async () => {
   await withOpenClawTestState({ label: "candidate-runtime" }, async (state) => {
-    setRuntimeConfigSnapshot({});
     const scope = { agentId: "main", env: state.env };
     const firstKey = "agent:main:first";
     const secondKey = "agent:main:second";
@@ -34,6 +33,7 @@ it("keeps candidate order and observes a committed replacement through the worke
       cfg: {},
       candidateKeys: ["agent:main:missing", firstKey, secondKey],
     };
+    setRuntimeConfigSnapshot(candidate.cfg);
     await replaceSessionEntry(
       { ...scope, sessionKey: firstKey },
       { sessionId: "first", updatedAt: 1, label: "before" },

@@ -13,14 +13,14 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operat
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { ChatPaneSharing } from "./chat-pane-sharing.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import type {
   TaskSuggestionAcceptance,
   TaskSuggestionStartMode,
-} from "./components/chat-task-suggestions.ts";
+} from "./components/chat-task-suggestions.tsx";
 
 type TaskSuggestionOperation =
   | { action: "dismiss"; resolved: boolean }
@@ -32,6 +32,7 @@ type TaskSuggestionOperation =
       canDisplay: () => boolean;
       isCurrent: () => boolean;
       outcome: TaskSuggestionAcceptance;
+      clearError?: () => void;
     };
 
 export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
@@ -130,7 +131,11 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     const scope = this.captureConnectionScope();
     if (
       !scope ||
-      !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "taskSuggestions.list") ||
+      !canCallGatewayMethod(
+        scope.context.gateway.snapshot,
+        "taskSuggestions.list",
+        "operator.read",
+      ) ||
       parseCatalogSessionKey(scope.state.sessionKey)
     ) {
       this.setTaskSuggestions([]);
@@ -367,6 +372,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
             canDisplay,
             isCurrent: ownsScope,
             outcome: { phase: "starting" },
+            clearError: previous?.clearError,
           }
         : { action, resolved: false };
     const originalIndex = this.taskSuggestions.findIndex((item) => item.id === suggestion.id);
@@ -397,6 +403,8 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
           throw new Error(t("chat.taskSuggestions.startUnconfirmed"));
         }
         operation.outcome = { phase: "started" };
+        operation.clearError?.();
+        operation.clearError = undefined;
       } else {
         await scope.client.request("taskSuggestions.dismiss", { taskId: suggestion.id });
         if (!isCurrent()) {
@@ -450,8 +458,12 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
             });
         }
       }
-      scope.state.lastError = formatUiError(error);
-      scope.state.chatError = scope.state.lastError;
+      if (operation.action === "accept") {
+        operation.clearError = scope.state.setRecoverableChatError(formatUiError(error));
+      } else {
+        scope.state.lastError = formatUiError(error);
+        scope.state.chatError = scope.state.lastError;
+      }
     } finally {
       if (this.taskSuggestionOperations.get(suggestion.id) === operation) {
         if (operation.action === "dismiss") {

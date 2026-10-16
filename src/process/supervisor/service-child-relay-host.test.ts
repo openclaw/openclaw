@@ -429,6 +429,67 @@ it("publishes confirmed cancellation when the root result is missing", async () 
   expect(lateExit).toHaveBeenCalledExactlyOnceWith(null, "SIGKILL");
 });
 
+it("keeps cleanup authority when a root-exit consumer ends already-closed stdin", async () => {
+  platformMock = mockProcessPlatform("darwin");
+  vi.spyOn(process, "kill").mockImplementation(() => {
+    throw Object.assign(new Error("synthetic missing process group"), { code: "ESRCH" });
+  });
+  const stub = createWritableRelayChild();
+  mocks.spawn.mockReturnValue(stub.child);
+  const write = stub.control.write.bind(stub.control);
+  vi.spyOn(stub.control, "write").mockImplementation((chunk, encoding, callback) => {
+    const message: unknown = JSON.parse(chunk.toString());
+    if (isRecord(message) && message.type === "stdin-end") {
+      callback?.(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+      return false;
+    }
+    return write(chunk, encoding, callback);
+  });
+  const starting = createServiceChildRelayAdapter({
+    command: "synthetic-command",
+    args: [],
+    stdinMode: "pipe-open",
+    terminateOnHostLoss: true,
+    oomScoreWrapperSelected: false,
+  });
+  const start = firstMockArg(stub.sendMock, "service start");
+  if (!isRecord(start) || typeof start.generation !== "string") {
+    throw new Error("Expected an admitted service generation");
+  }
+  const generation = start.generation;
+  let sequence = 0;
+  const emit = (payload: ServiceChildAnchorPayload) => {
+    stub.control.push(
+      Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence: ++sequence })),
+    );
+  };
+  emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
+  const adapter = await starting;
+  adapter.onExit(() => adapter.stdin!.end());
+  const extinction = adapter.waitForExtinction();
+  void extinction.catch(() => {});
+  try {
+    emit({ type: "root-result", code: 0, signal: null });
+    stub.stdout.end();
+    stub.stderr.end();
+    await nextTurn();
+    emit({ type: "closing", reason: "lineage-closed" });
+    await nextTurn();
+    stub.lineage.end();
+    stub.control.destroy();
+    stub.disconnectMock();
+    stub.emitExit(0);
+    await expect(extinction).resolves.toBeUndefined();
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+  } finally {
+    stub.control.destroy();
+    stub.lineage.destroy();
+    stub.disconnectMock();
+    stub.emitExit(0);
+    adapter.dispose();
+  }
+});
+
 it("keeps an observed Windows root result independent of failed extinction", async () => {
   const { adapter, emit, endOutput, close } = await createRelay("win32");
   adapter.kill("SIGTERM");

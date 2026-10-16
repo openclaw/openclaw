@@ -1,11 +1,23 @@
-import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../../../auto-reply/reply-payload.js";
+import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import { applyPreparedReplyMedia } from "../../../auto-reply/reply/reply-media-paths.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
+import {
+  prepareAgentRunTerminalReply,
+  sanitizeAgentRunTerminalReply,
+} from "../../agent-run-terminal-reply.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
-import { sanitizeAssistantVisibleStreamText } from "../../embedded-agent-utils.js";
+import {
+  extractAssistantVisibleText,
+  sanitizeAssistantVisibleStreamText,
+} from "../../embedded-agent-utils.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { isProviderModelRerouted } from "../../provider-model-route.js";
 import type { ReplyDeliveryState } from "../../reply-completion.js";
@@ -13,6 +25,7 @@ import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-pr
 import type { NormalizedUsage } from "../../usage.js";
 import {
   hasMessagingToolDeliveryEvidence,
+  resolveExplicitFinalSourceReplyDeliveryEvidence,
   resolveSourceReplyDelivery,
 } from "../delivery-evidence.js";
 import { resolveEmbeddedRunFailureSignal } from "../failure-signal.js";
@@ -25,7 +38,7 @@ import {
   buildUsageAgentMetaFields,
   normalizeAssistantUsageForContext,
   resolveFinalAssistantRawText,
-  resolveFinalAssistantVisibleText,
+  resolveFinalMessageRawText,
   resolveReportedModelRef,
 } from "./helpers.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
@@ -65,12 +78,16 @@ export function prepareEmbeddedRunTerminal(input: {
   contextRecoveryState: EmbeddedRunContextRecoveryState;
   resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
   terminalState: EmbeddedRunTerminalState;
+  rateLimitRetriesExhausted?: number;
 }) {
   const { runParams, attempt } = input;
-  const replyDeliveryState = resolveSourceReplyDelivery(attempt, input.replyDeliveryState);
+  const replyDeliveryState =
+    resolveExplicitFinalSourceReplyDeliveryEvidence(attempt) === false
+      ? (input.replyDeliveryState ?? "missing")
+      : resolveSourceReplyDelivery(attempt, input.replyDeliveryState);
   const sourceReplyDeliveryState = resolveSourceReplyDelivery(
     attempt,
-    input.sourceReplyDeliveryState ?? input.replyDeliveryState,
+    input.sourceReplyDeliveryState ?? replyDeliveryState,
   );
   const { timedOutDuringCompaction, timedOutDuringToolExecution } = projectAgentRunAttemptTerminal(
     attempt.terminal,
@@ -162,15 +179,35 @@ export function prepareEmbeddedRunTerminal(input: {
   };
   const attemptFinalText = answerAssistant
     ? undefined
-    : attempt.assistantTexts
-        .map((text) => sanitizeAssistantVisibleStreamText(text))
-        .findLast((text) => text.trim().length > 0)
-        ?.trim();
-  const finalAssistantVisibleText = terminalAssistantCanOwnFinalText
-    ? (resolveFinalAssistantVisibleText(answerAssistant) ?? attemptFinalText)
-    : undefined;
+    : attempt.assistantTexts.findLast(
+        (text) => sanitizeAssistantVisibleStreamText(text).trim().length > 0,
+      );
   const finalAssistantRawText = terminalAssistantCanOwnFinalText
     ? (resolveFinalAssistantRawText(answerAssistant) ?? attemptFinalText)
+    : undefined;
+  const preparedTerminalReply =
+    attempt.preparedTerminalReply ??
+    prepareAgentRunTerminalReply({ rawText: finalAssistantRawText });
+  if (
+    !attempt.preparedTerminalReply &&
+    preparedTerminalReply.terminalReply.disposition !== "silent"
+  ) {
+    const rawText = preparedTerminalReply.text;
+    preparedTerminalReply.text = answerAssistant
+      ? extractAssistantVisibleText(answerAssistant, (_text, final) => (final ? rawText : ""))
+      : sanitizeAssistantVisibleStreamText(rawText);
+  }
+  const finalAssistantVisibleText = parseReplyDirectives(preparedTerminalReply.text).text;
+  if (preparedTerminalReply.terminalReply.disposition === "visible") {
+    preparedTerminalReply.terminalReply = sanitizeAgentRunTerminalReply(finalAssistantVisibleText);
+  }
+  // Diagnostics record only the model's own latest message. The latest
+  // current-attempt message outranks the last completed one so a later partial
+  // answer is not hidden; a message that ended in a tool call has no final text.
+  // Harnesses that expose no message keep finalAssistantRawText.
+  const latestModelMessage = attempt.currentAttemptAssistant ?? terminalAssistant;
+  const finalAssistantMessageRawText = latestModelMessage
+    ? (resolveFinalMessageRawText(latestModelMessage) ?? "")
     : undefined;
   const terminalTurnId = (attempt as { terminalTurnId?: string }).terminalTurnId;
   Object.assign(agentMeta, {
@@ -196,7 +233,9 @@ export function prepareEmbeddedRunTerminal(input: {
       ? attempt.lastAssistant
       : input.currentAttemptCompletedAssistant;
   const payloads = buildEmbeddedRunPayloads({
+    rateLimitRetriesExhausted: input.rateLimitRetriesExhausted,
     ...attempt,
+    preparedTerminalReply,
     assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
     lastAssistant: payloadAssistant,
     currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
@@ -231,6 +270,22 @@ export function prepareEmbeddedRunTerminal(input: {
     deferAssistantTimeoutError:
       timedOutDuringPrompt && (!hasMessagingToolDeliveryEvidence(attempt) || timeoutFinal),
   }).map((payload) => applyPreparedReplyMedia(payload, attempt.preparedReplyMedia ?? []));
+  // Keep the local transcript fact before aggregate delivery also includes message tools.
+  if (input.sourceReplyDeliveryState === "missing" && input.replyDeliveryState === "delivered") {
+    for (const payload of payloads) {
+      const metadata = getReplyPayloadMetadata(payload);
+      if (
+        !payload.isError &&
+        !payload.isReasoning &&
+        !metadata?.hostNotice &&
+        !metadata?.sourceReplyTranscriptMirror &&
+        (metadata?.assistantTranscriptOwned === true ||
+          metadata?.assistantMessageIndex !== undefined)
+      ) {
+        setReplyPayloadMetadata(payload, { localTranscriptDeliveryConfirmed: true });
+      }
+    }
+  }
   const mergeToolMedia = input.mergeToolMedia ?? mergeAttemptToolMediaPayloads;
   // Pending source custody also holds terminal media; committed mirrors and earlier inputs stay.
   const payloadsWithToolMedia =
@@ -307,9 +362,12 @@ export function prepareEmbeddedRunTerminal(input: {
   return {
     agentMeta,
     replyDeliveryState,
+    sourceReplyDeliveryState,
     reportedModelRef,
+    preparedTerminalReply,
     finalAssistantVisibleText,
     finalAssistantRawText,
+    finalAssistantMessageRawText,
     payloads,
     payloadsWithToolMedia,
     timedOutDuringPrompt,
@@ -344,9 +402,13 @@ function replacePartialAssistantPayload(input: {
   if (!partialPayload) {
     return [...payloads, { text: input.recoveredText }];
   }
-  payloads[partialPayloadIndex] = copyReplyPayloadMetadata(partialPayload, {
-    ...partialPayload,
-    text: input.recoveredText,
-  });
+  // Replacement text has not passed the local transcript observation.
+  payloads[partialPayloadIndex] = setReplyPayloadMetadata(
+    copyReplyPayloadMetadata(partialPayload, {
+      ...partialPayload,
+      text: input.recoveredText,
+    }),
+    { localTranscriptDeliveryConfirmed: undefined },
+  );
   return payloads;
 }

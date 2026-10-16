@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -14,7 +14,6 @@ import {
   parseUserGitHubConnection,
   readUserGitHubConnectionInDatabase,
   readCanonicalUserGitHubConnectionInDatabase,
-  resolvePersonalGitHubOwnerInDatabase,
   writeUserGitHubConnectionInDatabase,
 } from "./user-github-connections.kernel.js";
 import type {
@@ -30,7 +29,7 @@ import type {
   WorkerWriteOperationContext,
 } from "./worker-operation-registry.js";
 
-function listUserGitHubConnections(db: DatabaseSync): Array<{
+function listUserGitHubConnections(db: EngineConnection): Array<{
   owner: string;
   connection: UserGitHubConnection;
 }> {
@@ -190,8 +189,8 @@ function mutate<T>(
 export const userGitHubConnectionOperations = {
   "userGitHubConnections.read": ({ owner }: { owner: string }, { open }) =>
     readUserGitHubConnectionInDatabase(open().db, owner),
-  "userGitHubConnections.resolveOwner": ({ profile }: { profile: string }, { open }) =>
-    resolvePersonalGitHubOwnerInDatabase(profile, open().db),
+  "userGitHubConnections.readCanonical": ({ profile }: { profile: string }, { open }) =>
+    readCanonicalUserGitHubConnectionInDatabase(open().db, profile),
   "userGitHubConnections.list": (_input: undefined, { open }) =>
     listUserGitHubConnections(open().db),
   "userGitHubConnections.mutate": (

@@ -312,7 +312,7 @@ describe("CI changed lint", () => {
         ...paths.toSorted(),
       ]);
       expect(central.some(({ args }) => args[0] === "lint:ui:i18n")).toBe(true);
-      expect(central.some(({ args }) => args[0] === "check:control-ui-lit-ratchet")).toBe(true);
+      expect(central.some(({ args }) => args[0] === "check:control-ui-controllers")).toBe(true);
       expect(
         central.some(
           ({ args }) =>
@@ -423,7 +423,7 @@ describe("CI changed lint", () => {
   );
 
   it.each(["ui/src/app.ts", ".oxlintrc.json"])(
-    "retains the Lit ratchet and its Git scope when CI splits lint for %s",
+    "retains the controller guard and its Git scope when CI splits lint for %s",
     (file) => {
       const result = detectChangedLanes([file]);
       for (const { base, staged, expectedBase } of [
@@ -455,9 +455,9 @@ describe("CI changed lint", () => {
           },
         }).commands;
         expect(
-          commands.find(({ args }) => args[0] === "check:control-ui-lit-ratchet")?.args,
+          commands.find(({ args }) => args[0] === "check:control-ui-controllers")?.args,
         ).toEqual([
-          "check:control-ui-lit-ratchet",
+          "check:control-ui-controllers",
           ...(staged ? ["--staged"] : []),
           "--base",
           expectedBase,

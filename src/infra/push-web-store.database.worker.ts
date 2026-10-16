@@ -1,5 +1,3 @@
-// Canonical shared-SQLite store for Web Push subscriptions and VAPID identity.
-import type { DatabaseSync } from "node:sqlite";
 import type { WebPushDevicePreferences } from "../../packages/gateway-protocol/src/schema/push.js";
 import { updateConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
@@ -33,6 +31,8 @@ import {
   type WebPushMutationProfileFacts,
 } from "./push-web-store.records.js";
 import { ensureWebPushSubscriptionBindingColumns } from "./push-web-store.schema.js";
+// Canonical shared-SQLite store for Web Push subscriptions and VAPID identity.
+import type { EngineConnection } from "./sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -98,7 +98,7 @@ type WebPushSubscriptionMutation = {
 function runWebPushSubscriptionMutation<T>(
   params: WebPushSubscriptionMutation,
   boundProfile: string | null | undefined,
-  mutate: (db: DatabaseSync) => T,
+  mutate: (db: EngineConnection) => T,
 ): T {
   ensureWebPushSubscriptionBindingSchema(params.database);
   const options = webPushDatabaseOptions(params.database);

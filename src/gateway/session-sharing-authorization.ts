@@ -5,18 +5,28 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { captureMemoryExactSessionReader } from "../config/sessions/session-accessor.memory-exact-read.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toAgentStoreSessionKey } from "../routing/session-key.js";
 import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
-import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
+import {
+  authenticatedProfileUnavailableError,
+  isGatewayClientProfilePending,
+} from "./server-methods/gateway-client-identity.js";
 import { isSyntheticGatewayCaller } from "./server-methods/gateway-personal-caller.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
-import { isAgentRunStartMethod, isSessionArchiveMutation } from "./session-method-policy.js";
+import {
+  isAgentRunStartMethod,
+  isSessionArchiveMutation,
+  isSessionProfileDependentMethod,
+} from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -37,10 +47,10 @@ import {
   resolveTalkSessionTargetInput,
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
-import { assertTalkSessionStorageTarget } from "./talk/session-target.js";
 import type { PreparedTalkSessionTarget } from "./talk/session-target.types.js";
 
 export type SessionMutationAuthorizationParams = {
@@ -58,6 +68,7 @@ export type SessionMutationAuthorizationParams = {
     sessionKey: string;
     agentId?: string;
     readSource?: import("../config/sessions/session-entry-read-source.types.js").CapturedSessionEntryReadSource;
+    prepareRead: () => Promise<void> | undefined;
     read: () => PreparedMutationSharing;
     followRegistration?: (
       change: import("../state/openclaw-agent-db-contract.js").AgentDatabaseRegistryChange,
@@ -126,6 +137,13 @@ export function prepareSessionMutationAuthorizationRequest(
   const bindsProgressLifecycle =
     params.method === "progressCard.put" || params.method === "progressCard.refresh";
   const adminBypass = isGatewayAdmin(params.client) && !authorizesAgentRun;
+  if (
+    !adminBypass &&
+    isGatewayClientProfilePending(params.client) &&
+    isSessionProfileDependentMethod(params.method)
+  ) {
+    return { ok: false as const, error: authenticatedProfileUnavailableError() };
+  }
   return {
     ok: true as const,
     params,
@@ -368,7 +386,7 @@ export function resolvePreparedTalkAuthorizationTarget(
       throw new Error("Talk session authorization requires prepared session facts");
     }
     if (talkSessionTarget) {
-      assertTalkSessionStorageTarget(getCfg(), talkSessionTarget);
+      talkSessionTarget.assertCurrent(getCfg());
     }
     return { error: null, talkInput, talkSessionTarget };
   } catch (error) {
@@ -422,4 +440,20 @@ export async function withCurrentSessionSharingSource<T>(params: {
       ),
     request.preparedSharing?.selection,
   );
+}
+
+/** Missing rows bind to their memory namespace or configured durable write target. */
+export function resolveSessionMutationWriteRoute(
+  cfg: OpenClawConfig,
+  target: SessionMutationTarget,
+) {
+  const identity = resolveSessionStoreIdentity({ cfg, ...target });
+  const memory = captureMemoryExactSessionReader({
+    agentId: identity.agentId,
+    sessionKey: identity.canonicalKey,
+  });
+  return {
+    ...identity,
+    storePath: memory?.path ?? resolveSessionStorePathCore(cfg.session?.store, identity),
+  };
 }

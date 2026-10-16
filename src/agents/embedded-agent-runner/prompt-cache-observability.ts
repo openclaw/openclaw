@@ -2,6 +2,7 @@ import {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
+import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { ContextEnginePromptCacheObservationChange as PromptCacheChange } from "../../context-engine/types.js";
@@ -10,6 +11,7 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import type { NormalizedUsage } from "../usage.js";
 import { log } from "./logger.js";
+import { fingerprintMessage, type PromptHistoryFingerprint } from "./prompt-cache-history.js";
 import type { ProviderPromptCachePrefix } from "./provider-prompt-serialization.js";
 import type { ProviderPromptState } from "./provider-prompt-state.js";
 
@@ -81,27 +83,8 @@ type PromptCacheTracker = {
   unmeasuredChanges?: PromptCacheChange[] | null;
 };
 
-type PromptHistoryFingerprint = {
-  digest: string;
-  role: string;
-  envelopeFields: Map<string, string>;
-  contentDigest: string;
-  contentKind: "string" | "blocks";
-  blockCount: number;
-  blocks: string[];
-  remainingBlocksDigest?: string;
-  stringBlock?: WeakRef<PromptStringFingerprint>;
-};
-
-type PromptStringFingerprint = { value: string; digest: string };
-
 const trackers = new Map<string, PromptCacheTracker>();
-const stringFingerprints = new WeakMap<Message, PromptStringFingerprint>();
-const blockFingerprints = new WeakMap<
-  object,
-  { digest: string; primitives: [string, unknown][] }
->();
-// Schemas are provider-owned declarations; unlike transcript blocks, they do not mutate in place.
+// Unpublished provider declarations retain their existing identity contract.
 const toolSchemaFingerprints = new WeakMap<object, string>();
 const MAX_TRACKERS = 512;
 const historyRewriteWarnings = createDedupeCache({ ttlMs: 0, maxSize: MAX_TRACKERS });
@@ -125,22 +108,23 @@ const HISTORY_ENVELOPE_FIELDS = new Set([
   "runtimeContextCarrier",
   "operatorMessage",
 ]);
-
-function fingerprintEnvelope(envelope: object): Map<string, string> {
-  const fields = new Map<string, string>();
-  const other: [string, unknown][] = [];
-  for (const [key, value] of Object.entries(envelope)) {
-    if (HISTORY_ENVELOPE_FIELDS.has(key)) {
-      fields.set(key, sha256Hex(stableStringify({ [key]: value })));
-    } else {
-      other.push([key, value]);
-    }
-  }
-  if (other.length) {
-    fields.set("other", sha256Hex(stableStringify(Object.fromEntries(other))));
-  }
-  return fields;
-}
+const HISTORY_BLOCK_FIELDS = new Set([
+  "type",
+  "text",
+  "textSignature",
+  "thinking",
+  "thinkingSignature",
+  "openclawReasoningReplay",
+  "id",
+  "name",
+  "arguments",
+  "partialJson",
+  "async",
+  "thoughtSignature",
+  "data",
+  "mimeType",
+  "index",
+]);
 
 function describeHistoryChange(
   previous: PromptHistoryFingerprint,
@@ -153,95 +137,59 @@ function describeHistoryChange(
   if (previous.contentKind !== next.contentKind) {
     fields.push("content.type");
   }
-  if (previous.contentDigest !== next.contentDigest) {
+  if (
+    previous.blocks.length !== next.blocks.length ||
+    previous.blocks.some((digest, index) => digest !== next.blocks[index])
+  ) {
     if (previous.contentKind === "string" || next.contentKind === "string") {
       fields.push("content");
     } else {
-      if (previous.blockCount !== next.blockCount) {
+      if (previous.blocks.length !== next.blocks.length) {
         fields.push("content.length");
       }
-      for (let index = 0; index < Math.max(previous.blocks.length, next.blocks.length); index++) {
+      for (
+        let index = 0;
+        index <
+        Math.min(MAX_HISTORY_DIFF_FIELDS, Math.max(previous.blocks.length, next.blocks.length));
+        index++
+      ) {
         if (previous.blocks[index] !== next.blocks[index]) {
-          fields.push(`content[${index}]`);
+          const before = previous.blockFields[index];
+          const after = next.blockFields[index];
+          const changed = [
+            ...new Set([...(before?.keys() ?? []), ...(after?.keys() ?? [])]),
+          ].filter((key) => before?.get(key) !== after?.get(key));
+          fields.push(
+            ...(changed.length
+              ? new Set(
+                  changed.map(
+                    (key) => `content[${index}].${HISTORY_BLOCK_FIELDS.has(key) ? key : "other"}`,
+                  ),
+                )
+              : [`content[${index}]`]),
+          );
         }
       }
-      if (previous.remainingBlocksDigest !== next.remainingBlocksDigest) {
+      if (
+        previous.blocks.some(
+          (digest, index) => index >= MAX_HISTORY_DIFF_FIELDS && digest !== next.blocks[index],
+        ) ||
+        (previous.blocks.length !== next.blocks.length &&
+          Math.max(previous.blocks.length, next.blocks.length) > MAX_HISTORY_DIFF_FIELDS)
+      ) {
         fields.push("content[remaining]");
       }
     }
   }
   for (const key of new Set([...previous.envelopeFields.keys(), ...next.envelopeFields.keys()])) {
     if (previous.envelopeFields.get(key) !== next.envelopeFields.get(key)) {
-      fields.push(`envelope.${key}`);
+      const field = `envelope.${HISTORY_ENVELOPE_FIELDS.has(key) ? key : "other"}`;
+      if (!fields.includes(field)) {
+        fields.push(field);
+      }
     }
   }
   return `changed fields: ${fields.slice(0, MAX_HISTORY_DIFF_FIELDS).join(", ")}${fields.length > MAX_HISTORY_DIFF_FIELDS ? ", …" : ""}`;
-}
-
-function fingerprintBlock(block: object): string {
-  const primitives: [string, unknown][] = [];
-  const nested: [string, unknown][] = [];
-  for (const entry of Object.entries(block)) {
-    const value = entry[1];
-    const primitive =
-      value === null || ["string", "number", "boolean", "undefined"].includes(typeof value);
-    (primitive ? primitives : nested).push(entry);
-  }
-  const previous = blockFingerprints.get(block);
-  const unchanged =
-    previous &&
-    previous.primitives.length === primitives.length &&
-    primitives.every(([key, value], index) => {
-      const cached = previous.primitives[index];
-      return cached?.[0] === key && cached[1] === value;
-    });
-  const memo = unchanged
-    ? previous
-    : { digest: sha256Hex(stableStringify(Object.fromEntries(primitives))), primitives };
-  if (!unchanged) {
-    blockFingerprints.set(block, memo);
-  }
-  return nested.length
-    ? sha256Hex(`${memo.digest}:${stableStringify(Object.fromEntries(nested))}`)
-    : memo.digest;
-}
-
-function fingerprintMessage(
-  message: Message,
-  previous?: PromptHistoryFingerprint,
-): PromptHistoryFingerprint {
-  const { content, ...envelope } = message;
-  let stringBlock: PromptHistoryFingerprint["stringBlock"];
-  let blocks: string[];
-  if (typeof content === "string") {
-    // Transcript messages own text memos; diagnostics retain only weak references.
-    const previousMemo = previous?.stringBlock?.deref() ?? stringFingerprints.get(message);
-    const memo =
-      previousMemo?.value === content
-        ? previousMemo
-        : { value: content, digest: sha256Hex(stableStringify(content)) };
-    stringFingerprints.set(message, memo);
-    stringBlock = new WeakRef(memo);
-    blocks = [memo.digest];
-  } else {
-    stringFingerprints.delete(message);
-    blocks = content.map(fingerprintBlock);
-  }
-  const envelopeFields = fingerprintEnvelope(envelope);
-  const contentDigest = sha256Hex(stableStringify(blocks));
-  return {
-    digest: sha256Hex(stableStringify([Object.fromEntries(envelopeFields), contentDigest])),
-    role: message.role,
-    envelopeFields,
-    contentDigest,
-    contentKind: typeof content === "string" ? "string" : "blocks",
-    blockCount: blocks.length,
-    blocks: blocks.slice(0, MAX_HISTORY_DIFF_FIELDS),
-    ...(blocks.length > MAX_HISTORY_DIFF_FIELDS
-      ? { remainingBlocksDigest: sha256Hex(stableStringify(blocks.slice(MAX_HISTORY_DIFF_FIELDS))) }
-      : {}),
-    stringBlock,
-  };
 }
 
 const MIN_CACHE_BREAK_TOKEN_DROP = 1_000;
@@ -459,7 +407,9 @@ export function collectPromptCacheTools(
       const { description, parameters } = tool;
       let schemaDigest: string | undefined;
       if (parameters) {
-        schemaDigest = toolSchemaFingerprints.get(parameters);
+        schemaDigest =
+          getPublishedRuntimeToolInputSchema(parameters)?.canonicalFingerprint ??
+          toolSchemaFingerprints.get(parameters);
         if (!schemaDigest) {
           schemaDigest = sha256Hex(stableStringify(parameters));
           toolSchemaFingerprints.set(parameters, schemaDigest);
@@ -548,7 +498,7 @@ export function beginPromptCacheObservation(
     ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
   );
   const divergence = previous
-    ? previous.history.findIndex((message, index) => message.digest !== history[index]?.digest)
+    ? previous.history.findIndex((message, index) => message !== history[index])
     : -1;
   const violation =
     divergence < 0 || restarted || previous?.declaredRewrites?.size

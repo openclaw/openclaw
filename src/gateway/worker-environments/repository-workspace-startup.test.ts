@@ -233,10 +233,13 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
     expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBeTruthy();
   });
   let finished = false;
-  const pending = f.start({ runSetupScript: true }).then((result) => {
-    finished = true;
-    return result;
-  });
+  const phases: string[] = [];
+  const pending = f
+    .start({ runSetupScript: true, markPhase: (phase) => phases.push(phase) })
+    .then((result) => {
+      finished = true;
+      return result;
+    });
   try {
     await Promise.race([entered.promise, pending]);
     expect(finished).toBe(false);
@@ -251,6 +254,16 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
     await pending;
   }
   const result = await pending;
+  expect(phases).toEqual([
+    "repositorySync",
+    "repositoryQuiesce",
+    "repositoryReconcile",
+    "repositoryQuiescenceRenewal",
+    "repositoryVerification",
+    "repositoryLocalVerification",
+    "repositoryAcceptance",
+    "repositoryCleanup",
+  ]);
   expect(prepareGitHubPublicationFact).toHaveBeenCalledWith({
     sessionId: session.sessionId,
     sessionKey: session.sessionKey,

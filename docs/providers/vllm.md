@@ -80,9 +80,27 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 
 When `VLLM_API_KEY` is set (or an auth profile exists) and `models.providers.vllm` is **not** defined, OpenClaw queries `GET http://127.0.0.1:8000/v1/models` and converts the returned IDs into model entries.
 
+Discovery recognizes DeepSeek V4 and Nemotron 3 Nano, Super, and Ultra reasoning models, including served-name aliases such as `yk_deepseek_v4` and `yk_nemotron-3-super`. An explicitly configured `reasoning: false` still disables reasoning capability.
+
 <Note>
 If you set `models.providers.vllm` explicitly, OpenClaw uses only your declared models. Add `"vllm/*": {}` to `agents.defaults.models` to make OpenClaw also query that configured provider's `/models` endpoint and include all advertised vLLM models.
 </Note>
+
+### Serving context limits
+
+When discovery returns a positive integer `max_model_len`, OpenClaw keeps it as
+the observed context ceiling for that server and model. Inference budgets cannot
+exceed that ceiling, even when an explicit model `contextWindow` or `contextTokens`
+is larger. Smaller configured limits still apply. Static model defaults and
+missing or invalid server metadata do not become observed ceilings.
+
+The observation belongs to the discovered API and base URL. A model-level endpoint
+override does not inherit another route's ceiling. Explicit provider configuration
+without `"vllm/*"` remains manual and does not probe the server.
+
+After changing vLLM's serving limit, explicitly refresh the model catalog. New
+turns use the refreshed observation; an already prepared turn keeps its current
+budget. OpenClaw does not poll the server for every inference request.
 
 ## Explicit configuration
 
@@ -247,12 +265,12 @@ migration.
 
     `/think off` sends both template flags as `false`, because vLLM enables DeepSeek thinking when either flag is true. Hosted DeepSeek's root `thinking` object and root `reasoning_effort` are removed. Existing explicit template kwargs and the final `params.extra_body` override remain authoritative. Explicit Qwen thinking formats take precedence over the model-name match.
 
-    This request shaping does not enable reasoning for catalog rows marked `reasoning: false` or change discovery heuristics. Configure the model explicitly if discovery does not recognize its reasoning capability.
+    This request shaping does not enable reasoning for catalog rows marked `reasoning: false`. Configure the model explicitly if discovery does not recognize its reasoning capability.
 
   </Accordion>
 
   <Accordion title="Nemotron 3 thinking controls">
-    For `vllm/nemotron-3-*` models with thinking off, the bundled plugin sends:
+    For Nemotron 3 models (including served-name aliases such as `vllm/yk_nemotron-3-super`) with thinking off, the bundled plugin sends:
 
     ```json
     {

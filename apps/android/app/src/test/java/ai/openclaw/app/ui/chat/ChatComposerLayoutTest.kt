@@ -2181,6 +2181,7 @@ class ChatComposerLayoutTest {
     val owner = model.captureChatShareOwner()
     val sessionKey = controller.sessionKey.value
     val calls = ConcurrentLinkedQueue<Pair<String, String?>>()
+    val reviewLoad = AtomicReference<Job?>()
     val endpointField = NodeRuntime::class.java.getDeclaredField("connectedEndpoint").apply { isAccessible = true }
     val previousEndpoint = endpointField.get(runtime)
     val previousRequest = runtime.gatewayDataRequestOverrideForTests
@@ -2192,6 +2193,30 @@ class ChatComposerLayoutTest {
     val observeChatRequest: suspend (String, String, String?) -> String = { gatewayId, method, params ->
       chatMethods.add(method)
       previousChatRequest(gatewayId, method, params)
+    }
+
+    fun openReview() {
+      reviewLoad.set(null)
+      composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
+      composeRule.onNodeWithText(nativeString("Review changes")).performClick()
+      // Snapshot decoding and patch preparation leave Compose for Dispatchers.Default.
+      val loading =
+        object : IdlingResource {
+          override val isIdleNow: Boolean
+            get() = reviewLoad.get()?.isCompleted == true
+
+          override fun getDiagnosticMessageIfBusy(): String = "Review snapshot requests=${calls.size} job=${reviewLoad.get()}"
+        }
+      composeRule.registerIdlingResource(loading)
+      try {
+        composeRule.waitForIdle()
+      } finally {
+        composeRule.unregisterIdlingResource(loading)
+      }
+      assertFalse("The review snapshot must finish normally", checkNotNull(reviewLoad.get()).isCancelled)
+      composeRule
+        .onNode(hasText("Snapshot from the conversation workspace", substring = true) and hasAnyAncestor(isDialog()))
+        .assertIsDisplayed()
     }
     try {
       chatRequestField.set(controller, observeChatRequest)
@@ -2207,6 +2232,7 @@ class ChatComposerLayoutTest {
       runtime.gatewayDataRequestOverrideForTests = { gatewayId, method, params ->
         assertEquals(owner.gatewayStableId, gatewayId)
         assertEquals("sessions.diff", method)
+        reviewLoad.set(currentCoroutineContext().job)
         calls.add(method to params)
         buildJsonObject {
           put("sessionKey", JsonPrimitive(sessionKey))
@@ -2228,12 +2254,7 @@ class ChatComposerLayoutTest {
           )
         }.toString()
       }
-      composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
-      composeRule.onNodeWithText(nativeString("Review changes")).performClick()
-      composeRule.waitUntil {
-        composeRule.onAllNodesWithText("Snapshot from the conversation workspace", substring = true).fetchSemanticsNodes().isNotEmpty()
-      }
-      composeRule.onNodeWithText("Snapshot from the conversation workspace", substring = true).assertIsDisplayed()
+      openReview()
       composeRule.onNodeWithContentDescription(nativeString("Refresh changes")).assertIsDisplayed()
       composeRule.onNode(isDialog()).performTouchInput { swipeDown() }
       composeRule.waitForIdle()
@@ -2262,19 +2283,12 @@ class ChatComposerLayoutTest {
         assertFalse("Referencing code must not send the draft", "chat.send" in chatMethods)
       }
 
-      fun reopenReview() {
-        composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
-        composeRule.onNodeWithText(nativeString("Review changes")).performClick()
-        composeRule.waitUntil {
-          composeRule.onAllNodesWithText("Snapshot from the conversation workspace", substring = true).fetchSemanticsNodes().isNotEmpty()
-        }
-      }
-      reopenReview()
+      openReview()
       val reviewDialog = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
       composeRule.runOnIdle { reviewDialog.onBackPressedDispatcher.onBackPressed() }
       composeRule.waitForIdle()
       composeRule.onNode(isDialog()).assertDoesNotExist()
-      reopenReview()
+      openReview()
       val other = model.chatSessions.value.first { it.key != sessionKey }
       composeRule.runOnIdle { model.switchChatSession(other.key, other.ownerAgentId) }
       composeRule.waitUntil { !model.isCurrentChatComposerOwner(owner) }
@@ -2880,11 +2894,13 @@ class ChatComposerLayoutTest {
       branchDiagnosticCase = "eligible"
       openBranchSheet(calls)
       branchRow(2).assertIsEnabled().performClick()
-      composeRule.waitUntil {
+      awaitBranchSwitch(calls)
+      assertEquals(
+        "android-screenshot-branch-02",
         controller.messages.value
           .lastOrNull()
-          ?.entryId == "android-screenshot-branch-02"
-      }
+          ?.entryId,
+      )
       assertEquals(1, calls.count { it.method == "sessions.branches.switch" })
     }
 

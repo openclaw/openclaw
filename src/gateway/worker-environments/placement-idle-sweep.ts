@@ -1,7 +1,6 @@
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
-import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
@@ -20,9 +19,11 @@ export function createWorkerPlacementIdleSweep(options: {
   getConfig: () => OpenClawConfig;
   info: (message: string) => void;
   warn: (message: string) => void;
+  isStopping?: () => boolean;
   isPlacementOperationInFlight?: (sessionId: string) => boolean;
   getSessionWorkAdmissionCheck?: (
     identity: WorkerSessionPlacementIdentity,
+    signal?: AbortSignal,
   ) => Promise<() => boolean>;
   loadSessionRuntime?: () => Promise<
     Pick<
@@ -37,34 +38,34 @@ export function createWorkerPlacementIdleSweep(options: {
   const getSessionWorkAdmissionCheck =
     options.getSessionWorkAdmissionCheck ??
     (loadSessionRuntime &&
-      (async ({ sessionId, sessionKey, agentId }: WorkerSessionPlacementIdentity) => {
-        const memory = getSessionActorStorageBinding({ sessionKey, agentId });
+      (async (
+        { sessionId, sessionKey, agentId }: WorkerSessionPlacementIdentity,
+        signal?: AbortSignal,
+      ) => {
+        signal?.throwIfAborted();
+        const memory = captureSessionActorStorageOwner(
+          { sessionKey, agentId },
+          {
+            assertCurrent() {},
+            authorize() {},
+          },
+        );
         if (memory) {
           const identities = [sessionKey, sessionId];
-          return () => {
-            memory.actor.assertCurrent();
-            return (
-              isSessionWorkAdmissionActive(memory.path, identities) ||
-              hasPendingFollowupQueueWork(identities)
-            );
-          };
-        }
-        const binding = captureIncognitoSessionBinding({ sessionKey, agentId });
-        if (binding) {
-          const identities = [sessionKey, sessionId];
-          return () => {
-            binding.actor.assertReadable();
-            return (
-              isSessionWorkAdmissionActive(binding.actor.path, identities) ||
-              hasPendingFollowupQueueWork(identities)
-            );
-          };
+          return () =>
+            isSessionWorkAdmissionActive(memory.path, identities) ||
+            hasPendingFollowupQueueWork(identities);
         }
         const sessionRuntime = await loadSessionRuntime();
         const target = await sessionRuntime.resolveGatewaySessionStoreTargetInWorker({
           cfg: options.getConfig(),
           key: sessionKey,
           agentId,
+          exactRead: true,
+          projection: "list",
+          readOnly: true,
+          signal,
+          assertActive: () => signal?.throwIfAborted(),
         });
         const identities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
         return () =>
@@ -73,7 +74,10 @@ export function createWorkerPlacementIdleSweep(options: {
       }));
 
   return {
-    async sweep(): Promise<void> {
+    async sweep(signal?: AbortSignal): Promise<void> {
+      if (signal?.aborted || options.isStopping?.()) {
+        return;
+      }
       const profiles = options.getConfig().cloudWorkers?.profiles;
       if (!profiles || !Object.values(profiles).some((profile) => profile.suspendAfter)) {
         return;
@@ -86,6 +90,9 @@ export function createWorkerPlacementIdleSweep(options: {
         );
 
         for (const { sessionId } of candidates) {
+          if (signal?.aborted || options.isStopping?.()) {
+            return;
+          }
           const placement = projection.placements.get(sessionId);
           if (placement?.state !== "active" || placement.turnClaim) {
             continue;
@@ -113,7 +120,10 @@ export function createWorkerPlacementIdleSweep(options: {
               sessionKey: placement.sessionKey,
               agentId: placement.agentId,
             };
-            const hasSessionWork = await getSessionWorkAdmissionCheck?.(request);
+            const hasSessionWork = await getSessionWorkAdmissionCheck?.(request, signal);
+            if (signal?.aborted || options.isStopping?.()) {
+              return;
+            }
             const assertCurrent = () => {
               if (
                 options.getConfig().cloudWorkers?.profiles?.[environment.profileId]
@@ -125,6 +135,9 @@ export function createWorkerPlacementIdleSweep(options: {
             };
             const beforeDrain = Object.assign(
               () => {
+                if (signal?.aborted || options.isStopping?.()) {
+                  throw new WorkerPlacementAutoSuspendBusyError();
+                }
                 assertCurrent();
                 const current = options.placements.get(placement.sessionId);
                 if (
@@ -145,6 +158,9 @@ export function createWorkerPlacementIdleSweep(options: {
               `auto-suspended ${placement.sessionKey} after ${suspendAfter} idle; wakes on next message`,
             );
           } catch (error) {
+            if (signal?.aborted && error === signal.reason) {
+              return;
+            }
             if (error instanceof WorkerPlacementAutoSuspendBusyError) {
               continue;
             }

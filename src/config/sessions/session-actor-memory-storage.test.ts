@@ -116,6 +116,133 @@ describe("actor-owned memory storage", () => {
     expect(actor.snapshot(authority)?.entry?.label).toBeUndefined();
   });
 
+  it.each(["entry", "transcript"] as const)(
+    "keeps a cleanup candidate after an in-process %s write",
+    async (change) => {
+      const { actor, store } = await fixture();
+      await create(store);
+      const expected = await store.read({ type: "session.entry.read", input: {} }, authority);
+      if (!expected) {
+        throw new Error("Expected seeded entry");
+      }
+      if (change === "entry") {
+        expect(
+          await store.mutate(
+            {
+              type: "session.entry.patch",
+              input: {
+                operation: { kind: "fields", patch: { label: "Keep this update" } },
+                preserveActivity: true,
+              },
+            },
+            authority,
+          ),
+        ).toMatchObject({ kind: "committed" });
+      } else {
+        expect(
+          await store.mutate(
+            {
+              type: "session.transcript.appendMessage",
+              input: {
+                scope: {
+                  agentId: "main",
+                  storePath: "/synthetic/incognito",
+                  sessionKey,
+                  sessionId: expected.sessionId,
+                },
+                messageJson: JSON.stringify({ role: "user", content: "Keep this message" }),
+                cwd: "/synthetic",
+              },
+            },
+            authority,
+          ),
+        ).toMatchObject({ kind: "committed" });
+        // Appends leave the entry unchanged; cleanup must inspect the current transcript.
+        expect(await store.read({ type: "session.entry.read", input: {} }, authority)).toEqual(
+          expected,
+        );
+      }
+      expect(
+        await store.mutate(
+          {
+            type: "session.lifecycle.reclaim",
+            input: { entries: [{ sessionKey, expected, requiresMissingTranscript: true }] },
+          },
+          authority,
+        ),
+      ).toMatchObject({
+        kind: "committed",
+        value: { removedSessionKeys: [], beforeCount: 1, afterCount: 1 },
+      });
+      expect(actor.snapshot(authority)?.entry).toMatchObject({ sessionId: expected.sessionId });
+      if (change === "entry") {
+        expect(actor.snapshot(authority)?.entry?.label).toBe("Keep this update");
+      } else {
+        expect(
+          await store.read({ type: "session.history.message-presence", input: {} }, authority),
+        ).toBe(true);
+      }
+    },
+  );
+
+  it("archives a current entry without overwriting a newer entry from a stale plan", async () => {
+    const { actor, store } = await fixture();
+    await create(store);
+    const expected = await store.read({ type: "session.entry.read", input: {} }, authority);
+    if (!expected) {
+      throw new Error("Expected seeded entry");
+    }
+    expect(
+      await store.mutate(
+        {
+          type: "session.entry.patch",
+          input: {
+            operation: { kind: "fields", patch: { label: "Newer label" } },
+            preserveActivity: true,
+          },
+        },
+        authority,
+      ),
+    ).toMatchObject({ kind: "committed" });
+    expect(
+      await store.mutate(
+        {
+          type: "session.lifecycle.reclaim",
+          input: {
+            entries: [],
+            archives: [{ sessionKey, expected, entry: { ...expected, archivedAt: 10 } }],
+          },
+        },
+        authority,
+      ),
+    ).toMatchObject({
+      kind: "committed",
+      value: { archivedSessionKeys: [], beforeCount: 1, afterCount: 1 },
+    });
+    expect(actor.snapshot(authority)?.entry).toMatchObject({ label: "Newer label" });
+    expect(actor.snapshot(authority)?.entry?.archivedAt).toBeUndefined();
+    const current = (await store.read({ type: "session.entry.read", input: {} }, authority))!;
+    expect(
+      await store.mutate(
+        {
+          type: "session.lifecycle.reclaim",
+          input: {
+            entries: [],
+            archives: [{ sessionKey, expected: current, entry: { ...current, archivedAt: 10 } }],
+          },
+        },
+        authority,
+      ),
+    ).toMatchObject({
+      kind: "committed",
+      value: { archivedSessionKeys: [sessionKey], beforeCount: 1, afterCount: 1 },
+    });
+    expect(actor.snapshot(authority)?.entry).toMatchObject({
+      label: "Newer label",
+      archivedAt: 10,
+    });
+  });
+
   it("retains reset windows, closes old handles, and deletes all owned history", async () => {
     const { actor, store, acquire } = await fixture();
     await create(store);

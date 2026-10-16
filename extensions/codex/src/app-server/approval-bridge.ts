@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   type AgentApprovalEventData,
   type BeforeToolCallFailureDisposition,
@@ -23,7 +24,6 @@ import {
   resolveCommandApproval,
 } from "./native-command-approval.js";
 import {
-  approvalRequestExplicitlyUnavailable,
   codexApprovalTimeoutText,
   mapExecDecisionToOutcome,
   requestPluginApproval,
@@ -272,7 +272,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
       message: "Codex app-server approval requested.",
     });
 
-    const requestUnavailable = approvalRequestExplicitlyUnavailable(requestResult);
+    const requestUnavailable = requestResult?.decision === null;
     const approvalResult = requestUnavailable
       ? undefined
       : await waitForPluginApprovalDecision({
@@ -515,7 +515,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
         : {}),
     };
   }
-  if ("params" in outcome && toolPolicyParamsWereRewritten(policyRequest.params, outcome.params)) {
+  if (!isDeepStrictEqual(policyRequest.params, outcome.params, { skipPrototype: true })) {
     return {
       outcome: "denied",
       reason:
@@ -697,44 +697,6 @@ function buildOpenClawToolPolicyRequest(
   }
   if (method === "item/permissions/requestApproval") {
     return { toolName: "codex_permission_approval", params: requestParams ?? {} };
-  }
-  return undefined;
-}
-
-function toolPolicyParamsWereRewritten(original: JsonObject, candidate: unknown): boolean {
-  if (candidate === original) {
-    return false;
-  }
-  const originalText = stableJsonText(original);
-  const candidateText = stableJsonText(candidate);
-  return !candidateText || candidateText !== originalText;
-}
-
-function stableJsonText(value: unknown): string | undefined {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    const items = value.map((item) => stableJsonText(item));
-    return items.every((item): item is string => item !== undefined)
-      ? `[${items.join(",")}]`
-      : undefined;
-  }
-  if (isJsonObject(value)) {
-    const entries = Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => {
-        const text = stableJsonText(item);
-        return text === undefined ? undefined : `${JSON.stringify(key)}:${text}`;
-      });
-    return entries.every((entry): entry is string => entry !== undefined)
-      ? `{${entries.join(",")}}`
-      : undefined;
   }
   return undefined;
 }

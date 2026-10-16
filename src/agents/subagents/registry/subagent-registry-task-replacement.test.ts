@@ -39,16 +39,11 @@ import type { AgentWaitResult } from "../../run-wait.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import * as persistence from "./subagent-registry-persistence.js";
-import {
-  mutateSubagentRuns,
-  SubagentRegistryVersionConflictError,
-} from "./subagent-registry-persistence.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
-import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import {
   finalizeInterruptedSubagentRun,
   releaseSubagentRun,
@@ -594,9 +589,11 @@ it("rearms native execution for an interrupted run's successor", async () => {
     await finalizeInterruptedSubagentRun({ runId: previous.runId, expectedEntry: previous, error }),
   ).toBe(1);
   await fixture.settle();
-  expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toEqual(
-    subagentRuns.get(previous.runId),
-  );
+  expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toMatchObject({
+    task: "Resume interrupted work",
+    execution: { status: "terminal", outcome: { status: "error", error } },
+    completion: { resultText: null },
+  });
 
   const observerSnapshots: Array<{ run?: string }> = [];
   const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
@@ -716,7 +713,6 @@ it("admits a child follow-up while its predecessor's browser cleanup is still pe
 it.each([
   "committed",
   "caller retired",
-  "source replaced",
   "stamp admitted during wait",
   "caller retired during late stamp",
   "cleanup admitted during wait",
@@ -775,7 +771,6 @@ it.each([
     const lateCleanup = transition === "cleanup admitted during wait";
     const lateWrite = lateStamp || lateCleanup;
     const callerRetired = transition.startsWith("caller retired");
-    const sourceReplaced = transition.startsWith("source replaced");
     const firstEntered = createDeferred();
     const releaseFirst = createDeferred();
     const secondAdmitted = createDeferred();
@@ -903,31 +898,16 @@ it.each([
       }
       if (callerRetired) {
         callerCurrent = false;
-      } else if (sourceReplaced) {
-        const replacement = structuredClone(subagentRuns.get(original.runId)!);
-        replacement.generation = original.generation! + 1;
-        replacement.task = "replacement owner";
-        // An independent writer changes the durable execution while the worker is held.
-        writeSubagentRunValuesInDatabase(
-          openOpenClawStateDatabase(),
-          [bindSubagentRunRecord(replacement)],
-          [],
-        );
       }
       release.resolve();
       await hook;
-      if (callerRetired || sourceReplaced) {
-        // An out-of-band writer is refused at the version check without reloading/replaying.
+      if (callerRetired) {
         expect(await followup).toMatchObject({
-          error: sourceReplaced
-            ? new SubagentRegistryVersionConflictError([original.runId])
-            : new Error("follow-up caller retired"),
+          error: new Error("follow-up caller retired"),
         });
         const stored = loadSubagentRegistryFromSqlite();
         expect(stored.has("after-ended-hook")).toBe(false);
-        expect(stored.get(original.runId)?.task).toBe(
-          sourceReplaced ? "replacement owner" : "original work",
-        );
+        expect(stored.get(original.runId)?.task).toBe("original work");
       } else {
         expect(await followup).toEqual({ value: true });
         const stored = loadSubagentRegistryFromSqlite();

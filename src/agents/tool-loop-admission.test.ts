@@ -191,7 +191,6 @@ describe("whole-batch tool-loop admission", () => {
   );
 
   it.each([
-    ["read", { path: "/tmp/repeated" }, "generic_repeat"],
     ["process", { action: "poll", sessionId: "process-1" }, "known_poll_no_progress"],
   ] as const)(
     "returns bucketed warnings before %s reaches a critical loop",

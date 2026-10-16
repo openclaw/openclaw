@@ -40,11 +40,11 @@ export function AgentFilePreview<T>(props: {
       throw new Error("Agent file preview must be a modal child");
     }
     setOpen(modal.open);
-    modal.addEventListener("wa-show", show);
-    modal.addEventListener("wa-hide", hide);
+    modal.addEventListener("overlay-show", show);
+    modal.addEventListener("overlay-hide", hide);
     return () => {
-      modal?.removeEventListener("wa-show", show);
-      modal?.removeEventListener("wa-hide", hide);
+      modal?.removeEventListener("overlay-show", show);
+      modal?.removeEventListener("overlay-hide", hide);
     };
   });
   return (

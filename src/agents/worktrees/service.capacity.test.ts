@@ -149,12 +149,21 @@ describe("ManagedWorktreeService capacity", () => {
     },
   );
 
-  it.for(["linked create", "borrowed create", "borrowed restore"] as const)(
-    "retains managed Git sources until %s settles below the count cap",
+  it.for(["linked create", "borrowed create", "borrowed restore", "nested destination"] as const)(
+    "retains managed dependencies until %s settles below the count cap",
     async (operation, { signal }) => {
       const source = await service.create({ repoRoot: repo, name: "source", baseRef: "HEAD" });
       let consumerRoot = source.path;
-      if (operation !== "linked create") {
+      if (operation === "nested destination") {
+        consumerRoot = repo;
+        service = new ManagedWorktreeService({
+          env,
+          getConfig: () => ({
+            worktreeAcceleration: false,
+            worktreeRoot: path.join(source.path, "nested"),
+          }),
+        });
+      } else if (operation !== "linked create") {
         const donor = path.join(source.path, "donor");
         consumerRoot = path.join(root, "borrower");
         await git(root, "clone", "--no-local", "--", repo, donor);

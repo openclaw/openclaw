@@ -53,6 +53,64 @@ function localeMeta(overrides: Partial<LocaleMeta> = {}): LocaleMeta {
 }
 
 describe("createControlUiLocaleSyncPlan", () => {
+  it("preserves authored plugin values under force without inventing memory provenance", () => {
+    const verified = memoryEntry({
+      segment_id: "example.verified",
+      text: "Same",
+      translated: "Identique",
+      text_hash: hashText("Same"),
+    });
+    const plan = createControlUiLocaleSyncPlan({
+      allowTranslate: true,
+      cacheKeyFor,
+      entry,
+      existingFlat: new Map(),
+      authoredFlat: new Map([
+        ["example.authored", "Identique"],
+        ["example.verified", "Identique"],
+      ]),
+      force: true,
+      refreshKeys: new Set(["example.authored"]),
+      hashText,
+      previousMeta: null,
+      sourceFlat: new Map([
+        ["example.authored", "Same"],
+        ["example.verified", "Same"],
+        ["example.new", "New {count}"],
+      ]),
+      sourceHash: "plugin-source",
+      sourcePath: "extensions/example/browser/i18n/locales/en.ts",
+      translationMemory: new Map([[verified.cache_key, verified]]),
+    });
+    expect(plan.pending.map(({ key }) => key)).toEqual(["example.new"]);
+    plan.recordTranslations(plan.pending, new Map([["example.new", "Nouveau {count}"]]), {
+      sourceLocale: "en",
+      updatedAt: () => "2026-01-02T00:00:00Z",
+    });
+    const result = plan.render({
+      defaultGlossary: [],
+      glossary: [],
+      generatedAt: "2026-01-02T00:00:00Z",
+      workflow: 1,
+    });
+    expect(result.nextFlat.get("example.authored")).toBe("Identique");
+    const records = result.translationMemory
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(
+      records
+        .flatMap((record) => [record.segment_id, ...(record.segment_ids ?? [])])
+        .toSorted((left, right) => left.localeCompare(right)),
+    ).toEqual(["example.new", "example.verified"]);
+    expect(records.find((record) => record.segment_id === "example.new")).toMatchObject({
+      source_path: "extensions/example/browser/i18n/locales/en.ts",
+      text_hash: hashText("New {count}"),
+      translated: "Nouveau {count}",
+    });
+    expect(result.fallbackCount).toBe(0);
+  });
+
   it("refreshes selected keys without replaying cached aliases or dropping normal pending work", () => {
     const catalogHashText = hashControlUiTranslationText;
     const sourceFlat = new Map([
@@ -85,6 +143,7 @@ describe("createControlUiLocaleSyncPlan", () => {
       translated: "Autre",
     });
     const plan = createControlUiLocaleSyncPlan({
+      sourcePath: "ui/src/i18n/locales/fr.ts",
       allowTranslate: true,
       cacheKeyFor,
       entry,
@@ -159,6 +218,7 @@ describe("createControlUiLocaleSyncPlan", () => {
   it("retranslates cached and existing strings on a full refresh", () => {
     const cached = memoryEntry({ segment_id: "cached" });
     const plan = createControlUiLocaleSyncPlan({
+      sourcePath: "ui/src/i18n/locales/fr.ts",
       allowTranslate: true,
       cacheKeyFor,
       entry,
@@ -227,6 +287,7 @@ describe("createControlUiLocaleSyncPlan", () => {
       provider: "private-provider-fixture",
     });
     const plan = createControlUiLocaleSyncPlan({
+      sourcePath: "ui/src/i18n/locales/fr.ts",
       allowTranslate: false,
       cacheKeyFor,
       entry,
@@ -344,6 +405,7 @@ describe("createControlUiLocaleSyncPlan", () => {
 
   it("refreshes recorded fallback copy when forced without a provider", () => {
     const plan = createControlUiLocaleSyncPlan({
+      sourcePath: "ui/src/i18n/locales/fr.ts",
       allowTranslate: false,
       cacheKeyFor,
       entry,
@@ -375,6 +437,7 @@ describe("createControlUiLocaleSyncPlan", () => {
       translatedKeys: 1,
     });
     const plan = createControlUiLocaleSyncPlan({
+      sourcePath: "ui/src/i18n/locales/fr.ts",
       allowTranslate: false,
       cacheKeyFor,
       entry,

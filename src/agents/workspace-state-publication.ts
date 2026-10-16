@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   observeSqliteWorkerCommittedFacts,
@@ -63,7 +63,7 @@ export const workspaceStatePublication = createStateDomainPublication<WorkspaceS
   },
 });
 
-export function captureWorkspaceStateReceipt<T>(db: DatabaseSync, run: () => T): T {
+export function captureWorkspaceStateReceipt<T>(db: EngineConnection, run: () => T): T {
   const { result, receipt } = workspaceStatePublication.capture(db, run);
   deferSqliteWorkerCommitReceipt(
     db,

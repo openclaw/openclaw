@@ -12,6 +12,11 @@ import { selectResetKeptEntries } from "./tool-result-pairing.js";
 
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
 
+function isExcludedCustomMessage(entry: Extract<SessionTreeEntry, { type: "custom_message" }>) {
+  // Existing failure receipts predate the generic context exclusion marker.
+  return entry.excludeFromContext === true || entry.customType === "run-failed-before-reply";
+}
+
 /** The same semantic cut is used before payload acquisition and when building messages. */
 function resolveSessionContextWindow(
   entries: readonly { id: string; type: string; firstKeptEntryId?: string }[],
@@ -38,6 +43,9 @@ export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessag
         ? undefined
         : entry.message;
     case "custom_message":
+      if (isExcludedCustomMessage(entry)) {
+        return undefined;
+      }
       return createCustomMessage(
         entry.customType,
         entry.content,
@@ -96,6 +104,7 @@ export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
       entry.type === "branch_summary";
     if (
       !hasMessage ||
+      (entry.type === "custom_message" && isExcludedCustomMessage(entry)) ||
       (!resetKept?.has(entry) &&
         entry.type === "message" &&
         "excludeFromContext" in entry.message &&

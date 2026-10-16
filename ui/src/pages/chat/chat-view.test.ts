@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { html, render } from "lit";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -30,7 +30,9 @@ import {
 } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { makeUiSettings } from "../../test-helpers/settings-node.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -44,7 +46,10 @@ import {
   selectAttachmentMenuOption,
   selectFile,
 } from "./chat-attachment-picker.test-support.ts";
-import { createComposerContainer } from "./chat-composer.test-support.ts";
+import {
+  createComposerContainer,
+  createComposerControlsFixture,
+} from "./chat-composer.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -65,8 +70,11 @@ import {
   createReplyPane,
   createPasteEvent,
   createTestTranscript,
+  disposeChatView,
   renderChatInto,
+  renderChatPropsInto,
   renderChatView,
+  renderChatModelControls,
   getComposerTextarea,
   requireElement,
   stubAnimationFrames,
@@ -79,10 +87,10 @@ import {
   getThinkingSliderValues,
   itemAt,
 } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import type { ChatProps } from "./chat-view.tsx";
 import * as chatMessageConfirmation from "./components/chat-message-confirmation.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
-import { renderChatModelControls } from "./components/chat-model-controls.tsx";
+import { ChatModelControls } from "./components/chat-model-controls.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import {
   resetThreadPresentation,
@@ -93,7 +101,8 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import { renderWelcomeState } from "./components/chat-welcome.ts";
+import { ChatWelcome } from "./components/chat-welcome.tsx";
+import { saveChatSessionScrollPosition } from "./scroll.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 import {
   workspaceConflictPathForDisplay,
@@ -254,8 +263,6 @@ type ChatHeaderTestState = {
   resetChatScroll(): void;
   resetToolStream(): void;
 };
-
-type ChatProps = Parameters<typeof renderChat>[0];
 
 function createOpenAiModelCatalog(): ModelCatalogEntry[] {
   return [
@@ -488,7 +495,7 @@ function createReasoningHeaderState(options: { models: ModelCatalogEntry[] }) {
   return result;
 }
 
-type ChatModelControlsProps = Parameters<typeof renderChatModelControls>[0];
+type ChatModelControlsProps = Parameters<typeof ChatModelControls>[0];
 
 function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelControlsProps {
   const selectedSession = state.sessionsResult?.sessions.find((row) =>
@@ -496,7 +503,6 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
   );
   return {
     activeRunId: state.chatRunId,
-    activeRunSessionKey: state.chatRunId ? state.sessionKey : undefined,
     connected: state.connected,
     gatewayAvailable: Boolean(state.client),
     loading: state.chatLoading,
@@ -538,11 +544,10 @@ function renderModelControls(
   overrides: Partial<ChatModelControlsProps> = {},
   container = document.createElement("div"),
 ) {
-  render(
-    renderChatModelControls({ ...createChatModelControlsProps(state), ...overrides }),
+  return renderChatModelControls(
+    { ...createChatModelControlsProps(state), ...overrides },
     container,
   );
-  return container;
 }
 
 describe("chat typing status", () => {
@@ -626,7 +631,10 @@ describe("chat run error", () => {
       vi.mocked(chatThread.buildCachedChatItems).mockRestore();
       const onRetrySessionPlacementStartup = vi.fn();
       const onQueueRetry = vi.fn();
+      const paneId = `startup-${action}`;
+      saveChatSessionScrollPosition(paneId, "main", { scrollTop: 0, anchorToEnd: false });
       const container = renderChatView({
+        transcript: createTestTranscript(paneId),
         canSend: false,
         messages: [
           { role: "user", content: "[System] Gateway restarted", timestamp: 3 },
@@ -956,16 +964,18 @@ describe("chat history pagination", () => {
     expect(container.querySelector(".chat-history-sentinel")).toBeNull();
   });
 
-  it("loads older history from upward wheel and keyboard intent without a button", () => {
+  it("loads older history from upward wheel and keyboard intent across transcript updates", () => {
     const onHistoryIntent = vi.fn();
-    const container = renderChatView({
+    const props = {
+      messages: [{ role: "assistant", content: "Current history" }],
       historyPagination: {
         hasMore: true,
         loading: false,
         onShowEarlier: vi.fn(),
       },
       onHistoryIntent,
-    });
+    };
+    const container = renderChatView(props);
     const thread = requireElement(container, ".chat-thread", "chat thread");
     const sentinel = requireElement(container, ".chat-history-sentinel", "history sentinel");
 
@@ -973,6 +983,19 @@ describe("chat history pagination", () => {
     thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
     thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
     expect(onHistoryIntent).toHaveBeenCalledTimes(2);
+
+    renderChatInto(container, {
+      ...props,
+      messages: [...props.messages, { role: "assistant", content: "Updated history" }],
+    });
+    expect(container.querySelector(".chat-history-sentinel")).toBe(sentinel);
+    expect(thread.contains(sentinel)).toBe(true);
+    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+    expect(onHistoryIntent).toHaveBeenCalledTimes(3);
+
+    renderChatInto(container, { messages: props.messages, onHistoryIntent });
+    expect(container.querySelector(".chat-history-sentinel")).toBeNull();
+    expect(thread.contains(sentinel)).toBe(false);
   });
 });
 
@@ -1133,14 +1156,11 @@ describe("direct thread avatar mode", () => {
     agentsList: { defaultId: "work", mainKey: "main", scope: "global" as const },
     hello: null,
   };
-  const message = [{ role: "user", content: "hi", timestamp: 1 }] satisfies Parameters<
-    typeof renderChat
-  >[0]["messages"];
-  const avatarCase = (
-    sessionKey: string,
-    direct: boolean,
-    overrides: Partial<Parameters<typeof renderChat>[0]> = {},
-  ) => ({ props: { sessionKey, messages: message, ...overrides }, direct });
+  const message = [{ role: "user", content: "hi", timestamp: 1 }] satisfies ChatProps["messages"];
+  const avatarCase = (sessionKey: string, direct: boolean, overrides: Partial<ChatProps> = {}) => ({
+    props: { sessionKey, messages: message, ...overrides },
+    direct,
+  });
 
   it.each([
     [
@@ -1881,9 +1901,7 @@ describe("chat loading skeleton", () => {
   it("shows prompt-bar progress beside context usage while the current session send is awaiting acknowledgement", () => {
     const container = renderChatView({
       sending: true,
-      composerControls: html`<button class="chat-composer-model-control" type="button">
-        Model
-      </button>`,
+      composerControls: createComposerControlsFixture(),
       queue: [createPendingSend()],
       selectedSession: createContextUsageSessions().sessions[0],
     });
@@ -1922,6 +1940,7 @@ describe("chat loading skeleton", () => {
           role: "assistant",
           provider: "openai",
           responseModel: "gpt-5.5",
+          content: "Completed response",
           cost: { input: 0.001, output: 0.002 },
         },
       ],
@@ -1930,6 +1949,8 @@ describe("chat loading skeleton", () => {
 
     // The session provider matches a plan-usage group, so dollar estimates
     // yield to the subscription windows.
+    container.querySelector<HTMLElement>(".context-usage summary")!.click();
+    flush();
     expect(container.querySelector("[data-chat-usage-provider='true']")?.textContent).toContain(
       "OpenAI",
     );
@@ -2016,9 +2037,7 @@ describe("chat loading skeleton", () => {
     try {
       const container = renderChatView({
         messages: [{ role: "assistant", content: "Partial response" }],
-        composerControls: html`<button class="chat-composer-model-control" type="button">
-          Model
-        </button>`,
+        composerControls: createComposerControlsFixture(),
         runStatus: {
           phase: "interrupted",
           runId: "run-1",
@@ -2256,10 +2275,10 @@ describe("chat composer render invalidation", () => {
     });
     const onRequestUpdate = vi.fn(() => {
       props = { ...props, draft, getDraft: () => draft };
-      render(renderChat(props), container);
+      renderChatPropsInto(container, props);
     });
     props = { ...props, onRequestUpdate };
-    render(renderChat(props), container);
+    renderChatPropsInto(container, props);
 
     const textarea = getComposerTextarea(container);
     onRequestUpdate.mockClear();
@@ -2281,7 +2300,7 @@ describe("chat composer render invalidation", () => {
     expect(chatThread.buildCachedChatItems).not.toHaveBeenCalled();
     expect(textarea.dir).toBe("rtl");
 
-    render(renderChat(props), container);
+    renderChatPropsInto(container, props);
     expect(getComposerTextarea(container).dir).toBe("rtl");
   });
 });
@@ -2817,6 +2836,7 @@ describe("chat slash menu accessibility", () => {
     textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
     textarea.setSelectionRange(textarea.value.length, textarea.value.length);
     textarea.dispatchEvent(new Event("select", { bubbles: true }));
+    flush();
 
     expect(container.querySelector(".skill-menu")).toBeNull();
   });
@@ -3183,20 +3203,23 @@ describe("chat attachment picker", () => {
     }
   });
 
-  it("opens the scoped file input from the attachment menu", () => {
+  it("opens the scoped file input from the attachment menu", async () => {
     const container = renderChatView();
     const input = requireAttachmentInput(
       container,
       ".agent-chat__file-input",
       "attachment file input",
     );
-    const attachButton = getAttachmentMenuOption(container, t("chat.composer.attachFileOption"));
+    const attachButton = await getAttachmentMenuOption(
+      container,
+      t("chat.composer.attachFileOption"),
+    );
     const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
 
     expect(attachButton).toBeInstanceOf(HTMLElement);
     selectAttachmentMenuOption(attachButton);
 
-    expect(clickInput).toHaveBeenCalledTimes(1);
+    await waitForSolid(() => expect(clickInput).toHaveBeenCalledTimes(1));
   });
 
   it("opens the scoped camera dialog instead of a file picker and attaches its photo", async () => {
@@ -3206,12 +3229,12 @@ describe("chat attachment picker", () => {
     if (!camera) {
       throw new Error("Missing camera capture dialog");
     }
-    const cameraButton = getAttachmentMenuOption(container, t("chat.composer.takePhoto"));
+    const cameraButton = await getAttachmentMenuOption(container, t("chat.composer.takePhoto"));
     const show = vi.spyOn(camera, "show").mockImplementation(() => undefined);
     const fileClick = vi.spyOn(HTMLInputElement.prototype, "click");
     expect(container.querySelector(".agent-chat__camera-input")).not.toBeNull();
     selectAttachmentMenuOption(cameraButton);
-    expect(show).toHaveBeenCalledOnce();
+    await waitForSolid(() => expect(show).toHaveBeenCalledOnce());
     expect(fileClick).not.toHaveBeenCalled();
 
     const photo = new File(["photo"], "camera.jpg", { type: "image/jpeg" });
@@ -3269,14 +3292,15 @@ describe("chat welcome", () => {
     onModelSetup?: () => void;
   }) {
     const container = document.createElement("div");
-    render(
-      renderWelcomeState({
-        assistantName: "Val",
-        onDraftChange: () => undefined,
-        onSend: () => undefined,
-        ...params,
-      }),
-      container,
+    mountSolid(
+      () =>
+        createComponent(ChatWelcome, {
+          assistantName: "Val",
+          onDraftChange: () => undefined,
+          onSend: () => undefined,
+          ...params,
+        }),
+      { container },
     );
     return container;
   }
@@ -3393,6 +3417,39 @@ describe("chat welcome", () => {
 
     itemAt(rows, 0, "recent session row").click();
     expect(opened).toEqual(["agent:main:dashboard:newer"]);
+  });
+
+  it("retains the draft composer when secondary welcome content fades", () => {
+    const composer = document.createElement("textarea");
+    composer.value = "Unsubmitted draft";
+    let fade!: () => void;
+    const view = mountSolid(() => {
+      const [faded, setFaded] = createSignal(false);
+      fade = () => setFaded(true);
+      return createComponent(ChatWelcome, {
+        assistantName: "Val",
+        assistantAvatar: "🦉",
+        composer,
+        get fadeSecondaryContent() {
+          return faded();
+        },
+        onDraftChange: () => undefined,
+        onSend: () => undefined,
+      });
+    });
+    composer.focus();
+    composer.setSelectionRange(4, 8);
+
+    fade();
+    flush();
+
+    expect(view.container.querySelector("textarea")).toBe(composer);
+    expect(composer.value).toBe("Unsubmitted draft");
+    expect(document.activeElement).toBe(composer);
+    expect([composer.selectionStart, composer.selectionEnd]).toEqual([4, 8]);
+    expect(
+      view.container.querySelector(".agent-chat__welcome-secondary")?.getAttribute("aria-hidden"),
+    ).toBe("true");
   });
 
   it("renders welcome text from the active locale", async () => {
@@ -4088,7 +4145,9 @@ describe("chat model controls", () => {
     expect(onModelSelect).not.toHaveBeenCalled();
     expect(search!.value).toBe("claude");
 
-    const nestedPicker = document.createElement("wa-dropdown");
+    const nestedPicker = document.createElement("div");
+    nestedPicker.setAttribute("role", "menu");
+    nestedPicker.setAttribute("popover", "manual");
     const nestedTrigger = document.createElement("button");
     nestedPicker.append(nestedTrigger);
     details!.append(nestedPicker);
@@ -4844,7 +4903,7 @@ describe("right-click Reply", () => {
       );
     } finally {
       transcript.hostDisconnected();
-      render(null, container);
+      disposeChatView(container);
       container.remove();
     }
   });
@@ -4867,10 +4926,12 @@ describe("right-click Reply", () => {
       let target: HTMLElement = bubble;
       if (mode === "linked image") {
         const preview = bubble.appendChild(document.createElement("div"));
-        render(
-          html`<a href="https://example.com"><img src="/example.png" alt="Example" /></a>`,
-          preview,
+        const link = document.createElement("a");
+        link.href = "https://example.com";
+        link.append(
+          Object.assign(document.createElement("img"), { src: "/example.png", alt: "Example" }),
         );
+        preview.append(link);
         target = expectDefined(preview.querySelector("img"), "linked image");
       } else if (mode === "streaming") {
         bubble.classList.add("streaming");

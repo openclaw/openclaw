@@ -1,6 +1,8 @@
 import { fork } from "node:child_process";
 import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import {
@@ -110,6 +112,65 @@ export function createAgentSchemaInspectionWorker() {
       }
       busy = true;
       try {
+        if (kind === "agent" && getDatabaseEngineInput("agent")) {
+          if (snapshotPath) {
+            throw new Error(
+              "PostgreSQL agent inspection requires its live engine owner, not a SQLite snapshot.",
+            );
+          }
+          const {
+            captureOpenClawAgentDatabaseExecution,
+            getPendingOpenClawAgentDatabasePreparation,
+          } = await import("./openclaw-agent-execution.js");
+          await getPendingOpenClawAgentDatabasePreparation(input.pathname);
+          signal?.throwIfAborted();
+          let agentId =
+            input.agentId ??
+            getOrLoadSqliteDatabaseAdmissionForPath(
+              input.pathname,
+              agentSchemaMetadataKey,
+              () => undefined,
+            )?.agentId;
+          if (!agentId) {
+            const { resolveSessionSqliteTargetInWorker } =
+              await import("../config/sessions/session-transcript-read-worker-runtime.js");
+            const target = await resolveSessionSqliteTargetInWorker(
+              {
+                storePath: input.pathname,
+                env: input.env ?? process.env,
+                registeredDatabases: [],
+              },
+              signal,
+            );
+            if (target.ownerSource !== "database-path" || !target.agentId) {
+              throw new Error(
+                "PostgreSQL schema inspection could not establish the custom store owner.",
+              );
+            }
+            agentId = target.agentId;
+          }
+          const execution = captureOpenClawAgentDatabaseExecution({
+            agentId,
+            path: input.pathname,
+            env: input.env,
+          });
+          try {
+            const result = await execution.runExisting(
+              createSessionWorkerExecutionSource(
+                () => signal?.throwIfAborted(),
+                "Agent schema inspection admission expired",
+              ),
+              (scope) =>
+                scope.execute({ type: "database.schema.inspect", input: undefined }, { signal }),
+            );
+            if (result) {
+              inspectionCount += 1;
+            }
+            return result ?? null;
+          } finally {
+            await execution.release();
+          }
+        }
         if (
           kind !== "state" &&
           !snapshotPath &&
@@ -127,7 +188,7 @@ export function createAgentSchemaInspectionWorker() {
             () => undefined,
           );
           if (
-            validation?.schema?.facts.userVersion === input.supportedVersion &&
+            validation?.schema?.facts?.userVersion === input.supportedVersion &&
             Atomics.load(new Int32Array(validation.valid), 0) === 1 &&
             Atomics.load(new Int32Array(validation.schema.valid), 0) === 1 &&
             prepareSqliteDatabaseAdmission(input.pathname) ===
@@ -186,14 +247,17 @@ export function createAgentSchemaInspectionWorker() {
           } else {
             if (kind === "state") {
               const stateInspection = message.stateInspection;
-              if (!stateInspection) {
+              if (stateInspection === null) {
+                response.resolve(null);
+                return;
+              }
+              if (stateInspection === undefined) {
                 failure = new Error("Invalid state schema inspection response");
                 kill();
                 return;
               }
               response.resolve({
                 ...stateInspection,
-                schemaContracts: message.schemaContracts,
                 inspectionErrors: stateInspection.inspectionErrors.map(
                   restoreAgentSchemaInspectionError,
                 ),
@@ -306,10 +370,10 @@ export function createAgentSchemaInspectionWorker() {
       input: StateSchemaInspectionInput,
       callerSignal: AbortSignal | undefined,
       snapshotPath?: string,
-    ): Promise<StateSchemaInspection> => {
+    ): Promise<StateSchemaInspection | null> => {
       const result = await operations.inspect({ kind: "state", input }, callerSignal, snapshotPath);
-      if (!result || !("schemas" in result)) {
-        throw new Error("Missing state schema inspection result");
+      if (result && !("schemas" in result)) {
+        throw new Error("Unexpected agent schema inspection result");
       }
       return result;
     },

@@ -17,6 +17,7 @@ import {
   inferUniqueProviderFromConfiguredModels,
   listModelAliasCandidates,
 } from "../model-selection-shared.js";
+import { readModelServingContextWindow } from "../model-serving-context.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../openai-routing.js";
 import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
@@ -268,6 +269,9 @@ export function resolveCompactionContextTokenBudget(params: {
         provider: params.provider,
         modelId: params.modelId,
         modelContextTokens: asFiniteNumber(params.model?.contextTokens),
+        modelServingContextWindow: params.model
+          ? readModelServingContextWindow(params.model)
+          : undefined,
         modelContextWindow: params.model?.contextWindow,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       }).tokens,

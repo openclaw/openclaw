@@ -1225,6 +1225,66 @@ describe("gateway server chat", () => {
     },
   );
 
+  test.each([
+    {
+      name: "hides assistant control replies in Responses output blocks",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "NO_REPLY" }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "visible response" }],
+          timestamp: 2,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "input_text", text: "NO_REPLY" }],
+          timestamp: 3,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "input_text", text: "visible assistant input" }],
+          timestamp: 4,
+        },
+      ],
+      expected: ["assistant:visible response", "assistant:visible assistant input"],
+    },
+    {
+      name: "preserves literal announce/reply skip text outside its owning protocol",
+      messages: [
+        createGatewayHistoryText("assistant", "ANNOUNCE_SKIP", 1),
+        createGatewayHistoryText("assistant", "REPLY_SKIP", 2),
+        {
+          role: "assistant",
+          text: "real text field reply",
+          content: "ANNOUNCE_SKIP",
+          timestamp: 3,
+        },
+        createGatewayHistoryText("assistant", "real reply", 4),
+      ],
+      expected: [
+        "assistant:ANNOUNCE_SKIP",
+        "assistant:REPLY_SKIP",
+        "assistant:real text field reply",
+        "assistant:real reply",
+      ],
+    },
+  ])("chat.history $name", async ({ messages, expected }) => {
+    const historyMessages = await loadChatHistoryWithMessages(messages);
+    const roleAndText = historyMessages.map((message) => {
+      const entry = isRecord(message) ? message : {};
+      const role = typeof entry.role === "string" ? entry.role : "unknown";
+      const text =
+        typeof entry.text === "string" ? entry.text : (extractFirstTextBlock(message) ?? "");
+      return `${role}:${text}`;
+    });
+
+    expect(roleAndText).toEqual(expected);
+  });
+
   test("chat.history omits argument-derived replies for partial broadcasts and retains diagnostics", async () => {
     const result = {
       kind: "broadcast",

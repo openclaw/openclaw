@@ -11,6 +11,7 @@ import {
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
+import { CronService } from "../cron/service.js";
 import { waitForActiveCronTaskRuns } from "../cron/service/active-run-cancellation.js";
 import { captureCronSchedulerWakeForTest } from "../cron/service/scheduler-actor.test-support.js";
 import * as cronServiceState from "../cron/service/state.js";
@@ -51,6 +52,7 @@ vi.mock("./cron-stream-watchers.js", async (importOriginal) => ({
     resume: vi.fn(),
     start: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
+    stopBeforeUpdate: vi.fn(() => undefined),
     stopAll: stopAllMock,
     activeJobIds: () => [],
     inspect: () => undefined,
@@ -83,9 +85,12 @@ async function startGatewayCron(
   const clock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(clock.clock);
   const state = buildGatewayCronService({
+    storePath: await cronStore.resolveCronJobsStorePathFromConfigAsync(cfg, {
+      ...process.env,
+      OPENCLAW_STATE_DIR: stateDir,
+    }),
     scheduler,
     cfg,
-    storePath: path.join(stateDir, "cron", "jobs.json"),
     deps: {} as CliDeps,
     broadcast,
     env: { ...process.env, OPENCLAW_SKIP_CRON: "0", OPENCLAW_STATE_DIR: stateDir },
@@ -552,6 +557,53 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     }
   });
 
+  it.each(["resume", "stop"] as const)(
+    "joins concurrent starts while paused until %s",
+    async (action) => {
+      stopAllMock.mockResolvedValue(undefined);
+      const broadcast = vi.fn();
+      const start = vi.spyOn(CronService.prototype, "start");
+      const original = await startGatewayCron(`paused-start-${action}`, true, broadcast);
+      try {
+        await original.state.cron.stopAndDrain?.();
+        start.mockClear();
+        broadcast.mockClear();
+        original.state.cron.pauseScheduling();
+        const starts = [original.state.cron.start(), original.state.cron.start()];
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(start).not.toHaveBeenCalled();
+        expect(original.state.cron.getSuspensionBlockerCount?.()).toBeGreaterThan(0);
+        expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(false);
+        expect(broadcast).not.toHaveBeenCalled();
+
+        if (action === "resume") {
+          original.state.cron.resumeScheduling();
+          await Promise.all(starts);
+          await original.state.cron.start();
+          expect(start).toHaveBeenCalledOnce();
+          expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(true);
+          expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+            "sessions.changed",
+            { reason: "cron-bindings-loaded", ts: expect.any(Number) },
+            { dropIfSlow: true },
+          );
+        } else {
+          await original.state.cron.stopAndDrain?.();
+          await Promise.all(starts);
+          expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(false);
+          expect(broadcast).not.toHaveBeenCalled();
+        }
+        expect(original.state.cron.getSuspensionBlockerCount?.()).toBe(0);
+      } finally {
+        start.mockRestore();
+        await cleanGatewayCron(original);
+        await original.scheduler.stop();
+      }
+    },
+  );
+
   it("does not reopen the scheduler when a later stop wins a pending restart", async () => {
     const exitWatcherDrain = createDeferred();
     cancelAllMock.mockReturnValue(exitWatcherDrain.promise);
@@ -571,6 +623,48 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     } finally {
       exitWatcherDrain.resolve(undefined);
       await cleanGatewayCron(original);
+    }
+  });
+
+  it("observes asynchronous exit cleanup failure and preserves it across drain and restart", async () => {
+    const exitWatcherDrain = createDeferred();
+    cancelAllMock.mockReturnValue(exitWatcherDrain.promise);
+    stopAllMock.mockResolvedValue(undefined);
+    const original = await startGatewayCron("exit-watcher-cleanup-failure");
+    const error = new Error("cleanup could not be confirmed");
+    try {
+      original.state.cron.stop();
+      exitWatcherDrain.reject(error);
+      // cron.stop has no returned promise; its owner must observe rejection itself.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(false);
+      await expect(original.state.cron.stopAndDrain?.()).rejects.toBe(error);
+      await expect(original.state.cron.start()).rejects.toBe(error);
+      await expect(original.state.cron.stopAndDrain?.()).rejects.toBe(error);
+      expect(cancelAllMock).toHaveBeenCalledOnce();
+    } finally {
+      exitWatcherDrain.reject(error);
+      await expect(cleanGatewayCron(original)).rejects.toBe(error);
+      await original.scheduler.stop();
+    }
+  });
+
+  it("observes failed exit cleanup during disabled reconciliation", async () => {
+    stopAllMock.mockResolvedValue(undefined);
+    const original = await startGatewayCron("disabled-exit-cleanup-failure", false);
+    const error = new Error("cleanup could not be confirmed");
+    try {
+      await original.state.reconcileExitWatchers();
+      cancelAllMock.mockRejectedValue(error);
+      await expect(original.state.reconcileExitWatchers()).resolves.toBeUndefined();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    } finally {
+      await expect(cleanGatewayCron(original)).rejects.toBe(error);
+      await original.scheduler.stop();
     }
   });
 

@@ -3,6 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CLI_PARENT_BOUND_PRELOAD } from "../cli-parent-lifetime.mjs";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 
 const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
@@ -23,39 +24,35 @@ function buildPlan(params: Parameters<typeof buildCliRespawnPlan>[0]) {
 }
 
 describe("buildCliRespawnPlan", () => {
-  it("returns null when respawn policy skips the argv", () => {
-    expect(
-      buildPlan({
-        argv: ["node", "openclaw", "--help"],
-        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-      }),
-    ).toBeNull();
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it.each([["gateway", "--ambient-channels", "run"]])(
-    "keeps foreground Gateway ambient channel options in process: %j",
-    (...args) => {
-      for (const platform of ["darwin", "linux", "win32"] as const) {
-        expect(
-          buildPlan({
-            argv: ["node", "openclaw", ...args],
-            autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-            platform,
-          }),
-        ).toBeNull();
-      }
+  it.each([undefined, "--max-old-space-size=4096"])(
+    "suppresses standalone warnings through NODE_OPTIONS while preserving %s",
+    (nodeOptions) => {
+      vi.stubGlobal("__openclawStandaloneRootUrl", "file:///app/runtime/");
+      const argv = [
+        "bun",
+        "/app/runtime/openclaw.mjs",
+        "--profile",
+        "work",
+        "config",
+        "get",
+        "gateway.mode",
+      ];
+      const respawnPlan = expectCliRespawnPlan(
+        buildPlan({ argv, env: { NODE_OPTIONS: nodeOptions }, platform: "darwin" }),
+      );
+
+      expect(respawnPlan.argv).toEqual(argv.slice(2));
+      expect(respawnPlan.env.NODE_OPTIONS).toBe(
+        nodeOptions ? `${nodeOptions} ${EXPERIMENTAL_WARNING_FLAG}` : EXPERIMENTAL_WARNING_FLAG,
+      );
+      expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBe("1");
+      expect(buildPlan({ argv, env: respawnPlan.env, platform: "darwin" })).toBeNull();
     },
   );
-
-  it("does not detach native hook relays through a startup respawn", () => {
-    expect(
-      buildPlan({
-        argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
-        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-        platform: "linux",
-      }),
-    ).toBeNull();
-  });
 
   it.each(["linux", "win32"] as const)(
     "leaves foreground Gmail shutdown with its lifecycle owner on %s",
@@ -253,9 +250,9 @@ describe("runCliRespawnPlan", () => {
 
     expect(spawn).toHaveBeenCalledWith(
       "/usr/bin/node",
-      ["/repo/openclaw/dist/entry.js", "status"],
+      ["--import", CLI_PARENT_BOUND_PRELOAD, "/repo/openclaw/dist/entry.js", "status"],
       {
-        stdio: "inherit",
+        stdio: ["inherit", "inherit", "inherit", "ipc"],
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
         detached: process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
         windowsHide: !(process.stdin.isTTY || process.stdout.isTTY),

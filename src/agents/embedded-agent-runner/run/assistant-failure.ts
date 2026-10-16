@@ -30,6 +30,7 @@ import {
   shouldRetryFailoverSignal,
 } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
+import { renderRateLimitRetryExhaustion } from "../../failover/user-copy.js";
 import { resolveSessionSuspensionReason } from "../../session-suspension.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
 import { log } from "../logger.js";
@@ -41,7 +42,7 @@ import { createFailoverDecisionLogger } from "./failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { shouldRetrySilentErrorAssistantTurn } from "./incomplete-turn-recovery.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime.js";
 import { isEmbeddedRunTerminalInterrupted, isEmbeddedRunTimeoutFinal } from "./terminal-outcome.js";
 
 const MAX_EMPTY_ERROR_RETRIES = 3;
@@ -100,6 +101,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   previousRetryFailoverReason: FailoverReason | null;
   traceAttempts: TraceAttempt[];
   suspensionSessionId: string;
+  rateLimitRetriesExhausted?: number;
 }): Promise<EmbeddedRunAssistantFailureOutcome> {
   const { runInput, preparedRuntime, normalizedAttempt, runtime } = input;
   const { attempt, terminalState, activeErrorContext } = normalizedAttempt;
@@ -499,27 +501,31 @@ export async function handleEmbeddedAssistantFailure(input: {
       logDecision("fallback_model", { status });
     }
     throwFailure(
-      new FailoverError(message, {
-        reason,
-        provider: activeErrorContext.provider,
-        model: activeErrorContext.model,
-        profileId: runtime.lastProfileId,
-        authMode,
-        status,
-        code: failedAssistant?.errorCode,
-        rawError: failedAssistant?.errorMessage?.trim(),
-        // Retry reason "timeout" also includes 5xx; only the terminal owner records a deadline.
-        timeout:
-          terminalOutcome.status === "timeout"
-            ? {
-                timeoutPhase: terminalOutcome.timeoutPhase,
-                providerStarted: terminalOutcome.providerStarted,
-              }
-            : undefined,
-        suspend:
-          Boolean(runInput.runParams.sessionKey ?? runInput.runParams.sessionId) &&
-          (reason === "rate_limit" || reason === "billing"),
-      }),
+      new FailoverError(
+        renderRateLimitRetryExhaustion(input.rateLimitRetriesExhausted) ?? message,
+        {
+          reason,
+          rateLimitRetriesExhausted: input.rateLimitRetriesExhausted,
+          provider: activeErrorContext.provider,
+          model: activeErrorContext.model,
+          profileId: runtime.lastProfileId,
+          authMode,
+          status,
+          code: failedAssistant?.errorCode,
+          rawError: failedAssistant?.errorMessage?.trim(),
+          // Retry reason "timeout" also includes 5xx; only the terminal owner records a deadline.
+          timeout:
+            terminalOutcome.status === "timeout"
+              ? {
+                  timeoutPhase: terminalOutcome.timeoutPhase,
+                  providerStarted: terminalOutcome.providerStarted,
+                }
+              : undefined,
+          suspend:
+            Boolean(runInput.runParams.sessionKey ?? runInput.runParams.sessionId) &&
+            (reason === "rate_limit" || reason === "billing"),
+        },
+      ),
     );
   }
 

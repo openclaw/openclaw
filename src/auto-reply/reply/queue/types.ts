@@ -7,6 +7,7 @@ import type {
   CurrentInboundPromptContext,
   RunEmbeddedAgentParams,
 } from "../../../agents/embedded-agent-runner/run/params.js";
+import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
 import type {
   ReplyDeliveryFactsObserver,
@@ -63,7 +64,9 @@ export type EnqueueFollowupRunOptions = {
   steerCandidate?: boolean;
 };
 
-export type FollowupQueueDisposition = "queue-cap" | "queue-cap-old" | "queue-cap-new";
+type FollowupQueueDisposition = Parameters<
+  NonNullable<GetReplyOptions["onFollowupQueueDisposition"]>
+>[0];
 
 export type QueuedFollowupReplyBatch = {
   kind: "queued-followup";
@@ -158,6 +161,8 @@ export type FollowupRun = {
   /** Turn-owned tool authority captured before queue ownership transfers. */
   toolsAllow?: string[];
   disableTools?: boolean;
+  forceRestartSafeTools?: boolean;
+  forceCodeModeTools?: boolean;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
   /** Pending same-turn acceptance while this item remains parked in FIFO order. */
@@ -166,6 +171,8 @@ export type FollowupRun = {
     predecessor: Promise<boolean>;
     settle: (accepted: boolean) => void;
   };
+  /** Internal Goal nudge; admission must still observe this exact active Goal. */
+  goalContinuation?: import("../goal-continuation.js").GoalContinuation;
   /** Internal marker for the one-shot stranded final recovery retry. */
   strandedReplyRetry?: boolean;
   /** This continuation owes last-resort feedback if it also stalls, including claimed input. */
@@ -228,6 +235,7 @@ export type FollowupRun = {
     | "authProfileId"
     | "authProfileIdSource"
     | "thinkLevel"
+    | "thinkingExplicit"
     | "fastMode"
     | "fastModeAutoOnSeconds"
     | "verboseLevel"
@@ -313,6 +321,13 @@ export function bindReplyOperationQueueDisposition(
     }
   };
 }
+
+/** Admission-owned image facts stay out of the public FollowupRun contract. */
+export type InternalFollowupRun = FollowupRun & {
+  currentTurnImagesPrepared?: true;
+  /** Fact indexes are relative to this run's media array. */
+  mediaImageLayout?: MediaImageLayout;
+};
 
 export function isFollowupRunAborted(
   run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal" | "operatorAuthority">,

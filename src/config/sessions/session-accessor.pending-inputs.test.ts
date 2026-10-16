@@ -15,6 +15,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptMessage,
@@ -110,6 +111,8 @@ describe("accepted input custody", () => {
 
   beforeEach(async () => {
     setRuntimeConfigSnapshot({ session: { store: fixture.storePath() } });
+    // Raw custody/savepoint fixtures need their native handle before worker writes start.
+    database();
     await upsertSessionEntryCore(scope(), { sessionId, updatedAt: 1 });
   });
   afterEach(async () => {
@@ -432,12 +435,14 @@ describe("accepted input custody", () => {
         expect.objectContaining({ id: eventId }),
       );
     }
-    expect(() =>
-      receipt.run(() => appendCopy("first-savepoint-copy", "stale-savepoint-source")),
-    ).toThrow("does not match");
-    expect(
-      receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
-    ).toMatchObject({ ok: true, value: { appended: false } });
+    await runOpenClawAgentWriteAdmission(databaseOptions, () => {
+      expect(() =>
+        receipt.run(() => appendCopy("first-savepoint-copy", "stale-savepoint-source")),
+      ).toThrow("does not match");
+      expect(
+        receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
+      ).toMatchObject({ ok: true, value: { appended: false } });
+    });
   });
 
   it("rejects a split-cursor replay before and after projection reconciliation", async () => {
@@ -882,10 +887,13 @@ describe("accepted input custody", () => {
       .prepare("SELECT * FROM session_pending_inputs ORDER BY seq")
       .all();
     expect(storedBefore.map((row) => row.state)).toEqual(["queued", "queued"]);
-    const counter = trackSqliteStatementExecutions(current.db, ["pending"], (sqlText) =>
-      sqlText.startsWith("select ") && sqlText.includes('from "session_pending_inputs"')
-        ? "pending"
-        : null,
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(current.db),
+      ["pending"],
+      (sqlText) =>
+        sqlText.startsWith("select ") && sqlText.includes('from "session_pending_inputs"')
+          ? "pending"
+          : null,
     );
     try {
       expect(await listSessionPendingInputs(scope())).toMatchObject({
@@ -922,10 +930,13 @@ describe("accepted input custody", () => {
     const storedBefore = current.db
       .prepare("SELECT * FROM session_pending_inputs ORDER BY seq")
       .all();
-    const counter = trackSqliteStatementExecutions(current.db, ["pending"], (sqlText) =>
-      sqlText.startsWith("select ") && sqlText.includes('from "session_pending_inputs"')
-        ? "pending"
-        : null,
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(current.db),
+      ["pending"],
+      (sqlText) =>
+        sqlText.startsWith("select ") && sqlText.includes('from "session_pending_inputs"')
+          ? "pending"
+          : null,
     );
     try {
       expect(await readSessionPendingInput(scope(), first.inputId)).toMatchObject({

@@ -60,6 +60,11 @@ function databaseOptions(captured: ReturnType<typeof context>) {
   return { path: captured.admission.databasePath, env: captured.environment };
 }
 
+const readBindingApprovals = {
+  type: "plugins.conversationBindingApprovals.read",
+  input: undefined,
+} as const;
+
 const readProvenance = {
   type: "claws.install-schema-versions",
   input: { artifactPreservingReadOnly: true },
@@ -248,6 +253,34 @@ describe("canonical shared-state worker admission", () => {
     },
   );
 
+  it("keeps writer inspection and the first Web Push operation in the same actor", async () => {
+    const captured = context();
+    await seedMetadata(captured);
+    const reopened = captureOpenClawStateWorkerContext(databaseOptions(captured));
+    const messages = vi.spyOn(Worker.prototype, "postMessage");
+    await runOpenClawStateWorkerOperation(
+      reopened,
+      async (scope) => {
+        expect(await scope.execute(readBindingApprovals)).toEqual([]);
+        const actorWorker = messages.mock.contexts[0];
+        expect(actorWorker).toBeInstanceOf(Worker);
+        messages.mockClear();
+        expect(
+          await scope.execute({
+            type: "webPush.listTerminalWebPushApprovalDeliveryIds",
+            input: {},
+          }),
+        ).toEqual({ approvalIds: [], nextAfterApprovalId: null, throughApprovalId: null });
+        expect(messages.mock.contexts.length).toBeGreaterThan(0);
+        expect(messages.mock.contexts.every((worker) => worker === actorWorker)).toBe(true);
+        expect(await scope.execute(readBindingApprovals)).toEqual([]);
+      },
+      { existingOnly: true },
+    );
+    await closeOpenClawStateDatabaseAsync();
+    messages.mockRestore();
+  });
+
   it("leaves a missing database absent for existing-only inspection", async () => {
     const captured = context();
     const inspect = vi.fn(async () => "inspected");
@@ -327,9 +360,14 @@ describe("canonical shared-state worker admission", () => {
         expect(
           await executeOpenClawStateWorker(alias, {
             type: "audit.writer.prune",
-            input: "events",
+            input: undefined,
           }),
-        ).toMatchObject({ status: "settled", error: expect.any(String) });
+        ).toEqual([
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+        ]);
       } else {
         await expect(
           executeOpenClawStateWorker(

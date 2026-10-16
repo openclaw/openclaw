@@ -134,6 +134,7 @@ describe("committed requester outcome queue receipts", () => {
           throw new Error("Blocked outcome did not retain a system-event intent");
         }
         expect(queued.text).toContain("Requester unavailable");
+        expect(queued.text).toContain(entry.runId);
         expect(subagentRuns.get(entry.runId)?.requesterSettleWake).toBeUndefined();
         expect(deliver).not.toHaveBeenCalled();
         const advanceToIntent = () =>

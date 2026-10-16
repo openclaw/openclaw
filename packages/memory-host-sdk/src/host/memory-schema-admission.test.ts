@@ -3,7 +3,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { openNodeSqliteDatabase } from "../../../../src/infra/node-sqlite.js";
-import { revokeSqliteDatabaseAdmissions } from "../../../../src/infra/sqlite-database-admission.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  prepareSqliteDatabaseCleanClose,
+  revokeSqliteDatabaseAdmissions,
+} from "../../../../src/infra/sqlite-database-admission.js";
+import { assertSqliteIntegrity } from "../../../../src/infra/sqlite-integrity.js";
 import { admitSqliteSchema } from "../../../../src/infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../../../src/infra/sqlite-transaction.js";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -21,6 +26,48 @@ function schemaStatements(queries: string[]): string[] {
 }
 
 describe("memory physical schema admission", () => {
+  it.each(["clean", "missing seal"])("reopens after %s without losing schema repair", (close) => {
+    const filename = path.join(tempDirs.make("memory-admission-seal-"), "memory.sqlite");
+    {
+      using db = openNodeSqliteDatabase(filename);
+      admitSqliteSchema(db);
+      ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+      assertSqliteIntegrity(db, "memory index");
+      using seal = prepareSqliteDatabaseCleanClose(db);
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      db.close();
+      expect(seal.publish()).toBe(true);
+    }
+    expect(
+      captureSqliteDatabaseAdmissions().filter((entry) => entry.location === filename),
+    ).toEqual([]);
+    if (close === "missing seal") {
+      fs.unlinkSync(`${filename}.seal`);
+    }
+    using db = openNodeSqliteDatabase(filename);
+    admitSqliteSchema(db);
+    const observed = observeHostDataSql();
+    try {
+      expect(ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true })).toEqual({
+        ftsAvailable: true,
+      });
+      if (close === "clean") {
+        expect(schemaStatements(observed.queries)).toEqual([]);
+      } else {
+        expect(schemaStatements(observed.queries).length).toBeGreaterThan(0);
+      }
+      db.exec("DROP INDEX idx_memory_index_chunks_source");
+      ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+      expect(
+        db
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_memory_index_chunks_source'")
+          .get(),
+      ).toEqual({ name: "idx_memory_index_chunks_source" });
+    } finally {
+      observed.restore();
+    }
+  });
+
   it.each(["commit", "rollback", "later DDL", "revocation"])(
     "publishes only final committed initialization after %s",
     (outcome) => {

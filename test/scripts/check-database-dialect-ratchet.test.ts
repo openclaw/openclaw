@@ -173,6 +173,12 @@ it("retains SQLite JSONB debt without counting PostgreSQL catalog constructors",
     "src/sqlite.ts",
     'const sql = "SELECT jsonb_object(), jsonb_array(), jsonb_extract(value), jsonb_group_array(value) FROM facts";',
   );
+  for (const owner of ["postgres-search-schema", "postgres-vector"]) {
+    write(
+      `src/infra/database-engine/${owner}.ts`,
+      'const sql = "SELECT openclaw_vector(embedding, 3)";',
+    );
+  }
   expect(inventory(root)).toMatchObject([
     {
       file: "src/sqlite.ts",
@@ -180,6 +186,51 @@ it("retains SQLite JSONB debt without counting PostgreSQL catalog constructors",
     },
   ]);
   expect(inventory(root).map((row) => row.matches.length)).toEqual([4]);
+});
+
+it("distinguishes PostgreSQL staging from SQLite temporary schemas", () => {
+  const { root, write } = fixture();
+  write(
+    "extensions/memory-core/src/memory/manager-publication-postgres.ts",
+    'db.exec("CREATE TEMP TABLE memory_stage (ordinal BIGINT)"); db.exec("SELECT rowid FROM t");',
+  );
+  write("src/sqlite.ts", 'db.exec("CREATE TEMP TABLE stage (id INTEGER)");');
+  expect(inventory(root)).toMatchObject([
+    {
+      file: "extensions/memory-core/src/memory/manager-publication-postgres.ts",
+      matches: [{ construct: "rowid" }],
+    },
+    { file: "src/sqlite.ts", matches: [{ construct: "temp-schema" }] },
+  ]);
+  expect(inventory(root).map((row) => row.matches.length)).toEqual([1, 1]);
+});
+
+it("excludes generated PostgreSQL SQL and captured catalogs while retaining SQLite JSON debt", () => {
+  const { root, write, git } = fixture();
+  write("src/sqlite.ts", "export {};\n");
+  git("add", ".");
+  git("commit", "-qm", "base");
+  const base = git("rev-parse", "HEAD");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  for (const file of ["agent.postgres.sql", "fragment-cache.postgres.sql"]) {
+    write(
+      `src/state/postgres-schema.generated/${file}`,
+      "SELECT value ->> 'id' FROM json_each('{}'::json);",
+    );
+  }
+  for (const store of ["state", "agent"]) {
+    write(
+      `src/state/postgres-schema.generated/sqlite-${store}-catalogs.ts`,
+      "export const catalog = { sql: \"CREATE TABLE events AS SELECT json_extract(body, '$') FROM payloads\" };",
+    );
+  }
+  expect(changedProductionFiles(root, base, false)).toEqual([]);
+  expect(inventory(root)).toEqual([]);
+  expect(main(root, ["--base", base])).toBe(0);
+  expect(main(root, ["--base", base, "--full-tree"])).toBe(0);
+  write("src/sqlite.ts", "const sql = \"SELECT value ->> 'id' FROM json_each(?)\";");
+  expect(main(root, ["--base", base])).toBe(1);
 });
 
 it("distinguishes table column lists from custom function calls", () => {

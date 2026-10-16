@@ -15,12 +15,12 @@ type SwarmDot = {
   duration: string;
 };
 
-const SWARM_STATUS_LABEL_KEYS: Record<SwarmDotStatus, string> = {
-  queued: "common.queued",
-  running: "common.running",
-  done: "common.completed",
-  failed: "labsPage.swarm.failedOrStopped",
-};
+const SWARM_STATUS_PRESENTATION = {
+  queued: ["common.queued", "clock"],
+  running: ["common.running", "loader"],
+  done: ["common.completed", "check"],
+  failed: ["labsPage.swarm.failedOrStopped", "alertTriangle"],
+} as const;
 
 function swarmDuration(row: GatewaySessionRow, status: SwarmDotStatus): string {
   if (status === "queued") {
@@ -209,19 +209,9 @@ export function ChatSwarmProgress(props: ChatSwarmProgressProps) {
                         <span
                           class={`chat-swarm__task-icon chat-swarm__task-icon--${task.status}`}
                           role="img"
-                          aria-label={t(SWARM_STATUS_LABEL_KEYS[task.status])}
+                          aria-label={t(SWARM_STATUS_PRESENTATION[task.status][0])}
                         >
-                          <Icon
-                            name={
-                              task.status === "done"
-                                ? "check"
-                                : task.status === "failed"
-                                  ? "alertTriangle"
-                                  : task.status === "running"
-                                    ? "loader"
-                                    : "clock"
-                            }
-                          />
+                          <Icon name={SWARM_STATUS_PRESENTATION[task.status][1]} />
                         </span>
                         <span class="chat-swarm__task-name">{task.label}</span>
                         <span class="chat-swarm__task-duration">{task.duration}</span>

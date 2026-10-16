@@ -215,6 +215,28 @@ describePosix("correction publication authority handoff", () => {
     },
   );
 
+  it.each(["failed", "malformed"])(
+    "does not select either transport after %s publication-baseline validation",
+    (fault) => {
+      const f = fixture("auto");
+      const result = runCorrection(f, {
+        setup: [
+          "eval \"$(declare -f run_prepared_correction_review | sed '1s/run_prepared_correction_review/fixture_correction_review/')\"",
+          "run_prepared_correction_review() {",
+          '  if [ "$2" = publication-baseline ]; then',
+          fault === "failed" ? "    return 1" : "    printf 'not-a-commit'; return 0",
+          "  fi",
+          '  fixture_correction_review "$@"',
+          "}",
+        ],
+      });
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
+      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
+      expect(existsSync(join(f.local, "prepare-push-result.env"))).toBe(false);
+    },
+  );
+
   it("publishes a signed baseline refresh only after fresh exact-candidate review and gates", () => {
     const f = fixture("auto");
     f.git("branch", "-m", "pr-4242-prep");

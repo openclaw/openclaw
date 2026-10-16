@@ -125,6 +125,7 @@ describe("Codex command RPC helpers", () => {
     clearRuntimeAuthProfileStoreSnapshots();
     clearRuntimeConfigSnapshot();
     clearSessionStoreCacheForTest();
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
   });

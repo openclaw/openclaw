@@ -4,13 +4,13 @@ import { admitChatSend } from "./server-methods/chat-send-admission.js";
 import { createChatAbortContext } from "./server-methods/chat.abort.test-helpers.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 
 export function createWorkerStopChatContext() {
   return createChatAbortContext() as unknown as GatewayRequestContext;
 }
 
-export function admitWorkerStopChat(params: {
+export async function admitWorkerStopChat(params: {
   context: GatewayRequestContext;
   storePath: string;
   sessionKey: string;
@@ -22,7 +22,7 @@ export function admitWorkerStopChat(params: {
   const { context, storePath, sessionKey, sessionId, agentId, entry, runId } = params;
   const respond = vi.fn();
   const now = Date.now();
-  const stored = loadGatewaySessionEntryReadOnly(
+  const stored = await loadGatewaySessionEntryReadOnlyAsync(
     sessionKey,
     { agentId },
     { session: { store: storePath } },

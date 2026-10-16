@@ -121,6 +121,23 @@ describe("actor transcript context replica", () => {
     expect(readSessionActorTranscriptContext(retained, changed, limits)).toBeUndefined();
   });
 
+  it("retains only the bounded window when a worker read cannot seed a complete path", () => {
+    const { hot, prepared } = fixture();
+    prepared.snapshot.truncated = true;
+    delete prepared.snapshot.completeActivePath;
+    prepared.transcript = { anchors: [] };
+    const expected = structuredClone(prepared.snapshot);
+    const retained = seedSessionActorTranscriptContext(undefined, hot, prepared, limits);
+    prepared.snapshot.events.length = 0;
+    const read = readSessionActorTranscriptContext(retained, hot, limits);
+    expect(read).toEqual({ kind: "bounded", snapshot: expected });
+    read?.snapshot.events.splice(0);
+    expect(readSessionActorTranscriptContext(retained, hot, limits)).toEqual({
+      kind: "bounded",
+      snapshot: expected,
+    });
+  });
+
   it("advances a complete linear path using the receipt's stored byte sizes", () => {
     const { hot, prepared } = fixture();
     const retained = seedSessionActorTranscriptContext(undefined, hot, prepared, limits);

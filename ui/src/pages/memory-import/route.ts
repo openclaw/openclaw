@@ -1,12 +1,12 @@
 import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
+import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
 
 export const page = definePage({
   ...routePageSpec("memory-import"),
   component: () =>
-    import("./memory-import-page.tsx").then(() => ({
+    import("./memory-import-page.tsx").then((module) => ({
       header: true,
-      render: () => html`<openclaw-memory-import-page></openclaw-memory-import-page>`,
+      renderSolid: () => createComponent(module.MemoryImportPage, {}),
     })),
 });

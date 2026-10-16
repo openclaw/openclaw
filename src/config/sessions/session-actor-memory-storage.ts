@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { BoardValidationError } from "../../boards/board-layout.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../routing/session-key.js";
-import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { SessionGoalOperationError } from "./goals-operations.types.js";
 import type {
   SessionActor,
@@ -119,13 +118,10 @@ export function createSessionActorMemoryStorage(options: {
         throw new Error("Session actor read cannot mutate storage");
       }
       if (
-        !isIncognitoSessionKey(sessionKey) ||
         parseAgentSessionKey(sessionKey)?.agentId !== options.agentId ||
         toAgentStoreSessionKey({ agentId: options.agentId, requestKey: sessionKey }) !== sessionKey
       ) {
-        throw new Error(
-          "Memory session storage requires a canonical incognito key owned by this agent",
-        );
+        throw new Error("Memory session storage requires a canonical key owned by this agent");
       }
     };
     const edit = (sessionKey: string) => {
@@ -243,7 +239,13 @@ export function createSessionActorMemoryStorage(options: {
           // No await follows admission; a callback's reentrant close may race this accepted install.
           authority.assertCurrent();
           // Detach before installation: an uncloneable result cannot leave a partial commit.
-          const committed = structuredClone({ kind: "committed" as const, value, changes });
+          const committed = structuredClone({
+            kind: "committed" as const,
+            value,
+            changes,
+            ...(context.entryPatchEffects ? { entryPatchEffects: context.entryPatchEffects } : {}),
+          });
+          observer?.beforeCommit?.(structuredClone(committed));
           for (const [sessionKey, state] of changed) {
             const previous = sessions.get(sessionKey);
             if (!state) {
@@ -275,7 +277,7 @@ export function createSessionActorMemoryStorage(options: {
               { ...options, incarnation: target.database.incarnation },
               committed.changes,
             );
-            observer?.committed(structuredClone(committed));
+            observer?.committed?.(structuredClone(committed));
           } catch (error) {
             outcome.failure = errorFacts(error);
           }

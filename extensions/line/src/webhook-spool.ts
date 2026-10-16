@@ -278,7 +278,6 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions) {
         // other parts already returned as deferred, so without fanning the
         // failure across them they stay held until recovery.
         await fannedIn.abandon(error);
-        handedOff = true;
         throw error;
       } finally {
         activeDeliveries.delete(delivery);

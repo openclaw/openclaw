@@ -17,7 +17,7 @@ import { createExpectedProfileBinding } from "../expected-profile.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
-import * as sharingPreparation from "../session-sharing-preparation.js";
+import * as sessionSharingFacts from "../session-sharing-facts-read.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import {
@@ -118,13 +118,13 @@ describe("native profile-bound input admission", () => {
       }
       const entered = createDeferred();
       const release = createDeferred();
-      const prepare = sharingPreparation.prepareSessionMutationFacts;
+      const read = sessionSharingFacts.readSessionSharingFactsInWorker;
       let held = false;
-      const workerRead = vi
-        .spyOn(sharingPreparation, "prepareSessionMutationFacts")
-        .mockImplementation(async (params) => {
-          const result = await prepare(params);
-          if (!held && params.sessionKey === fixture.scope.sessionKey) {
+      const sharingRead = vi
+        .spyOn(sessionSharingFacts, "readSessionSharingFactsInWorker")
+        .mockImplementation(async (input, prepareSource) => {
+          const result = await read(input, prepareSource);
+          if (!held && input.sessionKeys.includes(fixture.scope.sessionKey)) {
             held = true;
             entered.resolve();
             await release.promise;
@@ -167,7 +167,7 @@ describe("native profile-bound input admission", () => {
         }
       } finally {
         release.resolve();
-        workerRead.mockRestore();
+        sharingRead.mockRestore();
         await request;
         await fixture.cleanup();
       }

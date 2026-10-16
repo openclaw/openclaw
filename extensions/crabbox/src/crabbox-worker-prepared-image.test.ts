@@ -510,9 +510,20 @@ describe("Crabbox prepared image demand and custody", () => {
       provider.resolvePreparationTarget?.({ ...PROFILE, setup: "install-other-tools" }, "fast")
         ?.profileKey,
     ).not.toBe(target?.profileKey);
+    const protectedProfile = {
+      ...PROFILE,
+      setupSecrets: {
+        SETUP_TOKEN: { source: "store", provider: "default", id: "PROTECTED_SETUP" },
+      },
+    };
+    expect(provider.resolvePreparedIdleTimeoutMs?.(protectedProfile)).toBe(3_600_000);
+    expect(provider.resolvePreparationTarget?.(protectedProfile, "fast")).toMatchObject({
+      machineClass: "fast",
+      platform: "linux",
+      profileKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
     for (const profile of [
       { ...PROFILE, warmImage: false },
-      { ...PROFILE, setup: "setup", setupEnv: ["MUTABLE_INPUT"] },
       { ...CLASSLESS_PROFILE, target: "windows/wsl2" },
     ]) {
       expect(provider.resolvePreparedIdleTimeoutMs?.(profile)).toBeUndefined();

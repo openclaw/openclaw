@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   readSandboxBrowserRegistryInDatabase,
   readSandboxRegistryEntryInDatabase,
@@ -12,12 +11,13 @@ import {
   readWorkerEnvironmentFacts,
   readWorkerEnvironmentPrunePage,
 } from "../gateway/worker-environments/store-row-codec.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 
 export function readStateRegistryCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: Extract<
     OpenClawStateReadCommand,
     {

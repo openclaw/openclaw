@@ -1,5 +1,4 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,13 +11,13 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reportGitHubPublicationTranscript } from "./github-publication-transcript.js";
@@ -38,147 +37,167 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
+async function createSession(sessionId: string) {
+  setRuntimeConfigSnapshot({});
+  const identity = { agentId: "main", sessionKey: "agent:main:main", sessionId };
+  await upsertSessionEntryCore(identity, { sessionId, updatedAt: 1 });
+  return identity;
+}
+
+function failedResult(
+  requestId: string,
+  message = "Publication failed.",
+  nextAction = "Retry.",
+): SessionGitHubPublicationResult {
+  return { requestId, status: "failed", code: "push_rejected", message, nextAction };
+}
+
+const publishedResult = {
+  requestId: "publication-success",
+  status: "published",
+  repository: "example/repository",
+  branch: "publication",
+  url: "https://github.com/example/repository/pull/1",
+  headCommit: "a".repeat(40),
+} satisfies SessionGitHubPublicationResult;
+
+function report(
+  identity: Awaited<ReturnType<typeof createSession>>,
+  result: SessionGitHubPublicationResult,
+  markReportedAsync: (requestId: string) => Promise<void>,
+) {
+  return reportGitHubPublicationTranscript(
+    () => import("./session-utils.js"),
+    { markReportedAsync },
+    { ...identity, result },
+  );
+}
+
+function reportMessages(events: unknown[], requestId: string, assistantOnly = false) {
+  return events.filter(
+    (event) =>
+      isRecord(event) &&
+      event.type === "message" &&
+      isRecord(event.message) &&
+      (!assistantOnly || event.message.role === "assistant") &&
+      event.message.responseId === `github-publication:${requestId}`,
+  );
+}
+
+const rootMessage = () => ({
+  type: "message",
+  id: "root",
+  parentId: null,
+  message: { role: "user", content: "Start" },
+});
+function previousReport(requestId: string, id = "report", content: unknown = "Reported") {
+  return {
+    type: "message",
+    id,
+    parentId: "root",
+    message: { role: "assistant", responseId: `github-publication:${requestId}`, content },
+  };
+}
+
+function messageTail(
+  role: "assistant" | "user",
+  content: string | null,
+  fields: { parentId?: string | null; appendMode?: "side" } = {},
+) {
+  return { type: "message", id: "tail", ...fields, message: { role, content } };
+}
+
+function tailScenario(
+  label: string,
+  tail: Record<string, unknown>,
+  count = 1,
+  beforeTail?: Record<string, unknown>[],
+) {
+  return { label, tail, count, beforeTail };
+}
+const reset = [{ type: "reset", id: "reset", parentId: null, reason: "reset" }];
+const danglingLabel = { type: "label", id: "tail", targetId: "absent", label: "Unknown" };
+
 describe("GitHub publication transcript reporting", () => {
-  it("commits one bound private report before marking its publication receipt", async () => {
+  it("commits one memory-only private report before marking its publication receipt", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const authority = { assertCurrent() {} };
-      const actor = await captureOpenClawAgentDatabaseExecution({
-        kind: "ephemeral",
-        agentId: "main",
-        env: state.env,
-        authority,
-      });
-      assert(actor);
       const session = {
         agentId: "main",
         sessionKey: "agent:main:dashboard:incognito-publication-transcript",
         sessionId: "private-publication",
       };
-      await actor.sessions.create(authority, {
-        sessionKey: session.sessionKey,
-        entry: { sessionId: session.sessionId, updatedAt: Date.now() },
-      });
-      const result = {
-        requestId: "private-result",
-        status: "published" as const,
-        repository: "example/repository",
-        url: "https://github.com/example/repository/pull/1",
-        branch: "private-result",
-        headCommit: "a".repeat(40),
+      const location = {
+        agentId: session.agentId,
+        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: session.agentId, env: state.env }),
       };
+      await upsertSessionEntryCore(
+        { ...session, env: state.env },
+        {
+          sessionId: session.sessionId,
+          updatedAt: Date.now(),
+        },
+      );
+      const result = { ...publishedResult, requestId: "private-result" };
       const loadRuntime = vi.fn(async () => {
         throw new Error("Private reports must not select native storage");
       });
       const markReportedAsync = vi.fn().mockResolvedValue(undefined);
       const sql = observeHostDataSql();
       try {
-        await withIncognitoSessionBinding({ actor }, async () => {
-          await reportGitHubPublicationTranscript(
-            loadRuntime,
-            { markReportedAsync },
-            { ...session, result },
-          );
-          await reportGitHubPublicationTranscript(
-            loadRuntime,
-            { markReportedAsync },
-            { ...session, result },
-          );
-          const events = await loadTranscriptEvents({
-            ...session,
-            storePath: actor.path,
-            env: state.env,
-          });
-          const reports = events.filter(
-            (event) =>
-              isRecord(event) &&
-              event.type === "message" &&
-              isRecord(event.message) &&
-              event.message.responseId === `github-publication:${result.requestId}`,
-          );
-          expect(reports).toHaveLength(1);
-          expect(JSON.stringify(reports[0])).toContain(result.url);
-          expect(markReportedAsync).toHaveBeenCalledTimes(2);
-          expect(loadRuntime).not.toHaveBeenCalled();
-          expect(sql.queries).toEqual([]);
+        await reportGitHubPublicationTranscript(
+          loadRuntime,
+          { markReportedAsync },
+          { ...session, result },
+        );
+        await reportGitHubPublicationTranscript(
+          loadRuntime,
+          { markReportedAsync },
+          { ...session, result },
+        );
+        const events = await loadTranscriptEvents({
+          ...session,
+          storePath: location.path,
+          env: state.env,
         });
+        const reports = reportMessages(events, result.requestId);
+        expect(reports).toHaveLength(1);
+        expect(JSON.stringify(reports[0])).toContain(
+          "https://github.com/example/repository/pull/1",
+        );
+        expect(markReportedAsync).toHaveBeenCalledTimes(2);
+        expect(loadRuntime).not.toHaveBeenCalled();
+        expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();
-        await actor.close();
+        memorySessionActorOwners.closeDatabase(location);
       }
     });
   });
 
   it.each(
     [
-      {
-        label: "unreadable message",
-        tail: {
-          type: "message",
-          id: "tail",
-          parentId: null,
-          message: { role: "assistant", content: null },
-        },
-        count: 1,
-      },
-      {
-        label: "missing parent",
-        tail: {
-          type: "message",
-          id: "tail",
-          parentId: "absent",
-          message: { role: "user", content: "A separate branch" },
-        },
-        count: 2,
-      },
-      {
-        label: "parentless row",
-        tail: { type: "message", id: "tail", message: { role: "user", content: "Continued" } },
-        count: 1,
-      },
-      {
-        label: "unattached label",
-        tail: { type: "label", id: "tail", parentId: null, targetId: "absent", label: "Unknown" },
-        count: 1,
-      },
-      {
-        label: "invalid leaf control",
-        tail: { type: "leaf", id: "tail", parentId: "report", targetId: "absent" },
-        count: 1,
-      },
-      {
-        label: "side append",
-        tail: {
-          type: "message",
-          id: "tail",
-          parentId: null,
-          appendMode: "side",
-          message: { role: "user", content: "Side" },
-        },
-        count: 1,
-      },
-      {
-        label: "parentless row after reset",
-        beforeTail: [{ type: "reset", id: "reset", parentId: null, reason: "reset" }],
-        tail: { type: "message", id: "tail", message: { role: "user", content: "Continued" } },
-        count: 2,
-      },
-      {
-        label: "parentless dangling label after reset",
-        beforeTail: [{ type: "reset", id: "reset", parentId: null, reason: "reset" }],
-        tail: { type: "label", id: "tail", targetId: "absent", label: "Unknown" },
-        count: 2,
-      },
-      {
-        label: "parentless side append after reset",
-        beforeTail: [{ type: "reset", id: "reset", parentId: null, reason: "reset" }],
-        tail: {
-          type: "message",
-          id: "tail",
-          appendMode: "side",
-          message: { role: "user", content: "Side" },
-        },
-        count: 2,
-      },
+      tailScenario("unreadable message", messageTail("assistant", null, { parentId: null })),
+      tailScenario("missing parent", messageTail("user", "Branch", { parentId: "absent" }), 2),
+      tailScenario("parentless row", messageTail("user", "Continued")),
+      tailScenario("unattached label", { ...danglingLabel, parentId: null }),
+      tailScenario("invalid leaf control", {
+        type: "leaf",
+        id: "tail",
+        parentId: "report",
+        targetId: "absent",
+      }),
+      tailScenario(
+        "side append",
+        messageTail("user", "Side", { parentId: null, appendMode: "side" }),
+      ),
+      tailScenario("parentless row after reset", messageTail("user", "Continued"), 2, reset),
+      tailScenario("parentless dangling label after reset", danglingLabel, 2, reset),
+      tailScenario(
+        "parentless side append after reset",
+        messageTail("user", "Side", { appendMode: "side" }),
+        2,
+        reset,
+      ),
     ].flatMap((scenario) =>
       ["identity", "compressed"].map((encoding) => ({
         label: scenario.label,
@@ -192,38 +211,12 @@ describe("GitHub publication transcript reporting", () => {
     "preserves canonical report visibility after $label ($encoding)",
     async ({ tail, count, encoding, beforeTail = [] }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot({});
-        const identity = {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          sessionId: "publication-codec",
-        };
-        const result = {
-          requestId: "codec-publication",
-          status: "failed",
-          code: "push_rejected",
-          message: "Publication failed.",
-          nextAction: "Retry.",
-        } satisfies SessionGitHubPublicationResult;
-        await upsertSessionEntryCore(identity, { sessionId: identity.sessionId, updatedAt: 1 });
+        const identity = await createSession("publication-codec");
+        const result = failedResult("codec-publication");
         const events = [
           { type: "session", id: identity.sessionId, version: CURRENT_SESSION_VERSION },
-          {
-            type: "message",
-            id: "root",
-            parentId: null,
-            message: { role: "user", content: "Start" },
-          },
-          {
-            type: "message",
-            id: "report",
-            parentId: "root",
-            message: {
-              role: "assistant",
-              responseId: `github-publication:${result.requestId}`,
-              content: "Reported",
-            },
-          },
+          rootMessage(),
+          previousReport(result.requestId),
           ...beforeTail,
           tail,
         ];
@@ -240,18 +233,8 @@ describe("GitHub publication transcript reporting", () => {
           )
           .get(identity.sessionId);
         expect(encoded?.count).toBe(encoding === "compressed" ? 3 + beforeTail.length : 0);
-        await reportGitHubPublicationTranscript(
-          () => import("./session-utils.js"),
-          { markReportedAsync: vi.fn().mockResolvedValue(undefined) },
-          { ...identity, result },
-        );
-        const reports = (await loadTranscriptEvents(identity)).filter(
-          (event) =>
-            isRecord(event) &&
-            event.type === "message" &&
-            isRecord(event.message) &&
-            event.message.responseId === `github-publication:${result.requestId}`,
-        );
+        await report(identity, result, vi.fn().mockResolvedValue(undefined));
+        const reports = reportMessages(await loadTranscriptEvents(identity), result.requestId);
         expect(reports).toHaveLength(count);
       });
     },
@@ -261,13 +244,7 @@ describe("GitHub publication transcript reporting", () => {
     "keeps the %s header migration boundary before reporting",
     async (header) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot({});
-        const identity = {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          sessionId: "publication-header",
-        };
-        await upsertSessionEntryCore(identity, { sessionId: identity.sessionId, updatedAt: 1 });
+        const identity = await createSession("publication-header");
         const events = [
           ...(header === "legacy" ? [{ type: "session", id: identity.sessionId, version: 1 }] : []),
           { type: "provider_event", id: "opaque", parentId: null },
@@ -275,19 +252,10 @@ describe("GitHub publication transcript reporting", () => {
         await replaceTranscriptEvents(identity, events);
         const markReportedAsync = vi.fn().mockResolvedValue(undefined);
         await expect(
-          reportGitHubPublicationTranscript(
-            () => import("./session-utils.js"),
-            { markReportedAsync },
-            {
-              ...identity,
-              result: {
-                requestId: "header-publication",
-                status: "failed",
-                code: "push_rejected",
-                message: "Failed",
-                nextAction: "Retry",
-              },
-            },
+          report(
+            identity,
+            failedResult("header-publication", "Failed", "Retry"),
+            markReportedAsync,
           ),
         ).rejects.toThrow("doctor/import migration");
         expect(markReportedAsync).not.toHaveBeenCalled();
@@ -297,20 +265,8 @@ describe("GitHub publication transcript reporting", () => {
   );
   it("marks a publication reported only after the transcript commits and allows retry after failure", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      const identity = {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionId: "publication-failure",
-      };
-      await upsertSessionEntryCore(identity, { sessionId: identity.sessionId, updatedAt: 1 });
-      const result = {
-        requestId: "retry-publication",
-        status: "failed",
-        code: "push_rejected",
-        message: "Publication failed.",
-        nextAction: "Retry.",
-      } satisfies SessionGitHubPublicationResult;
+      const identity = await createSession("publication-failure");
+      const result = failedResult("retry-publication");
       const database = openOpenClawAgentDatabase({ agentId: identity.agentId });
       const markReportedAsync = vi.fn(async () => {
         const reader = new DatabaseSync(database.path, { readOnly: true });
@@ -326,60 +282,26 @@ describe("GitHub publication transcript reporting", () => {
       });
       reportFault.enable();
       try {
-        await expect(
-          reportGitHubPublicationTranscript(
-            () => import("./session-utils.js"),
-            { markReportedAsync },
-            { ...identity, result },
-          ),
-        ).rejects.toThrow("report insert failed");
+        await expect(report(identity, result, markReportedAsync)).rejects.toThrow(
+          "report insert failed",
+        );
         expect(markReportedAsync).not.toHaveBeenCalled();
         expect(await loadTranscriptEvents(identity)).toEqual([]);
       } finally {
         reportFault.disable();
       }
-      await reportGitHubPublicationTranscript(
-        () => import("./session-utils.js"),
-        { markReportedAsync },
-        { ...identity, result },
-      );
+      await report(identity, result, markReportedAsync);
       expect(markReportedAsync).toHaveBeenCalledOnce();
     });
   });
   it("reports on the active branch while preserving large unrelated evidence", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      const identity = {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionId: "publication-branch",
-      };
-      await upsertSessionEntryCore(identity, { sessionId: identity.sessionId, updatedAt: 1 });
-      const result = {
-        requestId: "inactive-publication",
-        status: "failed",
-        code: "push_rejected",
-        message: "Publication failed.",
-        nextAction: "Retry.",
-      } satisfies SessionGitHubPublicationResult;
+      const identity = await createSession("publication-branch");
+      const result = failedResult("inactive-publication");
       await replaceTranscriptEvents(identity, [
         { type: "session", id: identity.sessionId, version: CURRENT_SESSION_VERSION },
-        {
-          type: "message",
-          id: "root",
-          parentId: null,
-          message: { role: "user", content: "Start" },
-        },
-        {
-          type: "message",
-          id: "old-report",
-          parentId: "root",
-          message: {
-            role: "assistant",
-            responseId: `github-publication:${result.requestId}`,
-            content: [{ type: "text", text: "Previous report" }],
-          },
-        },
+        rootMessage(),
+        previousReport(result.requestId, "old-report", [{ type: "text", text: "Previous report" }]),
         {
           type: "provider_event",
           id: "opaque",
@@ -401,24 +323,10 @@ describe("GitHub publication transcript reporting", () => {
           .all(identity.sessionId);
       const before = readEvidence();
       const markReportedAsync = vi.fn().mockResolvedValue(undefined);
-      await reportGitHubPublicationTranscript(
-        () => import("./session-utils.js"),
-        { markReportedAsync },
-        { ...identity, result },
-      );
-      await reportGitHubPublicationTranscript(
-        () => import("./session-utils.js"),
-        { markReportedAsync },
-        { ...identity, result },
-      );
+      await report(identity, result, markReportedAsync);
+      await report(identity, result, markReportedAsync);
       expect(readEvidence().slice(0, before.length)).toEqual(before);
-      const reports = (await loadTranscriptEvents(identity)).filter(
-        (event) =>
-          isRecord(event) &&
-          event.type === "message" &&
-          isRecord(event.message) &&
-          event.message.responseId === `github-publication:${result.requestId}`,
-      );
+      const reports = reportMessages(await loadTranscriptEvents(identity), result.requestId);
       expect(reports).toHaveLength(2);
       expect(reports[1]).toMatchObject({ parentId: "opaque" });
       expect(markReportedAsync).toHaveBeenCalledTimes(2);
@@ -427,56 +335,29 @@ describe("GitHub publication transcript reporting", () => {
   it.each([
     {
       label: "published",
-      result: {
-        requestId: "publication-success",
-        status: "published",
-        url: "https://github.com/openclaw/openclaw/pull/1",
-        repository: "openclaw/openclaw",
-        branch: "openclaw/task",
-        headCommit: "a".repeat(40),
-      } satisfies SessionGitHubPublicationResult,
-      visibleText: "https://github.com/openclaw/openclaw/pull/1",
+      result: publishedResult,
+      visibleText: "https://github.com/example/repository/pull/1",
     },
     {
       label: "failed",
-      result: {
-        requestId: "publication-failure",
-        status: "failed",
-        code: "push_rejected",
-        message: "GitHub publication failed.",
-        nextAction: "Check repository write access and retry.",
-      } satisfies SessionGitHubPublicationResult,
+      result: failedResult(
+        "publication-failure",
+        "GitHub publication failed.",
+        "Check repository write access and retry.",
+      ),
       visibleText: "Check repository write access and retry.",
     },
   ])(
     "appends one projected assistant message for a $label result",
     async ({ result, visibleText }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot({});
-        const sessionKey = "agent:main:main";
-        const sessionId = "publication-transcript";
-        await upsertSessionEntryCore({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
+        const identity = await createSession("publication-transcript");
         const markReportedAsync = vi.fn().mockResolvedValue(undefined);
-        await reportGitHubPublicationTranscript(
-          () => import("./session-utils.js"),
-          { markReportedAsync },
-          { sessionId, sessionKey, agentId: "main", result },
-        );
-        await reportGitHubPublicationTranscript(
-          () => import("./session-utils.js"),
-          { markReportedAsync },
-          { sessionId, sessionKey, agentId: "main", result },
-        );
+        await report(identity, result, markReportedAsync);
+        await report(identity, result, markReportedAsync);
 
-        const events = await loadTranscriptEvents({ agentId: "main", sessionId, sessionKey });
-        const messages = events.filter(
-          (event) =>
-            isRecord(event) &&
-            event.type === "message" &&
-            isRecord(event.message) &&
-            event.message.role === "assistant" &&
-            event.message.responseId === `github-publication:${result.requestId}`,
-        );
+        const events = await loadTranscriptEvents(identity);
+        const messages = reportMessages(events, result.requestId, true);
         expect(messages).toHaveLength(1);
         expect(JSON.stringify(messages[0])).toContain(visibleText);
         expect(markReportedAsync).toHaveBeenCalledWith(result.requestId);

@@ -45,7 +45,7 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createRegisteredCompletionPair } from "./server.subagent-completion-authority.test-support.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -65,7 +65,7 @@ async function createCompletion(context: GatewayRequestContext) {
     { agentId: "main", sessionKey: requesterSessionKey },
     { sessionId, updatedAt: Date.now() },
   );
-  const loaded = loadSessionEntry(requesterSessionKey, { agentId: "main" });
+  const loaded = await loadSessionEntryAsync(requesterSessionKey, { agentId: "main" });
   const sessionScope = {
     agentId: "main",
     sessionKey: requesterSessionKey,
@@ -242,7 +242,13 @@ describe("native completion final-effect authority", () => {
           "Expected real registered completion input recorder",
         );
         expect(await recorder.persistApproved()).toMatchObject({ appended: true });
-        return { payloads: [{ text: "Child received", mediaUrl: null }], meta: { durationMs: 1 } };
+        return {
+          payloads: [{ text: "Child received", mediaUrl: null }],
+          meta: {
+            durationMs: 1,
+            terminalReply: { disposition: "visible", text: "Child received" },
+          },
+        };
       });
       try {
         await pair.complete(0);
@@ -346,7 +352,13 @@ describe("native completion final-effect authority", () => {
           "Expected real native completion input recorder",
         );
         expect(await recorder.persistApproved()).toMatchObject({ appended: true });
-        return { payloads: [{ text: "Child received", mediaUrl: null }], meta: { durationMs: 1 } };
+        return {
+          payloads: [{ text: "Child received", mediaUrl: null }],
+          meta: {
+            durationMs: 1,
+            terminalReply: { disposition: "visible", text: "Child received" },
+          },
+        };
       });
       expect(context.dedupe.has(`agent:${completion.idempotencyKey}`)).toBe(false);
       const delivery = completion.deliver();

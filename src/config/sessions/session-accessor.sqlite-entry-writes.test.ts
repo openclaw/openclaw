@@ -6,12 +6,11 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
-import {
-  readCommittedSessionEntryCache,
-  readSessionEntryCache,
-} from "./session-accessor.sqlite-entry-cache.js";
+import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.test-support.js";
 import { writeSessionEntryPatchInDatabase } from "./session-accessor.sqlite-entry-mutation.js";
 import {
   readSessionEntrySelectionSnapshot,
@@ -42,18 +41,21 @@ it("publishes canonical side metadata through cold, warm, and field-only writes"
         expect(entry).not.toHaveProperty(field);
       }
     };
-    const write = (label: string) =>
+    const write = (label: string, updatedAt = 10) =>
       runOpenClawAgentWriteTransaction(
         (writer) =>
           writeSessionEntry(writer, scope.sessionKey, {
             sessionId: "cache-metadata",
-            updatedAt: 10,
+            updatedAt,
             label,
             skillsSnapshot: { prompt: "saved prompt", skills: [] },
           }),
         scope,
       );
-    const current = () => readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey);
+    const current = () =>
+      readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))?.get(
+        scope.sessionKey,
+      );
     const owner: NonNullable<SessionEntry["owner"]> = {
       actor: { type: "human", id: "cache-owner" },
     };
@@ -69,8 +71,8 @@ it("publishes canonical side metadata through cold, warm, and field-only writes"
       expect(published?.fullEntry?.skillsSnapshot?.prompt).toBe("saved prompt");
 
       readSessionEntryCache(database, { cache: true, projection: "list" });
-      write("warm");
-      expect(current()?.label).toBe("warm");
+      write("warm", 20);
+      expect(current()).toMatchObject({ label: "warm", updatedAt: 20 });
       expectAbsentMetadata(current());
       expectAbsentMetadata(published?.entry);
 
@@ -137,7 +139,7 @@ it("skips unchanged entry and snapshot writes while retaining current transcript
     // Settle the initial transcript observation before measuring unchanged rows.
     await patch({});
     const sql = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["nodes", "windows", "snapshots"],
       (query) => {
         const table = /^(?:insert into|update|delete from) "([^"]+)"/iu.exec(query)?.[1];
@@ -253,7 +255,7 @@ it.each(["entry", "target"] as const)(
         addSideTables("first-member");
       }, scope);
       const sql = trackSqliteStatementExecutions(
-        database.db,
+        requireNativeSqliteDatabase(database.db),
         ["participants", "windows", "metadata", "watermarks"],
         (query) =>
           /^select\b.*\bfrom "session_participants"/iu.test(query)

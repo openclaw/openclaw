@@ -6,7 +6,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMetaForEntryAsync } from "../acp/runtime/session-meta-readonly.js";
+import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { resolveSessionStorePathForAcp } from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
@@ -26,9 +26,11 @@ import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model
 import { getPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { SessionEntrySummary } from "../config/sessions/session-accessor.js";
+import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
@@ -273,14 +275,11 @@ function resolveSessionModelRef(
   );
 }
 
-async function resolveSessionRuntime(params: {
+function resolveStatusAcpSession(params: {
   cfg: OpenClawConfig;
-  entry?: SessionEntry;
-  provider: string;
-  model: string;
   agentId?: string;
   sessionKey: string;
-}): Promise<{ id: string | undefined; label: string }> {
+}) {
   const acpSessionKey = params.agentId
     ? resolveStoredSessionKeyForAgentStore({
         cfg: params.cfg,
@@ -292,14 +291,37 @@ async function resolveSessionRuntime(params: {
     cfg: params.cfg,
     sessionKey: acpSessionKey,
   });
-  // The summary already captured the session generation. Rereading its store
-  // could pair runtime metadata with a replacement row and reopen cold history.
-  const acpMeta = await readAcpSessionMetaForEntryAsync({
-    cfg: params.cfg,
-    sessionKey: acpSessionKey,
-    agentId: acpAgentId,
-    entry: params.entry,
+  return { sessionKey: acpSessionKey, agentId: acpAgentId };
+}
+
+async function readSessionRuntimeMetadata(
+  cfg: OpenClawConfig,
+  candidates: readonly SessionEntrySummary[],
+) {
+  return readAcpSessionMetaForEntries({
+    cfg,
+    entries: candidates.map(({ sessionKey, entry }) => ({
+      ...resolveStatusAcpSession({
+        cfg,
+        sessionKey,
+        agentId: parseAgentSessionKey(sessionKey)?.agentId,
+      }),
+      entry,
+    })),
   });
+}
+
+function resolveSessionRuntime(params: {
+  cfg: OpenClawConfig;
+  entry?: SessionEntry;
+  provider: string;
+  model: string;
+  agentId?: string;
+  sessionKey: string;
+  acpMeta: SessionAcpMeta | null;
+}): { id: string | undefined; label: string } {
+  const { sessionKey: acpSessionKey, agentId: acpAgentId } = resolveStatusAcpSession(params);
+  const { acpMeta } = params;
   const runtime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId ?? acpAgentId,
@@ -342,6 +364,7 @@ export const statusSummaryRuntime = {
   classifySessionKey: classifySessionKind,
   resolveSessionModelRef,
   resolveSessionRuntime,
+  readSessionRuntimeMetadata,
   resolveConfiguredStatusModelRef,
   resolveStatusModelLookupRef,
   resolveStatusModelComparisonLabel,

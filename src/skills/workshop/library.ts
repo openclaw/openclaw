@@ -669,6 +669,8 @@ export async function restoreWorkshopSkill(
         }
         throw error;
       }
+      // Only successful publication may discard the original live copy.
+      await fs.rm(previous, { recursive: true, force: true });
       const summary =
         params.summary ??
         (target.action === "archive"
@@ -679,7 +681,6 @@ export async function restoreWorkshopSkill(
       return { summary, versionId };
     } finally {
       await fs.rm(staging, { recursive: true, force: true });
-      await fs.rm(previous, { recursive: true, force: true });
     }
   });
 }

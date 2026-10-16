@@ -335,7 +335,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
   // race a pending teardown, so start/install/recovery paths keep failing fast
   // on an unrelated EIO instead of waiting out the teardown deadline.
   retryPendingTeardown?: boolean;
-}) {
+}): Promise<"bootstrapped" | "already-loaded"> {
   if (params.preserveAutoStart) {
     params.assertCurrent?.();
     const label = params.serviceTarget.slice(params.domain.length + 1);
@@ -383,7 +383,10 @@ export async function bootstrapLaunchAgentOrThrow(params: {
         "LaunchAgent bootstrap and disabled-policy restoration failed.",
       );
     }
-    return;
+    if (boot.status === "rejected") {
+      throw boot.reason;
+    }
+    return boot.value;
   }
 
   // `disable` state survives bootout and plist rewrites; explicit start/repair
@@ -404,7 +407,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
     );
     if (boot.code === 0) {
       params.onMutation?.("bootstrap");
-      return;
+      return "bootstrapped";
     }
     const detail = (boot.stderr || boot.stdout).trim();
     if (isUnsupportedGuiDomain(detail)) {
@@ -414,6 +417,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
           domain: params.domain,
           actionHint: params.actionHint,
         }),
+        { cause: boot },
       );
     }
     if (boot.termination === "exit" && isLaunchctlOperationAlreadyInProgress(detail)) {
@@ -423,7 +427,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
       );
       if (state.state === "running" || state.state === "stopped") {
         params.onMutation?.("bootstrap");
-        return;
+        return "already-loaded";
       }
     }
     const remainingMs = teardownDeadline - Date.now();
@@ -432,7 +436,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
       !isLaunchctlBootstrapPendingTeardown(boot) ||
       remainingMs <= 0
     ) {
-      throw new Error(`launchctl bootstrap failed: ${detail}`);
+      throw new Error(`launchctl bootstrap failed: ${detail}`, { cause: boot });
     }
     await sleep(
       Math.min(

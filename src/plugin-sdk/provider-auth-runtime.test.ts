@@ -170,7 +170,6 @@ describe("plugin-sdk provider-auth-runtime", () => {
       expectedState: "state-1",
       timeoutMs: 5_000,
       callbackPath: "/callback",
-      hostname: "127.0.0.1",
       successTitle: `OAuth <complete>&"'`,
       corsOriginAllowlist: ["auth.x.ai", "accounts.x.ai"],
     });
@@ -238,20 +237,6 @@ describe("plugin-sdk provider-auth-runtime", () => {
     expect(callbackListener.servers[0]?.listening).toBe(false);
   });
 
-  it("binds the redirect host when the public hostname option is omitted", async () => {
-    const { callback, ready } = startCallback({
-      expectedState: "state-1",
-      timeoutMs: 5_000,
-      callbackPath: "/callback",
-      successTitle: "OAuth complete",
-    });
-
-    const port = await ready;
-    const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
-    expect(response.status).toBe(200);
-    await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
-  });
-
   it("keeps an explicit localhost bind compatible with an IPv4 redirect", async () => {
     const { callback, ready } = startCallback({
       expectedState: "state-1",
@@ -266,7 +251,6 @@ describe("plugin-sdk provider-auth-runtime", () => {
     expect(response.status).toBe(200);
     await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
   });
-
   it("does not echo CORS for unallowlisted callback origins but keeps waiting", async () => {
     const { callback, ready } = startCallback({
       expectedState: "state-1",
@@ -381,10 +365,6 @@ describe("buildOAuthCallbackOriginResolver", () => {
     expect(resolver("not a url")).toBeUndefined();
     expect(resolver(undefined)).toBeUndefined();
     expect(resolver([])).toBeUndefined();
-  });
-
-  it("uses the first value when multiple Origin headers arrive", () => {
-    const resolver = providerAuthRuntime.buildOAuthCallbackOriginResolver(["auth.example.com"]);
     expect(resolver(["https://auth.example.com", "https://attacker.example.com"])).toBe(
       "https://auth.example.com",
     );

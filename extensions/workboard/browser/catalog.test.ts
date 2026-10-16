@@ -31,7 +31,9 @@ describe("Workboard catalog", () => {
     "loads the full page after catalog hydration (failed=%s)",
     async (failed) => {
       const pending = createDeferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
-      const request = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue({ cards: [] });
+      const request = vi.fn(async (method: string) =>
+        method === "workboard.boards.list" ? pending.promise : { cards: [] },
+      );
       const host = createHost();
       const runtime = new WorkboardCatalog(() => {}, host);
       const client = { request } as unknown as GatewayBrowserClient;
@@ -69,12 +71,68 @@ describe("Workboard catalog", () => {
     try {
       runtime.sync(client, true);
       await vi.waitFor(() => expect(host.boardsReady).toBe(true));
+      host.state.cards = [card];
       runtime.handleGatewayEvent("plugin.workboard.changed");
       await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
       await moveWorkboardCard({ host, client, cardId: card.id, status: "review", position: 1000 });
       pending.resolve({ cards: [card], boards: [board("ops")] });
       await pending.promise;
       expect(host.state.cards).toEqual([moved]);
+    } finally {
+      runtime.dispose();
+      host.dispose();
+    }
+  });
+
+  it("loads only summaries on connect and changes without hydrating card history", async () => {
+    vi.useFakeTimers();
+    const historical = createWorkboardCard({ notes: "history".repeat(10_000) });
+    const host = createHost();
+    let name = "Operations";
+    let responseBytes = 0;
+    const request = vi.fn(async (method: string) => {
+      const response =
+        method === "workboard.boards.list"
+          ? { boards: [{ ...board("ops"), name }] }
+          : { boards: [board("ops")], cards: [historical] };
+      responseBytes += JSON.stringify(response).length;
+      return response;
+    });
+    const runtime = new WorkboardCatalog(() => {}, host);
+    try {
+      runtime.sync({ request } as unknown as GatewayBrowserClient, true);
+      await vi.advanceTimersByTimeAsync(0);
+      name = "Renamed";
+      runtime.handleGatewayEvent("plugin.workboard.changed", {
+        epoch: "test",
+        revision: 2,
+        cardsRevision: 2,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      runtime.handleGatewayEvent("plugin.workboard.changed", {
+        epoch: "test",
+        revision: 3,
+        cardsRevision: 2,
+        sessionsRevision: 3,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request.mock.calls).toEqual([
+        ["workboard.boards.list", {}],
+        ["workboard.boards.list", {}],
+      ]);
+      expect(responseBytes).toBeLessThan(512);
+      expect(host.state.boards[0]?.name).toBe("Renamed");
+      runtime.handleGatewayEvent("plugin.workboard.changed", { epoch: "test", revision: 4 });
+      await vi.advanceTimersByTimeAsync(0);
+      runtime.handleGatewayEvent("plugin.workboard.changed", {
+        epoch: "restarted",
+        revision: 1,
+        cardsRevision: 2,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(host.state.cards).toEqual([]);
+      expect(host.state.loaded).toBe(false);
     } finally {
       runtime.dispose();
       host.dispose();

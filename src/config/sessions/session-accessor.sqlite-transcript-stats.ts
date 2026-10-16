@@ -5,6 +5,7 @@ import {
   prepareSqliteQuerySync,
   sqliteStringSetEntries,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import type { SessionTranscriptStats } from "./session-accessor.sqlite-contract.js";
@@ -34,7 +35,7 @@ function transcriptStatsFromRow(row: TranscriptStatsRow | undefined): SessionTra
   };
 }
 
-const transcriptStatsQuery = createSqliteQueryCache((database) => {
+const transcriptStatsQuery = createSqliteQueryCache((database: EngineConnection) => {
   const db = getSessionKysely(database);
   const prepare = (point: boolean, includeGeneration = false) =>
     prepareSqliteQuerySync<readonly string[], TranscriptStatsRow>(database, (parameter) => {
@@ -60,7 +61,11 @@ const transcriptStatsQuery = createSqliteQueryCache((database) => {
             ])
             .$call((query) =>
               point
-                ? query.where("session_id", "=", id)
+                ? query
+                    .where("session_id", "=", id)
+                    .$if(isPostgresSqlConnection(database), (pointQuery) =>
+                      pointQuery.groupBy("session_id"),
+                    )
                 : query
                     .where(
                       "session_id",

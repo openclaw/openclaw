@@ -23,7 +23,10 @@ import {
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
-import { WORKER_BUNDLE_CHUNK_PATH_PATTERN } from "../../src/shared/worker-bundle-hash.js";
+import {
+  WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
+} from "../../src/shared/worker-bundle-hash.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import buildConfigs from "../../tsdown.config.ts";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
@@ -87,7 +90,12 @@ const workerBuildTargets = [
   ],
 ] as const;
 const isWorkerBuildConfig = (config: TsdownConfig) =>
-  workerBuildTargets.some(([, entry, source]) => hasWorkerEntry(config, entry, source));
+  workerBuildTargets.some(([, entry, source]) => hasWorkerEntry(config, entry, source)) ||
+  (typeof config.entry === "object" &&
+    config.entry !== null &&
+    !Array.isArray(config.entry) &&
+    Object.keys(config.entry).length > 0 &&
+    Object.keys(config.entry).every((name) => name.startsWith("worker/")));
 
 function findWorkerBuildConfig(target: string) {
   const selected = workerBuildTargets.find(([name]) => name === target);
@@ -654,6 +662,7 @@ describe("tsdown config", () => {
           files.every(
             (file) =>
               file === `${entry}.mjs` ||
+              file === `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}` ||
               (file.startsWith("worker/") && WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(file.slice(7))),
           ),
         ).toBe(true);
@@ -841,8 +850,16 @@ console.log("relocated session card renders with bundled fonts");
       } else {
         // Each launch boots both helpers; shared chunks pull unrelated runtime
         // exports into startup before the durable worker gate can open.
+        // The anchor's lineage writer retains the shared lazy schema catalogs.
         expect(files.toSorted()).toEqual(
-          [`dist/${relay}.${extension}`, `dist/${anchor}.${extension}`].toSorted(),
+          [
+            `dist/${relay}.${extension}`,
+            `dist/${anchor}.${extension}`,
+            "dist/assets/sqlite-schema/sqlite-agent-catalogs.json",
+            "dist/assets/sqlite-schema/sqlite-daemon-catalogs.json",
+            "dist/assets/sqlite-schema/sqlite-memory-catalogs.json",
+            "dist/assets/sqlite-schema/sqlite-state-catalogs.json",
+          ].toSorted(),
         );
         expect(imports).toEqual([]);
       }
@@ -1188,7 +1205,9 @@ console.log("relocated session card renders with bundled fonts");
     );
 
     expect(packageConfigs).not.toHaveLength(0);
-    expect(packageConfigs.map((entry) => entry.dts)).toEqual(packageConfigs.map(() => true));
+    expect(packageConfigs.map((entry) => entry.dts)).toEqual(
+      packageConfigs.map(() => ({ tsconfig: "tsconfig.packages.json" })),
+    );
     expect(unifiedRuntimeConfig?.dts).toBe(false);
     expect(standaloneRuntimeConfig?.dts).toBe(false);
     expect(unifiedDeclarationConfigs).toHaveLength(1);

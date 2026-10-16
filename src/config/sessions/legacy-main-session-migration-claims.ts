@@ -37,10 +37,13 @@ function generationWindowIdentity(
   generation: SqliteSessionGenerationComparison,
   canonicalKey: string,
 ) {
+  // Derived previews and local write clocks do not distinguish retained histories.
   const {
     updated_at: _updatedAt,
     transcript_updated_at: _transcriptUpdatedAt,
     transcript_observed_at: _transcriptObservedAt,
+    row_transcript_json: _rowTranscript,
+    row_transcript_updated_at: _rowTranscriptUpdatedAt,
     ...identity
   } = rehomeSqliteSessionGenerationWindow(
     generation.window,

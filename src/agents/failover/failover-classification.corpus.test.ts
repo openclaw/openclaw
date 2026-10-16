@@ -32,6 +32,9 @@ function classifyReplyRequest(signal: FailoverSignal) {
 
 // The shared corpus also feeds retry tests; select only distinct classification paths here.
 const representativeCorpusIds = new Set([
+  "patterns-context-tgi-input",
+  "patterns-context-tgi-total",
+  "structured-tgi-output-only",
   "patterns-context-lmstudio-loaded-length-400",
   "billing-together-payment-required",
   "billing-proxy-subscription",
@@ -40,6 +43,7 @@ const representativeCorpusIds = new Set([
   "billing-periodic-limit-402",
   "billing-custom-proxy",
   "billing-zhipu-periodic-limit",
+  "billing-minimax-chinese-usage-limit",
   "billing-subscription-quota-refresh",
   "billing-org-period",
   "retry-429-insufficient-quota-short",
@@ -50,6 +54,7 @@ const representativeCorpusIds = new Set([
   "patterns-html-407",
   "bedrock-deprecated-temperature",
   "billing-context-reasoning-required",
+  "billing-context-dashscope-range",
   "http-legacy-bad-request-normalized",
   "billing-image-dimension",
   "billing-image-size",

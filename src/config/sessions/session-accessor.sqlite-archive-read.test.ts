@@ -19,6 +19,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   encodeSessionArchiveContent,
@@ -483,7 +484,7 @@ describe("SQLite transcript archive reads", () => {
       expect(archiveRead).not.toHaveBeenCalled();
       const database = openOpenClawAgentDatabase(options);
       database.db.exec("DROP TABLE session_transcript_archives");
-      assertOpenClawAgentCurrentRuntimeSchema(database.db, {
+      assertOpenClawAgentCurrentRuntimeSchema(requireNativeSqliteDatabase(database.db), {
         agentId: database.agentId,
         pathname: database.path,
       });
@@ -534,7 +535,16 @@ describe("SQLite transcript archive reads", () => {
         id,
         message: { role: "assistant", content, __openclaw: { runId } },
       });
-      const answer = message("latest", `${'你好 🦞 {result} "quoted" \\ '.repeat(4_000)}tail`);
+      const answer = {
+        type: "message",
+        id: "latest",
+        message: {
+          role: "assistant",
+          content: `${'你好 🦞 {result} "quoted" \\ '.repeat(4_000)}tail`,
+          display: true,
+          __openclaw: { runId: "completed-run" },
+        },
+      };
       const archives = [
         { sessionId: "old", sessionKey, events: [message("old")] },
         {

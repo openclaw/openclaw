@@ -6,6 +6,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { formatCliOperatorError } from "../cli/failure-output.js";
+import {
+  registerSignalExitBarrier,
+  waitForCliSignalExit,
+  waitForSignalExitBarriers,
+} from "../cli/signal-exit-barrier.js";
 import * as lifecycleWriteCustody from "../infra/lifecycle-write-custody.js";
 import { readLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
 import {
@@ -13,6 +18,9 @@ import {
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { readBackupRuns } from "../state/backup-run-records.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import {
@@ -21,6 +29,7 @@ import {
   type BackupAsset,
   resolveBackupPlanFromDisk,
 } from "./backup-shared.js";
+import * as backupVerify from "./backup-verify.js";
 import {
   createMockTarStream,
   mockStateOnlyBackupPlan,
@@ -66,7 +75,7 @@ describe("backup commands", () => {
     await tempHome.restore();
   });
 
-  it.each(["success", "failure", "uncertain"] as const)(
+  it.each(["success", "failure", "uncertain", "SIGINT", "SIGTERM"] as const)(
     "retains archive custody until stream cleanup is confirmed: %s",
     async (outcome) => {
       await mockStateOnlyBackupPlan(path.join(tempHome.home, ".openclaw"));
@@ -84,7 +93,7 @@ describe("backup commands", () => {
             entered.resolve();
             await settled.promise;
           },
-          ...(outcome === "success"
+          ...(outcome === "success" || outcome === "SIGINT" || outcome === "SIGTERM"
             ? {}
             : {
                 error: new Error(
@@ -102,14 +111,19 @@ describe("backup commands", () => {
         }),
       );
       const running = backupCreateCommand(createTestRuntime(), {
-        output: path.join(tempHome.home, "backup.tgz"),
+        output: path.join(tempHome.home, `backup-${outcome}.tgz`),
         includeWorkspace: false,
       }).catch((error: unknown) => error);
       await entered.promise;
       try {
         expect(readLifecycleWriteCustody()).toEqual([{ phase: "backup", count: 1 }]);
+        const signalDrain =
+          outcome === "SIGINT" || outcome === "SIGTERM"
+            ? waitForSignalExitBarriers(outcome)
+            : undefined;
         settled.resolve();
         const result = await running;
+        await signalDrain;
         expect(result instanceof Error).toBe(outcome !== "success");
         expect(hasCommandProcessCleanupError(result)).toBe(outcome === "uncertain");
         expect(readLifecycleWriteCustody()).toEqual(
@@ -118,11 +132,72 @@ describe("backup commands", () => {
       } finally {
         settled.resolve();
         await running;
+        await waitForCliSignalExit();
         releaseCustody?.();
       }
       expect(readLifecycleWriteCustody()).toEqual([]);
     },
   );
+
+  it("retains a committed archive and records its verified outcome before signal exit", async () => {
+    openOpenClawStateDatabase();
+    await closeStateDatabaseForTest();
+    await mockStateOnlyBackupPlan(path.join(tempHome.home, ".openclaw"));
+    backupWalkMock.mockImplementationOnce(walkBackupTar);
+    const archivePath = path.join(tempHome.home, "committed.tar.gz");
+    const entered = createDeferred();
+    const continueVerification = createDeferred();
+    const verify = backupVerify.verifyBackupArchive;
+    vi.spyOn(backupVerify, "verifyBackupArchive").mockImplementation(async (...args) => {
+      entered.resolve();
+      await continueVerification.promise;
+      return verify(...args);
+    });
+    const running = backupCreateCommand(createTestRuntime(), {
+      output: archivePath,
+      verify: true,
+      nowMs: 123,
+    });
+    const observed = running.catch((error: unknown) => error);
+    let cleanupStarted = false;
+    const releaseBarrier = registerSignalExitBarrier(async () => {
+      cleanupStarted = true;
+    });
+    let signalDrain: Promise<void> | undefined;
+    try {
+      await Promise.race([
+        entered.promise,
+        running.then(() => {
+          throw new Error("Backup completed without entering requested verification");
+        }),
+      ]);
+      const committed = await fs.stat(archivePath, { bigint: true });
+      let drained = false;
+      signalDrain = waitForSignalExitBarriers("SIGTERM").then(() => {
+        drained = true;
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(drained).toBe(false);
+      expect(cleanupStarted).toBe(false);
+      expect(readLifecycleWriteCustody()).toEqual([{ phase: "backup", count: 1 }]);
+      continueVerification.resolve();
+      await expect(running).resolves.toMatchObject({ archivePath, verified: true });
+      await signalDrain;
+      expect(await waitForCliSignalExit()).toBe(143);
+      expect((await fs.stat(archivePath, { bigint: true })).ino).toBe(committed.ino);
+      expect(await readBackupRuns(process.env)).toContainEqual(
+        expect.objectContaining({ archivePath, status: "ok", kind: "archive" }),
+      );
+    } finally {
+      continueVerification.resolve();
+      await observed;
+      await signalDrain;
+      await waitForCliSignalExit();
+      releaseBarrier();
+    }
+  });
 
   async function withInvalidWorkspaceBackupConfig<T>(
     raw: string,

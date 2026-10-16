@@ -142,11 +142,6 @@ vi.mock("./disk-budget-runtime.js", () => ({
 vi.mock("./session-accessor.sqlite-exact-read.js", () => ({
   loadSessionEntryReadOnlyInScope: () => observed.read(),
 }));
-vi.mock("./session-sharing-store.js", () => ({
-  listSessionMembers: () => {
-    throw new Error("Native membership reads are forbidden in these pure controls");
-  },
-}));
 vi.mock("../../gateway/session-history-readonly-reader.js", () => ({
   createReadonlySessionHistoryReader: () => ({
     readTranscriptDisplayDelta: observed.delta,
@@ -160,6 +155,12 @@ vi.mock("./session-cold-storage-read.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-cold-storage-read.js")>();
   return {
     ...actual,
+    readRestoredSessionTranscriptInWorker: (
+      ...args: Parameters<typeof actual.readRestoredSessionTranscriptInWorker>
+    ) =>
+      args[0].scope.sessionId === "delta"
+        ? args[1]()
+        : actual.readRestoredSessionTranscriptInWorker(...args),
     readRestoredSessionTranscript: (
       ...args: Parameters<typeof actual.readRestoredSessionTranscript>
     ) =>

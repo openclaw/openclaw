@@ -9,7 +9,7 @@ import {
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { settleLitElement } from "../lit-settle.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar session section visibility", () => {
   it("paginates each expanded section independently", async () => {

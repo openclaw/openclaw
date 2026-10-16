@@ -1,15 +1,26 @@
 /** Process-local reverse registry from prepared agent directories to agent ids. */
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { resolveUserPath } from "../utils.js";
 
 // Process-local registry mapping resolved agent directories back to agent ids.
 // It lets later runtime paths recover scope from an already-prepared agent dir.
 const agentIdsByDir = new Map<string, Set<string>>();
-const preparedPaths = new Map<string, { key: string; close(): void }>();
+const preparedPaths = resolveGlobalMap<string, { key: string; close(): void }>(
+  Symbol.for("openclaw.agentDirPreparedPaths"),
+  (paths) => {
+    for (const prepared of paths.values()) {
+      prepared.close();
+    }
+    paths.clear();
+  },
+  "shared-state",
+);
 
 function forgetPreparedPaths(key: string) {
   for (const [pathname, prepared] of preparedPaths) {
@@ -27,7 +38,7 @@ function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = f
     return cached.key;
   }
   const key = normalizeAgentDirRegistryPath(pathname, env);
-  if (!registering && !agentIdsByDir.has(key)) {
+  if (!isMainThread || (!registering && !agentIdsByDir.has(key))) {
     return key;
   }
   const observations: Array<{ close(): void }> = [];
@@ -40,22 +51,25 @@ function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = f
   for (let child = pathname; path.dirname(child) !== child; child = path.dirname(child)) {
     const basename = path.basename(child);
     observations.push(
-      observeOwnedDirectory(path.dirname(child), (filename) => {
-        if (filename === undefined || filename === basename) {
-          if (
-            filename === undefined &&
-            resolveIdentityPathViaExistingAncestorSync(pathname) === key
-          ) {
-            return;
+      observeOwnedDirectory(
+        path.dirname(child),
+        (filename) => {
+          if (filename === undefined || filename === basename) {
+            if (resolveIdentityPathViaExistingAncestorSync(pathname) === key) {
+              return;
+            }
+            preparedPaths.delete(pathname);
+            prepared.close();
           }
-          preparedPaths.delete(pathname);
-          prepared.close();
-        }
-      }),
+        },
+        { recoveryIntervalMs: 30_000 },
+      ),
     );
   }
+  // Fit the registered fleet plus this registration while bounding extra aliases.
+  const capacity = Math.max(256, agentIdsByDir.size + 1);
   for (const [oldestPath, oldest] of preparedPaths) {
-    if (preparedPaths.size <= 256) {
+    if (preparedPaths.size <= capacity) {
       break;
     }
     preparedPaths.delete(oldestPath);

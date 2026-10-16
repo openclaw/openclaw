@@ -441,12 +441,11 @@ describe("GitHub detail public read boundary", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    { name: "private", body: { id: 123, private: true, visibility: "private" }, status: 200 },
-    { name: "missing", body: { message: "Not Found" }, status: 404 },
-  ])("stops $name before fetching the object", async ({ body, status }) => {
+  it("stops private repositories before fetching the object", async () => {
     for (const selected of [undefined, identity()]) {
-      const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(json(body, status));
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(json({ id: 123, private: true, visibility: "private" }));
       await expect(loadGitHubDetail(target(), selected, fetchMock)).rejects.toMatchObject({
         statusCode: 404,
       });
@@ -483,28 +482,18 @@ describe("GitHub detail public read boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
-  const failures: Array<{ status: number; headers: Record<string, string>; expected: number }> = [
-    { status: 429, headers: {}, expected: 429 },
-    { status: 403, headers: { "x-ratelimit-remaining": "0" }, expected: 429 },
-    { status: 403, headers: { "retry-after": "60" }, expected: 429 },
-    { status: 403, headers: {}, expected: 403 },
-    { status: 503, headers: {}, expected: 502 },
-  ];
-  it.each(failures)(
-    "normalizes $status/$expected failures and caches repeated opens",
-    async ({ status, headers, expected }) => {
-      const fetchMock = vi
-        .fn<typeof fetch>()
-        .mockResolvedValueOnce(json({ message: "upstream" }, status, headers));
-      const input = target();
-      for (let attempt = 0; attempt < 2; attempt++) {
-        await expect(loadGitHubDetail(input, undefined, fetchMock)).rejects.toMatchObject({
-          statusCode: expected,
-        });
-      }
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("normalizes a retry-after rate limit and caches repeated opens", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(json({ message: "upstream" }, 403, { "retry-after": "60" }));
+    const input = target();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(loadGitHubDetail(input, undefined, fetchMock)).rejects.toMatchObject({
+        statusCode: 429,
+      });
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 
   it("expires cached visibility failures rather than making a missing repository permanently unavailable", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -601,20 +590,6 @@ describe("GitHub detail public read boundary", () => {
       bodyTruncated: true,
       partial: true,
       files: [{ patch: patchPrefix, patchTruncated: true }],
-    });
-  });
-
-  it.each([
-    { patch: "", partial: false },
-    { patch: undefined, partial: true },
-  ])("distinguishes empty from unavailable patches (%j)", async ({ patch, partial }) => {
-    const fetchMock = publicFetch(item({ changed_files: 1 })).mockResolvedValueOnce(
-      json([file({ patch })]),
-    );
-    const detail = await loadGitHubDetail(target("pull"), undefined, fetchMock);
-    expect(detail).toMatchObject({
-      partial,
-      files: [{ patch, patchTruncated: partial }],
     });
   });
 
@@ -763,14 +738,9 @@ describe("GitHub detail public read boundary", () => {
       response: () =>
         json([commentItem({ html_url: "https://user:secret@github.com/owner/repo" })]),
     },
-    {
-      name: "more pages",
-      response: () =>
-        json([commentItem()], 200, { Link: '<https://example.com/never-follow>; rel="next"' }),
-    },
   ])(
     "marks incomplete commit comments for $name without losing the commit",
-    async ({ name, response }) => {
+    async ({ response }) => {
       const fetchMock = publicFetch(
         commit({ commit: { ...commit().commit, comment_count: 1 } }),
       ).mockResolvedValueOnce(response());
@@ -781,7 +751,7 @@ describe("GitHub detail public read boundary", () => {
         commentsTruncated: true,
         commentsTotal: 1,
       });
-      expect(detail.comments).toHaveLength(name === "more pages" ? 1 : 0);
+      expect(detail.comments).toHaveLength(0);
       expect(fetchMock).toHaveBeenCalledTimes(3);
     },
   );

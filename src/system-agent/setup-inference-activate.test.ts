@@ -18,7 +18,6 @@ import { ensureOnboardingAgent } from "../commands/onboard-agent.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { clearConfigCache, readConfigFileSnapshot } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
 import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -40,7 +39,6 @@ import {
   SetupInferenceActivationUnavailableError,
 } from "./setup-inference-core.js";
 import * as credentialActivation from "./setup-inference-credential-access.js";
-import { saveSetupCredential } from "./setup-inference-credentials.js";
 import * as activationTransition from "./setup-inference-transition.js";
 import { codexRuntimeArtifactAuth, pluginRecord } from "./verified-inference.test-support.js";
 
@@ -157,6 +155,7 @@ describe("setup activation credentials and configuration", () => {
       });
       expect(result).toMatchObject({ ok: true });
       expect(setup.login).not.toHaveBeenCalled();
+      expect(setup.run).toHaveBeenCalledOnce();
       expect(readNativeKey).not.toHaveBeenCalled();
       expect(setup.readProfile()).toBeUndefined();
       expect(
@@ -167,6 +166,33 @@ describe("setup activation credentials and configuration", () => {
       ).toEqual({ enabled: true });
     },
   );
+
+  it("does not activate a native sign-in revoked before commit", async () => {
+    const setup = await fixture({ codex: true, homeScope: "user" });
+    const verifySetup = vi.fn(async () => {
+      if (verifySetup.mock.calls.length > 1) {
+        throw new Error("Native account no longer has model access");
+      }
+    });
+    setup.pluginRegistry.agentHarnesses[0] = {
+      pluginId: "codex",
+      source: "test",
+      harness: {
+        id: "codex",
+        label: "Native setup fixture",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        verifySetup,
+        runAttempt: async () => {
+          throw new Error("Setup must not start a turn");
+        },
+      },
+    };
+    expect((await setup.activate("codex-cli")).ok).toBe(false);
+    expect(verifySetup).toHaveBeenCalledTimes(2);
+    expect(setup.run).not.toHaveBeenCalled();
+    expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+  });
 
   it.each([
     { authMethod: "oauth", homeScope: "user" },
@@ -330,7 +356,7 @@ describe("setup activation credentials and configuration", () => {
     const setup = await fixture({ codex: true });
     setup.deps.readCodexCliActiveApiKey = () => credential;
     const result = await setup.activate("codex-cli");
-    expect(result).toMatchObject({ ok: true });
+    expect(result, result.ok ? undefined : result.error).toMatchObject({ ok: true });
     expect(setup.login).not.toHaveBeenCalled();
     expect(setup.run).toHaveBeenCalledOnce();
     expect(setup.readProfile()?.[1]).toMatchObject(credential);
@@ -692,56 +718,6 @@ describe("setup activation credentials and configuration", () => {
       ).toEqual(originalCredential);
     },
   );
-
-  it("activates saved sparse model settings without treating runtime defaults as a changed connection", async () => {
-    const setup = await fixture();
-    const configured = structuredClone(setup.config);
-    assert(configured.agents?.defaults);
-    configured.agents.defaults.model = `${modelRef}@openai:original`;
-    await persistProviderAuthProfilesAfterLogin({
-      config: configured,
-      agentDir: setup.agentDir,
-      profiles: [
-        { profileId: "openai:original", credential: { ...credential, key: "original-key" } },
-      ],
-    });
-    await fs.writeFile(setup.configPath, JSON.stringify(configured));
-    clearConfigCache();
-    const sparse = validateConfigObjectRaw({
-      ...configured,
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://provider.example/v1",
-            api: "openai-responses",
-            models: [{ id: "gpt-5.4-mini", name: "Sparse saved model" }],
-          },
-        },
-      },
-    });
-    assert.ok(sparse.ok);
-    const saved = await saveSetupCredential({
-      profile: { profileId: "openai:replacement", credential },
-      config: sparse.config,
-      baseConfig: configured,
-      agentDir: setup.agentDir,
-      modelRef,
-      authChoice: "fixture-login",
-      pluginId: "openai",
-    });
-
-    const result = await setup.activate(
-      `saved-auth:${encodeURIComponent(saved.profile.profileId)}`,
-      true,
-    );
-
-    expect(result).toMatchObject({ ok: true });
-    expect(setup.readProfile()).toEqual([saved.profile.profileId, credential]);
-    const snapshot = await readConfigFileSnapshot();
-    expect(snapshot.sourceConfig.models?.providers?.openai?.models).toEqual([
-      { id: "gpt-5.4-mini", name: "Sparse saved model" },
-    ]);
-  });
 
   it("preserves an unrelated config edit when selecting the verified model", async () => {
     const setup = await fixture();

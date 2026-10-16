@@ -53,7 +53,7 @@ suite.define(() => {
         await gateway.waitForRequest("environments.list");
         await page.locator("#new-session-where-trigger").click();
         await page
-          .locator("wa-popover.new-session-page__where-popover")
+          .locator(".oc-popover.new-session-page__where-popover")
           .getByRole("button", { name: "aws", exact: true })
           .click();
         await page.getByRole("switch", { name: "Incognito" }).click();
@@ -94,9 +94,9 @@ suite.define(() => {
           await gateway.resolveDeferred("sessions.dispatch", {});
           await pollLocatorText(retained).toContain("Your prompt is kept here");
           await expect.poll(() => working.count()).toBe(0);
-          expect(await retained.locator(".agent-chat__composer-shell button:enabled").count()).toBe(
-            0,
-          );
+          expect(
+            await retained.locator(".agent-chat__composer-shell button:enabled:visible").count(),
+          ).toBe(0);
           expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
           await captureUiProof(suite, page, "interrupted-incognito-prompt.png");
         } else {
@@ -198,7 +198,7 @@ suite.define(() => {
           await gateway.waitForRequest("environments.list");
           await page.locator("#new-session-where-trigger").click();
           await page
-            .locator("wa-popover.new-session-page__where-popover")
+            .locator(".oc-popover.new-session-page__where-popover")
             .getByRole("button", { name: "aws", exact: true })
             .click();
           const composer = page.locator(".new-session-page__message");

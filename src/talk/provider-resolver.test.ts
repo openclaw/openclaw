@@ -77,7 +77,7 @@ describe("realtime voice provider resolver", () => {
     expect(legacyHook).not.toHaveBeenCalled();
   });
 
-  it("awaits browser readiness and capabilities without reading legacy credentials", async () => {
+  it("prefers async browser readiness and capabilities over retained synchronous hooks", async () => {
     const legacyHook = vi.fn(() => {
       throw new Error("synchronous browser credential lookup must not run");
     });
@@ -288,7 +288,8 @@ describe("realtime voice provider resolver", () => {
     };
     attachInternalRealtimeVoiceProviderApi(provider, {
       isBrowserSessionConfigured: () => true,
-      resolveBrowserSessionCapabilities: ({ providerConfig, agentId, model }) => ({
+      isBrowserSessionConfiguredAsync: async () => true,
+      resolveBrowserSessionCapabilitiesAsync: async ({ providerConfig, agentId, model }) => ({
         transports: ["webrtc"],
         inputAudioFormats: [],
         outputAudioFormats: [],

@@ -87,6 +87,46 @@ describe("channel route projection", () => {
     ).toBeUndefined();
   });
 
+  it.each([
+    { label: "fraction", value: 12.9, expected: "channel:12" },
+    { label: "negative fraction", value: -12.9, expected: "channel:-12" },
+    { label: "zero", value: 0, expected: "channel:0" },
+    { label: "negative zero", value: -0, expected: "channel:0" },
+    { label: "padded string", value: "  12.9  ", expected: "channel:12.9" },
+    { label: "literal NaN string", value: " NaN ", expected: "channel:NaN" },
+    { label: "blank string", value: "  ", expected: undefined },
+    { label: "NaN", value: Number.NaN, expected: undefined },
+    { label: "positive infinity", value: Number.POSITIVE_INFINITY, expected: undefined },
+    { label: "negative infinity", value: Number.NEGATIVE_INFINITY, expected: undefined },
+    { label: "missing id", value: undefined, expected: undefined },
+  ])("normalizes a $label conversation id before plugin projection", ({ value, expected }) => {
+    expect(formatConversationTarget({ channel: "thread-chat", conversationId: value })).toBe(
+      expected,
+    );
+  });
+
+  it.each([
+    { label: "fraction", value: 12.9, expected: "channel:12" },
+    { label: "negative fraction", value: -12.9, expected: "channel:-12" },
+    { label: "zero", value: 0, expected: "channel:0" },
+    { label: "negative zero", value: -0, expected: "channel:0" },
+    { label: "padded string", value: "  parent  ", expected: "channel:parent" },
+    { label: "literal NaN string", value: " NaN ", expected: "channel:NaN" },
+    { label: "blank string", value: "  ", expected: "channel:child" },
+    { label: "NaN", value: Number.NaN, expected: "channel:child" },
+    { label: "positive infinity", value: Number.POSITIVE_INFINITY, expected: "channel:child" },
+    { label: "negative infinity", value: Number.NEGATIVE_INFINITY, expected: "channel:child" },
+    { label: "missing id", value: undefined, expected: "channel:child" },
+  ])("normalizes a $label parent id before plugin projection", ({ value, expected }) => {
+    expect(
+      formatConversationTarget({
+        channel: "thread-chat",
+        conversationId: "child",
+        parentConversationId: value,
+      }),
+    ).toBe(expected);
+  });
+
   it("projects parent-child conversation refs through plugin delivery targets", () => {
     expect(
       deliveryContextFromConversation({

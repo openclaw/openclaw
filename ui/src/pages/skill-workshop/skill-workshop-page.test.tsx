@@ -135,33 +135,6 @@ describe("Skill Workshop page", () => {
     }
   });
 
-  it("lists learned skills and undoes a change by restoring its saved version", async () => {
-    const request = workshopGateway();
-    const page = await mount(
-      createContext(request, {
-        methods: ["skills.workshop.archive", "skills.workshop.restore"],
-      }),
-    );
-    await vi.waitFor(() => {
-      expect(page.textContent).toContain("Use when reconciling Actual Budget accounts");
-      expect(page.textContent).toContain("tightened reconciliation step");
-    });
-    expect(request).toHaveBeenCalledWith("skills.workshop.list", { agentId: "research" });
-
-    button(page, "Undo")?.click();
-
-    await vi.waitFor(() =>
-      expect(
-        request.mock.calls.filter(([method]) => method === "skills.workshop.list"),
-      ).toHaveLength(2),
-    );
-    expect(request).toHaveBeenCalledWith("skills.workshop.restore", {
-      agentId: "research",
-      name: SKILL,
-      versionId: VERSION,
-    });
-  });
-
   it("undoes restoring an archived skill by archiving it again", async () => {
     const request = workshopGateway([
       { ...change, action: "restore", actor: "user", summary: "restored", versionId: undefined },

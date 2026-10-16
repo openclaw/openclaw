@@ -1,6 +1,8 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
+import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-route-types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveOnboardingMode } from "../../app/onboarding-mode.ts";
 
@@ -17,8 +19,13 @@ export const page = definePage({
     intent: new URLSearchParams(location.search).get("intent") === "new-agent" ? "new-agent" : null,
   }),
   component: () =>
-    import("./custodian-page.ts").then(({ renderCustodianRoute }) => ({
+    import("./custodian-page.tsx").then((module) => ({
       header: true,
-      render: renderCustodianRoute,
+      renderSolid: (props: SolidRouteProps<CustodianRouteData>) =>
+        createComponent(module.CustodianRoute, {
+          get data() {
+            return props.data;
+          },
+        }),
     })),
 });

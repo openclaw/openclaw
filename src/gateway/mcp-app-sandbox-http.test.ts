@@ -113,6 +113,9 @@ describe("MCP App sandbox HTTP origin", () => {
   });
 
   it("caches only the exact versioned public shell and separates effective policies", async () => {
+    const mutablePolicy = { connectDomains: ["https://original.example"] };
+    const originalPath = buildMcpAppSandboxPath(mutablePolicy);
+    mutablePolicy.connectDomains[0] = "https://replacement.example";
     const paths = [
       buildMcpAppSandboxPath(),
       buildMcpAppSandboxPath({
@@ -120,6 +123,11 @@ describe("MCP App sandbox HTTP origin", () => {
         resourceDomains: ["https://cdn.example.com"],
       }),
       buildMcpAppSandboxPath({ blockDescendantFrames: true }),
+      buildMcpAppSandboxPath({ mediaDomains: ["https://media.example"] }),
+      buildMcpAppSandboxPath({ frameDomains: ["https://frames.example"] }),
+      buildMcpAppSandboxPath({ baseUriDomains: ["https://base.example"] }),
+      originalPath,
+      buildMcpAppSandboxPath(mutablePolicy),
     ] as const;
     await withSandboxHost(async (origin) => {
       const versions = new Set<string>();

@@ -67,6 +67,10 @@ loads the selected active branch, and `openDetachedBoundedAsync` returns the sam
 selection without persistence. File-backed SQLite reads run on the history worker.
 The synchronous getters consume the prepared view without reading storage.
 
+Hydrated entry and message envelopes remain mutable local views. Their nested
+payloads are frozen after migration and can be shared across rewrite snapshots.
+Replace a payload with a new value instead of editing its nested objects or arrays.
+
 Full reads transfer bounded chunks from one committed SQLite snapshot without
 truncating the transcript to fit the worker. The caller still holds the complete
 result in memory; use the bounded methods when the complete history is unnecessary.
@@ -89,8 +93,9 @@ synchronous and does not access SQLite.
 
 The synchronous `open`, `openBounded`, `openDetachedBounded`, `openModelContext`,
 `setSessionTarget`, and `reloadPersistedTranscript` methods are deprecated
-third-party compatibility variants through the next Plugin SDK major. Runtime
-code should await their asynchronous counterparts.
+third-party compatibility variants. They will be removed in a later stable
+release after the deprecation period. Runtime code should await their
+asynchronous counterparts.
 
 ## Awaited transcript mutations
 
@@ -109,8 +114,8 @@ writing a leaf record by themselves. The synchronous `resetLeaf()` remains a
 supported in-memory operation.
 
 Synchronous persistence methods retain their immediate return values for
-third-party plugins and warn once per method per process. Their removal gate is
-the next Plugin SDK major. See the [migration table](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
+third-party plugins and warn once per method per process. They will be removed
+in a later stable release after the deprecation period. See the [migration table](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
 for every replacement, return value, and the additive extension and provider
 replay APIs. Transcript formats, schemas, and update behavior are unchanged.
 
@@ -186,16 +191,19 @@ keeps the full selected context. Async reads retain admission, anchor, and
 cancellation checks.
 
 For a temporary model-only view, callers may explicitly add
-`toolResultOverflow: "omit"` to `limits`. If the newest atomic tool frame would
-otherwise leave no fitting context, recovery replaces only the tool-result bodies
-needed to fit with omission notices, before loading those bodies from SQLite.
-Each notice identifies the tool, call, and original projected event size. Recovery
-retains the latest historical user request and complete owned call/result frames.
-Unselected result bodies and tool-call arguments remain intact.
+`toolResultOverflow: "omit"` to `limits`. Under byte pressure, the reader replaces
+tool-result bodies with omission notices before selecting a bounded suffix, so
+earlier goals and constraints can remain in context. It omits only bodies whose
+savings help the view fit, before loading those bodies from SQLite. Each notice
+identifies the tool, call, and original projected event size. If dropping a prefix
+makes retained bodies affordable again, the reader restores the newest ones that
+fit. Tool-call arguments and owned call/result frames remain intact.
 
 This is a lossy model view, not a full-fidelity history API. It does not rewrite
-stored transcripts or change evidence and fork readers. The same byte/event
-limits, required boundaries, and tool-result ownership checks still apply. Reads
+stored transcripts or change evidence and fork readers. Preferring earlier
+requests over result bodies changes retention and may change reusable prompt
+prefixes. The same byte/event limits, required boundaries, and tool-result
+ownership checks still apply. Reads
 still fail if required user messages, call arguments, summaries, or event counts
 cannot fit, or result ownership is ambiguous. Omitting `toolResultOverflow`
 preserves strict bounded-read behavior.
@@ -291,7 +299,9 @@ the provider's own awaited work.
 
     `runEmbeddedAgent(...)` is the neutral helper for starting a normal OpenClaw agent turn from plugin code. It uses the same provider/model resolution and agent-harness selection as channel-triggered replies.
 
-    The caller owns `terminalReplyExpectation`: `"required"` for a requested response, or `"optional"` for work that may finish silently. A model's `NO_REPLY` is empty output, not permission to waive a required response. Recovery after settled tools uses a tool-free finalization pass rather than repeating completed actions.
+    The caller owns `terminalReplyExpectation`: `"required"` for a normally requested response, `"optional"` for optional work, or `"result-required"` for internal work that must return a result. External turns may explicitly finish with an entire final that trims to uppercase `NO_REPLY` under either default reply expectation. The terminal producer prepares the full payload once and publishes `meta.terminalReply`; delivery consumes that fact without reparsing text. Producer preparation strips one literal leading `NO_REPLY\n`, preserving the remaining bytes as visible text. Otherwise, a standalone `NO_REPLY` on the last non-empty line is removed and the preceding answer is delivered; whitespace around that final line is allowed. Lowercase, punctuation, quoted or JSON forms, and inline or mid-text mentions are ordinary visible text. Internal result-required turns need a completed current-source final result, not a silent payload or progress update. `NO_REPLY` discards anything written this turn that was not sent, so send confirmations before ending silently. Empty output is not silence: recovery after settled tools uses a tool-free finalization pass rather than repeating completed actions.
+
+    For stored assistant text without an authoritative display or final-result fact, `openclaw/plugin-sdk/reply-runtime` exports `isSilentReplyText(text?: string)`, which checks only `text?.trim() === "NO_REPLY"`. It has no custom-token parameter. `reply-chunking` no longer exports silence helpers, and the memory-host runtime no longer re-exports them. There are no compatibility aliases; live delivery must use producer-prepared output rather than this stored-text helper.
 
     If your adapter delivers a final reply before the run returns, provide `resolveReplyDelivery(minimumAssistantMessageIndex?)`. Return `"delivered"` for a confirmed final to the current source, `"pending"` while its transport owns delivery or the outcome is uncertain, and `"missing"` when no final was delivered. Bind observations to this run and input; exclude earlier-input receipts when the supplied lower bound advances. Collecting a block, showing a preview, or writing an external channel's transcript is not a delivery receipt. Observation failures retain pending custody instead of authorizing another reply.
 
@@ -299,7 +309,7 @@ the provider's own awaited work.
 
     An explicit `resolveReplyDelivery` always takes precedence. If `onBlockReply` only collects output, updates a preview, or fails before sending, return `"missing"` when the adapter can confirm that no source transport owns a final response; this permits required recovery. Migrate delivery adapters to the observer so they can report actual receipts and uncertain sends. The block callback returns no delivery result, so a generic rejection alone does not authorize recovery. Legacy custody is scoped to the run and assistant-message index, retired for later inputs and on cancellation or completion; blocks without an index apply only to the initial input.
 
-    The optional `githubPublicationAvailable` input shipped in 2026.9.4 is deprecated and ignored. Remove it from plugin calls: the host checks the current session and Gateway for every attempt. The SDK accepts the old input until the next Plugin SDK major; it does not grant or disable publication tools.
+    The optional `githubPublicationAvailable` input shipped in 2026.9.4 is deprecated and ignored. Remove it from plugin calls: the host checks the current session and Gateway for every attempt. The SDK accepts the old input until a separately announced ordinary stable removal release; it does not grant or disable publication tools.
 
     `resolveCliBackendDispatchEligibility({ provider, model, agentId, authProfileId, config, agentDir, workspaceDir })` shares the embedded runner's CLI-backend dispatch decision (route, the backend's declared `subscriptionAuthDispatch` capability, stored credential mode — honoring an explicitly pinned `authProfileId`) with callers that opt embedded runs into `cliBackendDispatch: "subscription-auth"`. It returns `{ provider }` when the run would execute through the CLI backend and `undefined` when it stays on the direct passthrough, so callers can budget timeouts for the run that will actually execute.
 
@@ -349,7 +359,7 @@ the provider's own awaited work.
 
     Prefer `getSessionEntryAsync(...)`, `getSessionEntryByIdAsync(...)`, `prepareSessionEntryPatch(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. Doctor and migration paths can combine `fallbackEntry`, `skipMaintenance`, and `requireWriteSuccess` for one atomic repair of the underlying store.
 
-    Both async getters are also exported from the existing `openclaw/plugin-sdk/session-store-runtime` subpath. They return the complete public entry projection, excluding host-private fields, or `undefined` for a missing entry. The by-ID result includes `{ sessionKey, entry }` from the same selected owner. An explicit `storePath` selects that physical store; an omitted path inside a host-supplied incognito scope retains that scope. Managed runtime calls reject if their plugin owner retires while the read is pending. Returned metadata does not authorize a later effect; revalidate the caller's current authority at that boundary. The SDK and runtime `getSessionEntry(...)` getters are deprecated in favor of `getSessionEntryAsync(...)` and will be removed at the next Plugin SDK major. Their synchronous behavior remains unchanged during the migration window. The existing `readSessionUpdatedAt(...)` deprecation follows the same removal window; await `readSessionUpdatedAtAsync(...)` instead.
+    Both async getters are also exported from the existing `openclaw/plugin-sdk/session-store-runtime` subpath. They return the complete public entry projection, excluding host-private fields, or `undefined` for a missing entry. The by-ID result includes `{ sessionKey, entry }` from the same selected owner. An explicit `storePath` selects that physical store; an omitted path inside a host-supplied incognito scope retains that scope. Managed runtime calls reject if their plugin owner retires while the read is pending. Returned metadata does not authorize a later effect; revalidate the caller's current authority at that boundary. The SDK and runtime `getSessionEntry(...)` getters are deprecated in favor of `getSessionEntryAsync(...)` and remain supported through 2026-12-31, with removal in the first January 2027 stable release. Their synchronous behavior remains unchanged during the migration window. The existing `readSessionUpdatedAt(...)` deprecation follows the same removal window; await `readSessionUpdatedAtAsync(...)` instead.
 
     By default, `getSessionEntryByIdAsync(...)` chooses the first visible exact ID match in session-key order, falling back to trimmed legacy IDs only when there is no exact match. Pass `orderBy: "updatedAt"` to choose the most recently updated match across exact and trimmed IDs, with session-key order breaking ties. Active Memory uses this option to preserve its most-recent-session selection.
 
@@ -381,7 +391,7 @@ the provider's own awaited work.
 
     Use `runWithWorkAdmission(...)` when a plugin starts work on a persisted session. The callback rejects archived or concurrently replaced sessions, keeps archive/reset/delete mutations coordinated through completion, and receives an `AbortSignal` that must be forwarded to the agent run. A harness may explicitly name trusted execution delegates through its experimental `delegatedExecutionPluginIds` registration field. Delegates can admit and run only an exact existing model-locked session; all session mutations remain restricted to the harness owner. See [Agent harness plugins](/plugins/sdk-agent-harness#delegated-execution).
 
-    Maintenance and repair plugins may use `deleteSessionEntry(...)` for one scoped session entry, `cleanupSessionLifecycleArtifacts(...)` for lifecycle-owned scratch sessions, and `resolveSessionStoreBackupPaths(...)` before mutating a store. Pass `expectedSessionId` and `expectedUpdatedAt` when deletion must not race a concurrent session update; use `expectedSessionId: null` when the earlier snapshot had no session id. These helpers are narrow repair/lifecycle surfaces, not a general store deletion API.
+    Maintenance and repair plugins may use `deleteSessionEntry(...)` for one scoped session entry, `cleanupSessionLifecycleArtifacts(...)` for lifecycle-owned scratch sessions, and `deleteSessionEntry({ ..., backupDir })` to complete a recovery snapshot before deletion. When repairing several entries in one store, pass `backupDir` on the first deletion only. The backup uses the verified SQLite snapshot owner, embeds retained cold transcripts, and publishes a standalone database without WAL or SHM sidecars alongside any legacy session index. Use a fresh backup directory; existing target files are never overwritten. `resolveSessionStoreBackupPaths(...)` remains an artifact inventory, not a safe file-copy protocol. Pass `expectedSessionId` and `expectedUpdatedAt` when deletion must not race a concurrent session update; use `expectedSessionId: null` when the earlier snapshot had no session id. These helpers are narrow repair/lifecycle surfaces, not a general store deletion API.
 
     `resolveStorePath(...)` and `updateSessionStoreEntry(...)` round out the session helpers: `resolveStorePath` resolves the session store path for a given scope, and `updateSessionStoreEntry({ storePath, sessionKey, update })` patches one entry directly by store path when the caller already knows it.
 
@@ -405,7 +415,7 @@ the provider's own awaited work.
 
     A harness that supports `sessions_yield` uses `appendSessionYieldContext(...)` after successful yield settlement to retain private resume context in the stored session transcript. Pass the session target, `message`, and an `assertCurrent` callback that checks the current run and settlement authority. The writer checks that callback again before appending the hidden context entry. Failed or revoked settlement must not append context; public tool results and display projections must omit the private message.
 
-Read-only native session catalogs use `readSessionTranscriptCatalogPage({ agentId, sessionKey, storePath?, limit, cursor, sourceDomain, pluginId })` from the same subpath. It returns `{ items, nextCursor? }` in newest-first catalog order; the optional opaque cursor continues toward older items and malformed cursors are rejected. The reader resolves the configured session store when `storePath` is omitted and binds the cursor to the selected store and session. Only nonempty user and assistant text from the local chat display projection is included; tool calls, tool results, reasoning, and other non-conversation blocks are omitted. Text preserves credentials and is bounded per item with `truncated` set when clipped. Review it before sharing; diagnostic exports retain their masking. Reads scan at most 1,000 source messages per page, so a page containing only omitted activity can have no items and still return a continuation cursor. Cursors from the earlier tool-inclusive projection are rejected with a reload message. Raw page reads are bounded to 8 MiB; an oversized entry returns an explicit error. Cold history requires restoration by the source Gateway; the catalog reader never opens a writer to restore it. User sender attribution is portable: source-local profiles become remote identities in the caller's plugin/domain namespace, using a verified numeric GitHub account ID when available and a source profile ID otherwise. Existing remote and observed identities remain portable. The caller must authorize each session read separately; a cursor or identity claim never grants access. [Session Share](/plugins/session-share) uses this reader for its paired-node publication.
+Read-only native session catalogs use `readSessionTranscriptCatalogPage({ agentId, sessionKey, storePath?, limit, cursor, sourceDomain, pluginId })` from the same subpath. It returns `{ items, nextCursor? }` in newest-first catalog order; the optional opaque cursor continues toward older items and malformed cursors are rejected. The reader resolves the configured session store when `storePath` is omitted and binds the cursor to the selected store and session. Only nonempty user and assistant text from the local chat display projection is included; tool calls, tool results, reasoning, and other non-conversation blocks are omitted. Standalone control lines removed by that projection are not catalog items; raw transcript reads retain the original source rows. Text preserves credentials and is bounded per item with `truncated` set when clipped. Review it before sharing; diagnostic exports retain their masking. Reads scan at most 1,000 source messages per page, so a page containing only omitted activity can have no items and still return a continuation cursor. Cursors from the earlier tool-inclusive projection are rejected with a reload message. Raw page reads are bounded to 8 MiB; an oversized entry returns an explicit error. Cold history requires restoration by the source Gateway; the catalog reader never opens a writer to restore it. User sender attribution is portable: source-local profiles become remote identities in the caller's plugin/domain namespace, using a verified numeric GitHub account ID when available and a source profile ID otherwise. Existing remote and observed identities remain portable. The caller must authorize each session read separately; a cursor or identity claim never grants access. [Session Share](/plugins/session-share) uses this reader for its paired-node publication.
 
 Catalog list publishers await `prepareSessionCatalogSourceActorProjector({ pluginId, sourceDomain, actors })` from the same subpath after selecting a page. It prepares profile and verified GitHub facts in workers; call the returned function for each actor synchronously and in publication order. Only human creators stamped with `source: "profile"` resolve local profiles; the resulting remote claims never grant access. Prepare a new projector for each page or request so profile merges, display names, and primary GitHub accounts are refreshed. The synchronous `createSessionCatalogSourceActorProjector` is deprecated and remains available only for existing consumers. See [catalog identity preparation](/plugins/sdk-migration/how-to-migrate#prepare-session-catalog-identities).
 

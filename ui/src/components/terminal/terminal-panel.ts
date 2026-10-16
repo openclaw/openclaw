@@ -1,9 +1,9 @@
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import type { ApplicationContext } from "../../app/context.ts";
 import { terminalFontFamily } from "../../app/terminal-font.ts";
+import { renderSolidSnapshot } from "../../lib/dom/solid-snapshot.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
-import { renderSolidSnapshot } from "../../lit/solid-snapshot.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { SubscriptionsController } from "../../lib/subscriptions-controller.ts";
 import { DockLayoutController } from "../dock-layout-controller.ts";
 import { terminalPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
 import { notifyPanelHostedTabsChanged } from "../panel-hosted-tabs.ts";
@@ -30,8 +30,8 @@ import { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
 import type { TerminalPanelViewState } from "./terminal-panel-view.tsx";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 
-// Hosted-tab getters can run in ownerless effects. Render static artwork at module load.
-const hostedTabIcon = renderSolidSnapshot(terminalPanelTabIcon);
+// Clone the SVG itself: insertion consumes a fragment and loses its replacement boundary.
+const hostedTabIcon = renderSolidSnapshot(terminalPanelTabIcon).firstElementChild!;
 
 type TerminalDock = Exclude<DockPanelPlacement, "left">;
 

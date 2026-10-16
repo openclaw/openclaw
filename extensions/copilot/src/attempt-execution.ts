@@ -394,7 +394,9 @@ export async function runCopilotExecution(context: {
           pooledClient: handle,
           sessionConfig,
         });
-      } catch {}
+      } catch {
+        // Binding observers are best effort; the journal still owns transcript writes.
+      }
     }
     transcriptJournal = createAttemptTranscriptJournal({
       abortSession: () => session?.abort() ?? Promise.resolve(),
@@ -512,7 +514,9 @@ export async function runCopilotExecution(context: {
         timedOutDuringCompaction = bridge?.isCompacting() === true;
         try {
           await bridge?.awaitDeltaChain();
-        } catch {}
+        } catch {
+          // Preserve the timeout and still drain canonical transcript writes below.
+        }
         await bridge?.awaitAgentEventChain();
         bridge?.flushTranscriptProjection();
         try {
@@ -589,7 +593,9 @@ export async function runCopilotExecution(context: {
             cleanup,
             sdkSessionId,
           });
-        } catch {}
+        } catch {
+          // A cleanup observer cannot replace the turn's already-selected outcome.
+        }
       }
       params.abortSignal?.removeEventListener("abort", abortActiveSession);
     } else {

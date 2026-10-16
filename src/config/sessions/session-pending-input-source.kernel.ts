@@ -14,7 +14,7 @@ import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 
-/** Read comparison evidence only; recovered custody is claimed by the current host owner. */
+/** Worker-only comparison evidence; recovered custody is claimed by the current host owner. */
 export function readPendingInputSourceInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">,
   input: PendingInputSourceRead,

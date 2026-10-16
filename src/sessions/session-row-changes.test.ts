@@ -93,6 +93,43 @@ it("keeps postcommit observer events outside the committing worker's captured po
   expect(captured.changes).toEqual([{ sessionKey: "committed", facts: { kind: "unchanged" } }]);
 });
 
+it("settles session notifications through a connection's separate publication anchor", () => {
+  const { DatabaseSync } = requireNodeSqlite();
+  const anchor = new DatabaseSync(":memory:");
+  const database = Object.assign(new DatabaseSync(":memory:"), {
+    anchor,
+    [Symbol.for("openclaw.postgres-sync-connection")]: true,
+  });
+  cleanup.push(
+    () => anchor.close(),
+    () => database.close(),
+  );
+  const observed: string[] = [];
+  cleanup.push(
+    sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change) {
+        observed.push(change.sessionKey);
+      }
+    }),
+  );
+  const emit = (sessionKey: string) =>
+    sessionChanges.emit({ sessionKey, facts: { kind: "unchanged" } }, database);
+  const captured = captureSessionRowChanges(anchor, () =>
+    withSqlitePostCommitPublications(anchor, () => {
+      expect(() =>
+        withSqlitePostCommitPublications(anchor, () => {
+          emit("rolled-back");
+          throw new Error("cancel publication");
+        }),
+      ).toThrow("cancel publication");
+      emit("committed");
+      expect(observed).toEqual([]);
+    }),
+  );
+  expect(captured.changes).toEqual([{ sessionKey: "committed", facts: { kind: "unchanged" } }]);
+  expect(observed).toEqual(["committed"]);
+});
+
 it("installs private authority before observers without duplicate presentation notifications", () => {
   const installed: string[] = [];
   const projected: string[] = [];

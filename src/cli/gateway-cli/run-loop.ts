@@ -683,6 +683,7 @@ export async function runGatewayLoop(params: {
         budget,
         action,
         forceRestart: restartIntent?.force === true,
+        interruptAfterDrain: acceptedRequest.interruptAfterDrain,
         restartWithoutSupervisor,
         acceptedAtMs: acceptedRequest.acceptedAtMs,
         requestedRestartDrainTimeoutMs: isRestart
@@ -765,7 +766,6 @@ export async function runGatewayLoop(params: {
         await signals.settle();
         shutdownStep = "gateway-server-close";
         // Natural exit must retire native watchers, not detach them for a forced exit.
-        // This retains the synchronous macOS watcher-close cost until native retirement improves.
         await runWithProcessCleanupBudget(
           budget.cleanupBudget(shutdownDeadline, HARD_EXIT_WATCHDOG_GRACE_MS),
           () =>
@@ -968,7 +968,7 @@ export async function runGatewayLoop(params: {
       );
       return;
     }
-    if (action === "stop" && signal === "SIGTERM") {
+    if (action !== "restart" && signal === "SIGTERM") {
       // Transfer the exact one-shot authority before host retirement and the
       // one-way fence discard it; neither operation may precede consumption.
       const handoff =
@@ -978,7 +978,8 @@ export async function runGatewayLoop(params: {
         gatewayLog.warn(`external restart handoff refused: ${handoff.error}`);
       } else if (handoff.value) {
         acceptedRequest.action = "external-restart";
-        acceptedRequest.restartIntent = { force: true };
+        acceptedRequest.restartIntent = { ...acceptedRequest.restartIntent, force: true };
+        acceptedRequest.interruptAfterDrain = true;
       }
     }
     const isRestart = acceptedRequest.action !== "stop";

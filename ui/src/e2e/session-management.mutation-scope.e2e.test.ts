@@ -2,7 +2,6 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
-import type { SessionDataController } from "../components/session-data-controller.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
@@ -35,7 +34,6 @@ suite.define(() => {
       const context = await suite.browser.newContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
       await page.clock.install();
-      await installMutationScopeDiagnostics(page, { operation, filter });
       const original = sessionRow("agent:main:rename-cross-agent", "Original name", 3);
       const batch = [original, sessionRow("agent:main:batch-sibling", "Batch sibling", 2)];
       const mainRows = [sessionRow("agent:main:main", "Main", 1), ...batch];
@@ -116,7 +114,7 @@ suite.define(() => {
       const selectResearchAgent = async () => {
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         await sidebar
-          .locator("wa-dropdown.sidebar-agent-menu")
+          .locator(".sidebar-agent-menu")
           .getByRole("menuitem", { name: "Research", exact: true })
           .click();
       };
@@ -124,6 +122,7 @@ suite.define(() => {
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, original.key));
         await rowFor(original.key).waitFor({ state: "visible" });
+        await installMutationScopeDiagnostics(page, { operation, filter });
         if (operation === "rename" && filter === "All") {
           // A submitted sidebar rename owns its modal until the response settles.
           // Prepare real same-document history so browser navigation can change
@@ -147,6 +146,9 @@ suite.define(() => {
           await rowFor(original.key).waitFor({ state: "visible" });
         }
         if (filter === "All") {
+          if (operation === "rename") {
+            await gateway.deferNext("sessions.list", { agentId: "main", archived: "all" });
+          }
           await chooseSidebarMenuOption(page, "Status", filter);
           await closeSidebarMenu(page);
           await gateway.waitForRequest("sessions.list", {
@@ -179,6 +181,9 @@ suite.define(() => {
             key: original.key,
             expectedSessionId: original.sessionId,
           });
+          if (filter === "All") {
+            await gateway.resolveDeferred("sessions.list");
+          }
         } else {
           for (const row of batch) {
             await rowFor(row.key).click({ modifiers: ["Alt"] });
@@ -283,7 +288,7 @@ suite.define(() => {
         await capture("after-pagination");
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         await sidebar
-          .locator("wa-dropdown.sidebar-agent-menu")
+          .locator(".sidebar-agent-menu")
           .getByRole("menuitem", { name: "Main", exact: true })
           .click();
         if (operation === "rename") {
@@ -306,7 +311,7 @@ suite.define(() => {
           .length;
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         await sidebar
-          .locator("wa-dropdown.sidebar-agent-menu")
+          .locator(".sidebar-agent-menu")
           .getByRole("menuitem", { name: "Research", exact: true })
           .click();
         const returnedList = await gateway.waitForRequest("sessions.list", {
@@ -341,13 +346,11 @@ suite.define(() => {
           expect(refresh.params).toMatchObject({ limit: retainedLimit + 1 });
           await expect
             .poll(() =>
-              sidebar.evaluate(
-                (element) =>
-                  (element as HTMLElement & { sessionData: SessionDataController }).sessionData
-                    .sessionsLoading,
-              ),
+              sidebar
+                .locator('.sidebar-session-pagination--roster > button[aria-busy="true"]')
+                .count(),
             )
-            .toBe(false);
+            .toBe(0);
           await capture("retained-after-invalidation");
         }
         await rowFor(researchRows[2]!.key).waitFor({ state: "visible" });

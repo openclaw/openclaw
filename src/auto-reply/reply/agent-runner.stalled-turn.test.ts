@@ -18,6 +18,7 @@ import {
   createSqliteTranscriptTarget,
   readTranscriptMessages,
 } from "../../sessions/user-turn-transcript.test-support.js";
+import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import type { TemplateContext } from "../templating.js";
 import type * as AgentRunnerExecution from "./agent-runner-execution.js";
 import { runReplyAgent } from "./agent-runner-run.js";
@@ -202,7 +203,7 @@ describe("runReplyAgent stalled turn continuation", () => {
     replyRunTesting.resetReplyRunRegistry();
     clearFollowupQueue(queueKey);
     clearFollowupDrainCallback(queueKey);
-    drainedRuns.mockClear();
+    drainedRuns.mockReset();
     mocks.executeFollowups = false;
     executionStarted = createDeferred();
     mocks.preflight.mockReset().mockResolvedValue(undefined);
@@ -306,6 +307,46 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(getFollowupQueueDepth(queueKey)).toBe(0);
     expect(next).toBe(queued);
     expect(last).toBe(sameSenderLater);
+  });
+
+  it("queues node-loss recovery once ahead of newer input without absorbing that input", async () => {
+    const drained = createDeferred();
+    drainedRuns.mockImplementation(async () => {
+      if (drainedRuns.mock.calls.length === 2) {
+        drained.resolve();
+      }
+    });
+    const interrupted = createStalledRun();
+    const queued = createQueuedRequest({ senderId: "traveler", to: "12345" });
+    expect(enqueueFollowupRun(queueKey, queued, settings, "message-id", drainedRuns, false)).toBe(
+      true,
+    );
+    await executionStarted.promise;
+    const guidance = `${new WorkerNodeLostError().message} Continue the interrupted request from the transcript.`;
+    const otherIngress = createReplyOperation({
+      sessionId: "other-ingress",
+      sessionKey: "agent:main:telegram:direct:other",
+      resetTriggered: false,
+    });
+    try {
+      expect(interrupted.runState.continueStalledTurn?.(guidance, otherIngress)).toBe(false);
+      expect(getFollowupQueueDepth(queueKey)).toBe(1);
+    } finally {
+      otherIngress.complete();
+    }
+    expect(interrupted.runState.continueStalledTurn?.(guidance)).toBe(true);
+    expect(interrupted.runState.continueStalledTurn?.(guidance)).toBe(false);
+    expect(queued.currentInboundContext).toBeUndefined();
+    expect(queued.stalledTurnRecovery).toBeUndefined();
+
+    expireStaleReplyOperation(interrupted.operation, "stuck_recovery");
+    await settleStalledOwner(interrupted);
+    await drained.promise;
+    const [recovery, newer] = drainedRuns.mock.calls.map(([run]) => run);
+    expect(recovery).toMatchObject({ stalledTurnRecovery: true, transcriptPrompt: undefined });
+    expect(recovery?.prompt).toContain(guidance);
+    expect(newer).toBe(queued);
+    expect(getFollowupQueueDepth(queueKey)).toBe(0);
   });
 
   it("leaves dispatch responsible for a stall before the request reaches the transcript", async () => {

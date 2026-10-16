@@ -83,7 +83,10 @@ import {
   createBoundWorker,
   createSpawnBoundaryParent,
   createSpawnOperatorSource,
+  createSpawnBoundaryConfig,
+  prepareIsolatedChildAdmissionProof,
   readBoundExecutionState,
+  recordSpawnBoundaryFinal,
   registerYieldedRequesterBatchCase,
 } from "./subagent-spawn.production-boundary.test-support.js";
 import { registerRequestCustodySpawnCases } from "./subagent-spawn.request-custody.test-support.js";
@@ -122,39 +125,7 @@ let settleRootWork: ReturnType<typeof observeRootWork>;
 let releaseProfileCatalog: (() => void) | undefined;
 
 async function writeTestConfig(maxChildrenPerAgent?: number) {
-  const config = {
-    logging: { audit: { enabled: true, executionIdentity: true } },
-    tools: { swarm: { enabled: true, maxConcurrent: 1 } },
-    agents: {
-      ownership: "explicit",
-      defaults: {
-        workspace: stateDir,
-        systemAgent: { agentId: "main" },
-        model: { primary: "custom/test-model" },
-        ...(maxChildrenPerAgent !== undefined ? { subagents: { maxChildrenPerAgent } } : {}),
-      },
-      entries: { main: { workspace: stateDir } },
-    },
-    models: {
-      mode: "replace",
-      providers: {
-        custom: {
-          api: "openai-completions",
-          baseUrl: "https://example.invalid/v1",
-          models: [
-            {
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              id: "test-model",
-              input: ["text"],
-              maxTokens: 1_024,
-              name: "Test model",
-              reasoning: false,
-            },
-          ],
-        },
-      },
-    },
-  } satisfies OpenClawConfig;
+  const config = createSpawnBoundaryConfig(stateDir, maxChildrenPerAgent);
   await state.writeConfig(config);
   clearConfigCache();
   setRuntimeConfigSnapshot(config);
@@ -162,7 +133,10 @@ async function writeTestConfig(maxChildrenPerAgent?: number) {
 }
 
 beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "spawn-production-boundary" });
+  state = await createOpenClawTestState({
+    label: "spawn-production-boundary",
+    prepareProfileCatalog: true,
+  });
   await resetPreparedModelRuntimeHarness(state);
   runEmbeddedAgent.mockReset();
   stateDir = state.stateDir;
@@ -461,7 +435,7 @@ describe("recursive spawn production boundary", () => {
     assertNoModelExecution: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
   });
 
-  it("admits a descendant using the active parent turn model", async () => {
+  it("admits an isolated descendant with current policy and the active parent turn model", async () => {
     const customProvider = expectDefined(
       runtimeConfig.models?.providers?.custom,
       "custom provider fixture",
@@ -510,11 +484,19 @@ describe("recursive spawn production boundary", () => {
       },
     );
     const { context, runtime, identities } = await createBoundGateway(bound);
+    const childProof = await prepareIsolatedChildAdmissionProof(bound);
     const modelRun = createDeferred<EmbeddedAgentRunResult>();
     const modelRunStarted = createDeferred();
-    runEmbeddedAgent.mockImplementationOnce(() => {
+    runEmbeddedAgent.mockImplementationOnce(async (params) => {
       modelRunStarted.resolve();
-      return modelRun.promise;
+      const result = await modelRun.promise;
+      await recordSpawnBoundaryFinal({
+        storePath: bound.storePath,
+        sessionKey: expectDefined(params.sessionKey, "child session"),
+        runId: params.runId,
+        text: "descendant complete",
+      });
+      return result;
     });
     let childRunId: string | undefined;
     const failures: unknown[] = [];
@@ -567,9 +549,8 @@ describe("recursive spawn production boundary", () => {
         applicableGrantRefs: ["tool:sessions_spawn"],
         runtimeAssuranceRefs: ["spawn-runtime:subagent"],
       });
-      expect(
-        loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey }),
-      ).toMatchObject({
+      const admittedChild = childProof.assertAdmitted(details.childSessionKey, embeddedRun);
+      expect(admittedChild).toMatchObject({
         spawnedBy: parentSessionKey,
         spawnedBySessionId: "parent-session",
         spawnedBySenderIsOwner: true,
@@ -581,10 +562,8 @@ describe("recursive spawn production boundary", () => {
         modelOverrideFallbackOriginModel: "child-model",
       });
       // The receipt's parent id stays out of navigation fields that sessions.list projects.
-      expect(
-        loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey })
-          ?.parentSessionId,
-      ).toBeUndefined();
+      expect(admittedChild.parentSessionId).toBeUndefined();
+      expect(admittedChild.groupId).toBeUndefined();
       expect(subagentRuns.get(details.runId)).toMatchObject({
         childSessionKey: details.childSessionKey,
         requesterSessionKey: parentSessionKey,
@@ -592,9 +571,13 @@ describe("recursive spawn production boundary", () => {
     } catch (error) {
       failures.push(error);
     } finally {
+      childProof.restore();
       modelRun.resolve({
         payloads: [{ text: "descendant complete" }],
-        meta: { durationMs: 1 },
+        meta: {
+          durationMs: 1,
+          terminalReply: { disposition: "visible", text: "descendant complete" },
+        },
       });
       failures.push(...(await closeBoundGateway(bound, runtime, childRunId)));
       throwBoundFailures(failures);
@@ -669,7 +652,14 @@ describe("recursive spawn production boundary", () => {
             throw error;
           }
           modelRunStarted.resolve();
-          return await modelRun.promise;
+          const result = await modelRun.promise;
+          await recordSpawnBoundaryFinal({
+            storePath: bound.storePath,
+            sessionKey: expectDefined(runParams.sessionKey, "child session"),
+            runId: runParams.runId,
+            text: "collector complete",
+          });
+          return result;
         },
       );
       let childRunId: string | undefined;
@@ -818,7 +808,13 @@ describe("recursive spawn production boundary", () => {
         } catch (error) {
           failures.push(error);
         }
-        modelRun.resolve({ payloads: [{ text: "collector complete" }], meta: { durationMs: 1 } });
+        modelRun.resolve({
+          payloads: [{ text: "collector complete" }],
+          meta: {
+            durationMs: 1,
+            terminalReply: { disposition: "visible", text: "collector complete" },
+          },
+        });
         failures.push(
           ...(await closeBoundGateway(bound, runtime, childRunId, () =>
             releaseAgentRunDelegatedAuthority(releaserAuthority),

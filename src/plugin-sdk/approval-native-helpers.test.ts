@@ -1,9 +1,11 @@
 /**
  * Tests native approval routing helpers and target matching logic.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   createChannelApproverDmTargetResolver,
+  createChannelApproverDmTargetResolverAsync,
   createChannelNativeOriginTargetResolver,
   createNativeApprovalChannelRouteGates,
   createNativeApprovalForwardingFallbackSuppressor,
@@ -433,6 +435,29 @@ describe("createChannelNativeOriginTargetResolver", () => {
 });
 
 describe("createChannelApproverDmTargetResolver", () => {
+  it("warns once for the legacy factory and keeps awaited target preparation warning-free", async () => {
+    using warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    const params = {
+      resolveApprovers: () => ["owner-1"],
+      mapApprover: (approver: string) => ({ to: `user:${approver}` }),
+    };
+    const input = { cfg: {}, request: matrixExecRequest };
+    await withPluginRuntimePluginScope({ pluginId: "approval-dm-compat-proof" }, async () => {
+      const resolveAsync = createChannelApproverDmTargetResolverAsync(params);
+      expect(await resolveAsync(input)).toEqual([{ to: "user:owner-1" }]);
+      expect(warning).not.toHaveBeenCalled();
+      const resolveSync = createChannelApproverDmTargetResolver(params);
+      expect(resolveSync(input)).toEqual([{ to: "user:owner-1" }]);
+      createChannelApproverDmTargetResolver(params);
+    });
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        "createChannelApproverDmTargetResolver is deprecated; use createChannelApproverDmTargetResolverAsync",
+      ),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
+  });
+
   it("filters null targets and skips delivery when shouldHandle rejects the request", () => {
     const resolveApproverDmTargets = createChannelApproverDmTargetResolver({
       shouldHandleRequest: ({ approvalKind }) => approvalKind === "exec",

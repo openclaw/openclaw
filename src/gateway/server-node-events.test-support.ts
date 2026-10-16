@@ -7,7 +7,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
+import type { loadSessionEntryAsync as loadSessionEntryTypeAsync } from "./session-entry-load.test-support.js";
 
 export const buildSessionLookup = (
   sessionKey: string,
@@ -26,11 +26,11 @@ export const buildSessionLookup = (
     spawnedBy?: string;
     parentSessionKey?: string;
   } = {},
-): ReturnType<typeof loadSessionEntryType> => ({
+): Awaited<ReturnType<typeof loadSessionEntryTypeAsync>> => ({
   cfg: { session: { mainKey: "main" } } as OpenClawConfig,
   agentId: resolveAgentIdFromSessionKey(sessionKey, "main"),
   storePath: "/tmp/sessions.json",
-  store: {} as ReturnType<typeof loadSessionEntryType>["store"],
+  store: {},
   entry: {
     agentHarnessId: entry.agentHarnessId,
     modelSelectionLocked: entry.modelSelectionLocked,
@@ -84,7 +84,7 @@ const runtimeMocks = vi.hoisted(() => ({
   INLINE_IMAGE_DURABLE_OMISSION_MARKER:
     "[image attachment omitted: durable managed media claim unavailable]",
   loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
-  loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
+  loadSessionEntry: vi.fn((sessionKey: string, _opts?: unknown) => buildSessionLookup(sessionKey)),
   upsertSessionEntryCore: vi.fn(),
   normalizeChannelId: normalizeChannelIdMock,
   parseMessageWithAttachments: parseMessageWithAttachmentsMock,

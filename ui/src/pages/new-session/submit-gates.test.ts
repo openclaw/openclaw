@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProjectsListResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  ProjectsCheckoutOptionsResult,
+  ProjectsListResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
@@ -19,6 +22,118 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow submit gates", () => {
+  it.each(["registered", "cloned"] as const)(
+    "submits a guest's path-redacted %s project as an isolated worktree",
+    async (source) => {
+      const availability = createDeferred<ProjectsCheckoutOptionsResult>();
+      const fixture = createDraftFixture({
+        scopes: ["operator.sessions.read", "operator.sessions.write"],
+        methods: [
+          "sessions.create",
+          "projects.list",
+          "projects.checkoutOptions",
+          "worktrees.branches",
+        ],
+        selfUser: { id: "guest" },
+        request: (method) => {
+          if (method === "projects.list") {
+            return Promise.resolve({
+              projects: [{ id: "registered", displayName: "Registered Project", source }],
+            });
+          }
+          if (method === "projects.checkoutOptions") {
+            return availability.promise;
+          }
+          if (method === "worktrees.branches") {
+            return Promise.reject(new Error("missing scope: operator.write"));
+          }
+          return Promise.resolve({});
+        },
+      });
+      const { place, flow, context, request } = fixture;
+      await place.browser.refreshProjects();
+      place.selectProjectId("registered");
+      flow.setMessage("Create an isolated change");
+      expect(place.checkoutVisible).toBe(true);
+      expect(flow.canSubmit()).toBe(false);
+      availability.resolve({ current: false, worktree: true });
+      await availability.promise;
+      expect(place.worktree).toBe(true);
+      expect(flow.submitBlock()).toBeUndefined();
+      vi.mocked(context.sessions.createResult).mockRejectedValueOnce(
+        new Error("project registered is unavailable; re-register the project"),
+      );
+      await flow.submit();
+      expect(context.sessions.createResult).toHaveBeenCalledOnce();
+      const params = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+      expect(params).toMatchObject({ projectId: "registered", worktree: true });
+      expect(params).not.toHaveProperty("worktreeBaseRef");
+      expect(params).not.toHaveProperty("cwd");
+      expect(flow.error).toContain("re-register the project");
+      expect(place.worktree).toBe(true);
+      expect(place.browser.projectId).toBe("registered");
+      expect(flow.submitBlock()).toBeUndefined();
+      expect(request.mock.calls.filter(([method]) => method === "worktrees.branches")).toEqual([]);
+    },
+  );
+
+  it("retries a restored existing-folder create after its device stops offering free slots", async () => {
+    let freeSlots = 1;
+    const { place, flow, gateway } = createDraftFixture({
+      methods: ["environments.list", "sessions.create", "sessions.dispatch"],
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      request: async (method) =>
+        method === "environments.list"
+          ? {
+              environments: [
+                {
+                  id: "node:runner",
+                  type: "node",
+                  status: "available",
+                  sessionHost: true,
+                  workerHost: { deviceFolders: true },
+                  workerSlots: { total: 1, available: freeSlots },
+                },
+              ],
+              profiles: [],
+            }
+          : {},
+      agents: [
+        {
+          id: "main",
+          workspace: "/workspace",
+          agentRuntime: {
+            id: "openclaw",
+            source: "agent",
+            cloudPlacementExecutionMode: "worker-turn",
+            devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+          },
+        },
+      ],
+    });
+    await gateway.refreshCloudProfiles();
+    flow.pendingPlacement.stageCreate({
+      agentId: "main",
+      target: { kind: "device", deviceId: "runner" },
+      message: "Keep my folder",
+      gatewayUrl: "ws://gateway.example",
+      recoveryScope: "principal-a",
+      createParams: {
+        agentId: "main",
+        message: "",
+        deviceFolder: { deviceId: "runner", path: "/srv/project" },
+      },
+    });
+    flow.releasePendingPlacementOwner();
+    flow.restorePendingPlacementRecovery("ws://gateway.example", "principal-a");
+    expect(place.deviceFolder).toEqual({ deviceId: "runner", path: "/srv/project" });
+    // The pending session itself can hold the device's only slot.
+    freeSlots = 0;
+    await gateway.refreshCloudProfiles();
+    expect(place.deviceFolderAvailable).toBe(false);
+    expect(flow.submitBlock()).toBeUndefined();
+  });
+
   it.each(["retry", "choose-workspace"] as const)(
     "retains a saved project after failed discovery until %s resolves the choice",
     async (recovery) => {
@@ -28,13 +143,21 @@ describe("DraftSubmissionFlow submit gates", () => {
         projectId: "registered",
       });
       const discovery = createDeferred<ProjectsListResult>();
+      const availability = createDeferred<ProjectsCheckoutOptionsResult>();
       let projects = discovery.promise;
       const { place, flow, context } = createDraftFixture({
-        methods: ["sessions.create", "projects.list", "worktrees.branches"],
+        methods: [
+          "sessions.create",
+          "projects.list",
+          "projects.checkoutOptions",
+          "worktrees.branches",
+        ],
         request: (method) =>
           method === "projects.list"
             ? projects
-            : Promise.resolve({ repositoryStatus: "not_git", branches: [] }),
+            : method === "projects.checkoutOptions"
+              ? availability.promise
+              : Promise.resolve({ repositoryStatus: "not_git", branches: [] }),
       });
       const read = place.browser.refreshProjects();
       flow.setMessage("work in the saved project");
@@ -61,6 +184,8 @@ describe("DraftSubmissionFlow submit gates", () => {
         });
         await place.browser.refreshProjects();
         place.restorePreferenceSelections();
+        availability.resolve({ current: true, worktree: true });
+        await availability.promise;
       }
       expect(flow.canSubmit()).toBe(true);
       await flow.submit();

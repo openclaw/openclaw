@@ -177,7 +177,10 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
     install(
       sessionEntryWorker.readSessionEntryReadOnlyInWorker,
       () => vi.spyOn(sessionEntryWorker, "readSessionEntryReadOnlyInWorker"),
-      async (...args) => current.loadSessionEntry!(args[0]),
+      async (readScope, assertCurrent) => {
+        assertCurrent?.();
+        return current.loadSessionEntry!(readScope);
+      },
     );
   }
   if (current.loadRequesterSessionEntry) {

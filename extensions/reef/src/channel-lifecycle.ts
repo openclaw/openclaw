@@ -1,4 +1,3 @@
-import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 
 const REEF_RECONCILE_INTERVAL_MS = 30_000;
@@ -24,8 +23,8 @@ async function runReconcileStep(params: {
   }
 }
 
-// One abort scope owns both account loops. If either branch throws, the inbox
-// loop must be torn down and awaited before startAccount settles: a leaked
+// One abort scope owns both account loops. On account exit, the inbox loop
+// must be torn down and awaited before startAccount settles: a leaked
 // loop keeps reconnecting as this handle, fights the replacement instance for
 // the single relay inbox socket, and drives the relay into rate limiting.
 export async function runReefChannelLifecycle(params: {
@@ -46,7 +45,6 @@ export async function runReefChannelLifecycle(params: {
   }
   const lifecycle = params.scheduler.scope();
   const intervalMs = params.reconcileIntervalMs ?? REEF_RECONCILE_INTERVAL_MS;
-  const reconciliationFailed = createDeferred<never>();
   // Declared outside the try so the finally can await it even when the startup
   // steps below throw before the inbox is started.
   let inboxTask: Promise<void> | undefined;
@@ -73,10 +71,10 @@ export async function runReefChannelLifecycle(params: {
           ...params,
           shouldContinueAfterError: CONTINUE_AFTER_RECONCILE_ERROR,
           signal: lifecycle.signal,
-        }).catch(reconciliationFailed.reject),
+        }),
     });
     inboxTask = params.startInbox(lifecycle.signal);
-    await Promise.race([inboxTask, reconciliationFailed.promise]);
+    await inboxTask;
   } finally {
     lifecycle.beginClose();
     // Neither branch may outlive the account, including a failed inbox drain.

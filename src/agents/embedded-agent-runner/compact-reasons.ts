@@ -14,6 +14,7 @@ const COMPACTION_PROVIDER_5XX = new Set([500, 502, 503, 504]);
 const COMPACTION_TEXT_REASONS: ReadonlyArray<
   readonly [reason: string, fragments: readonly string[], match?: "all"]
 > = [
+  ["unshrinkable_request", ["estimated foreground request budget still exceeds"]],
   ["no_compactable_entries", ["nothing to compact", "no real conversation messages"]],
   // Both backends' phrases mean the transcript is already small enough.
   ["below_threshold", ["below threshold", "already under target"]],

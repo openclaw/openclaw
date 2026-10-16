@@ -38,6 +38,18 @@ import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
 const loadedCronStoreRevisions = new WeakMap<CronServiceState, { revision: number }>();
 
+/** Advance a complete resident store after its committed row postimages are installed. */
+export function noteLoadedCronStoreCommit(state: CronServiceState, observedRevision: number): void {
+  const storeKey = cronStoreKey(state.deps.storePath);
+  const current = getCronJobsStoreRevision(storeKey);
+  const loaded = loadedCronStoreRevisions.get(state)?.revision;
+  noteCronJobsStoreCommit(storeKey);
+  // A sibling publication during the worker await still requires a full reload.
+  if (loaded === observedRevision && current === observedRevision) {
+    loadedCronStoreRevisions.set(state, { revision: getCronJobsStoreRevision(storeKey) });
+  }
+}
+
 function warnInvalidPersistedCronJob(params: {
   state: CronServiceState;
   raw: Record<string, unknown>;
@@ -168,6 +180,12 @@ export async function ensureLoaded(
       continue;
     }
     const hydrated = hydratedRaw;
+    const loadWarning = state.deps.describeJobLoadWarning?.(hydrated);
+    const loadWarningKey = `host:${hydrated.id}`;
+    if (loadWarning && !state.warnedInvalidPersistedJobKeys.has(loadWarningKey)) {
+      state.warnedInvalidPersistedJobKeys.add(loadWarningKey);
+      state.deps.log.warn({ jobId: hydrated.id, name: hydrated.name }, loadWarning);
+    }
     jobs.push(hydrated);
     durableNextRunAtMsByJobId.set(hydrated.id, hydrated.state.nextRunAtMs);
   }

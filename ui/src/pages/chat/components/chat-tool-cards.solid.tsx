@@ -5,6 +5,7 @@ import { dynamic, type JSX } from "@solidjs/web";
 import { For, Match, Show, Switch, createMemo } from "solid-js";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
+import { browserTabKey } from "../../../components/browser/browser-target.ts";
 import { iconData } from "../../../components/icon-data.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
@@ -22,22 +23,42 @@ import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
+import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { resolveSpawnedSubagent, type SpawnedSubagent } from "../chat-spawned-subagent.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
+import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
 import { DiffStatChips } from "./chat-diff-render.solid.tsx";
-import { renderChatPermissionCard } from "./chat-divider.ts";
+import { ChatPermissionCard } from "./chat-divider.tsx";
+import type { BrowserTabPreview } from "./chat-tool-cards.ts";
 import { ExpandedToolCardContent } from "./chat-tool-content.solid.tsx";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
-import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
+import {
+  toolResultSurfaceProps,
+  toolWorkspacePath,
+  type ToolRenderOptions,
+} from "./chat-tool-render-model.ts";
 
 const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
   read: "chat.toolCards.verbs.read",
   search: "chat.toolCards.verbs.searched",
   fetch: "chat.toolCards.verbs.fetched",
 };
+
+export function BrowserTabPreviews(props: { previews: readonly BrowserTabPreview[] | undefined }) {
+  return (
+    <For each={props.previews} keyed={(item) => browserTabKey(item.preview)}>
+      {(item) => (
+        <BrowserTabCardHost
+          preview={item().preview}
+          revision={item().revision}
+          latest={item().latest}
+        />
+      )}
+    </For>
+  );
+}
 
 const MUTATION_VERB_KEYS = {
   update: ["editing", "edited", "edit"],
@@ -550,13 +571,13 @@ function ToolCardView(props: ToolCardProps) {
       }
     >
       {(request) => (
-        <LitContent value={renderChatPermissionCard(request(), props.options.onPermissionRetry)} />
+        <ChatPermissionCard request={request()} onRetry={props.options.onPermissionRetry} />
       )}
     </Show>
   );
 }
 
-defineSolidBridge<{
+const ToolCardHost = defineSolidBridge<{
   card: ToolCard | null;
   options: ToolCardOptions;
   hasChildren: boolean;
@@ -582,7 +603,7 @@ defineSolidBridge<{
     },
   },
 );
-defineSolidBridge<{
+export const ChatToolIcon = defineSolidBridge<{
   name: string;
   tool?: { toolName: string; pluginToolIcons?: PluginToolIcons };
 }>("openclaw-chat-tool-icon", (props) => <ToolIcon name={props.name} tool={props.tool} />, {
@@ -591,8 +612,28 @@ defineSolidBridge<{
     tool: { default: undefined, attribute: false },
   },
 });
-defineSolidBridge<{ card: ToolCard | null }>(
+export const ChatToolApprovalReviews = defineSolidBridge<{ card: ToolCard | null }>(
   "openclaw-chat-tool-reviews",
   (props) => <Show when={props.card}>{(card) => <ToolApprovalReviews card={card()} />}</Show>,
   { properties: { card: { default: null, attribute: false } } },
 );
+
+export function ChatToolCard(props: ToolCardProps) {
+  return (
+    <PluginSurface
+      surface="tool-result"
+      props={toolResultSurfaceProps(props.card, props.options)}
+      presented={props.options.presented ?? true}
+      renderDefault={() => (
+        <ToolCardHost
+          style={{ display: "contents" }}
+          card={props.card}
+          options={props.options}
+          hasChildren={props.hasChildren ?? Boolean(props.children)}
+        >
+          {props.children}
+        </ToolCardHost>
+      )}
+    />
+  );
+}

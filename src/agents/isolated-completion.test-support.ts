@@ -25,7 +25,7 @@ const isolatedCompletionMocks = vi.hoisted(() => ({
     vi.fn<(params: AgentHarnessSelectionDecisionParams) => AgentHarnessSelectionDecision>(),
   ensureAuthProfileStore: vi.fn(),
   cliBackendAcceptsAuthProfileForwarding: vi.fn<() => boolean>(() => false),
-  resolveCliExecutionAuthProfileId: vi.fn<() => string | undefined>(() => undefined),
+  resolveCliExecutionAuthProfileId: vi.fn<() => Promise<string | undefined>>(async () => undefined),
   hasAvailableAuthForProvider: vi.fn(async () => false),
   isCliRuntimeAliasForProvider: vi.fn<(params: { runtime?: string; provider?: string }) => boolean>(
     () => false,
@@ -206,7 +206,7 @@ export function resetIsolatedCompletionTestState(): void {
   });
   isolatedCompletionMocks.isCliRuntimeAliasForProvider.mockReturnValue(false);
   isolatedCompletionMocks.cliBackendAcceptsAuthProfileForwarding.mockReturnValue(false);
-  isolatedCompletionMocks.resolveCliExecutionAuthProfileId.mockReturnValue(undefined);
+  isolatedCompletionMocks.resolveCliExecutionAuthProfileId.mockResolvedValue(undefined);
   isolatedCompletionMocks.resolveCliBackendConfig.mockReturnValue({
     config: { command: "test-cli" },
   });

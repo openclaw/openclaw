@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as failure, ok, type Result } from "@openclaw/normalization-core/result";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
@@ -267,7 +268,7 @@ function startConfigLoad(
   isCurrentLoad: () => boolean = () => true,
 ): ConfigRead | null {
   const client = state.client;
-  if (!client || !state.connected) {
+  if (!client || !state.connected || !hasOperatorReadAccess(client.auth)) {
     return null;
   }
   const read = beginConfigRead(state, client);
@@ -397,7 +398,12 @@ async function readConfig(
 
 export async function loadConfigSchema(state: RuntimeConfigState) {
   const client = state.client;
-  if (!client || !state.connected || state.configSchemaLoading) {
+  if (
+    !client ||
+    !state.connected ||
+    state.configSchemaLoading ||
+    !hasOperatorReadAccess(client.auth)
+  ) {
     return;
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);

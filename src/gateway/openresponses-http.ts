@@ -514,7 +514,7 @@ export async function handleOpenResponsesHttpRequest(
     part: { type: "output_text", text: "" },
   });
 
-  handled.onDisconnect = startOpenAiCompatibleStream({
+  startOpenAiCompatibleStream({
     protocol: "responses",
     res,
     runId: responseId,

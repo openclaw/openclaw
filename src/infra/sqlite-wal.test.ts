@@ -34,7 +34,7 @@ function createMockDb(checkpointResult = { busy: 0, log: 0, checkpointed: 0 }): 
           ? checkpointResult
           : sql === "PRAGMA freelist_count"
             ? { freelist_count: 1024 }
-            : { journal_mode: sql === "PRAGMA journal_mode;" ? "wal" : "delete" },
+            : { journal_mode: sql === "PRAGMA journal_mode = WAL;" ? "wal" : "delete" },
       ),
     })),
   } as unknown as DatabaseSync;
@@ -151,8 +151,7 @@ describe("sqlite WAL maintenance", () => {
     });
 
     expect(realpath).toHaveBeenCalledWith(databasePath);
-    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
+    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = WAL;");
   });
 
   it("uses rollback journaling when Windows cannot classify an opened drive path", () => {
@@ -354,8 +353,7 @@ describe("sqlite WAL maintenance", () => {
       databasePath: path.join(tempDir, "openclaw.sqlite"),
     });
 
-    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
-    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode;");
+    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = WAL;");
   });
 
   it("uses macOS SMB mount filesystem names", () => {
@@ -403,7 +401,7 @@ describe("sqlite WAL maintenance", () => {
       databasePath: path.join(tempDir, "openclaw.sqlite"),
     });
 
-    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
+    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = WAL;");
   });
 
   it("parses Linux mount command filesystem names when proc mountinfo is unavailable", () => {
@@ -449,8 +447,6 @@ describe("sqlite WAL maintenance", () => {
           expect(sessionScope.getStore()).toBe(session);
           // The native resource must be detached at allocation, not only when its callback runs.
           expect(timerContexts).toEqual([[undefined, undefined]]);
-          expect(db["exec"]).toHaveBeenCalledTimes(3);
-
           await vi.advanceTimersByTimeAsync(5);
           expect(await periodic.promise).toEqual([undefined, undefined]);
           expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
@@ -787,7 +783,7 @@ describe("sqlite WAL maintenance", () => {
           get: vi.fn(() =>
             sql.includes("wal_checkpoint")
               ? { busy: 1, log: 4, checkpointed: 3 }
-              : { journal_mode: sql === "PRAGMA journal_mode;" ? "wal" : "delete" },
+              : { journal_mode: sql === "PRAGMA journal_mode = WAL;" ? "wal" : "delete" },
           ),
         }) as unknown as ReturnType<DatabaseSync["prepare"]>,
     );
@@ -814,7 +810,9 @@ describe("sqlite WAL maintenance", () => {
         throw error;
       }
       return {
-        get: vi.fn(() => ({ journal_mode: sql === "PRAGMA journal_mode;" ? "wal" : "delete" })),
+        get: vi.fn(() => ({
+          journal_mode: sql === "PRAGMA journal_mode = WAL;" ? "wal" : "delete",
+        })),
       } as unknown as ReturnType<DatabaseSync["prepare"]>;
     });
 
@@ -866,14 +864,17 @@ describe("sqlite WAL maintenance", () => {
     const db = createMockDb();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     let journalModeAttempts = 0;
-    vi.mocked(db["exec"]).mockImplementation((sql) => {
-      if (sql === "PRAGMA journal_mode = WAL;" && journalModeAttempts++ === 0) {
-        throw Object.assign(new Error("database is locked"), {
-          code: "ERR_SQLITE_ERROR",
-          errcode: 5,
-        });
-      }
-    });
+    vi.mocked(db["prepare"]).mockReturnValue({
+      get: vi.fn(() => {
+        if (journalModeAttempts++ === 0) {
+          throw Object.assign(new Error("database is locked"), {
+            code: "ERR_SQLITE_ERROR",
+            errcode: 5,
+          });
+        }
+        return { journal_mode: "wal" };
+      }),
+    } as unknown as ReturnType<DatabaseSync["prepare"]>);
 
     configureSqliteConnectionPragmas(db, {
       busyTimeoutMs: 50,
@@ -896,7 +897,9 @@ describe("sqlite WAL maintenance", () => {
     vi.mocked(db["prepare"]).mockImplementation(
       (sql) =>
         ({
-          get: vi.fn(() => ({ journal_mode: sql === "PRAGMA journal_mode;" ? "delete" : "wal" })),
+          get: vi.fn(() => ({
+            journal_mode: sql === "PRAGMA journal_mode = WAL;" ? "delete" : "wal",
+          })),
         }) as unknown as ReturnType<DatabaseSync["prepare"]>,
     );
 
@@ -907,7 +910,6 @@ describe("sqlite WAL maintenance", () => {
         databaseLabel: "test-db",
       }),
     ).toThrow("test-db could not enable WAL; SQLite kept journal_mode=delete");
-    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode;");
   });
 
   it("configures lock retry before inspecting a fresh database header", () => {

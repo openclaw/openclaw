@@ -176,6 +176,26 @@ describe("telegram message cache", () => {
     ]);
   });
 
+  it("keeps a cached dice roll readable as a reply target", async () => {
+    const cache = createTelegramMessageCache();
+    const roll = message(9100, "Ada", {
+      from: sender(2, "Ada"),
+      dice: { emoji: "\u{1F3B2}", value: 4 },
+    });
+    await record(cache, roll);
+
+    const chain = await replyChain(
+      cache,
+      message(9101, "Grace", {
+        text: "what did it land on?",
+        from: sender(3, "Grace"),
+        reply_to_message: roll,
+      }),
+    );
+
+    expect(chain).toMatchObject([{ messageId: "9100", body: "[Dice \u{1F3B2} = 4]" }]);
+  });
+
   it("prefers exact stored ancestors over stale embedded content and topic metadata", async () => {
     const cache = createTelegramMessageCache();
     await record(
@@ -229,14 +249,18 @@ describe("telegram message cache", () => {
 
   it("persists prompt-context projection provenance across cache restart", async () => {
     const marker = projection("assistant-projection-restart");
+    const text = "  indented\nnext  \n";
     const cache = createTelegramMessageCache();
-    await record(cache, botMessage(9125, "Projection-aware state message"), {
+    const live = await record(cache, botMessage(9125, text), {
+      botUserId: 999,
       promptContextProjection: marker,
     });
+    expect(live.body).toBe(text);
 
     resetCache();
     const reloadedCache = createTelegramMessageCache();
     const reloaded = await get(reloadedCache, "9125");
+    expect(reloaded?.body).toBe(text);
     expect(reloaded?.promptContextProjectionMarker).toEqual({ kind: "valid", projection: marker });
 
     const edited = await record(
@@ -304,25 +328,6 @@ describe("telegram message cache", () => {
     });
     const mismatched = await reloadGet("9128");
     expect(mismatched?.promptContextProjectionMarker).toBeUndefined();
-  });
-
-  it("preserves projected message whitespace across cache restart", async () => {
-    const marker = projection("assistant-whitespace-projection");
-    const text = "  indented\nnext  \n";
-    const cache = createTelegramMessageCache();
-    const live = await record(
-      cache,
-      message(9132, "OpenClaw", { text, from: sender(42, "OpenClaw", true) }),
-      {
-        botUserId: 42,
-        promptContextProjection: marker,
-      },
-    );
-    expect(live.body).toBe(text);
-
-    const reloaded = await reloadGet("9132");
-    expect(reloaded?.body).toBe(text);
-    expect(reloaded?.promptContextProjectionMarker).toEqual({ kind: "valid", projection: marker });
   });
 
   it.each([

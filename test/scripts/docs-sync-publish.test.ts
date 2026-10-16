@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  applyLocaleNavLabelOverlay,
   composeDocsConfig,
   parseArgs,
   reportOrphanLocaleDocs,
@@ -75,6 +76,40 @@ function collectPages(entry: unknown, pages: string[] = []): string[] {
   collectPages(record.groups, pages);
   collectPages(record.tabs, pages);
   return pages;
+}
+
+function findNestedGroup(
+  pages: unknown,
+  groupName: string,
+): { group: string; pages?: unknown } | undefined {
+  if (!Array.isArray(pages)) {
+    return undefined;
+  }
+  for (const entry of pages) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    if ("group" in entry && entry.group === groupName) {
+      return entry;
+    }
+    const nested = findNestedGroup(entry.pages, groupName);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+function findNestedGroupByPage(pages: unknown, page: string) {
+  if (!Array.isArray(pages)) {
+    return undefined;
+  }
+  return pages.find((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return false;
+    }
+    return "pages" in entry && collectPages(entry.pages).includes(page);
+  });
 }
 
 describe("docs-sync-publish", () => {
@@ -375,6 +410,86 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     }
   });
 
+  it("overlays deep groups without changing the input or ambiguously labeling siblings", () => {
+    const source = {
+      tabs: [
+        {
+          tab: "Tools",
+          groups: [
+            {
+              group: "Guides",
+              pages: [
+                { group: "Browser", pages: [{ group: "Setup", pages: ["tr/browser/setup"] }] },
+                { group: "Search", pages: ["tr/search"] },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const before = structuredClone(source);
+    const result = applyLocaleNavLabelOverlay(source, {
+      tabs: [
+        {
+          tab: "Araçlar",
+          groups: [
+            {
+              group: "Kılavuzlar",
+              pages: [
+                { group: "Tarayıcı", pages: [{ group: "Kurulum", pages: ["tr/browser/setup"] }] },
+                { group: "Combined", pages: ["tr/browser/setup", "tr/search"] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(source).toEqual(before);
+    expect(collectPages(result)).toEqual(collectPages(source));
+    expect(result.tabs[0].groups[0]).toEqual({
+      group: "Kılavuzlar",
+      pages: [
+        { group: "Tarayıcı", pages: [{ group: "Kurulum", pages: ["tr/browser/setup"] }] },
+        { group: "Search", pages: ["tr/search"] },
+      ],
+    });
+  });
+
+  it("covers every published Swedish navigation label with a matching English anchor", () => {
+    type NavGroup = { group: string; pages: Array<string | NavGroup> };
+    type NavTab = { tab: string; groups: NavGroup[] };
+    const source = JSON.parse(fs.readFileSync("docs/docs.json", "utf8")) as {
+      navigation: { languages: Array<{ language: string; tabs: NavTab[] }> };
+    };
+    const englishTabs = source.navigation.languages
+      .find((entry) => entry.language === "en")!
+      .tabs.filter((tab) => tab.tab !== "ClawHub");
+    const glossary = new Map<string, string>(
+      JSON.parse(fs.readFileSync("docs/.i18n/glossary.sv.json", "utf8")).map(
+        (entry: { source: string; target: string }) => [entry.source, entry.target],
+      ),
+    );
+    const label = (value: string) => {
+      expect(glossary.has(value), value).toBe(true);
+      return glossary.get(value)!;
+    };
+    const group = (entry: NavGroup, translated: boolean): NavGroup => ({
+      group: translated ? label(entry.group) : entry.group,
+      pages: entry.pages.map((page) =>
+        typeof page === "string" ? `sv/${page}` : group(page, translated),
+      ),
+    });
+    const overlay = JSON.parse(fs.readFileSync("docs/.i18n/sv-navigation.json", "utf8"));
+    const navigation = (translated: boolean) => ({
+      language: "sv",
+      tabs: englishTabs.map((tab) => ({
+        tab: translated ? label(tab.tab) : tab.tab,
+        groups: tab.groups.map((entry) => group(entry, translated)),
+      })),
+    });
+    expect(applyLocaleNavLabelOverlay(navigation(false), overlay)).toEqual(navigation(true));
+  });
+
   it("keeps generated locale navigation aligned with English routes", () => {
     const config = composeDocsConfig() as {
       navigation: {
@@ -396,6 +511,10 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     expect(english).toBeDefined();
     expect(simplifiedChinese).toBeDefined();
     expect(german).toBeDefined();
+    const turkish = config.navigation.languages.find((entry) => entry.language === "tr");
+    expect(turkish).toBeDefined();
+    const swedish = config.navigation.languages.find((entry) => entry.language === "sv");
+    expect(swedish).toBeDefined();
     const sourceConfig = JSON.parse(
       fs.readFileSync(path.join("docs", "docs.json"), "utf8"),
     ) as typeof config;
@@ -434,7 +553,69 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
         .find((tab) => tab.tab === "贡献")
         ?.groups?.map((group) => group.group),
     ).toEqual(["成熟度", "测试与 CI"]);
+    expect(swedish!.tabs[0]?.tab).toBe("Kom igång");
+    expect(swedish!.tabs[0]?.groups?.[0]?.group).toBe("Översikt");
     expect(german!.tabs[0]?.tab).toBe("Loslegen");
     expect(german!.tabs[0]?.groups?.[0]?.group).toBe("Überblick");
+
+    const simplifiedChineseGateway = simplifiedChinese!.tabs
+      .find((tab) => tab.tab === "网关与运维")
+      ?.groups?.find((group) => group.group === "网关");
+    for (const [page, group] of [
+      ["zh-CN/gateway/configuration", "Configuration"],
+      ["zh-CN/gateway/authentication", "Authentication and secrets"],
+      ["zh-CN/gateway/health", "Health and diagnostics"],
+      ["zh-CN/gateway/gateway-lock", "Scaling and operations"],
+    ] as const) {
+      expect(findNestedGroupByPage(simplifiedChineseGateway?.pages, page)).toEqual(
+        expect.objectContaining({ group }),
+      );
+    }
+
+    expect(turkish!.tabs.map((tab) => tab.tab)).toEqual([
+      "Başlangıç",
+      "Kurulum",
+      "Kanallar",
+      "Ajanlar",
+      "Yetenekler",
+      "Modeller",
+      "Platformlar",
+      "Gateway ve operasyonlar",
+      "Başvuru",
+      "Sürümler",
+      "Katkıda bulunma",
+      "Yardım",
+    ]);
+    expect(turkish!.tabs[0]?.groups?.[0]?.group).toBe("Genel bakış");
+    for (const { tab, parent, child, page } of [
+      { tab: "Kurulum", parent: "Bakım", child: "Geçiş", page: "tr/install/migrating" },
+      {
+        tab: "Ajanlar",
+        parent: "Oturumlar ve bellek",
+        child: "Active Memory",
+        page: "tr/concepts/active-memory/enabling",
+      },
+      {
+        tab: "Yetenekler",
+        parent: "Plugin kılavuzları",
+        child: "Codex harness",
+        page: "tr/plugins/codex-harness/placement",
+      },
+      { tab: "Yetenekler", parent: "Araçlar", child: "Tarayıcı", page: "tr/tools/browser/setup" },
+      {
+        tab: "Gateway ve operasyonlar",
+        parent: "Gateway",
+        child: "OpenTelemetry",
+        page: "tr/gateway/opentelemetry/setup",
+      },
+      { tab: "Başvuru", parent: "CLI komutları", child: "Gateway", page: "tr/cli/gateway/running" },
+    ]) {
+      const parentGroup = turkish!.tabs
+        .find((entry) => entry.tab === tab)
+        ?.groups?.find((entry) => entry.group === parent);
+      expect(findNestedGroup(parentGroup?.pages, child)).toEqual(
+        expect.objectContaining({ pages: expect.arrayContaining([page]) }),
+      );
+    }
   });
 });

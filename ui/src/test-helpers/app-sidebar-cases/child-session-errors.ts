@@ -4,7 +4,7 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { createGateway, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 function sessionResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
   return {
@@ -45,7 +45,9 @@ describe("AppSidebar child-session load errors", () => {
       const { sidebar } = await mountSidebar(gateway, harness.sessions);
       harness.publishList({ result: sessionResult([parentSession(parentKey, childKey)]) });
       await settleLitElement(sidebar);
-      sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
+      expect(
+        sidebar.querySelector("[data-child-session-toggle]")?.getAttribute("aria-expanded"),
+      ).toBe("true");
 
       await waitForFast(() => {
         const alert = sidebar.querySelector(`[data-child-session-error="${parentKey}"]`);

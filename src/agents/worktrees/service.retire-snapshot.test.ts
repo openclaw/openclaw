@@ -26,7 +26,7 @@ import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.t
 import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
 import { insertRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
-import { resolveRepository } from "./service-preparation.js";
+import { resolveRepository } from "./repository-paths.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 import { retireManagedWorktreeSnapshotById } from "./snapshot-host.js";
 import type { ManagedWorktreeRecord } from "./types.js";

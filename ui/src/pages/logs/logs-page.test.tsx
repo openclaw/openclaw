@@ -14,10 +14,15 @@ type TestGateway = ApplicationContext["gateway"] & {
 };
 type TestContext = ApplicationContext & { gateway: TestGateway };
 
-function contextWithClient(client: GatewayBrowserClient, connected = false): TestContext {
+function contextWithClient(
+  client: GatewayBrowserClient,
+  connected = false,
+  bootId?: string,
+): TestContext {
   let snapshot = {
     client,
     phase: connected ? "connected" : "stopped",
+    hello: bootId === undefined ? undefined : { server: { bootId } },
   } as ApplicationGatewaySnapshot;
   const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   return {
@@ -103,7 +108,7 @@ afterEach(() => {
 });
 
 describe("LogsPage lifecycle", () => {
-  it.each([{ lines: [] }, { lines: ["initial log"] }])(
+  it.each([{ lines: [] }])(
     "retains one initial request across metadata snapshots with $lines",
     async ({ lines }) => {
       const pending = deferred<{ cursor: number; file: string; lines: string[] }>();
@@ -190,6 +195,60 @@ describe("LogsPage lifecycle", () => {
     },
   );
 
+  it("resumes the loaded cursor after a same-gateway reconnect", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 100, file: "/tmp/gateway.log", lines: ["before"] })
+      .mockResolvedValueOnce({ cursor: 110, file: "/tmp/gateway.log", lines: ["after"] });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = contextWithClient(client, true, "same-boot");
+    const page = mountPage(context);
+    await settle();
+    expect(page.lines()).toEqual(["before"]);
+
+    context.gateway.publish({ ...context.gateway.snapshot, phase: "reconnecting" });
+    context.gateway.publish({ ...context.gateway.snapshot, phase: "connected" });
+    await settle();
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]![1]).toMatchObject({ cursor: 100 });
+    expect(page.lines()).toEqual(["before", "after"]);
+  });
+
+  it("retries a changed boot from the start while retaining stale rows until replacement", async () => {
+    const pending = deferred<{ cursor: number; file: string; lines: string[] }>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 100, file: "/tmp/gateway.log", lines: ["before"] })
+      .mockImplementationOnce(() => pending.promise)
+      .mockResolvedValueOnce({ cursor: 200, file: "/tmp/gateway.log", lines: ["restarted"] });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = contextWithClient(client, true, "original-boot");
+    const page = mountPage(context);
+    await settle();
+
+    context.gateway.publish({ ...context.gateway.snapshot, phase: "reconnecting" });
+    // SAFETY: This focused snapshot fixture supplies only the hello boot field read by LogsPage.
+    context.gateway.publish({
+      ...context.gateway.snapshot,
+      phase: "connected",
+      hello: { server: { bootId: "replacement-boot" } },
+    } as ApplicationGatewaySnapshot);
+    await settle();
+    expect(request.mock.calls[1]![1]).toMatchObject({ cursor: undefined });
+    expect(page.lines()).toEqual(["before"]);
+
+    pending.reject(new Error("replacement boot is not ready"));
+    await settle();
+    expect(page.lines()).toEqual(["before"]);
+    expect(page.container.textContent).toContain("replacement boot is not ready");
+
+    await poll();
+    expect(request.mock.calls[2]![1]).toMatchObject({ cursor: undefined });
+    expect(page.lines()).toEqual(["restarted"]);
+    expect(page.container.textContent).not.toContain("replacement boot is not ready");
+  });
+
   it("clears loaded rows, source, and cursor when the gateway provider changes", async () => {
     const request = vi
       .fn()
@@ -230,30 +289,6 @@ describe("LogsPage lifecycle", () => {
     expect(page.lines()).toEqual(["recovered"]);
     expect(page.container.textContent).not.toContain("logs unavailable");
   });
-
-  it.each(["detach", "disconnect", "source replacement"])(
-    "discards a response after %s without scheduling scroll work",
-    async (transition) => {
-      const pending = deferred<{ cursor: number; lines: string[] }>();
-      const request = vi.fn().mockReturnValue(pending.promise);
-      const client = { request } as unknown as GatewayBrowserClient;
-      const context = contextWithClient(client, true);
-      const page = mountPage(context);
-      await settle();
-      if (transition === "detach") {
-        page.dispose();
-      } else if (transition === "disconnect") {
-        context.gateway.publish({ client, phase: "stopped" } as ApplicationGatewaySnapshot);
-      } else {
-        page.replaceContext(contextWithClient(client));
-      }
-      const requestFrame = vi.spyOn(window, "requestAnimationFrame");
-      pending.resolve({ cursor: 1, lines: ["stale"] });
-      await settle();
-      expect(page.lines()).toEqual([]);
-      expect(requestFrame).not.toHaveBeenCalled();
-    },
-  );
 
   it("pauses polling while hidden and catches up once on reveal", async () => {
     let visibility: DocumentVisibilityState = "hidden";

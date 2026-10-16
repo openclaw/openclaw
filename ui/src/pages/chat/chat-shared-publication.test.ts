@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+import { createComponent, flush } from "solid-js";
 import { describe, expect, it } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   options,
   requestId,
@@ -8,7 +9,7 @@ import {
   settled,
   shared,
 } from "./chat-github-publication.test-support.ts";
-import { renderGitHubPublicationAction } from "./components/chat-github-publication.ts";
+import { GitHubPublicationAction } from "./components/chat-github-publication.tsx";
 
 const accepted = {
   requestId,
@@ -80,8 +81,13 @@ describe("shared publication observation", () => {
       throw new Error("An observation must not execute publication");
     });
     const container = document.createElement("div");
+    let unmount: (() => void) | undefined;
     try {
-      render(renderGitHubPublicationAction(controller.view()!), container);
+      unmount = mountSolid(
+        () => createComponent(GitHubPublicationAction, { publication: controller.view()! }),
+        { container },
+      ).unmount;
+      flush();
       container.querySelector<HTMLButtonElement>("button.chat-pr__create")!.click();
       expect((await settled(controller)).result).toEqual(published);
       expect(request).toHaveBeenLastCalledWith("sessions.github.status", {
@@ -93,7 +99,7 @@ describe("shared publication observation", () => {
         request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
       ).toHaveLength(1);
     } finally {
-      render(null, container);
+      unmount?.();
     }
   });
 

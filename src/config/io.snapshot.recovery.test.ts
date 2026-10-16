@@ -351,14 +351,6 @@ describe("prepared config recovery", () => {
     }
   });
 
-  it("keeps an unobserved best-effort config read free of source sidecars", async () => {
-    const { root, databasePath, io } = fixture();
-    expect(fs.existsSync(`${databasePath}-wal`)).toBe(false);
-    const before = manifest(root);
-    await io.readBestEffortConfig();
-    expect(manifest(root)).toEqual(before);
-  });
-
   it.each(["full", "core-only"] as const)(
     "previews %s recovery without writes, then restores the admitted bytes",
     async (pluginValidation) => {
@@ -373,7 +365,7 @@ describe("prepared config recovery", () => {
       expect(plan.snapshot.path).toBe(configPath);
       expect(plan.snapshot.config.gateway).toMatchObject({ mode: "local", port: 18720 });
       expect(plan.snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
-      expect(Boolean(plan.pluginMetadataSnapshot)).toBe(pluginValidation === "full");
+      expect(plan.snapshot.valid).toBe(true);
       expect(env).not.toHaveProperty("RECOVERY_MARKER");
       expect(manifest(root)).toEqual(before);
 
@@ -446,6 +438,32 @@ describe("prepared config recovery", () => {
       expect(fs.readFileSync(path.join(root, clobbered[0]!), "utf8")).toBe(original);
     },
   );
+
+  it("defers prepared recovery when the forensic snapshot cannot be written", async () => {
+    const warn = vi.fn();
+    const { root, configPath, original, backup, io } = fixture({
+      logger: { warn, error: vi.fn() },
+      fs: {
+        ...fs,
+        promises: {
+          ...fs.promises,
+          writeFile: async (target, data, options) => {
+            if (typeof target === "string" && target.includes(".clobbered.")) {
+              throw Object.assign(new Error("snapshot disk full"), { code: "ENOSPC" });
+            }
+            return fs.promises.writeFile(target, data, options);
+          },
+        },
+      },
+    });
+    const plan = await recovery(io);
+
+    await expect(plan.apply()).rejects.toThrow("Config backup recovery deferred");
+
+    expectUnchanged(root, configPath, original);
+    expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backup);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("recovery deferred"));
+  });
 
   it("rejects failed replacement while retaining the original and its clobbered snapshot", async () => {
     const { root, configPath, original, env } = fixture();

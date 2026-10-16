@@ -11,6 +11,7 @@ import {
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll } from "vitest";
+import type { RollupPayload } from "../../scripts/lib/watch-pr-ci-rollup.mjs";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createPrivateHandoffStoreFixture } from "./pr-private-handoff.test-support.js";
@@ -41,7 +42,17 @@ function createFixtureGit(root: string) {
     GIT_TERMINAL_PROMPT: "0",
     XDG_CONFIG_HOME: join(home, ".config"),
   };
-  const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+  const configuredGit = spawnSync("which", ["git"], { env, encoding: "utf8" }).stdout.trim();
+  const backendDirectory = join(root, "git-backend");
+  mkdirSync(backendDirectory);
+  const realGit = join(backendDirectory, "native-git");
+  // A configured Git wrapper may resolve its backend through PATH again.
+  // Retain the private handoff's Node shim but exclude later Git instrumentation.
+  writeFileSync(
+    realGit,
+    `#!/bin/sh\nexport PATH=${shellQuote(handoff.env.PATH)}\nexec ${shellQuote(configuredGit)} "$@"\n`,
+    { flag: "wx", mode: 0o700 },
+  );
   function git(cwd: string, ...args: string[]) {
     const result = spawnSync(realGit, args, { cwd, env, encoding: "utf8" });
     if (result.status !== 0) {
@@ -74,6 +85,10 @@ function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean
   writeFileSync(join(canonical, ".gitignore"), ".worktrees/\n.local/\nnode_modules\n");
   mkdirSync(join(canonical, "src"), { recursive: true });
   writeFileSync(join(canonical, "src", "subject.ts"), "export const subject = 'base';\n");
+  writeFileSync(
+    join(canonical, "src", "subject.test.ts"),
+    "// Synthetic package-command target.\n",
+  );
   git(canonical, "add", ".");
   git(canonical, "commit", "-qm", "test: trusted native wrapper");
   const main = git(canonical, "rev-parse", "HEAD");
@@ -251,6 +266,7 @@ export function createMainRefreshFixture(
   const eventsFile = join(root, "events.jsonl");
   const control = {
     metadata,
+    rollup: null as RollupPayload | null,
     authorPermission: "write",
     failFetch: false,
     failPrFetch: false,
@@ -552,6 +568,14 @@ if (args[0] === 'pr' && args[1] === 'view') {
         ref: { target: { oid: runGit(['-C', origin, 'rev-parse', 'refs/heads/main']) } },
         pullRequest: control.metadata,
       } } };
+    } else if (args.some(arg => arg.includes('statusCheckRollup'))) {
+      event({ kind: 'rollup-read' });
+      value = { data: { repository: { pullRequest: {
+        state: control.metadata.state,
+        mergeable: control.metadata.mergeable,
+        headRefOid: control.metadata.headRefOid,
+        statusCheckRollup: control.rollup,
+      } } } };
     } else {
       throw new Error('Unexpected GraphQL request');
     }
@@ -762,8 +786,28 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
     gateMain,
     env,
     git,
+    realGit,
     assertPrivateHandoffVerified: () => handoff.assertProvisionersInjected(),
     metadata,
+    enableReviewTests() {
+      // Keep the native bootstrap, guard and evidence writer; only the package
+      // command is synthetic, so these cases never install or run another suite.
+      writeFileSync(
+        join(bin, "pnpm"),
+        prelude +
+          `
+event({ kind: 'pnpm', args });
+if (JSON.stringify(args) === JSON.stringify(['install', '--frozen-lockfile'])) {
+  process.exit(0);
+}
+if (args[0] !== 'test' || args[1] !== '--' || args.length < 3) {
+  throw new Error('Unexpected package command');
+}
+console.log(args.slice(2).join('\\n'));
+`,
+        { mode: 0o755 },
+      );
+    },
     seedPreparedMerge() {
       // Merge-only cases need prepared inputs, not another prepare/gates/push run.
       // Preparation lifecycle cases still create these artifacts through the wrapper.

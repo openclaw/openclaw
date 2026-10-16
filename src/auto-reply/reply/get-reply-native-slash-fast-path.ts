@@ -20,11 +20,7 @@ import {
 } from "../../utils/delivery-context.read.js";
 import { isInternalMessageChannel, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
-import {
-  isAuthorizedTextSlashCommandTurn,
-  isNativeCommandTurn,
-  resolveCommandTurnContext,
-} from "../command-turn-context.js";
+import { isAuthorizedTextSlashCommandTurn, isNativeCommandTurn } from "../command-turn-context.js";
 import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
 import type { FinalizedRuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
@@ -52,7 +48,7 @@ const skillCommandsRuntimeLoader = createLazyImportLoader(
 const statusCommandRuntimeLoader = createLazyImportLoader(() => import("./commands-status.js"));
 
 function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
-  const commandTurn = resolveCommandTurnContext(ctx);
+  const commandTurn = ctx.CommandTurn;
   if (!isNativeCommandTurn(commandTurn) && !isAuthorizedTextSlashCommandTurn(commandTurn)) {
     return false;
   }
@@ -330,6 +326,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         resolveModelLevels: async () => ({
           resolvedThinkLevel: undefined,
           resolvedReasoningLevel: "off",
+          thinkingExplicit: false,
         }),
         resolvedVerboseLevel: "off",
         resolvedElevatedLevel: "off",

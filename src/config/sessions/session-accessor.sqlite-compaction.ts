@@ -1,8 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
 import type {
   CommittedCompactionAppend,
   PreparedCompactionAppend,
 } from "../../agents/sessions/session-compaction-persistence.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -41,8 +41,6 @@ import type {
   SessionTranscriptWriteScope,
 } from "./session-accessor.types.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
-import { trimIncognitoTranscript } from "./session-incognito-manual-compact.js";
 import type {
   CompactionBoundaryOperations,
   InitialSessionEntryCommit,
@@ -69,7 +67,7 @@ type CompactionParams = {
 };
 
 type CompactionWorkerContext = {
-  database: DatabaseSync;
+  database: EngineConnection;
   admit(stage: "transaction" | "commit"): void;
 };
 
@@ -215,10 +213,6 @@ export async function trimTranscriptForManualCompact(
     };
   } = {},
 ): Promise<{ trimmed: false } | { kept: number; trimmed: true }> {
-  const binding = captureIncognitoSessionOperation(scope);
-  if (binding) {
-    return trimIncognitoTranscript(binding, scope, selectRetainedLines, options);
-  }
   const resolved = resolveSqliteTranscriptScope(scope);
   if (options.preparation) {
     options.preparation.assertCurrent();

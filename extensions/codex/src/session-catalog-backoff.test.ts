@@ -1,4 +1,5 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
@@ -16,6 +17,111 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 describe("Codex catalog failure recovery", () => {
+  it("shrinks oversized wire pages and retains the working limit for later refreshes", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const native = Array.from({ length: 20 }, (_, i) =>
+      idleThread({ id: `large-${i}`, source: "cli", preview: "x".repeat(600_000) }),
+    );
+    const pages: { limit: number; bytes: number }[] = [];
+    const harness = createClientHarness({
+      onWrite(line, send) {
+        const request = JSON.parse(line);
+        const offset = Number(request.params.cursor ?? 0);
+        const limit = request.params.limit;
+        const response = {
+          id: request.id,
+          result: {
+            data: native.slice(offset, offset + limit),
+            nextCursor: offset + limit < native.length ? String(offset + limit) : null,
+          },
+        };
+        pages.push({ limit, bytes: Buffer.byteLength(JSON.stringify(response)) });
+        send(response);
+      },
+    });
+    commandRpcMocks.codexControlRequest.mockImplementation((_plugin, method, params, options) =>
+      harness.client.request(method, params, options),
+    );
+    const factory = createCodexSessionCatalogControlFactory({
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getRuntimeConfig: () => undefined,
+    });
+    const control = factory.forRequest("main");
+    try {
+      await control.initialize();
+      expect((await control.listPage({ limit: 64 })).sessions).toHaveLength(20);
+      expect(pages.map((page) => page.limit)).toEqual([16, 8, 8, 8]);
+      expect(pages[0]!.bytes).toBeGreaterThan(8 * 1024 * 1024);
+      expect(pages.slice(1).every((page) => page.bytes < 8 * 1024 * 1024)).toBe(true);
+      pages.length = 0;
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      await control.listPage({});
+      await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
+      expect(pages.map((page) => page.limit)).toEqual([8, 8, 8]);
+      expect((await control.listPage({ limit: 64 })).sessions).toHaveLength(20);
+    } finally {
+      await factory.stop();
+      await harness.client.closeAndWait();
+      vi.useRealTimers();
+    }
+  });
+
+  it("defers an oversized single thread for 15 minutes without repeated background warnings", async () => {
+    let now = 0;
+    let oversized = true;
+    const limits: number[] = [];
+    const harness = createClientHarness({
+      onWrite(line, send) {
+        const request = JSON.parse(line);
+        limits.push(request.params.limit);
+        send({
+          id: request.id,
+          result: {
+            data: [
+              idleThread({
+                source: "cli",
+                name: null,
+                preview: oversized ? "x".repeat(8 * 1024 * 1024) : "Recovered",
+              }),
+            ],
+          },
+        });
+      },
+    });
+    commandRpcMocks.codexControlRequest.mockImplementation((_plugin, method, params, options) =>
+      harness.client.request(method, params, options),
+    );
+    const warnings = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    const factory = createCodexSessionCatalogControlFactory({
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getRuntimeConfig: () => undefined,
+      now: () => now,
+    });
+    const control = factory.forRequest("main");
+    try {
+      await expect(control.listPage({})).rejects.toThrow("exceeds 8 MiB");
+      await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
+      expect(limits).toEqual([16, 8, 4, 2, 1]);
+      for (now = 5_000; now < 15 * 60_000; now += 5_000) {
+        await expect(control.listPage({})).rejects.toThrow("exceeds 8 MiB");
+        await nextTurn();
+      }
+      expect(limits).toHaveLength(5);
+      expect(
+        warnings.mock.calls.filter(
+          ([message]) => message === "Codex resident catalog background update failed",
+        ),
+      ).toHaveLength(1);
+      oversized = false;
+      await control.initialize();
+      expect(limits).toEqual([16, 8, 4, 2, 1, 1]);
+      expect((await control.listPage({})).sessions[0]?.fallbackName).toBe("Recovered");
+    } finally {
+      await factory.stop();
+      await harness.client.closeAndWait();
+    }
+  });
+
   it("settles a successful prefix recovery probe before the next activity check", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const native = Array.from({ length: 96 }, (_, i) =>

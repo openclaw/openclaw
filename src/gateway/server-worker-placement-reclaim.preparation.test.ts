@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
@@ -25,22 +29,11 @@ import { createHarness } from "./worker-environments/placement-dispatch-test-har
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { prepareSessionWorkerPlacementStop } from "./worker-environments/session-placement-lifecycle.js";
 
-const lookup = vi.hoisted(() => ({
-  value: undefined as ReturnType<typeof import("./session-utils.js").loadSessionEntry> | undefined,
-}));
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: () => lookup.value,
-}));
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
-  getRuntimeConfig: () => ({}),
-}));
 const roots: string[] = [];
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
-  lookup.value = undefined;
+  clearRuntimeConfigSnapshot();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
@@ -53,19 +46,18 @@ async function cancellationLoadFixture(
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   const placements = createWorkerSessionPlacementStore({ database });
   const storePath = path.join(root, "sessions.sqlite");
+  const cfg = { session: { store: storePath } };
+  setRuntimeConfigSnapshot(cfg);
   const entry = {
     sessionId: REQUEST.sessionId,
     lifecycleRevision: "original",
     worktree: { id: "task-worktree", branch: "test", repoRoot: root },
     updatedAt: Date.now(),
   };
-  const target = {
-    storePath,
-    canonicalKey: REQUEST.sessionKey,
-    storeKeys: [REQUEST.sessionKey],
-    agentId: REQUEST.agentId,
-    store: { [REQUEST.sessionKey]: entry },
-  };
+  await replaceSessionEntry(
+    { storePath, sessionKey: REQUEST.sessionKey, agentId: REQUEST.agentId },
+    entry,
+  );
   const runtime = {
     managedWorktrees: {
       findLiveByOwner: async () => ({
@@ -91,8 +83,6 @@ async function cancellationLoadFixture(
       }),
     resolveCanonicalSessionEntryFromStoreKeys,
   };
-  lookup.value = { ...target, cfg: {}, entry, legacyKey: undefined };
-  await replaceSessionEntry({ ...target, sessionKey: REQUEST.sessionKey }, entry);
   const context = createWorkerStopChatContext();
   let delayCancellation = false;
   const loading = createDeferredCore();
@@ -289,7 +279,7 @@ it.each(["missing", "local", "reclaimed"] as const)(
     const cancellations = vi.fn();
     f.context.cancelRunBoundApprovals = cancellations;
     const runId = `ordinary-${state}`;
-    const admitted = await admitWorkerStopChat({ ...REQUEST, ...f, runId }).promise;
+    const admitted = await (await admitWorkerStopChat({ ...REQUEST, ...f, runId })).promise;
     if (!admitted.ok) {
       throw new Error("Ordinary local chat fixture was not admitted");
     }
@@ -356,8 +346,6 @@ it.each([false, true])(
     });
     const barrier = createGatewayWorkerPlacementMoveBarrier({
       placements: f.placements,
-      awaitTurnClaimRelease: (sessionId, wait) =>
-        f.coordinated.awaitTurnClaimRelease(sessionId, wait),
       loadSessionRuntime: async () => {
         entering.resolve();
         await begin.promise;
@@ -693,8 +681,6 @@ it.each([
     });
     const barrier = createGatewayWorkerPlacementMoveBarrier({
       placements: f.placements,
-      awaitTurnClaimRelease: (sessionId, wait) =>
-        f.coordinated.awaitTurnClaimRelease(sessionId, wait),
       loadSessionRuntime: async () => f.runtime,
       revokeSessionAuthority: vi.fn(),
     });

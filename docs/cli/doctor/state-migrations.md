@@ -9,6 +9,20 @@ read_when:
 `openclaw doctor --fix` owns the persistent file-to-SQLite migrations. This page
 describes each migration source and what to do when one stays blocked.
 
+After an interrupted legacy session import, rerun `openclaw doctor --fix` against
+the same state directory. Doctor compares retained transcripts with the importer's
+repaired representation, including legacy provider names and duplicate session
+headers. Already imported events succeed without duplication; a verified missing
+suffix can be appended. Matching stores finish archival with the original bytes
+preserved. Genuine content conflicts retain the affected store and its originals;
+Doctor displays the blocking finding and records archive validation as failed.
+
+Session-key repair treats paths that resolve to the same physical database as one
+store, including case variants on case-insensitive filesystems. For example, an
+existing `agents/BA-EA` directory can serve the configured `ba-ea` agent without
+copying or deleting its transcript history. Later repairs, including Telegram
+SQLite update-offset migration, can then continue normally.
+
 For a named channel account no longer present in account discovery, Doctor moves
 its legacy `credentials/<channel>-<account>-allowFrom.json` file to the existing
 `.migrated` archive path (numbered if occupied), reports both paths as a warning,

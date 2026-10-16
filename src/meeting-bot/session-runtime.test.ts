@@ -497,7 +497,7 @@ describe("MeetingSessionRuntime failed joins", () => {
   });
 
   it.each(["browser", "transport"])(
-    "retries partial %s cleanup after an unpublished failed join",
+    "retains partial %s cleanup after a failed join for an explicit leave retry",
     async (failure) => {
       const joinError = new Error("transport setup failed");
       const stop = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
@@ -528,6 +528,14 @@ describe("MeetingSessionRuntime failed joins", () => {
       await expect(
         runtime.join({ url: "https://meeting.example/room", agentId: "main" }),
       ).rejects.toBe(joinError);
+      const pending = runtime.list();
+      expect(pending).toEqual(createdSessions);
+      expect(pending).toHaveLength(1);
+      expect(stop).toHaveBeenCalledOnce();
+      expect(releaseBrowserTab).toHaveBeenCalledOnce();
+      for (const session of pending) {
+        await runtime.leave(session.id);
+      }
       expect(stop).toHaveBeenCalledTimes(failure === "transport" ? 2 : 1);
       expect(releaseBrowserTab).toHaveBeenCalledTimes(failure === "browser" ? 2 : 1);
       expect(createdSessions[0]).toMatchObject({ state: "ended", browser: { tab: undefined } });
@@ -568,7 +576,7 @@ describe("MeetingSessionRuntime failed joins", () => {
         runtime.join({ url: "https://meeting.example/failed", agentId: "main" }),
       ).rejects.toBe(joinError);
       expect(resourceLive).toBe(true);
-      expect(stop).toHaveBeenCalledTimes(2);
+      expect(stop).toHaveBeenCalledOnce();
       const original = createdSessions[0];
       expect(original).toBeDefined();
       if (!original) {
@@ -578,11 +586,11 @@ describe("MeetingSessionRuntime failed joins", () => {
       await expect(runtime.join({ url: original.url, agentId: "main" })).rejects.toBe(cleanupError);
       expect(createdSessions).toHaveLength(1);
       expect(resourceLive).toBe(true);
-      expect(stop).toHaveBeenCalledTimes(3);
+      expect(stop).toHaveBeenCalledTimes(2);
       releaseStop = true;
       await runtime.leave(original.id);
       expect(resourceLive).toBe(false);
-      expect(stop).toHaveBeenCalledTimes(4);
+      expect(stop).toHaveBeenCalledTimes(3);
       await expect(runtime.status(original.id)).resolves.toMatchObject({ found: false });
     } finally {
       releaseStop = true;

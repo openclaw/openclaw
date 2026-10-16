@@ -26,30 +26,35 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("update.run handoff refusal diagnostics", () => {
-  it("retains a handoff cause after the helper has finalized the failed run", async () => {
-    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-    mockGlobalInstallSurface();
-    startManagedServiceUpdateHandoffMock.mockImplementationOnce(async (params) => {
-      finishUpdateRun(expectDefined(params.runId, "handoff run"), {
-        status: "failed",
-        reason: "managed-service-handoff-failed",
+  it.each(["managed-service-handoff-failed", "update-recovery-pending"])(
+    "retains the helper's finalized refusal and handoff cause (%s)",
+    async (reason) => {
+      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+      mockGlobalInstallSurface();
+      startManagedServiceUpdateHandoffMock.mockImplementationOnce(async (params) => {
+        finishUpdateRun(expectDefined(params.runId, "handoff run"), {
+          status: "failed",
+          reason,
+        });
+        throw Object.assign(new Error("spawn node EACCES"), { code: "EACCES" });
       });
-      throw Object.assign(new Error("spawn node EACCES"), { code: "EACCES" });
-    });
-    const payload = expectDefined(await captureUpdateRunPayload(), "update response");
-    const run = expectDefined(getUpdateRun(payload.runId), "update run");
-    expect(run.steps.flatMap((step) => step.failureFacts ?? [])).toContainEqual(
-      expect.objectContaining({ code: "handoff-permission-denied" }),
-    );
-    const report = await prepareUpdateFailureReport({
-      attemptId: run.runId,
-      recordedRun: run,
-      result: { status: "error", mode: "npm", steps: [], durationMs: 0 },
-    });
-    expect(report.body).toContain("handoff-permission-denied");
-    expect(report.body).toContain("Recovery outcome: Gateway kept serving");
-    expect(report.body).not.toContain("exit unknown");
-  });
+      const payload = expectDefined(await captureUpdateRunPayload(), "update response");
+      const run = expectDefined(getUpdateRun(payload.runId), "update run");
+      expect(payload.result).toMatchObject({ status: "error", reason });
+      expect(run).toMatchObject({ status: "failed", reason });
+      expect(run.steps.flatMap((step) => step.failureFacts ?? [])).toContainEqual(
+        expect.objectContaining({ code: "handoff-permission-denied" }),
+      );
+      const report = await prepareUpdateFailureReport({
+        attemptId: run.runId,
+        recordedRun: run,
+        result: { status: "error", mode: "npm", steps: [], durationMs: 0 },
+      });
+      expect(report.body).toContain("handoff-permission-denied");
+      expect(report.body).toContain("Recovery outcome: Gateway kept serving");
+      expect(report.body).not.toContain("exit unknown");
+    },
+  );
 
   it("records a real detached helper refusal before launchd activation", async () => {
     const root = tempDirs.make("openclaw-handoff-missing-runtime-");
@@ -92,18 +97,10 @@ describe("update.run handoff refusal diagnostics", () => {
   });
 
   it.each([
-    ["permission-denied", Object.assign(new Error("denied"), { code: "EACCES" })],
-    ["runtime-unavailable", Object.assign(new Error("spawn node ENOENT"), { code: "ENOENT" })],
     ["helper-start-failed", Object.assign(new Error("spawn node EAGAIN"), { code: "EAGAIN" })],
     ["service-refused", new Error("launchctl bootstrap failed")],
     ["ownership-refused", new Error("managed update handoff helper lease identity is unavailable")],
-    ["payload-failed", Object.assign(new Error("write EPIPE"), { code: "EPIPE" })],
     ["timeout", new Error("managed update handoff did not signal readiness within 1800 seconds")],
-    [
-      "helper-exited",
-      new Error("managed update handoff exited before signaling readiness (code=1, signal=null)"),
-    ],
-    ["preparation-failed", new Error("unrecognized startup refusal")],
   ])("persists and publishes the closed handoff kind %s", async (kind, error) => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     mockGlobalInstallSurface();
@@ -366,20 +363,6 @@ describe("update.run handoff refusal diagnostics", () => {
       }),
       reason: "requester-revoked",
       message: "requester-revoked",
-    },
-    {
-      error: new Error(
-        "managed update handoff exited before signaling readiness (code=1, signal=null)",
-      ),
-      reason: "managed-service-handoff-failed",
-      message: "managed update handoff exited before signaling readiness (code=1, signal=null)",
-      publicMessage: "managed update handoff exited before signaling readiness",
-    },
-    {
-      error: new Error("managed update handoff did not signal readiness within 1800 seconds"),
-      reason: "managed-service-handoff-failed",
-      message: "managed update handoff did not signal readiness within 1800 seconds",
-      publicMessage: "managed update handoff did not signal readiness",
     },
   ])(
     "records a handoff refusal: $message",

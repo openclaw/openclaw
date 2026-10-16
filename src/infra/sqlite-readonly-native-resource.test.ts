@@ -50,6 +50,7 @@ function fixture() {
     notStarted: false,
     isRetired: () => retired,
     compatible: () => !retired,
+    setIdle: () => {},
     createNativeReplacement() {
       throw new Error("Native resource must not replace its session");
     },

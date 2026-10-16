@@ -289,7 +289,7 @@ export async function runConfigOperations(params: {
     pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
     env: mutationStart.writeOptions.envSnapshotForRestore,
   };
-  let currentConfig = normalizeConfigMutationModelRefs(snapshot.resolved, {
+  let currentConfig = await normalizeConfigMutationModelRefs(snapshot.resolved, {
     ...modelNormalizationOptions,
     normalizeProviderCatalogs: false,
   });
@@ -471,9 +471,12 @@ export async function runConfigOperations(params: {
     env: modelNormalizationOptions.env,
   });
   if (normalizeProviderCatalogs) {
-    currentConfig = normalizeConfigMutationModelRefs(snapshot.resolved, modelNormalizationOptions);
+    currentConfig = await normalizeConfigMutationModelRefs(
+      snapshot.resolved,
+      modelNormalizationOptions,
+    );
   }
-  nextConfig = normalizeConfigMutationModelRefs(nextConfig, {
+  nextConfig = await normalizeConfigMutationModelRefs(nextConfig, {
     ...modelNormalizationOptions,
     normalizeProviderCatalogs,
   });

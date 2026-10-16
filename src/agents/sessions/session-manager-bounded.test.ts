@@ -30,6 +30,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { SessionManager } from "./session-manager.js";
 
 const { uuidQueue } = vi.hoisted(() => ({ uuidQueue: [] as string[] }));
@@ -198,12 +199,15 @@ it("accepts a prepared assistant whose parent is the admitted user", async () =>
     agentId: scope.agentId,
     path: resolveSessionTranscriptDatabasePath(scope),
   });
-  const reads = trackSqliteStatementExecutions(database.db, ["identity"], (sql) =>
-    /^select\b/iu.test(sql) &&
-    /from "transcript_event_identities" where/iu.test(sql) &&
-    /"event_id" = \?/u.test(sql)
-      ? "identity"
-      : null,
+  const reads = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["identity"],
+    (sql) =>
+      /^select\b/iu.test(sql) &&
+      /from "transcript_event_identities" where/iu.test(sql) &&
+      /"event_id" = \?/u.test(sql)
+        ? "identity"
+        : null,
   );
   const reply = buildAssistantMessage("reply");
   let replyId: string;

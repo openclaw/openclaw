@@ -72,7 +72,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("projects.list");
       const trigger = page.locator("#new-session-project-trigger");
-      const place = page.locator("wa-popover.new-session-page__project-popover");
+      const place = page.locator(".oc-popover.new-session-page__project-popover");
       await trigger.click();
       await place.getByRole("button", { name: "Browse folders" }).click();
       const pathInput = page.locator("input.new-session-page__browser-path");
@@ -106,7 +106,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("projects.list");
-      const place = page.locator("wa-popover.new-session-page__project-popover");
+      const place = page.locator(".oc-popover.new-session-page__project-popover");
       await page.locator("#new-session-project-trigger").click();
       await place
         .getByText("Admins can register projects from Browse folders", { exact: true })
@@ -176,7 +176,7 @@ suite.define(() => {
         await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
           late === "system info" ? "Local" : "QA-Gateway",
         );
-        const place = page.locator("wa-popover.new-session-page__where-popover");
+        const place = page.locator(".oc-popover.new-session-page__where-popover");
         const local = place.locator('[data-value="gateway"]');
         if (late === "recovery scope") {
           await trigger.click();
@@ -189,7 +189,7 @@ suite.define(() => {
         }
         await page.locator("#new-session-project-trigger").click();
         await page
-          .locator("wa-popover.new-session-page__project-popover")
+          .locator(".oc-popover.new-session-page__project-popover")
           .getByRole("button", { name: "Browse folders" })
           .click();
         const pathInput = page.locator("input.new-session-page__browser-path");
@@ -204,7 +204,7 @@ suite.define(() => {
         );
         await expect.poll(() => pathInput.getAttribute("placeholder")).toBe("Gateway · QA-Gateway");
         await captureProjectUiProof(suite, page, `gateway-name-${late.replaceAll(" ", "-")}.png`, {
-          surface: page.locator('.new-session-page__project-popover wa-popup [part="popup"]'),
+          surface: page.locator(".oc-popover.new-session-page__project-popover"),
           content: [pathInput],
         });
 
@@ -222,9 +222,7 @@ suite.define(() => {
             page,
             `gateway-name-${late.replaceAll(" ", "-")}-final.png`,
             {
-              surface: page.locator(
-                '.new-session-page__where-popover wa-popup.popover > [part="popup"]',
-              ),
+              surface: page.locator(".oc-popover.new-session-page__where-popover"),
               content: [page.locator('.new-session-page__where-popover [data-value="gateway"]')],
             },
           );
@@ -334,7 +332,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       const trigger = page.locator("#new-session-project-trigger");
-      const place = page.locator("wa-popover.new-session-page__project-popover");
+      const place = page.locator(".oc-popover.new-session-page__project-popover");
       await trigger.click();
       await place.getByRole("button", { name: "Browse folders" }).click();
       await page.locator("input.new-session-page__browser-path").fill("/home");
@@ -346,7 +344,7 @@ suite.define(() => {
 
       expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
       await page.locator("#new-session-where-trigger").click();
-      const where = page.locator("wa-popover.new-session-page__where-popover");
+      const where = page.locator(".oc-popover.new-session-page__where-popover");
       const cloud = where.getByRole("button", { name: "aws", exact: true });
       await cloud.waitFor();
       expect(await cloud.isEnabled()).toBe(true);

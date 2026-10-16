@@ -99,7 +99,14 @@ export type CodexStartOrResumeThreadParams = Omit<
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
   /** Selected quoted history, injected before turn/start on the admitted idle thread. */
   historyBootstrapItems?: JsonValue[];
+  /** Acknowledged selection suffix for reuse; fresh threads always receive the full bootstrap. */
+  historyDeltaItems?: JsonValue[];
   signal?: AbortSignal;
+  /**
+   * Runs synchronously when `signal` ends a wait for a previous owner's exit
+   * before `client` wrote thread state, so the caller may keep `client`.
+   */
+  onPrewriteHandoffCancelled?: () => void;
   timing?: CodexThreadLifecycleTimingOptions;
 };
 
@@ -109,4 +116,5 @@ export type CodexThreadResumePreparation = {
   assertCurrent: () => void;
   dispose: () => void;
   settledSystemError: boolean;
+  waitForUnload: () => Promise<boolean>;
 };

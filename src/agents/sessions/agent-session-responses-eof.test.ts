@@ -1,4 +1,5 @@
 import { setImmediate } from "node:timers/promises";
+import { Stream } from "openai/core/streaming";
 import {
   createAssistantMessageEventStream,
   type Context,
@@ -35,6 +36,9 @@ function responseCall(callId: string, args = "", status = "in_progress") {
 
 it.each([
   { failure: "eof", recover: true },
+  { failure: "malformed_sse", recover: true },
+  { failure: "malformed_sse", recover: false, repeatFailure: true },
+  { failure: "malformed_sse", recover: false, retryEnabled: false },
   { failure: "max_output_tokens", recover: true },
   { failure: "max_output_tokens", responseStatus: "completed", recover: false },
   { failure: "content_filter", recover: false },
@@ -202,7 +206,7 @@ it.each([
             };
             return;
           }
-          if (failure !== "eof") {
+          if (failure !== "eof" && failure !== "malformed_sse") {
             yield {
               type: failure === "completed" ? "response.completed" : "response.incomplete",
               response: {
@@ -214,8 +218,31 @@ it.each([
             };
           }
         })();
+        // Use the real SDK parser for malformed wire data, not a fabricated error.
+        const source =
+          failure === "malformed_sse"
+            ? Stream.fromSSEResponse(
+                new Response(
+                  new ReadableStream<Uint8Array>({
+                    async start(controller) {
+                      const encoder = new TextEncoder();
+                      for await (const event of events) {
+                        controller.enqueue(
+                          encoder.encode(
+                            `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+                          ),
+                        );
+                      }
+                      controller.enqueue(encoder.encode("data: {malformed\n\n"));
+                      controller.close();
+                    },
+                  }),
+                ),
+                new AbortController(),
+              )
+            : events;
         void processResponsesStream(
-          events,
+          source,
           output,
           {
             push: (event) => {
@@ -475,48 +502,41 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
 it.each(["", "Partial response before the disconnect"])(
   "preserves a failed assistant through retry and transcript replay: %j",
   async (partialText) => {
-    vi.useFakeTimers();
-    try {
-      const requests: Context["messages"][] = [];
-      streamMocks.streamSimple.mockImplementation((model, context) => {
-        requests.push(structuredClone(context.messages));
-        return createAssistantResultStream({
-          ...createAssistant(
-            model,
-            [{ type: "text", text: requests.length === 1 ? partialText : "Recovered response" }],
-            requests.length === 1 ? "error" : "stop",
-          ),
-          ...(requests.length === 1 ? { errorMessage: "HTTP 503 temporary failure" } : {}),
-        });
+    const requests: Context["messages"][] = [];
+    streamMocks.streamSimple.mockImplementation((model, context) => {
+      requests.push(structuredClone(context.messages));
+      return createAssistantResultStream({
+        ...createAssistant(
+          model,
+          [{ type: "text", text: requests.length === 1 ? partialText : "Recovered response" }],
+          requests.length === 1 ? "error" : "stop",
+        ),
+        ...(requests.length === 1 ? { errorMessage: "HTTP 503 temporary failure" } : {}),
       });
-      const { session, sessionManager } = await createTestSession({
-        settingsManager: SettingsManager.inMemory({
-          compaction: { enabled: false },
-          retry: { enabled: true, baseDelayMs: 1, maxRetries: 1 },
-        }),
-      });
-      const run = session.prompt("Original request");
-      await vi.runAllTimersAsync();
-      await run;
+    });
+    const { session, sessionManager } = await createTestSession({
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: false },
+        retry: { enabled: true, baseDelayMs: 1, maxRetries: 1 },
+      }),
+    });
+    await session.prompt("Original request");
 
-      expect(requests).toHaveLength(2);
-      expect(requests[1]).toContainEqual(
-        expect.objectContaining({
-          role: "assistant",
-          content: [{ type: "text", text: partialText }],
-          stopReason: "error",
-          errorMessage: "HTTP 503 temporary failure",
-        }),
-      );
-      expect(session.messages).toEqual(sessionManager.buildSessionContext().messages);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: partialText }],
+        stopReason: "error",
+        errorMessage: "HTTP 503 temporary failure",
+      }),
+    );
+    expect(session.messages).toEqual(sessionManager.buildSessionContext().messages);
 
-      session.dispose();
-      const reopened = await createTestSession({ sessionManager });
-      await reopened.session.prompt("Next request");
-      expect(requests).toHaveLength(3);
-      expect(requests[2]?.slice(0, requests[1]?.length)).toEqual(requests[1]);
-    } finally {
-      vi.useRealTimers();
-    }
+    session.dispose();
+    const reopened = await createTestSession({ sessionManager });
+    await reopened.session.prompt("Next request");
+    expect(requests).toHaveLength(3);
+    expect(requests[2]?.slice(0, requests[1]?.length)).toEqual(requests[1]);
   },
 );

@@ -125,7 +125,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(f.state().mutations, run.output).toBe(0);
       expect(run.status, run.output).toBe(1);
       expect(f.state().posts).toBe(0);
-      expect(f.state().settlementSleeps).toEqual(settles ? [1] : []);
+      expect(f.state().settlementSleeps).toEqual(settles ? [2] : []);
       expect(() => f.record()).toThrow();
       expect(f.captures()).toEqual([]);
       expect(existsSync(f.worktree)).toBe(true);
@@ -169,11 +169,27 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       }
       expect(state.mutations).toBe(1);
       expect(state.posts).toBe(1);
-      expect(state.settlementSleeps).toEqual([1, 2]);
+      expect(state.settlementSleeps).toEqual([2, 4]);
       expect(f.record()).toMatchObject({ route, phase: "complete", head: f.head, main: f.base });
       expect(f.git(["show", `${f.record().landed}:owner.txt`])).toBe("after");
     },
   );
+
+  it("allows GitHub mergeability to settle after the old three-observation limit", () => {
+    const f = fixture();
+    f.save({
+      ...f.state(),
+      observations: [
+        ...Array.from({ length: 5 }, () => ({ pr: unknownProjection })),
+        { pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" } },
+      ],
+    });
+    const run = f.run();
+    expect(run.status, run.output).toBe(0);
+    expect(f.state().settlementSleeps).toEqual([2, 4, 8, 8, 8]);
+    expect(f.state().mutations).toBe(1);
+    expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+  });
 
   it.each([
     { route: "ordinary", stage: "settlement" },
@@ -234,7 +250,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.state().mutations).toBe(1);
     expect(f.state().posts).toBe(1);
     expect(f.state().settlementSleeps).toEqual(
-      stage === "settlement" || stage.includes("recalculation") ? [1] : [],
+      stage === "settlement" || stage.includes("recalculation") ? [2] : [],
     );
     expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(main);
     expect(f.git(["show", `${f.record().landed}:owner.txt`])).toBe("after");
@@ -310,7 +326,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
         : fault === "conflicting tree"
           ? "cannot establish prepared-head merge tree"
           : fault === "persistent UNKNOWN"
-            ? "mergeability recalculation remained UNKNOWN after 3 observations"
+            ? "mergeability recalculation remained UNKNOWN"
             : fault.startsWith("strict ")
               ? "OPENCLAW_PR_STRICT_DRIFT=1"
               : fault === "blocked route"
@@ -407,8 +423,14 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     const run = f.run(true);
     expect(run.status, run.output).toBe(1);
     const state = f.state();
-    expect(state.observationReads).toBe(persistent || finalRead || projectionDrift ? 3 : 2);
-    expect(state.settlementSleeps).toEqual(persistent || projectionDrift ? [1, 2] : [1]);
+    if (persistent) {
+      expect(run.output).toContain("60s");
+      expect(state.settlementSleeps.reduce((total, delay) => total + delay, 0)).toBe(60);
+      expect(state.settlementSleeps.every((delay) => delay <= 8)).toBe(true);
+    } else {
+      expect(state.observationReads).toBe(finalRead || projectionDrift ? 3 : 2);
+      expect(state.settlementSleeps).toEqual(projectionDrift ? [2, 4] : [2]);
+    }
     expect(state.mutations).toBe(0);
     expect(state.posts).toBe(0);
     expect(() => f.record()).toThrow();
@@ -449,7 +471,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     }
     if (fault === "known HAS_HOOKS") {
       expect(run.output).toContain(
-        "auto-merge admission requires MERGEABLE with CLEAN, BEHIND, or BLOCKED status",
+        "auto-merge admission requires MERGEABLE with CLEAN, UNSTABLE, BEHIND, or BLOCKED status",
       );
     }
     if (fault === "conflicting") {

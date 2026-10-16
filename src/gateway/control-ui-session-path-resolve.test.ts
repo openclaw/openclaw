@@ -57,6 +57,9 @@ it("resolves only current public instances before choosing a URL candidate", asy
         expect(await resolve(path)).toBeNull();
       }
       const captured = await resolve("/chat/main/12345678");
+      await patchSessionEntryCore({ ...scope, sessionKey: privateKey }, () => ({ updatedAt: 3 }));
+      await projection.ensureMaterialized();
+      expect(captured?.isCurrent()).toBe(true);
       await patchSessionEntryCore(scope, () => ({ publicShare: undefined }));
       expect(captured?.isCurrent()).toBe(false);
       expect(await resolve("/chat/main/12345678")).toBeNull();

@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { BoardOp } from "../../lib/board/types.ts";
-import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.ts";
+import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.tsx";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import "./board-view.ts";
-import { boardWidget, callbacks, mount, settleCells, snapshot } from "./board-view.test-support.ts";
+import {
+  boardWidget,
+  gatewayContext,
+  mount,
+  settleCells,
+  snapshot,
+} from "./board-view.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -11,6 +18,76 @@ afterEach(() => {
 });
 
 describe("openclaw-board-view retention", () => {
+  it("keeps active and retained frames quiet for unrelated Gateway publications", async () => {
+    const context = gatewayContext(null);
+    const listeners = new Set<Parameters<typeof context.gateway.subscribe>[0]>();
+    context.gateway.subscribe = (notify) => {
+      listeners.add(notify);
+      return () => listeners.delete(notify);
+    };
+    const view = await mount({ context });
+    view.activeTabId = "ops";
+    await settleCells(view);
+    const cells = [...view.querySelectorAll("openclaw-board-widget-cell")];
+    const frames = cells.map((cell) => cell.querySelector("iframe")!);
+    expect(frames).toHaveLength(3);
+    const messages = frames.map((frame) => vi.spyOn(frame.contentWindow!, "postMessage"));
+    const publish = async () => {
+      for (const notify of listeners) {
+        notify(context.gateway.snapshot);
+      }
+      await settleCells(view);
+    };
+    for (let index = 0; index < 10; index += 1) {
+      context.gateway.snapshot.usagePublications = {
+        main: { usageUpdatedAt: index + 1, committedAt: index + 1 },
+      };
+      await publish();
+    }
+    expect(messages.map((message) => message.mock.calls.length)).toEqual([0, 0, 0]);
+    expect(cells.map((cell) => cell.querySelector("iframe"))).toEqual(frames);
+
+    const gateway = context.gateway.snapshot;
+    const hello = gatewayHelloForMethods([], ["operator.read"]);
+    const transitions: Array<[string, () => void]> = [
+      ["restart", () => (gateway.restartPending = true)],
+      ["restart settled", () => (gateway.restartPending = false)],
+      ["suspension", () => (gateway.suspensionPhase = "draining")],
+      ["accepting", () => (gateway.suspensionPhase = "accepting")],
+      ["client", () => (gateway.client = createTestGatewayClient(async () => ({})))],
+      [
+        "hello/auth/recovery",
+        () =>
+          (gateway.hello = {
+            ...hello,
+            auth: { ...hello.auth, recoveryScope: "new-principal" },
+          }),
+      ],
+      ["credentials/account", () => Object.assign(context.gateway, { connectionRevision: 1 })],
+      ["disconnect", () => (gateway.phase = "reconnecting")],
+      ["reconnect", () => (gateway.phase = "connected")],
+    ];
+    for (const [label, change] of transitions) {
+      messages.forEach((message) => message.mockClear());
+      change();
+      await publish();
+      expect(messages[2]!.mock.calls.length, label).toBeGreaterThan(0);
+      expect(messages[0], label).not.toHaveBeenCalled();
+      expect(messages[1], label).not.toHaveBeenCalled();
+      expect(
+        cells.map((cell) => cell.querySelector("iframe")),
+        label,
+      ).toEqual(frames);
+    }
+    view.activeTabId = "main";
+    await settleCells(view);
+    expect(messages[0]).toHaveBeenCalled();
+    expect(messages[1]).toHaveBeenCalled();
+    view.remove();
+    await Promise.resolve();
+    expect(listeners.size).toBe(0);
+  });
+
   it("preserves each widget cell and iframe identity when order changes", async () => {
     const view = await mount();
     const before = [...view.querySelectorAll("openclaw-board-widget-cell")].find(
@@ -116,48 +193,21 @@ describe("openclaw-board-view retention", () => {
 
     view.snapshot = snapshot({ revision: 2, widgets: [] });
     await settleCells(view);
-    expect(cell.isConnected).toBe(true);
+    expect(cell).toMatchObject({ isConnected: true, active: false, hidden: true });
     expect(cell.widget).toBe(widget);
-    expect(cell.active).toBe(false);
-    expect(cell.hidden).toBe(true);
 
     teardown.resolve();
     await settleCells(view);
     expect(cell.isConnected).toBe(false);
   });
 
-  it("moves widgets to another tab from the kebab menu", async () => {
+  it("tears down its retained cells when removed before disposal", async () => {
     const view = await mount();
-    const cell = view.querySelector("openclaw-board-widget-cell")!;
-    const frame = cell.querySelector("iframe");
-    const applyOps = vi.fn(async (ops: BoardOp[]) => {
-      view.snapshot = applyBoardFixtureOps(view.snapshot!, ops);
-    });
-    view.callbacks = callbacks({ applyOps });
-    const moveButton = [...view.querySelectorAll<HTMLElement>("wa-dropdown-item")].find(
-      (button) => button.textContent?.trim() === "Operations",
-    );
-    view.querySelector(".board-widget__menu")?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        detail: { item: moveButton },
-        bubbles: true,
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(applyOps).toHaveBeenCalledWith([
-        { kind: "widget_move", name: "alpha", tabId: "ops", position: 1 },
-      ]),
-    );
-    const cells = await settleCells(view);
-    expect(cell.isConnected).toBe(true);
-    expect(cell.hidden).toBe(true);
-    expect(cell.active).toBe(false);
-    expect(cell.querySelector("iframe")).toBe(frame);
-    expect(cells.some((entry) => entry.widget?.name === "ops-only")).toBe(false);
-
-    view.activeTabId = "ops";
-    await settleCells(view);
-    expect(cell.active).toBe(true);
-    expect(cell.querySelector("iframe")).toBe(frame);
+    const cells = [...view.querySelectorAll("openclaw-board-widget-cell")];
+    const teardown = cells.map((cell) => vi.spyOn(cell, "teardown"));
+    view.remove();
+    const retired = view.teardown();
+    expect(teardown.every((spy) => spy.mock.calls.length === 1)).toBe(true);
+    await retired;
   });
 });

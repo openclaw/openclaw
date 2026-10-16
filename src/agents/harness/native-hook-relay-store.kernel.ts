@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { readNativeHookRelayBridgeRow } from "./native-hook-relay-bridge-query.js";
 import {
@@ -23,7 +23,7 @@ export type NativeHookRelayBridgePruneCandidate = {
 };
 
 export function readNativeHookRelayBridgeRecordFromDatabase(params: {
-  database: { db: DatabaseSync };
+  database: { db: EngineConnection };
   relayId: string;
 }): NativeHookRelayBridgeRecord | undefined {
   return readNativeHookRelayBridgeRecordRow(
@@ -50,7 +50,7 @@ function nativeHookRelayBridgeRow({
 }
 
 export function writeNativeHookRelayBridgeRecordInDatabase(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   params: { record: NativeHookRelayBridgeRecord; updatedAtMs: number },
 ): void {
   const { relay_id, ...fields } = nativeHookRelayBridgeRow(params);
@@ -65,7 +65,7 @@ export function writeNativeHookRelayBridgeRecordInDatabase(
 }
 
 export function renewOrRestoreNativeHookRelayBridgeRecordInDatabase(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   params: { record: NativeHookRelayBridgeRecord; updatedAtMs: number },
 ): boolean {
   const { relay_id, ...fields } = nativeHookRelayBridgeRow(params);
@@ -87,7 +87,7 @@ export function renewOrRestoreNativeHookRelayBridgeRecordInDatabase(
 }
 
 export function deleteNativeHookRelayBridgeRecordIfOwnedInDatabase(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   params: { relayId: string; pid: number; token: string },
 ): boolean {
   const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
@@ -103,7 +103,7 @@ export function deleteNativeHookRelayBridgeRecordIfOwnedInDatabase(
 }
 
 export function listNativeHookRelayBridgeRecordsInDatabase(database: {
-  db: DatabaseSync;
+  db: EngineConnection;
 }): NativeHookRelayBridgeRecord[] {
   const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
   return executeSqliteQuerySync(
@@ -116,7 +116,7 @@ export function listNativeHookRelayBridgeRecordsInDatabase(database: {
 }
 
 export function pruneNativeHookRelayBridgeRecordsInDatabase(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   candidates: NativeHookRelayBridgePruneCandidate[],
   nowMs: number,
 ): NativeHookRelayBridgePruneResult[] {

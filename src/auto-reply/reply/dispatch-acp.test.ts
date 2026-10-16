@@ -370,6 +370,19 @@ function mockVisibleTextTurn(text = "visible") {
   );
 }
 
+function mockCaptionedTts(text: string) {
+  const mediaUrl = "/tmp/openclaw-media/acp-tts.ogg";
+  ttsCapabilityMocks.captionedFinalText = true;
+  ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
+    text,
+    mediaUrl,
+    audioAsVoice: true,
+    spokenText: text,
+    ttsSupplement: { spokenText: text },
+  });
+  return mediaUrl;
+}
+
 describe("tryDispatchAcpReplyCore", () => {
   it("records an accepted channel input in the canonical participant store", async () => {
     await expectAcpSessionParticipantInput(sessionKey, async () => {
@@ -1176,53 +1189,33 @@ describe("tryDispatchAcpReplyCore", () => {
     ]);
   });
 
-  it.each([true])(
-    "drops history when an unreadable current image is described (preprocessed=%s)",
-    async (preprocessed) => {
-      const currentPath = "/tmp/openclaw-described-history-current.png";
-      const historyPath = "/tmp/openclaw-described-history-previous.jpg";
-      acpAttachmentBuffers.set(historyPath, ACP_JPEG_IMAGE_BYTES);
-      const description = {
-        kind: "image.description" as const,
-        attachmentIndex: 0,
-        text: "The current image was already described.",
-        provider: "imageModel",
-      };
-      mediaUnderstandingMocks.applyMediaUnderstanding.mockImplementationOnce(async (params) => {
-        const ctx = (params as { ctx: { MediaUnderstanding?: unknown[]; agentText: string } }).ctx;
-        ctx.MediaUnderstanding = [description];
-        ctx.agentText = `${ctx.agentText}\n\n[Image 1]\n${description.text}`;
-        return {
-          extractedFileImages: [],
-        };
-      });
+  it("drops history when an unreadable current image was already described", async () => {
+    const currentPath = "/tmp/openclaw-described-history-current.png";
+    const historyPath = "/tmp/openclaw-described-history-previous.jpg";
+    acpAttachmentBuffers.set(historyPath, ACP_JPEG_IMAGE_BYTES);
+    const description = {
+      kind: "image.description" as const,
+      attachmentIndex: 0,
+      text: "The current image was already described.",
+      provider: "imageModel",
+    };
+    await runDispatch({
+      bodyForAgent: "The current image was already described.",
+      ctxOverrides: {
+        Timestamp: 1_700_000_060_000,
+        MediaUnderstanding: [description],
+        media: [{ path: currentPath, contentType: "image/png", kind: "image" }],
+        InboundHistory: [
+          imageHistory([{ path: historyPath, contentType: "image/jpeg", kind: "image" }]),
+        ],
+      },
+    });
 
-      await runDispatch({
-        bodyForAgent: preprocessed
-          ? "The current image was already described."
-          : "describe the current image",
-        ctxOverrides: {
-          Timestamp: 1_700_000_060_000,
-          MediaUnderstanding: preprocessed ? [description] : undefined,
-          media: [{ path: currentPath, contentType: "image/png", kind: "image" }],
-          InboundHistory: [
-            imageHistory([{ path: historyPath, contentType: "image/jpeg", kind: "image" }]),
-          ],
-        },
-      });
-
-      if (preprocessed) {
-        expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
-      } else {
-        expect(mediaUnderstandingMocks.applyMediaUnderstanding).toHaveBeenCalledWith(
-          expect.objectContaining({ deliveredImageIndexes: new Set([1]) }),
-        );
-      }
-      expect(runTurnCall().text).toContain("The current image was already described.");
-      expect(runTurnCall().text).not.toContain("Recent image 1");
-      expect(runTurnCall().attachments).toBeUndefined();
-    },
-  );
+    expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+    expect(runTurnCall().text).toContain("The current image was already described.");
+    expect(runTurnCall().text).not.toContain("Recent image 1");
+    expect(runTurnCall().attachments).toBeUndefined();
+  });
 
   it("preserves chat.send inline image attachments over recent history images", async () => {
     const image = {
@@ -1409,6 +1402,35 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(dispatcherCall(dispatcher.sendFinalReply, 0).text).toContain(
       "acpx session id: acpx-work",
     );
+  });
+
+  it("keeps a free-text [[tts:<prose>]] reply visible in the Telegram voice caption", async () => {
+    const text = "Yes—I understand you clearly now.";
+    const mediaUrl = mockCaptionedTts(text);
+    mockVisibleTextTurn(`[[tts:${text}]]`);
+    const attempted: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        attempted.push(payload);
+        return { visibleReplySent: true };
+      },
+    });
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      cfg: liveConfig({ auto: "always", mode: "final" }),
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(attempted).toHaveLength(1);
+    expect(attempted[0]).toMatchObject({
+      text,
+      mediaUrl,
+      audioAsVoice: true,
+    });
   });
 
   it.each([
@@ -1605,15 +1627,8 @@ describe("tryDispatchAcpReplyCore", () => {
   it.each(["confirmed", "held"] as const)(
     "records only confirmed text when cancellation interrupts a %s caption receipt",
     async (outcome) => {
-      ttsCapabilityMocks.captionedFinalText = true;
       const text = "Caption awaiting delivery.";
-      ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
-        text,
-        mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
-        audioAsVoice: true,
-        spokenText: text,
-        ttsSupplement: { spokenText: text },
-      } as MockTtsReply);
+      mockCaptionedTts(text);
       mockVisibleTextTurn(text);
       const controller = new AbortController();
       const started = createDeferred();
@@ -1841,59 +1856,33 @@ describe("tryDispatchAcpReplyCore", () => {
     },
   );
 
-  it.each([{ audio: false, visible: false, expectedText: "Private ACP speech." }])(
-    "delivers tagged ACP text once (audio=$audio, visible=$visible)",
-    async ({ audio, visible, expectedText }) => {
-      const mediaUrl = "/tmp/openclaw-media/acp-tts.ogg";
-      ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
-        text: visible ? "Visible ACP answer." : "Private ACP speech.",
-        ...(audio ? { mediaUrl, audioAsVoice: true } : {}),
-      });
-      mockVisibleTextTurn(
-        `${visible ? "Visible ACP answer. " : ""}[[tts:text]]Private ACP speech.[[/tts:text]]`,
-      );
-      const { dispatcher } = createDispatcher();
-      await runDispatch({
-        bodyForAgent: "reply",
-        cfg: liveConfig({ auto: "tagged" }),
-        dispatcher,
-        ctxOverrides: { Provider: "telegram", Surface: "telegram" },
-      });
-      const payload = dispatcherCall(
-        visible ? dispatcher.sendBlockReply : dispatcher.sendFinalReply,
-      );
-      expect(payload.text).toBe(expectedText);
-      if (visible) {
-        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-      } else {
-        expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
-        if (audio) {
-          expect(payload).toMatchObject({ mediaUrl, audioAsVoice: true });
-        }
-      }
-    },
-  );
+  it("delivers private tagged ACP text once when synthesis returns text only", async () => {
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
+      text: "Private ACP speech.",
+    });
+    mockVisibleTextTurn("[[tts:text]]Private ACP speech.[[/tts:text]]");
+    const { dispatcher } = createDispatcher();
+    await runDispatch({
+      bodyForAgent: "reply",
+      cfg: liveConfig({ auto: "tagged" }),
+      dispatcher,
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("Private ACP speech.");
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+  });
 
   const notSent = new PlatformMessageNotDispatchedError("offline", { cause: undefined });
   it.each([
     ["sent", { ok: true, delivered: true, messageId: "sent" }, 1],
     ["vetoed", { ok: true, delivered: false, suppressed: true, reason: "channel_transform" }, 1],
     ["not-sent", { ok: false, delivered: false, cause: notSent }, 2],
-    ["partial", { ok: false, delivered: true }, 1],
     ["held", { ok: false, delivered: false, queueCustody: "held" }, 1],
   ] as const)(
     "retries a routed ACP voice caption only after %s permits it",
     async (outcome, result, calls) => {
-      ttsCapabilityMocks.captionedFinalText = true;
       const text = "Visible ACP fallback.";
-      const mediaUrl = "/tmp/openclaw-media/acp-tts.ogg";
-      ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
-        text,
-        mediaUrl,
-        audioAsVoice: true,
-        spokenText: text,
-        ttsSupplement: { spokenText: text },
-      });
+      const mediaUrl = mockCaptionedTts(text);
       mockVisibleTextTurn(text);
       routeMocks.routeReply.mockResolvedValueOnce(result);
       await runDispatch({
@@ -2025,8 +2014,14 @@ describe("tryDispatchAcpReplyCore", () => {
       },
     });
 
-    expect(dispatcherCall(dispatcher.sendBlockReply, 0).text).toBe("abcde");
-    expect(dispatcherCall(dispatcher.sendBlockReply, 1).text).toBe("f");
+    expect(dispatcherCall(dispatcher.sendBlockReply, 0)).toMatchObject({
+      text: "abcde",
+      textMode: "delta",
+    });
+    expect(dispatcherCall(dispatcher.sendBlockReply, 1)).toMatchObject({
+      text: "f",
+      textMode: "delta",
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

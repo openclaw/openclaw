@@ -10,14 +10,11 @@ export function registerDiscordActivities(api: OpenClawPluginApi): void {
   // Registration precedes publication of secret-resolved channel config. Keep the
   // transport static; runtime matching and HTTP dispatch gate on the current snapshot.
   const store = new DiscordActivityStore(
-    openDiscordActivityStores(api.runtime.state.openKeyedStore.bind(api.runtime.state)),
+    openDiscordActivityStores(api.runtime.state.openKeyedStoreV2.bind(api.runtime.state)),
   );
   const runtime = new DiscordActivitiesRuntime(
     store,
-    api.config,
-    api.runtime.config?.current
-      ? () => api.runtime.config.current() as typeof api.config
-      : undefined,
+    () => api.runtime.config.current() as typeof api.config,
   );
   setDiscordActivitiesRuntime(runtime);
   const http = createDiscordActivityHttpHandler({

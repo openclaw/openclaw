@@ -4,8 +4,13 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import * as ts from "typescript/unstable/ast";
 import { expect } from "vitest";
+import {
+  createUiRealGatewayTestShards,
+  createUiTestShardGroups,
+} from "../../scripts/lib/ci-node-test-plan.mts";
 import type { NativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { sharedVitestConfig } from "../vitest/vitest.shared.config.ts";
+import { createPrebuiltUiE2eVitestConfig } from "../vitest/vitest.ui-e2e-prebuilt.config.ts";
 import {
   createUiE2eVitestConfig,
   uiE2ePrivateServerTestFiles,
@@ -45,6 +50,10 @@ export function assertControlUiE2eOwnership(
         return;
       }
       if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+        if (node.expression.text === "createGatewayHttpServer") {
+          ownsPrivateServer = true;
+          return;
+        }
         // A Gateway or Vite proxy acquired by the suite owns its UI server;
         // a separate backend in a test can still use the shared UI bundle.
         if (
@@ -119,7 +128,10 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+    "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+    "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
+    "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
@@ -138,12 +150,14 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
     "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
     "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+    "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
     "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
     "ui/src/e2e/session-management.delete.e2e.test.ts",
     "ui/src/e2e/session-management.promotion.e2e.test.ts",
     "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
     "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
+    "ui/src/pages/workboard/workboard-distribution.e2e.test.ts",
   ]);
   expect(uiE2eRealGatewayTestFiles.every((file) => uiE2eSerialTestFiles.includes(file))).toBe(true);
   expect(uiE2eSerialTestFiles).toContain(uiE2eRuntimeBudgetTestFile);
@@ -233,6 +247,23 @@ export function assertControlUiE2eOwnership(
   expect(ordinarySelected.flat().toSorted()).toEqual(ordinary);
   expect(new Set(ordinarySelected.flat()).size).toBe(ordinary.length);
 
+  // The packaged delivery proof needs the runtime build owned by the prebuilt lane.
+  const packagedWorkboard = "ui/src/pages/workboard/workboard-distribution.e2e.test.ts";
+  expect(ordinarySelected.flat()).not.toContain(packagedWorkboard);
+  const prebuilt = createPrebuiltUiE2eVitestConfig({}, ["node", "vitest", packagedWorkboard]);
+  const prebuiltProjects = prebuilt.test?.projects as typeof projects;
+  expect(
+    prebuiltProjects
+      .map((project) => ({ name: project.test.name, files: selectedFiles(project.test) }))
+      .filter((project) => project.files.length > 0),
+  ).toEqual([{ name: "ui-e2e-serial-standalone", files: [packagedWorkboard] }]);
+  const packagedGroups = createUiTestShardGroups({ uiE2eFiles: [packagedWorkboard] });
+  expect(
+    createUiRealGatewayTestShards(packagedGroups.e2e)
+      .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns))
+      .filter((file) => file === packagedWorkboard),
+  ).toEqual([packagedWorkboard]);
+
   const bundledFile = expectDefined(ordinarySelected[0]?.[0], "bundled Control UI E2E file");
   const serialFile = expectDefined(ordinarySelected[3]?.[0], "serial Control UI E2E file");
   const narrowedByArgv = createUiE2eVitestConfig({}, ["node", "vitest", serialFile]);
@@ -293,6 +324,7 @@ export const frozenRealGatewayFiles = [
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",

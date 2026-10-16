@@ -194,7 +194,7 @@ it("rejects unavailable facts after authority changes", async () => {
   );
 });
 
-it("refuses a replaced registry without retrying against another database's memo", async () => {
+it("reads separate registries without retrying against another database's memo", async () => {
   const firstReply = createDeferred<OpenClawAgentDatabaseRegistryReadResult>();
   const secondReply = createDeferred<OpenClawAgentDatabaseRegistryReadResult>();
   mocks.read
@@ -207,7 +207,9 @@ it("refuses a replaced registry without retrying against another database's memo
   }).read();
   try {
     firstReply.resolve({ status: "available", entries });
-    await expect(first).rejects.toThrow("registry changed");
+    const snapshot = await first;
+    expect(snapshot.result).toEqual({ status: "available", entries });
+    expect(snapshot.assertCurrent).toThrow("registry changed");
     secondReply.resolve({ status: "available", entries: [] });
     await expect(second).resolves.toMatchObject({
       result: { status: "available", entries: [] },

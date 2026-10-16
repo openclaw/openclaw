@@ -1,11 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import {
+  disposeChatView,
+  renderChatInto as renderNativeChatInto,
+} from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -22,12 +24,9 @@ afterEach(() => {
 
 function renderChatInto(
   container: HTMLElement,
-  overrides: Partial<Parameters<typeof renderChat>[0]> = {},
+  overrides: Parameters<typeof renderNativeChatInto>[1] = {},
 ) {
-  render(
-    renderChat(createChatProps({ currentSessionId: "goal-session", ...overrides })),
-    container,
-  );
+  renderNativeChatInto(container, { currentSessionId: "goal-session", ...overrides });
 }
 
 describe("chat goal status", () => {
@@ -59,7 +58,7 @@ describe("chat goal status", () => {
     "renders goal details and gates actions when connected=%s",
     (connected) => {
       const onGoalAction = vi.fn();
-      const container = document.createElement("div");
+      const container = createComposerContainer();
       const props = {
         selectedSession: goalSession(),
         onGoalAction,
@@ -116,7 +115,7 @@ describe("chat goal status", () => {
   );
 
   it("exposes the pause reason in a keyboard-accessible tooltip and freezes elapsed time", () => {
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     const now = Date.now();
     const selectedSession = goalSession({ createdAt: now - 60_000 });
     const onGoalAction = vi.fn();
@@ -161,9 +160,9 @@ describe("chat goal status", () => {
   });
 
   it("restores goal actions and expansion after a transient missing session goal", () => {
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     onTestFinished(() => {
-      render(null, container);
+      disposeChatView(container);
     });
     const onGoalAction = vi.fn();
     const selectedSession = goalSession({ status: "paused", pausedAt: Date.now() });
@@ -186,7 +185,7 @@ describe("chat goal status", () => {
 
   it("edits the plain objective and restores the conversation draft on cancellation", () => {
     let draft = "Keep my conversation draft";
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     const onDraftChange = vi.fn((next: string) => {
       draft = next;
     });

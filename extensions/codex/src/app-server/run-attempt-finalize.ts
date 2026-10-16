@@ -4,7 +4,7 @@ import {
   formatErrorMessage,
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { appendSessionYieldContext } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
@@ -109,7 +109,7 @@ export async function finalizeCodexAttempt(
     isActive: isSettlementActive,
     readRetainedNativeCommands,
   } = await beginCodexAttemptSettlement(resources, turnRuntime, notifications, activeTurn);
-  let projectionDrained = false;
+  let projectionDrained: boolean;
   try {
     try {
       // Native completion does not end accepted projection or checkpoint work.
@@ -350,7 +350,7 @@ export async function finalizeCodexAttempt(
       const mirrorTerminal = projectTerminalOutcome();
       state.pendingSettlementStage = "transcript/mirror";
       return codexTranscriptMirrorRuntime.mirrorBestEffort({
-        assertWriteCurrent: createNativeSessionBindingAuthority([], () => {
+        assertWriteCurrent: createNativeSessionBindingScope(() => {
           // Expiry replaces this exact pending write; it cannot borrow the degraded final's owner.
           if (!isSettlementActive() || state.settlementWarning !== warning) {
             throw new Error("Codex transcript settlement is no longer active");
@@ -494,7 +494,7 @@ export async function finalizeCodexAttempt(
               assertActive: connection.assertCurrent,
               withCurrent: connection.withCurrent,
             })
-          : undefined) ?? Object.freeze({ source: "unavailable" as const }))
+          : undefined) ?? { source: "unavailable" as const })
       : undefined;
     if (settledTurnFinalizationContext?.source === "unavailable") {
       embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {

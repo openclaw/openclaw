@@ -13,7 +13,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import type { StateSchemaInspectionInput } from "./openclaw-state-schema-preflight.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -21,7 +20,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("carries cold state contracts through IPC without rebuilding or drifting their fingerprints", async () => {
+it("inspects state in cold children without executing comparison DDL", async () => {
   const directory = tempDirs.make("state-schema-contract-transfer-");
   const pathname = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: directory } }).path;
   closeOpenClawStateDatabaseForTest();
@@ -41,9 +40,7 @@ DatabaseSync.prototype.exec = function(sql) {
 };`,
   );
   await withEnvAsync(sqliteWorkerPreloadEnv(preload), async () => {
-    let schemaContracts: StateSchemaInspectionInput["schemaContracts"];
-    let firstDdl: string | undefined;
-    for (const attempt of [0, 1]) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       await using reader = createAgentSchemaInspectionWorker();
       const result = await reader.inspectState(
         {
@@ -52,21 +49,15 @@ DatabaseSync.prototype.exec = function(sql) {
           verifyCurrentSchemaShape: true,
           purpose: "runtime",
           scope: "state",
-          schemaContracts,
         },
         undefined,
         pathname,
       );
-      expect(result.schemas).toEqual({ incompatible: [], indeterminate: [] });
-      const ddl = fs.readFileSync(ddlLog, "utf8");
-      if (attempt === 0) {
-        expect(result.schemaContracts?.length).toBeGreaterThan(0);
-        expect(ddl.length).toBeGreaterThan(0);
-        schemaContracts = result.schemaContracts;
-        firstDdl = ddl;
-      } else {
-        expect(ddl).toBe(firstDdl);
+      if (!result) {
+        throw new Error("Expected the supplied snapshot to be inspectable");
       }
+      expect(result.schemas).toEqual({ incompatible: [], indeterminate: [] });
+      expect(fs.readFileSync(ddlLog, "utf8")).toBe("");
     }
   });
 });

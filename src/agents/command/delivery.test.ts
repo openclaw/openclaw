@@ -635,37 +635,9 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(onDeliveryResult).toHaveBeenCalledWith(delivered, expect.any(Array));
     expect(buildRestartRecoveryTerminalDeliveryEvidence(delivered)).toEqual({
       captured: true,
+      requesterContinuationSettled: true,
       restartUnsafeSideEffectsDetected: true,
     });
-  });
-
-  it("does not automatically redeliver text and media already sent to the same target", async () => {
-    const delivered = await deliverAgentCommandResultForTest({
-      opts: { threadId: "171.222" },
-      payloads: [{ text: "The image is ready.", mediaUrls: ["/tmp/generated-image.png"] }],
-      result: {
-        didSendViaMessagingTool: true,
-        messagingToolSentTexts: ["The image is ready."],
-        messagingToolSentMediaUrls: ["/tmp/generated-image.png"],
-      },
-      sentTarget: {
-        threadId: "171.222",
-        text: "The image is ready.",
-        mediaUrls: ["/tmp/generated-image.png"],
-      },
-    });
-
-    expect(delivered.payloads).toEqual([]);
-    expect(delivered.deliverySucceeded).toBe(true);
-    expectDeliveryStatusFields(delivered, {
-      requested: true,
-      attempted: false,
-      status: "suppressed",
-      succeeded: true,
-      reason: "no_visible_payload",
-    });
-    expect(delivered.messagingToolSentMediaUrls).toEqual(["/tmp/generated-image.png"]);
-    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
   });
 
   it("preserves duplicate media needed for a delivery operation", async () => {
@@ -705,14 +677,30 @@ describe("deliverAgentCommandResult payload normalization", () => {
     );
 
     const delivered = await deliverAgentCommandResultForTest({
+      opts: { threadId: "171.222" },
       payloads: [{ text: "The image is ready.", mediaUrls: ["file:///tmp/generated-image.png"] }],
+      result: {
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The image is ready."],
+        messagingToolSentMediaUrls: ["file:///tmp/generated-image.png"],
+      },
       sentTarget: {
+        threadId: "171.222",
         text: "The image is ready.",
         mediaUrls: ["file:///tmp/generated-image.png"],
       },
     });
 
     expect(delivered.payloads).toEqual([]);
+    expect(delivered.deliverySucceeded).toBe(true);
+    expectDeliveryStatusFields(delivered, {
+      requested: true,
+      attempted: false,
+      status: "suppressed",
+      succeeded: true,
+      reason: "no_visible_payload",
+    });
+    expect(delivered.messagingToolSentMediaUrls).toEqual(["file:///tmp/generated-image.png"]);
     expect(createReplyMediaPathNormalizerMock).not.toHaveBeenCalled();
     expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
   });

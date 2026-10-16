@@ -246,6 +246,7 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       });
       const messages: string[] = [];
       try {
+        controller.observeAttempt({ providerRetryMaxRetries: 1 });
         await expect(controller.maybeRetryTransient({ reason: "timeout" })).resolves.toBe(true);
         nowMs += 130_000;
         await runUsageCalls(
@@ -262,12 +263,13 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         expect(messages).toEqual(["toolUse", stopReason]);
         expect(recovery.overflowCompactionAttempts).toBe(stopReason === "stop" ? 0 : 2);
         controller.observeAttempt({
+          providerRetryMaxRetries: 1,
           hasSuccessfulModelResponse: harness.subscription.hasSuccessfulModelResponse(),
         });
         await expect(controller.maybeRetryTransient({ reason: "timeout" })).resolves.toBe(
           stopReason === "stop",
         );
-        expect(controller.transientRetryCount).toBe(stopReason === "stop" ? 2 : 1);
+        expect(controller.transientRetryCount).toBe(1);
       } finally {
         now.mockRestore();
         harness.subscription.unsubscribe();

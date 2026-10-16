@@ -31,8 +31,6 @@ import type {
 import { questionDraftValues } from "./chat-question-answer-controls.ts";
 import type { QuestionPanelOptions, QuestionPanelProps } from "./chat-question-card.ts";
 
-export { renderAsyncQuestionSummary } from "./chat-async-question-summary.ts";
-
 function terminalOutcome(message: unknown): "successful" | "settled" | null {
   const record = asNullableRecord(message);
   const metadata = asNullableRecord(record?.["__openclaw"]);
@@ -249,6 +247,7 @@ export function createAsyncQuestionPresentation(
     sessionKey: string;
     currentAgentId?: string;
     connectionEpoch?: number;
+    connected?: boolean;
     asyncQuestionStorage?: DurableComposerDraftScope | null;
     onAsyncQuestionSubmit?: AsyncQuestionPresentation["submit"];
     onReopen?: (itemId: string, scope: string) => void;
@@ -452,10 +451,12 @@ export function createAsyncQuestionPresentation(
         item.sendError,
       ]),
       Boolean(props.onAsyncQuestionSubmit && props.onQueueRetry),
+      props.connected,
     ]),
     drafts,
     resolved,
     delivery,
+    connected: props.connected,
     discard: (item) => {
       if (!isCurrent()) {
         return;

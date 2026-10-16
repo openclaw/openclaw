@@ -8,6 +8,7 @@ import {
   sqliteStringSet,
   sqliteStringSetEntries,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   assertPluginStateKey,
   createPluginStateError,
@@ -22,7 +23,7 @@ import {
 import {
   PluginStateStoreError,
   type PluginStateEntry,
-  type PluginStateKeyRange,
+  type PluginStateKeyRangeParams,
 } from "./plugin-state-store.types.js";
 
 export function lookupPluginStateEntries(
@@ -83,11 +84,6 @@ export function listPluginStateEntries(
   return entries;
 }
 
-export type PluginStateKeyRangeParams = {
-  pluginId: string;
-  namespace: string;
-} & PluginStateKeyRange;
-
 export function validatePluginStateKeyRange(params: PluginStateKeyRangeParams): void {
   if (!Number.isSafeInteger(params.limit) || params.limit < 1) {
     throw createPluginStateError({
@@ -128,7 +124,7 @@ export function listPluginStateEntriesInKeyRange(
 }
 
 type PluginStateBatchParams = { pluginId: string; entriesJson: string; now: number };
-const pluginStateBatchQuery = createSqliteQueryCache((db) =>
+const pluginStateBatchQuery = createSqliteQueryCache((db: EngineConnection) =>
   prepareSqliteQuerySync<PluginStateBatchParams, PluginStateReadRow & { position: number }>(
     db,
     (parameter) =>

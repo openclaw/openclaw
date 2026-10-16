@@ -653,7 +653,7 @@ describe("operator role policy", () => {
     },
   );
 
-  it.each(["legacy", "prepared", "stale"] as const)(
+  it.each(["legacy", "prepared", "unknown"] as const)(
     "resolves %s assignments and denies unavailable role authority",
     async (assignment) => {
       const cfg = roleConfig();
@@ -667,13 +667,13 @@ describe("operator role policy", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const profile = ensureProfileForEmail("role-assignment@example.test");
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-        if (assignment === "stale") {
+        if (assignment === "unknown") {
           setUserProfileRole(profile.id, "retired");
         } else {
           expect(resolveOperatorRolePolicy(identifiedClient(profile.id), cfg)).toEqual(guestRole);
         }
         expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(guestRole);
-        if (assignment === "stale") {
+        if (assignment === "unknown") {
           expect(resolveOperatorRolePolicyForProfile(profile.id, roleConfig(false))).toMatchObject(
             denied,
           );

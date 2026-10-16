@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { prepareUserGitHubConnection } from "../state/user-github-connections.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
@@ -260,8 +261,10 @@ export async function callPersonalPublicationRpc(
         githubOAuthService: {
           personal: {
             ...personal,
-            status: async (action: Parameters<typeof personalGitHubStatus>[0]) =>
-              personalGitHubStatus(action),
+            status: async (statusAction: Parameters<typeof personalGitHubStatus>[0]) => {
+              await prepareUserGitHubConnection(statusAction.owner);
+              return personalGitHubStatus(statusAction);
+            },
           },
         } as GatewayRequestContext["githubOAuthService"],
       },

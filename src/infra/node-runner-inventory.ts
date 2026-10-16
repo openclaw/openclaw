@@ -87,6 +87,7 @@ const WorkerHost = z
       portalStream: z.literal(NODE_WORKER_PORTAL_STREAM_VERSION).optional(),
       environmentSession: z.literal(NODE_WORKER_ENVIRONMENT_SESSION_VERSION).optional(),
       statusWait: z.literal(NODE_WORKER_STATUS_WAIT_VERSION).optional(),
+      deviceFolders: z.literal(true).optional(),
       preparedWorkspace: z.literal(NODE_WORKER_PREPARED_WORKSPACE_VERSION).optional(),
       capturedExecPolicy: z.literal(true).optional(),
       workspaceQuiescence: z.literal(NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION).optional(),

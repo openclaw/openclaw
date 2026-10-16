@@ -23,7 +23,6 @@ import {
   maybeControlDiscordVoiceAgentRun,
 } from "./agent-control.js";
 import type { DiscordVoiceIngressContext } from "./ingress.js";
-import { formatVoiceLogPreview } from "./log-preview.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import type { DiscordRealtimePlaybackPort } from "./realtime-playback.js";
 import type { DiscordRealtimeSpeakerContext, DiscordRealtimeTurns } from "./realtime-turns.js";
@@ -197,7 +196,7 @@ export class DiscordRealtimeConsults {
     }
     const consultMessage = outcome.message;
     logger.info(
-      `discord voice: realtime consult requested call=${callId} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatVoiceLogPreview(consultMessage)}`,
+      `discord voice: realtime consult requested call=${callId} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} chars=${consultMessage.length}`,
     );
     const nativeConsult = this.params.harness.forcedConsults.recordNativeConsult(
       event.args,
@@ -270,7 +269,7 @@ export class DiscordRealtimeConsults {
       }
       if ("text" in result) {
         logger.info(
-          `discord voice: realtime consult answer (${result.text.length} chars) voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel} owner=${context.senderIsOwner}: ${formatVoiceLogPreview(result.text)}`,
+          `discord voice: realtime consult answer (${result.text.length} chars) voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} owner=${context.senderIsOwner}`,
         );
       } else if ("error" in result) {
         logger.warn(`discord voice: realtime consult failed call=${callId}: ${result.error}`);
@@ -432,9 +431,9 @@ export class DiscordRealtimeConsults {
     }
     const skipReason = classifySkippableRealtimeVoiceConsultTranscript(question);
     if (skipReason) {
-      const context = this.params.turns.consumePendingSpeakerContext();
+      this.params.turns.consumePendingSpeakerContext();
       logger.info(
-        `discord voice: realtime forced agent consult skipped reason=${skipReason} chars=${question.length} speaker=${context?.speakerLabel ?? "unknown"} transcript=${formatVoiceLogPreview(question)}`,
+        `discord voice: realtime forced agent consult skipped reason=${skipReason} chars=${question.length}`,
       );
       return undefined;
     }
@@ -496,7 +495,7 @@ export class DiscordRealtimeConsults {
     }
     if ("text" in result) {
       logger.info(
-        `discord voice: realtime forced agent consult answer (${result.text.length} chars) elapsedMs=${Date.now() - startedAt} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId}: ${formatVoiceLogPreview(result.text)}`,
+        `discord voice: realtime forced agent consult answer (${result.text.length} chars) elapsedMs=${Date.now() - startedAt} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId}`,
       );
     } else {
       logger.warn(

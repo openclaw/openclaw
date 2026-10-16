@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { recordCommittedSessionMetadataPublication } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import {
   prepareGitHubPublicationOptionsRead,
@@ -9,13 +13,19 @@ import {
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  loadSession: vi.fn<typeof import("../session-utils.js").loadGatewaySessionEntryReadOnly>(),
+  loadSession:
+    vi.fn<
+      (
+        key: string,
+        options?: { agentId?: string },
+      ) => ReturnType<typeof sessionRead> | Promise<ReturnType<typeof sessionRead>>
+    >(),
   roleScopes: undefined as string[] | undefined,
 }));
 
 // mock-isolation: Throw on legacy synchronous reads so publication tests enforce the async storage boundary.
 vi.mock("../session-utils.js", () => ({
-  loadGatewaySessionEntryReadOnly: () => {
+  loadIncognitoGatewaySessionEntryReadOnly: () => {
     throw new Error("Synchronous publication read");
   },
 }));
@@ -28,7 +38,7 @@ vi.mock("../session-utils-store-worker.js", () => ({
   }: Parameters<
     typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
   >[0]) => {
-    const loaded = mocks.loadSession(key, { agentId });
+    const loaded = await mocks.loadSession(key, { agentId });
     onSelected?.({
       ...loaded,
       store: loaded.entry ? { [loaded.canonicalKey]: loaded.entry } : {},
@@ -117,6 +127,7 @@ function createRequest() {
 }
 
 function sessionRead(agentId = "main") {
+  const entry: SessionEntry = { sessionId: "session-cache-test", updatedAt: 1 };
   return {
     cfg: {},
     canonicalKey: `agent:${agentId}:main`,
@@ -124,7 +135,7 @@ function sessionRead(agentId = "main") {
     storePath: "/test/sessions.json",
     store: {},
     storeKeys: [`agent:${agentId}:main`],
-    entry: { sessionId: "session-cache-test", updatedAt: 1 },
+    entry,
     legacyKey: undefined,
   };
 }
@@ -142,6 +153,79 @@ describe("GitHub publication request discovery", () => {
     mocks.roleScopes = undefined;
     mocks.loadSession.mockReset();
     mocks.loadSession.mockReturnValue(sessionRead());
+  });
+
+  it("shares overlapping options preparation without sharing caller authority or release", async () => {
+    const snapshot = sessionRead();
+    const gate = Promise.withResolvers<typeof snapshot>();
+    const entered = Promise.withResolvers<void>();
+    mocks.loadSession.mockImplementation(() => {
+      entered.resolve();
+      return gate.promise;
+    });
+    const cancelled = new AbortController();
+    const first = prepareGitHubPublicationOptionsRead(
+      createRequest(),
+      { sessionKey: "main" },
+      cancelled.signal,
+    );
+    const failed = expect(first).rejects.toThrow("synthetic cancellation");
+    const second = prepareGitHubPublicationOptionsRead(createRequest(), { sessionKey: "main" });
+    const third = prepareGitHubPublicationOptionsRead(createRequest(), { sessionKey: "main" });
+    await entered.promise;
+    cancelled.abort(new Error("synthetic cancellation"));
+    gate.resolve(snapshot);
+    await failed;
+    using surviving = await second;
+    using independent = await third;
+    expect(surviving.currentSession().sessionId).toBe(snapshot.entry.sessionId);
+    expect(mocks.loadSession).toHaveBeenCalledTimes(1);
+    surviving.release();
+    expect(() => surviving.currentSession()).toThrow();
+    expect(independent.currentSession().sessionId).toBe(snapshot.entry.sessionId);
+    recordCommittedSessionMetadataPublication(
+      "github-options-fixture",
+      snapshot.canonicalKey,
+      undefined,
+      { ...snapshot.entry, archivedAt: 123 },
+    );
+    expect(() => independent.currentSession()).toThrow("session lifecycle changed");
+    mocks.loadSession.mockReturnValue({
+      ...snapshot,
+      entry: { ...snapshot.entry, archivedAt: 123 },
+    });
+    using fresh = await prepareGitHubPublicationOptionsRead(createRequest(), {
+      sessionKey: "main",
+    });
+    expect(fresh.currentSession().archivedAt).toBe(123);
+    expect(mocks.loadSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("prepares the new session store after an in-place config publication", async () => {
+    const config = getRuntimeConfigSnapshot()!;
+    const snapshot = sessionRead();
+    const pending = Promise.withResolvers<typeof snapshot>();
+    const entered = Promise.withResolvers<void>();
+    mocks.loadSession
+      .mockImplementationOnce(() => {
+        entered.resolve();
+        return pending.promise;
+      })
+      .mockReturnValue({
+        ...snapshot,
+        entry: { ...snapshot.entry, sessionId: "reloaded-session" },
+      });
+    const first = prepareGitHubPublicationOptionsRead(createRequest(), { sessionKey: "main" });
+    await entered.promise;
+    config.session = { store: "/test/reloaded/sessions.json" };
+    setRuntimeConfigSnapshot(config);
+    const second = prepareGitHubPublicationOptionsRead(createRequest(), { sessionKey: "main" });
+    await Promise.resolve();
+    pending.resolve(snapshot);
+    (await first).release();
+    using reloaded = await second;
+    expect(reloaded.currentSession().sessionId).toBe("reloaded-session");
+    expect(mocks.loadSession).toHaveBeenCalledTimes(2);
   });
 
   it("keeps origin-free personal reads and publication bound to the live ingress grant", async () => {
@@ -223,7 +307,7 @@ describe("GitHub publication request discovery", () => {
         ...loaded,
         entry: { ...loaded.entry, archivedAt: archivedAt ?? undefined },
       });
-      const read = await prepareGitHubPublicationOptionsRead(createRequest(), {
+      using read = await prepareGitHubPublicationOptionsRead(createRequest(), {
         sessionKey: "main",
       });
       releases.push(read.release);

@@ -13,6 +13,7 @@ import type {
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
+const recoveryReadyMarker = "OPENCLAW_TEST_RECOVERY_DESCENDANT_READY";
 
 /** A LaunchAgent gateway's own environment; the handoff keeps only the label for its children. */
 export const LAUNCHD_GATEWAY_IDENTITY_ENV = {
@@ -127,6 +128,7 @@ export function createManagedServiceCommandFixture(params: {
               `const { spawn } = require("node:child_process");`,
               `const recoveryDescendantPid = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).pid;`,
               `${managedServiceStateUpdateScript(statePath, "state.recoveryDescendantPid = recoveryDescendantPid")};`,
+              `console.log(${JSON.stringify(recoveryReadyMarker)});`,
               `setInterval(() => {}, 1000);`,
             ]
           : options?.recoveryExitCode === undefined || options.recoveryExitCode === 0
@@ -198,6 +200,31 @@ export function createManagedServiceCommandFixture(params: {
           "--non-interactive",
         ],
   };
+}
+
+export async function prepareManagedServiceRecoveryClockPreload(
+  params: { root: string; scriptPath: string; statePath: string; timeoutMs: number },
+  commandArgv: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<NodeJS.ProcessEnv> {
+  const configPath = path.join(params.root, "recovery-clock.json");
+  await fs.writeFile(
+    configPath,
+    JSON.stringify({
+      scriptPath: params.scriptPath,
+      statePath: params.statePath,
+      timeoutMs: params.timeoutMs,
+      commandArgv,
+      readyMarker: recoveryReadyMarker,
+      deadlinePath: path.join(params.root, "recovery-deadline.json"),
+    }),
+  );
+  const preloadUrl = new URL(
+    "../../test/fixtures/managed-service-recovery-clock.mjs",
+    import.meta.url,
+  );
+  preloadUrl.searchParams.set("config", configPath);
+  return { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --import=${preloadUrl.href}`.trim() };
 }
 
 export async function waitForHandoffResponse(
@@ -340,19 +367,35 @@ export function registerManagedRecoveryCommandTests(
   );
 
   itUnix("bounds a stalled recovery command and terminates its descendants", async () => {
-    const { state, sentinel } = await runManagedServiceManagerBoundary("systemd", {
-      recoveryHang: true,
-      updaterNotification: "published",
-      updaterResult: {
-        status: "error",
-        mode: "npm",
-        reason: "managed-service-handoff-failed",
-        recovery: { serviceRestartSafe: true, version: "1.0.0" },
+    const recoveryTimeoutMs = 60_000;
+    const { state, sentinel, log, recoveryDeadline } = await runManagedServiceManagerBoundary(
+      "systemd",
+      {
+        recoveryHang: true,
+        recoveryTimeoutMs,
+        updaterNotification: "published",
+        updaterResult: {
+          status: "error",
+          mode: "npm",
+          reason: "managed-service-handoff-failed",
+          recovery: { serviceRestartSafe: true, version: "1.0.0" },
+        },
       },
-    });
+    );
     expect(state.guardedRestart).toEqual(["gateway", "restart", "--preserve-definition", "--json"]);
     expect(state.restored).toBeUndefined();
     expect(typeof state.recoveryDescendantPid).toBe("number");
+    expect(recoveryDeadline).toEqual({
+      requestedMs: recoveryTimeoutMs,
+      descendantPid: state.recoveryDescendantPid,
+    });
+    expect(log).toContain("verified recovery command exceeded its update timeout");
+    expect(log.indexOf("managed update recovery command exited")).toBeGreaterThan(
+      log.indexOf("verified recovery command exceeded its update timeout"),
+    );
+    expect(log.indexOf("managed update helper completed")).toBeGreaterThan(
+      log.indexOf("managed update recovery command exited"),
+    );
     await expect.poll(() => isPidAlive(Number(state.recoveryDescendantPid))).toBe(false);
     expect(sentinel).toMatchObject({
       payload: {

@@ -10,6 +10,7 @@ import {
   resolveConfiguredCapabilityProviderAsync,
   type ResolvedConfiguredProvider,
 } from "../plugin-sdk/provider-selection-runtime.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   readInternalRealtimeVoiceProviderApi,
@@ -98,7 +99,7 @@ function resolveRealtimeVoiceProviderCapabilities(
 function isRealtimeVoiceProviderConfigured(params: RealtimeVoiceProviderContext): boolean {
   const internalConfigured =
     params.surface === "browser-session"
-      ? readInternalRealtimeVoiceProviderApi(params.provider)?.isBrowserSessionConfigured({
+      ? readInternalRealtimeVoiceProviderApi(params.provider)?.isBrowserSessionConfigured?.({
           cfg: params.cfg,
           providerConfig: params.providerConfig,
           agentId: params.agentId,
@@ -133,10 +134,19 @@ export async function resolveRealtimeVoiceProviderCapabilitiesAsync(
     model: params.model,
     ...(params.clientControl ? { clientControl: params.clientControl } : {}),
   };
-  const capabilities =
-    params.surface === "browser-session" && internal?.resolveBrowserSessionCapabilitiesAsync
-      ? await internal.resolveBrowserSessionCapabilitiesAsync(context)
-      : resolveRealtimeVoiceProviderCapabilities(params);
+  let capabilities: InternalRealtimeVoiceProviderCapabilities | undefined;
+  if (params.surface === "browser-session" && internal?.resolveBrowserSessionCapabilitiesAsync) {
+    capabilities = await internal.resolveBrowserSessionCapabilitiesAsync(context);
+  } else {
+    if (params.surface === "browser-session" && internal?.resolveBrowserSessionCapabilities) {
+      warnPluginSdkDeprecation({
+        family: "provider-sync-configuration",
+        method: "InternalRealtimeVoiceProviderApi.resolveBrowserSessionCapabilities",
+        replacement: "resolveBrowserSessionCapabilitiesAsync",
+      });
+    }
+    capabilities = resolveRealtimeVoiceProviderCapabilities(params);
+  }
 
   return capabilities || params.provider.capabilities;
 }
@@ -150,18 +160,39 @@ export async function isRealtimeVoiceProviderConfiguredAsync(
     providerConfig: params.providerConfig,
     agentId: params.agentId,
   };
-  const configured =
-    params.surface === "browser-session"
-      ? internal?.isBrowserSessionConfiguredAsync
-        ? await internal.isBrowserSessionConfiguredAsync(context)
-        : internal?.isBrowserSessionConfigured(context)
-      : params.surface === "gateway-relay"
-        ? internal?.isGatewayRelayConfiguredAsync
-          ? await internal.isGatewayRelayConfiguredAsync(context)
-          : internal?.isGatewayRelayConfigured?.(context)
-        : undefined;
+  let configured: boolean | undefined;
+  if (params.surface === "browser-session") {
+    if (internal?.isBrowserSessionConfiguredAsync) {
+      configured = await internal.isBrowserSessionConfiguredAsync(context);
+    } else if (internal?.isBrowserSessionConfigured) {
+      warnPluginSdkDeprecation({
+        family: "provider-sync-configuration",
+        method: "InternalRealtimeVoiceProviderApi.isBrowserSessionConfigured",
+        replacement: "isBrowserSessionConfiguredAsync",
+      });
+      configured = internal.isBrowserSessionConfigured(context);
+    }
+  } else if (params.surface === "gateway-relay") {
+    if (internal?.isGatewayRelayConfiguredAsync) {
+      configured = await internal.isGatewayRelayConfiguredAsync(context);
+    } else if (internal?.isGatewayRelayConfigured) {
+      warnPluginSdkDeprecation({
+        family: "provider-sync-configuration",
+        method: "InternalRealtimeVoiceProviderApi.isGatewayRelayConfigured",
+        replacement: "isGatewayRelayConfiguredAsync",
+      });
+      configured = internal.isGatewayRelayConfigured(context);
+    }
+  }
   if (configured !== undefined) {
     return configured;
+  }
+  if (!params.provider.isConfiguredAsync) {
+    warnPluginSdkDeprecation({
+      family: "provider-sync-configuration",
+      method: "RealtimeVoiceProviderPlugin.isConfigured",
+      replacement: "isConfiguredAsync",
+    });
   }
   return params.provider.isConfiguredAsync
     ? await params.provider.isConfiguredAsync(context)
@@ -235,10 +266,15 @@ function requireRealtimeVoiceProvider(
   return resolution;
 }
 
-/** @deprecated Use resolveConfiguredRealtimeVoiceProviderAsync for stored-credential providers. */
+/** @deprecated Use resolveConfiguredRealtimeVoiceProviderAsync for stored-credential providers. Final compatibility day: 2026-12-31. */
 export function resolveConfiguredRealtimeVoiceProvider(
   params: ResolveConfiguredRealtimeVoiceProviderParams,
 ): ResolvedRealtimeVoiceProvider {
+  warnPluginSdkDeprecation({
+    family: "provider-selection",
+    method: "resolveConfiguredRealtimeVoiceProvider",
+    replacement: "await resolveConfiguredRealtimeVoiceProviderAsync()",
+  });
   const resolution = requireRealtimeVoiceProvider(
     resolveConfiguredCapabilityProvider({
       ...prepareRealtimeVoiceProviderSelection(params),
@@ -279,6 +315,13 @@ export async function resolveConfiguredRealtimeVoiceProviderAsync(
       ...prepareRealtimeVoiceProviderSelection(params),
       resolveProviderConfig: async ({ provider, cfg, rawConfig }) => {
         const context = prepareRealtimeVoiceProviderConfig(params, provider, cfg, rawConfig);
+        if (!provider.resolveConfigAsync && provider.resolveConfig) {
+          warnPluginSdkDeprecation({
+            family: "provider-sync-configuration",
+            method: "RealtimeVoiceProviderPlugin.resolveConfig",
+            replacement: "resolveConfigAsync",
+          });
+        }
         return (
           (provider.resolveConfigAsync
             ? await provider.resolveConfigAsync(context)

@@ -450,8 +450,6 @@ test("preserves complete base rows across time and caller presentation fixtures"
               )
             : undefined,
         lightweightListRow: !fixture.transcript,
-        includeDerivedTitles: fixture.transcript,
-        includeLastMessage: fixture.transcript,
       };
       const { inputs, presentation } = readSessionRowInputs(rowParams);
       const clock = vi.spyOn(Date, "now").mockImplementation(() => {

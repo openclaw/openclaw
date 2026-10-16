@@ -30,14 +30,12 @@ import {
 } from "../session-row-projection-access.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
-import { loadCachedSessionSharingSnapshot } from "../session-sharing-snapshot-cache.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   warn: vi.fn(),
-  invalidate: vi.fn(),
   loadRow: vi.fn(),
   rowLabel: "first",
 }));
@@ -50,16 +48,6 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
       const logger = actual.createSubsystemLogger(...args);
       return args[0] === "gateway/session-events" ? { ...logger, warn: mocks.warn } : logger;
     },
-  };
-});
-
-vi.mock("../session-sharing.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session-sharing.js")>();
-  return {
-    ...actual,
-    invalidateSessionSharingSnapshot: mocks.invalidate.mockImplementation(
-      actual.invalidateSessionSharingSnapshot,
-    ),
   };
 });
 
@@ -92,10 +80,7 @@ function createContext(
       return { rowContext: { projectedAgentRuns: buildProjectedAgentRunIndex() } };
     },
     ensureMaterialized: async () => {},
-    withPreparedExactRows: async (_queries: unknown, consume: () => unknown) => ({
-      kind: "complete",
-      value: consume(),
-    }),
+    withPreparedExactRows: async (_queries: unknown, consume: () => unknown) => consume(),
     snapshot: ({ key }: { key: string }) => ({ row: mocks.loadRow(key) }),
   };
   return {
@@ -178,8 +163,6 @@ beforeEach((context) => {
   const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
   restorePerformanceClock = () => clock.mockRestore();
   context.onTestFinished(restorePerformanceClock);
-  mocks.invalidate();
-  mocks.invalidate.mockClear();
   mocks.loadRow.mockReset().mockImplementation((key: string) => ({
     key,
     label: mocks.rowLabel,
@@ -205,7 +188,6 @@ describe("sessions.changed coalescing", () => {
     await emitAndSettleLeading(context, { reason: "groups" }, { catalogOnly: true });
 
     expect(changed).not.toHaveBeenCalled();
-    expect(mocks.invalidate).not.toHaveBeenCalled();
     expect(context.mentionInbox?.invalidateAsync).not.toHaveBeenCalled();
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
     expect(context.broadcastToConnIds).toHaveBeenCalledWith(
@@ -218,7 +200,6 @@ describe("sessions.changed coalescing", () => {
     // Rename/delete use the same public reason but can change member rows.
     await emitAndSettleLeading(context, { reason: "groups" });
     expect(changed).toHaveBeenCalledWith({ all: true, scope: "sessions" });
-    expect(mocks.invalidate).toHaveBeenCalledOnce();
     expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 1);
   });
@@ -320,6 +301,7 @@ describe("sessions.changed coalescing", () => {
   it.each(["before", "during"])(
     "publishes a 20-session burst when its producer drains %s preparation",
     async (when) => {
+      vi.useRealTimers();
       mocks.warn.mockClear();
       const context = createContext();
       const cfg = context.getRuntimeConfig();
@@ -367,9 +349,7 @@ describe("sessions.changed coalescing", () => {
         }
         await producer.drain();
         release.resolve();
-        const drain = flushPendingSessionsChangedEvents(context);
-        await vi.runAllTimersAsync();
-        await drain;
+        await flushPendingSessionsChangedEvents(context);
         expect(mocks.warn).not.toHaveBeenCalled();
         expect(preparationBindings).toEqual(new Set(["publisher"]));
         expect(
@@ -384,9 +364,7 @@ describe("sessions.changed coalescing", () => {
         );
       } finally {
         release.resolve();
-        const drain = flushPendingSessionsChangedEvents(context);
-        await vi.runAllTimersAsync();
-        await drain;
+        await flushPendingSessionsChangedEvents(context);
         placement.dispose();
         projection.dispose();
       }
@@ -474,11 +452,51 @@ describe("sessions.changed coalescing", () => {
     await flushPendingSessionsChangedEvents(context);
     expect(earlyPublications).toBe(0);
     expect(
-      vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload),
+      vi.mocked(context.broadcastToConnIds).mock.calls.map(([event, payload]) => [event, payload]),
     ).toMatchObject([
-      { reason: "patch", sessionId: "removed" },
-      { reason: "delete", sessionId: "removed" },
+      ["sessions.changed", { reason: "patch", sessionId: "removed" }],
+      ["socket.drain", { reason: "delete", sessionId: "removed" }],
+      ["sessions.changed", { reason: "delete", sessionId: "removed" }],
     ]);
+  });
+
+  it.each([
+    { key: "main", agentId: "main", subscriptionKey: "agent:main:main" },
+    { key: "global", agentId: "work", subscriptionKey: "agent:work:global" },
+  ])(
+    "routes $key teardown to message-only subscribers for $agentId",
+    async ({ key, agentId, subscriptionKey }) => {
+      const context = createContext(new Set(), {
+        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+      });
+      context.getSessionMessageSubscriberConnIds = vi.fn(
+        (requestedKey) => new Set(requestedKey === subscriptionKey ? ["message-reader"] : []),
+      );
+
+      await emitAndSettleLeading(context, { reason: "reset", sessionKey: key, agentId });
+      await flushPendingSessionsChangedEvents(context);
+
+      expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "socket.drain",
+        expect.objectContaining({ sessionKey: key, agentId, reason: "reset" }),
+        new Set(["message-reader"]),
+        expect.objectContaining({ agentId, dropIfSlow: false }),
+      );
+    },
+  );
+
+  it("sends one drain notice to the union of list and message subscribers", async () => {
+    const context = createContext(new Set(["list-reader", "both"]));
+    context.getSessionMessageSubscriberConnIds = () => new Set(["message-reader", "both"]);
+
+    await emitAndSettleLeading(context, { reason: "reset", sessionKey: "agent:main:main" });
+    await flushPendingSessionsChangedEvents(context);
+
+    const drains = vi
+      .mocked(context.broadcastToConnIds)
+      .mock.calls.filter(([event]) => event === "socket.drain");
+    expect(drains).toHaveLength(1);
+    expect(drains[0]?.[2]).toEqual(new Set(["list-reader", "message-reader", "both"]));
   });
 
   it("joins a different session admitted while shutdown is draining", async () => {
@@ -529,7 +547,6 @@ describe("sessions.changed coalescing", () => {
       catalogChanged: true,
     });
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 3);
-    expect(mocks.invalidate).toHaveBeenCalledTimes(3);
     await emitAndSettleLeading(context, { reason: "patch", sessionKey: "agent:main:chat" });
     expect(vi.mocked(context.broadcastToConnIds).mock.calls.at(-1)?.[1]).not.toHaveProperty(
       "catalogChanged",
@@ -540,22 +557,10 @@ describe("sessions.changed coalescing", () => {
     const context = createContext(new Set());
     const sessionKey = "agent:main:metadata";
     const initialAccessRevision = readGatewayAccessRevision();
-    const resolve = vi.fn(() => ({
-      canonicalKey: sessionKey,
-      snapshot: { incognito: false, visibility: "shared" as const },
-    }));
-    loadCachedSessionSharingSnapshot({ sessionKey, resolve });
-
     await emitAndSettleLeading(context, { reason: "patch", sessionKey }, { accessChanged: false });
 
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
-    expect(mocks.invalidate).toHaveBeenCalledOnce();
     expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
-    expect(mocks.invalidate.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(context.mentionInbox!.invalidateAsync).mock.invocationCallOrder[0]!,
-    );
-    loadCachedSessionSharingSnapshot({ sessionKey, resolve });
-    expect(resolve).toHaveBeenCalledTimes(2);
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
     expect(mocks.loadRow).not.toHaveBeenCalled();
   });

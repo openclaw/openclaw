@@ -23,6 +23,7 @@ import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-alia
 import { describe, expect, it, vi } from "vitest";
 import plugin from "../../index.js";
 import { CodexAppServerClient } from "./client.js";
+import type { CodexPluginConfig } from "./config.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { isJsonObject } from "./protocol.js";
@@ -50,7 +51,7 @@ setupRunAttemptTestHooks();
 describe("registered Codex harness model attribution", () => {
   it("attributes completed models and refreshes their selection on warm reuse", async () => {
     // Protocol events own completion; host load must not spend the attempt watchdog.
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const params = createTestParams();
     // Supervision replaces the helper model; this fixture supplies no host tools.
     params.hostCapabilities = Object.freeze({
@@ -82,7 +83,7 @@ describe("registered Codex harness model attribution", () => {
       },
       supervision: { enabled: true },
       sessionCatalog: { enabled: false },
-    };
+    } satisfies CodexPluginConfig;
     const openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
       createPluginStateSyncKeyedStoreForTests<T>("codex", {
         ...options,

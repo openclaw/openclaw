@@ -532,33 +532,6 @@ class GatewayOnboardingFixture(GatewaySwitchFixture):
         if hashlib.sha256(staged.read_bytes()).hexdigest() != self.binary_sha256:
             raise RuntimeError("Staging changed the native application binary")
         shutil.copytree(binary.parent / "desktop-runtime", directory / "desktop-runtime")
-        shutil.copy2(Path(__file__).parent / "fixtures/onboarding-cli.mjs", directory / "entry.js")
-        prefix = Path.home() / ".openclaw"
-        entry = prefix / "dev/openclaw/dist/entry.js"
-        node = prefix / "tools/node/bin/node"
-        bootstrap = '#!/bin/sh\n[ "$#" = 2 ] && [ "$2" = --version ] || exit 1\nprintf "OpenClaw fixture\\n"\n'
-        launcher = f'#!/usr/bin/env bash\nset -euo pipefail\nexec "{node}" "{entry}" "$@"\n'
-        installer = directory / "install-cli.sh"
-        installer.write_text(
-            "#!/bin/bash\nset -euo pipefail\n/usr/bin/python3 - \"$@\" <<'PY'\n"
-            "import json, shutil, sys\nfrom pathlib import Path\n"
-            "prefix = Path.home() / '.openclaw'\n"
-            "expected = ['--json', '--no-onboard', '--prefix', str(prefix), '--version', 'main', "
-            "'--runtime-only', '--install-method', 'git', '--git-dir', str(prefix / 'dev/openclaw')]\n"
-            "assert sys.argv[1:] == expected, 'Unexpected native installer arguments'\n"
-            "entry = prefix / 'dev/openclaw/dist/entry.js'\n"
-            "entry.parent.mkdir(parents=True)\n"
-            f"shutil.copy2({str(directory / 'entry.js')!r}, entry)\n"
-            # Discovery verifies --version before the app binds the real bundled Bun.
-            "node = prefix / 'tools/node/bin/node'\nnode.parent.mkdir(parents=True)\n"
-            f"node.write_text({bootstrap!r})\n"
-            "node.chmod(0o700)\n"
-            "cli = prefix / 'bin/openclaw'\n"
-            f"cli.write_text({launcher!r})\ncli.chmod(0o700)\n"
-            "(prefix / 'openclaw.json').write_text(json.dumps({'gateway': {'mode': 'local'}}))\n"
-            "Path('fixture-installer-called').touch()\n"
-            "print(json.dumps({'event': 'install_complete'}))\nPY\n"
-        )
         return staged
 
     def capture(self, name):
@@ -607,8 +580,9 @@ class GatewayOnboardingFixture(GatewaySwitchFixture):
         self.chrome.until(lambda: any(r.get("capabilityAtBoot") and r.get("currentGateway") == {
             "name": "This computer", "kind": "local",
         } for r in self.reports.values()), "shell setup capability installed before the real card boots")
-        if not Path("fixture-installer-called").is_file() or not Path("fixture-runtime-installed.json").is_file():
-            raise RuntimeError("The native installation/bundled-runtime entrypoint did not run")
+        installed = json.loads(Path("fixture-runtime-installed.json").read_text())
+        if not installed["entry"].endswith("/package/node_modules/openclaw/openclaw.mjs"):
+            raise RuntimeError("The native installer did not select the staged CLI")
         if not self.document_requests or self.document_requests[0] != {
             "path": "/fixture/custodian", "query": {"onboarding": ["1"]},
         }:

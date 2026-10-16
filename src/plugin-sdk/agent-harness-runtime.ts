@@ -47,6 +47,7 @@ import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
 import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
 export type {
   AgentExecutorBinding,
@@ -57,6 +58,9 @@ export { resolveAgentExecutorController } from "../plugins/agent-executor-contro
 
 export { projectAgentActivityItem } from "../agents/agent-activity-presentation.js";
 export { projectAgentToolActivity } from "../infra/agent-activity-events.js";
+export { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
+export { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
+export type { StreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 
 export {
   formatToolProgressOutput,
@@ -71,7 +75,7 @@ export const execPolicy = Object.freeze({ resolveExecModePolicy, minSecurity, ma
  * Harness runtimes that assemble their own instruction layers (e.g. Codex)
  * must surface the same watched-session facts as the embedded prompt, or the
  * model keeps refusing cross-session questions on those runtimes (openclaw#114797).
- * @deprecated Await prepareWatchedSessionsHarnessContext with current host authority.
+ * @deprecated Await prepareWatchedSessionsHarnessContext with current host authority. Final compatibility day: 2026-12-31.
  */
 export function buildWatchedSessionsHarnessContext(params: {
   config?: OpenClawConfig;
@@ -80,6 +84,11 @@ export function buildWatchedSessionsHarnessContext(params: {
   toolNames: Iterable<string>;
   capabilityToolNames?: Iterable<string>;
 }): string | undefined {
+  warnPluginSdkDeprecation({
+    family: "watched-sessions-sync-harness-context",
+    method: "buildWatchedSessionsHarnessContext",
+    replacement: "await prepareWatchedSessionsHarnessContext() with a host-bound assertCurrent",
+  });
   const lines = buildWatchedSessionsPromptLines(
     prepareWatchedSessionsPrompt({ enabled: true, ...params }),
   );
@@ -163,6 +172,7 @@ export type { AgentHarnessUserInputPromptOptions } from "../agents/harness/user-
 export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question-dispatch.js";
 type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,
+  | "thinkingExplicit"
   | "admittedRunContext"
   | "disableToolSearch"
   | "sessionReadScopeKey"

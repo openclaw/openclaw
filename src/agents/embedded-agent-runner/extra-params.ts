@@ -83,6 +83,8 @@ export function resolveExtraParams(params: {
     });
   const sources = [defaultParams, modelParams, agentModelParams, agentParams];
   const merged = Object.assign({}, ...sources);
+  canonicalizeExtraParamAlias(merged, sources, ["serviceTier", "service_tier"]);
+  canonicalizeExtraParamAlias(merged, sources, ["fastMode", "fast_mode"]);
   canonicalizeExtraParamAlias(merged, sources, ["parallel_tool_calls", "parallelToolCalls"]);
   canonicalizeExtraParamAlias(
     merged,
@@ -125,6 +127,7 @@ function resolveSupportedTransport(value: unknown): AgentRuntimeTransport | unde
 
 export function resolvePreparedExtraParams(params: {
   cfg: OpenClawConfig | undefined;
+  transportConfig?: OpenClawConfig;
   provider: string;
   modelId: string;
   agentDir?: string;
@@ -146,6 +149,12 @@ export function resolvePreparedExtraParams(params: {
     ...sanitizeExtraParamsRecord(resolvedExtraParams),
     ...override,
   };
+  canonicalizeExtraParamAlias(
+    merged,
+    [resolvedExtraParams, override],
+    ["serviceTier", "service_tier"],
+  );
+  canonicalizeExtraParamAlias(merged, [resolvedExtraParams, override], ["fastMode", "fast_mode"]);
   canonicalizeMaxTokensParam({
     merged,
     sources: [resolvedExtraParams, override],
@@ -164,13 +173,13 @@ export function resolvePreparedExtraParams(params: {
   const { plugin } = ensureProviderRuntimePluginHandle({
     provider: params.provider,
     modelId: params.modelId,
-    config: params.cfg,
+    config: params.transportConfig ?? params.cfg,
     workspaceDir: params.workspaceDir,
     runtimeHandle:
       params.providerRuntimeHandle ?? getModelProviderRuntimePluginHandle(params.model),
   });
   const context = {
-    config: params.cfg,
+    config: params.transportConfig ?? params.cfg,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     provider: params.provider,
@@ -536,6 +545,7 @@ export function applyExtraParamsToAgent(
   resolvedTransport?: AgentRuntimeTransport,
   options?: {
     preparedExtraParams?: Record<string, unknown>;
+    transportConfig?: OpenClawConfig;
     modelCallUrgency?: ModelCallUrgency;
     auth?: ProviderPrepareExtraParamsContext["auth"];
     nativeWebSearchPolicyContext?: NativeWebSearchToolPolicyParams;
@@ -544,7 +554,7 @@ export function applyExtraParamsToAgent(
   const selectedModel = { provider, modelId };
   const providerRuntimeHandle = ensureProviderRuntimePluginHandle({
     ...selectedModel,
-    config: cfg,
+    config: options?.transportConfig ?? cfg,
     workspaceDir,
     runtimeHandle: getModelProviderRuntimePluginHandle(model),
   });
@@ -553,6 +563,7 @@ export function applyExtraParamsToAgent(
     options?.preparedExtraParams ??
     resolvePreparedExtraParams({
       cfg,
+      transportConfig: options?.transportConfig,
       ...selectedModel,
       extraParamsOverride,
       thinkingLevel,
@@ -582,7 +593,7 @@ export function applyExtraParamsToAgent(
   });
   const pluginWrappedStreamFn =
     providerRuntimeHandle.plugin?.wrapStreamFn?.({
-      config: cfg,
+      config: options?.transportConfig ?? cfg,
       agentDir,
       workspaceDir,
       agentId,

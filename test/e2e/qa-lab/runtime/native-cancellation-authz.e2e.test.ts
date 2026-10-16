@@ -4,7 +4,7 @@ import path from "node:path";
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
@@ -186,7 +186,8 @@ describe("native child cancellation authority", () => {
         const acpxServices: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
         const acpxRuntime = createPluginRuntimeMock({
           state: {
-            openKeyedStore: (options) => createPluginStateKeyedStoreForTests("acpx", options),
+            openKeyedStoreV2: (options) =>
+              createPluginStateKeyedStoreV2ForTests("acpx", options, { assertCurrent() {} }),
           },
         });
         acpxPlugin.register(

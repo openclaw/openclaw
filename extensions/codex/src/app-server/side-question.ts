@@ -159,7 +159,7 @@ export async function runCodexAppServerSideQuestion(
   if (denyToolCalls && (!options.nativeHookRelay || options.nativeHookRelay.enabled === false)) {
     throw new Error("Session fork tool denial requires the Codex native hook relay to be enabled.");
   }
-  const { binding, authority } = await resolveCodexSessionBinding({
+  const { binding, authority, release } = await resolveCodexSessionBinding({
     bindingStore: options.bindingStore,
     identity: bindingIdentity,
     config: params.cfg,
@@ -167,6 +167,7 @@ export async function runCodexAppServerSideQuestion(
     assertCurrent: hostCapabilities.assertActive,
     signal: params.opts?.abortSignal,
   });
+  using _ = { [Symbol.dispose]: release };
   const assertCurrent = authority.assertCurrent;
   if (!binding?.threadId) {
     throw new Error(
@@ -702,27 +703,22 @@ export async function runCodexAppServerSideQuestion(
               const assertCurrentBinding = () => {
                 assertCurrent();
                 runAbortController.signal.throwIfAborted();
-                const current = options.bindingStore.read(bindingIdentity);
-                if (
-                  !(denyToolCalls
-                    ? isSameCodexAppServerThreadOwner(current, binding)
-                    : isDeepStrictEqual(current, binding))
-                ) {
-                  throw new Error("Codex side-question binding changed before fork");
-                }
-              };
-              const currentRequestOptions = () => {
-                const scoped = requestOptions();
-                return {
-                  ...scoped,
-                  withCurrent: authority.withCurrent,
-                  assertCurrent: () => {
-                    scoped.assertCurrent();
-                    assertCurrentBinding();
-                  },
-                };
               };
               assertCurrentBinding();
+              // The lease pins this snapshot; later native effects still require live authority.
+              const current = options.bindingStore.read(bindingIdentity);
+              if (
+                !(denyToolCalls
+                  ? isSameCodexAppServerThreadOwner(current, binding)
+                  : isDeepStrictEqual(current, binding))
+              ) {
+                throw new Error("Codex side-question binding changed before fork");
+              }
+              const currentRequestOptions = () => ({
+                ...requestOptions(),
+                withCurrent: authority.withCurrent,
+                assertCurrent: assertCurrentBinding,
+              });
               if (binding.connectionScope === "supervision") {
                 const { thread } = await forkClient.request(
                   "thread/read",
@@ -838,20 +834,12 @@ export async function runCodexAppServerSideQuestion(
                     "Codex supervised side thread did not preserve its native model and provider",
                   );
                 }
-                const scoped = requestOptions();
                 if (!denyToolCalls) {
                   await refreshCodexThreadPolicy({
                     client: forkClient,
                     threadId: childThreadId,
                     developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
-                    ...scoped,
-                    withCurrent: authority.withCurrent,
-                    signal: runAbortController.signal,
-                    assertCurrent: () => {
-                      assertCurrent();
-                      runAbortController.signal.throwIfAborted();
-                      scoped.assertCurrent();
-                    },
+                    ...currentRequestOptions(),
                   });
                 }
               } catch (error) {

@@ -49,6 +49,18 @@ registry accepts the wait. The attempt carries that fact into terminal reply
 presentation, so a registered message wait does not produce a missing-continuation
 warning. Refused or unregistered waits do not provide that evidence.
 
+`resolveYieldedRunContinuation` owns whether a paused run can still be continued.
+A collector without a recorded result never can, because an explicit wait reads a
+collector and no continuation resumes it. The registry sweeper settles that run
+through the existing completion owner and keeps the end time the yield recorded.
+An outcome the yield already recorded stays: a collector an earlier version left at
+`ok` settles as done with the reply its yielded turn ended on, the same result a
+collector that yields now gets. Only a run with no recorded outcome settles as an
+`error` that says why. Every other paused run stays continuable however long it has been
+paused: a declared message wait, a leaf that an earlier version left paused, and an
+orchestrator waiting on descendants are not bounded by this settlement. A kill
+claim on a paused run is never settled over; cancellation stays with the kill path.
+
 Private child results wait for their spawning turn to settle before individual
 announcement admission. Normal settlement resumes each finished private child,
 even while siblings are still running. Explicit yield assigns the frozen batch
@@ -74,6 +86,14 @@ announcements and the older descendant-wake path retain `subagent_announce`:
 the latter already owns its run replacement after dispatch and must not trigger
 paused-run adoption at admission. Provenance classifies the handoff; live
 Gateway admission and registry ownership still authorize it.
+
+The completion owner also selects whether the successor owes another reply.
+Gateway admission carries that choice into execution without deriving it again
+from the internal channel or private-delivery mode. Optional result processing
+can finish silently when there is no more work or new answer; an outstanding
+required final still cannot. A peer’s returned `sessions_send` result likewise
+need not generate an acknowledgment. These internal choices are not public RPC
+options, and an unrelated earlier answer never discharges a new request.
 
 An explicit yield batch must be eligible at any requester depth. The ordinary
 nested-wave exclusion remains: nested runs without a yielded batch use the
@@ -139,6 +159,13 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   custody only after the new delivery generation commits; it does not reopen the
   expired source. Restart still admits a
   fresh recovery owner rather than reviving the previous process capability.
+  Visible settlement cohorts use the host-only binding when every captured
+  requester session and lifecycle revision matches the current parent. Private
+  cohorts retain their strict requester identity checks. This lets a guest's own yielded session
+  resume under its existing session-write scope without granting `operator.write`.
+  Stale, mixed-incarnation, or unbound visible history does not gain this scope
+  alternative; its existing authorized recovery path stays unchanged. Copied
+  request fields cannot supply the host-only binding.
 - **Stable audience.** A nested wake uses internal delivery. A settlement
   continuation targeting a live `sessions_yield`-paused row adopts that row;
   unrelated inter-session messages do not adopt that row. An ordinary
@@ -155,9 +182,13 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   time, completion time, and child session identity as tie-breakers. Superseded
   child rows are excluded. Batch identity includes requester identity, child
   IDs, and yield generation.
-- **Bounded delivery.** Existing limits remain: three attempts, three ambiguous
-  transport replays, and ten stale deferrals. Active descendants do not consume
-  the stale-deferral budget. Delivery bookkeeping for executions that ended
+- **Bounded delivery.** Delivery retains three attempts and three ambiguous
+  transport replays. Active descendants resume settlement through completion
+  events, without periodic wake retries or retry-state writes. Terminal descendants
+  with unresolved delivery get one fallback timer, five minutes after the latest
+  recorded completion in the batch's descendant tree. Settlement events can release
+  the wait earlier; restart does not recharge it. The fallback delivers the finished
+  batch with an explicit notice that a descendant result remains undelivered. Delivery bookkeeping for executions that ended
   before the current batch's earliest child was created cannot block its
   continuation. Active descendants and delivery settlement overlapping that
   batch still hold the wake; historical failure records remain available.

@@ -63,10 +63,9 @@ function resolveClawRouterThinkingProfile(
 }
 
 function configuredBaseUrl(
-  config: { models?: { providers?: Record<string, { baseUrl?: unknown }> } } | null | undefined,
+  config: ProviderResolveDynamicModelContext["config"],
 ): string | undefined {
-  const value = config?.models?.providers?.[PROVIDER_ID]?.baseUrl;
-  return typeof value === "string" ? value : undefined;
+  return config?.models?.providers?.[PROVIDER_ID]?.baseUrl;
 }
 
 function dynamicModelScope(ctx: ProviderResolveDynamicModelContext): string {

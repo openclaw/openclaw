@@ -42,10 +42,32 @@ import {
 import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 
 describe("gateway chat metadata personal accounts", () => {
+  test("stops serving a retained shared list once the requester connects a personal account", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const { harness, owner, alice, aliceScope } = await createPersonalChatMetadataFixture();
+      let current = true;
+      harness.setOwner({ ...owner, isCurrent: () => current });
+      await harness.runtime.refresh();
+      const request = {
+        ...aliceScope,
+        params: { agentId: "main", view: "configured" as const },
+        includeManualSelection: false,
+      };
+      const shared = { accountSelection: { kind: "automatic" } };
+      expect(await harness.runtime.readModelsList(request)).toMatchObject(shared);
+      // The retired owner's replacement has not published, so reads use the retained list.
+      current = false;
+      expect(await harness.runtime.readModelsList(request)).toMatchObject(shared);
+      connectChatMetadataAccount(alice.id);
+      // Personal accounts need their own projection, not the retained shared list.
+      expect(await harness.runtime.readModelsList(request)).toBeUndefined();
+    });
+  });
+
   test("reads a startup account label while unrelated work occupies the state writer", async ({
     signal,
   }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const harness = createChatMetadataHarness();
       const owner = ensureProfileForEmail("startup-label@example.test");
       const authProfileId = connectChatMetadataAccount(owner.id);
@@ -118,7 +140,7 @@ describe("gateway chat metadata personal accounts", () => {
   });
 
   test("refuses a private account summary when its startup requester changes during the read", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async () => {
+    await withOpenClawTestState({ layout: "state-only", prepareProfileCatalog: true }, async () => {
       const harness = createChatMetadataHarness();
       const owner = ensureProfileForEmail("owner@example.test");
       const viewer = ensureProfileForEmail("viewer@example.test");
@@ -149,7 +171,7 @@ describe("gateway chat metadata personal accounts", () => {
   });
 
   test("prepares cold, merged, missing and foreign-updated account labels without host SQL", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async () => {
+    await withOpenClawTestState({ layout: "state-only", prepareProfileCatalog: true }, async () => {
       const harness = createChatMetadataHarness();
       const owner = await ensureCanonicalUserProfileForEmail("label-owner@example.test");
       const viewer = await ensureCanonicalUserProfileForEmail("label-viewer@example.test");
@@ -204,53 +226,56 @@ describe("gateway chat metadata personal accounts", () => {
   test.each(["display", "physical source"])(
     "refuses a changed %s while its label reply is pending",
     async (change) => {
-      await withOpenClawTestState({ layout: "state-only" }, async () => {
-        const harness = createChatMetadataHarness();
-        const owner = await ensureCanonicalUserProfileForEmail("stale-label@example.test");
-        await setCanonicalUserProfileDisplayName(owner.id, "Before");
-        const readSelection = accountOperations.readUserModelAccountSelectionAsync;
-        let restoreSource: (() => void) | undefined;
-        const selectionRead = vi
-          .spyOn(accountOperations, "readUserModelAccountSelectionAsync")
-          .mockImplementationOnce(async (...args) => {
-            const selection = await readSelection(...args);
-            if (change === "display") {
-              await setCanonicalUserProfileDisplayName(owner.id, "After");
-            } else {
-              const pathname = resolveOpenClawStateSqlitePath();
-              const original = `${pathname}.original`;
-              renameSync(pathname, original);
-              restoreSource = () => {
-                rmSync(pathname, { force: true });
-                renameSync(original, pathname);
-              };
-              copyFileSync(original, pathname);
-            }
-            return selection;
-          });
-        try {
-          await harness.runtime.refresh();
-          await expect(
-            harness.runtime.readStartup({
-              agentId: "main",
-              sessionEntry: { authProfileOverride: `personal:${owner.id}:${randomUUID()}` },
-            }),
-          ).rejects.toThrow(
-            change === "display"
-              ? "Personal account changed while preparing its metadata"
-              : "SQLite database file identity changed",
-          );
-        } finally {
-          selectionRead.mockRestore();
-          restoreSource?.();
-          await harness.runtime.stop();
-        }
-      });
+      await withOpenClawTestState(
+        { layout: "state-only", prepareProfileCatalog: true },
+        async () => {
+          const harness = createChatMetadataHarness();
+          const owner = await ensureCanonicalUserProfileForEmail("stale-label@example.test");
+          await setCanonicalUserProfileDisplayName(owner.id, "Before");
+          const readSelection = accountOperations.readUserModelAccountSelectionAsync;
+          let restoreSource: (() => void) | undefined;
+          const selectionRead = vi
+            .spyOn(accountOperations, "readUserModelAccountSelectionAsync")
+            .mockImplementationOnce(async (...args) => {
+              const selection = await readSelection(...args);
+              if (change === "display") {
+                await setCanonicalUserProfileDisplayName(owner.id, "After");
+              } else {
+                const pathname = resolveOpenClawStateSqlitePath();
+                const original = `${pathname}.original`;
+                renameSync(pathname, original);
+                restoreSource = () => {
+                  rmSync(pathname, { force: true });
+                  renameSync(original, pathname);
+                };
+                copyFileSync(original, pathname);
+              }
+              return selection;
+            });
+          try {
+            await harness.runtime.refresh();
+            await expect(
+              harness.runtime.readStartup({
+                agentId: "main",
+                sessionEntry: { authProfileOverride: `personal:${owner.id}:${randomUUID()}` },
+              }),
+            ).rejects.toThrow(
+              change === "display"
+                ? "Personal account changed while preparing its metadata"
+                : "SQLite database file identity changed",
+            );
+          } finally {
+            selectionRead.mockRestore();
+            restoreSource?.();
+            await harness.runtime.stop();
+          }
+        },
+      );
     },
   );
 
   test("reads the startup requester after personal metadata preparation", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async () => {
+    await withOpenClawTestState({ layout: "state-only", prepareProfileCatalog: true }, async () => {
       const harness = createChatMetadataHarness();
       const owner = ensureProfileForEmail("owner@example.test");
       const viewer = ensureProfileForEmail("viewer@example.test");
@@ -287,7 +312,12 @@ describe("gateway chat metadata personal accounts", () => {
 
   test("keeps persisted-session startup separate from personal defaults and draft previews", async () => {
     await withOpenClawTestState(
-      { layout: "state-only", prefix: "personal-chat-metadata-", env: WITHOUT_OPENAI_ENV_AUTH },
+      {
+        layout: "state-only",
+        prefix: "personal-chat-metadata-",
+        env: WITHOUT_OPENAI_ENV_AUTH,
+        prepareProfileCatalog: true,
+      },
       async () => {
         const { harness, owner, alice, bob, aliceScope, bobScope } =
           await createPersonalChatMetadataFixture();
@@ -300,7 +330,7 @@ describe("gateway chat metadata personal accounts", () => {
           }
         };
         const shared = await harness.runtime.read({ agentId: "main" });
-        expect(await harness.runtime.read(aliceScope)).toEqual(shared);
+        expect(await readAliceDefaults()).toEqual(shared);
         const aliceAuthId = connectChatMetadataAccount(alice.id);
         const available = {
           models: expect.arrayContaining([
@@ -392,7 +422,12 @@ describe("gateway chat metadata personal accounts", () => {
     "keeps a %s personal session pin available outside shared auth order",
     async (source) => {
       await withOpenClawTestState(
-        { layout: "state-only", prefix: "personal-pinned-metadata-", env: WITHOUT_OPENAI_ENV_AUTH },
+        {
+          layout: "state-only",
+          prefix: "personal-pinned-metadata-",
+          env: WITHOUT_OPENAI_ENV_AUTH,
+          prepareProfileCatalog: true,
+        },
         async () => {
           const { harness, owner, alice, bobScope } = await createPersonalChatMetadataFixture();
           const authProfileId = connectChatMetadataAccount(alice.id);

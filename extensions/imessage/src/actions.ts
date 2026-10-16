@@ -254,7 +254,7 @@ function decodeBase64Buffer(params: Record<string, unknown>, action: string): Ui
   if (!canonical) {
     throw new Error(`iMessage ${action} buffer must be valid base64.`);
   }
-  return Uint8Array.from(Buffer.from(canonical, "base64"));
+  return Buffer.from(canonical, "base64");
 }
 
 // Hydration must admit raw paths before this adapter receives attachment bytes.

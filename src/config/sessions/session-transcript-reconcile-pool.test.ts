@@ -44,6 +44,10 @@ const observer = useReconcileWorkerObserver();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("closes a queued admission without dispatching it after shutdown", async () => {
+  const stateDir = tempDirs.make("openclaw-reconcile-queued-admission-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  setRuntimeConfigSnapshot({});
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
   const resume = createDeferredCore();
   const queued = createDeferredCore();
   let admissionCompletion: Promise<unknown> | undefined;
@@ -58,7 +62,15 @@ it("closes a queued admission without dispatching it after shutdown", async () =
   const dispatch = vi.fn();
   observer.onTask = dispatch;
   const operation = runSessionTranscriptReconcileOperation(async (owner) => {
-    const task = await owner.startTask({ mode: "memory", sessionIds: [] });
+    const task = await owner.startTask({
+      mode: "disk",
+      agentId: "main",
+      path: database.path,
+      stateDir,
+      leaseId: "queued-admission",
+      externallySupervised: false,
+      sessionIds: [],
+    });
     try {
       await task.completion;
     } finally {
@@ -88,6 +100,9 @@ it("closes a queued admission without dispatching it after shutdown", async () =
     await closing;
     admissionSpy.mockRestore();
     await closeSessionTranscriptReconcileWorkerPool();
+    await closeOpenClawAgentDatabasesAsync(stateDir);
+    closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
   }
 });
 

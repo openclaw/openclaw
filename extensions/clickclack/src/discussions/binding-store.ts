@@ -1,6 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import {
+  assertPluginStateReadAvailable,
+  preparePluginStateRead,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import type {
   PluginStateComparisonCondition,
   PluginStateKeyedStore,
@@ -133,11 +137,25 @@ export class ClickClackDiscussionBindingStore {
     return await this.#workerStore().lookup(sessionKey);
   }
 
+  async prepareRead(sessionKey: string) {
+    return (
+      (await preparePluginStateRead(this.#workerStore(), sessionKey)) ?? {
+        // Custom adapters cannot publish writes through the host's owner.
+        read: () => this.get(sessionKey),
+        release() {},
+      }
+    );
+  }
+
   get(sessionKey: string): ClickClackDiscussionBinding | undefined {
-    // Final tool/disclosure authority stays native until synchronous SDK writers retire.
+    // Retained for synchronous SDK consumers and custom adapters.
     this.#nativeStore ??=
       this.#runtime.state.openSyncKeyedStore<ClickClackDiscussionBinding>(BINDING_STORE_OPTIONS);
     return this.#nativeStore.lookup(sessionKey);
+  }
+
+  assertReadAvailable(): void {
+    assertPluginStateReadAvailable(this.#workerStore());
   }
 
   async hasCapacity(sessionKey: string): Promise<boolean> {

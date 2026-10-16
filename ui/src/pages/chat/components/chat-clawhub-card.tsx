@@ -9,7 +9,7 @@ import { useApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ClawHubSkillDetail } from "../../../lib/skills/index.ts";
 import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import {
   PluginIconController,
   pluginIconFetchContext,
@@ -131,15 +131,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
     const client = scope.client;
     controller = new AbortController();
     const signal = controller.signal;
-    const current = () =>
-      active &&
-      generation === requestGeneration &&
-      connection.isCurrent(scope) &&
-      host.recommendation?.id === card.id &&
-      host.recommendation?.kind === card.kind &&
-      host.agentId === agentId &&
-      (card.kind !== "skill" ||
-        (host.recommendation.kind === "skill" && host.recommendation.registry === card.registry));
+    const current = () => active && generation === requestGeneration && connection.isCurrent(scope);
     const previous = state.presentation;
     if (
       !previous ||

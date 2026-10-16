@@ -20,16 +20,12 @@ import {
   writeCodexAppServerBinding,
 } from "./run-attempt.context-engine.test-support.js";
 import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
-import {
-  CODEX_HISTORY_FRAGMENT_PREFIX,
-  CODEX_HISTORY_FRAGMENT_SUFFIX,
-  CODEX_HISTORY_ITEM_TEXT_MAX_BYTES,
-} from "./user-input.js";
+import { CODEX_HISTORY_FRAGMENT_PREFIX, CODEX_HISTORY_FRAGMENT_SUFFIX } from "./user-input.js";
 
 setupRunAttemptTestHooks();
 
 const ANCHOR = "FULL_HISTORY_SEED_PREFIX";
-const historyText = `${ANCHOR} $historical [@historical](plugin://history)\n${"h".repeat(1_100_000)}\nFULL_HISTORY_SEED_TAIL`;
+const historyText = `${ANCHOR} $historical [@historical](plugin://history)\n${"h".repeat(1_100_000)}\né漢字\nFULL_HISTORY_SEED_TAIL`;
 const historicalImage = {
   type: "image" as const,
   mimeType: "image/png",
@@ -75,7 +71,7 @@ function seedParams(mode: "thread_bootstrap" | "per_turn") {
     }),
   );
   params.contextEngine = createContextEngine({ assemble });
-  return { params, assemble };
+  return { params, assemble, messages };
 }
 
 function historySeedRequests(harness: ReturnType<typeof createStartedThreadHarness>) {
@@ -223,7 +219,7 @@ describe("Codex configured assembled-history delivery", () => {
   });
 
   it.each(["thread_bootstrap", "per_turn"] as const)(
-    "installs the complete large %s seed before publishing ready, separate from current input",
+    "installs all >1,048,576 characters of the %s seed before publishing ready, separate from current input",
     async (mode) => {
       const { params, assemble } = seedParams(mode);
       const seedEntered = createDeferred<void>();
@@ -261,9 +257,7 @@ describe("Codex configured assembled-history delivery", () => {
               isJsonObject(part) && typeof part.text === "string" ? [part.text] : [],
             )
             .join("");
-          expect(Buffer.byteLength(itemText, "utf8")).toBeLessThanOrEqual(
-            CODEX_HISTORY_ITEM_TEXT_MAX_BYTES,
-          );
+          expect(Buffer.byteLength(itemText, "utf8")).toBeLessThanOrEqual(8 * 1_024);
           return parts;
         });
         const stripFragmentFrame = (part: unknown) => {
@@ -312,9 +306,11 @@ describe("Codex configured assembled-history delivery", () => {
         expect(assembled?.tokenBudget).toBeLessThan(480_000);
         const binding = await readCodexAppServerBinding(params.sessionFile);
         expect(binding?.threadId).toBe("thread-1");
-        expect(binding?.contextEngine?.projection?.epoch).toBe(
-          mode === "thread_bootstrap" ? "seed-epoch-1" : undefined,
-        );
+        if (mode === "thread_bootstrap") {
+          expect(binding?.contextEngine?.projection?.epoch).toBe("seed-epoch-1");
+        } else {
+          expect(binding?.contextEngine?.projection?.epoch).toEqual(expect.any(String));
+        }
       } finally {
         acknowledgeSeed.resolve();
         await run.waitForTurnAccepted();
@@ -450,7 +446,7 @@ describe("Codex configured assembled-history delivery", () => {
     await run;
   });
 
-  it("reuses the native per-turn thread when assembly selects no new messages", async () => {
+  it("rotates when a previously nonempty selection is rewritten to empty", async () => {
     const { params } = seedParams("per_turn");
     let starts = 0;
     const harness = createStartedThreadHarness(
@@ -473,101 +469,205 @@ describe("Codex configured assembled-history delivery", () => {
     const offset = harness.requests.length;
     const empty = runCodexAppServerAttempt({ ...params, runId: "empty-projection" });
     await empty.waitForTurnAccepted();
-    expect(starts).toBe(1);
+    expect(starts).toBe(2);
     const requests = harness.requests.slice(offset);
     expect(requests.some(({ method }) => method === "thread/inject_items")).toBe(false);
     expect(requests.some(({ method }) => method === "thread/resume")).toBe(false);
     const turn = requests.find(({ method }) => method === "turn/start");
-    expect(turn?.params).toMatchObject({ threadId: "thread-empty-1" });
+    expect(turn?.params).toMatchObject({ threadId: "thread-empty-2" });
     expect(JSON.stringify(turn?.params)).toContain(params.prompt);
     expect(JSON.stringify(turn?.params)).not.toContain(ANCHOR);
-    await harness.completeTurn("completed", "thread-empty-1");
+    await harness.completeTurn("completed", "thread-empty-2");
     await empty;
-    expect((await readCodexAppServerBinding(params.sessionFile))?.threadId).toBe("thread-empty-1");
+    expect((await readCodexAppServerBinding(params.sessionFile))?.threadId).toBe("thread-empty-2");
   });
 
-  it("injects each selected per-turn quote on the same retained native thread", async () => {
-    const { params } = seedParams("per_turn");
-    let starts = 0;
-    const harness = createStartedThreadHarness(
-      async (method) => {
-        if (method === "thread/start") {
-          return threadStartResult(`thread-retained-${++starts}`);
-        }
-        return undefined;
-      },
-      { persistedThreads: [] },
-    );
-    const first = runCodexAppServerAttempt(params);
-    await first.waitForTurnAccepted();
-    await harness.completeTurn("completed", "thread-retained-1");
-    await first;
-    const offset = harness.requests.length;
-    const second = runCodexAppServerAttempt({ ...params, runId: "retained-second" });
-    await second.waitForTurnAccepted();
-    const requests = harness.requests.slice(offset);
-    expect(starts).toBe(1);
-    expect(historySeedRequests(harness)).toHaveLength(2);
-    expect(requests.some(({ method }) => method === "thread/resume")).toBe(false);
-    expect(requests.find(({ method }) => method === "thread/inject_items")?.params).toMatchObject({
-      threadId: "thread-retained-1",
-    });
-    expect(requests.findIndex(({ method }) => method === "thread/inject_items")).toBeLessThan(
-      requests.findIndex(({ method }) => method === "turn/start"),
-    );
-    expect(requests.find(({ method }) => method === "turn/start")?.params).toMatchObject({
-      threadId: "thread-retained-1",
-    });
-    await harness.completeTurn("completed", "thread-retained-1");
-    await second;
-  });
+  it.each(["thread_bootstrap", "per_turn"] as const)(
+    "injects only append-only suffixes once per %s native epoch and rotates rewritten history",
+    async (mode) => {
+      const { params, assemble } = seedParams(mode);
+      const initial = {
+        messages: [userMessage("ORIGINAL_SELECTED_HISTORY", 1)],
+        estimatedTokens: 20,
+        ...(mode === "thread_bootstrap"
+          ? { contextProjection: { mode: "thread_bootstrap" as const, epoch: "append-epoch" } }
+          : {}),
+      };
+      assemble.mockResolvedValue(initial);
+      let starts = 0;
+      const harness = createStartedThreadHarness(
+        async (method) =>
+          method === "thread/start" ? threadStartResult(`thread-selected-${++starts}`) : undefined,
+        { persistedThreads: [] },
+      );
+      const runTurn = async (runId: string, threadId: string) => {
+        const offset = harness.requests.length;
+        const run = runCodexAppServerAttempt({ ...params, runId });
+        await run.waitForTurnAccepted();
+        const requests = harness.requests.slice(offset);
+        expect(requests.find(({ method }) => method === "turn/start")?.params).toMatchObject({
+          threadId,
+        });
+        expect(
+          JSON.stringify(requests.find(({ method }) => method === "turn/start")?.params),
+        ).not.toContain("SELECTED_HISTORY");
+        await harness.completeTurn("completed", threadId);
+        await run;
+        return requests;
+      };
+      const first = await runTurn("selected-first", "thread-selected-1");
+      expect(first.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+      const binding = await readCodexAppServerBinding(params.sessionFile);
+      const unchanged = await runTurn("selected-unchanged", "thread-selected-1");
+      expect(unchanged.some(({ method }) => method === "thread/inject_items")).toBe(false);
+      assemble.mockResolvedValue({
+        ...initial,
+        messages: [...initial.messages, assistantMessage("APPENDED_SELECTED_HISTORY", 2)],
+      });
+      const appended = await runTurn("selected-appended", "thread-selected-1");
+      const injections = appended.filter(({ method }) => method === "thread/inject_items");
+      expect(injections).toHaveLength(1);
+      expect(injections[0]?.params).toMatchObject({ threadId: "thread-selected-1" });
+      expect(JSON.stringify(injections[0]?.params)).toContain("APPENDED_SELECTED_HISTORY");
+      expect(JSON.stringify(injections[0]?.params)).not.toContain("ORIGINAL_SELECTED_HISTORY");
+      expect(appended.findIndex(({ method }) => method === "thread/inject_items")).toBeLessThan(
+        appended.findIndex(({ method }) => method === "turn/start"),
+      );
+      const appendedBinding = await readCodexAppServerBinding(params.sessionFile);
+      expect(appendedBinding?.contextEngine?.projection?.epoch).toBe(
+        binding?.contextEngine?.projection?.epoch,
+      );
+      expect(appendedBinding?.contextEngine?.projection?.fingerprint).not.toBe(
+        binding?.contextEngine?.projection?.fingerprint,
+      );
+      const repeated = await runTurn("selected-appended-unchanged", "thread-selected-1");
+      expect(repeated.some(({ method }) => method === "thread/inject_items")).toBe(false);
+      assemble.mockResolvedValue({
+        ...initial,
+        messages: [
+          userMessage("REWRITTEN_SELECTED_HISTORY", 1),
+          assistantMessage("APPENDED_SELECTED_HISTORY", 2),
+        ],
+      });
+      const rewritten = await runTurn("selected-rewritten", "thread-selected-2");
+      const replacement = rewritten.filter(({ method }) => method === "thread/inject_items");
+      expect(starts).toBe(2);
+      expect(replacement).toHaveLength(1);
+      expect(replacement[0]?.params).toMatchObject({ threadId: "thread-selected-2" });
+      expect(JSON.stringify(replacement[0]?.params)).toContain("REWRITTEN_SELECTED_HISTORY");
+      expect(JSON.stringify(replacement[0]?.params)).toContain("APPENDED_SELECTED_HISTORY");
+      expect(JSON.stringify(replacement[0]?.params)).not.toContain("ORIGINAL_SELECTED_HISTORY");
+      const unchangedRewrite = await runTurn("selected-rewritten-unchanged", "thread-selected-2");
+      expect(unchangedRewrite.some(({ method }) => method === "thread/inject_items")).toBe(false);
+    },
+  );
 
-  it("injects selected per-turn history after a cold native resume without rotating the thread", async () => {
-    const { params } = seedParams("per_turn");
-    const firstHarness = createStartedThreadHarness(
-      async (method) => {
-        return method === "thread/start" ? threadStartResult("thread-cold-history") : undefined;
-      },
-      { persistedThreads: [] },
-    );
-    const first = runCodexAppServerAttempt(params);
-    await first.waitForTurnAccepted();
-    await firstHarness.completeTurn("completed", "thread-cold-history");
-    await first;
-    await firstHarness.client.closeAndWait();
-    const resumedHarness = createStartedThreadHarness(
-      async (method, request) => {
-        if (method === "thread/resume" && isJsonObject(request)) {
-          if (typeof request.threadId !== "string") {
-            throw new Error("Expected the preserved native thread id in the resume request");
+  it.each(["legacy-engine-fingerprint", "pending:selection-v1:interrupted"])(
+    "rotates an unacknowledged %s binding once before resuming delta delivery",
+    async (fingerprint) => {
+      const { params } = seedParams("thread_bootstrap");
+      let starts = 0;
+      const harness = createStartedThreadHarness(
+        async (method) =>
+          method === "thread/start" ? threadStartResult(`thread-upgrade-${++starts}`) : undefined,
+        { persistedThreads: [] },
+      );
+      const runTurn = async (runId: string, threadId: string) => {
+        const run = runCodexAppServerAttempt({ ...params, runId });
+        await run.waitForTurnAccepted();
+        await harness.completeTurn("completed", threadId);
+        await run;
+      };
+      await runTurn("before-upgrade", "thread-upgrade-1");
+      const binding = await readCodexAppServerBinding(params.sessionFile);
+      if (!binding?.contextEngine?.projection) {
+        throw new Error("Expected a committed selected-history binding");
+      }
+      await writeCodexAppServerBinding(params.sessionFile, {
+        ...binding,
+        contextEngine: {
+          ...binding.contextEngine,
+          projection: { ...binding.contextEngine.projection, fingerprint },
+        },
+      });
+      const offset = harness.requests.length;
+      await runTurn("after-upgrade", "thread-upgrade-2");
+      const replacement = harness.requests.slice(offset);
+      expect(starts).toBe(2);
+      expect(replacement.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+      expect(JSON.stringify(replacement)).toContain(ANCHOR);
+      const acknowledged = await readCodexAppServerBinding(params.sessionFile);
+      expect(acknowledged?.contextEngine?.projection?.fingerprint).toMatch(/^selection-v1:/);
+      const afterReplacement = harness.requests.length;
+      await runTurn("after-upgrade-unchanged", "thread-upgrade-2");
+      expect(starts).toBe(2);
+      expect(
+        harness.requests
+          .slice(afterReplacement)
+          .some(({ method }) => method === "thread/inject_items"),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["thread_bootstrap", "per_turn"] as const)(
+    "does not reinject acknowledged %s history after a cold native resume",
+    async (mode) => {
+      const { params } = seedParams(mode);
+      const firstHarness = createStartedThreadHarness(
+        async (method) =>
+          method === "thread/start" ? threadStartResult("thread-cold-history") : undefined,
+        { persistedThreads: [] },
+      );
+      const first = runCodexAppServerAttempt(params);
+      await first.waitForTurnAccepted();
+      await firstHarness.completeTurn("completed", "thread-cold-history");
+      await first;
+      const initialBinding = await readCodexAppServerBinding(params.sessionFile);
+      expect(historySeedRequests(firstHarness)).toHaveLength(1);
+      await firstHarness.client.closeAndWait();
+      const resumedHarness = createStartedThreadHarness(
+        async (method, request) => {
+          if (method === "thread/resume" && isJsonObject(request)) {
+            if (typeof request.threadId !== "string") {
+              throw new Error("Expected the preserved native thread id in the resume request");
+            }
+            return threadStartResult(request.threadId);
           }
-          return threadStartResult(request.threadId);
-        }
-        return undefined;
-      },
-      {
-        persistedThreads: [threadStartResult("thread-cold-history", { cwd: params.workspaceDir })],
-      },
-    );
-    const resumed = runCodexAppServerAttempt({ ...params, runId: "cold-history-resume" });
-    await resumed.waitForTurnAccepted();
-    expect(resumedHarness.requests.some(({ method }) => method === "thread/start")).toBe(false);
-    expect(resumedHarness.requests.some(({ method }) => method === "thread/resume")).toBe(true);
-    expect(historySeedRequests(resumedHarness)).toHaveLength(1);
-    expect(
-      resumedHarness.requests.findIndex(({ method }) => method === "thread/inject_items"),
-    ).toBeLessThan(resumedHarness.requests.findIndex(({ method }) => method === "turn/start"));
-    expect(
-      resumedHarness.requests.find(({ method }) => method === "turn/start")?.params,
-    ).toMatchObject({
-      threadId: "thread-cold-history",
-    });
-    await resumedHarness.completeTurn("completed", "thread-cold-history");
-    await resumed;
-  });
+          return undefined;
+        },
+        {
+          persistedThreads: [
+            threadStartResult("thread-cold-history", { cwd: params.workspaceDir }),
+          ],
+        },
+      );
+      const resumed = runCodexAppServerAttempt({ ...params, runId: "cold-history-resume" });
+      await resumed.waitForTurnAccepted();
+      expect(resumedHarness.requests.some(({ method }) => method === "thread/start")).toBe(false);
+      expect(resumedHarness.requests.some(({ method }) => method === "thread/resume")).toBe(true);
+      expect(historySeedRequests(resumedHarness)).toEqual([]);
+      const resumedHistory = resumedHarness.requests
+        .filter(({ method }) => method === "thread/inject_items")
+        .flatMap(({ params: request }) =>
+          isJsonObject(request) && Array.isArray(request.items) ? request.items : [],
+        )
+        .filter((item) => isJsonObject(item) && item.role === "user");
+      expect(resumedHistory).toEqual([]);
+      expect(
+        resumedHarness.requests.find(({ method }) => method === "turn/start")?.params,
+      ).toMatchObject({
+        threadId: "thread-cold-history",
+      });
+      await resumedHarness.completeTurn("completed", "thread-cold-history");
+      await resumed;
+      expect(
+        (await readCodexAppServerBinding(params.sessionFile))?.contextEngine?.projection,
+      ).toEqual(initialBinding?.contextEngine?.projection);
+    },
+  );
 
   it("preserves a reused native transcript after an uncertain injection and retries fresh", async () => {
-    const { params } = seedParams("per_turn");
+    const { params, assemble, messages } = seedParams("per_turn");
     let starts = 0;
     let loseAcknowledgment = false;
     const respond = async (method: string) => {
@@ -599,6 +699,11 @@ describe("Codex configured assembled-history delivery", () => {
     await first.waitForTurnAccepted();
     await harness.completeTurn("completed", "thread-warm-retry-1");
     await first;
+    const original = await assemble.mock.results[0]!.value;
+    assemble.mockResolvedValue({
+      ...original,
+      messages: [...messages, userMessage(`${ANCHOR} APPENDED_UNCERTAIN_HISTORY`, 5)],
+    });
     const offset = harness.requests.length;
     loseAcknowledgment = true;
     await expect(runCodexAppServerAttempt({ ...params, runId: "warm-lost-ack" })).rejects.toThrow(

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { getSessionKysely } from "../src/config/sessions/session-accessor.sqlite-scope.js";
@@ -21,6 +21,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../src/state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../src/test-utils/native-sqlite.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import {
   collectSqliteQueryPlanEvidence,
@@ -720,12 +721,17 @@ function main(): void {
   const started = nowMs();
   try {
     const stateDatabase = openOpenClawStateDatabase({ env });
-    const agentDatabases = Array.from({ length: config.agentCount }, (_, index) =>
-      openOpenClawAgentDatabase({ agentId: `perf-agent-${index}`, env }),
-    );
+    const stateDb = stateDatabase.db;
+    if (!(stateDb instanceof DatabaseSync)) {
+      throw new Error("SQLite state benchmark requires a SQLite state database");
+    }
+    const agentDatabases = Array.from({ length: config.agentCount }, (_, index) => {
+      const database = openOpenClawAgentDatabase({ agentId: `perf-agent-${index}`, env });
+      return { path: database.path, db: requireNativeSqliteDatabase(database.db) };
+    });
 
     const seedStarted = nowMs();
-    seedStateDatabase(stateDatabase.db, config);
+    seedStateDatabase(stateDb, config);
     const perAgentEntries = Math.ceil(config.agentCacheEntries / config.agentCount);
     agentDatabases.forEach((database, index) =>
       seedAgentDatabase(database.db, perAgentEntries, index),
@@ -734,16 +740,16 @@ function main(): void {
 
     const stateWalBefore = walSize(stateDatabase.path);
     const agentWalBefore = agentDatabases.map((database) => walSize(database.path));
-    const stateIntegrity = readIntegrity(stateDatabase.db);
+    const stateIntegrity = readIntegrity(stateDb);
     const agentIntegrity = agentDatabases.map((database) => readIntegrity(database.db));
     const queries = runHotQueries({
-      agentDb: agentDatabases[0]?.db ?? stateDatabase.db,
+      agentDb: agentDatabases[0]?.db ?? stateDb,
       config,
-      stateDb: stateDatabase.db,
+      stateDb,
     });
 
     const checkpointStarted = nowMs();
-    checkpoint(stateDatabase.db);
+    checkpoint(stateDb);
     agentDatabases.forEach((database) => checkpoint(database.db));
     const checkpointMs = nowMs() - checkpointStarted;
 
@@ -764,7 +770,7 @@ function main(): void {
       queries,
       versions: {
         agentSchema: OPENCLAW_AGENT_SCHEMA_VERSION,
-        sqlite: readSqliteVersion(stateDatabase.db),
+        sqlite: readSqliteVersion(stateDb),
         stateSchema: OPENCLAW_STATE_SCHEMA_VERSION,
       },
       rows: {

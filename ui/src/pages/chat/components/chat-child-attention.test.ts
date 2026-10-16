@@ -1,8 +1,8 @@
-/* @vitest-environment jsdom */
-import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import { renderChatComposerNotices } from "../chat-view-notices.ts";
+/* @vitest-environment jsdom */
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { renderChatComposerNotices } from "../chat-view-notices.tsx";
 import type { ChatChildAttention } from "./chat-child-attention.tsx";
 
 const parentKey = "agent:main:dashboard:parent";
@@ -33,20 +33,21 @@ function mount(rows: GatewaySessionRow[] = [child]) {
   const container = document.body.appendChild(document.createElement("div"));
   const open = vi.fn();
   // Reproduce the parent entry point: no run error or new assistant message.
-  render(
-    renderChatComposerNotices({
-      sessionKey: parentKey,
-      subagentParentKey: parentKey,
-      messages: [{ role: "assistant", content: "The diagnostic is running." }],
-      subagentSessions: rows,
-      subagentSessionsRead: true,
-      onOpenSubagent: open,
-    }),
-    container,
+  const view = mountSolid(
+    () =>
+      renderChatComposerNotices({
+        sessionKey: parentKey,
+        subagentParentKey: parentKey,
+        messages: [{ role: "assistant", content: "The diagnostic is running." }],
+        subagentSessions: rows,
+        subagentSessionsRead: true,
+        onOpenSubagent: open,
+      }),
+    { container },
   );
   const notice = container.querySelector<ChatChildAttention>("openclaw-chat-child-attention");
   expect(notice).not.toBeNull();
-  return { container, open, notice: notice! };
+  return { container, open, notice: notice!, unmount: view.unmount };
 }
 
 it("shows the blocked child outcome in its idle parent and opens that exact child", async () => {
@@ -125,10 +126,10 @@ it("uses sidebar ancestry for nested outcomes and excludes unrelated or archived
 });
 
 it("retires its expiry timer when the pane is removed", async () => {
-  const { notice } = mount();
+  const { notice, unmount } = mount();
   await notice.updateComplete;
   expect(vi.getTimerCount()).toBe(1);
-  notice.remove();
+  unmount();
   await Promise.resolve();
   expect(vi.getTimerCount()).toBe(0);
 });

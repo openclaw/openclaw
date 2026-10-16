@@ -32,7 +32,7 @@ import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
 setupRunAttemptTestHooks();
 
 describe("Codex submitted prompt provenance", () => {
-  it("forks a sender-attributed turn using the exact submitted text without changing its display", async () => {
+  it("forks a sender-attributed turn through a database alias using exact submitted text without changing its display", async () => {
     let stage = "create-harness";
     let cleanupStage = "not-started";
     onTestFailed(() => {

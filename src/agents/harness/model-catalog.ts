@@ -342,53 +342,52 @@ export function isPreparedNativeModelCatalogReady(params: {
   catalogAcquired?: boolean;
 }): boolean {
   const { selection, snapshot, pluginGeneration } = params;
-  if (!selection) {
-    return (
-      params.catalogAcquired === true &&
-      snapshot.routeVariants.every((entry) => {
-        const runtime = entry.nativeRuntime;
-        return (
-          !runtime ||
-          (snapshot.nativeProviderOutcomes &&
-            Object.hasOwn(snapshot.nativeProviderOutcomes, runtime) &&
-            snapshot.nativeProviderOutcomes[runtime]?.some(
-              (outcome) => outcome.provider === entry.provider && outcome.status !== "ready",
-            )) ||
-          isPreparedNativeModelCatalogReady({
-            ...params,
-            selection: { provider: entry.provider, modelId: entry.id, runtime },
-          })
-        );
-      })
-    );
-  }
-  if (
-    ![...snapshot.entries, ...snapshot.routeVariants].some(
-      (entry) =>
-        entry.provider === selection.provider &&
-        entry.id === selection.modelId &&
-        entry.nativeRuntime === selection.runtime,
-    )
-  ) {
+  if (!selection && params.catalogAcquired !== true) {
     return false;
   }
-  const harness = pluginGeneration.pluginRegistry?.agentHarnesses.find(
-    (registration) => registration.harness.id === selection.runtime,
-  )?.harness;
-  return (
-    !harness?.readModelCatalogReadiness ||
-    withPluginRuntimeGenerationScope(
-      {
-        metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
-        pluginRegistry: pluginGeneration.pluginRegistry,
-      },
-      () =>
-        harness.readModelCatalogReadiness?.({
-          ...preparedHarnessCatalogScope(params.input),
-          provider: selection.provider,
-          modelId: selection.modelId,
-        }),
-    ) !== undefined
+  if (!selection && !snapshot.routeVariants.some((entry) => entry.nativeRuntime)) {
+    return true;
+  }
+  let scope: AgentHarnessModelCatalogParams | undefined;
+  const readReady = (entry: ModelCatalogEntry) => {
+    const harness = pluginGeneration.pluginRegistry?.agentHarnesses.find(
+      (registration) => registration.harness.id === entry.nativeRuntime,
+    )?.harness;
+    return (
+      !harness?.readModelCatalogReadiness ||
+      harness.readModelCatalogReadiness({
+        ...(scope ??= preparedHarnessCatalogScope(params.input)),
+        provider: entry.provider,
+        modelId: entry.id,
+      }) !== undefined
+    );
+  };
+  return withPluginRuntimeGenerationScope(
+    {
+      metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+      pluginRegistry: pluginGeneration.pluginRegistry,
+    },
+    () => {
+      if (selection) {
+        const matches = (entry: ModelCatalogEntry) =>
+          entry.provider === selection.provider &&
+          entry.id === selection.modelId &&
+          entry.nativeRuntime === selection.runtime;
+        const entry = snapshot.entries.find(matches) ?? snapshot.routeVariants.find(matches);
+        return entry !== undefined && readReady(entry);
+      }
+      // These rows already belong to this snapshot; only native readiness can change.
+      return snapshot.routeVariants.every(
+        (entry) =>
+          !entry.nativeRuntime ||
+          (snapshot.nativeProviderOutcomes &&
+            Object.hasOwn(snapshot.nativeProviderOutcomes, entry.nativeRuntime) &&
+            snapshot.nativeProviderOutcomes[entry.nativeRuntime]?.some(
+              (outcome) => outcome.provider === entry.provider && outcome.status !== "ready",
+            )) ||
+          readReady(entry),
+      );
+    },
   );
 }
 

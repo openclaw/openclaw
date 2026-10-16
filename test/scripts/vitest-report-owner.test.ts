@@ -754,7 +754,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
           if (mode === "corrupt") {
             expect(fs.readFileSync(first.blob, "utf8")).toBe("owned corruption");
             expect(() => json(`${first.blob}.native-original`)).not.toThrow();
-            expect(result.stderr).toContain('"owned corruption" is not valid JSON');
+            expect(result.stderr).toContain("SyntaxError:");
           } else if (mode === "merge-failure") {
             expect(result.stderr).toContain("owned native merge failure");
           } else if (mode === "identity") {

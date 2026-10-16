@@ -116,7 +116,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       } else if (preparedWorkSessionKeys.has(result.key)) {
         host.publish({ ...host.readState() });
       }
-      const reconciliation = host.reconcileMutation(params.agentId);
+      const reconciliation = host.reconcileMutation(params.agentId, undefined, true);
       if (options.reconciliation === "background") {
         void reconciliation.catch((error: unknown) => reportError(scope, error));
       } else {

@@ -43,6 +43,12 @@ export function runGatewayHttpRequest(
   context: GatewayHttpRequestLifetime | undefined,
   handle: () => Promise<"failed" | undefined>,
 ): Promise<void> {
+  if (context?.requestEntryLifetime?.signal.aborted) {
+    if (!res.writableFinished && !res.destroyed) {
+      res.destroy();
+    }
+    return Promise.resolve();
+  }
   const run = async () => {
     const ingress = getRemoteControlUiIngressContext(req);
     assertRemoteControlUiIngressCurrent(ingress);

@@ -10,8 +10,10 @@ import {
   isJobEnabled,
   isTimeScheduledJob,
   resolveJobErrorBackoffUntilMs,
+  resolveJobLastRunEndedAtMs,
   resolveJobLastRunStatus,
 } from "./jobs-scheduling.js";
+import { resolveForcePreservedOneShotAtMs } from "./one-shot-schedule.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
 
 /**
@@ -21,10 +23,17 @@ import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
  */
 export function hasMissedCronSlotSinceLastRun(job: CronJob, nowMs: number): boolean {
   const lastTriggerEvalAtMs = job.trigger ? job.state.lastTriggerEvalAtMs : undefined;
+  const lastRunStatus = resolveJobLastRunStatus(job);
+  // Successful and skipped runs already advance from their end. Slots covered
+  // by that execution must not become new misses when the scheduler restarts.
+  const coveredThroughMs =
+    lastRunStatus === "ok" || lastRunStatus === "skipped"
+      ? resolveJobLastRunEndedAtMs(job)
+      : job.state.lastRunAtMs;
   const lastRunAtMs =
     lastTriggerEvalAtMs === undefined
-      ? job.state.lastRunAtMs
-      : Math.max(job.state.lastRunAtMs ?? lastTriggerEvalAtMs, lastTriggerEvalAtMs);
+      ? coveredThroughMs
+      : Math.max(coveredThroughMs ?? lastTriggerEvalAtMs, lastTriggerEvalAtMs);
   const nextRunAtMs = job.state.nextRunAtMs;
   // Pacing supersedes intervening natural slots. Both startup admission and
   // backoff repair must retain that occurrence instead of inventing a miss.
@@ -99,7 +108,10 @@ export function isRunnableJob(params: {
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && lastRunStatus) {
     // The recovery owner recorded pending work after checking the exact task
     // identity. Its scheduled slot remains due even when the old run started later.
-    if (hasScheduledNextRunAtMs(next) && job.state.startupCatchupAtMs === next) {
+    if (
+      hasScheduledNextRunAtMs(next) &&
+      (job.state.startupCatchupAtMs === next || resolveForcePreservedOneShotAtMs(job) === next)
+    ) {
       return nowMs >= next;
     }
     const lastRun = job.state.lastRunAtMs;
@@ -130,9 +142,11 @@ export function isRunnableJob(params: {
     const lastRunAtMs = job.state.lastRunAtMs;
     // Startup loads persisted state before maintenance recompute. Suppress a
     // completed stale slot, but still replay a newer slot due by restart time.
+    // A force run explicitly leaves its scheduled occurrence unconsumed.
     const alreadyCompletedDueCronSlot =
       params.allowCronMissedRunByLastRun &&
       job.schedule.kind === "cron" &&
+      job.state.forcePreservedNextRunAtMs !== next &&
       (lastRunStatus === "ok" || lastRunStatus === "skipped") &&
       typeof lastRunAtMs === "number" &&
       Number.isFinite(lastRunAtMs) &&
@@ -146,7 +160,8 @@ export function isRunnableJob(params: {
     } catch {
       return false;
     }
-    return typeof latestRunAtMs === "number" && latestRunAtMs > lastRunAtMs;
+    const lastEndedAtMs = resolveJobLastRunEndedAtMs(job) ?? lastRunAtMs;
+    return typeof latestRunAtMs === "number" && latestRunAtMs > lastEndedAtMs;
   }
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
     return false;

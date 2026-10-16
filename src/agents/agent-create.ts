@@ -42,7 +42,7 @@ import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
 import { listAgentRoles, loadAgentRole } from "./agent-roles.js";
 import { toAgentEntriesRecord } from "./agent-scope-config.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
-import { resolveSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import {
   createAgentIdentityConfig,
@@ -222,8 +222,7 @@ function describeLegacySessionOutcome(outcome: LegacyMainSessionMigrationOutcome
     case "no-legacy-rows":
       return "the current session-store layout has no matching completed migration ledger";
   }
-  const unreachable: never = outcome.kind;
-  return unreachable;
+  return outcome.kind satisfies never;
 }
 
 async function evaluateMainCreationGate(
@@ -257,7 +256,7 @@ async function evaluateMainCreationGate(
     );
   }
 
-  if (resolveSharedAuthStoreOwnership().location !== "state-db") {
+  if ((await prepareSharedAuthStoreOwnership()).location !== "state-db") {
     return createError(
       "shared-auth-store-owned-by-main",
       'Cannot create agent "main" while agents/main/agent owns the shared auth store. Run openclaw doctor --fix to relocate shared auth, then retry.',

@@ -24,7 +24,6 @@ import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import { getAgentIdentity, SessionRows, sessionsTableColumnCount } from "./session-row.tsx";
 import {
   categoryDropHandlers,
-  clearSessionsSearch,
   handleSessionsSearchKeydown,
   SessionsAdvancedFilters,
 } from "./sessions-filters.tsx";
@@ -58,13 +57,7 @@ function renderSessionsHeadingFacts(
                 ·
               </span>
             ) : undefined}
-            <span
-              class={
-                active
-                  ? "sessions-heading-fact sessions-heading-fact--active"
-                  : "sessions-heading-fact"
-              }
-            >
+            <span class={["sessions-heading-fact", { "sessions-heading-fact--active": active }]}>
               <strong>{value}</strong> {label}
             </span>
           </>
@@ -241,6 +234,7 @@ function SortHeader(
 }
 
 function SessionsTable(props: SessionsProps) {
+  let searchInput!: HTMLInputElement;
   const rawRows = createMemo(() => props.result?.sessions ?? []);
   const searchQuery = createMemo(() => props.searchQuery);
   const pageSizeValue = createMemo(() => String(props.pageSize));
@@ -281,6 +275,10 @@ function SessionsTable(props: SessionsProps) {
   const paginated = createMemo(() =>
     displayRows().slice(page() * props.pageSize, (page() + 1) * props.pageSize),
   );
+  const selectedOnPage = createMemo(
+    () => paginated().filter((row) => props.selectedKeys.has(row.key)).length,
+  );
+  const allSelected = () => selectedOnPage() === paginated().length;
   const emptyBecauseFiltered = createMemo(
     () =>
       rawRows().length === 0 &&
@@ -313,6 +311,7 @@ function SessionsTable(props: SessionsProps) {
         <div class="data-table-search sessions-toolbar__search">
           <Icon name="search" />
           <input
+            ref={(element) => (searchInput = element)}
             type="text"
             aria-label={t("sessionsView.searchPlaceholder")}
             placeholder={t("sessionsView.searchPlaceholder")}
@@ -327,7 +326,10 @@ function SessionsTable(props: SessionsProps) {
             title={t("sessionsView.clearSearch")}
             hidden={!props.searchQuery}
             disabled={!props.searchQuery}
-            onClick={(event: MouseEvent) => clearSessionsSearch(event, props.onSearchChange)}
+            onClick={() => {
+              searchInput.focus({ preventScroll: true });
+              props.onSearchChange("");
+            }}
           >
             <Icon name="x" />
           </button>
@@ -375,15 +377,10 @@ function SessionsTable(props: SessionsProps) {
                 {paginated().length > 0 ? (
                   <input
                     type="checkbox"
-                    checked={paginated().every((r) => props.selectedKeys.has(r.key))}
-                    prop:indeterminate={
-                      paginated().some((r) => props.selectedKeys.has(r.key)) &&
-                      !paginated().every((r) => props.selectedKeys.has(r.key))
-                    }
+                    checked={allSelected()}
+                    prop:indeterminate={selectedOnPage() > 0 && !allSelected()}
                     onChange={() => {
-                      const update = paginated().every((r) => props.selectedKeys.has(r.key))
-                        ? props.onDeselectPage
-                        : props.onSelectPage;
+                      const update = allSelected() ? props.onDeselectPage : props.onSelectPage;
                       update(paginated().map((r) => r.key));
                     }}
                     aria-label={t("sessionsView.selectAllOnPage")}

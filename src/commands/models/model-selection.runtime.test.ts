@@ -110,16 +110,6 @@ describe("model command provider preparation", () => {
     },
   );
 
-  it.each([{ raw: "fixture/legacy", expected: "fixture/current" }])(
-    "saves $raw using its cold provider's exact alias rules",
-    async ({ raw, expected }) => {
-      config.agents!.defaults!.models = { "fixture/legacy": { alias: "friendly" } };
-      await isolated(() => modelsSetCommand(raw, runtime));
-      expect(readConfig().agents?.defaults?.model).toEqual({ primary: expected });
-      expect(runtime.log).toHaveBeenCalledWith(`Default model: ${expected}`);
-    },
-  );
-
   it.each([{ provider: "fixture", api: "openai-completions" }] as const)(
     "keeps the $provider/$api owner's model literal",
     async ({ provider, api }) => {

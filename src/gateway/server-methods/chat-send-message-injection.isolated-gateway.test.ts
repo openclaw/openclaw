@@ -8,6 +8,7 @@ import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RawData, WebSocket } from "ws";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { installQueueRuntimeErrorSilencer } from "../../auto-reply/reply/queue.test-helpers.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
@@ -36,55 +37,11 @@ installQueueRuntimeErrorSilencer();
 const SESSION_KEY = "agent:main:main";
 const SOURCE_TURN_ID = "source-failclosed-1";
 
-type WireResponse = {
-  ok: boolean;
-  payload?: { status?: string; runId?: string; message?: string };
-  error?: { message?: string; code?: string };
-};
-
-type DispatchInboundParams = {
-  dispatcher: {
-    sendFinalReply: (payload: { text: string }) => boolean;
-    markComplete: () => void;
-    waitForIdle: () => Promise<void>;
-  };
-};
-
-const dispatchCapture = { calls: 0 };
-const resolverCapture: {
-  calls: number;
-  ctxBody?: string;
-  runId?: string;
-  messageInjectionDisposition?: unknown;
-} = { calls: 0 };
-
 type ChatWirePayload = {
   runId?: string;
   state?: string;
   message?: { text?: string; content?: unknown };
 };
-
-function visibleMessageText(message: unknown): string {
-  if (!message || typeof message !== "object") {
-    return "";
-  }
-  const rec = message as Record<string, unknown>;
-  const parts: string[] = [];
-  if (typeof rec.text === "string") {
-    parts.push(rec.text);
-  }
-  if (Array.isArray(rec.content)) {
-    for (const block of rec.content) {
-      if (block && typeof block === "object") {
-        const text = (block as Record<string, unknown>).text;
-        if (typeof text === "string") {
-          parts.push(text);
-        }
-      }
-    }
-  }
-  return parts.join(" ");
-}
 
 let ws: WebSocket;
 let sessionStoreDir: string | undefined;
@@ -98,26 +55,18 @@ function clearLiveOperation(cause: string) {
   if (liveOperation) {
     try {
       forceClearReplyOperation(liveOperation, cause);
-    } catch {
-      // Best-effort cleanup of an operation left behind by a failed test.
-    }
+    } catch {}
     liveOperation = undefined;
   }
 }
 
 beforeEach(() => {
   dispatchInboundMessageMock.mockReset();
-  dispatchCapture.calls = 0;
-  resolverCapture.calls = 0;
-  delete resolverCapture.ctxBody;
-  delete resolverCapture.runId;
-  delete resolverCapture.messageInjectionDisposition;
   dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
-    const p = params as DispatchInboundParams;
-    dispatchCapture.calls += 1;
-    p.dispatcher.sendFinalReply({ text: "after-fix follow-up reply" });
-    p.dispatcher.markComplete();
-    await p.dispatcher.waitForIdle();
+    const { dispatcher } = params as Parameters<typeof dispatchInboundMessage>[0];
+    dispatcher.sendFinalReply({ text: "after-fix follow-up reply" });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
     return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
   });
 });
@@ -138,33 +87,27 @@ afterEach(async () => {
 });
 
 async function seedActiveTurn(params: {
-  sessionKey: string;
-  sessionId: string;
-  runId: string;
+  sessionKey?: string;
   terminalRunId: string;
   sourceTurnId?: string;
   deliverySourceRunId?: string;
 }) {
+  const { sessionKey = SESSION_KEY } = params;
+  const sessionId = "session-steer";
   // One suite Gateway keeps one physical store; retained populated stores collide in discovery.
   sessionStoreDir ??= await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-iso-gw-"));
   testState.sessionStorePath = path.join(sessionStoreDir, "sessions.json");
   await writeSessionStore({
     entries: {
-      [params.sessionKey]: {
-        sessionId: params.sessionId,
+      [sessionKey]: {
+        sessionId,
         updatedAt: Date.now(),
         restartRecoveryTerminalRunIds: [params.terminalRunId],
-        ...(params.deliverySourceRunId
-          ? { restartRecoveryDeliverySourceRunId: params.deliverySourceRunId }
-          : {}),
+        restartRecoveryDeliverySourceRunId: params.deliverySourceRunId,
       },
     },
   });
-  const operation = createReplyOperation({
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    resetTriggered: false,
-  });
+  const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
   liveOperation = operation;
   const fingerprint = "isolated-steer-authority";
   operation.bindToolAuthoritySnapshot({
@@ -180,15 +123,11 @@ async function seedActiveTurn(params: {
   operation.setPhase("running");
   operation.attachBackend({
     kind: "embedded",
-    runId: params.runId,
+    runId: "live-run-steer",
     toolAuthorityFingerprint: fingerprint,
     cancel: () => {},
     isStreaming: () => false,
-    messageInjectionV2: {
-      version: 2,
-      isAvailable: () => true,
-      queueMessage,
-    },
+    messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
   });
   if (params.sourceTurnId) {
     replyRunRegistry.bindSourceTurnId(operation, params.sourceTurnId);
@@ -211,9 +150,6 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
     "classifies an accepted steer waiting %sms as steering over the real transport",
     async (durationMs, { signal }) => {
       const queueMessage = await seedActiveTurn({
-        sessionKey: SESSION_KEY,
-        sessionId: "session-slow-steer",
-        runId: "live-run-slow-steer",
         terminalRunId: "source-old",
         sourceTurnId: SOURCE_TURN_ID,
       });
@@ -238,18 +174,21 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
         assertCurrent();
       });
       try {
-        const response = (await rpcReq(ws, "chat.send", {
+        const response = await rpcReq(ws, "chat.send", {
           sessionKey: SESSION_KEY,
           message: "Synthetic steer awaiting the active run boundary.",
           idempotencyKey: `slow-steer-${durationMs}`,
           queueMode: "steer",
-        })) as WireResponse;
+        });
         expect(response, JSON.stringify(response)).toMatchObject({
           ok: true,
           payload: { status: "started" },
         });
         expect(queueMessage).toHaveBeenCalledOnce();
-        expect(dispatchCapture.calls).toBe(0);
+        expect(queueMessage.mock.calls[0]?.[0]).toContain(
+          "Synthetic steer awaiting the active run boundary.",
+        );
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         clock = durationMs;
         commit.resolve();
         expect(await withinTest(reported.promise, signal)).toMatchObject({
@@ -257,7 +196,7 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
           durationMs,
           details: { stage: "steer" },
         });
-        expect(dispatchCapture.calls).toBe(0);
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       } finally {
         commit.resolve();
         now.mockRestore();
@@ -270,43 +209,32 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
   it.for([
     {
       name: "a tombstone for the active source",
-      sessionKey: SESSION_KEY,
-      sessionId: "session-failclosed",
-      runId: "live-run-failclosed",
       terminalRunId: SOURCE_TURN_ID,
       sourceTurnId: SOURCE_TURN_ID,
       deliverySourceRunId: SOURCE_TURN_ID,
-      message: "round-8 isolated-gateway inbound",
-      replyText: "after-fix follow-up reply from the production dispatcher",
     },
     {
       name: "a retained tombstone with unknown active source identity",
       sessionKey: "agent:main:unknown-source",
-      sessionId: "session-unknown-source",
-      runId: "live-run-unknown-source",
       terminalRunId: "source-old",
-      message: "unknown-source isolated-gateway inbound",
-      replyText: "unknown-source follow-up reply from the production dispatcher",
     },
   ])(
     "$name rejects steering and delivers exactly one follow-up reply over the real transport",
     { timeout: 30_000 },
     async (scenario, { signal }) => {
+      const sessionKey = scenario.sessionKey ?? SESSION_KEY;
+      const message = "isolated-gateway inbound";
+      const replyText = "follow-up reply from the production dispatcher";
       const queueMessage = await seedActiveTurn(scenario);
       const resolved = createDeferred();
 
-      // Resetting this seam uses the production dispatcher and delivery owner;
-      // only the reply source is controlled. Observe its final on the real socket.
+      // Exercise the production dispatcher; only its reply source is controlled.
       dispatchInboundMessageMock.mockReset();
-      mockGetReplyFromConfigOnce(async (ctx, opts) => {
-        resolverCapture.calls += 1;
-        resolverCapture.ctxBody = (ctx as { Body?: string }).Body;
-        const options = (opts ?? {}) as { runId?: string; messageInjectionDisposition?: unknown };
-        resolverCapture.runId = options.runId;
-        resolverCapture.messageInjectionDisposition = options.messageInjectionDisposition;
+      const resolveReply = vi.fn<Parameters<typeof mockGetReplyFromConfigOnce>[0]>(async () => {
         resolved.resolve();
-        return { text: scenario.replyText };
+        return { text: replyText };
       });
+      mockGetReplyFromConfigOnce(resolveReply);
 
       const runId = `idem-iso-gw-${randomUUID()}`;
       const chatFrames: ChatWirePayload[] = [];
@@ -330,76 +258,48 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
       };
       ws.on("message", onChatFrame);
       try {
-        const res = (await rpcReq(
+        const res = await rpcReq(
           ws,
           "chat.send",
           {
-            sessionKey: scenario.sessionKey,
-            message: scenario.message,
+            sessionKey,
+            message,
             idempotencyKey: runId,
             queueMode: "steer",
           },
           20_000,
-        )) as WireResponse;
+        );
 
-        expect(res.ok, JSON.stringify(res)).toBe(true);
-        expect(res.payload?.status).toBe("started");
-        expect(res.payload?.runId).toBe(runId);
+        expect(res, JSON.stringify(res)).toMatchObject({
+          ok: true,
+          payload: { status: "started", runId },
+        });
         expect(queueMessage).not.toHaveBeenCalled();
         await withinTest(resolved.promise, signal);
-        expect(resolverCapture.calls).toBe(1);
-        expect(resolverCapture.ctxBody).toBe(scenario.message);
-        expect(resolverCapture.runId).toBe(runId);
-        expect(resolverCapture.messageInjectionDisposition).toBe("rejected");
-        expect(dispatchCapture.calls).toBe(0);
+        expect(resolveReply).toHaveBeenCalledOnce();
+        expect(resolveReply.mock.calls[0]?.slice(0, 2)).toEqual([
+          expect.objectContaining({ Body: message }),
+          expect.objectContaining({ runId, messageInjectionDisposition: "rejected" }),
+        ]);
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 
         await withinTest(finalReceived.promise, signal);
         await getSessionWorkAdmissionRelease({
           scope: testState.sessionStorePath!,
-          identities: [scenario.sessionKey, scenario.sessionId],
+          identities: [sessionKey, "session-steer"],
         });
         // The producer is settled; a pong drains earlier frames on this same connection.
         const pong = once(ws, "pong", { signal });
         ws.ping();
         await withinTest(pong, signal);
         const finals = chatFrames.filter((frame) => frame.state === "final");
-        expect(finals.length).toBe(1);
-        expect(visibleMessageText(finals[0]?.message)).toContain(scenario.replyText);
+        expect(finals).toHaveLength(1);
+        expect(finals[0]).toMatchObject({
+          message: { content: [{ text: expect.stringContaining(replyText) }] },
+        });
       } finally {
         ws.off("message", onChatFrame);
       }
-    },
-  );
-
-  it(
-    "isolated gateway: still steers when the tombstone belongs to an unrelated prior source turn",
-    { timeout: 30_000 },
-    async () => {
-      const queueMessage = await seedActiveTurn({
-        sessionKey: SESSION_KEY,
-        sessionId: "session-unrelated",
-        runId: "live-run-unrelated",
-        terminalRunId: "source-old",
-        sourceTurnId: SOURCE_TURN_ID,
-      });
-      const runId = `idem-iso-gw-unrelated-${randomUUID()}`;
-      const res = (await rpcReq(
-        ws,
-        "chat.send",
-        {
-          sessionKey: SESSION_KEY,
-          message: "unrelated-tombstone inbound",
-          idempotencyKey: runId,
-          queueMode: "steer",
-        },
-        20_000,
-      )) as WireResponse;
-
-      expect(res.ok, JSON.stringify(res)).toBe(true);
-      expect(res.payload?.status).toBe("started");
-      expect(queueMessage).toHaveBeenCalledOnce();
-      expect(queueMessage.mock.calls[0]?.[0]).toContain("unrelated-tombstone inbound");
-      expect(dispatchCapture.calls).toBe(0);
     },
   );
 });

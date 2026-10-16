@@ -88,7 +88,7 @@ function resolveParentSessionKeyCandidate(params: {
   return null;
 }
 
-/** @deprecated Use resolveStoredModelOverrideAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use resolveStoredModelOverrideAsync; final compatibility day: 2026-12-31. */
 export function resolveStoredModelOverride(params: {
   loadSessionEntry?: (sessionKey: string) => SessionEntry | undefined;
   sessionEntry?: SessionEntry;

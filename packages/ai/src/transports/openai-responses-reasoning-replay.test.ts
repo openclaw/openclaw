@@ -47,6 +47,116 @@ const responseConverters = [
 
 describe("OpenAI Responses reasoning replay", () => {
   it.each(responseConverters)(
+    "$name omits function item ids when preceding reasoning has no rs_* identity",
+    ({ convert }) => {
+      for (const id of [undefined, null, 42, "msg_wrong"]) {
+        const input = convert({
+          messages: [
+            createAssistant([
+              {
+                type: "thinking",
+                thinking: "",
+                thinkingSignature: JSON.stringify({ type: "reasoning", id, summary: [] }),
+              },
+              { type: "toolCall", id: "call_probe|fc_probe", name: "probe", arguments: {} },
+            ]),
+          ],
+        });
+        expect(input.find((item) => item.type === "function_call")).toEqual({
+          type: "function_call",
+          call_id: "call_probe",
+          name: "probe",
+          arguments: "{}",
+        });
+      }
+    },
+  );
+
+  it.each(responseConverters)(
+    "$name omits orphan function item ids without changing paired transcript ids",
+    ({ convert }) => {
+      const reasoning = {
+        type: "thinking" as const,
+        thinking: "",
+        thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_tool", summary: [] }),
+        openclawReasoningReplay: buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
+      };
+      const toolCall = {
+        type: "toolCall" as const,
+        id: "call_one|fc_one",
+        name: "probe",
+        arguments: { input: "synthetic" },
+      };
+      const context: Context = {
+        messages: [
+          createAssistant([
+            reasoning,
+            { type: "text", text: "Before calls" },
+            toolCall,
+            { type: "text", text: "Between calls" },
+            { ...toolCall, id: "call_two|fc_two" },
+          ]),
+          {
+            role: "toolResult",
+            toolCallId: "call_one|fc_one",
+            toolName: "probe",
+            content: [{ type: "text", text: "Done" }],
+            isError: false,
+            timestamp: 1,
+          },
+          createAssistant([{ ...toolCall, id: "call_orphan|fc_orphan" }]),
+          createAssistant([
+            { ...reasoning, thinkingSignature: "malformed" },
+            { ...toolCall, id: "call_invalid|fc_invalid" },
+          ]),
+          createAssistant([{ ...toolCall, id: "call_late|fc_late" }, reasoning]),
+        ],
+      };
+      const original = structuredClone(context);
+      const input = convert(context);
+      expect(input.filter((item) => item.type === "function_call")).toEqual([
+        {
+          type: "function_call",
+          id: "fc_one",
+          call_id: "call_one",
+          name: "probe",
+          arguments: '{"input":"synthetic"}',
+        },
+        {
+          type: "function_call",
+          id: "fc_two",
+          call_id: "call_two",
+          name: "probe",
+          arguments: '{"input":"synthetic"}',
+        },
+        {
+          type: "function_call",
+          call_id: "call_orphan",
+          name: "probe",
+          arguments: '{"input":"synthetic"}',
+        },
+        {
+          type: "function_call",
+          call_id: "call_invalid",
+          name: "probe",
+          arguments: '{"input":"synthetic"}',
+        },
+        {
+          type: "function_call",
+          call_id: "call_late",
+          name: "probe",
+          arguments: '{"input":"synthetic"}',
+        },
+      ]);
+      expect(input.find((item) => item.type === "function_call_output")).toMatchObject({
+        call_id: "call_one",
+        output: "Done",
+      });
+      expect(context).toEqual(original);
+    },
+  );
+
+  it.each(responseConverters)(
     "$name preserves encrypted reasoning and removes bare orphan tails after payload preparation",
     ({ convert }) => {
       for (const encryptedContent of [undefined, null, "", "synthetic-completed-reasoning"]) {

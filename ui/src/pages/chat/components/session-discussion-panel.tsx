@@ -3,21 +3,17 @@ import type {
   SessionDiscussionInfo,
   SessionDiscussionState,
 } from "../../../../../packages/gateway-protocol/src/index.js";
-import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import {
   buildWidgetThemeMessage,
   postWidgetTheme,
   registerWidgetThemeFrame,
 } from "../../../lib/widget-theme.ts";
-import {
-  defineSolidBridge,
-  LitContent,
-  type SolidBridgeElement,
-} from "../../../lit/solid-bridge.ts";
 
 type SessionDiscussionInfoLoader = (sessionKey: string) => Promise<SessionDiscussionInfo>;
 type SessionDiscussionStateListener = (
@@ -167,17 +163,13 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
     const current = state();
     if (current.status === "loading" || current.status === "opening") {
       return (
-        <LitContent
-          render={() =>
-            renderPanelLoadingSkeleton(
-              "discussion",
-              t(
-                state().status === "opening"
-                  ? "chat.sessionDiscussion.opening"
-                  : "chat.sessionDiscussion.loading",
-              ),
-            )
-          }
+        <PanelLoadingSkeleton
+          variant="discussion"
+          label={t(
+            state().status === "opening"
+              ? "chat.sessionDiscussion.opening"
+              : "chat.sessionDiscussion.loading",
+          )}
         />
       );
     }

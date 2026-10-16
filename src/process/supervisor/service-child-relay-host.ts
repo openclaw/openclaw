@@ -453,7 +453,11 @@ export async function createServiceChildRelayAdapter(
         });
       }
     } else if (message.type === "startup-error") {
-      if (useWindowsJobAnchor || useLinuxSubreaper || message.errorDetails) {
+      // A failed command never sends ready. Keep its live anchor's identity for
+      // the outside-group extinction join without converting it into kill authority.
+      anchorPid ??= message.anchorPid;
+      cleanupDeadline.begin();
+      if (useWindowsJobAnchor || anchorPid !== undefined) {
         startup.reject(Object.assign(new Error(message.error), message.errorDetails));
       } else {
         loseIdentity(message.error);
@@ -615,9 +619,9 @@ export async function createServiceChildRelayAdapter(
         secretDeliveryResult.status === "rejected" ? secretDeliveryResult.reason : undefined;
       // Preserve admission failure over the secret pipe it closes as a consequence.
       if (startupError !== undefined || secretDeliveryError !== undefined) {
-        if ((useWindowsJobAnchor || useLinuxSubreaper) && startupError !== undefined) {
+        if (startupError !== undefined) {
           await startupErrorAckDelivery;
-          await cleanup.completion.promise;
+          await cleanup.promise;
         }
         throw startupError ?? secretDeliveryError;
       }

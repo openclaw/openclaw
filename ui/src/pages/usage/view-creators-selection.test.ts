@@ -1,9 +1,12 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { selectUsageExport } from "./export-menu.test-support.ts";
 import { projectUsageData, createUsageProps, usageSession } from "./view.test-support.ts";
 import { renderUsage } from "./view.tsx";
+
+afterEach(() => document.body.replaceChildren());
 
 function creatorSession(id: string, multiplier: number) {
   const daily = [
@@ -47,11 +50,11 @@ it.each([
   },
 ])(
   "keeps creators beyond the visible session cap for $selectedDays",
-  ({ selectedDays, tokens, cost, costs }) => {
+  async ({ selectedDays, tokens, cost, costs }) => {
     const base = createUsageProps();
     const sessions = [creatorSession("Alex", 1), creatorSession("Jordan", 2)];
     const onExportJson = vi.fn();
-    const container = document.createElement("div");
+    const container = document.body.appendChild(document.createElement("div"));
     mountSolid(
       () =>
         renderUsage({
@@ -88,18 +91,16 @@ it.each([
         (node) => node.textContent,
       ),
     ).toEqual([tokens, cost, "2"]);
-    container
-      .querySelector(".usage-export-menu")
-      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
+    await selectUsageExport(container.querySelector(".usage-export-menu")!, "json");
     expect(onExportJson).toHaveBeenCalledWith();
   },
 );
 
-it("exports all matched sessions even when the current roster page is empty", () => {
+it("exports all matched sessions even when the current roster page is empty", async () => {
   const base = createUsageProps();
   const session = creatorSession("Alex", 1);
   const onExportCsv = vi.fn();
-  const container = document.createElement("div");
+  const container = document.body.appendChild(document.createElement("div"));
   mountSolid(
     () =>
       renderUsage({
@@ -113,7 +114,7 @@ it("exports all matched sessions even when the current roster page is empty", ()
   expect(container.querySelectorAll(".session-bar-row")).toHaveLength(0);
   expect(container.querySelectorAll(".usage-metric-badge strong")[2]?.textContent).toBe("1");
   const menu = container.querySelector(".usage-export-menu")!;
-  expect(menu.querySelector('[value="sessions-csv"]')!.hasAttribute("disabled")).toBe(false);
-  menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "sessions-csv" } } }));
+  expect(menu.querySelector('[data-value="sessions-csv"]')!.hasAttribute("disabled")).toBe(false);
+  await selectUsageExport(menu, "sessions-csv");
   expect(onExportCsv).toHaveBeenCalledWith("sessions-csv");
 });

@@ -10,7 +10,6 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
-  createAnthropicServiceTierWrapper,
   resolveAnthropicBetas,
   resolveAnthropicFastMode,
   wrapAnthropicProviderStream,
@@ -515,12 +514,5 @@ describe("Anthropic service_tier payload wrappers", () => {
     );
     expect(first?.service_tier).toBe("auto");
     expect(second?.service_tier).toBe("standard_only");
-  });
-
-  it("explicit service tier injects service_tier=standard_only for regular API keys", () => {
-    const payload = runPayloadWrapper({ apiKey: "sk-ant-api03-test-key" }, (base) =>
-      createAnthropicServiceTierWrapper(base, "standard_only"),
-    );
-    expect(payload?.service_tier).toBe("standard_only");
   });
 });

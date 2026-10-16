@@ -1,5 +1,6 @@
 // @vitest-environment node
 import {
+  createSessionProjection,
   reduceSessionProjection,
   type SessionProjectionScope,
 } from "@openclaw/gateway-client/browser";
@@ -110,6 +111,51 @@ function createAuthoritativeInitialMessage(sequence = 1) {
 }
 
 describe("pane-owned canonical session projection", () => {
+  it.each(["message", "user", "imported", "session", "agent", "lifecycle"])(
+    "does not transfer a pairing QR across a different %s identity",
+    (change) => {
+      const owner = { sessionKey: "agent:main:one", chatMessages: [] as unknown[] };
+      const scope = {
+        sessionKey: owner.sessionKey,
+        sessionId: "one",
+        agentId: "main",
+        lifecycleRevision: 1,
+      };
+      const saved = createHistoryMessage("assistant", "Pairing details", { id: "pair-reply" });
+      projectLiveMessage(
+        owner,
+        {
+          ...saved,
+          content: [...saved.content, { type: "openclaw_pairing_qr", image_url: imageDataUrl }],
+        },
+        scope,
+      );
+      const incoming = {
+        ...saved,
+        ...(change === "user" ? { role: "user" } : {}),
+        __openclaw: {
+          id: change === "message" ? "another-reply" : "pair-reply",
+          ...(change === "imported"
+            ? { importedFrom: "claude-cli", cliSessionId: "external", externalId: "pair-reply" }
+            : {}),
+        },
+      };
+      publishChatSessionProjection(
+        owner,
+        createSessionProjection(
+          {
+            ...scope,
+            ...(change === "session" ? { sessionId: "two" } : {}),
+            ...(change === "agent" ? { agentId: "other" } : {}),
+            ...(change === "lifecycle" ? { lifecycleRevision: 2 } : {}),
+          },
+          [incoming],
+        ),
+      );
+      expect(owner.chatMessages).toEqual([incoming]);
+    },
+  );
+
   it.each(["reset", "session", "branch"] as const)(
     "retires the compaction marker's live state on %s changes",
     (change) => {

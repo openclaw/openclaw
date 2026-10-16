@@ -27,10 +27,13 @@ import {
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
 import type { SessionEntrySummary } from "../../config/sessions/session-accessor.types.js";
 import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
+import {
   readSessionEntryReadOnlyInWorker,
   withSessionStoreReaderInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import {
@@ -135,7 +138,7 @@ type SessionIdMatchSet = {
 type SessionIdMatchCandidate = {
   sessionKey: string;
   entry: InternalSessionEntry;
-  resolution: Omit<SessionKeyResolution, "sessionEntry">;
+  resolution: Omit<SessionKeyResolution, "sessionEntry"> & { sessionKey: string };
   primary: boolean;
 };
 
@@ -164,21 +167,36 @@ function selectSessionIdMatchCandidate(
     })[0];
 }
 
-async function loadCommandSessionEntries(params: {
+async function loadCommandSessionIdMatches(params: {
   agentId?: string;
   storePath: string;
+  sessionId: string;
 }): Promise<SessionEntrySummary[]> {
   return withSessionStoreReaderInWorker(
     params,
     async ({ reader, database, continuation }) => {
-      const result = await reader.readEntries(
-        { agentId: database.agentId, storePath: database.path, env: database.env },
+      // Identity selection must not hydrate every saved prompt and diff in the store.
+      const result = await reader.readExactEntries({
+        selection: { kind: "session-id-or-key", sessionIdOrKey: params.sessionId },
+        projection: "list",
+        env: database.env,
         continuation,
-      );
-      return result.entries;
+      });
+      return result.entries.filter(({ entry }) => entry.sessionId === params.sessionId);
     },
     { backing: true, dataOnly: true },
   );
+}
+
+async function readCommandSessionIdMatch(
+  scope: { agentId?: string; storePath: string; sessionKey: string },
+  sessionId: string,
+): Promise<InternalSessionEntry> {
+  const entry = await readSessionEntryReadOnlyInWorker(scope);
+  if (entry?.sessionId !== sessionId) {
+    throw new Error("Stored session changed while resolving its ID. Retry the request.");
+  }
+  return entry;
 }
 
 export function buildExplicitSessionIdSessionKey(params: {
@@ -217,13 +235,10 @@ async function collectSessionIdMatchesForRequest(opts: {
     candidateAgentId: string | undefined,
     options?: { primary?: boolean },
   ): void => {
-    // The successful listing already validated a partition's scoped owner; do not inspect it again.
+    // The worker selection already validated a partition's scoped owner.
     const candidateStoreTarget =
       resolveUnsuffixedSqliteTargetFromSessionStorePath(candidateStorePath);
     for (const { sessionKey: candidateKey, entry: candidateEntry } of candidateEntries) {
-      if (candidateEntry?.sessionId !== opts.sessionId) {
-        continue;
-      }
       const normalizedCandidateAgentId = candidateAgentId
         ? normalizeAgentId(candidateAgentId)
         : undefined;
@@ -294,9 +309,10 @@ async function collectSessionIdMatchesForRequest(opts: {
     }
     const candidateStorePath = resolveSessionStorePathCore(opts.cfg.session?.store, { agentId });
     addMatches(
-      await loadCommandSessionEntries({
+      await loadCommandSessionIdMatches({
         agentId,
         storePath: candidateStorePath,
+        sessionId: opts.sessionId,
       }),
       candidateStorePath,
       agentId,
@@ -330,13 +346,14 @@ export async function resolveStoredSessionKeyForSessionId(opts: {
   const storePath = resolveSessionStorePathCore(opts.cfg.session?.store, {
     agentId: storeAgentId,
   });
-  const sessionEntries = await loadCommandSessionEntries({
-    storePath,
-    agentId: storeAgentId,
-  });
   if (!sessionId) {
     return { sessionKey: undefined, storePath };
   }
+  const sessionIdMatches = await loadCommandSessionIdMatches({
+    storePath,
+    agentId: storeAgentId,
+    sessionId,
+  });
 
   const resolveMatchedAgentId = (sessionKey: string): string | undefined => {
     const scopedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
@@ -350,7 +367,6 @@ export async function resolveStoredSessionKeyForSessionId(opts: {
         ? undefined
         : (requestedAgentId ?? tryResolveLegacyCompatibilityAgentId(opts.cfg));
   };
-  const sessionIdMatches = sessionEntries.filter(({ entry }) => entry.sessionId === sessionId);
   const selectionMatches = requestedAgentId
     ? sessionIdMatches.filter(
         ({ sessionKey }) => resolveMatchedAgentId(sessionKey) === requestedAgentId,
@@ -391,8 +407,9 @@ export async function resolveStoredSessionKeyForSessionId(opts: {
   return {
     agentId: resolvedAgentId,
     sessionKey,
-    sessionEntry: structuredClone(
-      selectionMatches.find((match) => match.sessionKey === sessionKey)?.entry,
+    sessionEntry: await readCommandSessionIdMatch(
+      { agentId: resolvedAgentId, storePath, sessionKey },
+      sessionId,
     ),
     storePath,
   };
@@ -505,11 +522,14 @@ async function resolveSessionKeyForRequestInternal(
     !isInternalSessionEffectsKey(storeSessionKey) &&
     !(
       opts.prepareBoundEntry &&
-      captureIncognitoSessionSource({
-        agentId: storeAgentId,
-        storePath,
-        sessionKey: storeSessionKey,
-      })
+      captureSessionActorStorageOwner(
+        {
+          agentId: storeAgentId,
+          storePath,
+          sessionKey: storeSessionKey,
+        },
+        { assertCurrent() {}, authorize() {} },
+      )
     )
       ? await readSessionEntryReadOnlyInWorker({
           agentId: storeAgentId,
@@ -529,7 +549,11 @@ async function resolveSessionKeyForRequestInternal(
   ) {
     const { candidates, ownerConflict } = await collectSessionIdMatchesForRequest({
       cfg: opts.cfg,
-      sessionEntries: await loadCommandSessionEntries({ storePath, agentId: storeAgentId }),
+      sessionEntries: await loadCommandSessionIdMatches({
+        storePath,
+        agentId: storeAgentId,
+        sessionId: requestedSessionId,
+      }),
       storePath,
       storeAgentId,
       sessionId: requestedSessionId,
@@ -542,7 +566,7 @@ async function resolveSessionKeyForRequestInternal(
     if (selectedMatch) {
       return {
         ...selectedMatch.resolution,
-        sessionEntry: structuredClone(selectedMatch.entry),
+        sessionEntry: await readCommandSessionIdMatch(selectedMatch.resolution, requestedSessionId),
       };
     }
     if (ownerConflict) {
@@ -607,15 +631,19 @@ export async function resolveSession(
     prepareBoundEntry: true,
   });
   const scope = { agentId: resolvedAgentId, sessionKey: sessionKey ?? "", storePath };
-  const sessionEntry =
-    sessionKey && !isInternalSessionEffectsKey(sessionKey) && captureIncognitoSessionSource(scope)
-      ? await readSessionEntryReadOnlyInWorker(
-          { ...scope, sessionKey: normalizeStoreSessionKey(sessionKey) },
-          () => {
+  const memory =
+    sessionKey && !isInternalSessionEffectsKey(sessionKey)
+      ? captureSessionActorStorageOwner(scope, {
+          assertCurrent() {
             opts.signal?.throwIfAborted();
             opts.assertCurrent?.();
           },
-        )
+          authorize() {},
+        })
+      : undefined;
+  const sessionEntry =
+    memory && sessionKey
+      ? readCapturedSessionActorEntry(memory, normalizeStoreSessionKey(sessionKey))
       : routedEntry;
   const now = Date.now();
 

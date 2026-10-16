@@ -115,12 +115,14 @@ const mocks = vi.hoisted(() => {
         threadId: undefined,
       }),
     ),
-    loadSessionEntry:
+    loadSessionEntryAsync:
       vi.fn<
         (
           sessionKey: string,
-          options?: Parameters<typeof import("./session-utils.js").loadSessionEntry>[1],
-        ) => LoadedSessionEntry
+          options?: Parameters<
+            typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync
+          >[1],
+        ) => Promise<LoadedSessionEntry>
       >(),
     deliveryContextFromSession: vi.fn<
       typeof import("../utils/delivery-context.read.js").deliveryContextFromSession
@@ -160,6 +162,10 @@ const mocks = vi.hoisted(() => {
       value: await fn(),
     })),
     withStableDeliveryPreparation: vi.fn(),
+    loadSessionEntryInWorker:
+      vi.fn<
+        typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+      >(),
     resolveSessionTarget:
       vi.fn<
         typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker
@@ -343,11 +349,6 @@ vi.mock("../channels/plugins/session-thread-info-loaded.js", () => ({
   resolveLoadedSessionThreadInfo: mocks.parseSessionThreadInfo,
 }));
 
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: mocks.loadSessionEntry,
-}));
-
 vi.mock("../utils/delivery-context.read.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../utils/delivery-context.read.js")>()),
   deliveryContextFromSession: mocks.deliveryContextFromSession,
@@ -497,11 +498,7 @@ vi.mock("./server-restart-update-run.js", async () => {
 
 // mock-isolation: These producer tests use supplied rows; worker authority has its own boundary suite.
 vi.mock("./session-utils-store-worker.js", () => ({
-  loadGatewaySessionEntryReadOnlyInWorker: async (params: {
-    key: string;
-    agentId?: string;
-    env?: NodeJS.ProcessEnv;
-  }) => mocks.loadSessionEntry(params.key, { agentId: params.agentId, env: params.env }),
+  loadGatewaySessionEntryReadOnlyInWorker: mocks.loadSessionEntryInWorker,
   resolveGatewaySessionStoreTargetInWorker: mocks.resolveSessionTarget,
 }));
 
@@ -664,8 +661,12 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.getRuntimeConfig.mockReset();
     mocks.getRuntimeConfig.mockReturnValue({ commands: { ownerAllowFrom: ["+15550002"] } });
     configureRestartSessionEventMocks(mocks);
-    mocks.loadSessionEntry.mockReset();
-    mocks.loadSessionEntry.mockImplementation((sessionKey: string) =>
+    mocks.loadSessionEntryInWorker.mockReset().mockImplementation(async ({ key, agentId, env }) => {
+      const loaded = await mocks.loadSessionEntryAsync(key, { agentId, env });
+      return { ...loaded, agentId: loaded.agentId ?? agentId ?? "main" };
+    });
+    mocks.loadSessionEntryAsync.mockReset();
+    mocks.loadSessionEntryAsync.mockImplementation(async (sessionKey: string) =>
       sessionFixture(
         sessionKey,
         { sessionId: sessionKey, updatedAt: 0 },
@@ -752,9 +753,9 @@ describe("scheduleRestartSentinelWake", () => {
   it("records a non-owner update without delivery or a diagnostic wake", async () => {
     const sessionKey = "agent:main:whatsapp:direct:+15550002";
     const run = createUpdateRun({ trigger: "control-ui", origin: { sessionKey } });
-    const session = mocks.loadSessionEntry(sessionKey);
+    const session = await mocks.loadSessionEntryAsync(sessionKey);
     mocks.getRuntimeConfig.mockReturnValue({ commands: { ownerAllowFrom: ["telegram:12345"] } });
-    mocks.loadSessionEntry.mockReturnValue({
+    mocks.loadSessionEntryAsync.mockResolvedValue({
       ...session,
       cfg: { commands: { ownerAllowFrom: ["telegram:12345"] } },
     });
@@ -981,15 +982,25 @@ describe("scheduleRestartSentinelWake", () => {
     const entry = { sessionId, updatedAt: 1, lifecycleRevision: "update-lifecycle" };
     await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, entry);
     const originalMerge = mocks.mergeDeliveryContext.getMockImplementation()!;
-    const sessionUtils =
-      await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
     const delivery = await vi.importActual<typeof import("../utils/delivery-context.shared.js")>(
       "../utils/delivery-context.shared.js",
     );
     const deliveryRead = await vi.importActual<typeof import("../utils/delivery-context.read.js")>(
       "../utils/delivery-context.read.js",
     );
-    mocks.loadSessionEntry.mockImplementation(sessionUtils.loadSessionEntry);
+    const sessionWorker = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+      "./session-utils-store-worker.js",
+    );
+    mocks.loadSessionEntryInWorker.mockImplementation(
+      sessionWorker.loadGatewaySessionEntryReadOnlyInWorker,
+    );
+    mocks.loadSessionEntryAsync.mockImplementation((key, options) =>
+      sessionWorker.loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: mocks.getRuntimeConfig(),
+        key,
+        ...options,
+      }),
+    );
     mocks.deliveryContextFromSession.mockImplementation(deliveryRead.deliveryContextFromSession);
     mocks.mergeDeliveryContext.mockImplementation(delivery.mergeDeliveryContext);
     const updateRun = createUpdateRun({ trigger: "api", origin: { sessionKey } });
@@ -1397,7 +1408,7 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("authorizes queued media replay for an active cron continuation", async () => {
-    mocks.loadSessionEntry.mockReturnValue(
+    mocks.loadSessionEntryAsync.mockResolvedValue(
       sessionFixture("agent:main:cron:daily-media:run:run-123", {
         sessionId: "cron-run-session",
         cronRunContinuation: {
@@ -1437,7 +1448,7 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("defers a generated-media turn still owned by agent recovery", async () => {
     mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "in_flight" });
-    mocks.loadSessionEntry.mockReturnValue(
+    mocks.loadSessionEntryAsync.mockResolvedValue(
       sessionFixture("agent:main:main", {
         sessionId: "agent:main:main",
         restartRecoveryDeliveryRunId: "recovery-run",
@@ -1485,7 +1496,7 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("fails closed when a terminal agent turn has no replayable result", async () => {
     mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "ok" });
-    mocks.loadSessionEntry.mockReturnValue(
+    mocks.loadSessionEntryAsync.mockResolvedValue(
       sessionFixture("agent:main:main", {
         sessionId: "agent:main:main",
         restartRecoveryTerminalRunIds: ["image:task-terminal:agent-loop"],
@@ -1504,7 +1515,7 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("retries a captured empty terminal result instead of dead-lettering it", async () => {
     mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "ok" });
-    mocks.loadSessionEntry.mockReturnValue(
+    mocks.loadSessionEntryAsync.mockResolvedValue(
       sessionFixture("agent:main:main", {
         sessionId: "agent:main:main",
         restartRecoveryTerminalRunIds: ["image:task-terminal-empty:agent-loop"],
@@ -1555,7 +1566,7 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("does not replay private terminal media as an owning-transcript delivery", async () => {
     mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "ok" });
-    mocks.loadSessionEntry.mockReturnValue(
+    mocks.loadSessionEntryAsync.mockResolvedValue(
       sessionFixture("agent:main:main", {
         sessionId: "agent:main:main",
         restartRecoveryTerminalRunIds: ["image:task-terminal-private:agent-loop"],
@@ -1746,7 +1757,7 @@ describe("scheduleRestartSentinelWake", () => {
     if (!storedEntry) {
       throw new Error("expected persisted media owner");
     }
-    mocks.loadSessionEntry.mockReturnValue(
+    mocks.loadSessionEntryAsync.mockResolvedValue(
       sessionFixture("global", storedEntry, { agentId: "ops", storePath: opsStorePath }),
     );
 
@@ -2159,7 +2170,9 @@ describe("scheduleRestartSentinelWake", () => {
       },
       "thread-42",
     );
-    mocks.loadSessionEntry.mockReturnValueOnce(activeEntry).mockReturnValue(replacementEntry);
+    mocks.loadSessionEntryAsync
+      .mockResolvedValueOnce(activeEntry)
+      .mockResolvedValue(replacementEntry);
 
     await wakeRestartSentinel();
 
@@ -2202,7 +2215,7 @@ describe("scheduleRestartSentinelWake", () => {
       baseSessionKey: "agent:main:telegram:group:-1003826723328",
       threadId: "13757",
     });
-    mocks.loadSessionEntry.mockReturnValue(
+    mocks.loadSessionEntryAsync.mockResolvedValue(
       sessionFixture("agent:main:telegram:group:-1003826723328:topic:13757", {
         sessionId: "agent:main:telegram:group:-1003826723328:topic:13757",
         updatedAt: 0,
@@ -2460,7 +2473,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "room-77" });
     setNoticeOwner("telegram:room-77");
     await wakeRestartSentinel();
-    expect(mocks.loadSessionEntry).toHaveBeenCalledWith(
+    expect(mocks.loadSessionEntryAsync).toHaveBeenCalledWith(
       sessionKey,
       expect.objectContaining({
         env: expect.objectContaining({ OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR }),
@@ -2590,9 +2603,9 @@ describe("scheduleRestartSentinelWake", () => {
       baseSessionKey: key === sessionKey ? baseSessionKey : key,
       threadId: key === sessionKey ? "99" : undefined,
     }));
-    const loadSession = mocks.loadSessionEntry.getMockImplementation()!;
-    mocks.loadSessionEntry.mockImplementation((key) => ({
-      ...loadSession(key),
+    const loadSession = mocks.loadSessionEntryAsync.getMockImplementation()!;
+    mocks.loadSessionEntryAsync.mockImplementation(async (key) => ({
+      ...(await loadSession(key)),
       entry: {
         sessionId: key,
         updatedAt: 0,
@@ -2720,8 +2733,8 @@ describe("scheduleRestartSentinelWake", () => {
       baseSessionKey: "agent:main:matrix:channel:!lowercased:example.org",
       threadId: "$thread-event",
     });
-    mocks.loadSessionEntry
-      .mockReturnValueOnce(
+    mocks.loadSessionEntryAsync
+      .mockResolvedValueOnce(
         sessionFixture(
           "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
           {
@@ -2735,7 +2748,7 @@ describe("scheduleRestartSentinelWake", () => {
           { cfg: { commands: { ownerAllowFrom: ["room:!MixedCase:example.org"] } } },
         ),
       )
-      .mockReturnValueOnce(
+      .mockResolvedValueOnce(
         sessionFixture("agent:main:matrix:channel:!lowercased:example.org", {
           sessionId: "agent:main:matrix:channel:!lowercased:example.org",
           updatedAt: 0,

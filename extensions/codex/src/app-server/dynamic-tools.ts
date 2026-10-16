@@ -193,9 +193,7 @@ export function createCodexDynamicToolBridge(params: {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
   const contextWindowTokens = params.hookContext?.contextWindowTokens;
   const toolResultMaxChars =
-    typeof contextWindowTokens === "number" &&
-    Number.isFinite(contextWindowTokens) &&
-    contextWindowTokens > 0
+    contextWindowTokens !== undefined && contextWindowTokens > 0
       ? Math.max(1, resolveLiveToolResultMaxChars({ contextWindowTokens }))
       : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
   const availableProjection = projectCodexExecutableDynamicToolSurface(
@@ -207,9 +205,7 @@ export function createCodexDynamicToolBridge(params: {
     : availableProjection;
   // Supervised thread declarations are native-owned and fingerprinted. Narrow
   // executors below, but never rewrite the catalog checked by thread-lifecycle-run.
-  const inheritedSpecs = params.registeredSpecs
-    ? structuredClone([...params.registeredSpecs])
-    : undefined;
+  const inheritedSpecs = params.registeredSpecs ? [...params.registeredSpecs] : undefined;
   const inheritedNames = inheritedSpecs
     ? new Set(flattenCodexDynamicToolFunctions(inheritedSpecs).map((tool) => tool.name))
     : undefined;

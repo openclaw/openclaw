@@ -73,7 +73,7 @@ it("keeps exact-millisecond ties resident and applies real native title notifica
       ids.toSorted(),
     );
 
-    expect(batches.map((batch) => batch.length)).toEqual([64, 17]);
+    expect(batches.map((batch) => batch.length)).toEqual([16, 16, 16, 16, 16, 1]);
     batches.length = 0;
     await client.request("thread/name/set", { threadId: ids[0], name: "Changed catalog head" });
     await vi.waitFor(async () => {

@@ -35,7 +35,7 @@ function domain(sourceIdentity?: (db: DatabaseSync) => string | symbol) {
   });
 }
 
-function fixture() {
+function fixture(publishPending = true) {
   const db = openTrackedStateDatabase(
     path.join(dirs.make("state-domain-receipts-"), "state.sqlite"),
   );
@@ -51,6 +51,7 @@ function fixture() {
   const begin = (owner = publication) =>
     owner.begin({
       identity: readTrackedStateDatabaseIdentity(db)!.key,
+      publishPending,
       assertCurrent() {
         if (!db.isOpen) {
           throw new Error("closed database");
@@ -157,36 +158,46 @@ it("installs all domains from a worker commit before notifying either domain", (
   ]);
 });
 
-it("cannot restore a newer native deletion with a delayed worker receipt", () => {
-  const { db, publication, transaction, write, begin } = fixture();
-  const captured = transaction(() =>
-    publication.capture(db, () => write({ id: "grant", version: 1 })),
-  );
-  const delayed = begin();
-  transaction(() => {
-    db.prepare("DELETE FROM facts WHERE id = ?").run("grant");
-    publication.stageDeletions(db, ["grant"]);
-  });
-  const observed: StateDomainChange<Row>[] = [];
-  cleanup.push(publication.subscribe((change) => observed.push(change)));
-  delayed.committed(captured.receipt);
-  delayed.finish(true);
-  expect(observed).toMatchObject([
-    { kind: "committed", receipt: { facts: new Map([["grant", { kind: "unknown" }]]) } },
-  ]);
-  expect(db.prepare("SELECT * FROM facts").all()).toEqual([]);
-});
+it.each([true, false])(
+  "cannot restore a newer native deletion with a delayed worker receipt (pending=%s)",
+  (publishPending) => {
+    const { db, publication, transaction, write, begin } = fixture(publishPending);
+    const captured = transaction(() =>
+      publication.capture(db, () => write({ id: "grant", version: 1 })),
+    );
+    const delayed = begin();
+    transaction(() => {
+      db.prepare("DELETE FROM facts WHERE id = ?").run("grant");
+      publication.stageDeletions(db, ["grant"]);
+    });
+    const observed: StateDomainChange<Row>[] = [];
+    cleanup.push(publication.subscribe((change) => observed.push(change)));
+    delayed.committed(captured.receipt);
+    delayed.finish(true);
+    expect(observed).toMatchObject([
+      { kind: "committed", receipt: { facts: new Map([["grant", { kind: "unknown" }]]) } },
+    ]);
+    expect(db.prepare("SELECT * FROM facts").all()).toEqual([]);
+  },
+);
 
-it("distinguishes a proven rollback from missing accepted commit evidence", () => {
-  const { publication, begin } = fixture();
-  const changes: StateDomainChange<Row>[] = [];
-  cleanup.push(publication.subscribeFacts((change) => changes.push(change)));
-  begin().finish(true, true);
-  expect(changes.map((change) => change.kind)).toEqual(["pending", "settled"]);
-  changes.length = 0;
-  begin().finish(true);
-  expect(changes.map((change) => change.kind)).toEqual(["pending", "unknown", "settled"]);
-});
+it.each([true, false])(
+  "distinguishes a proven rollback from missing accepted commit evidence (pending=%s)",
+  (publishPending) => {
+    const { publication, begin } = fixture(publishPending);
+    const changes: StateDomainChange<Row>[] = [];
+    cleanup.push(publication.subscribeFacts((change) => changes.push(change)));
+    begin().finish(true, true);
+    expect(changes.map((change) => change.kind)).toEqual(
+      publishPending ? ["pending", "settled"] : [],
+    );
+    changes.length = 0;
+    begin().finish(true);
+    expect(changes.map((change) => change.kind)).toEqual(
+      publishPending ? ["pending", "unknown", "settled"] : ["unknown"],
+    );
+  },
+);
 
 it("invalidates installed facts when their publisher throws before completed settlement", () => {
   const { db, publication, transaction, write, begin } = fixture();

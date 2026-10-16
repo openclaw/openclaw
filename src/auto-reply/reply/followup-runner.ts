@@ -5,6 +5,7 @@ import {
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
+import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -25,14 +26,19 @@ import {
   type FollowupRunnerParams,
 } from "./followup-turn-admission.js";
 import { executeFollowupTurn } from "./followup-turn-execution.js";
+import { enqueueGoalContinuation } from "./goal-continuation.js";
 import {
   completeFollowupRunLifecycle,
   FollowupRunDeferredError,
   type FollowupRun,
 } from "./queue.js";
+import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
-import { retainReplyOperationUntilComplete } from "./reply-run-registry.state.js";
+import {
+  getReplyOperationSessionReader,
+  retainReplyOperationUntilComplete,
+} from "./reply-run-registry.state.js";
 import {
   isReplyOperationStalledBeforeOutput,
   STALLED_TURN_NOTICE_TEXT,
@@ -66,7 +72,7 @@ function resolveFollowupCompletion(
         outcome.kind === "rejected"
           ? outcome.payload.text
           : outcome.kind === "settled" && outcome.status === "failed"
-            ? outcome.terminalFailurePayload.text
+            ? (outcome.terminalFailurePayload?.text ?? meta?.error?.message)
             : meta?.error?.message,
     },
   });
@@ -93,32 +99,19 @@ export function createFollowupRunner(
     ? initialDefaults.resolveGatewayContext
     : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const defaults = { ...initialDefaults, resolveGatewayContext };
-  // Every queue handoff, including delivery retries, retains this host owner
-  // without borrowing the invoking turn's request or workspace-preparation authority.
+  // Follow-ups retain the host owner, never the invoking turn's transcript or request scope.
   const runFollowup = (queued: FollowupRun): Promise<void> =>
-    runWithAgentWorkspaceReadiness(undefined, () =>
-      withPluginRuntimeGatewayContextResolver(
-        resolveGatewayContext,
-        () => executeFollowup(queued),
-        {
-          inheritRequestScope: false,
-        },
+    withoutSessionTranscriptReadFence(() =>
+      runWithAgentWorkspaceReadiness(undefined, () =>
+        withPluginRuntimeGatewayContextResolver(
+          resolveGatewayContext,
+          () => executeFollowup(queued),
+          {
+            inheritRequestScope: false,
+          },
+        ),
       ),
     );
-  const deliverProgress = async (
-    turn: AdmittedFollowupTurn,
-    payloads: ReplyPayload[],
-    kind: "tool" | "block",
-  ) => {
-    await deliverFollowupDecision({
-      decision: { kind: "deliver", payloads },
-      turn,
-      defaults,
-      runId: turn.runId,
-      runFollowup,
-      kind,
-    });
-  };
   const executeFollowup = async (queued: FollowupRun): Promise<void> => {
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
@@ -127,14 +120,37 @@ export function createFollowupRunner(
     let progressContinuation: ProgressContinuationCapability | undefined;
     const admissionNotices: ReplyPayload[] = [];
     let completion: QueuedFollowupReplyBatch["completion"] = { kind: "completed" };
-    const initiallyAborted = isFollowupRunAborted(queued);
-    const endDeliveryCorrelations = initiallyAborted
-      ? []
-      : (queued.deliveryCorrelations ?? [])
-          .map((correlation) => correlation.begin())
-          .filter((end): end is () => void => typeof end === "function");
+    let visibleReplySent = false;
+    let deliveryPending = false;
+    let sourceRetryPending = false;
+    const onObservedReplyDelivery = async () => {
+      if (visibleReplySent) {
+        return;
+      }
+      visibleReplySent = true;
+      await defaults.opts?.onObservedReplyDelivery?.();
+    };
+    const deliverProgress = async (
+      turn: AdmittedFollowupTurn,
+      payloads: ReplyPayload[],
+      kind: "tool" | "block",
+    ) => {
+      const delivery = await deliverFollowupDecision({
+        decision: { kind: "deliver", payloads },
+        turn,
+        defaults,
+        runId: turn.runId,
+        runFollowup,
+        kind,
+        onObservedReplyDelivery,
+      });
+      deliveryPending ||= delivery.kind === "pending";
+    };
+    const endDeliveryCorrelations = (queued.deliveryCorrelations ?? [])
+      .map((correlation) => correlation.begin())
+      .filter((end) => typeof end === "function");
     try {
-      if (initiallyAborted) {
+      if (isFollowupRunAborted(queued)) {
         disposition = { kind: "consumed" };
         return;
       }
@@ -168,6 +184,7 @@ export function createFollowupRunner(
       const turn: AdmittedFollowupTurn = admission.turn;
       admittedTurn = turn;
       operation = turn.operation;
+      const initialGoalId = turn.session.current()?.goal?.id;
       retainReplyOperationUntilComplete(operation);
       const execution = await executeFollowupTurn({
         turn,
@@ -210,7 +227,7 @@ export function createFollowupRunner(
         execution.execution.outcome.kind === "settled" &&
         hasCompletedSourceReplyDeliveryEvidence(execution.execution.outcome.result)
       ) {
-        await defaults.opts?.onObservedReplyDelivery?.();
+        await onObservedReplyDelivery();
       }
       const deliveryOpts = {
         ...defaults.opts,
@@ -218,8 +235,9 @@ export function createFollowupRunner(
         resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
         resolveReplyDeliveryFacts: turn.queued.runObservers?.resolveReplyDeliveryFacts,
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
+        onObservedReplyDelivery,
       };
-      const decision = await withAgentTurnCompletion(
+      const { decision, accounting: completedAccounting } = await withAgentTurnCompletion(
         {
           agentId: turn.queued.run.agentId,
           storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
@@ -246,7 +264,7 @@ export function createFollowupRunner(
             opts: deliveryOpts,
           });
           await turnCompletion?.complete();
-          return resolved;
+          return { decision: resolved, accounting };
         },
       );
       if (decision.kind === "deliver") {
@@ -270,9 +288,39 @@ export function createFollowupRunner(
         defaults,
         runId: execution.execution.runId,
         runFollowup,
+        onObservedReplyDelivery,
       });
       // Source recovery has its own queued callback; this execution still closes once.
-      terminalPayloads = delivery.kind === "completed" ? delivery.payloads : [];
+      terminalPayloads = delivery.kind === "source-retry" ? [] : delivery.payloads;
+      deliveryPending ||= delivery.kind === "pending";
+      sourceRetryPending = delivery.kind === "source-retry";
+      // Gateway final batches are returned above, not delivered: their one-shot
+      // source owner settles in finally. Allocate its successor before that boundary.
+      if (
+        completion.kind === "completed" &&
+        completedAccounting?.activeSessionEntry?.goal?.status === "active" &&
+        turn.session.kind === "session" &&
+        turn.session.storePath
+      ) {
+        await enqueueGoalContinuation({
+          base: turn.queued,
+          result: completedAccounting.runResult,
+          initialGoalId: turn.queued.goalContinuation?.goalId ?? initialGoalId,
+          expectedSession: completedAccounting.expectedSession,
+          sessionKey: turn.session.key,
+          storePath: turn.session.storePath,
+          reader: getReplyOperationSessionReader(turn.operation),
+          queueKey: turn.queued.run.sessionKey ?? turn.session.key,
+          settings: resolveQueueSettings({
+            cfg: turn.config,
+            sessionEntry: turn.session.current(),
+            channel: turn.queued.originatingChannel,
+          }),
+          sourceRunId: turn.runId,
+          operation: turn.operation,
+          runFollowup,
+        });
+      }
     } catch (error) {
       let operatorAuthorityLost = false;
       try {
@@ -306,7 +354,7 @@ export function createFollowupRunner(
         disposition = { kind: "retry", error };
       }
     } finally {
-      const sourceDisposition = admittedTurn?.queued.queuedFollowupReplyDisposition;
+      const sourceDisposition = (admittedTurn?.queued ?? queued).queuedFollowupReplyDisposition;
       if (
         disposition.kind === "consumed" &&
         admittedTurn &&
@@ -321,6 +369,7 @@ export function createFollowupRunner(
             completion,
           });
         } catch (error) {
+          completion = { kind: "failed", error: formatErrorMessage(error) };
           defaultRuntime.error?.(
             `followup queue: completion delivery failed; refusing replay: ${formatErrorMessage(error)}`,
           );
@@ -336,7 +385,19 @@ export function createFollowupRunner(
       }
       for (const end of endDeliveryCorrelations.toReversed()) {
         try {
-          end();
+          end(
+            // Source-owned batches settle through their own owner, whose void callback is not a receipt.
+            disposition.kind === "consumed" &&
+              (!sourceRetryPending || visibleReplySent || completion.kind === "failed") &&
+              sourceDisposition?.kind !== "deliver"
+              ? {
+                  visibleReplySent,
+                  failed: !admittedTurn || completion.kind === "failed",
+                  completed: Boolean(admittedTurn) && completion.kind === "completed",
+                  ...(deliveryPending ? { transportPending: true } : {}),
+                }
+              : undefined,
+          );
         } catch (error) {
           defaultRuntime.error?.(
             `followup queue: delivery correlation cleanup failed: ${formatErrorMessage(error)}`,
@@ -345,6 +406,13 @@ export function createFollowupRunner(
       }
       if (disposition.kind === "consumed") {
         completeFollowupRunLifecycle(queued);
+      }
+      try {
+        await admittedTurn?.restartRecovery?.clear();
+      } catch (error) {
+        defaultRuntime.error?.(
+          `followup queue: recovery settlement failed: ${formatErrorMessage(error)}`,
+        );
       }
       if (disposition.kind !== "deferred" && admittedTurn?.runId) {
         clearAgentRunContext(admittedTurn.runId);

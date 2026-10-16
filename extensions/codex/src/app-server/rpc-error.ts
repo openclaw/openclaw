@@ -3,6 +3,24 @@ import { isJsonObject, type JsonValue } from "./protocol.js";
 
 export const CODEX_APP_SERVER_OVERLOADED_ERROR_CODE = -32_001;
 
+export class CodexCatalogResponseTooLargeError extends Error {
+  constructor() {
+    super("Codex catalog response exceeds 8 MiB; reduce oversized thread previews and retry.");
+    this.name = "CodexCatalogResponseTooLargeError";
+  }
+
+  /** Transport and background reconciliation preserve the local rejection as a cause. */
+  static fromError(error: unknown): CodexCatalogResponseTooLargeError | undefined {
+    let current = error;
+    for (let depth = 0; current instanceof Error && depth < 8; depth++, current = current.cause) {
+      if (current instanceof CodexCatalogResponseTooLargeError) {
+        return current;
+      }
+    }
+    return undefined;
+  }
+}
+
 /** A scoped guard rejected the request before a physical write. */
 export class CodexAppServerScopedRequestRejectedError extends Error {
   constructor(message: string, options?: ErrorOptions) {

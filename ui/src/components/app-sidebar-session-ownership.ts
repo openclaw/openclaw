@@ -1,8 +1,8 @@
 import type { SessionsListResult } from "../api/types.ts";
 import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
+import { sessionSelfOwner, type SessionOwnerOption } from "../lib/session-owner.ts";
 import { findSidebarSessionInTree } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { sessionSelfOwner, type SessionOwnerOption } from "./session-owner-chip.ts";
 
 function hasMultipleSidebarSessionIdentities(
   ownerOptions: readonly SessionOwnerOption[],

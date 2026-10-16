@@ -5,24 +5,23 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   listSessionBranches,
-  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
   readSessionBranchSnapshot,
   readSessionBranchSummariesInWorker,
-} from "./session-accessor.sqlite-branches.js";
+} from "./session-accessor.sqlite-branches.worker.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionBranchListResult } from "./session-accessor.types.js";
@@ -394,8 +393,6 @@ it("reads only the newest usable appended headline while retaining cached histor
   const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
   const expected = {
     sessionKey: scope.sessionKey,
-    sessionId: scope.sessionId,
-    lifecycleRevision: loadSessionEntry(scope)?.lifecycleRevision,
   };
   const previous = readSessionBranchSnapshot(database, expected);
   expect(previous).toMatchObject({ status: "ok", appendSafe: true });
@@ -418,12 +415,15 @@ it("reads only the newest usable appended headline while retaining cached histor
     });
     parentId = eventId;
   }
-  const tracked = trackSqliteStatementExecutions(database.db, ["headlines"], (sqlText) =>
-    sqlText.includes('from "transcript_events"') &&
-    sqlText.includes('as "event_json"') &&
-    sqlText.includes('"seq" = ?')
-      ? "headlines"
-      : null,
+  const tracked = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["headlines"],
+    (sqlText) =>
+      sqlText.includes('from "transcript_events"') &&
+      sqlText.includes('as "event_json"') &&
+      sqlText.includes('"seq" = ?')
+        ? "headlines"
+        : null,
   );
   try {
     expect(readSessionBranchSnapshot(database, { ...expected, previous })).toMatchObject({
@@ -438,6 +438,33 @@ it("reads only the newest usable appended headline while retaining cached histor
   } finally {
     tracked.restore();
   }
+});
+
+it("rescans an unindexed legacy prefix after an append reuses one of its IDs", async () => {
+  const scope = await seedStoredBranchEvents([message("legacy", null, "legacy headline")]);
+  const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+  const expected = { sessionKey: scope.sessionKey };
+  const previous = readSessionBranchSnapshot(database, expected);
+  expect(previous).toMatchObject({ status: "ok", appendSafe: false });
+  if (previous.status !== "ok") {
+    throw new Error("expected a legacy branch snapshot");
+  }
+
+  await appendTranscriptMessage(scope, {
+    eventId: "legacy",
+    parentId: "legacy",
+    now: 1_000,
+    message: { role: "user", content: "duplicate creates a cycle" },
+  });
+
+  expect(readSessionBranchSnapshot(database, { ...expected, previous })).toMatchObject({
+    status: "ok",
+    appendSafe: false,
+    branches: [
+      { leafEntryId: "legacy", headline: "", messageCount: 0, active: true },
+      { leafEntryId: "legacy", headline: "", messageCount: 0, active: true },
+    ],
+  });
 });
 
 it("rejects a malformed unused row before choosing an available headline", async () => {
@@ -464,16 +491,9 @@ it("uses one snapshot for navigation and lazy headline reads", async () => {
   const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
   const writer = sqliteRuntime.openNodeSqliteDatabase(database.path);
   admitSqliteSchema(writer);
-  const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
-  if (typeof databaseIdentity !== "string") {
-    throw new Error("expected a persisted branch fixture");
-  }
   const request = {
     database: { agentId: scope.agentId, path: database.path },
-    databaseIdentity,
     sessionKey: scope.sessionKey,
-    sessionId: scope.sessionId,
-    lifecycleRevision: loadSessionEntry(scope)?.lifecycleRevision,
   };
   const openSqlite = sqliteRuntime.openNodeSqliteDatabase;
   let changed = false;

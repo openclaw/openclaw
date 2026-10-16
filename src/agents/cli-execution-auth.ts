@@ -4,7 +4,7 @@
 import type { CliSessionBinding } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAuthProfileOrderWithMetadata } from "./auth-profiles/order.js";
-import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreForRuntimeAsync } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
 import { resolveCliBackendConfig, resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-runner/cli-backend-auth-policy.js";
@@ -37,21 +37,22 @@ export function cliBackendAcceptsAuthProfileForwarding(params: {
  * Preserve the session account unless the user selects another or it was removed.
  * A user-locked profile must fail closed rather than run as another user.
  */
-export function resolveCliExecutionAuthProfileId(params: {
+export async function resolveCliExecutionAuthProfileId(params: {
   cliExecutionProvider: string;
   authProfileProvider: string;
   config: OpenClawConfig;
   agentDir: string;
   selected?: CliExecutionAuthProfileSelection;
   sessionBinding?: CliSessionBinding;
-  loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
-}): string | undefined {
-  const loadStore = params.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
+  loadAuthProfileStoreForRuntimeAsync?: typeof loadAuthProfileStoreForRuntimeAsync;
+}): Promise<string | undefined> {
+  const loadStore =
+    params.loadAuthProfileStoreForRuntimeAsync ?? loadAuthProfileStoreForRuntimeAsync;
   const selectedAuthProfileId = params.selected?.authProfileId?.trim();
   const hasExplicitSelection =
     selectedAuthProfileId && params.selected?.authProfileIdSource !== "auto";
   const sessionAuthProfileId = params.sessionBinding?.authProfileId?.trim();
-  const store = loadStore(params.agentDir, {
+  const store = await loadStore(params.agentDir, {
     readOnly: true,
     allowKeychainPrompt: false,
     externalCliProviderIds: [params.cliExecutionProvider],

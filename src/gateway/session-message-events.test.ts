@@ -916,6 +916,7 @@ describe("session.message websocket events", () => {
     const profileState = await createOpenClawTestState({
       label: "session-message-current-profile-display",
       layout: "state-only",
+      prepareProfileCatalog: true,
     });
     cleanupTestStates.push(profileState);
     const storePath = await createSessionStoreFile();

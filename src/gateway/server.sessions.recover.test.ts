@@ -26,18 +26,17 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { recoverGatewaySession } from "./session-recovery-service.js";
-import {
-  resolveSessionMutationAuthorization,
-  SessionMutationAuthorizationChangedError,
-} from "./session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
+import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetInWorker,
 } from "./session-utils.js";
-import { testState, writeSessionStore } from "./test-helpers.js";
+import { agentCommandMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   seedSessionTranscript,
@@ -62,8 +61,10 @@ vi.mock("../auto-reply/reply/conversation-label-generator.js", async (importOrig
 afterEach(() => drainGlobalSingletonLifecycleState());
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const prepareProfiles = useUserProfileCatalogForTest();
 
-beforeEach(() => {
+beforeEach(async () => {
+  await prepareProfiles();
   titleGeneration.mockReset().mockResolvedValue("Recovered session");
 });
 
@@ -514,6 +515,29 @@ test.each(["session-id", "lifecycle-revision"] as const)(
   },
 );
 
+test("sessions.recover preserves device-folder affinity before launching its successor", async () => {
+  const deviceFolder = { deviceId: "recovery-device", path: "/existing/project" };
+  const fixture = await recoveryFixture("device-folder-recovery", { deviceFolder });
+  const launchContinuation = vi.fn(async (target: { sessionKey: string; storePath: string }) => {
+    expect(loadSessionEntry(target)?.deviceFolder).toEqual(deviceFolder);
+    return { status: "started" as const, runId: "device-folder-recovery-run" };
+  });
+  const result = await recoverGatewaySession({
+    cfg: getRuntimeConfig(),
+    key: fixture.sourceKey,
+    agentId: "main",
+    workerPlacementContext: {},
+    launchContinuation,
+  });
+  expect(result).toMatchObject({
+    ok: true,
+    created: true,
+    successorEntry: { deviceFolder },
+  });
+  expect(launchContinuation).toHaveBeenCalledOnce();
+  expect(fixture.source()?.deviceFolder).toEqual(deviceFolder);
+});
+
 test("sessions.recover rolls over one tombstone and returns its continuation outcome", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.sessionConfig = { dmScope: "main", scope: "per-sender" };
@@ -854,12 +878,13 @@ test("sessions.recover revalidates participation at the recovery writer commit",
   } as never;
   // Use an already-registered single-key mutation to isolate handler/writer propagation from
   // the separate sessions.recover registry regression covered at the router boundary.
-  const authorization = resolveSessionMutationAuthorization({
+  const authorization = await resolveSessionMutationAuthorizationAsync({
     client,
     method: "sessions.reset",
     requestParams: { key: sourceKey, agentId: "main" },
     context: { getRuntimeConfig } as never,
   });
+  using _ = { [Symbol.dispose]: () => authorization.authorization?.release?.() };
   expect(authorization.error).toBeNull();
   if (!authorization.authorization) {
     throw new Error("failed to capture recovery source participation");
@@ -969,10 +994,14 @@ test("sessions.recover rejects continuation launch after runtime authority close
     payload: {
       continuation: {
         status: "rejected",
-        error: { message: "agent runtime authority is no longer active" },
+        error: {
+          code: "INVALID_REQUEST",
+          message: "agent runtime authority is no longer active",
+        },
       },
     },
   });
+  expect(agentCommandMock).not.toHaveBeenCalled();
   expect(
     loadSessionEntry({
       agentId: "main",

@@ -19,6 +19,7 @@ import {
   createUiTestShardGroups,
   createVitestCacheWarmGroups,
   hasCompleteStartupCorpusCoverage,
+  packCompactNodeTestJobsToCapacity,
   resolveCanonicalNodeTestConfig,
   resolveStartupCorpusTestFiles,
 } from "../../scripts/lib/ci-node-test-plan.mts";
@@ -84,7 +85,10 @@ import { createRuntimeConfigVitestConfig } from "../vitest/vitest.runtime-config
 import { startupCorpusTestFiles } from "../vitest/vitest.startup-corpus-paths.mjs";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
-import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
+import {
+  uiE2ePrebuiltParallelTestFiles,
+  uiE2eRealGatewayTestFiles,
+} from "../vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTimerTestFiles,
@@ -114,6 +118,7 @@ describe("Control UI release-only inventories", () => {
   const teamScale = "ui/src/e2e/team-scale-cold-load.e2e.test.ts";
   const automationManagement =
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
+  const reconnectContinuity = "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts";
   const releaseOnlyRealGateway = new Set([
     "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
     "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
@@ -122,6 +127,7 @@ describe("Control UI release-only inventories", () => {
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
     "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+    reconnectContinuity,
     "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
     "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
     "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
@@ -156,6 +162,10 @@ describe("Control UI release-only inventories", () => {
     );
     // Array equality also catches duplicate ownership between jobs or desktop proof.
     expect(files.toSorted()).toEqual(expectedFiles.toSorted());
+    // Desktop and serial proof must not acquire a second parallel-fixture phase.
+    expect(shards[1]?.groups[0]?.includePatterns.toSorted()).toEqual(
+      expectedFiles.filter((file) => uiE2ePrebuiltParallelTestFiles.includes(file)).toSorted(),
+    );
   }
 
   it("retains PR-exempt entries while omitting release-only UI matrices", () => {
@@ -207,7 +217,7 @@ describe("Control UI release-only inventories", () => {
     expectRealGatewayCoverage(
       createUiTestShardGroups({
         includeReleaseOnlyTests: false,
-        changedPaths: [automationManagement, "ui/src/e2e", "ui/src/pages/usage/usage-page.ts"],
+        changedPaths: [automationManagement, "ui/src/e2e", "ui/src/pages/usage/usage-page.tsx"],
       }).e2e,
       uiE2eRealGatewayTestFiles.filter(
         (file) => !releaseOnlyRealGateway.has(file) || file === automationManagement,
@@ -324,6 +334,126 @@ function selectFixtureProjects(owns: (config: string) => boolean) {
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
+  it.each([false, true])(
+    "keeps the scheduled main inventory within its reserved compact capacity (extra group: %s)",
+    (extraGroup) => {
+      const original = fullSuiteVitestShards.slice();
+      if (extraGroup) {
+        // A new isolated group must not exhaust main's capacity on arrival.
+        fullSuiteVitestShards.push({
+          name: "synthetic-capacity-growth",
+          config: "fixture-capacity.config.ts",
+          projects: ["test/vitest/vitest.hooks.config.ts"],
+        });
+      }
+      try {
+        const jobs = createNodeTestShardBundles({
+          includeProofTests: true,
+          includeReleaseOnlyPluginShards: false,
+          includeReleaseOnlyToolingShards: true,
+          includeReleaseOnlyRuntimeTests: false,
+          includePrExemptRuntimeTests: true,
+          compactMode: "pull-request",
+          compactNodeJobCap: 76,
+          mainValidation: true,
+          runnerBackend: "hybrid",
+        });
+        // Main's 77 Node rows reserve one for the separate worker-E2E owner.
+        expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(76);
+        expect(jobs.length).toBeLessThanOrEqual(78);
+        expect(
+          jobs
+            .flatMap((job) => job.groups)
+            .filter((group) => group.shard_name === "synthetic-capacity-growth"),
+        ).toHaveLength(extraGroup ? 1 : 0);
+      } finally {
+        fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...original);
+      }
+    },
+  );
+
+  function smallCapacityJobs(count: number): CompactNodeTestShard[] {
+    return Array.from({ length: count }, (_, index) => ({
+      checkName: `checks-capacity-${index}`,
+      shardName: `capacity-${index}`,
+      requiresDist: false,
+      runner: "blacksmith-8vcpu-ubuntu-2404",
+      planConcurrency: 1,
+      predictedSeconds: 10,
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+      groups: [
+        {
+          shard_name: `capacity-${index}`,
+          requiresDist: false,
+          runner: "blacksmith-8vcpu-ubuntu-2404",
+          configs: ["test/vitest/vitest.hooks.config.ts"],
+          includePatterns: [`src/hooks/capacity-${index}.test.ts`],
+        },
+      ],
+    }));
+  }
+
+  const capacityOptions = {
+    compactJobCap: 78,
+    runnerBackend: "hybrid",
+    estimateGroupSeconds: () => 10,
+  };
+
+  it("fits 83 small compatible bundles under the capacity ceiling without losing or duplicating files", () => {
+    const before = smallCapacityJobs(83);
+    const after = packCompactNodeTestJobsToCapacity(before, capacityOptions);
+    expect(after).toHaveLength(78);
+    expect(
+      after.flatMap((job) => job.groups.flatMap((group) => group.includePatterns!)).toSorted(),
+    ).toEqual(
+      Array.from({ length: 83 }, (_, index) => `src/hooks/capacity-${index}.test.ts`).toSorted(),
+    );
+    expect(after.filter((job) => job.groups.length > 1)).toHaveLength(5);
+    for (const job of after) {
+      expect(job.predictedSeconds).toBeLessThanOrEqual(210);
+      expect(job.groups.length).toBeLessThanOrEqual(10);
+      for (const group of job.groups) {
+        expect(before.flatMap((entry) => entry.groups)).toContain(group);
+      }
+    }
+    expect(
+      packCompactNodeTestJobsToCapacity(before, { ...capacityOptions, compactJobCap: 83 }),
+    ).toBe(before);
+  });
+
+  it.each(["runner", "build", "workers", "environment", "time budget", "group budget"] as const)(
+    "refuses over-cap bundles that cannot merge within the existing %s policy",
+    (policy) => {
+      const jobs = smallCapacityJobs(79);
+      for (const [index, job] of jobs.entries()) {
+        if (policy === "runner") {
+          job.runner = `different-runner-${index}`;
+        }
+        if (policy === "build") {
+          job.pretestBuildMode = "runtime";
+        }
+        if (policy === "workers") {
+          job.groups[0]!.env = { OPENCLAW_VITEST_MAX_WORKERS: "4" };
+        }
+        if (policy === "environment") {
+          job.env!.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS = "60000";
+        }
+        if (policy === "time budget") {
+          job.predictedSeconds = 110;
+        }
+        if (policy === "group budget") {
+          job.groups = Array.from({ length: 10 }, (_, group) => ({
+            ...job.groups[0]!,
+            shard_name: `capacity-${index}-${group}`,
+          }));
+        }
+      }
+      expect(() => packCompactNodeTestJobsToCapacity(jobs, capacityOptions)).toThrow(
+        "no compatible bundles fit the existing limits",
+      );
+    },
+  );
+
   it("retries hybrid Gateway-first packing only when the completed plan exceeds its cap", () => {
     const entries = [
       ["ordinary-a", "hooks", 180],
@@ -695,6 +825,24 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           job.groups.every((group) => group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2"),
       ),
     ).toBe(true);
+  });
+
+  it.each([
+    { profile: "native" as const, limit: 420, jobs: 2 },
+    { profile: "main-validation" as const, limit: 420, jobs: 1 },
+    { profile: "main-validation" as const, limit: 150, jobs: 2 },
+  ])("packs $profile tooling within its $limit-second test budget", ({ profile, limit, jobs }) => {
+    const before = measuredToolingFixture().slice(0, 2);
+    const after = rebalanceMeasuredSerialJobs(before, {
+      ...measuredPackingOptions,
+      profile,
+      estimateGroup: () => ({ seconds: 210, complete: true }),
+      testSecondsLimit: () => limit,
+    });
+    expect(after).toHaveLength(jobs);
+    expect(sortedMeasuredGroups(after)).toEqual(sortedMeasuredGroups(before));
+    expect(after.every((job) => job.planConcurrency === 1 && job.timeoutMinutes === 20)).toBe(true);
+    expect(after.map((job) => job.predictedSeconds)).toEqual(jobs === 1 ? [420] : [210, 210]);
   });
 
   it("packs hosted hourly tooling only with complete supplied prices and ignores native tails", () => {
@@ -3095,6 +3243,38 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
+  it("keeps selected Gateway and embedded-agent work within its runner capacity", () => {
+    const targets = [
+      "src/gateway/openai-http.test.ts",
+      "src/agents/embedded-agent-runner/compact.small-context.test.ts",
+      "src/agents/embedded-agent-runner/stream-resolution.test.ts",
+      "src/gateway/client-callsites.guard.test.ts",
+      "src/gateway/server-plugin-subagent-runtime.fork-transport.test.ts",
+    ];
+    const plan = expectDefined(
+      createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
+      "mixed selected serial plan",
+    );
+    const groups = plan.flatMap((job) => job.groups);
+    expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+      targets.toSorted(),
+    );
+    // Selection retains full-plan concurrency. Unrelated inventory may move these
+    // groups into serial Gateway templates; fixed-inventory coverage below proves
+    // parallel capacity is retained when the canonical templates permit it.
+    for (const job of plan) {
+      expect([1, 2]).toContain(job.planConcurrency);
+      expect(job.runner).toBe(
+        job.planConcurrency === 2
+          ? "blacksmith-32vcpu-ubuntu-2404"
+          : "blacksmith-16vcpu-ubuntu-2404",
+      );
+    }
+    for (const group of groups) {
+      expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? String(group.fallbackMaxWorkers)).toBe("2");
+    }
+  });
+
   it.each(["github"])(
     "shares one prepared runtime across affordable %s groups",
     (runnerBackend) => {
@@ -3318,71 +3498,105 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("retains the ordered wall budget when repacking selected files", async () => {
-    const config = "test/vitest/vitest.infra.config.ts";
-    const entries = [
-      ["src/infra/env.test.ts", "core-runtime-infra-env-auth", 170],
-      ["src/infra/os-summary.test.ts", "core-runtime-infra-misc-os", 170],
-      ["src/infra/ports-probe.test.ts", "core-runtime-infra-system-runtime", 160],
-      ["src/infra/provider-usage.test.ts", "core-runtime-infra-provider-push", 160],
-      ["src/infra/channel-runtime-context.test.ts", "core-runtime-infra-channel-plugin", 150],
-      ["src/infra/diagnostic-trace-context.test.ts", "core-runtime-infra-diagnostics-state", 150],
-    ] as const;
-    const files = entries.map(([file]) => file);
-    const targets = files.slice(0, 3);
-    vi.resetModules();
-    vi.doMock("../vitest/vitest.test-shards.mjs", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("../vitest/vitest.test-shards.mjs")>()),
-      fullSuiteVitestShards: [{ name: "core-runtime", config, projects: [config] }],
-    }));
-    vi.doMock("../vitest/vitest.database-worker-core-paths.mjs", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("../vitest/vitest.database-worker-core-paths.mjs")>()),
-      databaseWorkerCoreTestFiles: [],
-      isDatabaseWorkerCoreTestFile: () => false,
-    }));
-    vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>()),
-      listTrackedTestFiles: (root: string) => (root === "src/infra" ? files : []),
-    }));
-    vi.doMock("../../scripts/lib/ci-test-timings.mts", () => ({
-      ...testTimings,
-      readCompactGroupTimings: () =>
-        Object.fromEntries(entries.map(([, owner, seconds]) => [owner, seconds])),
-      readRuntimePlacementTimings: () => [],
-    }));
-    vi.doMock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
-      ...(await importOriginal<
-        typeof import("../../scripts/lib/vitest-build-prerequisites.mts")
-      >()),
-      resolveVitestPretestBuildMode: () => undefined,
-    }));
-    try {
-      const { createSelectedNodeTestShardBundles: createSelected } =
-        await import("../../scripts/lib/ci-node-test-plan.mts");
-      const selected = expectDefined(
-        createSelected(targets, { runnerBackend: "blacksmith" }),
-        "selected infra plan",
-      );
-      // The selected 170/170/160 envelopes fit the aggregate limit but need 330 seconds together.
-      expect(selected).toHaveLength(2);
-      expect(selected.every((job) => job.planConcurrency === 2)).toBe(true);
-      expect(selected.every((job) => job.predictedTestSeconds! <= 300)).toBe(true);
-      expect(selected.map((job) => job.predictedTestSeconds!).toSorted((a, b) => a - b)).toEqual([
-        160, 170,
-      ]);
-      expect(selected.reduce((sum, job) => sum + job.predictedSeconds!, 0)).toBe(500);
-      expect(
-        selected.flatMap((job) => job.groups.flatMap((group) => group.includePatterns!)).toSorted(),
-      ).toEqual(targets.toSorted());
-    } finally {
-      vi.doUnmock("../../scripts/lib/vitest-build-prerequisites.mts");
-      vi.doUnmock("../../scripts/lib/ci-test-timings.mts");
-      vi.doUnmock("../../scripts/lib/list-test-files.mts");
-      vi.doUnmock("../vitest/vitest.database-worker-core-paths.mjs");
-      vi.doUnmock("../vitest/vitest.test-shards.mjs");
+  it.each(["blacksmith", "hybrid"])(
+    "retains parallel capacity and ordered wall budgets for selected %s files",
+    async (runnerBackend) => {
+      const config = "test/vitest/vitest.infra.config.ts";
+      const entries = [
+        ["src/infra/env.test.ts", "core-runtime-infra-env-auth", 170],
+        ["src/infra/os-summary.test.ts", "core-runtime-infra-misc-os", 170],
+        ["src/infra/ports-probe.test.ts", "core-runtime-infra-system-runtime", 160],
+        ["src/infra/provider-usage.test.ts", "core-runtime-infra-provider-push", 160],
+        ["src/infra/channel-runtime-context.test.ts", "core-runtime-infra-channel-plugin", 150],
+        ["src/infra/diagnostic-trace-context.test.ts", "core-runtime-infra-diagnostics-state", 150],
+      ] as const;
+      const files = entries.map(([file]) => file);
+      const targets = files.slice(0, 3);
       vi.resetModules();
-    }
-  });
+      vi.doMock("../vitest/vitest.test-shards.mjs", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../vitest/vitest.test-shards.mjs")>()),
+        fullSuiteVitestShards: [{ name: "core-runtime", config, projects: [config] }],
+      }));
+      vi.doMock("../vitest/vitest.database-worker-core-paths.mjs", async (importOriginal) => ({
+        ...(await importOriginal<
+          typeof import("../vitest/vitest.database-worker-core-paths.mjs")
+        >()),
+        databaseWorkerCoreTestFiles: [],
+        isDatabaseWorkerCoreTestFile: () => false,
+      }));
+      vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>()),
+        listTrackedTestFiles: (root: string) => (root === "src/infra" ? files : []),
+      }));
+      vi.doMock("../../scripts/lib/ci-test-timings.mts", () => ({
+        ...testTimings,
+        readCompactGroupTimings: () =>
+          Object.fromEntries(entries.map(([, owner, seconds]) => [owner, seconds])),
+        readRuntimePlacementTimings: () => [],
+      }));
+      vi.doMock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
+        ...(await importOriginal<
+          typeof import("../../scripts/lib/vitest-build-prerequisites.mts")
+        >()),
+        resolveVitestPretestBuildMode: () => undefined,
+      }));
+      try {
+        const {
+          createSelectedNodeTestShardBundles: createSelected,
+          createNodeTestShardBundles: createBundles,
+        } = await import("../../scripts/lib/ci-node-test-plan.mts");
+        const full = createBundles({
+          runnerBackend,
+          includeReleaseOnlyPluginShards: false,
+          includeProofTests: false,
+          changedPaths: targets,
+          compactMode: "pull-request",
+        });
+        const selected = expectDefined(
+          createSelected(targets, { runnerBackend }),
+          "selected infra plan",
+        );
+        // The selected 170/170/160 envelopes fit the aggregate limit but need 330 seconds together.
+        expect(selected).toHaveLength(2);
+        expect(selected.every((job) => job.planConcurrency === 2)).toBe(true);
+        for (const job of selected) {
+          expect(job.runner).toBe("blacksmith-32vcpu-ubuntu-2404");
+          for (const group of job.groups) {
+            const original = expectDefined(
+              full.find((owner) =>
+                owner.groups.some((entry) => entry.shard_name === group.shard_name),
+              ),
+              "canonical template",
+            );
+            const owner = expectDefined(
+              original.groups.find((entry) => entry.shard_name === group.shard_name),
+              "canonical group",
+            );
+            expect(job.planConcurrency).toBe(original.planConcurrency);
+            expect(group.env).toEqual(owner.env);
+            expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
+          }
+        }
+        expect(selected.every((job) => job.predictedTestSeconds! <= 300)).toBe(true);
+        expect(selected.map((job) => job.predictedTestSeconds!).toSorted((a, b) => a - b)).toEqual([
+          160, 170,
+        ]);
+        expect(selected.reduce((sum, job) => sum + job.predictedSeconds!, 0)).toBe(500);
+        expect(
+          selected
+            .flatMap((job) => job.groups.flatMap((group) => group.includePatterns!))
+            .toSorted(),
+        ).toEqual(targets.toSorted());
+      } finally {
+        vi.doUnmock("../../scripts/lib/vitest-build-prerequisites.mts");
+        vi.doUnmock("../../scripts/lib/ci-test-timings.mts");
+        vi.doUnmock("../../scripts/lib/list-test-files.mts");
+        vi.doUnmock("../vitest/vitest.database-worker-core-paths.mjs");
+        vi.doUnmock("../vitest/vitest.test-shards.mjs");
+        vi.resetModules();
+      }
+    },
+  );
 
   async function createToolingFixturePlan(params: {
     files: string[];
@@ -3991,7 +4205,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     "config/ci-budget.md",
     "test/vitest/vitest.tooling.config.ts",
     "package.json",
-    "patches/vitest@5.0.1.patch",
+    "patches/vitest@5.0.3.patch",
     ".github/workflows/ci.yml",
     "apps/ios/fastlane/Fastfile",
     "extensions/matrix/scripts/build.mjs",

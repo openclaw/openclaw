@@ -20,8 +20,8 @@ import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
 } from "../../components/solid/settings-ui.tsx";
-import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { GitHubIdentity } from "../../features/github-connections/github-identity-view.tsx";
+import type { GitHubIdentity as GitHubIdentityModel } from "../../features/github-connections/github-identity.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentConfig } from "../../lib/agents/display.ts";
 import {
@@ -165,7 +165,7 @@ export function AgentTools(
     toolsEffectiveResult: ToolsEffectiveResult | null;
     runtimeSessionKey: string;
     runtimeSessionMatchesSelectedAgent: boolean;
-    githubIdentity: GitHubIdentityController;
+    githubIdentity: GitHubIdentityModel;
     onOpenGitHubConnections: () => void;
     onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
     onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
@@ -463,7 +463,7 @@ export function AgentTools(
         {runtimeAvailability()}
       </SettingsSection>
       <GitHubIdentity
-        controller={params.githubIdentity}
+        identity={params.githubIdentity}
         onOpenConnections={params.onOpenGitHubConnections}
       />
       <SettingsSection title={t("agentTools.catalogTitle")}>

@@ -1,12 +1,9 @@
 import { createEffect, createMemo, createSignal, Match, Show, Switch } from "solid-js";
-import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
 import type { ConfigAutoSaveStatus } from "../lib/config/config-state-model.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
-import { defineSolidBridge, LitContent } from "../lit/solid-bridge.ts";
-import { icons } from "./icons.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
-import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
+import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 
 const SAVED_VISIBLE_MS = 2_000;
 
@@ -31,11 +28,6 @@ function action(label: string, onClick: () => void) {
 }
 
 function Claw(props: { saved?: boolean }) {
-  const branding = projectSource(null, {
-    read: currentThemeBranding,
-    subscribe: (_source, notify) => subscribeThemeBranding(notify),
-    equality: Object.is,
-  });
   return (
     <span
       class={[
@@ -44,28 +36,25 @@ function Claw(props: { saved?: boolean }) {
       ]}
       aria-hidden="true"
     >
-      <LitContent render={() => renderThemeBrandIcon(icons.claw, branding.read())} />
+      <ThemeBrandingIcon claw={<Icon name="claw" />} />
     </span>
   );
 }
 
 function SaveIndicatorContent(input: { props?: SettingsSaveIndicatorProps }) {
-  const [savedVisible, setSavedVisible] = createSignal(false, { ownedWrite: true });
-  // Unrelated shell props refreshes must not clean up the saved-state timer.
-  createEffect(
-    createMemo(() => input.props?.status),
-    (status, previous) => {
-      if (previous === "saving" && status === "saved") {
-        setSavedVisible(true);
-        const timer = globalThis.setTimeout(() => setSavedVisible(false), SAVED_VISIBLE_MS);
-        return () => globalThis.clearTimeout(timer);
-      }
-      if (status !== "saved") {
-        setSavedVisible(false);
-      }
-      return undefined;
-    },
+  const status = createMemo(() => input.props?.status);
+  // Only a saving → saved transition starts a fresh display window.
+  type SaveState = SettingsSaveIndicatorProps["status"] | "saved-visible" | undefined;
+  const [saved, setSaved] = createSignal<SaveState>((previous) =>
+    previous === "saving" && status() === "saved" ? "saved-visible" : status(),
   );
+  createEffect(saved, (current) => {
+    if (current === "saved-visible") {
+      const timer = globalThis.setTimeout(() => setSaved("saved"), SAVED_VISIBLE_MS);
+      return () => globalThis.clearTimeout(timer);
+    }
+    return undefined;
+  });
   const state = createMemo(() => {
     const props = input.props;
     if (!props) {
@@ -77,10 +66,7 @@ function SaveIndicatorContent(input: { props?: SettingsSaveIndicatorProps }) {
     if (["saving", "recovery", "rejected", "error", "paused", "conflict"].includes(props.status)) {
       return props.status;
     }
-    if (savedVisible()) {
-      return "saved";
-    }
-    return props.needsApply ? "apply" : undefined;
+    return saved() === "saved-visible" ? "saved" : props.needsApply ? "apply" : undefined;
   });
   const title = () =>
     state() === "error" ? input.props?.lastError?.trim() || undefined : undefined;
@@ -172,3 +158,23 @@ defineSolidBridge<{ props?: SettingsSaveIndicatorProps }>(
     properties: { props: { default: undefined, attribute: false } },
   },
 );
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-settings-save-indicator": SolidBridgeElement<{
+      props?: SettingsSaveIndicatorProps;
+    }>;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-settings-save-indicator": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-settings-save-indicator"]
+      > & {
+        "prop:props"?: SettingsSaveIndicatorProps;
+      };
+    }
+  }
+}

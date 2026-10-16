@@ -7,7 +7,6 @@ import {
 } from "./auth-start-options.js";
 import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
-import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import { isJsonObject, type CodexThread } from "./protocol.js";
 import {
@@ -53,6 +52,7 @@ export async function withCodexThreadLifecycleBinding(
     binding: CodexAppServerThreadBinding | undefined,
     authority: CodexBindingAuthority,
   ) => Promise<CodexAppServerThreadLifecycleBinding>,
+  onFailure?: (error: unknown) => Promise<never>,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const identity = sessionBindingIdentity({
     sessionId: params.params.sessionId,
@@ -60,7 +60,11 @@ export async function withCodexThreadLifecycleBinding(
     agentId: params.agentId ?? params.params.agentId,
     config: params.params.config,
   });
-  const { binding: snapshot, authority } = await resolveCodexSessionBinding({
+  const {
+    binding: snapshot,
+    authority,
+    release,
+  } = await resolveCodexSessionBinding({
     reclaimStale: true,
     authority: params.authority,
     bindingStore: params.bindingStore,
@@ -77,6 +81,7 @@ export async function withCodexThreadLifecycleBinding(
           assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership)
       : undefined,
   });
+  using _ = { [Symbol.dispose]: release };
   const assertCurrent = authority.assertCurrent;
   const runWithLease = () =>
     params.bindingStore.withLease(
@@ -98,16 +103,24 @@ export async function withCodexThreadLifecycleBinding(
     );
   // Ordinary resumes own their binding key even when a legacy row omits sessionId.
   // Foreign-owner rejection belongs to adoption, not an upgrade of that same binding.
-  return snapshot?.pendingResumeConfiguration
-    ? await withExclusiveCodexAppServerThread({
-        bindingStore: params.bindingStore,
-        identity,
-        threadId: snapshot.threadId,
-        run: runWithLease,
-      })
-    : snapshot
-      ? await withCodexAppServerThreadMutation(snapshot.threadId, runWithLease)
-      : await runWithLease();
+  try {
+    return snapshot?.pendingResumeConfiguration
+      ? await withExclusiveCodexAppServerThread({
+          bindingStore: params.bindingStore,
+          identity,
+          threadId: snapshot.threadId,
+          run: runWithLease,
+        })
+      : snapshot
+        ? await withCodexAppServerThreadMutation(snapshot.threadId, runWithLease)
+        : await runWithLease();
+  } catch (error) {
+    // Failed publication still owns cleanup, including failures settling the lease.
+    if (onFailure) {
+      return await onFailure(error);
+    }
+    throw error;
+  }
 }
 
 type PendingResumeContext = CodexThreadRequestContext & {
@@ -143,7 +156,7 @@ export async function resumePendingCodexThread(
   const prebuiltPluginThreadConfig = params.pluginThreadConfig?.enabled
     ? await lifecycleTiming.measure("plugin-config-build", () => params.pluginThreadConfig?.build())
     : undefined;
-  const clientId = resolveCodexAppServerClientInstanceId(params.client);
+  const clientId = params.client.getInstanceId();
   const resumed = await resumeExistingCodexThread(params, {
     ...context,
     prebuiltPluginThreadConfig,
@@ -298,6 +311,7 @@ function observeCodexThreadConfiguration(
   }
   const settledSystemError = thread.status.type === "systemError";
   let unloaded = thread.status.type === "notLoaded";
+  let onUnload: (() => void) | undefined;
   const dispose = params.client.addNotificationHandler((notification) => {
     if (
       notification.method === "thread/status/changed" &&
@@ -307,12 +321,33 @@ function observeCodexThreadConfiguration(
       notification.params.status.type === "notLoaded"
     ) {
       unloaded = true;
+      onUnload?.();
     }
   });
   return {
     modelProvider: thread.modelProvider,
     dispose,
     settledSystemError,
+    // Unsubscribe only acknowledges removal of our subscription. Native teardown
+    // is asynchronous, including with a zero post-unsubscribe retention delay.
+    waitForUnload: async () => {
+      assertCurrent();
+      if (!unloaded) {
+        await new Promise<void>((resolve) => {
+          const finish = () => {
+            clearTimeout(timer);
+            params.signal?.removeEventListener("abort", finish);
+            onUnload = undefined;
+            resolve();
+          };
+          const timer = setTimeout(finish, 2_000);
+          onUnload = finish;
+          params.signal?.addEventListener("abort", finish, { once: true });
+        });
+      }
+      assertCurrent();
+      return unloaded;
+    },
     assertConfigured: () => {
       assertCurrent();
       // Native resume can acknowledge ignored overrides when another subscriber

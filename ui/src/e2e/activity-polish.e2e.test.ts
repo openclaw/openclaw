@@ -243,6 +243,12 @@ suite.define(() => {
           expect(await recap(activityPolishKeys.initial).locator(".skeleton").count()).toBe(2);
           const thumbnails = row(activityPolishKeys.current).locator(".chat-message-image-button");
           await expect.poll(() => thumbnails.count()).toBe(4);
+          // Expanding the phone grid leaves later thumbnails offscreen. Admit
+          // them by scrolling, as a user would, before requiring decoded pixels.
+          for (const thumbnail of await thumbnails.all()) {
+            await thumbnail.scrollIntoViewIfNeeded();
+            await thumbnail.locator("img").evaluate((image: HTMLImageElement) => image.decode());
+          }
           await expect
             .poll(() =>
               thumbnails

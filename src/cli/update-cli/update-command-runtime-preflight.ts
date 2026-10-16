@@ -132,7 +132,8 @@ export async function resolvePackageRuntimePreflight(params: {
         }
         if (runtime.status !== "supported") {
           throw new Error(
-            runtime.sqliteSelectionError ?? "Bun 1.4+ with WAL-reset-safe node:sqlite is required.",
+            runtime.sqliteSelectionError ??
+              "Bun 1.4.3+ with WAL-reset-safe node:sqlite is required.",
           );
         }
         // Finalization keeps the updater runtime; service recovery cannot replace it.

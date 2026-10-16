@@ -13,6 +13,7 @@ import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
+import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
@@ -221,6 +222,7 @@ it.skipIf(process.platform === "win32").for([
       signal,
       startTimeoutMs: 120_000,
       stopTimeoutMs: 10_000,
+      gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
       env: {
         OPENAI_API_KEY: undefined,
         OPENAI_BASE_URL: undefined,

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionLeafControl } from "../../agents/sessions/session-manager-types.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionActorAuthority, SessionActorStorage } from "./session-actor-contract.js";
-import { createMemorySessionActorOwner } from "./session-actor-memory.js";
-import type { SessionActorStorageBinding } from "./session-actor-storage-binding.js";
-import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
 import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
 import {
@@ -31,13 +31,9 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 const agentId = "main";
-const storePath = "/synthetic/incognito-search";
-const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
-afterEach(() => {
-  for (const owner of owners.splice(0)) {
-    owner.close();
-  }
-});
+const env = { OPENCLAW_STATE_DIR: "/synthetic/incognito-search" };
+const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env });
+afterEach(() => memorySessionActorOwners.reset());
 
 function committed<T>(outcome: SessionActorStorageOutcome<T>): T {
   if (outcome.kind !== "committed") {
@@ -61,12 +57,13 @@ function message(
 }
 
 async function fixture() {
-  const owner = createMemorySessionActorOwner({ agentId, path: storePath });
-  owners.push(owner);
   const create = async (id: string, events: unknown[]) => {
     const sessionKey = `agent:main:dashboard:incognito-${id}`;
-    const actor = await owner.acquire({ database: owner.identity, sessionKey }, lifetime);
-    const storage = actor.storage!;
+    const binding = (await acquireSessionActorStorage(
+      { agentId, storePath, sessionKey, env },
+      { authority, lifetime, create: true },
+    ))!;
+    const storage = binding.actor.storage;
     committed(
       await storage.mutate(
         {
@@ -80,18 +77,13 @@ async function fixture() {
         authority,
       ),
     );
-    const binding: SessionActorStorageBinding = { actor, authority, agentId, path: storePath };
     return { sessionKey, storage, binding };
   };
-  const root = await create("root", []);
   const search = (query: string, options: Partial<SessionTranscriptSearchParams> = {}) =>
-    runWithSessionActorStorage(root.binding, () =>
-      searchSessionTranscripts({ agentId, storePath, query, ...options }),
-    );
+    searchSessionTranscripts({ agentId, storePath, env, query, ...options });
   return {
     create,
     search,
-    run: <T>(operation: () => T) => runWithSessionActorStorage(root.binding, operation),
   };
 }
 
@@ -134,6 +126,14 @@ async function append(
 }
 
 describe("actor-owned transcript search", () => {
+  it("returns empty results without allocating a memory owner for an absent namespace", async () => {
+    expect(await searchSessionTranscripts({ agentId, storePath, env, query: "missing" })).toEqual({
+      hits: [],
+      indexing: false,
+      truncated: false,
+    });
+    expect(memorySessionActorOwners.list()).toEqual([]);
+  });
   it("preserves literal phrases, AND terms, final prefix, accents and result bounds through the search adapter", async () => {
     const { create, search } = await fixture();
     await create("complete", [
@@ -203,7 +203,7 @@ describe("actor-owned transcript search", () => {
   });
 
   it("reads append, rewind, reset and deletion from the committed owner without stale indexes", async () => {
-    const { create, search, run } = await fixture();
+    const { create, search } = await fixture();
     const session = await create("before-reset", [
       message("base", "base"),
       message("removed", "rewound secret", { parentId: "base" }),
@@ -217,14 +217,14 @@ describe("actor-owned transcript search", () => {
       timestamp: new Date(11).toISOString(),
     });
     expect((await search("rewound")).hits).toEqual([]);
-    await run(async () => {
+    {
       const database = { agentId, path: storePath };
       startSessionTranscriptIndexReconcile(database);
       expect(await readSessionTranscriptIndexStatus(database)).toBe(false);
       expect(isSessionTranscriptIndexReconcileRunning(database)).toBe(false);
       expect(await reconcileSessionTranscriptIndexes(database)).toEqual({ reconciledSessions: 0 });
       await waitForSessionTranscriptIndexReconcile(database);
-    });
+    }
     await append(
       session.storage,
       session.sessionKey,
@@ -248,9 +248,10 @@ describe("actor-owned transcript search", () => {
     expect((await search("fresh", { sessionId: "before-reset" })).hits).toHaveLength(1);
     expect((await search("fresh", { sessionId: "after-reset" })).hits).toEqual([]);
     // A current acquisition closes the previous window's handle; deletion removes every retained window.
-    const current = await owners
-      .at(-1)!
-      .acquire({ database: owners.at(-1)!.identity, sessionKey: session.sessionKey }, lifetime);
+    const current = (await acquireSessionActorStorage(
+      { agentId, storePath, env, sessionKey: session.sessionKey },
+      { authority, lifetime },
+    ))!.actor;
     committed(
       await current.storage!.mutate({ type: "session.lifecycle.delete", input: {} }, authority),
     );

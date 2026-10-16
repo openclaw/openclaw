@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  loadAuthProfileStoreForRuntime,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -197,6 +198,7 @@ describe("memory-lancedb provider lifecycle", () => {
   });
 
   it("rotates actual private auth snapshots without replacing the runtime config", async () => {
+    loadAuthProfileStoreForRuntime(undefined, { readOnly: true, externalCli: { mode: "none" } });
     const config = {};
     const agentDir = "/tmp/openclaw-lancedb-private-auth-rotation";
     const profileId = "openai:private";
@@ -275,6 +277,7 @@ describe("memory-lancedb provider lifecycle", () => {
   });
 
   it("invalidates every inheriting agent when the actual main auth snapshot rotates", async () => {
+    loadAuthProfileStoreForRuntime(undefined, { readOnly: true, externalCli: { mode: "none" } });
     const config = {};
     const agentDirs = {
       private: "/tmp/openclaw-lancedb-inherited-private",
@@ -514,6 +517,7 @@ describe("memory-lancedb provider lifecycle", () => {
   });
 
   it("drains an admitted embedding before retiring a rotated actual auth snapshot", async () => {
+    loadAuthProfileStoreForRuntime(undefined, { readOnly: true, externalCli: { mode: "none" } });
     const config = {};
     const agentDir = "/tmp/openclaw-lancedb-inflight-auth-rotation";
     const profileId = "openai:inflight";

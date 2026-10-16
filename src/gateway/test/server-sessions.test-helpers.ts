@@ -581,6 +581,7 @@ export async function directSessionReq<TPayload = unknown>(
     client?: SessionsHandlerOptions["client"];
     isWebchatConnect?: SessionsHandlerOptions["isWebchatConnect"];
     sessionMutationAuthorization?: SessionsHandlerOptions["sessionMutationAuthorization"];
+    hasCurrentClientAuthority?: SessionsHandlerOptions["hasCurrentClientAuthority"];
     coercePayload?: (payload: unknown) => TPayload;
   },
 ): Promise<{
@@ -657,6 +658,7 @@ export async function directSessionReq<TPayload = unknown>(
     client: opts?.client ?? null,
     isWebchatConnect: opts?.isWebchatConnect ?? (() => false),
     sessionMutationAuthorization: opts?.sessionMutationAuthorization,
+    hasCurrentClientAuthority: opts?.hasCurrentClientAuthority,
   });
   await flushPendingSessionsChangedEvents(context);
   if (!result) {

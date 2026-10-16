@@ -7,7 +7,6 @@ import {
   For,
   Show,
   onCleanup,
-  untrack,
 } from "solid-js";
 import type {
   EnvironmentSummary,
@@ -36,6 +35,7 @@ import { showToast } from "../../lib/toast.ts";
 import {
   cloudEnvironments,
   environmentState,
+  isUnassignedPreparation,
   showPreparationRow,
   type SnapshotImage,
   type SnapshotsResult,
@@ -94,15 +94,11 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       activeLoad = undefined;
       stopPolling();
       setSelected(null);
-      setView((draft) => {
-        draft.inventory = null;
-      });
-      setView((draft) => {
-        draft.preparing = false;
-        draft.destroying = null;
-      });
       dismissed.clear();
       setView((draft) => {
+        draft.inventory = null;
+        draft.preparing = false;
+        draft.destroying = null;
         draft.result = null;
         draft.loading = false;
         draft.recovering = null;
@@ -117,9 +113,13 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   });
 
   createEffect(
-    () => runtime.read().state.configSnapshot?.appliedConfigHash,
-    (appliedHash, previousHash) => {
-      if (previousHash !== undefined && appliedHash !== previousHash) {
+    () =>
+      [
+        runtime.read().state.configSnapshot?.appliedConfigHash,
+        canCall("crabbox.images.list"),
+      ] as const,
+    (current, previous) => {
+      if (previous?.some((value, index) => value !== current[index])) {
         queueMicrotask(() => void load());
       }
     },
@@ -217,32 +217,31 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
           draft.loading = false;
         });
         stopPolling();
-        queueMicrotask(() =>
-          untrack(() => {
-            if (!gateway.isCurrent(scope)) {
-              return;
-            }
-            if (refreshAgain) {
-              refreshAgain = false;
-              void load();
-            } else if (
-              view.inventory?.environments.some(
-                (environment) =>
-                  environment.preparation &&
-                  environment.worker &&
-                  !environment.worker.attachedSessionIds.length &&
-                  ["requested", "provisioning", "bootstrapping", "ready"].includes(
-                    environment.worker.state,
-                  ),
-              ) ||
-              view.result?.images.some(
-                (image) => image.capture && image.capture.phase !== "uncertain",
-              )
-            ) {
-              pollTimer = setTimeout(() => void load(), 10_000);
-            }
-          }),
-        );
+        // This native microtask samples settled state once for polling, without subscribing.
+        queueMicrotask(() => {
+          if (!gateway.isCurrent(scope)) {
+            return;
+          }
+          if (refreshAgain) {
+            refreshAgain = false;
+            void load();
+          } else if (
+            view.inventory?.environments.some(
+              (environment) =>
+                environment.preparation &&
+                environment.worker &&
+                !environment.worker.attachedSessionIds.length &&
+                ["requested", "provisioning", "bootstrapping", "ready"].includes(
+                  environment.worker.state,
+                ),
+            ) ||
+            view.result?.images.some(
+              (image) => image.capture && image.capture.phase !== "uncertain",
+            )
+          ) {
+            pollTimer = setTimeout(() => void load(), 10_000);
+          }
+        });
       }
     }
   }
@@ -520,19 +519,16 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       ),
     ),
   );
+  const unlabeledImages = createMemo(() =>
+    (view.result?.images ?? [])
+      .filter((image) => !image.projectKey && !image.projectLabel && !image.projectRoot)
+      .toSorted((a, b) => (a.profileId ?? a.profileKey).localeCompare(b.profileId ?? b.profileKey)),
+  );
   const unlabeledBuilds = createMemo(() =>
     (view.inventory?.environments ?? []).filter(
       (environment) =>
-        environment.preparation &&
-        !environment.preparation.details?.project?.label &&
-        environment.worker &&
-        !environment.worker.attachedSessionIds.length &&
-        environment.worker.state !== "destroyed" &&
-        (["requested", "provisioning", "bootstrapping", "ready", "failed", "orphaned"].includes(
-          environment.worker.state,
-        ) ||
-          environment.worker.destroyRequestedAtMs !== undefined ||
-          Boolean(environment.worker.error)) &&
+        isUnassignedPreparation(environment) &&
+        !environment.preparation?.details?.project?.label &&
         showPreparationRow(environment),
     ),
   );
@@ -656,26 +652,13 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
           <CloudWorkerSnapshotPolicy />
           <Show
             when={
-              view.result?.images.some(
-                (image) => !image.projectKey && !image.projectLabel && !image.projectRoot,
-              ) ||
+              unlabeledImages().length ||
               view.result?.legacyLeases.length ||
               unlabeledBuilds().length
             }
           >
             <SettingsSection title={t("cloudWorkersPage.environments.machineImages")}>
-              <For
-                each={
-                  view.result?.images
-                    .filter(
-                      (image) => !image.projectKey && !image.projectLabel && !image.projectRoot,
-                    )
-                    .toSorted((a, b) =>
-                      (a.profileId ?? a.profileKey).localeCompare(b.profileId ?? b.profileKey),
-                    ) ?? []
-                }
-                keyed={(image) => image.profileKey}
-              >
+              <For each={unlabeledImages()} keyed={(image) => image.profileKey}>
                 {(image) => (
                   <CloudWorkerSnapshotRow
                     image={image()}

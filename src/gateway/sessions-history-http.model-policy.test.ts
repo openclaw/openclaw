@@ -100,7 +100,11 @@ describe("HTTP historical model disclosure", () => {
   };
 
   beforeAll(async () => {
-    state = await createOpenClawTestState({ scenario: "minimal", label: "http-model-policy" });
+    state = await createOpenClawTestState({
+      scenario: "minimal",
+      label: "http-model-policy",
+      prepareProfileCatalog: true,
+    });
     publishConfig(config());
     readerId = (await ensureCanonicalUserProfileForEmail(readerEmail)).id;
     const staff = await ensureCanonicalUserProfileForEmail(staffEmail);

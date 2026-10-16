@@ -42,7 +42,6 @@ it("retains the read failure classification when reader cleanup also fails", asy
     const prepare = vi.spyOn(readers, "prepareAgentAuthProfileRowsRead").mockReturnValue({
       identity: undefined,
       captureCredentialAuthority: () => undefined,
-      signal: new AbortController().signal,
       read: async () => {
         throw failure;
       },

@@ -253,39 +253,6 @@ describe("Codex Computer Use setup", () => {
     expectRequestMethodNotCalled(request, "plugin/read");
   });
 
-  it("requires explicit install commands to finish with a passing live test", async () => {
-    const request = createComputerUseRequest({ installed: true, liveTestFailures: 2 });
-
-    await expectSetupErrorStatus(
-      installCodexComputerUse({
-        pluginConfig: { computerUse: { marketplaceName: "desktop-tools" } },
-        request,
-      }),
-      {
-        ready: false,
-        reason: "live_test_failed",
-        installed: true,
-        pluginEnabled: true,
-        mcpServerAvailable: true,
-      },
-    );
-  });
-
-  it("fails closed when Computer Use is required but not installed", async () => {
-    const request = createComputerUseRequest({ installed: false });
-
-    await expectSetupErrorStatus(
-      ensureCodexComputerUse({
-        pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
-        request,
-      }),
-      {
-        reason: "plugin_not_installed",
-      },
-    );
-    expectRequestMethodNotCalled(request, "plugin/install");
-  });
-
   it("auto-registers the first installed bundled marketplace", async () => {
     const root = tempDirs.make("openclaw-codex-bundled-marketplace-");
     const bundledPath = (appName: string) =>

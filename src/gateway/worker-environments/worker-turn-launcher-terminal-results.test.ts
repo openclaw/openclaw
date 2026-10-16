@@ -7,7 +7,6 @@ import {
   type WorkerLiveEventParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
-import { buildAgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run.js";
@@ -32,6 +31,8 @@ import { NodeWorkerWorkspaceTransferError } from "../../worker/node-workspace-tr
 import { createGatewayWorkerDispatchAdmission } from "../server-worker-placement-dispatch-admission.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "../server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "../server-worker-placement-reclaim.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
@@ -516,19 +517,19 @@ describe("worker turn launcher terminal results", () => {
       claimWaitEntered.resolve();
       return pending;
     });
-    const entry = { sessionId: SESSION_ID, updatedAt: 1 };
     const barriers = createGatewayWorkerPlacementReclaimBarriers({
       placements,
       loadSessionRuntime: async () => ({
         managedWorktrees: { findLiveByOwner: async () => undefined },
-        resolveGatewaySessionStoreTargetInWorker: async () => ({
-          storePath: sessionTarget.storePath,
-          canonicalKey: SESSION_KEY,
-          storeKeys: [SESSION_KEY],
-          agentId: "main",
-          store: { [SESSION_KEY]: entry },
-        }),
-        resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+        resolveGatewaySessionStoreTargetInWorker: (params) =>
+          resolveGatewaySessionStoreTargetInWorker({
+            ...params,
+            cfg: {
+              ...params.cfg,
+              session: { ...params.cfg.session, store: sessionTarget.storePath },
+            },
+          }),
+        resolveCanonicalSessionEntryFromStoreKeys,
       }),
       cancelSessionWork: async ({ assertCurrent }) => {
         assertCurrent();
@@ -707,7 +708,6 @@ describe("worker turn launcher terminal results", () => {
       placements,
       loadSessionRuntime,
       revokeSessionAuthority: () => {},
-      awaitTurnClaimRelease: (sessionId, wait) => dispatch.awaitTurnClaimRelease(sessionId, wait),
     });
     const moveService = createWorkerPlacementMoveService({
       placements,
@@ -846,7 +846,7 @@ describe("worker turn launcher terminal results", () => {
     content: Parameters<typeof makeAgentAssistantMessage>[0]["content"];
     visibleText?: string;
     rawText?: string;
-    terminalReply: AgentRunTerminalReplySnapshot;
+    terminalReply?: AgentRunTerminalReplySnapshot;
     costs?: { first: number; last: number; total: number };
   }>([
     {
@@ -870,41 +870,48 @@ describe("worker turn launcher terminal results", () => {
       terminalReply: { disposition: "visible", text: "Usage reply" },
     },
     {
-      name: "sanitized final answer",
-      content: [{ type: "text", text: "<think>Private reasoning</think>Usage reply" }],
-      visibleText: "Usage reply",
-      rawText: "<think>Private reasoning</think>Usage reply",
-      terminalReply: { disposition: "visible", text: "Usage reply" },
-    },
-    {
       name: "explicit silence",
       content: [{ type: "text", text: "NO_REPLY" }],
-      visibleText: "NO_REPLY",
+      visibleText: "",
       rawText: "NO_REPLY",
       terminalReply: { disposition: "silent" },
     },
+    ...(
+      [
+        ["<think>Private reasoning</think>Usage reply", "Usage reply"],
+        ["NO_REPLY.", "NO_REPLY."],
+        ['"NO_REPLY"', '"NO_REPLY"'],
+        ['{"reply":"NO_REPLY"}', '{"reply":"NO_REPLY"}'],
+        ["no_reply", "no_reply"],
+        ["NO_REPLY\nNO_REPLY", "NO_REPLY"],
+        ["NO_REPLY\n<final></final>", ""],
+        ["[[reply_to_current]]", "", false],
+      ] satisfies Array<[string, string, boolean?]>
+    ).map(([rawText, visibleText, preservesRawText = true]) => ({
+      name: `prepared final ${JSON.stringify(rawText)}`,
+      content: [{ type: "text" as const, text: rawText }],
+      rawText: preservesRawText ? rawText : undefined,
+      visibleText,
+      terminalReply: visibleText
+        ? { disposition: "visible" as const, text: visibleText }
+        : { disposition: "empty" as const },
+    })),
     {
       name: "reasoning-only completion",
       content: [{ type: "thinking", thinking: "Private reasoning" }],
-      terminalReply: { disposition: "empty" },
     },
     {
       name: "tool-only completion",
       content: [{ type: "toolCall", id: "call-final", name: "read", arguments: {} }],
-      terminalReply: { disposition: "empty" },
     },
-    {
-      name: "empty final answer",
-      content: [],
-      terminalReply: { disposition: "empty" },
-    },
+    { name: "empty final answer", content: [] },
   ])(
     "reports canonical usage and $name",
     async ({
       content,
       visibleText,
       rawText,
-      terminalReply,
+      terminalReply = { disposition: "empty" },
       costs = { first: 0, last: 0, total: 0 },
     }) => {
       await seedActivePlacement();
@@ -979,14 +986,11 @@ describe("worker turn launcher terminal results", () => {
         async () => ({ meta: { durationMs: 1 } }),
       );
 
-      expect(result.meta.finalAssistantVisibleText).toBe(visibleText);
+      expect(result.meta.finalAssistantVisibleText ?? "").toBe(visibleText ?? "");
       expect(result.meta.finalAssistantRawText).toBe(rawText);
-      expect(
-        buildAgentRunTerminalReplySnapshot({
-          visibleText: result.meta.finalAssistantVisibleText,
-          rawText: result.meta.finalAssistantRawText,
-        }),
-      ).toEqual(terminalReply);
+      expect(result.meta.terminalReply).toEqual(terminalReply);
+      const payloadTexts = result.payloads?.map((payload) => payload.text) ?? [];
+      expect(payloadTexts).toEqual(visibleText ? [visibleText] : []);
       expect(result.meta.agentMeta).toEqual({
         sessionId: SESSION_ID,
         sessionFile,

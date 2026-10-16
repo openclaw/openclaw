@@ -7,6 +7,8 @@ import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
+import "../commands/agent.js";
+import { agentCliCommand } from "../commands/agent-via-gateway.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resetConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -27,6 +29,8 @@ import {
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+// Keep cold subject imports outside the skill-refresh behavior's timeout.
+import "./server-start.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -299,7 +303,6 @@ describe("Gateway agent skill refresh", () => {
 
           const requestCountBeforeLocal = requests.length;
           const runtime = createRuntimeEnv();
-          const { agentCliCommand } = await import("../commands/agent-via-gateway.js");
           await agentCliCommand(
             {
               local: true,

@@ -362,7 +362,7 @@ it.each([
           metadataReads.mock.calls.filter(
             ([, command]) => command.type === "sessionRows.sharedFacts",
           ),
-        ).toHaveLength(!retainsFacts || change === "worker legacy reset" ? 1 : 0);
+        ).toHaveLength(0);
         expect(row?.runtimeSelectionLocked).toBe(expected !== null);
         if (expected) {
           expect(row?.agentRuntime).toMatchObject({
@@ -565,6 +565,13 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
           expect(projection.dirtyRowCount).toBe(2);
           releaseRegistry.resolve();
           await recovery;
+          await projection.prepareSelection({ metadataOnly: true });
+          expect(
+            projection
+              .selectEntries({}, true)
+              .filter((row) => queries.slice(0, 2).some((query) => query.key === row.key))
+              .map((row) => row.entry.updatedAt),
+          ).toEqual([2, 2]);
           const reads: SessionRowDatabaseFacts[][] = [];
           const readDatabases = history.withSessionHistoryWorkerDatabases;
           vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
@@ -983,6 +990,8 @@ it.each(["delete", "dispose", "store replacement"] as const)(
       { replacement: change === "store replacement" },
     );
     if (change === "dispose") {
+      // Restoring spies does not clear their recorded fixture arguments or results.
+      vi.clearAllMocks();
       await nextTurn();
       queryObjects(WeakRef);
       expect(control?.deref()).toBeUndefined();

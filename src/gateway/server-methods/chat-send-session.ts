@@ -73,6 +73,8 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 // These inputs prepare model/runtime selection, native restrictions, command/retry
 // semantics, and creator defaults. Sharing authorization rechecks live policy;
 // unrelated logging and UI publications do not invalidate a prepared send.
+// Plugin-owned settings belong to the admitted runtime generation; core plugin
+// admission policy still affects preparation and must remain current.
 function chatSendPreparationConfig(
   cfg: OpenClawConfig,
   agentId: string,
@@ -137,7 +139,6 @@ function chatSendPreparationConfig(
     runtime: agent?.runtime,
     models: { mode: cfg.models?.mode, providers },
     auth: cfg.auth,
-    plugins: cfg.plugins,
     workspace: agent?.workspace ?? defaults?.workspace,
     agentDir: agent?.agentDir,
     timeoutSeconds: defaults?.timeoutSeconds,
@@ -145,6 +146,18 @@ function chatSendPreparationConfig(
     agentSandbox: agent?.sandbox,
     tools: cfg.tools,
     agentTools: agent?.tools,
+    plugins: {
+      enabled: cfg.plugins?.enabled,
+      allow: cfg.plugins?.allow,
+      deny: cfg.plugins?.deny,
+      load: cfg.plugins?.load,
+      slots: cfg.plugins?.slots,
+      entries: Object.fromEntries(
+        Object.entries(cfg.plugins?.entries ?? {}).map(
+          ([id, { enabled, hooks, subagent, llm }]) => [id, { enabled, hooks, subagent, llm }],
+        ),
+      ),
+    },
     channels: {
       defaults: cfg.channels?.defaults,
       selected: Object.fromEntries(channels.map((channel) => [channel, cfg.channels?.[channel]])),
@@ -413,12 +426,14 @@ export type LoadedChatSendSession = Extract<
 
 export type PreparedChatSendSession = LoadedChatSendSession & {
   sessionTarget: QualifiedSessionEntryAccessTarget;
+  releaseSessionStorage?: () => void;
   activeRunScopeKey: string;
   readSource?: CapturedSessionEntryReadSource;
 };
 
 export async function qualifyChatSendSession(
   loaded: LoadedChatSendSession,
+  releaseSessionStorage?: () => void,
 ): Promise<PreparedChatSendSession> {
   const qualified = await prepareQualifiedSessionEntryTarget(
     {
@@ -433,6 +448,7 @@ export async function qualifyChatSendSession(
   return {
     ...loaded,
     sessionTarget: qualified,
+    releaseSessionStorage,
     activeRunScopeKey: qualified.canonicalKey,
     readSource: qualified.readSource,
   };

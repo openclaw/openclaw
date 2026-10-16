@@ -1,8 +1,28 @@
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { notifyListeners } from "../../shared/listeners.js";
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "../../state/openclaw-state-db-cache.js";
-import type { PlacementAuthorityOwner, RetainedClaim } from "./placement-turn-authority.types.js";
+import {
+  isCurrentPlacementTurnClaim,
+  type WorkerSessionPlacementIdentity,
+  type WorkerSessionTurnClaim,
+} from "./placement-record.js";
+import type {
+  ClaimChange,
+  PlacementAuthorityOwner,
+  RetainedClaim,
+} from "./placement-turn-authority.types.js";
+
+export function placementChangeAllowsClaim(
+  change: ClaimChange,
+  claim: WorkerSessionTurnClaim,
+): boolean {
+  return (
+    change.kind !== "claim" ||
+    change.sessionId !== claim.sessionId ||
+    Boolean(change.facts && isCurrentPlacementTurnClaim(change.facts, claim))
+  );
+}
 
 export function notifyPlacementClaimRevoked(claim: RetainedClaim): void {
   if (!claim.revoked) {
@@ -15,6 +35,7 @@ export function notifyPlacementClaimRevoked(claim: RetainedClaim): void {
 
 export function closePlacementAuthorityOwner(owner: PlacementAuthorityOwner): void {
   owner.active = false;
+  owner.changeListeners.clear();
   owner.pending.clear();
   owner.published.clear();
   owner.tools.clear();
@@ -56,6 +77,7 @@ export function placementAuthorityOwnerFor(
   const owner: PlacementAuthorityOwner = {
     identity,
     active: true,
+    changeListeners: new Set(),
     claims: new Map(),
     placements: new Map(),
     observations: new Map(),
@@ -69,6 +91,60 @@ export function placementAuthorityOwnerFor(
   };
   placementAuthorityOwners.set(identity.key, owner);
   return owner;
+}
+
+export function subscribePlacementChanges(
+  identity: DatabasePathIdentity,
+  listener: (placement: WorkerSessionPlacementIdentity) => void,
+): () => void {
+  return registerListener(placementAuthorityOwnerFor(identity).changeListeners, listener);
+}
+
+function changedPlacementIdentity(
+  owner: PlacementAuthorityOwner,
+  change: ClaimChange,
+): WorkerSessionPlacementIdentity | undefined {
+  if (change.indeterminate) {
+    return undefined;
+  }
+  if (change.kind === "claim" && change.retired) {
+    return change.retiredIdentity;
+  }
+  const previous = owner.placements.get(change.sessionId)?.placement;
+  const current =
+    change.kind === "claim"
+      ? change.workspacePlacement
+      : change.kind === "workspace-result"
+        ? change.facts?.placement
+        : undefined;
+  if (
+    current &&
+    (!previous ||
+      current.state !== previous.state ||
+      current.generation !== previous.generation ||
+      current.updatedAtMs !== previous.updatedAtMs ||
+      current.sessionKey !== previous.sessionKey ||
+      current.agentId !== previous.agentId)
+  ) {
+    return {
+      sessionId: current.sessionId,
+      sessionKey: current.sessionKey,
+      agentId: current.agentId,
+    };
+  }
+  return undefined;
+}
+
+export function preparePlacementChangeNotification(
+  owner: PlacementAuthorityOwner,
+  change: ClaimChange,
+): () => void {
+  const changed = changedPlacementIdentity(owner, change);
+  return () => {
+    if (changed) {
+      notifyListeners(owner.changeListeners, changed);
+    }
+  };
 }
 
 registerOpenClawStateDatabaseLifecycleListener((event) => {

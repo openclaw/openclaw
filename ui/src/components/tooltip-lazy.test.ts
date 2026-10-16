@@ -89,7 +89,7 @@ describe("lazy tooltip content materialization", () => {
       document.body.append(tooltip);
       await settleTooltip(tooltip);
       if (outcome === "veto") {
-        tooltip.addEventListener("wa-show", (event) => event.preventDefault(), { once: true });
+        tooltip.addEventListener("overlay-show", (event) => event.preventDefault(), { once: true });
       }
       trigger.click();
       if (outcome === "escape") {

@@ -18,6 +18,7 @@ import { mutateSessionAtMessageWithPreconditions } from "../../config/sessions/s
 import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
+  withSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -28,7 +29,6 @@ import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   captureSessionUpstreamLinkReadSource,
   prepareSessionUpstreamLink,
@@ -47,7 +47,7 @@ import {
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
-import type { loadGatewaySessionEntryReadOnly } from "../session-utils-store.js";
+import type { GatewaySessionEntryRead } from "../session-utils-store.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import {
   readSessionWorkerPlacementAsync,
@@ -57,6 +57,7 @@ import { forkSessionRepositoryWorkspace } from "../worker-environments/session-r
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionForkFilesystemRoot } from "./session-create-root.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { resolveEditorMediaAttachments } from "./session-rewind-editor-media.js";
 import { prepareRewindRepositoryEntries } from "./session-rewind-repository-entries.js";
 import { waitForTerminalSessionRunSettlement } from "./session-run-settlement.js";
@@ -115,18 +116,37 @@ async function mutateSessionAtMessage(
     respond(false, undefined, requestedAgent.error);
     return;
   }
-  return withGatewaySessionEntryReadOnly(
-    { key: sessionKey, cfg, agentId: requestedAgent.agentId, excludeInternalEffects: true },
-    async (initial, assertSourceCurrent) =>
-      mutatePreparedSessionAtMessage({
-        options,
-        action,
-        cfg,
-        requestedAgentId: requestedAgent.agentId,
-        initial,
-        assertSourceCurrent,
-      }),
+  const run = () =>
+    withGatewaySessionEntryReadOnly(
+      { key: sessionKey, cfg, agentId: requestedAgent.agentId, excludeInternalEffects: true },
+      async (initial, assertSourceCurrent) =>
+        mutatePreparedSessionAtMessage({
+          options,
+          action,
+          cfg,
+          requestedAgentId: requestedAgent.agentId,
+          initial,
+          assertSourceCurrent,
+        }),
+    );
+  const assertCurrent = () => {
+    options.sessionMutationCommitGuard?.();
+    options.sessionMutationAuthorization?.assertCurrent();
+  };
+  const handled = await withSessionActorStorage(
+    { sessionKey, agentId: requestedAgent.agentId },
+    {
+      lifetime: { assertCurrent, assertReadable: assertCurrent },
+      authority: { assertCurrent, authorize() {} },
+    },
+    async () => {
+      await run();
+      return true;
+    },
   );
+  if (!handled) {
+    await run();
+  }
 }
 
 async function mutatePreparedSessionAtMessage({
@@ -141,7 +161,7 @@ async function mutatePreparedSessionAtMessage({
   action: MessageCutAction;
   cfg: OpenClawConfig;
   requestedAgentId: string;
-  initial: ReturnType<typeof loadGatewaySessionEntryReadOnly>;
+  initial: GatewaySessionEntryRead;
   assertSourceCurrent: () => void;
 }): Promise<void> {
   const { params, respond, context, client } = options;
@@ -427,6 +447,7 @@ async function mutatePreparedSessionAtMessage({
         return;
       }
       let result: MessageCutMutationResult;
+      let repositoryForkCommitted = false;
       let forkRepository:
         | {
             workspaceId: string;
@@ -523,6 +544,7 @@ async function mutatePreparedSessionAtMessage({
             assertUpstreamCurrent: assertLocalUpstreamCurrent,
           },
         );
+        repositoryForkCommitted = result.status === "created";
       } catch (error) {
         if (error === upstreamChanged) {
           respond(false, undefined, upstreamChanged.error);
@@ -538,7 +560,7 @@ async function mutatePreparedSessionAtMessage({
         reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);
         return;
       } finally {
-        if (forkRepository) {
+        if (forkRepository && !repositoryForkCommitted) {
           const { workspaceId, store, source } = forkRepository;
           if (repositoryEntries?.isForkUnclaimed(workspaceId)) {
             await store.delete({
@@ -623,7 +645,6 @@ async function mutatePreparedSessionAtMessage({
           reason: action === "switch" ? "branch-switch" : action,
         };
         if (memory) {
-          sessionChanges.emit({ sessionKey: payload.sessionKey, agentId: payload.agentId });
           try {
             await withPreparedSessionEventRow(
               getSessionRowProjection(context),
@@ -641,9 +662,17 @@ async function mutatePreparedSessionAtMessage({
         }
       };
       if (memory) {
-        const actor = await memory.actor.storage!.acquire(committedResult.key);
+        const assertCurrent = readGatewayRequestMutationAuthority(options).assertLifetimeCurrent;
+        // The mutation consumed the old instance authority; publication uses live recipient policy.
+        const actor = await memory.actor.storage!.acquire(committedResult.key, {
+          assertCurrent,
+          assertReadable: assertCurrent,
+        });
         try {
-          await runWithSessionActorStorage({ ...memory, actor }, complete);
+          await runWithSessionActorStorage(
+            { ...memory, actor, authority: { assertCurrent, authorize() {} } },
+            complete,
+          );
         } finally {
           await actor.release();
         }

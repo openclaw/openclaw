@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as yieldTurn } from "node:timers/promises";
@@ -19,14 +19,8 @@ import {
   WorktreePendingContentionError,
   WorktreeRepositoryError,
 } from "./errors.js";
-import {
-  commandError,
-  listGitWorktrees,
-  worktreePathExists,
-  resolveGitRepositoryPaths,
-  requireGit,
-  runGit,
-} from "./git.js";
+import { indexWorktreePaths } from "./gc-dependencies.js";
+import { commandError, listGitWorktrees, worktreePathExists, requireGit, runGit } from "./git.js";
 import { appendNameOrdinal, validateName } from "./name.js";
 import { assertOwnerWorktreeReuse, worktreeOwnerMatches } from "./owner.js";
 import { readPendingWorktrees, releasePendingWorktree } from "./pending-slots.js";
@@ -40,7 +34,11 @@ import {
   readLiveRegistryWorktreeByOwner,
 } from "./registry-read.js";
 import { updateRegistryWorktree } from "./registry.js";
-import { resolveCheckoutRootFromRealPath } from "./repository-paths.js";
+import {
+  resolveRepository,
+  resolveRepositoryFromRealPath,
+  type ResolvedRepository,
+} from "./repository-paths.js";
 import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
 import type {
@@ -234,47 +232,41 @@ export async function withWorktreeSources<T>(
         (record) => record.id !== params.restoringId,
       );
       const { repository } = params;
-      const requiredPaths = new Set([
-        repository.sourceRoot,
-        repository.repoRoot,
-        repository.commonDir,
-        ...(params.requiredPaths ?? []),
-      ]);
+      const source = await runGitWorkerOperation(
+        {
+          type: "worktree.eviction-source",
+          input: {
+            sourceRoot: repository.sourceRoot,
+            commonDir: repository.commonDir,
+            requiredPaths: [repository.repoRoot, ...(params.requiredPaths ?? [])],
+            records: records.map(({ id, path: checkoutPath, repoRoot }) => ({
+              id,
+              path: checkoutPath,
+              repoRoot,
+            })),
+          },
+        },
+        { signal: params.signal, assertCurrent: params.commitGuard },
+      );
+      if (!source.complete) {
+        throw new Error(
+          "Managed worktree source Git storage cannot be inspected safely. Repair its Git metadata before retrying.",
+        );
+      }
+      const ancestors = indexWorktreePaths(source.ownedPaths);
       const reuseTargets = records.filter(
         (record) =>
           (params.ownerId && worktreeOwnerMatches(record, params)) ||
           (params.name === record.name && record.repoFingerprint === repository.fingerprint),
       );
-      const retainSources = async (paths: readonly string[], initial = false) => {
-        const previousSize = requiredPaths.size;
-        for (const required of paths) {
-          requiredPaths.add(required);
-        }
-        if (!initial && requiredPaths.size === previousSize) {
-          return;
-        }
-        const source = await runGitWorkerOperation(
-          {
-            type: "worktree.eviction-source",
-            input: {
-              sourceRoot: repository.sourceRoot,
-              commonDir: repository.commonDir,
-              requiredPaths: [...requiredPaths],
-              records: records.map(({ id, path: checkoutPath, repoRoot }) => ({
-                id,
-                path: checkoutPath,
-                repoRoot,
-              })),
-            },
-          },
-          { signal: params.signal, assertCurrent: params.commitGuard },
-        );
-        if (!source.complete) {
-          throw new Error(
-            "Managed worktree source Git storage cannot be inspected safely. Repair its Git metadata before retrying.",
-          );
-        }
-        const needed = new Set([...source.worktreeIds, ...reuseTargets.map(({ id }) => id)]);
+      const retainSources = async (paths: readonly string[]) => {
+        // Additional destinations share this custody scope's prepared ownership inventory.
+        // Native removal still rechecks dependencies before deleting a checkout.
+        const needed = new Set([
+          ...source.worktreeIds,
+          ...reuseTargets.map(({ id }) => id),
+          ...paths.flatMap((required) => [...ancestors(required)]),
+        ]);
         for (const record of records) {
           if (!needed.has(record.id) || held.has(record.id)) {
             continue;
@@ -296,7 +288,7 @@ export async function withWorktreeSources<T>(
         }
         params.commitGuard();
       };
-      await retainSources([], true);
+      await retainSources([]);
       params.commitGuard();
       return retainSources;
     });
@@ -435,41 +427,6 @@ async function requireNewWorktreeBranch(repoRoot: string, branch: string): Promi
   }
 }
 
-export type ResolvedRepository = {
-  repoRoot: string;
-  sourceRoot: string;
-  commonDir: string;
-  originUrl: string;
-  fingerprint: string;
-};
-
-async function resolveRepositoryFromRealPath(
-  requested: string,
-  requestedLabel: string,
-): Promise<ResolvedRepository> {
-  const { root: sourceRoot } = await resolveCheckoutRootFromRealPath(requested, requestedLabel);
-  const { canonicalRoot, commonDir } = await resolveGitRepositoryPaths(sourceRoot);
-  const origin = await runGit(canonicalRoot, ["config", "--get", "remote.origin.url"]);
-  if (origin.termination !== "exit" || (origin.code !== 0 && origin.code !== 1)) {
-    throw commandError("git config --get remote.origin.url", origin);
-  }
-  const originUrl = origin.code === 0 ? origin.stdout.trim() : "";
-  const fingerprint = createHash("sha256")
-    .update(`${commonDir}\n${originUrl}`)
-    .digest("hex")
-    .slice(0, 16);
-  return { repoRoot: canonicalRoot, sourceRoot, commonDir, originUrl, fingerprint };
-}
-
-export async function resolveRepository(repoRoot: string): Promise<ResolvedRepository> {
-  return await timeWorktreePreparationPhase("repository", async () => {
-    const requested = await fs.realpath(repoRoot).catch(() => {
-      throw new Error(`repository does not exist: ${repoRoot}`);
-    });
-    return await resolveRepositoryFromRealPath(requested, repoRoot);
-  });
-}
-
 /** Rebind a live checkout only after its canonical repository and recorded origin agree. */
 export async function rebindLiveWorktreeRepository(
   env: NodeJS.ProcessEnv,
@@ -530,16 +487,6 @@ export async function rebindLiveWorktreeRepository(
     guard.commitGuard?.();
     return { ...record, repoRoot: repository.repoRoot, repoFingerprint: repository.fingerprint };
   });
-}
-
-export async function resolveRepositoryIdentity(repoRoot: string) {
-  const resolved = await resolveRepository(repoRoot);
-  return {
-    checkoutRoot: resolved.sourceRoot,
-    repoRoot: resolved.repoRoot,
-    originUrl: resolved.originUrl,
-    fingerprint: resolved.fingerprint,
-  };
 }
 
 export async function removeFailedWorktree(

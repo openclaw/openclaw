@@ -1,13 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
-import {
-  CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-  closeCodexStartupClientBestEffort,
-  CodexAppServerUnsafeSubscriptionError,
-  unsubscribeCodexThreadBestEffort,
-} from "./attempt-client-cleanup.js";
-import { resolveCodexAppServerClientInstanceId } from "./client.js";
+import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
@@ -31,6 +25,7 @@ import {
   areUserMcpServersFingerprintsCompatible,
   shouldStartTransientNoToolThread,
 } from "./thread-fingerprints.js";
+import { injectCodexHistoryDelta } from "./thread-history-delivery.js";
 import {
   resumePendingCodexThread,
   prepareCodexThreadResume,
@@ -56,15 +51,20 @@ import {
   throwIfCodexThreadLifecycleAborted,
   tryReuseCodexLiveThread,
 } from "./thread-lifecycle-warm.js";
+import { isTransientCodexRestrictedTurn } from "./thread-restricted-resume.js";
 import { materializePendingSupervisionBranch } from "./thread-supervision.js";
 
 export async function startOrResumeThread(
   input: CodexStartOrResumeThreadParams,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const incognito = isIncognitoSessionKey(input.params.sessionKey);
-  const clientId = resolveCodexAppServerClientInstanceId(input.client);
+  const clientId = input.client.getInstanceId();
   let cleanupWarmBinding: (() => Promise<void>) | undefined;
-  const prep = withCodexThreadLifecycleBinding(input, async (bindingIdentity, saved, authority) => {
+  const prepare: Parameters<typeof withCodexThreadLifecycleBinding>[1] = async (
+    bindingIdentity,
+    saved,
+    authority,
+  ) => {
     const assert = authority.assertCurrent;
     const params: CodexStartOrResumeThreadParams = { ...input, assertCurrent: assert, authority };
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
@@ -136,80 +136,11 @@ export async function startOrResumeThread(
         : input.refreshableInstructions;
       return context;
     };
-    const injectReusedHistory = async (
-      thread: CodexAppServerThreadLifecycleBinding,
-      context: CodexThreadRequestContext,
-    ) => {
-      const items = params.historyBootstrapItems;
-      if (!items?.length) {
-        return;
-      }
-      throwIfAborted();
-      assert();
-      if (
-        thread.model !== context.startModelSelection.model ||
-        (context.startModelProvider && thread.modelProvider !== context.startModelProvider)
-      ) {
-        throw new Error(
-          "Codex selected a different model than the assembled context policy; retry with that model's configured budget.",
-        );
-      }
-      // The existing warm/resume owner admitted an idle thread under this
-      // session lease. Like the baseline per-turn quote, this is additional
-      // context, not replacement of native history or a reason to rotate it.
-      try {
-        await lifecycleTiming.measure("thread-reuse-seed-history", () =>
-          params.client.request(
-            "thread/inject_items",
-            { threadId: thread.threadId, items },
-            {
-              signal: params.signal,
-              assertCurrent: () => {
-                throwIfAborted();
-                params.params.hostCapabilities.assertActive();
-                assert();
-              },
-              withCurrent: authority.withCurrent,
-            },
-          ),
-        );
-      } catch (error) {
-        // A lost acknowledgment may have appended the quote. Do not replay it
-        // on this physical thread: release its binding, preserving its native
-        // transcript, so an ordinary retry starts fresh. Existing startup/warm
-        // cleanup owns its subscription; only a provisional new thread is deleted.
-        await params.bindingStore.mutate(
-          bindingIdentity,
-          { kind: "clear", threadId: thread.threadId, clientId: thread.clientId },
-          assert,
-          authority,
-        );
-        if (!thread.liveThreadOwnership) {
-          // Cold resume acquired a subscription without a transferred warm claim.
-          const released = await unsubscribeCodexThreadBestEffort(params.client, {
-            threadId: thread.threadId,
-            timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-            assertCurrent: assert,
-            withCurrent: authority.withCurrent,
-          });
-          if (!released) {
-            await (
-              params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client))
-            )();
-            throw new CodexAppServerUnsafeSubscriptionError("Codex reused history cleanup failed", {
-              cause: error,
-            });
-          }
-        }
-        throw error;
-      }
-      throwIfAborted();
-      assert();
-    };
     const releaseRetainedThread = (
       threadId: string,
       ownerClientId = initialBoundClientId,
       assertCurrent?: () => void,
+      afterThreadWrite = false,
     ) =>
       releaseCodexBoundLiveThread({
         client: params.client,
@@ -221,6 +152,7 @@ export async function startOrResumeThread(
         assertCurrent,
         withCurrent: authority.withCurrent,
         signal: params.signal,
+        onExitWaitCancelled: afterThreadWrite ? undefined : params.onPrewriteHandoffCancelled,
       });
     if (binding?.pendingSupervisionBranch) {
       const requestContext = await prepareRequestContext();
@@ -315,12 +247,26 @@ export async function startOrResumeThread(
       });
       stageBindingReplacement("rotating a stale thread binding");
     };
-    const transientDelegationRestriction = params.params.delegationCapability === "report_only";
+    const transientDelegationRestriction =
+      params.params.delegationCapability === "report_only" ||
+      params.params.delegationCapability === "host_only";
     const persistentWebSearchRestriction =
       params.webSearchAllowed === false && params.persistentWebSearchAllowed === false;
-    const transientNativeToolRestriction =
-      params.nativeCodeModeEnabled === false && !persistentWebSearchRestriction;
-    const transientWebSearchRestriction = isTransientWebSearchRestriction(params);
+    const transientNativeToolRestriction = isTransientCodexRestrictedTurn(
+      params.params,
+      hostSystemAgentActive,
+    );
+    const transientWebSearchRestriction =
+      !ringZeroActive && isTransientWebSearchRestriction(params);
+    // A temporary first turn must not establish the conversation's durable policy.
+    let preserveExistingBinding =
+      transientNativeToolRestriction ||
+      transientWebSearchRestriction ||
+      transientDelegationRestriction ||
+      (!ringZeroActive &&
+        params.nativeProviderWebSearchSupport === "unknown" &&
+        !binding?.threadId);
+    let restrictedResumeCandidate = false;
     if (binding?.pendingResumeConfiguration) {
       const resumed = await resumePendingCodexThread(params, {
         ...(await prepareRequestContext()),
@@ -337,9 +283,7 @@ export async function startOrResumeThread(
     }
 
     if (binding?.threadId) {
-      if (!restrictedToolSurface && binding.nativeToolPolicyRestricted === true) {
-        stageBindingReplacement("rotating a host-policy-restricted thread binding");
-      } else if (binding.nativeSkillIsolationFingerprint !== nativeSkillIsolationFingerprint) {
+      if (binding.nativeSkillIsolationFingerprint !== nativeSkillIsolationFingerprint) {
         embeddedAgentLog.debug(
           "codex app-server native skill isolation changed; starting a new thread",
           { threadId: binding.threadId },
@@ -389,13 +333,23 @@ export async function startOrResumeThread(
       }
     }
     selectionBinding = binding;
-    // Capability read failures use managed search for this turn but must not
-    // create a binding that later looks like a confirmed provider-policy change.
-    let preserveExistingBinding =
-      transientDelegationRestriction ||
-      (!ringZeroActive &&
-        params.nativeProviderWebSearchSupport === "unknown" &&
-        !binding?.threadId);
+    if (
+      binding?.threadId &&
+      !restrictedToolSurface &&
+      binding.nativeToolPolicyRestricted === true
+    ) {
+      stageBindingReplacement("rotating a host-policy-restricted thread binding");
+    }
+    if (binding?.threadId && (transientNativeToolRestriction || transientWebSearchRestriction)) {
+      assertCodexBindingMayBeReplaced(
+        binding,
+        "starting a turn-restricted thread",
+        expectedOwnership,
+      );
+      preserveExistingBinding = true;
+      binding = undefined;
+    }
+
     let rotatedContextEngineBinding = false;
     let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
     // Scoped inventory requires a loaded native thread. The warm/resume owner
@@ -459,6 +413,16 @@ export async function startOrResumeThread(
       );
       preserveExistingBinding = false;
     }
+    if (binding?.restrictedThreadConfigFingerprint && params.nativeCodeModeEnabled !== false) {
+      stageBindingReplacement("rotating a native-tool-disabled thread binding");
+    }
+    if (binding?.threadId && params.nativeCodeModeEnabled === false && !ringZeroActive) {
+      if (!binding.restrictedThreadConfigFingerprint) {
+        stageBindingReplacement("transitioning an unattested restricted binding");
+      } else {
+        restrictedResumeCandidate = true;
+      }
+    }
     if (
       binding?.threadId &&
       params.mcpServersFingerprintEvaluated === true &&
@@ -513,21 +477,6 @@ export async function startOrResumeThread(
         // search-policy changes and legacy bindings without metadata rotate first.
         rotateStaleBinding(binding, "web search config");
       }
-      binding = undefined;
-    }
-    if (binding?.threadId && transientNativeToolRestriction && !ringZeroActive) {
-      assertCodexBindingMayBeReplaced(
-        binding,
-        "starting a native-tool-restricted turn",
-        expectedOwnership,
-      );
-      embeddedAgentLog.debug(
-        "codex app-server native tool surface disabled for turn; starting transient thread",
-        {
-          threadId: binding.threadId,
-        },
-      );
-      preserveExistingBinding = true;
       binding = undefined;
     }
     if (binding?.threadId && transientDelegationRestriction) {
@@ -611,10 +560,13 @@ export async function startOrResumeThread(
           "changing the dynamic tool catalog",
           expectedOwnership,
         );
-        preserveExistingBinding = shouldStartTransientNoToolThread({
-          previous: binding.dynamicToolsFingerprint,
-          nextHasDynamicTools: params.dynamicTools.length > 0,
-        });
+        preserveExistingBinding =
+          params.params.pluginHarnessToolPolicyScope !== "conversation" &&
+          params.nativeCodeModeEnabled !== false &&
+          shouldStartTransientNoToolThread({
+            previous: binding.dynamicToolsFingerprint,
+            nextHasDynamicTools: params.dynamicTools.length > 0,
+          });
         if (preserveExistingBinding) {
           embeddedAgentLog.debug(
             "codex app-server dynamic tools unavailable for turn; starting transient thread",
@@ -632,11 +584,17 @@ export async function startOrResumeThread(
           params,
           binding,
           clientId,
+          requireRestrictedThreadConfigFingerprint: restrictedResumeCandidate,
           buildLoadedPluginThreadConfig,
         });
         if (warmReuse.kind === "ready") {
           cleanupWarmBinding = warmReuse.cleanupOnFailure;
-          await injectReusedHistory(warmReuse.binding, requestContext);
+          await injectCodexHistoryDelta(params, {
+            thread: warmReuse.binding,
+            context: requestContext,
+            bindingIdentity,
+            authority,
+          });
           return publishCodexThreadInferenceBinding(params, warmReuse.binding, true);
         }
         if (incognito || warmReuse.kind === "rotate") {
@@ -651,6 +609,7 @@ export async function startOrResumeThread(
           const resumed = await resumeExistingCodexThread(params, {
             ...requestContext,
             binding: resumeBinding,
+            requireRestrictedThreadConfigFingerprint: restrictedResumeCandidate,
             stageBindingReplacement,
             prebuiltFinalConfigPatch: warmReuse.prebuiltFinalConfigPatch,
             prebuiltPluginThreadConfig,
@@ -665,7 +624,12 @@ export async function startOrResumeThread(
             },
           });
           if (resumed) {
-            await injectReusedHistory(resumed, requestContext);
+            await injectCodexHistoryDelta(params, {
+              thread: resumed,
+              context: requestContext,
+              bindingIdentity,
+              authority,
+            });
             return publishCodexThreadInferenceBinding(params, resumed);
           }
         }
@@ -686,13 +650,17 @@ export async function startOrResumeThread(
     });
     if (replacementPredecessor && !preserveExistingBinding && configuredMcpOwnershipChanged) {
       // Configured MCP migration retains the prior subscription until its replacement commits.
-      await releaseRetainedThread(replacementPredecessor.threadId, replacementPredecessor.clientId);
+      // That replacement already subscribed this client, so cancellation cannot keep it.
+      await releaseRetainedThread(
+        replacementPredecessor.threadId,
+        replacementPredecessor.clientId,
+        undefined,
+        true,
+      );
     }
     return publishCodexThreadInferenceBinding(params, started);
-  });
-  try {
-    return await prep;
-  } catch (error) {
+  };
+  return withCodexThreadLifecycleBinding(input, prepare, async (error) => {
     // Warm reuse transfers its claim before publication and lease settlement.
     // Until this function returns, a rejected preparation still owns cleanup.
     if (cleanupWarmBinding) {
@@ -707,5 +675,5 @@ export async function startOrResumeThread(
       }
     }
     throw error;
-  }
+  });
 }

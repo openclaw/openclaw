@@ -151,16 +151,6 @@ describe("cli program (nodes diagnostics auth)", () => {
     expect(getRuntimeOutput()).toContain("Remote Read Only Node");
   });
 
-  it("does not retry node diagnostics after a transport failure", async () => {
-    programGatewayCallMock.mockRejectedValue(new Error("gateway timed out"));
-
-    await expect(runProgram(["nodes", "status"])).rejects.toThrow("exit");
-
-    const requests = gatewayRequests().filter((request) => request.method === "node.list");
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.useStoredDeviceAuth).toBe(true);
-  });
-
   it("lets missing credentials reach the shared renderer without a nodes status prefix", async () => {
     const error = Object.assign(
       new Error(
@@ -201,6 +191,11 @@ describe("cli program (nodes diagnostics auth)", () => {
     expect(runtime.error).not.toHaveBeenCalledWith(
       expect.stringContaining("configure gateway.auth"),
     );
+    if (error.name === "Error") {
+      const requests = gatewayRequests().filter((request) => request.method === "node.list");
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.useStoredDeviceAuth).toBe(true);
+    }
   });
 
   it("falls back to configured auth after stored device auth is rejected", async () => {

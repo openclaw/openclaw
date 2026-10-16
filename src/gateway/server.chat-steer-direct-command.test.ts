@@ -412,7 +412,7 @@ it.for([
         ownsAdmittedInstance: true,
         hasDelegatedAuthority: true,
         isControlUiVisible: true,
-        terminalReplyExpectation: "required",
+        terminalReplyExpectation: "result-required",
         injectionVersion: 2,
         supportsTranscriptCommitWait: true,
       });
@@ -423,7 +423,9 @@ it.for([
         idempotencyKey: `browser-direct-command-correction-${source}`,
         queueMode: "steer",
       });
-      expect(response.ok, JSON.stringify(response)).toBe(true);
+      expect(response.ok, JSON.stringify({ response, diagnostics: diagnostics.mock.calls })).toBe(
+        true,
+      );
       const captured = capture.mock.results.find(
         (result) => result.type === "return" && result.value?.runId === runId,
       );

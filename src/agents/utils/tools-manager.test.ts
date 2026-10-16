@@ -116,62 +116,52 @@ describe("ensureTool", () => {
     },
   );
 
-  it.each(
-    [
-      { name: "legacy only", legacy: "payload", canonical: "missing", selected: "legacy" },
-      { name: "migrated", legacy: "missing", canonical: "payload", selected: "canonical" },
-      { name: "both present", legacy: "payload", canonical: "payload", selected: "legacy" },
-      { name: "empty canonical", legacy: "payload", canonical: "empty", selected: "legacy" },
-      {
-        name: "completed migration",
-        legacy: "payload",
-        canonical: "payload",
-        receipt: "valid",
-        selected: "canonical",
-      },
-      {
-        name: "incomplete receipt",
-        legacy: "payload",
-        canonical: "empty",
-        receipt: "partial",
-        selected: "legacy",
-      },
-      {
-        name: "another source's receipt",
-        legacy: "payload",
-        canonical: "payload",
-        receipt: "other-source",
-        selected: "legacy",
-      },
-      {
-        name: "another target's receipt",
-        legacy: "payload",
-        canonical: "payload",
-        receipt: "other-target",
-        selected: "legacy",
-      },
-      { name: "empty legacy", legacy: "empty", canonical: "missing", selected: "canonical" },
-      { name: "missing legacy", legacy: "missing", canonical: "missing", selected: "canonical" },
-    ].flatMap((testCase) =>
-      ["OPENCLAW_HOME"].map((override) => ({
-        testCase,
-        override,
-      })),
-    ),
-  )(
-    "reuses managed binaries across agent directory migration: $testCase.name ($override)",
-    async ({ testCase, override }) => {
+  it.each([
+    { name: "legacy only", legacy: "payload", canonical: "missing", selected: "legacy" },
+    { name: "migrated", legacy: "missing", canonical: "payload", selected: "canonical" },
+    { name: "both present", legacy: "payload", canonical: "payload", selected: "legacy" },
+    { name: "empty canonical", legacy: "payload", canonical: "empty", selected: "legacy" },
+    {
+      name: "completed migration",
+      legacy: "payload",
+      canonical: "payload",
+      receipt: "valid",
+      selected: "canonical",
+    },
+    {
+      name: "incomplete receipt",
+      legacy: "payload",
+      canonical: "empty",
+      receipt: "partial",
+      selected: "legacy",
+    },
+    {
+      name: "another source's receipt",
+      legacy: "payload",
+      canonical: "payload",
+      receipt: "other-source",
+      selected: "legacy",
+    },
+    {
+      name: "another target's receipt",
+      legacy: "payload",
+      canonical: "payload",
+      receipt: "other-target",
+      selected: "legacy",
+    },
+    { name: "empty legacy", legacy: "empty", canonical: "missing", selected: "canonical" },
+    { name: "missing legacy", legacy: "missing", canonical: "missing", selected: "canonical" },
+  ])(
+    "reuses managed binaries across default-profile agent directory migration: $name",
+    async (testCase) => {
       const home = expectDefined(tempAgentDir, "test home");
       vi.spyOn(os, "homedir").mockReturnValue(home);
-      const overrideHome = join(home, "override-home");
-      const stateDir =
-        override === "OPENCLAW_STATE_DIR"
-          ? join(home, "state")
-          : join(override === "OPENCLAW_HOME" ? overrideHome : home, ".openclaw");
+      const stateDir = join(home, ".openclaw");
       vi.stubEnv("HOME", home);
       vi.stubEnv("USERPROFILE", home);
-      vi.stubEnv("OPENCLAW_HOME", override === "OPENCLAW_HOME" ? overrideHome : "");
-      vi.stubEnv("OPENCLAW_STATE_DIR", override === "OPENCLAW_STATE_DIR" ? stateDir : "");
+      vi.stubEnv("OPENCLAW_HOME", home);
+      vi.stubEnv("OPENCLAW_PROFILE", "");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       vi.stubEnv("OPENCLAW_AGENT_DIR", "");
       vi.stubEnv("OPENCLAW_OFFLINE", "1");
       const canonicalDir = join(stateDir, "agents", "main", "agent");

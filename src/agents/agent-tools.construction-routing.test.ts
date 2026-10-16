@@ -108,16 +108,6 @@ describe("createOpenClawCodingTools cron scope", () => {
     },
   );
 
-  it("scopes cron-triggered jobs to self-removal", () => {
-    const tools = createOpenClawCodingTools({
-      trigger: "cron",
-      jobId: "job-current",
-    });
-
-    expect(tools.map((tool) => tool.name)).toContain(AUTOMATIONS_TOOL_NAME);
-    expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
-  });
-
   it("keeps self-scoped automation inspection available without sender ownership", () => {
     const tools = createOpenClawCodingTools({
       trigger: "cron",
@@ -270,7 +260,12 @@ describe("createOpenClawCodingTools sandbox filesystem ownership", () => {
     mocks.createOpenClawToolsOptions.mockClear();
 
     const tools = createOpenClawCodingTools({
-      sandbox,
+      sandbox: { ...sandbox, agentId: "main" },
+      config: { agents: { entries: { main: {}, work: {} } } },
+      policyAgentId: "main",
+      agentId: "work",
+      sessionKey: "agent:main:policy",
+      runSessionKey: "agent:work:run",
       toolConstructionPlan: {
         includeBaseCodingTools: false,
         includeShellTools: false,
@@ -282,6 +277,9 @@ describe("createOpenClawCodingTools sandbox filesystem ownership", () => {
 
     expect(tools.map((tool) => tool.name)).toContain(AUTOMATIONS_TOOL_NAME);
     expect(mocks.createOpenClawToolsOptions).toHaveBeenCalledOnce();
+    expect(mocks.createOpenClawToolsOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxAgentId: "main", requesterAgentIdOverride: "work" }),
+    );
   });
 
   it("rejects sandbox shell tools without their filesystem bridge", () => {

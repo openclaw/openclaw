@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { ModelProviderConfig } from "../../../config/types.models.js";
 import * as pluginEnable from "../../../plugins/enable.js";
+import "../../../system-agent/setup-inference-credentials.js";
 import { migrateLegacyConfig } from "../../doctor/shared/legacy-config-migrate.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
@@ -209,7 +210,10 @@ describe("applyNonInteractivePluginProviderChoice", () => {
           defaults: {
             ...config.agents?.defaults,
             model: { primary: "utility-fixture/small" },
-            utilityModel: "utility-fixture/small",
+            utilityModel: {
+              primary: "utility-fixture/small",
+              fallbacks: ["utility-fixture/backup"],
+            },
           },
         },
       }));
@@ -244,7 +248,10 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       }
       const before = structuredClone(baseConfig);
       const result = await apply();
-      expect(result?.agents?.defaults?.utilityModel).toBe("utility-fixture/small");
+      expect(result?.agents?.defaults?.utilityModel).toEqual({
+        primary: "utility-fixture/small",
+        fallbacks: ["utility-fixture/backup"],
+      });
       expect(result?.agents?.defaults?.model).toEqual(
         legacy ? { primary: "local-fixture/small" } : undefined,
       );
@@ -509,7 +516,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       ...config,
       agents: {
         defaults: {
-          model: { primary: "groq/llama-3.3-70b-versatile" },
+          model: { primary: "groq/openai/gpt-oss-120b" },
         },
       },
     }));
@@ -579,7 +586,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(result).toMatchObject({
       agents: {
         defaults: {
-          model: { primary: "groq/llama-3.3-70b-versatile" },
+          model: { primary: "groq/openai/gpt-oss-120b" },
         },
       },
       plugins: {

@@ -43,10 +43,7 @@ import { createAgentSession } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
 import { isSummaryTimeoutFailure, resolveCompactionFailure } from "./compact-reasons.js";
-import {
-  containsRealConversationMessages,
-  summarizeCompactionMessages,
-} from "./compaction-diagnostics.js";
+import { containsRealConversationMessages } from "./compaction-diagnostics.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
 import {
   buildBeforeCompactionHookMetrics,
@@ -82,8 +79,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     params,
     diagId,
     trigger,
-    attempt,
-    maxAttempts,
     runId,
     compactionModelCallTrace,
     diagnosticCompactionRunId,
@@ -394,6 +389,24 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           assertActive,
           onHookMessages: params.onCompactionHookMessages,
         });
+        const activeSessionFile = memoryTranscript
+          ? params.sessionFile
+          : formatSqliteSessionFileMarker({
+              ...sessionTarget,
+              sessionId: params.sessionId,
+            });
+        const completeSkippedCompaction = async (reason: string) => {
+          await runCompactionHooks({
+            ...hookContext(),
+            phase: "after",
+            messageCountAfter: beforeHookMetrics.messageCountBefore,
+            tokensAfter: beforeHookMetrics.tokenCountBefore,
+            compactedCount: 0,
+            compactionOutcome: "skipped",
+            sessionFile: activeSessionFile,
+          });
+          return { ok: true, compacted: false, reason };
+        };
         await runCompactionHooks({
           ...hookContext(),
           phase: "before",
@@ -401,33 +414,14 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         });
         const { messageCountOriginal, tokenCountBefore: limitedTranscriptTokensBefore } =
           beforeHookMetrics;
-        const diagEnabled = log.isEnabled("debug");
-        const preMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
-        if (preMetrics) {
-          log.debug(
-            `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
-              `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
-              `attempt=${attempt} maxAttempts=${maxAttempts} ` +
-              `pre.messages=${preMetrics.messages} pre.historyTextChars=${preMetrics.historyTextChars} ` +
-              `pre.toolResultChars=${preMetrics.toolResultChars} pre.estTokens=${preMetrics.estTokens ?? "unknown"}`,
-          );
-          log.debug(
-            `[compaction-diag] contributors diagId=${diagId} top=${JSON.stringify(preMetrics.contributors)}`,
-          );
-        }
 
         if (!containsRealConversationMessages(session.messages)) {
           log.info(
             `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
           );
-          return {
-            ok: true,
-            compacted: false,
-            reason: "no real conversation messages",
-          };
+          return await completeSkippedCompaction("no real conversation messages");
         }
 
-        const compactStartedAt = Date.now();
         // Setup completed: give the first provider request a full safety window.
         params.compactionTimeoutReset?.();
         let serverTokensAfter: number | undefined;
@@ -436,7 +430,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           // replacement window synchronously with its accepted rewrite.
           serverTokensAfter = estimateLlmBoundaryTokenPressure({
             messages: sessionManager.buildSessionContext().messages,
-            systemPrompt: systemPromptText,
+            systemPrompt: accountingRecorder?.requestBudget ? undefined : systemPromptText,
             prompt: "",
             replay: {
               model: effectiveModel,
@@ -445,6 +439,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               enabled: compactionReplayEnabled,
             },
           });
+          // Keep replay-aware history, but charge the foreground system/tools.
+          serverTokensAfter += accountingRecorder?.requestBudget
+            ? accountingRecorder.requestBudget.fixedTokens -
+              estimateLlmBoundaryTokenPressure({ messages: [], prompt: "" })
+            : 0;
           recordCompaction({
             tokensBefore,
             tokensAfter: serverTokensAfter,
@@ -476,7 +475,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             });
         const activeSession = session;
         let clientResult: Awaited<ReturnType<typeof activeSession.compact>> | undefined;
-        let summaryTimedOut = false;
         // A timeout after generation is persistence; recovery would discard a real summary.
         let summaryReady = false;
         if (!serverResult) {
@@ -548,7 +546,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               params.compactionTimeoutReset?.();
               // The same summary would time out again next turn (#164220): commit the
               // prepared cut without one.
-              summaryTimedOut = true;
               log.warn(
                 `[compaction-diag] fallback runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
                   `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
@@ -558,7 +555,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             });
             if (outcome.status === "skipped") {
               assertActive();
-              return { ok: true, compacted: false, reason: outcome.reason };
+              return await completeSkippedCompaction(outcome.reason);
             }
             clientResult = outcome.result;
           } finally {
@@ -579,12 +576,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             });
         const messageCountAfter = session.messages.length;
         const compactedCount = Math.max(0, messageCountOriginal - messageCountAfter);
-        const activeSessionFile = memoryTranscript
-          ? params.sessionFile
-          : formatSqliteSessionFileMarker({
-              ...sessionTarget,
-              sessionId: params.sessionId,
-            });
         if (!memoryTranscript) {
           await runPostCompactionSideEffects({
             config: params.config,
@@ -596,22 +587,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             sessionFile: activeSessionFile,
             assertActive,
           });
-        }
-        const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
-        if (preMetrics && postMetrics) {
-          log.debug(
-            `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
-              `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
-              `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted ` +
-              `reason=${summaryTimedOut ? "timeout summary=deterministic" : "none"} ` +
-              `durationMs=${Date.now() - compactStartedAt} retrying=false ` +
-              `post.messages=${postMetrics.messages} post.historyTextChars=${postMetrics.historyTextChars} ` +
-              `post.toolResultChars=${postMetrics.toolResultChars} post.estTokens=${postMetrics.estTokens ?? "unknown"} ` +
-              `delta.messages=${postMetrics.messages - preMetrics.messages} ` +
-              `delta.historyTextChars=${postMetrics.historyTextChars - preMetrics.historyTextChars} ` +
-              `delta.toolResultChars=${postMetrics.toolResultChars - preMetrics.toolResultChars} ` +
-              `delta.estTokens=${typeof preMetrics.estTokens === "number" && typeof postMetrics.estTokens === "number" ? postMetrics.estTokens - preMetrics.estTokens : "unknown"}`,
-          );
         }
         await runCompactionHooks({
           ...hookContext(),

@@ -9,6 +9,7 @@ import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getRuntimeConfig } from "../config.js";
 import { getCliSessionBinding } from "./cli-session-binding.js";
@@ -365,7 +366,16 @@ export async function readSessionHistoryPageInWorker(
                 ? capturedRequest.params.options.readOnly
                 : false;
       let retriedProjection = false;
-      const readPage = () => readQueuedHistory(input, key, owner, signal);
+      const readPage = () =>
+        capturedRequest.kind === "active-accounting"
+          ? runOpenClawAgentWriteAdmission(
+              databaseOptions,
+              () => readQueuedHistory(input, key, owner, signal),
+              true,
+              undefined,
+              signal,
+            )
+          : readQueuedHistory(input, key, owner, signal);
       try {
         if (exactArchiveRead) {
           const page = await readPage();

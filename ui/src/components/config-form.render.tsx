@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { SECTION_META } from "./config-form.meta.ts";
 import { ConfigNode } from "./config-form.node.tsx";
@@ -15,8 +15,8 @@ import {
 } from "./config-form.shared.ts";
 import { splitConfigSchemaByTier } from "./config-form.tiers.ts";
 import { Icon } from "./solid/icon.tsx";
+import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 import { SettingsEmpty, SettingsPage, LearnMoreLink } from "./solid/settings-ui.tsx";
-import { syncPopoverLabel } from "./web-awesome-popover.ts";
 
 export function ConfigTierGroups(props: ConfigTierGroupsProps): SolidJSX.Element {
   const split = createMemo(() =>
@@ -76,6 +76,8 @@ type Section = {
 };
 
 function ConfigSection(props: { section: Section; form: ConfigFormProps }): SolidJSX.Element {
+  const [docsTrigger, setDocsTrigger] = createSignal<HTMLButtonElement>();
+  let docsPopover!: PopoverHandle;
   const docsUrl = () =>
     props.form.showSectionDocs === false
       ? undefined
@@ -99,32 +101,39 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
                     prop:content={t("configForm.sectionHelp", { section: props.section.label })}
                   >
                     <button
+                      ref={setDocsTrigger}
                       id={docsTriggerId()}
                       type="button"
                       class="settings-section__help-button"
                       aria-label={t("configForm.sectionHelp", { section: props.section.label })}
                       aria-controls={`settings-section-help-popover-${props.section.id}`}
                       aria-haspopup="dialog"
+                      onClick={() => docsPopover.overlay.request(!docsPopover.overlay.open)}
                     >
                       <span aria-hidden="true">
                         <Icon name="circleQuestionMark" />
                       </span>
                     </button>
                   </openclaw-tooltip>
-                  <wa-popover
-                    ref={syncPopoverLabel}
-                    id={`settings-section-help-popover-${props.section.id}`}
-                    class="settings-section__help-popover"
-                    for={docsTriggerId()}
-                    placement="bottom-end"
-                  >
-                    <div class="settings-section__help-panel">
-                      <Show when={props.section.description}>
-                        <p>{props.section.description}</p>
-                      </Show>
-                      <LearnMoreLink url={url()} />
-                    </div>
-                  </wa-popover>
+                  <Show when={docsTrigger()}>
+                    {(trigger) => (
+                      <Popover
+                        ref={(handle) => (docsPopover = handle)}
+                        id={`settings-section-help-popover-${props.section.id}`}
+                        label={t("configForm.sectionHelp", { section: props.section.label })}
+                        class="settings-section__help-popover"
+                        anchor={trigger()}
+                        placement="bottom-end"
+                      >
+                        <div class="settings-section__help-panel">
+                          <Show when={props.section.description}>
+                            <p>{props.section.description}</p>
+                          </Show>
+                          <LearnMoreLink url={url()} />
+                        </div>
+                      </Popover>
+                    )}
+                  </Show>
                 </span>
               )}
             </Show>

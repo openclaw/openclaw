@@ -34,7 +34,7 @@ const getUserProfileDisplay = vi.hoisted(() =>
 
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
-  getUserProfileDisplay,
+  getResidentUserProfileDisplay: getUserProfileDisplay,
 }));
 
 import { listSessionFixture } from "./session-list.test-support.js";

@@ -22,7 +22,7 @@ import { getUserProfileListItem } from "../state/user-profile-list-item.test-sup
 import {
   prepareUserProfileCatalog,
   prepareUserProfileIdentity,
-  readUserProfileIdentity,
+  readResidentUserProfileIdentity,
 } from "../state/user-profile-list.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { userProfilesDb } from "../state/user-profiles-internal.js";
@@ -181,7 +181,7 @@ it("merges an email-less person through admin RPC without main-thread SQL and re
         queries.mockRestore();
       }
       expect(storedRedirect(source.id)).toBe(target.id);
-      expect(readUserProfileIdentity(source.id)?.profileId).toBe(target.id);
+      expect(readResidentUserProfileIdentity(source.id)?.profileId).toBe(target.id);
       expect(ensureProfileForTailscaleIdentity(providerIdentity).id).toBe(target.id);
       expect(resolveUserChannelIdentity(identity)?.profileId).toBe(target.id);
       expect(getUserPreferences(target.id)).toEqual({ shared: "target", sourceOnly: true });

@@ -10,7 +10,10 @@ import type {
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import {
+  readWorkerPreparation,
+  readWorkerProjectPreparation,
+} from "./preparation-identity.schema.js";
 import type { createWorkerProjectPreparation } from "./project-preparation.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import type { createWorkerProviderOwnerLifecycle } from "./provider-owner-lifecycle.js";
@@ -88,13 +91,13 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       }
       const nodeBootstrapSha256 = bootstrapResult.value;
       installation = installationResult.value;
-      const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
+      const preparation = readWorkerPreparation(record.profileSnapshot);
       if (
         preparation &&
         (preparation.artifacts.nodeBootstrapSha256 !== nodeBootstrapSha256 ||
           preparation.artifacts.workerArchiveSha256 !== installation.tarballSha256)
       ) {
-        throw new Error("Prepared project runtime artifacts changed after admission");
+        throw new Error("Prepared worker runtime artifacts changed after admission");
       }
       identity = {
         nodeBootstrapSha256,
@@ -282,7 +285,8 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       nodeDeviceId: lease.node.deviceId,
       sshEndpoint: null,
     };
-    const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
+    const preparation = readWorkerPreparation(record.profileSnapshot);
+    const projectPreparation = readWorkerProjectPreparation(record.profileSnapshot.project);
     const enrollmentOwner = options.store.get(record.environmentId);
     const assertCurrent = () => {
       cancellation?.assertActive();
@@ -329,12 +333,14 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         assertCurrent,
       });
       assertCurrent();
-      if (preparation) {
+      if (preparation && lease.sharedHost !== false) {
+        throw new Error("Prepared worker requires a dedicated environment");
+      }
+      if (projectPreparation) {
         if (
-          lease.sharedHost !== false ||
           !preparedWorkspace ||
-          preparedWorkspace.preparationKey !== preparation.key ||
-          preparedWorkspace.cacheKey !== preparation.cacheKey ||
+          preparedWorkspace.preparationKey !== projectPreparation.key ||
+          preparedWorkspace.cacheKey !== projectPreparation.cacheKey ||
           !options.registerPreparedWorkspace
         ) {
           throw new Error("Prepared worker requires its dedicated registered workspace");

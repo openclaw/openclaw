@@ -115,6 +115,13 @@ describe("session discussion panel", () => {
     );
     const panel = mount({ loadInfo, openDiscussion });
     await vi.waitFor(() => expect(openDiscussion).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => {
+      expect(
+        panel
+          .querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="discussion"]')
+          ?.getAttribute("aria-label"),
+      ).toBe("Opening discussion…");
+    });
     panel.sessionKey = "agent:main:second";
 
     await vi.waitFor(() => {

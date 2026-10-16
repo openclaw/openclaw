@@ -4,38 +4,28 @@ import type {
   SessionEntryCurrentCheck,
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
-import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { validatePluginStateComparison } from "./plugin-state-observation.js";
 import { createPluginStateOperation } from "./plugin-state-operation.js";
+import { assertPluginStatePublicationSettled } from "./plugin-state-publication.js";
 import {
   preparePluginStateJournalValue,
   type PluginStateSequencedJournalParams,
 } from "./plugin-state-store.journal.js";
 import { isRetainedPluginStateNamespace } from "./plugin-state-store.kernel.js";
 import {
+  createSyncKeyedStore,
+  createSyncKeyedStoreForPluginId,
+} from "./plugin-state-store.legacy.js";
+import {
   bindPluginStateNativeBindingStore,
   type PluginStateOperationModuleSource,
 } from "./plugin-state-store.native-binding.js";
-import {
-  validatePluginStateKeyRange,
-  type PluginStateKeyRangeParams,
-} from "./plugin-state-store.reads.js";
+import { validatePluginStateKeyRange } from "./plugin-state-store.reads.js";
 import {
   closePluginStateDatabase,
   MAX_PLUGIN_STATE_VALUE_BYTES,
-  pluginStateClear,
-  pluginStateConsume,
-  pluginStateCount,
-  pluginStateDelete,
-  pluginStateDeleteIf,
-  pluginStateEntries,
-  pluginStateLookup,
-  pluginStateLookupMany,
-  pluginStateRegister,
-  pluginStateRegisterIfAbsent,
-  pluginStateUpdate,
 } from "./plugin-state-store.sqlite.js";
 import type {
   OpenAsyncKeyedStoreOptions,
@@ -43,6 +33,7 @@ import type {
   PluginStateActionAuthority,
   PluginStateCompareResult,
   PluginStateEntry,
+  PluginStateKeyRangeParams,
   PluginStateKeyedStore,
   PluginStateObservation,
   PluginStateStoreError,
@@ -114,6 +105,19 @@ export {
   pluginStateDoctorEntriesInKeyRange,
 } from "./plugin-state-store.sqlite.js";
 
+function createReadAvailabilityAssertion(
+  options: PreparedKeyedStoreOptions,
+  assertCurrent?: () => void,
+) {
+  let context: ReturnType<typeof captureOpenClawStateWorkerContext> | undefined;
+  return () => {
+    assertCurrent?.();
+    context ??= captureOpenClawStateWorkerContext({ env: options.env });
+    (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
+    assertPluginStatePublicationSettled(context.admission.identity.key);
+  };
+}
+
 function createKeyedStoreForPluginId<T>(
   pluginId: string,
   options: OpenAsyncKeyedStoreOptions,
@@ -123,12 +127,14 @@ function createKeyedStoreForPluginId<T>(
 ): Required<PluginStateKeyedStore<T>> {
   const prepared = prepareKeyedStoreOptions(pluginId, options);
   const assertRetainedActive = options.retention === "retained" ? assertActive : undefined;
-  const store = createSyncKeyedStore<T>(
-    prepared,
-    assertRetainedActive,
-    "PluginStateKeyedStore",
-    warningPluginId,
-  );
+  let legacyStore: Required<PluginStateSyncKeyedStore<T>> | undefined;
+  const getLegacyStore = () =>
+    (legacyStore ??= createSyncKeyedStore<T>(
+      prepared,
+      assertRetainedActive,
+      "PluginStateKeyedStore",
+      warningPluginId,
+    ));
   const asyncStore: Required<PluginStateKeyedStore<T>> = {
     ...createAsyncKeyedStore<T>(
       prepared,
@@ -154,12 +160,15 @@ function createKeyedStoreForPluginId<T>(
         moduleSource,
       );
     },
-    update: async (...args) => store.update(...args),
-    deleteIf: async (...args) => store.deleteIf(...args),
+    /** @deprecated Use observe and compareAndApply; final compatibility day: 2026-12-31. */
+    update: async (...args) => getLegacyStore().update(...args),
+    /** @deprecated Use observe and compareAndApply; final compatibility day: 2026-12-31. */
+    deleteIf: async (...args) => getLegacyStore().deleteIf(...args),
   };
   return bindPluginStateNativeBindingStore(
     asyncStore,
     prepared,
+    createReadAvailabilityAssertion(prepared, assertActive),
     assertActive,
     undefined,
     moduleSource,
@@ -386,126 +395,11 @@ function createAsyncKeyedStore<T>(
   return bindPluginStateNativeBindingStore(
     store,
     prepared,
+    createReadAvailabilityAssertion(prepared, assertRangeActive),
     assertRangeActive,
     sessionEntryCurrent,
     moduleSource,
   );
-}
-
-function createSyncKeyedStoreForPluginId<T>(
-  pluginId: string,
-  options: OpenKeyedStoreOptions,
-  warn = true,
-  warningPluginId?: string,
-): Required<PluginStateSyncKeyedStore<T>> {
-  requireBoundedOptions(options);
-  return createSyncKeyedStore<T>(
-    prepareKeyedStoreOptions(pluginId, options),
-    undefined,
-    warn ? "PluginStateSyncKeyedStore" : undefined,
-    warningPluginId,
-  );
-}
-
-function createSyncKeyedStore<T>(
-  { pluginId, namespace, maxEntries, overflowPolicy, defaultTtlMs, env }: PreparedKeyedStoreOptions,
-  assertActive?: () => void,
-  legacyContract?: "PluginStateKeyedStore" | "PluginStateSyncKeyedStore",
-  warningPluginId?: string,
-): Required<PluginStateSyncKeyedStore<T>> {
-  const scope = { pluginId, namespace, env };
-  const writeScope = { ...scope, maxEntries, overflowPolicy };
-  const warnLegacyUse = (method: string, replacement = `openKeyedStoreV2().${method}()`) => {
-    if (legacyContract) {
-      warnPluginSdkDeprecation({
-        pluginId: warningPluginId,
-        family: "plugin-state-keyed-store",
-        method: `${legacyContract}.${method}`,
-        replacement: `await ${replacement}`,
-        compatibility:
-          "Synchronous operations still commit before returning; legacy callbacks retain transaction-local ordering.",
-      });
-    }
-  };
-  return {
-    register(key, value, opts) {
-      warnLegacyUse("register");
-      pluginStateRegister({
-        ...writeScope,
-        ...prepareRegisterParams(key, value, defaultTtlMs, opts),
-      });
-    },
-    registerIfAbsent(key, value, opts) {
-      warnLegacyUse("registerIfAbsent");
-      return pluginStateRegisterIfAbsent({
-        ...writeScope,
-        ...prepareRegisterParams(key, value, defaultTtlMs, opts),
-      });
-    },
-    update(key, updateValue, opts) {
-      warnLegacyUse("update", "openKeyedStoreV2().observe() and compareAndApply()");
-      assertActive?.();
-      if (isRetainedPluginStateNamespace(namespace) && opts?.ttlMs !== undefined) {
-        throw invalidInput("Retained plugin state does not accept a TTL.");
-      }
-      const normalizedKey = validateKey(key, "register");
-      return pluginStateUpdate({
-        ...writeScope,
-        key: normalizedKey,
-        updateValueJson: (current) => {
-          const next = updateValue(current as T | undefined);
-          assertActive?.();
-          return next === undefined
-            ? undefined
-            : prepareRegisterParams(normalizedKey, next, defaultTtlMs, opts, namespace);
-        },
-      });
-    },
-    deleteIf(key, predicate) {
-      warnLegacyUse("deleteIf", "openKeyedStoreV2().observe() and compareAndApply()");
-      assertActive?.();
-      return pluginStateDeleteIf({
-        ...scope,
-        key: validateKey(key, "delete"),
-        predicate: (current) => {
-          const result = predicate(current as T);
-          assertActive?.();
-          return result;
-        },
-      });
-    },
-    lookup(key) {
-      warnLegacyUse("lookup");
-      return pluginStateLookup({ ...scope, key: validateKey(key, "lookup") }) as T | undefined;
-    },
-    lookupMany(keys) {
-      warnLegacyUse("lookupMany");
-      // SAFETY: This namespace uses the caller's JSON value type, as with lookup.
-      return pluginStateLookupMany({ ...scope, keys: prepareLookupKeys(keys) }) as Array<
-        Result<T | undefined, PluginStateStoreError>
-      >;
-    },
-    consume(key) {
-      warnLegacyUse("consume");
-      return pluginStateConsume({ ...scope, key: validateKey(key, "consume") }) as T | undefined;
-    },
-    delete(key) {
-      warnLegacyUse("delete");
-      return pluginStateDelete({ ...scope, key: validateKey(key, "delete") });
-    },
-    entries() {
-      warnLegacyUse("entries");
-      return pluginStateEntries(scope) as PluginStateEntry<T>[];
-    },
-    count() {
-      warnLegacyUse("count");
-      return pluginStateCount(scope);
-    },
-    clear() {
-      warnLegacyUse("clear");
-      pluginStateClear(scope);
-    },
-  };
 }
 
 /** Opens an async plugin-state namespace for a non-core plugin id. */
@@ -590,7 +484,7 @@ export function createPluginStateRuntimeStores(
 /**
  * Named adapter for the plugin-state-sync-keyed-store compatibility contract.
  * @deprecated Use createPluginStateKeyedStoreV2 or api.runtime.state.openKeyedStoreV2
- * and await its operations. This adapter will be removed in the next Plugin SDK major.
+ * and await its operations. This adapter will be removed in the first January 2027 stable release, after the final compatibility day 2026-12-31.
  */
 export function createPluginStateSyncKeyedStore<T>(
   pluginId: string,
@@ -677,7 +571,7 @@ export async function registerPluginStateSequencedJournalEntry(params: {
   });
 }
 
-/** Internal bounded read through the same shared-state worker as journal writes. */
+/** Internal bounded read after preceding journal writes have settled. */
 export async function pluginStateEntriesInKeyRange(
   params: PluginStateKeyRangeParams & { env?: NodeJS.ProcessEnv },
 ): Promise<PluginStateEntry<unknown>[]> {
@@ -690,6 +584,23 @@ export function createCorePluginStateKeyedStore<T>(
   options: OpenAsyncKeyedStoreOptions & { ownerId: `core:${string}` },
 ): Required<PluginStateKeyedStore<T>> {
   return createKeyedStoreForPluginId<T>(options.ownerId, options);
+}
+
+/** Opens a data-only worker store for a trusted core owner. */
+export function createCorePluginStateKeyedStoreV2<T>(
+  options: OpenAsyncKeyedStoreOptions & { ownerId: `core:${string}` },
+  authority: PluginStateActionAuthority,
+): PluginStateKeyedStore<T, 2> {
+  if (typeof authority.assertCurrent !== "function") {
+    throw invalidInput("Plugin state action authority requires assertCurrent.");
+  }
+  authority.assertCurrent();
+  return createAsyncKeyedStore<T>(
+    prepareKeyedStoreOptions(options.ownerId, options),
+    authority.assertCurrent,
+    authority.assertCurrent,
+    authority.sessionEntryCurrent,
+  );
 }
 
 /** Bind a core catalog read and its later replacement to the same physical store. */

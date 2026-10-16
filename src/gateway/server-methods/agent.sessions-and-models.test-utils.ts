@@ -3,10 +3,12 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
+import { readSubagentRunAnnounceResult } from "../../agents/subagents/announce/subagent-announce-output.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
@@ -16,6 +18,10 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
+import {
+  appendTranscriptMessage,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
@@ -447,7 +453,8 @@ describe("gateway agent handler", () => {
           canonicalKey: childSessionKey,
         });
         mocks.updateSessionStore.mockResolvedValue(undefined);
-        const result = "The separately requested follow-up is complete.";
+        const result = `${"Completed follow-up detail. ".repeat(200)}The separately requested follow-up is complete.`;
+        const { terminalReply } = prepareAgentRunTerminalReply({ rawText: result });
         const completion = createDeferred<AgentWaitResult>();
         const announce = mocks.registryAnnounce.mockResolvedValue("delivered");
         mocks.registryCallGateway.mockReturnValue(completion.promise);
@@ -461,14 +468,38 @@ describe("gateway agent handler", () => {
           pauseReason: "sessions_yield",
           expectsCompletionMessage: true,
         });
+        await replaceSessionEntry(
+          { agentId: "work", sessionKey: childSessionKey, storePath: mocks.userTurnStorePath },
+          { sessionId: "spawned-child-session", updatedAt: Date.now() },
+        );
         mocks.agentCommand.mockImplementation(async () => {
+          await appendTranscriptMessage(
+            {
+              agentId: "work",
+              sessionKey: childSessionKey,
+              sessionId: "spawned-child-session",
+              storePath: mocks.userTurnStorePath!,
+            },
+            {
+              message: {
+                role: "assistant",
+                display: true,
+                content: result,
+                stopReason: "stop",
+                __openclaw: { runId },
+              },
+            },
+          );
           completion.resolve({
             status: "ok",
             startedAt: Date.now(),
             endedAt: Date.now(),
-            terminalReply: { disposition: "visible", text: result },
+            terminalReply,
           });
-          return { payloads: [{ text: result }], meta: { durationMs: 1 } };
+          return {
+            payloads: [{ text: result }],
+            meta: { durationMs: 1, terminalReply },
+          };
         });
         const context = makeContext();
         const baseClient = requireValue(backendGatewayClient(), "expected backend client");
@@ -525,9 +556,13 @@ describe("gateway agent handler", () => {
             childSessionKey,
             childRunId: runId,
             requesterSessionKey: followUpRequester.sessionKey,
-            roundOneReply: result,
+            terminalReply,
           }),
         );
+        // Keep the live owner read independent of post-cleanup payload compaction.
+        const prepared = await readSubagentRunAnnounceResult(run, (id) => subagentRuns.get(id));
+        expect(prepared.text).toBe(result);
+        expect(prepared.isCurrent()).toBe(true);
       },
     );
   });

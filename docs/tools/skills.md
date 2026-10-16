@@ -541,10 +541,10 @@ metadata:
   Optional URL shown as "Website" in the macOS Skills UI.
 </ParamField>
 
-<ParamField path="os" type='("darwin" | "linux" | "win32")[]'>
+<ParamField path="os" type='("darwin" | "macos" | "linux" | "win32")[]'>
   Hard platform filter. When set, the skill is only eligible when the local
   host or a connected remote runtime matches a listed OS. `always` does not
-  override this filter.
+  override this filter. `macos` is accepted as an alias for `darwin`.
 </ParamField>
 
 <ParamField path="requires.bins" type="string[]">
@@ -619,7 +619,7 @@ metadata:
       option (brew when available, otherwise node).
     - If all installers are `download`, OpenClaw lists each entry so you can
       see all available artifacts.
-    - Specs can include `os: ["darwin"|"linux"|"win32"]` to filter by platform.
+    - Specs can include `os: ["darwin"|"macos"|"linux"|"win32"]` to filter by platform.
     - Node installs honor `skills.install.nodeManager` in `openclaw.json`
       (default: npm; options: npm / pnpm / yarn / bun). This only affects skill
       installs; the Gateway runtime should still be Node.
@@ -773,15 +773,20 @@ bundled, plugin, personal, and workspace skill roots. With `skills.load.watch`
 enabled, it checks for passive on-disk changes about once per minute. Edits made
 outside OpenClaw may therefore take up to about a minute to appear, including
 adding or removing a skill and creating, removing, or replacing a skill root or
-workspace.
+workspace. Each discovery pass reads a shared root once for matching discovery
+limits and file policies, then applies each workspace's precedence separately.
+The next pass reads those roots again to observe changes.
 
 Explicit OpenClaw actions request an immediate rescan: installing, updating,
 uninstalling, or editing a skill; changing configuration that affects skills;
 and starting or restarting the Gateway. A new eligible remote node also refreshes
 skill eligibility. Remote workspace discovery stays with the host that owns
-those files.
+those files. Configuration changes replace source plans and subscriptions on the
+healthy discovery worker; they do not wait for an unnecessary worker restart.
 
-The worker publishes a complete snapshot after discovery. Existing sessions
+The worker publishes a complete snapshot after discovery. While a scan is running,
+turns reuse the last published skills without waiting for other workspaces. First
+discovery and explicit refresh actions still wait for publication. Existing sessions
 pick up changed file-backed skills on their next agent turn. If the effective
 agent allowlist changes, OpenClaw refreshes the snapshot to keep visible skills
 aligned.

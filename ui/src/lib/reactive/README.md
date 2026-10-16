@@ -35,8 +35,8 @@ delivery order, replay behavior, and completion contract.
 
 | Module                   | Owners                                                            |
 | ------------------------ | ----------------------------------------------------------------- |
-| `application.ts`         | Gateway snapshots, config, agent selection, overlays, Web Push    |
-| `application-native.ts`  | Native device settings and notifications                          |
+| `application.ts`         | Gateway snapshots, config, agent selection, overlays              |
+| `application-native.ts`  | Native device settings                                            |
 | `domain-capabilities.ts` | Agents, agent identity, roster activity, channels, runtime config |
 | `events-browser.ts`      | Lobster visits                                                    |
 

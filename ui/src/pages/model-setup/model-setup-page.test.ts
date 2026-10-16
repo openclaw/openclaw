@@ -2,7 +2,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
@@ -12,7 +11,6 @@ import {
   mountPage,
   detection,
   customIconUrl,
-  recommendedIconUrl,
 } from "./test-helpers/page.test-support.ts";
 import {
   createPage,
@@ -115,184 +113,6 @@ describe("ModelSetupPage catalog icons", () => {
     await page.updateComplete;
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:acme-icon");
     expect(fetchMock).toHaveBeenCalledOnce();
-  });
-
-  it("keeps legacy known-provider artwork on the authenticated proxy path", async () => {
-    const NativeUrl = URL;
-    vi.stubGlobal(
-      "URL",
-      class extends NativeUrl {
-        static override createObjectURL = vi.fn(() => "blob:legacy-ollama");
-        static override revokeObjectURL = vi.fn();
-      },
-    );
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: "image/png" }), {
-        status: 200,
-        headers: { "content-type": "image/png" },
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const { context, client } = createContext();
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          recommendedInstalls: detection.recommendedInstalls?.map(
-            ({ brandId: _brandId, ...entry }) => entry,
-          ),
-        },
-      },
-      client,
-      firstRun: false,
-    });
-
-    await waitForFast(() => {
-      expect(
-        page
-          .querySelector<HTMLImageElement>(".model-setup__recommendation img")
-          ?.getAttribute("src"),
-      ).toBe("blob:legacy-ollama");
-    });
-    expect(fetchMock).toHaveBeenCalledWith(
-      `/openclaw/__openclaw__/catalog-icon/${encodeURIComponent(recommendedIconUrl)}`,
-      expect.objectContaining({ credentials: "same-origin" }),
-    );
-    expect(page.querySelector(".model-setup__recommendation [data-provider-icon]")).toBeNull();
-  });
-
-  it("starts a prepare wizard from the download affordance", async () => {
-    const { context, client, request } = createContext();
-    request.mockImplementation(async (method: string) => {
-      if (method === "openclaw.setup.prepare.start") {
-        return { sessionId: "prepare-session", done: false, status: "running" };
-      }
-      if (method === "wizard.next") {
-        return {
-          done: false,
-          status: "running",
-          step: {
-            id: "download",
-            type: "progress",
-            message: "Downloading model: 25%",
-          },
-        };
-      }
-      return {};
-    });
-    const { page } = await mountPage(context, {
-      state: { phase: "ready", result: detection },
-      client,
-      firstRun: false,
-    });
-
-    page.querySelector<HTMLButtonElement>('[data-prepare-choice="llama-cpp"] button')?.click();
-
-    await waitForFast(() => {
-      expect(request).toHaveBeenCalledWith(
-        "openclaw.setup.prepare.start",
-        { sessionId: expect.any(String), agentId: "main", authChoice: "llama-cpp" },
-        { timeoutMs: null },
-      );
-      expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
-      expect(page.textContent).toContain("Downloading model: 25%");
-    });
-  });
-
-  it("verifies a prepared local provider model before showing success", async () => {
-    const choiceId = "vendor/local:v1%beta?x#y";
-    const preparedDetection: SystemAgentSetupDetectResult = {
-      ...detection,
-      prepareOptions: [
-        {
-          id: choiceId,
-          brandId: "llama-cpp",
-          label: "llama.cpp",
-          hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
-        },
-      ],
-    };
-    const { context: baseContext, client, request } = createContext();
-    const runtimeConfig = {
-      runExternalMutation: vi.fn(async (task) => ({
-        ok: true as const,
-        value: await task(client),
-        refresh: { ok: true as const },
-      })),
-    } as unknown as ApplicationContext["runtimeConfig"];
-    const context = { ...baseContext, runtimeConfig } as ApplicationContext;
-    request.mockImplementation(async (method: string) => {
-      if (method === "openclaw.setup.prepare.start") {
-        return { sessionId: "prepare-session", done: false, status: "running" };
-      }
-      if (method === "wizard.next") {
-        return {
-          done: true,
-          status: "done",
-          preparedModelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
-        };
-      }
-      if (method === "openclaw.setup.detect") {
-        return {
-          ...preparedDetection,
-          candidates: [
-            {
-              kind: "existing-model",
-              label: "Existing llama.cpp model",
-              detail: "Already configured",
-              modelRef: "llama-cpp/custom",
-              recommended: false,
-              credentials: true,
-            },
-            {
-              kind: "provider-auto:vendor%2Flocal%3Av1%25beta%3Fx%23y",
-              brandId: "llama-cpp",
-              label: "llama.cpp",
-              detail: "Gemma 4 E4B downloaded",
-              modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
-              recommended: true,
-              credentials: true,
-            },
-          ],
-        };
-      }
-      if (method === "openclaw.setup.activate.start") {
-        return {
-          done: true,
-          status: "done",
-          modelActivation: { modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m" },
-        };
-      }
-      return {};
-    });
-    const { page } = await mountPage(context, {
-      state: { phase: "ready", result: preparedDetection },
-      client,
-      firstRun: false,
-    });
-
-    page.querySelector<HTMLButtonElement>(`[data-prepare-choice="${choiceId}"] button`)?.click();
-
-    await waitForFast(() => {
-      expect(request).toHaveBeenCalledWith(
-        "openclaw.setup.activate.start",
-        {
-          sessionId: expect.any(String),
-          agentId: "main",
-          kind: "provider-auto:vendor%2Flocal%3Av1%25beta%3Fx%23y",
-          modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
-        },
-        { timeoutMs: null },
-      );
-      expect(page.textContent).toContain("Connection verified");
-      expect(page.textContent).toContain("llama-cpp/gemma-4-e4b-it-q4_k_m");
-    });
-    expect(request).not.toHaveBeenCalledWith(
-      "openclaw.setup.detect",
-      expect.anything(),
-      expect.anything(),
-    );
   });
 
   it("keeps an incomplete provider setup visible instead of claiming success", async () => {

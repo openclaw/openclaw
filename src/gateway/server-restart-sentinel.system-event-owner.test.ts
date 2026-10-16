@@ -26,7 +26,8 @@ const mocks = vi.hoisted(() => ({
     vi.fn<
       typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker
     >(),
-  loadSessionEntry: vi.fn<(typeof import("./session-utils.js"))["loadSessionEntry"]>(),
+  loadSessionEntryAsync:
+    vi.fn<(typeof import("./session-entry-load.test-support.js"))["loadSessionEntryAsync"]>(),
   captureSessionEventTarget:
     vi.fn<
       typeof import("../auto-reply/reply/session-event-handoff.js").captureSessionEventTargetForHost
@@ -37,17 +38,13 @@ const mocks = vi.hoisted(() => ({
     >(),
 }));
 
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: mocks.loadSessionEntry,
-}));
 // mock-isolation: Queued-owner cases use supplied session rows instead of real store discovery.
 vi.mock("./session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: async (params: {
     key: string;
     agentId?: string;
     env?: NodeJS.ProcessEnv;
-  }) => mocks.loadSessionEntry(params.key, { agentId: params.agentId, env: params.env }),
+  }) => mocks.loadSessionEntryAsync(params.key, { agentId: params.agentId, env: params.env }),
   resolveGatewaySessionStoreTargetInWorker: mocks.resolveSessionTarget,
 }));
 
@@ -101,7 +98,7 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 function mockEventSession(agentId = "main", sessionKey = "agent:main:main") {
-  mocks.loadSessionEntry.mockReturnValue({
+  mocks.loadSessionEntryAsync.mockResolvedValue({
     cfg: {},
     agentId,
     entry: { sessionId: "current-session", updatedAt: 1 },
@@ -277,43 +274,54 @@ it.each(["completed", "failed", "cancelled"] as const)(
   },
 );
 
-it("keeps an event retryable when normal admission refuses it before adoption", async () => {
-  await withOpenClawTestState({ label: "restart-event-retry", layout: "state-only" }, async () => {
-    setRuntimeConfigSnapshot({});
-    mockEventSession();
-    const queueContext = captureOpenClawStateWorkerContext();
-    const id = await queueStorage.enqueueSessionDelivery(
-      {
-        kind: "systemEvent",
-        sessionKey: "agent:main:main",
-        text: "resume work",
+it.each([undefined, true, false])(
+  "settles an admission refusal with retryable=%s",
+  async (retryable) => {
+    await withOpenClawTestState(
+      { label: "restart-event-retry", layout: "state-only" },
+      async () => {
+        setRuntimeConfigSnapshot({});
+        mockEventSession();
+        const queueContext = captureOpenClawStateWorkerContext();
+        const id = await queueStorage.enqueueSessionDelivery(
+          {
+            kind: "systemEvent",
+            sessionKey: "agent:main:main",
+            text: "resume work",
+          },
+          queueContext,
+        );
+        mocks.enqueueSessionEvent.mockReturnValueOnce({
+          id: "refused-event",
+          accepted: Promise.resolve({ ok: false, error: "session is busy" }),
+          cancel: () => true,
+          settled: Promise.resolve({
+            status: "failed",
+            executionStarted: false,
+            delivered: false,
+            error: "session is busy",
+            retryable,
+          }),
+        });
+        await drainPendingSessionDelivery({
+          id,
+          queueContext,
+          bypassBackoff: true,
+          logLabel: "restart admission",
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          deliver: (entry) => deliverQueuedSessionDelivery({ deps: {}, entry, queueContext }),
+        });
+        const pending = await queueStorage.loadPendingSessionDelivery(id, queueContext);
+        if (retryable === false) {
+          expect(pending).toBeNull();
+        } else {
+          expect(pending).toMatchObject({ id, retryCount: 1, lastError: "session is busy" });
+          expect(pending?.deliveryStartedAt).toBeUndefined();
+        }
       },
-      queueContext,
     );
-    mocks.enqueueSessionEvent.mockReturnValueOnce({
-      id: "refused-event",
-      accepted: Promise.resolve({ ok: false, error: "session is busy" }),
-      cancel: () => true,
-      settled: Promise.resolve({
-        status: "failed",
-        executionStarted: false,
-        delivered: false,
-        error: "session is busy",
-      }),
-    });
-    await drainPendingSessionDelivery({
-      id,
-      queueContext,
-      bypassBackoff: true,
-      logLabel: "restart admission",
-      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      deliver: (entry) => deliverQueuedSessionDelivery({ deps: {}, entry, queueContext }),
-    });
-    const pending = await queueStorage.loadPendingSessionDelivery(id, queueContext);
-    expect(pending).toMatchObject({ id, retryCount: 1, lastError: "session is busy" });
-    expect(pending?.deliveryStartedAt).toBeUndefined();
-  });
-});
+  },
+);
 
 it("does not hand off an event after its queue admission retires during the session read", async () => {
   await withOpenClawTestState(
@@ -357,7 +365,7 @@ it("joins managed media promotion before publishing an internal restart delivery
       const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
       const entry = { sessionId, updatedAt: 1 };
       await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, entry);
-      mocks.loadSessionEntry.mockReturnValue({
+      mocks.loadSessionEntryAsync.mockResolvedValue({
         cfg: {},
         agentId: "main",
         entry,

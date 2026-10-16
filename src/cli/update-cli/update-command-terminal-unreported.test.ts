@@ -74,14 +74,7 @@ it.each(["new-error", "pending-aggregate"] as const)(
       ],
       durationMs: 1,
     };
-    const primary = new UpdateCommandFailure(result, 1, "Package installation failed", {
-      automaticTriage: {
-        kind: "update",
-        phase: "global-install-failed",
-        error: "Permission denied",
-        gateway: "preserve",
-      },
-    });
+    const primary = new UpdateCommandFailure(result, 1, "Package installation failed");
     const pending = new UpdateCommandPendingRecoveryFailure(result);
     const settlementFailure = new AggregateError([pending], "Update executor cleanup failed", {
       cause: pending,

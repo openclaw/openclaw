@@ -94,6 +94,7 @@ async function withDemandFixture(
       prepareSessionPlacement: async (sessionId: string) => {
         let released = false;
         return {
+          prepareRead: () => undefined,
           current: () => {
             if (released) {
               throw new Error("Worker placement observation is no longer current");

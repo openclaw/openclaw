@@ -5,6 +5,7 @@ import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../agents/ag
 import type { SetupRuntimeCredential } from "../agents/auth-profiles/setup-access.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
+import { findModelInCatalog, loadManifestModelCatalog } from "../agents/model-catalog.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -21,8 +22,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { formatErrorMessage } from "../infra/errors.js";
 import { stripPendingPluginInstallRecords } from "../plugins/install-record-commit.js";
 import { createPluginCache } from "../plugins/plugin-cache.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
-import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginCache } from "../plugins/plugin-cache.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../utils.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
@@ -39,6 +39,7 @@ import {
   type StageContext,
   type StageFailure,
   type ActivateSetupInferenceResult,
+  describeSetupInferenceError,
   invalidSetupConfigError,
   parseInferenceRef,
   resolveSetupModel,
@@ -64,16 +65,22 @@ import {
   stageSavedAuthCandidate,
 } from "./setup-inference-credentials.js";
 import {
+  prepareSetupNativeRuntimeConsent,
+  prepareSetupVerificationGeneration,
+  verifySetupHarness,
+  type SetupHarnessVerification,
+} from "./setup-inference-harness.js";
+import {
   commitSetupInferenceActivation,
   captureSetupInferenceFileUndo,
   setupConfigPatchConflicts,
   type SetupInferenceConfigTarget,
 } from "./setup-inference-transition.js";
 import {
-  loadSetupInferencePluginGeneration,
   revalidateStableSetupInferenceOwner,
   runSetupInferenceTurn,
 } from "./setup-inference-turn.js";
+import type { SetupInferencePluginGeneration } from "./setup-inference-turn.js";
 import { createSystemAgentModelSelectionUpdater } from "./setup-model-selection.js";
 import {
   applySetupNativeSessionCatalogPreference,
@@ -114,7 +121,7 @@ async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | Stag
         cfg,
         params.agentId,
         {
-          loadAuthProfileStoreForRuntime: ctx.deps.loadAuthProfileStoreForRuntime,
+          loadAuthProfileStoreForRuntimeAsync: ctx.deps.loadAuthProfileStoreForRuntimeAsync,
           ...(params.modelTarget ? { modelTarget: params.modelTarget } : {}),
         },
         ctx.snapshot,
@@ -283,6 +290,7 @@ async function activateCandidate(
     effects: { credentialsSaved: false },
     beforePersistentEffect: async () => {
       throwIfSetupInferenceCancelled(params);
+      params.onActivationStarted?.();
       await params.beforePersistentEffect?.();
       throwIfSetupInferenceCancelled(params);
     },
@@ -300,8 +308,11 @@ async function activateCandidate(
   if ("error" in staged) {
     return failure({ ok: false, status: "unavailable", error: staged.error });
   }
+  await using cache = createPluginCache();
+  const prepared = await prepareSetupNativeRuntimeConsent(ctx, staged, cache);
+  staged.config = prepared.config;
   const verify = (runtimeCredential?: SetupRuntimeCredential) =>
-    verifyAndActivateCandidate(ctx, staged, failure, runtimeCredential);
+    verifyAndActivateCandidate(ctx, staged, failure, cache, prepared.generation, runtimeCredential);
   if (!staged.authProfileId) {
     return await verify();
   }
@@ -320,6 +331,8 @@ async function verifyAndActivateCandidate(
   failure: (
     result: Extract<ActivateSetupInferenceResult, { ok: false }>,
   ) => ActivateSetupInferenceResult,
+  cache: PluginCache,
+  preparedGeneration: SetupInferencePluginGeneration | undefined,
   runtimeCredential?: SetupRuntimeCredential,
 ): Promise<ActivateSetupInferenceResult> {
   const { params, deps, snapshot, cfg, routeAgentId } = ctx;
@@ -365,40 +378,27 @@ async function verifyAndActivateCandidate(
       // SAFETY: The patch is derived from typed configs and preserves their config shape.
       patched = applyMergePatch(base, providerPatch) as OpenClawConfig;
     }
-    const selected = selectModel(patched, base);
+    const selected = params.selectModel === false ? patched : selectModel(patched, base);
     return staged.pendingPluginInstalls
       ? { ...selected, plugins: { ...selected.plugins, installs: staged.pendingPluginInstalls } }
       : selected;
   };
   const candidate = buildCandidate(cfg);
   const sourceCandidate = buildCandidate(source);
-  const resolveMetadata = deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshotAsync;
-  await using cache = createPluginCache();
-  const generation =
-    staged.pendingPluginInstalls && Object.keys(staged.pendingPluginInstalls).length > 0
-      ? await withPluginLifecycleLease({ signal: params.signal }, async () =>
-          loadSetupInferencePluginGeneration({
-            cache,
-            config: candidate,
-            workspaceDir: ctx.workspace,
-            selection: {
-              provider: parseInferenceRef(staged.modelRef).provider,
-              modelId: parseInferenceRef(staged.modelRef).model,
-              runtime: staged.agentRuntimeId ?? "openclaw",
-              agentId: routeAgentId,
-            },
-            pendingPluginInstalls: staged.pendingPluginInstalls,
-            resolvePluginMetadataSnapshot: resolveMetadata,
-          }),
-        )
-      : undefined;
-  const metadata =
-    generation?.metadataSnapshot ??
-    (await resolveMetadata({ config: candidate, workspaceDir: ctx.workspace, env: process.env }));
+  // Verify the candidate's route without persisting a new primary model for access-only sign-in.
+  const candidateRouteConfig = (config: OpenClawConfig) =>
+    params.selectModel === false ? selectModel(config, config) : config;
+  const { generation, metadata } = await prepareSetupVerificationGeneration(
+    ctx,
+    staged,
+    candidate,
+    cache,
+    preparedGeneration,
+  );
   const routeDeps = {
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     pluginMetadataPlugins: metadata.plugins,
-    loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime,
+    loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync,
   };
   const requestedAgentId = params.agentId ? routeAgentId : undefined;
   // Saved model rows stay sparse; compare the same runtime defaults before and after writing.
@@ -411,7 +411,7 @@ async function verifyAndActivateCandidate(
     );
   const resolveRoute = (config: OpenClawConfig, currentSnapshot = snapshot) =>
     resolveSystemAgentConfiguredRouteFromConfig(
-      config,
+      candidateRouteConfig(config),
       requestedAgentId,
       routeDeps,
       currentSnapshot,
@@ -430,7 +430,10 @@ async function verifyAndActivateCandidate(
     });
   }
   const baselineRoute = await project(cfg, source);
-  const verifiedRoute = await project(candidate, sourceCandidate);
+  const verifiedRoute = await project(
+    candidateRouteConfig(candidate),
+    candidateRouteConfig(sourceCandidate),
+  );
   const withGeneration = <T>(run: () => T): T =>
     generation ? withPluginRuntimeGenerationScope(generation, run) : run();
   const artifacts = withGeneration(() =>
@@ -443,27 +446,44 @@ async function verifyAndActivateCandidate(
   params.onPreparationComplete?.();
   throwIfSetupInferenceCancelled(params);
   const progress = params.prompter?.progress("Testing your AI connection…");
-  const turn = await withGeneration(() =>
-    runSetupInferenceTurn({
-      route,
-      deps,
-      requireExecutionOwner: true,
-      signal: params.signal,
-      runtime: params.runtime,
-    }),
-  ).finally(() => progress?.stop());
+  const verification = await withGeneration(async () => {
+    try {
+      const native = await verifySetupHarness({
+        route,
+        deps,
+        cache,
+        generation,
+        signal: params.signal,
+        assertCurrent: () => throwIfSetupInferenceCancelled(params),
+      });
+      if (native) {
+        return native;
+      }
+      return await runSetupInferenceTurn({
+        route,
+        deps,
+        requireExecutionOwner: true,
+        signal: params.signal,
+        runtime: params.runtime,
+      });
+    } catch (error) {
+      return { ok: false as const, ...describeSetupInferenceError(error, route) };
+    }
+  }).finally(() => progress?.stop());
   throwIfSetupInferenceCancelled(params);
-  if (!turn.ok) {
-    return failure(turn);
+  if (!verification.ok) {
+    return failure(verification);
   }
-  const ownerFailure = validateSetupInferenceOwnerEvidence({
-    runner: route.runner,
-    configuredHarnessId:
-      route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
-    auth: turn.auth,
-  });
-  if (ownerFailure) {
-    return failure(ownerFailure);
+  if ("auth" in verification) {
+    const ownerFailure = validateSetupInferenceOwnerEvidence({
+      runner: route.runner,
+      configuredHarnessId:
+        route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
+      auth: verification.auth,
+    });
+    if (ownerFailure) {
+      return failure(ownerFailure);
+    }
   }
   const savedCredential = staged.authProfileId
     ? (await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir)).profiles[
@@ -487,15 +507,43 @@ async function verifyAndActivateCandidate(
     }
     throwIfSetupInferenceCancelled(params);
   }
-  const revalidateOwner = (candidateRoute: SystemAgentConfiguredRoute) =>
-    withGeneration(() =>
+  params.onActivationStarted?.();
+  const revalidateOwner = async (candidateRoute: SystemAgentConfiguredRoute) => {
+    if ("binding" in verification) {
+      let current: SetupHarnessVerification | undefined;
+      try {
+        current = await withGeneration(() =>
+          verifySetupHarness({
+            route: candidateRoute,
+            deps,
+            cache,
+            generation,
+            signal: params.signal,
+            assertCurrent: () => throwIfSetupInferenceCancelled(params),
+          }),
+        );
+      } catch (error) {
+        throw new SetupInferenceOwnerDriftError(
+          `The native connection changed before activation. Retry setup. (${formatErrorMessage(error)})`,
+          { cause: error },
+        );
+      }
+      if (!current || !isDeepStrictEqual(current.binding, verification.binding)) {
+        throw new SetupInferenceOwnerDriftError(
+          "The native setup verification owner changed before activation. Retry setup.",
+        );
+      }
+      return;
+    }
+    await withGeneration(() =>
       revalidateStableSetupInferenceOwner({
         route: candidateRoute,
-        auth: turn.auth,
+        auth: verification.auth,
         stagedOwnerPluginArtifacts: artifacts,
         deps,
       }),
     );
+  };
   const revalidate = async (currentSnapshot: ConfigFileSnapshot) => {
     const config = currentSnapshot.runtimeConfig ?? currentSnapshot.config;
     const sourceConfig = currentSnapshot.sourceConfig;
@@ -508,7 +556,15 @@ async function verifyAndActivateCandidate(
       );
     }
     const next = buildCandidate(config);
-    if (!isDeepStrictEqual(await project(next, buildCandidate(sourceConfig)), verifiedRoute)) {
+    if (
+      !isDeepStrictEqual(
+        await project(
+          candidateRouteConfig(next),
+          candidateRouteConfig(buildCandidate(sourceConfig)),
+        ),
+        verifiedRoute,
+      )
+    ) {
       throw new SetupInferenceOwnerDriftError(
         "The candidate route changed during verification. Retry setup before selecting it as the default.",
       );
@@ -580,10 +636,11 @@ async function verifyAndActivateCandidate(
       },
     };
     await commitSetupInferenceActivation({
+      // Access-only setup leaves the primary route intact and may reload its new runtime plugin.
       preserveWorkingConnection: Boolean(
         savedCredential?.setup?.replacement ||
-        baselineRoute.route ||
-        resolveAgentEffectiveModelPrimary(cfg, routeAgentId),
+        (params.selectModel !== false &&
+          (baselineRoute.route || resolveAgentEffectiveModelPrimary(cfg, routeAgentId))),
       ),
       requireApplied: params.automaticSetup,
       assertCurrent: () => throwIfSetupInferenceCancelled(params),
@@ -619,11 +676,17 @@ async function verifyAndActivateCandidate(
       lines.push(warning);
     }
   }
+  const modelName = findModelInCatalog(
+    loadManifestModelCatalog({ config: candidate, metadataSnapshot: metadata }),
+    route.provider,
+    route.model,
+  )?.name;
   return {
     ok: true,
     modelRef: staged.modelRef,
+    ...(modelName ? { modelName } : {}),
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
-    latencyMs: turn.latencyMs,
+    latencyMs: verification.latencyMs,
     lines,
   };
 }

@@ -922,7 +922,7 @@ export async function packOpenClawPackageForDocker(
     releaseSignalExit();
     throw error;
   }
-  let packOutput = "";
+  let packOutput: string;
   let packageError: unknown;
   let packReceiptDir: string | undefined;
   try {

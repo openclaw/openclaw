@@ -361,12 +361,19 @@ it("coalesces automatic maintenance through native planning and finalization", a
         finalized.resolve(result);
         return result;
       });
-    const deadlineRead = createDeferredCore();
+    const maintenanceSettled = createDeferredCore();
     const reclaim = reclamationRun.runSqliteSessionReclamation;
     vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
       const result = await reclaim(params);
-      if (params.plan.kind === "maintenance-age") {
-        deadlineRead.resolve();
+      if (
+        result.kind === "maintenance-age" ||
+        (result.kind === "maintenance-plan" &&
+          result.value.archived === 0 &&
+          result.value.entryRemovals.length === 0 &&
+          result.value.stateDeletePlans.length === 0)
+      ) {
+        // Empty plans carry their verified deadline without another age request.
+        maintenanceSettled.resolve();
       }
       return result;
     });
@@ -388,7 +395,8 @@ it("coalesces automatic maintenance through native planning and finalization", a
       storePath,
       maintenanceConfig: resolveMaintenanceConfigFromInput({
         mode: "enforce",
-        pruneAfter: "1s",
+        // Native worker preparation must not age the active fixture into a second archive pass.
+        pruneAfter: "30d",
         maxEntries: 100,
       }),
     };
@@ -396,9 +404,7 @@ it("coalesces automatic maintenance through native planning and finalization", a
       kickSessionEntryMaintenanceAfterWrite(request);
       kickSessionEntryMaintenanceAfterWrite(request);
       await finalized.promise;
-      await deadlineRead.promise;
-      // Read-only preflight can precede writable planning; both kicks share one committed finalizer.
-      expect(operations).toContain("session.maintenance.plan");
+      await maintenanceSettled.promise;
       expect(
         operations.filter((operation) => operation === "session.reclamation.worker-commit"),
       ).toEqual(["session.reclamation.worker-commit"]);

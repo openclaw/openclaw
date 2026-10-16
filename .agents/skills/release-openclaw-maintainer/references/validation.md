@@ -18,7 +18,7 @@ upgrade window. Verify each downloaded npm tarball against its published
 `--release` for every supported version. Generation replaces the recorded set:
 keep empty entries, drop expired versions and their historical corrections, and
 never hand-edit recorded origins. `pnpm update:compat:check` remains a manual
-maintainer report of npm `latest`/`beta` coverage. Repeat the generation
+maintainer report of npm `latest`/`beta`/`extended-stable` coverage. Repeat the generation
 arguments with `--check` for an offline regeneration check.
 
 Run every recorded `update-first-hop-compat*` lane and the upgrade survivor lane

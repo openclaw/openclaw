@@ -140,6 +140,20 @@ Hosted MiniMax/Kimi/GLM variants also exist on OpenRouter with region-pinned end
 
 MLX (`mlx_lm.server`), vLLM, SGLang, LiteLLM, OAI-proxy, or any custom gateway works if it exposes an OpenAI-style `/v1/chat/completions` endpoint. Use `openai-completions` unless the backend explicitly documents `/v1/responses` support.
 
+To configure one through the wizard, run `openclaw onboard`, choose **Custom provider**, and enter its base URL (for example, `http://127.0.0.1:8000/v1`). Setup lists models from `/v1/models` so you can select one, with manual model ID entry available if discovery fails or the desired model is not listed.
+
+For non-interactive setup, omit `--custom-model-id` to save all discovered models and use the first as the default:
+
+```bash
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --auth-choice custom-api-key \
+  --custom-base-url "http://127.0.0.1:8000/v1" \
+  --custom-provider-id local \
+  --custom-compatibility openai
+```
+
+Add `--custom-api-key` if the server requires authentication. Discovery uses that key and a five-second timeout. To select a specific model or recover from unavailable, empty, or invalid discovery, add `--custom-model-id "my-local-model"`; an explicit ID skips discovery. For manual configuration, use:
+
 ```json5
 {
   agents: {
@@ -284,6 +298,39 @@ If the model loads cleanly but full agent turns misbehave, check transport first
 
 5. **Inspect the failing request and server logs.** Check the chat template, context window, memory pressure, and server errors. A successful text-only check does not prove that the model can reliably complete a multi-step agent task.
 
+## Output budgets and repetition stops
+
+OpenClaw sends the resolved model output limit to local model servers. Native
+Ollama receives it as `num_predict`; an explicit request `maxTokens` or authored
+`params.num_predict` takes precedence. Set realistic `maxTokens` and context
+limits for custom model entries. Discovered local Ollama models default to 8,192
+output tokens. Ollama Cloud models use their documented output limit, or their
+context window when a separate output limit is unavailable. Set
+`params: { num_predict: -1 }` to restore Ollama's unlimited default; an explicit
+request output cap still wins.
+
+Embedded agent runs also watch long text and reasoning from models with a known
+total parameter count in the **32B class or smaller** (less than 34 billion, to
+allow for rounded model names). Discovery/catalog metadata takes precedence over
+a size inferred from the model name. Active-parameter-only MoE names do not establish
+the total size. The detector stays off for larger models and models whose size is
+unknown. There is no separate setting.
+
+The first check starts around 16,000 characters, with increasing intervals and a
+bounded recent tail. A single repeated line, repeated windows, or a repeated period
+must dominate the tail; a line-novelty check also protects varied output. Repeated
+boilerplate lines in distinct multi-line records are not added together to trigger
+the line check. This heuristic can miss loops and can stop legitimate output with
+sufficiently dominant repetition. Output limits still bound requests that the
+detector misses.
+
+When it triggers, OpenClaw stops the model request and reports a repetition
+failure. The affected unfinished block is replaced with
+`[Repetitive output stopped]` in session history, so later turns do not imitate
+the discarded text. Earlier unaffected blocks and completed tool work remain.
+Side effects are not retried automatically. Choose a stronger model or request a
+smaller output, then start a new turn.
+
 ## Troubleshooting
 
 - **Gateway can't reach the proxy?** `curl http://127.0.0.1:1234/v1/models`.
@@ -309,6 +356,8 @@ Lean mode is an advanced troubleshooting override that explicitly restricts capa
 Setup no longer writes this flag. For older installations, `openclaw doctor --fix` removes an onboarding-owned `true` when its ownership marker still matches the default model. Explicit settings and settings with stale ownership markers are preserved. Set a retained flag to `false` to restore optional capabilities; automatic Tool Search still applies to local routes.
 
 If you already tune Tool Search globally, OpenClaw leaves that config alone. Set `tools.toolSearch: false` to opt out of the lean-mode Tool Search default.
+
+Lean Tool Search directories list tool names and owners without descriptions. Full descriptions and schemas remain available through Tool Search. Removing optional tools therefore cannot expand the remaining directory descriptions. Lean mode keeps the ordinary system instructions, skills, and workspace context.
 
 In structured `tools` mode, lean runs keep `exec` directly visible beside the Tool Search controls so coding-tuned local models can still choose their familiar shell path. This changes schema visibility only: normal tool policy, sandboxing, and exec approvals still apply. Explicit `code` and `directory` modes keep their normal compaction behavior.
 

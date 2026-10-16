@@ -3,6 +3,7 @@ import {
   type GatewayCoreRequestParams,
   errorShape,
   validateSessionGitHubPublishParams,
+  validateSessionGitHubActionParams,
   validateSessionGitHubOptionsParams,
   validateSessionGitHubStatusParams,
   validateSessionGitHubConfirmParams,
@@ -14,10 +15,11 @@ import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
 import { prepareControlUiSessionPrRead } from "../control-ui-session-pr-read.js";
+import { performSessionGitHubAction } from "../github-publication-actions.js";
 import {
   prepareCurrentGitHubPublicationOptionsIdentity,
   hasSupportedGitHubPublicationTarget,
-  readGitHubPublicationSession,
+  prepareGitHubPublicationSession,
   type PublicationSessionIdentity,
 } from "../github-publication-availability.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
@@ -43,6 +45,8 @@ class GitHubOptionsTimeoutError extends Error {
 }
 const sessionGitHubFailureMessages = {
   "sessions.github.publish": "GitHub publication request failed",
+  "sessions.github.action":
+    "GitHub pull request action failed; inspect its current state before retrying.",
   "sessions.github.options": "GitHub publication options are unavailable.",
   "sessions.github.status": "GitHub publication status is unavailable.",
   "sessions.github.confirm": "GitHub publication confirmation failed.",
@@ -86,7 +90,7 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
       const timedOut = error instanceof GitHubOptionsTimeoutError;
       const forbidden = acquisition
         ? acquisition.kind === "held"
-        : !publishing && !busy && !timedOut;
+        : !publishing && method !== "sessions.github.action" && !busy && !timedOut;
       options.respond(
         false,
         undefined,
@@ -154,6 +158,13 @@ async function isSessionPublicationSuperseded(
 }
 
 export const sessionsGitHubHandlers: GatewayRequestHandlers = {
+  "sessions.github.action": defineSessionGitHubMethod(
+    "sessions.github.action",
+    validateSessionGitHubActionParams,
+    async (options) => {
+      await performSessionGitHubAction(options);
+    },
+  ),
   "sessions.github.publish": defineSessionGitHubMethod(
     "sessions.github.publish",
     validateSessionGitHubPublishParams,
@@ -202,7 +213,11 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
 
         return;
       }
-      const loaded = readGitHubPublicationSession(sessionKey, agentId ? { agentId } : undefined);
+      using selectedSession = await prepareGitHubPublicationSession(sessionKey, {
+        agentId,
+        assertCurrent: () => sessionMutationAuthorization?.assertCurrent(),
+      });
+      const loaded = selectedSession.loaded;
       if (!loaded.entry?.sessionId) {
         respond(
           false,
@@ -270,8 +285,12 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
             }),
             action ? service!.status(action) : null,
             action ? coordinator.personalPending(action, session) : null,
-            coordinator.latestShared(session, options.params.idempotencyKey, (snapshot) =>
-              isSessionPublicationSuperseded(options, session, snapshot, assertResponseCurrent),
+            coordinator.latestShared(
+              session,
+              options.params.idempotencyKey,
+              (snapshot) =>
+                isSessionPublicationSuperseded(options, session, snapshot, assertResponseCurrent),
+              read.currentSessionRead,
             ),
           ]);
           let shared: SessionGitHubOptionsResult["shared"] = identity

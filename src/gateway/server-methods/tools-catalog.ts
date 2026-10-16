@@ -20,7 +20,7 @@ import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
 } from "../../plugins/tools.js";
-import { hasMultipleSessionSharingIdentities } from "../../state/user-profile-list.js";
+import { hasMultipleResidentSessionSharingIdentities } from "../../state/user-profile-list.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -55,7 +55,7 @@ function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): Tool
   const swarmEnabled = resolveSwarmConfig(params.cfg, params.agentId).enabled;
   return listCoreToolSections({
     swarmEnabled,
-    personalInstructionsEnabled: hasMultipleSessionSharingIdentities(),
+    personalInstructionsEnabled: hasMultipleResidentSessionSharingIdentities(),
   }).map((section) => ({
     id: section.id,
     label: section.label,

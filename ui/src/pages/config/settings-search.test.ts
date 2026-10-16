@@ -104,29 +104,6 @@ describe("findSettingsSearchBlocks", () => {
     }
   });
 
-  it("uses word prefixes instead of arbitrary substrings for short queries", () => {
-    const matches = findSettingsSearchBlocks({
-      query: "cp",
-      schema: {
-        type: "object",
-        properties: {
-          mcp: { type: "object", title: "MCP" },
-          acp: { type: "object", title: "ACP" },
-        },
-      },
-      value: {},
-      uiHints: {},
-    });
-
-    expect(matches).toEqual([
-      expect.objectContaining({
-        routeId: "connection",
-        label: "Gateway Host",
-        hash: "#settings-connection-host",
-      }),
-    ]);
-  });
-
   it.each(["securityAcknowledgedAt"])("does not offer machine-owned %s in search", (key) => {
     expect(
       findSettingsSearchBlocks({

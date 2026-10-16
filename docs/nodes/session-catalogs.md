@@ -9,8 +9,11 @@ title: "Node session catalogs"
 sidebarTitle: "Session catalogs"
 ---
 
-Catalog listing waits up to one second per provider, concurrently. Providers that
-finish within that budget return normally. A slow provider returns
+Cold catalog listing waits up to one second per provider, concurrently. Providers that
+finish within that budget return normally. When a page is already available for
+the same caller and query, listing returns it promptly while discovery refreshes
+in the background; an already-settled refresh returns its fresh page instead.
+A slow provider returns
 `catalog.error.code: "catalog_pending"`; when available, its latest available page
 for the same caller and query is included with hosts marked `pending: true` and
 a stale-results message. A failed catalog enumeration can likewise return that page with
@@ -26,6 +29,10 @@ provider registration changes and catalog archive operations. Every delivery
 rechecks current visibility and local session identity. The one-second budget
 covers provider discovery and queueing, not session-projection preparation or
 time spent waiting for the Gateway event loop.
+
+Paired-node discovery reuses the current committed node inventory while pairing
+writes are queued. A committed pairing change invalidates that inventory before
+the next read, including when a node's access is revoked.
 
 With diagnostics enabled, slow-provider warnings report elapsed time, including
 queueing and asynchronous I/O. `isMainThread` identifies the calling thread; it

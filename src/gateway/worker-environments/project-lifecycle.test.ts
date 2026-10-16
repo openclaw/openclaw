@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
+import type { WorkerProvider } from "../../plugins/capability-provider.types.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { EnvironmentRecipe } from "./environment-recipe.js";
 import { runWorkerProjectLifecycle } from "./project-setup-script.js";
@@ -116,6 +117,81 @@ describe("cloud project lifecycle command transport", () => {
         OPENCLAW_WORKTREE_PATH: "/worker/project",
       });
     }
+  });
+
+  it("uses the provider lease runner and passes protected environment after recipe values", async () => {
+    const { tunnel, invocations } = lifecycleTransport();
+    const provider = vi.fn(
+      async (command: Parameters<NonNullable<WorkerProvider["runSetupCommand"]>>[1]) => {
+        command.assertCurrent();
+        expect(command.workspaceDir).toBe("/worker/project");
+        expect(command.homeDir).toBe("/worker/home");
+        return tunnel.runWorkspaceCommand({
+          argv: [
+            "node",
+            "-e",
+            command.createScript({
+              TOKEN: "sentinel_fixture",
+              HTTPS_PROXY: "http://127.0.0.1:3131",
+              NODE_EXTRA_CA_CERTS: "/tmp/owned/ca.pem",
+            }),
+          ],
+          transportRetry: "never",
+        });
+      },
+    );
+    await runWorkerProjectLifecycle({
+      recipe: { ...recipe, env: { ...recipe.env, TOKEN: null, HTTPS_PROXY: "untrusted" } },
+      tunnel,
+      postCreate: true,
+      workspaceDir: "/worker/project",
+      homeDir: "/worker/home",
+      runSetupCommand: provider,
+      assertCurrent: () => {},
+    });
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(tunnel.runWorkspaceCommand).toHaveBeenCalledTimes(1);
+    for (const invocation of invocations) {
+      expect(invocation.env).toMatchObject({
+        TOKEN: "sentinel_fixture",
+        HTTPS_PROXY: "http://127.0.0.1:3131",
+        NODE_EXTRA_CA_CERTS: "/tmp/owned/ca.pem",
+      });
+      expect(invocation.env).not.toHaveProperty("PRIVATE_FIXTURE");
+    }
+  });
+
+  it("keeps the ordinary tunnel when the provider has no protected setup transport", async () => {
+    const { tunnel, events } = lifecycleTransport();
+    await runWorkerProjectLifecycle({
+      recipe,
+      tunnel,
+      postCreate: false,
+      workspaceDir: "/worker/project",
+      homeDir: "/worker/home",
+      runSetupCommand: async () => undefined,
+      assertCurrent: () => {},
+    });
+    expect(tunnel.runWorkspaceCommand).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["spawn:serve", "close:serve"]);
+  });
+
+  it("does not fall back to the tunnel after a provider runner rejects", async () => {
+    const { tunnel } = lifecycleTransport();
+    await expect(
+      runWorkerProjectLifecycle({
+        recipe,
+        tunnel,
+        postCreate: true,
+        workspaceDir: "/worker/project",
+        homeDir: "/worker/home",
+        runSetupCommand: async () => {
+          throw new Error("Protected setup egress is unavailable");
+        },
+        assertCurrent: () => {},
+      }),
+    ).rejects.toThrow("Protected setup egress is unavailable");
+    expect(tunnel.runWorkspaceCommand).not.toHaveBeenCalled();
   });
 
   it("runs postStart without repeating postCreate for an already activated worker", async () => {

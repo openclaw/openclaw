@@ -34,6 +34,7 @@ type OpenClawTestStateOptions = {
   scenario?: OpenClawTestStateScenario;
   agentEnv?: "clear" | "main";
   applyEnv?: boolean;
+  prepareProfileCatalog?: boolean;
   env?: Record<string, string | undefined>;
   verifyCleanup?: (cleanup: () => Promise<void>) => Promise<void>;
   gateway?: {
@@ -310,6 +311,7 @@ export async function createOpenClawTestState(
     let envApplied = false;
     let releasePromise: Promise<void> | undefined;
     let cleanupPromise: Promise<void> | undefined;
+    let releaseProfileCatalog: (() => void) | undefined;
     const restoreAppliedEnv = () => {
       if (envApplied) {
         for (const snapshot of snapshots) {
@@ -396,6 +398,7 @@ export async function createOpenClawTestState(
       // including failure, so no concurrent caller can restore selectors early.
       restoreEnv: () =>
         (releasePromise ??= Promise.resolve().then(async () => {
+          releaseProfileCatalog?.();
           await cleanupSessionStateForTest({ stateDir: paths.stateDir, rootPath: root });
           restoreAppliedEnv();
         })),
@@ -421,6 +424,17 @@ export async function createOpenClawTestState(
 
     if (options.applyEnv !== false) {
       state.applyEnv();
+    }
+
+    if (options.prepareProfileCatalog) {
+      try {
+        const { prepareUserProfileCatalogForTest } = await import("./user-profile-catalog.js");
+        const catalog = await prepareUserProfileCatalogForTest({ env });
+        releaseProfileCatalog = catalog.release;
+      } catch (error) {
+        await state.cleanup();
+        throw error;
+      }
     }
 
     return state;

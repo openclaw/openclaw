@@ -101,6 +101,7 @@ it.each([
   "(await import('./state/user-model-accounts.js'))['SELECT']();",
   "const [{ SELECT: selected }] = await Promise.all([import('./state/user-model-accounts.js')]); selected();",
   "import('./state/user-model-accounts.js').then(({ SELECT: selected }) => selected());",
+  "import('./state/user-model-accounts.js').then(({ SELECT: selected }: { SELECT: () => void }) => selected());",
   "Promise.all([import('./state/user-model-accounts.js')]).then(([accounts]) => accounts.SELECT());",
 ])("checks a selected dynamic import without charging unused sibling exports: %s", (consumer) => {
   const source = `${owner}\nexport function listUserProfileAuthLinksAsync() {}`;
@@ -220,6 +221,9 @@ it.each([
   "db.exec('DELETE FROM secret_store_entries WHERE name = ?');",
   "db.exec(`UPDATE secret_store_entries SET value = 'replacement'`);",
   "db.exec(`UPDATE secret_store_entries SET value = ${replacement}`);",
+  "db.exec('REPLACE INTO secret_store_entries (name) VALUES (?)');",
+  "db.exec('UPDATE OR REPLACE secret_store_entries SET value = ?');",
+  "db.replaceInto('secret_store_entries').values({ name: 'replacement' });",
 ])("rejects a newly introduced secret-store write: %s", (write) => {
   expect(inspect({ "src/new-writer.ts": `function write() { ${write} }` })).toHaveLength(1);
 });
@@ -243,6 +247,9 @@ it.each([
   "const key = 'authProfiles.store'; db.deleteFrom('config_machine_state').where('state_key', '=', key);",
   "db.deleteFrom('config_machine_state').where('state_key', 'in', ['authProfiles.state', 'authProfiles.store']);",
   "db.updateTable('config_machine_state').set({ state_key: 'authProfiles.store' }).where('state_key', '=', 'other');",
+  "db.replaceInto('config_machine_state').values({ state_key: 'authProfiles.store' });",
+  "db.insertInto('config_machine_state').values({ state_key: 'other' }).onConflict((conflict) => conflict.column('state_key').doUpdateSet({ state_key: 'authProfiles.store' }));",
+  "db.insertInto('config_machine_state').values({ state_key: 'other' }).onConflict((conflict) => { return conflict.column('state_key').doUpdateSet({ state_key: 'authProfiles.store' }); });",
   "db.exec('DELETE FROM config_machine_state WHERE state_key = ?');",
   "db.insertInto('config_machine_state').values({ state_key: unknownKey });",
 ])("rejects a synthetic shared or agent credential bypass: %s", (write) => {
@@ -255,6 +262,11 @@ it("permits bounded noncredential machine-state writes", () => {
       "src/new-writer.worker.ts": `
       const unrelated = 'authProfiles.state';
       db.insertInto('config_machine_state').values({ state_key: unrelated });
+      db.replaceInto('config_machine_state').values({ state_key: unrelated });
+      db.insertInto('config_machine_state').values({ state_key: unrelated })
+        .onConflict((conflict) => conflict.column('state_key').doUpdateSet({ value_json: '{}' }));
+      db.insertInto('config_machine_state').values({ state_key: unrelated })
+        .onConflict((conflict) => conflict.column('state_key').doUpdateSet({ state_key: 'other' }));
       db.deleteFrom('config_machine_state').where('state_key', '=', unrelated);
     `,
     }),
@@ -306,6 +318,27 @@ it("limits offline raw machine-state migration exceptions to their reviewed stat
       expect.stringContaining("raw authority-table write"),
     ]);
   }
+});
+
+it.each([
+  ["scripts/generate-postgres-schema.mts", "function generatePostgresSchemas() {", "}"],
+  ["src/state/postgres-schema.generated/runtime.ts", "export const runtime = { sql:", "};"],
+])("bounds the v25 metadata publication in %s to its exact statement", (file, before, after) => {
+  const statement =
+    "UPDATE config_machine_state SET value_json = '25' WHERE state_key = 'state.schema.contentVersion' AND value_json = '24';";
+  const inspectSql = (sql: string) =>
+    inspect({ [file]: `${before} ${JSON.stringify(sql)} ${after}` });
+  expect(inspectSql(statement)).toEqual([]);
+  for (const sql of [
+    `${statement} ${statement}`,
+    statement.replace("state.schema.contentVersion", "auth.credentials"),
+    "DELETE FROM auth_profile_store",
+  ]) {
+    expect(inspectSql(sql)).toContainEqual(expect.stringContaining("raw authority-table write"));
+  }
+  expect(
+    inspect({ "src/new-metadata-writer.ts": `const sql = ${JSON.stringify(statement)}` }),
+  ).toContainEqual(expect.stringContaining("raw authority-table write"));
 });
 
 const lifecycle = "src/state/github-publication-session-lifecycles.worker.ts";
@@ -480,15 +513,19 @@ it("requires the host publication adapter for direct and aliased machine-state c
       "machineState.write credential writes require the host publication adapter",
     ),
   ]);
-  expect(
-    inspect({
-      "src/new-writer.ts": source.replace("type: command", "type: 'machineState.write'"),
-    }),
-  ).toEqual([
-    expect.stringContaining(
-      "machineState.write credential writes require the host publication adapter",
-    ),
-  ]);
+  for (const command of [
+    "'machineState.write'",
+    "`machineState.write`",
+    "'machineState\\u002ewrite'",
+  ]) {
+    const direct = source.replace("type: command", `type: ${command}`);
+    expect(inspect({ "src/state/config-machine-state-async.ts": direct })).toEqual([]);
+    expect(inspect({ "src/new-writer.ts": direct })).toEqual([
+      expect.stringContaining(
+        "machineState.write credential writes require the host publication adapter",
+      ),
+    ]);
+  }
 });
 
 const authRuntime = "src/agents/auth-profiles/store-runtime.ts";
@@ -638,12 +675,12 @@ it("bounds reviewed lazy imports by loader, declaration scope and selected expor
 it("closes raw-store and worker-kernel entries while preserving the named update dispatchers", () => {
   const sources = {
     [authCells]: `export function writeAuthProfileJsonCell() {}`,
-    "src/agents/auth-profiles/store-update-kernel.ts": `
+    "src/agents/auth-profiles/store-update.worker.ts": `
       import { writeAuthProfileJsonCell } from './sqlite-json-write.js';
       export function updateAuthProfileStoreInDatabase() { writeAuthProfileJsonCell(); }
     `,
     "src/agents/auth-profiles/store.worker.ts": `
-      import { updateAuthProfileStoreInDatabase } from './store-update-kernel.js';
+      import { updateAuthProfileStoreInDatabase } from './store-update.worker.js';
       export const operations = { 'authProfiles.update': () => updateAuthProfileStoreInDatabase() };
     `,
   };
@@ -652,7 +689,7 @@ it("closes raw-store and worker-kernel entries while preserving the named update
     inspect({
       ...sources,
       "src/new-writer.worker.ts": `
-        import { updateAuthProfileStoreInDatabase } from './agents/auth-profiles/store-update-kernel.js';
+        import { updateAuthProfileStoreInDatabase } from './agents/auth-profiles/store-update.worker.js';
         updateAuthProfileStoreInDatabase();
       `,
     }),
@@ -689,17 +726,77 @@ it("permits fixed noncredential generic writer keys without granting a caller ex
   ).toEqual([]);
 });
 
-it("requires host publication for auth-store commands, including literal aliases", () => {
-  const source = `async function runPreparedAuthProfileStoreUpdate() {
-    const type = 'authProfiles.update' as const;
+it.each([
+  [
+    "src/agents/auth-profiles/store-update.ts",
+    "runPreparedAuthProfileStoreUpdate",
+    "authProfiles.update",
+  ],
+  [
+    "src/agents/auth-profiles/authorization-enrollment-runtime.ts",
+    "enrollOwnedAuthProfileAuthorization",
+    "authProfiles.enrollAuthorization",
+  ],
+])("requires host publication for credential command aliases in %s", (adapter, entry, command) => {
+  const source = `async function ${entry}() {
+    const type = '${command}' as const;
     await scope.execute({ type, input: {} });
   }`;
-  expect(inspect({ "src/agents/auth-profiles/store-update.ts": source })).toEqual([]);
+  expect(inspect({ [adapter]: source })).toEqual([]);
   expect(inspect({ "src/new-writer.worker.ts": source })).toEqual([
-    expect.stringContaining(
-      "authProfiles.update credential writes require the host publication adapter",
-    ),
+    expect.stringContaining(`${command} credential writes require the host publication adapter`),
   ]);
+});
+
+it("restricts authorization enrollment to admitted workers and its offline Doctor owner", () => {
+  const sources = {
+    "src/agents/auth-profiles/sqlite-json-write.ts": `export function writeAuthProfileJsonCell() {}`,
+    "src/agents/auth-profiles/authorization-enrollment.ts": `
+      import { writeAuthProfileJsonCell } from './sqlite-json-write.js';
+      export function enrollAuthProfileAuthorizationInDatabase() { writeAuthProfileJsonCell(); }
+    `,
+    "src/agents/auth-profiles/store.worker.ts": `
+      import { enrollAuthProfileAuthorizationInDatabase } from './authorization-enrollment.js';
+      export const operations = {
+        'authProfiles.enrollAuthorization': () => enrollAuthProfileAuthorizationInDatabase(),
+      };
+    `,
+    "src/agents/auth-profiles/inline-usage.worker.ts": `
+      import { enrollAuthProfileAuthorizationInDatabase } from './authorization-enrollment.js';
+      export function bindSqliteWorkerBackend() {
+        return { execute() { enrollAuthProfileAuthorizationInDatabase(); } };
+      }
+    `,
+    "src/agents/auth-profiles/authorization-enrollment-runtime.ts": `
+      import { enrollAuthProfileAuthorizationInDatabase } from './authorization-enrollment.js';
+      export function enrollOwnedAuthProfileAuthorization(context) {
+        if (context.maintenanceScope?.ownsSchemaMaintenance) {
+          enrollAuthProfileAuthorizationInDatabase();
+        }
+      }
+    `,
+  };
+  expect(inspect(sources)).toEqual([]);
+  const runtime = "src/agents/auth-profiles/authorization-enrollment-runtime.ts";
+  expect(
+    inspect({
+      ...sources,
+      [runtime]:
+        sources[runtime] +
+        `
+        export function unownedSibling() { enrollAuthProfileAuthorizationInDatabase(); }
+      `,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+  expect(
+    inspect({
+      ...sources,
+      "src/new-writer.worker.ts": `
+        import { enrollAuthProfileAuthorizationInDatabase } from './agents/auth-profiles/authorization-enrollment.js';
+        enrollAuthProfileAuthorizationInDatabase();
+      `,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
 });
 
 it("keeps catalog capture and worker write custody behind the reviewed batch entry", () => {
@@ -814,4 +911,62 @@ it.each([
       expect.stringContaining("unreviewed personal credential writer reference"),
     ]),
   );
+});
+
+it("keeps session membership writes with the worker and canonical entry owners", () => {
+  const members = "src/config/sessions/session-sharing-store.native.ts";
+  const sources = {
+    [members]: `export function addSessionMember() { db.insertInto('session_members'); }`,
+    "src/config/sessions/session-sharing-store.worker.ts": `
+      import { addSessionMember } from './session-sharing-store.native.js';
+      function bindSqliteWorkerBackend() { return { execute() { addSessionMember(); } }; }
+    `,
+    "src/config/sessions/session-accessor.sqlite-node-artifacts.ts": `
+      export function clearSessionCollaborationForKey() {
+        const tables = clear ? ['session_members'] as const : ['session_members', 'session_suggestions'] as const;
+        for (const table of tables) { db.deleteFrom(table); }
+      }
+    `,
+    "src/config/sessions/session-accessor.sqlite-entry-store.ts": `
+      import { clearSessionCollaborationForKey } from './session-accessor.sqlite-node-artifacts.js';
+      function writeSessionEntry() { clearSessionCollaborationForKey(); }
+    `,
+  };
+  expect(inspect(sources)).toEqual([]);
+  expect(
+    inspect({
+      ...sources,
+      "src/new-writer.ts": `
+        import { addSessionMember } from './config/sessions/session-sharing-store.native.js';
+        addSessionMember();
+        db.exec('DELETE FROM session_members');
+      `,
+    }),
+  ).toEqual([
+    expect.stringContaining("unreviewed session membership writer reference"),
+    expect.stringContaining("raw authority-table write"),
+  ]);
+});
+
+it.each([
+  "import selected from './state/user-model-accounts.js'; selected();",
+  "import { default as selected } from './state/user-model-accounts.js'; selected();",
+  "export { default as selected } from './state/user-model-accounts.js';",
+  "import * as accounts from './state/user-model-accounts.js'; accounts.default();",
+])("checks default writer bindings without charging unrelated exports: %s", (consumer) => {
+  expect(
+    inspect(
+      { "src/consumer.ts": consumer },
+      `${owner}\nexport default function listUserProfileAuthLinksAsync() {}`,
+    ),
+  ).toEqual([]);
+  expect(
+    inspect(
+      { "src/consumer.ts": consumer },
+      owner.replace(
+        "export function connectUserModelAccount",
+        "export default function connectUserModelAccount",
+      ),
+    ),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
 });

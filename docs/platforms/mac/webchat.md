@@ -44,6 +44,11 @@ native. Selecting a thread in the sidebar or palette navigates the existing web
 pane without reloading it. **New Thread** stays in the sidebar and on Shift-Cmd-N:
 it creates the session through the native owner, then opens it in that pane.
 
+The Web experience shares the desktop web rail and panel layout with the Tauri desktop app on macOS, Linux, and Windows.
+Its panel header and content header occupy the same 52px titlebar row, with back/forward before the content title and search in the rail.
+On macOS, the panel title clears the traffic lights and the rail starts below them; Linux/Windows keep the rail aligned with the top row and reserve the top-right caption buttons.
+Sessions, Pages, and Online each have a trailing Collapse sidebar button; collapsing leaves only expand-sidebar beside the rail, which continues to own New session and search.
+
 The web pane owns sending, drafts, queues, history, read acknowledgements, Find,
 and export. Pane-local keys such as Cmd-F, Return, Shift-Return, and Escape go to
 the web view. Links to settings and other pages open the Dashboard for the same
@@ -279,8 +284,9 @@ the preference in the browser.
 **Session sources…** opens the same Gateway's Dashboard Appearance settings, where
 you can manage session sources. The native handoff opens the page without scrolling
 to the Session sources settings block. **Open in Terminal** is not offered because
-the native sidebar has no catalog terminal action. Catalogs refresh while the
-sidebar is visible and connected; **Load more** and **Retry** operate independently
+the native sidebar has no catalog terminal action. Catalogs refresh every two
+minutes while the sidebar is visible and connected, and immediately when it
+becomes visible or reconnects. **Load more** and **Retry** operate independently
 for each catalog. Source failures stay visible with **Retry**, including before
 the source returns its first session.
 
@@ -546,7 +552,7 @@ connection confirmation rules.
 ## How it is wired
 
 - Data plane: Gateway WS methods `chat.history`, `chat.message.get`, `chat.send`, `chat.abort`, `chat.inject`, plus `question.list` and `question.resolve`, and events `chat`, `agent`, `presence`, `tick`, `health`; question cards follow `question.requested` and `question.resolved` events and refresh from `question.list` after reconnects.
-- `chat.history` returns a display-normalized transcript: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, including truncated blocks) and leaked model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY`/`no_reply` are omitted, and oversized rows can be replaced with a truncated placeholder.
+- `chat.history` returns a Gateway-prepared display transcript: inline directive tags, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, including truncated blocks), and leaked model control tokens are stripped. Stored assistant visibility honors display, phase, and final-source facts first, then omits raw assistant text that trims to uppercase `NO_REPLY`; lowercase and wrapped forms remain visible. User text is never classified as silence. Oversized rows can be replaced with a truncated placeholder.
 - Session: defaults to the primary session as above; the UI can switch between sessions.
 - Session groups: `sessions.groups.list`, `sessions.groups.put`, `sessions.groups.rename`, and `sessions.groups.delete` own the path-free group catalog. Write-scoped `sessions.groups.defaults` and `sessions.groups.update` own optional New Session folder/worktree defaults. Membership is the session `category` updated through `sessions.patch` or assigned during `sessions.create`.
 - Unread state: after a session activates and its live history loads successfully, the app clears the unread state it observed. A manual unread marker created while that session is already open remains through refreshes and run completion; leave and reopen the session, or mark it read explicitly, to clear it. Failed history loads do not clear unread state, and a transient patch failure retries on the next activation. During staggered upgrades, an older active app can still send a bare read acknowledgement that clears the marker. Cross-client protection therefore requires every active app to support the acknowledgement contract; update all connected clients before relying on the reminder.

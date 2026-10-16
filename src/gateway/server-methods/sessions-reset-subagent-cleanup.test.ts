@@ -33,14 +33,19 @@ import {
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   loadSessionEntry,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionLifecycleOwner from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -212,6 +217,13 @@ afterEach(async () => {
     stateDir,
     resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
     closeDatabases: () => {
+      memorySessionActorOwners.closeDatabase({
+        agentId: "worker",
+        path: resolveIncognitoOpenClawAgentSqlitePath({
+          agentId: "worker",
+          env: { OPENCLAW_STATE_DIR: stateDir },
+        }),
+      });
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
     },
@@ -257,7 +269,12 @@ async function expectResultRetained() {
       currentAgentId: "main",
       config: cfg,
     }),
-  ).resolves.toMatchObject({ runId, status: "failed", result: "launch failed" });
+  ).resolves.toMatchObject({
+    runId,
+    status: "failed",
+    result: "launch failed",
+    error: "launch failed",
+  });
 }
 
 test("a real registry write failure blocks reset publication and leaves cleanup retryable", async () => {
@@ -512,7 +529,9 @@ test.each([false, true])(
       session: { store: path.join(stateDir, "custom-sessions.json") },
     };
     setRuntimeConfigSnapshot(cfg);
-    const childSessionKey = `agent:${agentId}:${incognito ? "incognito" : "subagent"}:scoped-cleanup`;
+    const childSessionKey = incognito
+      ? `agent:${agentId}:dashboard:incognito-scoped-cleanup`
+      : `agent:${agentId}:subagent:scoped-cleanup`;
     const scope = {
       agentId,
       sessionKey: childSessionKey,
@@ -520,7 +539,7 @@ test.each([false, true])(
     };
     const id = "scoped-collector";
     const siblingKey = "agent:main:subagent:scoped-cleanup";
-    replaceSessionEntrySync(scope, {
+    await replaceSessionEntry(scope, {
       sessionId: "scoped-original",
       lifecycleRevision: "scoped-original",
       updatedAt: Date.now(),
@@ -539,7 +558,7 @@ test.each([false, true])(
     expect(loadSubagentRegistryFromSqlite().get(id)?.execution.suppressSessionEffects).toBe(true);
     if (incognito) {
       expect(loadSessionEntry(scope)).toBeUndefined();
-      replaceSessionEntrySync(scope, {
+      await replaceSessionEntry(scope, {
         sessionId: "private-successor",
         lifecycleRevision: "private-successor",
         updatedAt: Date.now(),
@@ -583,7 +602,15 @@ test("reset cannot publish while a terminal completion owns an awaited capture",
   });
   const id = "completing-owner";
   await startCollector(id);
-  emitAgentEvent({ runId: id, stream: "lifecycle", data: { phase: "end", endedAt: Date.now() } });
+  // Leave producer metadata absent to hold the completion lock during transcript capture.
+  emitAgentEvent({
+    runId: id,
+    stream: "lifecycle",
+    data: {
+      phase: "end",
+      endedAt: Date.now(),
+    },
+  });
   await entered.promise;
   const original = loadSessionEntry({ sessionKey: key });
   try {

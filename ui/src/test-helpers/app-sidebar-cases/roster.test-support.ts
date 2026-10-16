@@ -1,4 +1,3 @@
-import type { LitElement } from "lit";
 import { expect, vi } from "vitest";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { patchSettings } from "../../app/settings.ts";
@@ -10,7 +9,7 @@ import {
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
 import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
-import { settleLitElement, settleLitElements } from "../lit-settle.ts";
+import { flush } from "../solid-settle.ts";
 
 export const roster: AgentsListResult = {
   defaultId: "main",
@@ -149,8 +148,8 @@ export async function settleRoster(sidebar: SidebarLifecycleState) {
   }
   await sidebar.updateComplete;
   await vi.dynamicImportSettled();
-  await settleLitElements(sidebar.querySelectorAll<LitElement>("openclaw-sidebar-agent-roster"));
-  await settleLitElement(sidebar);
+  flush();
+  await sidebar.updateComplete;
 }
 
 export function agentIds(sidebar: HTMLElement) {
@@ -176,7 +175,7 @@ export async function toggleRoster(sidebar: HTMLElement, agentId = "main") {
     ? `agent:${encodeURIComponent(agentId)}`
     : "scope:all";
   trigger.click();
-  const selector = `.sidebar-agent-menu [value="${value}"]`;
+  const selector = `.sidebar-agent-menu [data-value="${value}"]`;
   await vi.waitFor(() => expect(sidebar.querySelector(selector)).not.toBeNull());
   sidebar.querySelector<HTMLElement>(selector)?.click();
 }

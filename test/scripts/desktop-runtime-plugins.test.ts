@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, truncateSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   desktopRuntimeReleaseTag,
   planDesktopRuntimePlugins,
@@ -10,6 +11,11 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => {
+  vi.stubEnv("RELEASE_TAG", undefined);
+  vi.stubEnv("RELEASE_SHA", undefined);
+});
+afterEach(() => vi.unstubAllEnvs());
 const writeJson = (root: string, file: string, value: unknown) => {
   const target = path.join(root, file);
   mkdirSync(path.dirname(target), { recursive: true });
@@ -56,7 +62,99 @@ function fixture() {
   return { root, commit };
 }
 
+function shallowRelease(tag = "v2026.10.2") {
+  const { root: origin } = fixture();
+  git(origin, "add", ".");
+  git(
+    origin,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "-qm",
+    "release",
+  );
+  const commit = git(origin, "rev-parse", "HEAD");
+  git(
+    origin,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "tag",
+    "-a",
+    tag,
+    "-m",
+    "release",
+  );
+  const root = temps.make("desktop-release-clone-");
+  git(origin, "clone", "--quiet", "--depth=1", "--no-tags", pathToFileURL(origin).href, root);
+  expect(git(root, "rev-parse", "--is-shallow-repository")).toBe("true");
+  expect(git(root, "tag", "--list")).toBe("");
+  rmSync(path.join(root, "dist"), { recursive: true });
+  return { root, origin, commit };
+}
+
 describe("desktop runtime source plugins", () => {
+  it.each([true, false])(
+    "keeps tagless shallow release plans empty (verified SHA: %s)",
+    (withSha) => {
+      const { root, commit } = shallowRelease();
+      vi.stubEnv("RELEASE_TAG", "v2026.10.2");
+      if (withSha) {
+        vi.stubEnv("RELEASE_SHA", commit);
+      }
+      const plan = JSON.parse(
+        execFileSync(
+          process.execPath,
+          [path.resolve("scripts/lib/desktop-runtime-plugins.mjs"), "plan", root],
+          { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        ),
+      );
+      expect(plan).toEqual({ commit, releaseTag: "v2026.10.2", pluginIds: [] });
+    },
+  );
+
+  it.each([
+    ["v2026.10.2", "0".repeat(40), "does not match source commit"],
+    ["v2026.10.2", "", "does not match source commit"],
+    ["v2026.10.3", undefined, "does not match release tag"],
+    ["", undefined, "RELEASE_TAG"],
+    [undefined, "0".repeat(40), "RELEASE_TAG"],
+  ])("rejects conflicting or incomplete explicit release identity (%s)", (tag, sha, message) => {
+    const { root, commit } = fixture();
+    vi.stubEnv("RELEASE_TAG", tag);
+    vi.stubEnv("RELEASE_SHA", sha);
+    expect(() => desktopRuntimeReleaseTag(root, "2026.10.2", commit)).toThrow(message);
+  });
+
+  it("rejects a fetched release tag on another commit", () => {
+    const { root, origin, commit } = shallowRelease();
+    git(origin, "tag", "-f", "v2026.10.2", `${commit}^`);
+    vi.stubEnv("RELEASE_TAG", "v2026.10.2");
+    expect(() => planDesktopRuntimePlugins(root)).toThrow("does not match source commit");
+  });
+
+  it.each([true, false])(
+    "verifies a correction's fetched base tag (same source: %s)",
+    (sameSource) => {
+      const { root, origin, commit } = shallowRelease("v2026.10.2-1");
+      git(origin, "tag", "v2026.10.2", sameSource ? commit : `${commit}^`);
+      vi.stubEnv("RELEASE_TAG", "v2026.10.2-1");
+      vi.stubEnv("RELEASE_SHA", commit);
+      if (sameSource) {
+        expect(planDesktopRuntimePlugins(root)).toEqual({
+          commit,
+          releaseTag: "v2026.10.2-1",
+          pluginIds: [],
+        });
+      } else {
+        expect(() => planDesktopRuntimePlugins(root)).toThrow("does not match source commit");
+      }
+    },
+  );
+
   it.runIf(process.platform === "darwin")(
     "normalizes only staged Codex voice build rpaths",
     async () => {
@@ -101,17 +199,12 @@ describe("desktop runtime source plugins", () => {
     },
   );
 
-  it.each([
-    [[], null],
-    [["release/2026.10.2", "v2026.9.2"], null],
-    [["v2026.10.2"], "v2026.10.2"],
-    [["v2026.10.2", "v2026.10.2-1"], "v2026.10.2"],
-  ])("recognizes only matching exact release source tags (%j)", (tags, expected) => {
+  it("ignores nonmatching release source tags", () => {
     const { root, commit } = fixture();
-    for (const tag of tags) {
+    for (const tag of ["release/2026.10.2", "v2026.9.2"]) {
       git(root, "tag", tag);
     }
-    expect(desktopRuntimeReleaseTag(root, "2026.10.2", commit)).toBe(expected);
+    expect(desktopRuntimeReleaseTag(root, "2026.10.2", commit)).toBeNull();
   });
 
   it("requires the correction release's base tag at the same commit", () => {
@@ -130,23 +223,6 @@ describe("desktop runtime source plugins", () => {
       expect(desktopRuntimeReleaseTag(root, version, commit)).toBe(`v${version}`);
     },
   );
-
-  it("does not classify a commit after a release tag as a release", () => {
-    const { root } = fixture();
-    git(root, "tag", "v2026.10.2");
-    git(
-      root,
-      "-c",
-      "user.name=Fixture",
-      "-c",
-      "user.email=fixture@example.invalid",
-      "commit",
-      "--allow-empty",
-      "-qm",
-      "next",
-    );
-    expect(desktopRuntimeReleaseTag(root, "2026.10.2", git(root, "rev-parse", "HEAD"))).toBeNull();
-  });
 
   it("stages all official source plugins and stamps the installed build only", () => {
     const { root, commit } = fixture();
@@ -169,6 +245,17 @@ describe("desktop runtime source plugins", () => {
     expect(
       JSON.parse(readFileSync(path.join(root, "dist/build-info.json"), "utf8")),
     ).not.toHaveProperty("stagedOfficialPlugins");
+  });
+
+  it("lets a desktop stage only Codex without requiring other plugins' builds", () => {
+    const { root, commit } = fixture();
+    expect(planDesktopRuntimePlugins(root, { pluginIds: ["codex"] })).toMatchObject({
+      commit,
+      releaseTag: null,
+      pluginIds: ["codex"],
+    });
+    git(root, "tag", "v2026.10.2");
+    expect(planDesktopRuntimePlugins(root, { pluginIds: ["codex"] }).pluginIds).toEqual([]);
   });
 
   it("counts additional transitive dependencies and falls back to first-run Codex above 300 MiB", () => {

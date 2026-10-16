@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
+import * as stateMetadata from "../../infra/update-candidate-state.sizes.js";
 import {
   createUpdateRun,
   getUpdateRun,
@@ -110,6 +111,9 @@ let entrypoint: string;
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
+    stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
+  );
   mocks.publication.mockReset().mockImplementation(async (params, publish) => {
     params.assertCurrent();
     return await publish(async () => params.assertCurrent());
@@ -932,19 +936,25 @@ describe("update orchestration lifecycle ownership", () => {
     ],
     ["repair" as const, "finding" as const, "post-plugin-update-readiness-failed"],
     ["repair" as const, "execution" as const, "post-plugin-update-readiness-execution-failed"],
-  ])("%s leaves the Gateway stopped after a readiness %s", async (lane, failure, reason) => {
+  ])("%s preserves a readiness %s outcome", async (lane, failure, reason) => {
     await writeScenario(lane, {
       readinessFailure: failure,
       hostVersion: lane === "current-process" ? "1.0.0" : undefined,
     });
 
-    await invokeReportedFailure(lane);
+    if (failure === "finding") {
+      await invokeReportedFailure(lane);
+    } else {
+      await invoke(lane);
+    }
 
     expect(reportedResult(lane)).toMatchObject({
-      status: "error",
-      postUpdate: { plugins: { reason } },
+      status: failure === "finding" ? "error" : lane === "repair" ? "warning" : "ok",
+      postUpdate: { plugins: { status: failure === "finding" ? "error" : "warning", reason } },
     });
-    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.restart).toHaveBeenCalledTimes(
+      failure === "execution" && lane !== "repair" ? 1 : 0,
+    );
     expect(await events()).toEqual([
       ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
       ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),

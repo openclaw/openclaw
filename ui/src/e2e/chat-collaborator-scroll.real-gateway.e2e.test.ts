@@ -216,7 +216,9 @@ async function send(
     throw new Error("Expected a send request");
   }
   expect(record(request.params)).toMatchObject({ sessionKey, message });
-  await expect.poll(() => observed.response(request.id)).toMatchObject({ ok: true });
+  await expect.poll(() => observed.response(request.id)).toBeDefined();
+  const response = observed.response(request.id);
+  expect(response, JSON.stringify(response)).toMatchObject({ ok: true });
   const runId = record(request.params)?.idempotencyKey;
   if (typeof runId !== "string") {
     throw new Error("Missing actual send run identity");
@@ -542,6 +544,21 @@ suite.define(() => {
                       .soft(latest.policy?.locked, mode + ": " + stage + " follow lock")
                       .toBe(true);
                   } else {
+                    if (latest.distance > 8) {
+                      const locked = samples.findIndex(
+                        (sample, index) =>
+                          sample.policy?.locked && samples[index - 1]?.policy?.locked === false,
+                      );
+                      console.info(
+                        "REAL_GATEWAY_FOLLOW_LOCK",
+                        JSON.stringify({
+                          mode,
+                          stage,
+                          transition:
+                            locked < 0 ? [] : samples.slice(Math.max(0, locked - 2), locked + 3),
+                        }),
+                      );
+                    }
                     expect
                       .soft(latest.distance, mode + ": " + stage + " follows")
                       .toBeLessThanOrEqual(8);

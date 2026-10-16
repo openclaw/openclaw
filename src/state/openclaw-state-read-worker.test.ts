@@ -9,12 +9,17 @@ import { expect, it, vi } from "vitest";
 import type { AcpSessionReadInput } from "../acp/runtime/session-meta-read.types.js";
 import { createWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type { ExecutionIdentityInspectionQuery } from "../audit/execution-identity-inspection.types.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withArtifactPreservingStateReads,
+  withDisposableOpenClawStateReads,
+} from "./openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
@@ -123,6 +128,39 @@ it.each(["complete", "cancel", "revoke", "consumer-error", "worker-failure"] as 
   },
 );
 
+it.each([true, false])(
+  "inherits work-scope cancellation only for inspection reads (%s)",
+  async (inspection) => {
+    const { pathname, options } = source();
+    const scope = new AsyncWorkScope();
+    const task = queueTask();
+    const failure = new Error("inspection deadline reached");
+    const read = () =>
+      scope.run(() => executeExistingOpenClawStateRead(options, { type: "backup.runs" }));
+    const reading = withExistingOpenClawStateSchema({ path: pathname }, () =>
+      inspection
+        ? withDisposableOpenClawStateReads(pathname, () => withArtifactPreservingStateReads(read))
+        : read(),
+    );
+    const outcome = inspection
+      ? expect(reading).rejects.toBe(failure)
+      : expect(reading).resolves.toEqual(emptyReply);
+    try {
+      await task.captured;
+      scope.beginClose(failure);
+      if (!inspection) {
+        expect(task.close).not.toHaveBeenCalled();
+        task.result.resolve(emptyReply);
+      }
+      await outcome;
+      expect(task.close).toHaveBeenCalledOnce();
+    } finally {
+      task.result.reject(failure);
+      await Promise.allSettled([reading, outcome]);
+    }
+  },
+);
+
 it("captures queued read routing and schema facts without reading unrelated environment values", async () => {
   const { root, pathname } = source();
   let unrelatedReads = 0;
@@ -219,7 +257,8 @@ it("retains the shared pool after a resource drain fails until canonical retry",
   try {
     await expect(closeOpenClawStateDatabaseAsync()).rejects.toBe(failure);
     expect(mock.closePool).not.toHaveBeenCalled();
-    expect(() => captureOpenClawStateWorkerContext(options)).toThrow(/closed/i);
+    // The retained pool stays live, so reads resume until the retry seals again.
+    captureOpenClawStateWorkerContext(options);
     await closeOpenClawStateDatabaseAsync();
     expect(close).toHaveBeenCalledTimes(2);
     expect(mock.closePool).toHaveBeenCalledOnce();
@@ -444,7 +483,6 @@ const captures = [
         ? {
             type,
             input: {
-              kind: "repository" as const,
               session: {
                 agentId: selector,
                 sessionKey: selector,

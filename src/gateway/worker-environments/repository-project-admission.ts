@@ -17,7 +17,6 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-sta
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
 import { gitHubPublicApi } from "../github-public-api.js";
 import {
-  EnvironmentRecipeSchema,
   resolveEnvironmentRecipe,
   type EnvironmentRecipe,
   type EnvironmentRecipeEntry,
@@ -51,9 +50,7 @@ type AdmissionRequest = {
   signal?: AbortSignal;
   knownRecipe?: (
     project: RepositoryWorkerProjectSnapshot,
-  ) =>
-    | { project: RepositoryWorkerProjectSnapshot; setupRecipe?: string; recipe?: EnvironmentRecipe }
-    | undefined;
+  ) => { setupRecipe?: string; recipe?: EnvironmentRecipe } | undefined;
 } & (
   | {
       repository: { agentId: string; url: string; ref?: string; baseCommit?: string };
@@ -138,6 +135,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     assertAgent();
     return identity;
   };
+  await assertAgentPrepared();
   assertAdmission();
   let identity = await prepareIdentity(assertCaller);
   assertAdmission();
@@ -353,33 +351,19 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     }
     return entries[0];
   };
-  const knownRecipe = params.knownRecipe?.(structuredClone(project));
+  const knownRecipe = params.knownRecipe?.(project);
   assertAdmission();
-  let setupRecipe: string | undefined;
-  let recipe: EnvironmentRecipe | undefined;
-  if (knownRecipe !== undefined) {
-    if (!isRecord(knownRecipe)) {
-      sourceChanged();
-    }
-    const parsedRecipe =
-      knownRecipe.recipe === undefined
-        ? undefined
-        : EnvironmentRecipeSchema.safeParse(knownRecipe.recipe);
-    if (
-      !isDeepStrictEqual(knownRecipe.project, project) ||
-      (knownRecipe.setupRecipe !== undefined &&
-        (typeof knownRecipe.setupRecipe !== "string" ||
-          !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(knownRecipe.setupRecipe))) ||
-      (parsedRecipe !== undefined &&
-        (!parsedRecipe.success || parsedRecipe.data.identity !== knownRecipe.setupRecipe))
-    ) {
-      sourceChanged();
-    }
-    // Recipe identity, including absence, is immutable for this exact admitted
-    // project. Its reuse never substitutes for the surrounding access checks.
-    setupRecipe = knownRecipe.setupRecipe;
-    recipe = parsedRecipe?.success ? parsedRecipe.data : undefined;
-  } else {
+  if (knownRecipe?.recipe && knownRecipe.recipe.identity !== knownRecipe.setupRecipe) {
+    sourceChanged();
+  }
+  // Reusing admitted recipe facts never substitutes for current source access.
+  let setupRecipe = knownRecipe?.setupRecipe;
+  let recipe = knownRecipe?.recipe;
+  // Older devcontainer parsing did not record secret requests, including an empty selection.
+  if (
+    knownRecipe === undefined ||
+    (recipe?.source === "devcontainer" && recipe.secretNames === undefined)
+  ) {
     recipe = await resolveEnvironmentRecipe(
       async (file): Promise<EnvironmentRecipeEntry | undefined> => {
         const segments = file.split("/");

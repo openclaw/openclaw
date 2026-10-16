@@ -16,6 +16,7 @@ import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   openClawStateDatabaseCache,
   recordOpenClawStateDatabaseOpenFailure,
@@ -73,7 +74,7 @@ describe("unpublished state database acquisition", () => {
     const seed = openUnpublishedStateDatabase(params);
     seed.db.exec("INSERT INTO payload VALUES ('committed');");
     seed.walMaintenance.close();
-    closeTrackedStateDatabase(seed.db);
+    closeTrackedStateDatabase(requireNativeSqliteDatabase(seed.db));
     const opened: DatabaseSync[] = [];
     const targetLocations = new Set([pathname, nodeSqlite.resolveExistingSqliteFileUri(pathname)]);
     const openNative = nodeSqlite.openNodeSqliteDatabase;
@@ -105,7 +106,7 @@ describe("unpublished state database acquisition", () => {
       expect(prepare).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
     } finally {
       reopened.walMaintenance.close();
-      closeTrackedStateDatabase(reopened.db);
+      closeTrackedStateDatabase(requireNativeSqliteDatabase(reopened.db));
     }
     expect(maintenanceOwnerCount()).toBe(0);
     prepare.mockClear();
@@ -152,7 +153,7 @@ describe("unpublished state database acquisition", () => {
       } finally {
         acquired?.walMaintenance.close();
         if (acquired) {
-          closeTrackedStateDatabase(acquired.db);
+          closeTrackedStateDatabase(requireNativeSqliteDatabase(acquired.db));
         }
       }
 
@@ -205,7 +206,7 @@ describe("unpublished state database acquisition", () => {
     } finally {
       acquired?.walMaintenance.close();
       if (acquired) {
-        closeTrackedStateDatabase(acquired.db);
+        closeTrackedStateDatabase(requireNativeSqliteDatabase(acquired.db));
       }
     }
     expect.soft(failure).toBeInstanceOf(Error);
@@ -232,7 +233,7 @@ describe("unpublished state database acquisition", () => {
       vi.spyOn(fs, "statSync").mockImplementation((...args) => {
         const result = stat(...args);
         if (
-          process.platform === "linux" &&
+          (process.platform === "linux" || process.platform === "android") &&
           result &&
           args[0] === params.pathname &&
           "ctimeNs" in result
@@ -259,7 +260,7 @@ describe("unpublished state database acquisition", () => {
       try {
         const after = fs.statSync(params.pathname, { bigint: true });
         expect([after.dev, after.ino]).toEqual([before.dev, before.ino]);
-        if (process.platform === "linux") {
+        if (process.platform === "linux" || process.platform === "android") {
           expect(after.birthtimeNs).not.toBe(before.birthtimeNs);
         }
         expect(acquired.db.prepare("PRAGMA index_info(idx_payload)").all()).toEqual([
@@ -270,7 +271,7 @@ describe("unpublished state database acquisition", () => {
         ]);
       } finally {
         acquired.walMaintenance.close();
-        closeTrackedStateDatabase(acquired.db);
+        closeTrackedStateDatabase(requireNativeSqliteDatabase(acquired.db));
       }
     },
   );
@@ -292,7 +293,7 @@ describe("unpublished state database acquisition", () => {
     } finally {
       acquired?.walMaintenance.close();
       if (acquired) {
-        closeTrackedStateDatabase(acquired.db);
+        closeTrackedStateDatabase(requireNativeSqliteDatabase(acquired.db));
       }
     }
     expect.soft(fs.existsSync(directory)).toBe(false);
@@ -320,9 +321,10 @@ describe("unpublished state database acquisition", () => {
         const { params, open } = acquisitionFixture();
         const database = openUnpublishedStateDatabase(params);
         open.mockClear();
-        const prepare = database.db.prepare.bind(database.db);
+        const sqlite = requireNativeSqliteDatabase(database.db);
+        const prepare = sqlite.prepare.bind(sqlite);
         const checkpointFailure = new Error("checkpoint storage unavailable");
-        const intercepted = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+        const intercepted = vi.spyOn(sqlite, "prepare").mockImplementation((sql) => {
           if (sql === "PRAGMA wal_checkpoint(PASSIVE);") {
             throw checkpointFailure;
           }
@@ -356,7 +358,7 @@ describe("unpublished state database acquisition", () => {
         } finally {
           intercepted.mockRestore();
           database.walMaintenance.close();
-          closeTrackedStateDatabase(database.db);
+          closeTrackedStateDatabase(requireNativeSqliteDatabase(database.db));
         }
       } finally {
         Object.assign(loggingState, previousLogging);
@@ -406,7 +408,7 @@ describe("unpublished state database acquisition", () => {
           } finally {
             fs.rmSync(ownerPath, { force: true });
             database.walMaintenance.close();
-            closeTrackedStateDatabase(database.db);
+            closeTrackedStateDatabase(requireNativeSqliteDatabase(database.db));
           }
         } finally {
           Object.assign(loggingState, previousLogging);

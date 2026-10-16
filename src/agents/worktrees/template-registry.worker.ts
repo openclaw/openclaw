@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import {
   parseStateLeaseProcessOwner,
@@ -20,7 +20,7 @@ import type { WorktreeTemplateRecord } from "./template-registry.js";
 
 type TemplateDatabase = Pick<DB, "worktree_templates" | "state_leases">;
 const TEMPLATE_READER_SCOPE = "core:managed-worktrees:template-readers";
-const kyselyFor = (db: DatabaseSync) => getNodeSqliteKysely<TemplateDatabase>(db);
+const kyselyFor = (db: EngineConnection) => getNodeSqliteKysely<TemplateDatabase>(db);
 const ensureTemplateSchema = createOpenClawStateSchemaEnsurer({
   table: "worktree_templates",
   operationLabel: "agents.worktrees.templates.schema.ensure",
@@ -56,7 +56,7 @@ function openTemplateDatabase(context: WorkerOperationContext) {
 
 function worktreeTemplateMutation<Input, Output>(
   operationLabel: string,
-  mutate: (db: DatabaseSync, input: Input) => Output,
+  mutate: (db: EngineConnection, input: Input) => Output,
 ) {
   return (input: Input, context: WorkerOperationContext): Output =>
     runOpenClawStateWriteTransaction(
@@ -71,7 +71,7 @@ function worktreeTemplateMutation<Input, Output>(
     );
 }
 
-function hasTemplateReaders(db: DatabaseSync, id: string): boolean {
+function hasTemplateReaders(db: EngineConnection, id: string): boolean {
   const k = kyselyFor(db);
   const rows = executeSqliteQuerySync(
     db,
@@ -156,12 +156,29 @@ export const worktreeTemplateOperations = {
   ),
   "worktrees.templates.ready": worktreeTemplateMutation(
     "worktrees.templates.ready",
-    (db, { id, now }: { id: string; now: number }) =>
+    (
+      db,
+      {
+        id,
+        now,
+        content,
+      }: {
+        id: string;
+        now: number;
+        content?: Pick<WorktreeTemplateRecord, "sourceCommit" | "contentKey">;
+      },
+    ) =>
       executeSqliteQuerySync(
         db,
         kyselyFor(db)
           .updateTable("worktree_templates")
-          .set({ status: "ready", last_used_at: now })
+          .set({
+            status: "ready",
+            last_used_at: now,
+            ...(content
+              ? { source_commit: content.sourceCommit, content_key: content.contentKey }
+              : {}),
+          })
           .where("id", "=", id)
           .where("status", "=", "preparing"),
       ).numAffectedRows === 1n,

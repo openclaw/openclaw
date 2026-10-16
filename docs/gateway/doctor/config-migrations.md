@@ -18,6 +18,31 @@ Doctor keeps plugin repair and diagnostic contracts available through later heal
 checks and service finalization. It releases its private plugin resources when
 the flow ends, including failed runs.
 
+## Cloud setup secret migration
+
+The Crabbox plugin retires `cloudWorkers.profiles.<id>.settings.setupEnv`.
+Run `openclaw doctor --fix` to replace each legacy environment name with a
+same-name store SecretRef under `settings.setupSecrets`. The shared-store entry
+must already be protected (`kind: "secret"`) and have explicit destination
+bindings. Doctor compares a legacy host environment value when one is present;
+a conflicting value leaves the profile unchanged. It also preserves an existing
+conflicting `setupSecrets` mapping instead of granting a different secret.
+
+Doctor reports missing protected entries, missing bindings, conflicting values,
+and unavailable store inspection without exposing secret values. It never
+creates store entries, overwrites values, or infers allowed hosts. Repair the
+store through `openclaw secrets`, then rerun Doctor. A profile migrates only when
+every selected entry is ready; unrelated profiles may migrate independently.
+Audit and dry-run inspection leave authored config untouched.
+
+The plugin returns the repaired config to Doctor's existing backed-up,
+include-aware writer. Update-time Doctor uses the same plugin health repair when
+that phase is admitted. An update that defers it records the repair warning;
+run `openclaw doctor --fix` afterward. Unrepaired `setupEnv` profiles refuse new
+provisioning, with no plaintext fallback. Existing lease inspection and cleanup
+remain available. Protected setup secrets keep snapshots enabled; old plaintext
+setup image identities are not adopted as protected images.
+
 ## Runtime config migration
 
 Runtime config reads require per-model context budgets and current GitHub Copilot
@@ -293,7 +318,7 @@ Doctor also refuses these retired config inputs:
 - Agent `model.timeoutMs` and `subagents.model.timeoutMs`, including defaults.
   Timeouts on tool-model selectors remain supported.
 - `memorySearch.store.path`, including its agent and `memory.search` forms.
-- `plugins.installs`, `gateway.webchat`, `session.parentForkMaxTokens`,
+- Nonempty or malformed `plugins.installs`, `gateway.webchat`, `session.parentForkMaxTokens`,
   `browser.relayBindHost`, and `browser.ssrfPolicy.allowPrivateNetwork`.
 - Extension browser profiles with a legacy `cdpUrl`. Current extension profiles
   discover their relay endpoint automatically; the extension driver remains supported.
@@ -324,6 +349,11 @@ succeed. Doctor preserves the config and stops with recovery guidance instead
 of stripping these settings or replacing them with a backup. For an older installation,
 [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
 and run its Doctor migrations before installing the latest version.
+
+An empty `plugins.installs: {}` contains no install records. `openclaw doctor --fix`
+backs up the config and removes this retired key, preserving the SQLite plugin
+index and any settings retained for pending plugin migrations. Runtime config
+validation still rejects the key until Doctor repairs it.
 
 WhatsApp's `exposeErrorText` has been ignored since April 2026. Remove it from
 the reported channel or account path before retrying; removing this no-op does
@@ -809,6 +839,22 @@ beyond the grace period.
 
 ## Native Codex recovery after Tasks removal
 
+The Codex plugin's `codex-native-assignment-repair` runs during
+`openclaw doctor --fix` and update-time Doctor, after session repair. It collapses
+proven duplicate assignments for the same child and native turn and removes
+assignments whose requester session, lifecycle, or connection is provably
+obsolete. Compatible aliases retain their receipt and recorded-result metadata;
+conflicting facts produce a recoverable warning without changing the row.
+Separate pending turns of one child are preserved. Repairs use the
+existing SQLite backup and exact-row compare-and-apply owner; no database schema
+or assignment format changes. Ordinary Gateway startup does not run this repair.
+
+Unknown or malformed ownership and bindings changed during repair are preserved
+with recoverable warnings, allowing updates to finish best effort. Retry
+`openclaw doctor --fix` after resolving those warnings. Historical retry exhaustion
+without durable evidence stays unresolved: neither the age of an assignment nor
+a child's completed execution proves its result was delivered or abandoned.
+
 The Codex plugin's `codex-native-task-assignments` Doctor migration preserves
 recoverable native child work when upgrading from the Tasks runtime. It runs
 through the existing plugin state-migration lifecycle, including update-time
@@ -1072,7 +1118,7 @@ against the current SQLite owners before the import can rename profiles.
 
     Code Mode's runtime migration preserves an explicit QuickJS choice in global config, keyed agent entries, and legacy agent rosters. Existing `executor` values win, and activation and limits remain unchanged. Selecting the bundled QuickJS runtime works even when generic plugins are disabled or allowlisted, without enabling other plugins; an explicit deny or disabled entry for `code-mode-quickjs` still blocks it. Configurations that never selected a runtime use the new `node` default. See [Code Mode executors](/tools/code-mode/executors) before enabling Node execution; `node:vm` is not a security boundary.
 
-    Doctor removes retired `silentReply.internal` settings from agent defaults and surface overrides while preserving `silentReply.group`. This repair runs through the normal config backup and validation flow, including update-time Doctor. Direct chats and internal sessions, including subagents, require a result; only external channel groups can opt into `NO_REPLY`.
+    Doctor removes retired `silentReply.internal` settings from agent defaults and surface overrides while preserving `silentReply.group`. This repair runs through the normal config backup and validation flow, including update-time Doctor. Internal sessions, including subagents and private completions, require a result. External direct and group chats can end with explicit `NO_REPLY`; see [Silent replies](/concepts/messages#silent-replies).
 
     Doctor names the retired tuning paths it actually removes in one notice, including explicit `false` values: `Removed retired runtime tuning knobs: diagnostics.memoryPressureSnapshot; built-in defaults now apply.` Run `openclaw doctor --fix` before starting with these retired keys. Memory-pressure events remain available; use [diagnostics export or manual allocation profiling](/gateway/diagnostics) for current evidence.
 

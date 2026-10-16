@@ -1,4 +1,4 @@
-import { html, type ReactiveControllerHost, type TemplateResult } from "lit";
+import { createComponent, createSignal, flush, merge, Show } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type {
   SessionSuggestion,
@@ -28,11 +28,11 @@ import {
   disposeQuestionPromptState,
   handleQuestionPromptEvent,
 } from "../../app/question-prompt.ts";
-import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { loadSettings } from "../../app/settings.ts";
 import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
+import type { SolidControllerHost } from "../../lib/reactive/solid-controller-host.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
@@ -43,16 +43,23 @@ import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
-import "./chat-pane.ts";
 import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid as mountSolidRoot } from "../../test-helpers/mount-solid.ts";
+import { createChatErrorState } from "./chat-error-state.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
-import { ChatPane } from "./chat-pane-render.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
+import {
+  createPaneTestHost as createRuntimeTestHost,
+  type PaneRuntimeConstructor,
+} from "./chat-pane-runtime.test-support.ts";
+import type { ResolvedBoardView } from "./chat-pane-shared.ts";
+import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
-import type { ChatStateController } from "./chat-state-controller.ts";
+import type { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import type {
@@ -60,17 +67,16 @@ import type {
   ChatTypingActorView,
   ChatTypingOverflow,
 } from "./chat-typing-presence.ts";
-import type { ChatProps } from "./chat-view.ts";
+import type { ChatProps } from "./chat-view.tsx";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
-import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import type {
   ChatTaskSuggestionTrayProps,
   TaskSuggestionStartMode,
-} from "./components/chat-task-suggestions.ts";
+} from "./components/chat-task-suggestions.tsx";
+import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
-import type { SidebarLayout } from "./sidebar-layout.ts";
 
 type PaneHeaderWorkspace = ReturnType<typeof createChatPaneRails>["sessionWorkspace"];
 
@@ -87,7 +93,43 @@ export function createPaneHeaderWorkspaceFixture(
   };
 }
 
-export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
+type BoardPanelProps = Parameters<typeof ChatBoardPanel>[0];
+
+export function mountBoardPanel(
+  pane: {
+    resolveBoardView: () => ResolvedBoardView;
+    renderBoardPanel: (
+      board: ResolvedBoardView,
+      layout: ChatPageHost["sidebarLayout"],
+    ) => BoardPanelProps | null;
+  },
+  layout: ChatPageHost["sidebarLayout"],
+  container: HTMLElement,
+) {
+  const [content, setContent] = createSignal<BoardPanelProps | null>(null);
+  const view = mountSolidRoot(
+    () =>
+      Show({
+        get when() {
+          return content();
+        },
+        children: (current) => createComponent(ChatBoardPanel, merge(current)),
+      }),
+    { container },
+  );
+  return {
+    ...view,
+    draw: () => {
+      setContent(pane.renderBoardPanel(pane.resolveBoardView(), layout));
+      flush();
+    },
+  };
+}
+
+export interface TestChatPane extends HTMLElement, SolidControllerHost {
+  readonly element: HTMLElement;
+  render: ChatPaneRuntime["render"];
+  readonly transcript: ChatTranscriptController;
   catalogMessages: unknown[];
   active: boolean;
   presented: boolean;
@@ -95,7 +137,7 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   chatMessagesBySession?: ChatMessageCache;
   sessionSnapshotStore?: SessionSnapshotStore;
   chatState: Pick<
-    ChatStateController<ChatPageHost>,
+    ReturnType<typeof createChatState<ChatPageHost>>,
     "attach" | "composerPersistence" | "createRenderLifecycle" | "requestBackgroundUpdate"
   >;
   context: ApplicationContext;
@@ -175,7 +217,7 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
     sessionKey: string,
     transcriptLoad: Promise<boolean>,
   ) => void;
-  presentationTitle: string | undefined;
+  paneLabel: string | undefined;
   catalogSession: SessionCatalogSession | null;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;
@@ -221,16 +263,7 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   ) => Promise<void>;
   markSessionRead: (row: GatewaySessionRow | undefined) => void;
   applySessionsState: (stateValue: ApplicationContext["sessions"]["state"]) => void;
-  renderPaneHeader: (
-    workspace: PaneHeaderWorkspace,
-    row: GatewaySessionRow | undefined,
-    catalog: boolean,
-    agentWorkspace: undefined,
-    workspaceGit: boolean,
-    placementStartupStatus: ApplicationPlacementStartupStatus | null | undefined,
-    sidebarLayout?: SidebarLayout,
-    panelDefinitions?: SidebarPanelDefinition[],
-  ) => TemplateResult;
+  renderPaneHeader: ChatPaneRuntime["renderPaneHeader"];
 }
 
 type GatewayBrowserClientFixtureOverrides = Omit<Partial<GatewayBrowserClient>, "request"> & {
@@ -353,6 +386,7 @@ export function createInitializationContext(client?: GatewayBrowserClient): Appl
     },
     runtimeConfig: {
       state: { configNeedsApply: false, configSnapshot: null },
+      ensureLoaded: async () => undefined,
       subscribe: () => () => {},
     },
     placementStartup: {
@@ -389,6 +423,9 @@ export function createSessionCapabilityFixture(
     createSessionRowProvenance(),
   );
   return {
+    get presentation() {
+      return { result: overrides.state?.result ?? null, agentId: overrides.state?.agentId ?? null };
+    },
     captureConnectionScope: () => null,
     isConnectionScopeCurrent: () => false,
     subscribe: () => () => undefined,
@@ -491,26 +528,40 @@ export function createSessionContext(
   });
 }
 
+export function createPaneTestHost<R extends ChatPaneRuntime>(
+  tag: string,
+  Runtime: PaneRuntimeConstructor<R>,
+) {
+  return createRuntimeTestHost(tag, Runtime, createInitializationContext);
+}
+
+export { getPaneTestRuntime, connectPaneTestView } from "./chat-pane-runtime.test-support.ts";
+
 export function createTestChatPane(params: {
   client: GatewayBrowserClient;
   sessions?: SessionCapability;
 }) {
   const context = createSessionContext(params.client, params.sessions);
-  const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+  // SAFETY: TestChatPane declares the protected controller surface forwarded by the test host.
+  const pane = createPaneTestHost(
+    "openclaw-chat-runtime-test",
+    ChatPaneRuntime,
+  ) as unknown as TestChatPane;
   Object.defineProperty(pane, "isConnected", {
     configurable: true,
     value: true,
   });
   const requestUpdate = vi.fn();
-  const state = {
+  const chatMessagesBySession: ChatMessageCache = new Map();
+  const state = Object.assign(createChatErrorState(), {
     agentsList: null,
     assistantAgentId: null,
     chatAttachments: [],
     chatComposerFallbackByScope: {},
-    chatError: null,
     chatHistoryPagination: { hasMore: false },
     chatLoading: false,
     chatMessages: [],
+    chatMessagesBySession,
     chatToolMessages: [],
     chatModelCatalog: [],
     chatModelCatalogError: null,
@@ -523,7 +574,6 @@ export function createTestChatPane(params: {
     connected: true,
     connectionEpoch: 4,
     hello: sessionMutationGatewayHello(),
-    lastError: null,
     modelAuthStatusRequestVersion: 0,
     requestUpdate,
     sessionKey: "agent:main:current",
@@ -539,7 +589,7 @@ export function createTestChatPane(params: {
     handleChatScroll: vi.fn(),
     resetToolStream: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
-  } as unknown as ChatPageHost;
+  }) as unknown as ChatPageHost;
   attachChatRealtimeActions(state);
   state.updateSidebarLayout = (layout) => {
     state.sidebarLayout = layout;
@@ -631,11 +681,12 @@ export function offlineDeviceSession(): GatewaySessionRow & { placement: ActiveP
   };
 }
 
-class RenderTestChatPane extends ChatPane {
+class RenderTestChatPane extends ChatPaneRuntime {
+  declare context: ApplicationContext;
   chatProps: ChatProps | undefined;
 
-  constructor() {
-    super();
+  constructor(element: HTMLElement, context: ApplicationContext) {
+    super(element, context);
     onTestFinished(() => disposeQuestionPromptState(this.questionPromptState));
   }
 
@@ -655,7 +706,7 @@ class RenderTestChatPane extends ChatPane {
 
   protected override renderChatPaneLayout(params: { chatProps: ChatProps }) {
     this.chatProps = params.chatProps;
-    return html``;
+    return null;
   }
 
   override applySessionsState(state: ApplicationContext["sessions"]["state"]) {
@@ -668,8 +719,5 @@ class RenderTestChatPane extends ChatPane {
 }
 
 export function createRenderTestChatPane() {
-  if (!customElements.get("openclaw-chat-render-regression")) {
-    customElements.define("openclaw-chat-render-regression", RenderTestChatPane);
-  }
-  return document.createElement("openclaw-chat-render-regression") as RenderTestChatPane;
+  return createPaneTestHost("openclaw-chat-render-regression", RenderTestChatPane);
 }

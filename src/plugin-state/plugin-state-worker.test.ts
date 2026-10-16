@@ -16,6 +16,10 @@ import type {
   SessionEntryCurrentFacts,
 } from "../config/sessions/session-entry-current.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_MAX_RESULT_BYTES } from "../infra/sqlite-worker-contract.js";
 import { holdForeignWriter } from "../infra/sqlite-worker-shared-state-admission.test-support.js";
@@ -28,6 +32,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cach
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
 import {
@@ -46,6 +51,70 @@ afterEach(async () => {
 });
 
 describe("worker plugin state", () => {
+  it("keeps pure reads off the writer queue and observes earlier namespace writes", async () => {
+    await withOpenClawTestState({ label: "plugin-state-reader-queue" }, async (state) => {
+      const pluginId = "reader-fixture";
+      const namespace = "reconnect";
+      const store = createPluginStateKeyedStoreV2<string>(
+        pluginId,
+        {
+          namespace,
+          maxEntries: 10,
+          env: state.env,
+        },
+        { assertCurrent() {} },
+      );
+      await store.register("a", "first");
+      await waitForDiagnosticEventsDrained();
+      const queued: string[] = [];
+      const unsubscribe = onInternalDiagnosticEvent(
+        (event) => {
+          if (
+            event.type === "worker.request" &&
+            event.requestClass === "plugin_state" &&
+            event.phase === "queued"
+          ) {
+            queued.push(event.kind);
+          }
+        },
+        { include: ["worker.request"] },
+      );
+      try {
+        expect(await store.lookup("missing")).toBeUndefined();
+        expect(await store.lookupMany(["a", "missing"])).toEqual([
+          { ok: true, value: "first" },
+          { ok: true, value: undefined },
+        ]);
+        expect((await store.entries()).map(({ key, value }) => [key, value])).toEqual([
+          ["a", "first"],
+        ]);
+        expect(await store.count()).toBe(1);
+        expect(
+          (
+            await pluginStateEntriesInKeyRange({
+              pluginId,
+              namespace,
+              env: state.env,
+              keyStartInclusive: "a",
+              keyEndExclusive: "b",
+              limit: 10,
+            })
+          ).map(({ key, value }) => [key, value]),
+        ).toEqual([["a", "first"]]);
+        await waitForDiagnosticEventsDrained();
+        expect(queued).toHaveLength(5);
+        expect(queued).not.toContain("sqlite_writer");
+
+        const pendingWrite = store.register("b", "second");
+        const followingRead = store.lookup("b");
+        await expect(followingRead).resolves.toBe("second");
+        await pendingWrite;
+      } finally {
+        unsubscribe();
+      }
+    });
+  });
+
   it("compares cross-namespace lease conditions in the same worker transaction as the write", async () => {
     await withOpenClawTestState({ label: "plugin-state-conditional-lease" }, async (state) => {
       const options = { namespace: "journal", maxEntries: 10, env: state.env };
@@ -364,12 +433,12 @@ describe("worker plugin state", () => {
           .spyOn(worker, "postMessage")
           .mockImplementation((message, transferList) => {
             const request = asOptionalRecord(message);
+            const command =
+              request?.type === "execute" && request.input instanceof Uint8Array
+                ? asOptionalRecord(deserialize(request.input))?.type
+                : undefined;
             nativePost(message, transferList);
-            if (
-              request?.type === "execute" &&
-              request.input instanceof Uint8Array &&
-              asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation
-            ) {
+            if (command === "pluginState." + operation) {
               posted.resolve();
             }
           });
@@ -682,7 +751,7 @@ describe("worker plugin state", () => {
       const options = { namespace, maxEntries: expected.length };
       const sync = createPluginStateSyncKeyedStore(pluginId, options);
       const store = createPluginStateKeyedStore(pluginId, options);
-      const { db } = openOpenClawStateDatabase();
+      const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
       const reads = trackSqliteStatementExecutions(db, ["listing"], (sql) =>
         sql.startsWith("select ") && sql.includes('"plugin_state_entries"') ? "listing" : null,
       );

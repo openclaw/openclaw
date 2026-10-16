@@ -3,7 +3,6 @@ import fsSync, { type BigIntStats, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
-import type { BackupProgressInfo, DatabaseSync } from "node:sqlite";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import {
   getPublishFileExclusiveFailureDetails,
@@ -41,54 +40,34 @@ import {
   prepareSqliteReadOnlyLocation,
   withSqliteSnapshotSource,
 } from "./sqlite-snapshot-source.js";
+import type {
+  CreateVerifiedSqliteSnapshotOptions,
+  PublishedSqliteFileGuard,
+  PublishVerifiedSqliteFileOptions,
+  VerifiedSqliteSnapshot,
+} from "./sqlite-snapshot.types.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { configureSqliteSnapshotPragmas } from "./sqlite-wal.js";
 
-export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: string) => void;
+export type { SqliteSnapshotValidator } from "./sqlite-snapshot.types.js";
 
-type CreateVerifiedSqliteSnapshotOptions = {
-  sourcePath: string;
+export type SqliteReplacementReceipt = SqliteFileContent & {
   targetPath: string;
-  /** Only in an isolated child: acquire and consume a fresh private image, including crash recovery. */
-  sourceAcquisition?: {
-    mode: "isolated-process";
-    stagingRoot: string;
-    preserveSourceArtifacts?: boolean;
-  };
-  onProgress?: (progress: BackupProgressInfo) => void;
-  /** Final caller checks around publication; failures remove only this helper's target. */
-  afterPublish?: (guard: PublishedSqliteFileGuard) => void;
-  beforePublish?: () => void | Promise<void>;
-  requireNonEmptySource?: boolean;
-  /** Skip compaction/ID rewriting; transforms may still change IDs and free-page data remains. */
-  preserveRowIds?: boolean;
-  transform?: (database: DatabaseSync) => void | Promise<void>;
-  validate?: SqliteSnapshotValidator;
+  identity: FileIdentityStat;
 };
 
-type PublishedSqliteFileGuard = {
-  assertTargetMatchesExpectedContent: (finalCheck?: () => void) => void;
-  assertTargetUnchanged: (finalCheck?: () => void) => void;
-};
-
-type PublishVerifiedSqliteFileOptions = {
-  sourceIdentity: FileIdentityStat;
-  sourcePath: string;
-  targetPath: string;
-  expectedContent: SqliteFileContent;
-  requireAtomicPublication?: boolean;
-  beforePublish?: () => void | Promise<void>;
-  validatePublished?: (publishedPath: string) => void | Promise<void>;
-  /** Runs last. Call the supplied guard after any caller-specific checks. */
-  afterPublish?: (guard: PublishedSqliteFileGuard) => void;
-  /** Admit a destination byte copy only when actual native cloning is unavailable. */
-  beforeByteCopy?: (sizeBytes: number) => void | Promise<void>;
-};
-
-type VerifiedSqliteSnapshot = SqliteFileContent & {
-  path: string;
-  userVersion: number;
-};
+export class SqliteReplacementOutcomeUnknownError extends Error {
+  constructor(
+    readonly receipt: SqliteReplacementReceipt,
+    cause: unknown,
+  ) {
+    super(
+      `SQLite replacement outcome is uncertain: ${receipt.targetPath}. Reconcile the target against the retained recovery manifest before retrying.`,
+      { cause },
+    );
+    this.name = "SqliteReplacementOutcomeUnknownError";
+  }
+}
 
 async function assertRegularSourceFile(
   sourcePath: string,
@@ -119,8 +98,9 @@ async function copyFileExclusive(
   source: FileHandle,
   sourcePath: string,
   targetPath: string,
+  expectedContent: SqliteFileContent,
   beforeByteCopy?: PublishVerifiedSqliteFileOptions["beforeByteCopy"],
-): Promise<{ content: SqliteFileContent; identity: BigIntStats }> {
+): Promise<BigIntStats> {
   const sourceFingerprint = await source.stat({ bigint: true });
   let target: Awaited<ReturnType<typeof fs.open>> | undefined;
   let targetIdentity: BigIntStats | undefined;
@@ -138,17 +118,18 @@ async function copyFileExclusive(
       throw new Error(`SQLite snapshot target changed during publication: ${targetPath}`);
     }
     targetIdentity = openedIdentity;
-    const content = await hashOpenPublishedFile(target, targetPath, targetIdentity);
-    await assertMutationFingerprintUnchanged(source, sourceFingerprint, targetPath, content);
+    await assertMutationFingerprintUnchanged(
+      source,
+      sourceFingerprint,
+      targetPath,
+      expectedContent,
+    );
     await target.sync();
     const currentIdentity = await fs.lstat(targetPath, { bigint: true });
     if (!sameFileIdentity(targetIdentity, currentIdentity)) {
       throw new Error(`SQLite snapshot target changed during publication: ${targetPath}`);
     }
-    return {
-      content,
-      identity: currentIdentity,
-    };
+    return currentIdentity;
   } catch (error) {
     if (targetIdentity) {
       await target?.close().catch(() => undefined);
@@ -275,11 +256,11 @@ function assertSynchronousCallbackResult(result: unknown, label: string): void {
 
 /**
  * Publish the exact bytes of one already-verified SQLite file through a pinned
- * source identity. The target is always created exclusively.
+ * source identity. Targets are exclusive unless replacement is explicitly requested.
  */
 export async function publishVerifiedSqliteFile(
   options: PublishVerifiedSqliteFileOptions,
-): Promise<void> {
+): Promise<void | SqliteReplacementReceipt> {
   return publishSqliteFile(options, false);
 }
 
@@ -297,6 +278,7 @@ export async function prepareVerifiedSqliteFile(options: PublishVerifiedSqliteFi
     await publishVerifiedSqliteFile({
       ...options,
       targetPath: sourcePath,
+      replaceExisting: undefined,
       afterPublish: (guard) => {
         assertSynchronousCallbackResult(
           options.afterPublish?.(guard),
@@ -335,8 +317,20 @@ export async function prepareVerifiedSqliteFile(options: PublishVerifiedSqliteFi
 async function publishSqliteFile(
   options: PublishVerifiedSqliteFileOptions,
   consumeOwnedSource: boolean | "prepared",
-): Promise<void> {
-  await assertTargetAbsent(options.targetPath);
+): Promise<void | SqliteReplacementReceipt> {
+  const replacement = options.replaceExisting;
+  if (replacement) {
+    if (process.platform === "win32") {
+      throw new Error("Atomic SQLite replacement is unsupported on this platform");
+    }
+    assertExpectedContent(
+      hashPublishedFileSync(options.targetPath, replacement.expectedIdentity),
+      replacement.expectedContent,
+      options.targetPath,
+    );
+  } else {
+    await assertTargetAbsent(options.targetPath);
+  }
   const targetDirectory = path.resolve(path.dirname(options.targetPath));
   const targetDirectoryPin = await pinDirectory(targetDirectory, {
     label: "SQLite publication directory",
@@ -359,6 +353,7 @@ async function publishSqliteFile(
   let targetPinFileDescriptor: number | undefined;
   let publishedIdentity: FileIdentityStat | undefined;
   let publishedStat: Stats | BigIntStats | undefined;
+  let replacementAttempt: SqliteReplacementReceipt | undefined;
   try {
     stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
     await fs.chmod(stagingDir, 0o700);
@@ -368,17 +363,14 @@ async function publishSqliteFile(
     // Snapshot creation owns this closed private image. Transfer that image into
     // publication custody instead of allocating another database-sized file.
     // Public callers retain their independently mutable source and still copy it.
-    let staged: { content: SqliteFileContent; identity: FileIdentityStat & { size: bigint } };
+    let staged: FileIdentityStat & { size: bigint };
     if (consumeOwnedSource === "prepared") {
       if (options.sourcePath !== stagedPath || sourceIdentity.dev !== stagingIdentity.dev) {
         throw new Error(
           `SQLite prepared image is not on its publication volume: ${options.sourcePath}`,
         );
       }
-      staged = {
-        content: await hashOpenPublishedFile(source, options.sourcePath, sourceIdentity),
-        identity: sourceIdentity,
-      };
+      staged = sourceIdentity;
     } else if (
       consumeOwnedSource &&
       sourceIdentity.dev !== 0n &&
@@ -392,8 +384,6 @@ async function publishSqliteFile(
         strategy: "link-or-copy",
       });
       requireDirectorySync(moved.directorySync, "SQLite staging transfer directory");
-      const content = await hashPublishedFile(stagedPath, moved.exactIdentity);
-      assertExpectedContent(content, options.expectedContent, stagedPath);
       // The shared publisher falls back to copying on filesystems without hard
       // links. Retire only our still-pinned source name, never a replacement.
       const opened = fsSync.fstatSync(source.fd, { bigint: true });
@@ -415,68 +405,100 @@ async function publishSqliteFile(
       ) {
         throw new Error(`SQLite snapshot staging file changed during transfer: ${stagedPath}`);
       }
-      staged = { content, identity: { ...moved.exactIdentity, size: identity.size } };
+      staged = { ...moved.exactIdentity, size: identity.size };
     } else {
       staged = await copyFileExclusive(
         source,
         options.sourcePath,
         stagedPath,
+        options.expectedContent,
         options.beforeByteCopy,
       );
     }
     const expectedContent = options.expectedContent;
-    assertExpectedContent(staged.content, expectedContent, options.targetPath);
     await source.close();
     source = undefined;
 
     await options.validatePublished?.(stagedPath);
-    const validatedContent = await hashPublishedFile(stagedPath, staged.identity);
+    const validatedContent = await hashPublishedFile(stagedPath, staged);
     assertExpectedContent(validatedContent, expectedContent, options.targetPath);
     await options.beforePublish?.();
-    await assertTargetAbsent(options.targetPath);
+    if (!replacement) {
+      await assertTargetAbsent(options.targetPath);
+    }
     const stagedStatOptions = { bigint: true } as const;
     const currentStagedIdentity = await fs.lstat(stagedPath, stagedStatOptions);
-    if (!sameFileStatFingerprint(staged.identity, currentStagedIdentity)) {
+    if (!sameFileStatFingerprint(staged, currentStagedIdentity)) {
       throw new Error(`SQLite snapshot staging file changed during publication: ${stagedPath}`);
     }
-    try {
-      const publication = await publishFileExclusive({
-        sourcePath: stagedPath,
+    if (replacement) {
+      const directoryIdentity = await fs.lstat(targetDirectory, { bigint: true });
+      if (directoryIdentity.dev !== currentStagedIdentity.dev) {
+        throw new Error("Atomic SQLite replacement requires a same-volume prepared image");
+      }
+      const durability = await syncDirectory(targetDirectoryReceipt);
+      if (durability.status !== "synced") {
+        throw new Error("Atomic SQLite replacement requires directory synchronization");
+      }
+      assertExpectedContent(
+        hashPublishedFileSync(options.targetPath, replacement.expectedIdentity),
+        replacement.expectedContent,
+        options.targetPath,
+      );
+      assertExpectedContent(
+        hashPublishedFileSync(stagedPath, currentStagedIdentity),
+        expectedContent,
+        stagedPath,
+      );
+      assertSynchronousCallbackResult(replacement.assertCustody(), "SQLite replacement custody");
+      replacementAttempt = {
         targetPath: options.targetPath,
-        expectedSourceIdentity: currentStagedIdentity,
-        strategy:
-          options.requireAtomicPublication || consumeOwnedSource === "prepared"
-            ? "link-required"
-            : "link-or-copy",
-      });
-      publishedIdentity = publication.exactIdentity;
-      publishedStat = publication.identity;
-      // Keep the successful receipt before our durability policy can reject it;
-      // dependency failures retain their own cleanup instead of a lossy receipt.
-      requireDirectorySync(publication.directorySync, "File publication directory");
-    } catch (error) {
-      const details = getPublishFileExclusiveFailureDetails(error);
-      const stagedAfterFailure = details?.targetCreated
-        ? await fs.lstat(stagedPath, stagedStatOptions).catch(() => undefined)
-        : undefined;
-      const stagedPathChanged =
-        !stagedAfterFailure || !sameFileStatFingerprint(staged.identity, stagedAfterFailure);
-      // Failed-publication cleanup belongs to the publisher's opened identity.
-      // A later staging/target lookup cannot grant ownership of a replacement.
-      if (options.requireAtomicPublication && isHardlinkFallbackError(error)) {
-        throw new Error(
-          `Atomic SQLite publication requires hard-link support in ${targetDirectory}.`,
-          { cause: error },
-        );
+        identity: currentStagedIdentity,
+        ...expectedContent,
+      };
+      fsSync.renameSync(stagedPath, options.targetPath);
+      publishedIdentity = currentStagedIdentity;
+      publishedStat = currentStagedIdentity;
+    } else {
+      try {
+        const publication = await publishFileExclusive({
+          sourcePath: stagedPath,
+          targetPath: options.targetPath,
+          expectedSourceIdentity: currentStagedIdentity,
+          strategy:
+            options.requireAtomicPublication || consumeOwnedSource === "prepared"
+              ? "link-required"
+              : "link-or-copy",
+        });
+        publishedIdentity = publication.exactIdentity;
+        publishedStat = publication.identity;
+        // Keep the successful receipt before our durability policy can reject it;
+        // dependency failures retain their own cleanup instead of a lossy receipt.
+        requireDirectorySync(publication.directorySync, "File publication directory");
+      } catch (error) {
+        const details = getPublishFileExclusiveFailureDetails(error);
+        const stagedAfterFailure = details?.targetCreated
+          ? await fs.lstat(stagedPath, stagedStatOptions).catch(() => undefined)
+          : undefined;
+        const stagedPathChanged =
+          !stagedAfterFailure || !sameFileStatFingerprint(staged, stagedAfterFailure);
+        // Failed-publication cleanup belongs to the publisher's opened identity.
+        // A later staging/target lookup cannot grant ownership of a replacement.
+        if (options.requireAtomicPublication && isHardlinkFallbackError(error)) {
+          throw new Error(
+            `Atomic SQLite publication requires hard-link support in ${targetDirectory}.`,
+            { cause: error },
+          );
+        }
+        if (details?.targetCreated) {
+          const changed = stagedPathChanged ? "staging file" : "target";
+          throw new Error(
+            `SQLite snapshot ${changed} changed during publication: ${options.targetPath}`,
+            { cause: error },
+          );
+        }
+        throw error;
       }
-      if (details?.targetCreated) {
-        const changed = stagedPathChanged ? "staging file" : "target";
-        throw new Error(
-          `SQLite snapshot ${changed} changed during publication: ${options.targetPath}`,
-          { cause: error },
-        );
-      }
-      throw error;
     }
     if (!publishedIdentity) {
       throw new Error(`SQLite snapshot target was not published: ${options.targetPath}`);
@@ -485,7 +507,9 @@ async function publishSqliteFile(
     target = await fs.open(options.targetPath, "r");
     await assertOpenFileIdentity(target, options.targetPath, initialPublishedIdentity);
     // Retire the writable staging hard link before the final byte verification.
-    await fs.unlink(stagedPath);
+    if (!replacement) {
+      await fs.unlink(stagedPath);
+    }
     const expectedIdentity = await target.stat({ bigint: true });
     publishedIdentity = expectedIdentity;
     publishedStat = expectedIdentity;
@@ -528,7 +552,13 @@ async function publishSqliteFile(
     }
     fsSync.closeSync(targetPinFileDescriptor);
     targetPinFileDescriptor = undefined;
+    if (replacementAttempt) {
+      return { ...replacementAttempt, identity: expectedIdentity };
+    }
   } catch (error) {
+    if (replacementAttempt) {
+      throw new SqliteReplacementOutcomeUnknownError(replacementAttempt, error);
+    }
     if (target && publishedIdentity) {
       const openedIdentity = await target.stat({ bigint: true }).catch(() => undefined);
       if (openedIdentity && sameFileIdentity(openedIdentity, publishedIdentity)) {

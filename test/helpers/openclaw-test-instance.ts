@@ -55,6 +55,7 @@ type OpenClawTestInstanceOptions = {
   gatewayCommandPrefix?: string[];
   startTimeoutMs?: number;
   stopTimeoutMs?: number;
+  gracefulShutdownTimeoutMs?: number;
   signal?: AbortSignal;
   verifyCleanup?: (cleanup: () => Promise<void>) => Promise<void>;
 };
@@ -612,6 +613,9 @@ async function waitForGatewayReady(
       }
     }
     signal?.throwIfAborted();
+    if (hasChildExited(proc)) {
+      throw exitedBeforeReadinessError();
+    }
     throw startupError(`timeout waiting for gateway readiness on port ${port}`);
   } catch (error) {
     signal?.throwIfAborted();
@@ -1024,6 +1028,7 @@ export async function createOpenClawTestInstance(
         cwd,
         env,
         signal,
+        gracefulShutdownTimeoutMs: options.gracefulShutdownTimeoutMs,
         onError,
         onSpawnCleanup: (cleanup) => {
           constructionCleanup = cleanup;

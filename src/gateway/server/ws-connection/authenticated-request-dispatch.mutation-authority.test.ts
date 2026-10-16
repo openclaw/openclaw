@@ -102,16 +102,17 @@ describe("authenticated request mutation custody", () => {
         client,
       );
       expect(source?.()).toBe(true);
-      expect([...harness.clients.authorityClients]).toEqual([]);
+      expect([...harness.clients.authorityClients]).toEqual([client]);
       ingress.abort(new Error("remote grant expired"));
       expect(source?.()).toBe(false);
     } finally {
       release?.();
+      expect([...harness.clients.authorityClients]).toEqual([]);
     }
   });
 
   it("keeps original wildcard model ceilings separate through WS capture and contiguous collect", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const profile = ensureProfileForEmail("queued-model-ceiling@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const modelA = { provider: "fixture", model: "family-a" };

@@ -1,6 +1,5 @@
 import type { SessionsCompanionStateResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { buildCompanionQuestionPrefill } from "../../lib/chat/companion-question.ts";
@@ -14,10 +13,8 @@ import {
   type ChatSessionCompanionTurn,
   requestSessionCompanionAnswer,
 } from "./chat-session-companion.ts";
-import type { SubagentRoster } from "./chat-spawned-subagent.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { projectSubagentStatus } from "./chat-subagent-wait.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { formatChatSelectionAnnotation } from "./components/chat-selection-attachment.ts";
 import type { SidebarLayout, SidebarSlotId } from "./sidebar-layout-types.ts";
@@ -29,12 +26,10 @@ import {
   promoteSidebarPanel,
   setSidebarOpen,
   SIDEBAR_NARROW_BREAKPOINT_PX,
-  sidebarActivePanel,
   sidebarMainPanel,
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneSidePanels extends ChatPaneBase {
-  private subagentBatch: { session: string; sessionId?: string; active: boolean } | undefined;
   protected sessionCompanionHydrationKey = "";
   protected sessionCompanionFocusGeneration = 0;
   private sessionCompanionPresented = false;
@@ -83,6 +78,15 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     );
   }
 
+  protected toggleConversationPanel(layout: SidebarLayout): void {
+    const changeSlot = isSidebarSlotVisible(layout, "conversation") ? closeSlot : openSlot;
+    const nextLayout = changeSlot(layout, "conversation");
+    this.commitSidebarLayout(nextLayout, { dashboardPresentation: "personal" });
+    if (layout.columns[0]?.panels.some((panel) => panel.slot === "companion")) {
+      this.setSessionObserverVisibility(isSidebarSlotVisible(nextLayout, "companion"));
+    }
+  }
+
   protected requestSessionRail(intent: "open" | "toggle"): void {
     const state = this.state;
     if (!state) {
@@ -92,54 +96,6 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     const changeSlot = closing ? closeSlot : openSlot;
     this.commitSidebarLayout(changeSlot(state.sidebarLayout, "companion"));
     this.setSessionObserverVisibility(!closing);
-  }
-
-  requestSubagentsPanel(intent: "open" | "toggle"): void {
-    this.requestBackgroundPanel("subagents", intent);
-  }
-
-  protected syncSubagentsPanelPresence(
-    session: GatewaySessionRow | undefined,
-    roster: SubagentRoster,
-  ): void {
-    const state = this.state;
-    if (this.compact || !state || !session || session.archived) {
-      return;
-    }
-    const identity = JSON.stringify([resolveChatAgentId(state), session.key]);
-    if (
-      this.subagentBatch?.session !== identity ||
-      (this.subagentBatch.sessionId &&
-        session.sessionId &&
-        this.subagentBatch.sessionId !== session.sessionId)
-    ) {
-      this.subagentBatch = { session: identity, sessionId: session.sessionId, active: false };
-    } else if (session.sessionId) {
-      this.subagentBatch.sessionId = session.sessionId;
-    }
-    const batch = this.subagentBatch;
-    const active = projectSubagentStatus(
-      { ...roster, selectedSession: session, messages: state.chatMessages },
-      false,
-    ).activity.some((child) => child.listed);
-    if (active && !batch.active) {
-      // Open once per batch. A later close remains the user's choice until all
-      // children settle; the automatic reveal is not a saved session preference.
-      batch.active = true;
-      const selected = sidebarActivePanel(state.sidebarLayout);
-      const keepSelection = selected && isSidebarSlotVisible(state.sidebarLayout, selected.slot);
-      this.commitSidebarLayout(
-        openSlot(state.sidebarLayout, "subagents", { activate: !keepSelection }),
-        { persist: false },
-      );
-    } else if (
-      !active &&
-      session.hasActiveSubagentRun !== true &&
-      roster.subagentSessionsHydrated &&
-      !roster.subagentSessionsPending
-    ) {
-      batch.active = false;
-    }
   }
 
   /** Opens the Subagents panel on one subagent, or on its list. */
@@ -186,8 +142,8 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
 
   /** The layout as this pane shows it, which a narrow pane decides for the background panels. */
   protected presentSidebarLayout(layout: SidebarLayout): SidebarLayout {
-    return this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX
-      ? presentNarrowSidebarLayout(layout)
+    return this.mergedChrome || this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX
+      ? presentNarrowSidebarLayout(layout, { allPanels: this.mergedChrome })
       : layout;
   }
 

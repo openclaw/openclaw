@@ -51,6 +51,7 @@ export type DashboardMessageReadAdmission = Readonly<{
   runId: string;
   sessionKey: string;
   sessionId?: string;
+  prepare?: () => Promise<void>;
   assertCurrent: () => void;
 }>;
 

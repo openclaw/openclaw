@@ -1,7 +1,8 @@
 // Subagent announce delivery tests cover the last-mile routing used when child
 // runs report progress or completion back to the requester session.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as retry from "@openclaw/retry";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { validateAgentParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatValidationErrors } from "../../../../packages/gateway-protocol/src/validation-errors.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -56,6 +57,7 @@ import {
 } from "./subagent-announce-delivery.test-support.js";
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import { privateCompletionCases } from "./subagent-announce-private-completion.test-fixtures.js";
+import { createRequesterSettleCases } from "./subagent-announce-requester-settle.test-fixtures.js";
 
 const sessionDeliveryQueueMocks = vi.hoisted(() => ({
   enqueueClaimedSessionDelivery: vi.fn(
@@ -185,9 +187,13 @@ describe("queued completion handoff", () => {
             status: "ok",
             ...(outcome === "private" ? { inputProcessingCompleted: true } : {}),
             result: {
-              payloads: [
-                { text: outcome === "private" ? "NO_REPLY" : "Parent received child result" },
-              ],
+              payloads: outcome === "private" ? [] : [{ text: "Parent received child result" }],
+              meta: {
+                terminalReply:
+                  outcome === "private"
+                    ? { disposition: "silent" }
+                    : { disposition: "visible", text: "Parent received child result" },
+              },
             },
           } as T;
         });
@@ -403,9 +409,11 @@ function createQueueOutcomeSequenceMock(
   });
 }
 
-async function createRequesterTranscriptFixture(sessionId: string) {
+async function createRequesterTranscriptFixture(
+  sessionId: string,
+  sessionKey = "agent:main:slack:channel:C123:thread:171.222",
+) {
   const dir = tempDirs.make("openclaw-subagent-announce-transcript-");
-  const sessionKey = "agent:main:slack:channel:C123:thread:171.222";
   const storePath = path.join(dir, "agents", "main", "sessions", "sessions.json");
   const entry: SessionEntry = {
     sessionId,
@@ -735,7 +743,15 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       }),
     );
     testing.setDepsForTest({
-      callGateway: createGatewayMock(),
+      callGateway: createGatewayMock({
+        status: "ok",
+        result: {
+          payloads: [{ text: "Requester received child result" }],
+          meta: {
+            terminalReply: { disposition: "visible", text: "Requester received child result" },
+          },
+        },
+      }),
       getRequesterSessionActivity: () => ({ sessionId: "paperclip-session", isActive: true }),
       queueEmbeddedAgentMessageWithOutcome,
       getRuntimeConfig: () => ({ messages: { queue: { mode: "followup" } } }),
@@ -1221,7 +1237,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it("sanitizes and bounds text before direct completion fallback delivery", async () => {
+  it("sanitizes text while preserving the complete direct completion fallback", async () => {
     const callGateway = createPayloadGatewayMock();
     const sendMessage = createSendMessageMock();
     const leaked = [
@@ -1251,38 +1267,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(content).not.toContain("subagent_announce");
     expect(content).not.toContain("video_generate");
     expect(content).not.toContain(modelRouteChange);
-    expect(content.length).toBeLessThanOrEqual(4_096);
-  });
-
-  it("sends one generic direct notice when requester synthesis repeats an error child completion", async () => {
-    const status = "error";
-    const childSessionKey = `agent:worker:subagent:${status}-child`;
-    const providerFailure = "provider rejected private-model-alias with status 400";
-    const childResult = "private child output must not reach the requester";
-    const callGateway = createGatewayMock(new Error(providerFailure));
-    const sendMessage = createSendMessageMock();
-
-    const result = await deliverDiscordDirectMessageCompletion({
-      callGateway,
-      sendMessage,
-      sourceSessionKey: childSessionKey,
-      sourceTool: "subagent_announce",
-      internalEvents: taskCompletionEvents({
-        childSessionKey,
-        childSessionId: `${status}-child-session-id`,
-        status,
-        statusLabel: `${status}: ${providerFailure}`,
-        result: childResult,
-      }),
-    });
-
-    expectRecordFields(result, { delivered: true, path: "direct" });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(sendMessage).toHaveBeenCalledOnce();
-    const content = mockCallArg(sendMessage, 0, 0).content;
-    expect(content).toBe(
-      "A delegated task failed before it could report a result. Please retry the task.",
-    );
+    expect(content).toContain("x".repeat(8_000));
   });
 
   it.each(["cancelled", "source owner changed"] as const)(
@@ -1517,20 +1502,42 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
     },
     {
-      name: "accepts non-subagent session-only completion handoff when the in-process agent intentionally replies NO_REPLY",
-      result: { payloads: [{ text: "NO_REPLY" }] },
+      name: "rejects non-subagent session-only completion without the required result after NO_REPLY",
+      result: { payloads: [], meta: { terminalReply: { disposition: "silent" } } },
       sourceTool: "agent_harness_task",
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+      },
     },
     {
-      name: "accepts session-only completion with committed session spawn",
+      name: "rejects session-only completion without a result after committed session spawn",
       result: { payloads: [], ...committedSessionSpawnEvidence },
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+      },
     },
     {
-      name: "accepts session-only completion with committed cron add",
+      name: "rejects session-only completion without a result after committed cron add",
       result: { payloads: [], successfulCronAdds: 1 },
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+      },
     },
   ])("$name", async ({ result: gatewayResult, sourceTool, expected }) => {
-    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({ result: gatewayResult });
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      status: "ok",
+      inputProcessingCompleted: true,
+      result: gatewayResult,
+    });
     testing.setDepsForTest({
       dispatchGatewayMethodInProcess,
       getRequesterSessionActivity: () => ({
@@ -2071,7 +2078,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     error: "completion agent did not produce a visible reply",
   };
   const silentGatewayResult = {
-    payloads: [{ text: "NO_REPLY" }],
+    payloads: [],
+    meta: { terminalReply: { disposition: "silent" } },
     deliveryStatus: sentDeliveryStatus,
   };
   type NoOutputCompletionCase = [
@@ -2084,7 +2092,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   it.each<NoOutputCompletionCase>([
     [
       "rejects missing automatic visible delivery",
-      { payloads: [{ text: "NO_REPLY" }] },
+      { payloads: [], meta: { terminalReply: { disposition: "silent" } } },
       missingVisibleCompletion,
       "automatic",
     ],
@@ -2487,253 +2495,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     }
   });
 
-  const requesterSettleSourceTarget = {
-    tool: "message",
-    provider: "discord",
-    accountId: "acct-1",
-    to: "dm:U123",
-    text: "the consolidated answer",
-  };
-  const sourceProgress = { ...requesterSettleSourceTarget, sourceReplyFinal: false };
-  const sourceFinal = { ...requesterSettleSourceTarget, sourceReplyFinal: true };
-  const deliveredRequesterFinal = { delivered: true, path: "direct" };
-  const missingRequesterFinal = {
-    delivered: false,
-    path: "direct",
-    reason: "visible_reply_missing",
-  };
-  const suppressedDelivery = { status: "suppressed", succeeded: true, resultCount: 0 };
-  const finalText = "The consolidated answer.";
-
-  function settleRoute(
-    name: string,
-    sessionKey: string,
-    origin: AnnouncementInput["requesterSessionOrigin"],
-    channel?: string,
-    deliver = false,
-    requesterIsSubagent = false,
-  ) {
-    return {
-      name,
-      sessionKey,
-      origin,
-      requesterIsSubagent,
-      agentParams: {
-        deliver,
-        channel,
-        accountId: deliver ? "acct-1" : undefined,
-        to: deliver ? "dm:U123" : undefined,
-      },
-    };
-  }
-  const externalRequesterSettleRoute = settleRoute(
-    "Discord",
-    "agent:main:discord:dm:U123",
-    { channel: "discord", to: "dm:U123", accountId: "acct-1" },
-    "discord",
-    true,
-  );
-  const localRequesterSettleRoute = settleRoute(
-    "no origin",
-    "agent:main:requester-settle",
-    undefined,
-  );
-  const localSettleRoutes = [
-    localRequesterSettleRoute,
-    settleRoute(
-      "WebChat",
-      "agent:main:webchat:dm:requester-settle",
-      { channel: "webchat" },
-      "webchat",
-    ),
-    settleRoute(
-      "nested requester with inherited Discord origin",
-      "agent:main:subagent:requester-settle",
-      externalRequesterSettleRoute.origin,
-      undefined,
-      false,
-      true,
-    ),
-  ];
-  type SettleCaseOptions = {
-    routes?: ReturnType<typeof settleRoute>[];
-    status?: string;
-    requireVisibleReply?: boolean;
-    recordsVisibleFinal?: boolean;
-    expectedFinalText?: string;
-    expected?: Record<string, unknown>;
-  };
-  function settleCase(
-    name: string,
-    result?: Record<string, unknown>,
-    options: SettleCaseOptions = {},
-  ) {
-    return {
-      name,
-      result,
-      routes: [externalRequesterSettleRoute],
-      requireVisibleReply: true,
-      expected: missingRequesterFinal,
-      ...options,
-    };
-  }
-  const localOnly = { routes: [localRequesterSettleRoute] };
-  const visibleFinal = { recordsVisibleFinal: true, expected: deliveredRequesterFinal };
-  const requesterSettleCases = [
-    ...[
-      {
-        name: "automatic delivery",
-        evidence: { deliveryStatus: { status: "sent", succeeded: true, resultCount: 1 } },
-      },
-      { name: "final message tool", evidence: { messagingToolSentTargets: [sourceFinal] } },
-    ].map(({ name, evidence }) =>
-      settleCase(
-        `preserves ${name} final evidence alongside settled continuation`,
-        { payloads: [], meta: { yielded: true }, requesterContinuationSettled: true, ...evidence },
-        visibleFinal,
-      ),
-    ),
-    settleCase(
-      "acknowledges a core-settled next wave without recording a visible final",
-      { payloads: [], meta: { yielded: true }, requesterContinuationSettled: true },
-      { expected: deliveredRequesterFinal },
-    ),
-    ...[
-      { settled: undefined, error: undefined, aborted: undefined },
-      { settled: true, error: { kind: "incomplete_turn" }, aborted: undefined },
-      { settled: true, error: undefined, aborted: true },
-    ].map(({ settled, error, aborted }) =>
-      settleCase(
-        `rejects unproven or failed continuation (true/${settled}/${Boolean(error)}/${aborted})`,
-        {
-          payloads: [],
-          meta: { yielded: true, error, aborted },
-          requesterContinuationSettled: settled,
-          acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
-        },
-        localOnly,
-      ),
-    ),
-    ...["accepted", "in_flight"].map((status) =>
-      settleCase(`retains an ${status} settle handoff until terminal evidence`, undefined, {
-        status,
-        expected: { delivered: false, reason: "requester_turn_pending", disposition: "retryable" },
-      }),
-    ),
-    settleCase(
-      "does not record a canceled partial answer as a visible final",
-      { payloads: [{ text: "partial answer" }] },
-      { ...localOnly, status: "timeout", expected: deliveredRequesterFinal },
-    ),
-    settleCase(
-      "records a non-yielded visible final without requiring a reply",
-      { payloads: [{ text: finalText }], meta: { finalAssistantVisibleText: finalText } },
-      {
-        ...visibleFinal,
-        routes: localSettleRoutes,
-        requireVisibleReply: false,
-        expectedFinalText: finalText,
-      },
-    ),
-    settleCase("preserves an ordinary non-yielded direct settle turn", undefined, {
-      requireVisibleReply: false,
-      expected: deliveredRequesterFinal,
-    }),
-    settleCase("rejects a yielded turn without a result", undefined, localOnly),
-    ...[
-      { name: "error", payload: { text: "tool failed", isError: true } },
-      { name: "reasoning", payload: { text: "thinking", isReasoning: true } },
-      { name: "commentary", payload: { text: "working on it", isCommentary: true } },
-      { name: "compaction notice", payload: { text: "compacting", isCompactionNotice: true } },
-      {
-        name: "fallback notice",
-        payload: { text: "switching providers", isFallbackNotice: true },
-      },
-      { name: "status notice", payload: { text: "still working", isStatusNotice: true } },
-      {
-        name: "supplemental TTS audio",
-        payload: {
-          mediaUrl: "file:///tmp/answer.mp3",
-          ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true },
-        },
-      },
-    ].map(({ name, payload }) =>
-      settleCase(`rejects ${name} instead of a final answer`, { payloads: [payload] }, localOnly),
-    ),
-    settleCase(
-      "rejects an explicitly hidden assistant payload",
-      { payloads: [{ text: "not user visible", visible: false }] },
-      localOnly,
-    ),
-    settleCase(
-      "rejects a yielded turn that emits only the silent reply token",
-      { payloads: [{ text: "NO_REPLY" }] },
-      localOnly,
-    ),
-    settleCase(
-      "rejects a visible final whose delivery was suppressed",
-      { payloads: [{ text: "never delivered" }], deliveryStatus: suppressedDelivery },
-      localOnly,
-    ),
-    settleCase("rejects a messaging-tool flag without a committed source receipt", {
-      payloads: [],
-      didSendViaMessagingTool: true,
-    }),
-    settleCase("does not let an off-target final upgrade source progress", {
-      payloads: [],
-      didSendViaMessagingTool: true,
-      messagingToolSentTargets: [sourceProgress, { ...sourceFinal, to: "dm:OTHER" }],
-    }),
-    settleCase(
-      "accepts an automatic source-matched final without legacy intent markers",
-      {
-        payloads: [{ text: "NO_REPLY" }],
-        didSendViaMessagingTool: true,
-        messagingToolSentTargets: [requesterSettleSourceTarget],
-      },
-      visibleFinal,
-    ),
-    settleCase(
-      "accepts a source final after source progress in the same turn",
-      {
-        payloads: [],
-        didSendViaMessagingTool: true,
-        messagingToolSentTargets: [sourceProgress, sourceFinal],
-      },
-      visibleFinal,
-    ),
-    settleCase(
-      "accepts a committed source final when automatic delivery was suppressed",
-      {
-        payloads: [{ text: "NO_REPLY" }],
-        deliveryStatus: suppressedDelivery,
-        didSendViaMessagingTool: true,
-        messagingToolSentTargets: [sourceFinal],
-      },
-      visibleFinal,
-    ),
-    settleCase(
-      "rejects terminal text when an external origin cannot be resolved",
-      { payloads: [{ text: finalText }] },
-      {
-        routes: [
-          settleRoute(
-            "external channel without destination",
-            "agent:main:requester-settle",
-            { channel: "discord" },
-            "discord",
-          ),
-          settleRoute("destination without channel", "agent:main:requester-settle", {
-            to: "dm:U123",
-          }),
-          settleRoute("unknown channel", "agent:main:requester-settle", {
-            channel: "unknown-external",
-            to: "dm:U123",
-          }),
-        ],
-      },
-    ),
-  ];
+  const requesterSettleCases = createRequesterSettleCases();
 
   it.each(
     requesterSettleCases.flatMap((testCase) =>
@@ -2861,6 +2623,24 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     ],
     ["retries writer rebound without send evidence", writerRebound(), 2, "delivered", "active"],
     [
+      "keeps exhausted writer rebound retryable instead of permanent",
+      writerRebound(),
+      4,
+      "retryable",
+    ],
+    [
+      "keeps exhausted wrapped writer rebound retryable",
+      new Error("requester handoff failed", { cause: writerRebound() }),
+      4,
+      "retryable",
+    ],
+    [
+      "keeps a permanent cause of writer rebound permanent",
+      writerRebound(new Error("chat not found")),
+      1,
+      "permanent_failure",
+    ],
+    [
       "does not text-fallback after an identified incomplete platform send",
       new OutboundDeliveryError("incomplete terminal response", {
         cause: new Error("incomplete terminal response"),
@@ -2877,6 +2657,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       "ambiguous",
     ],
   ])("%s", async (_name, error, attempts, outcome, route) => {
+    const sleep = vi.spyOn(retry, "sleepWithAbort").mockResolvedValue(undefined);
+    onTestFinished(() => sleep.mockRestore());
     const callGateway = createGatewayMock();
     const gatewayMock = vi.mocked(callGateway).mockRejectedValue(error);
     if (outcome === "delivered") {

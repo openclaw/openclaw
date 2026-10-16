@@ -286,11 +286,9 @@ function flushBootRecord(): void {
     const json = JSON.stringify({ ...record, agents });
     if (new TextEncoder().encode(json).length > BOOT_RECORD_MAX_BYTES) {
       removeOwnedBootRecord(record.scope, bootRecordOwner(record));
-    } else {
-      storage?.setItem(key, json);
-      if (storage?.getItem(key) === json) {
-        notifyBootRecordChange({ scope: record.scope, replacement: bootRecordOwner(record) });
-      }
+    } else if (storage) {
+      storage.setItem(key, json);
+      notifyBootRecordChange({ scope: record.scope, replacement: bootRecordOwner(record) });
     }
   } catch {
     removeOwnedBootRecord(record.scope, bootRecordOwner(record));

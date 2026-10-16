@@ -45,8 +45,8 @@ type GatewayModelFixture = {
 };
 
 const TEXT_ONLY_AGENT_MODEL: GatewayModelFixture = {
-  id: "deepseek-v4-flash",
-  name: "DeepSeek V4 Flash",
+  id: "deepseek-v4-pro",
+  name: "DeepSeek V4 Pro",
   provider: "ollama-cloud",
   input: ["text"],
 };
@@ -205,7 +205,7 @@ describe("gateway server agent", () => {
     agentCommandMock.mockImplementationOnce(async () => {
       const admitted = getAgentRunContext("idem-agent-owned-global");
       admittedOwner = { sessionKey: admitted?.sessionKey, agentId: admitted?.agentId };
-      return { payloads: [], meta: { durationMs: 0 } };
+      return { payloads: [], meta: { durationMs: 0, terminalReply: { disposition: "empty" } } };
     });
     const res = await rpcReq(gatewaySuite.ws, "agent", {
       message: "hi",
@@ -393,7 +393,7 @@ describe("gateway server agent", () => {
   });
 
   test("agent validates first image attachment against per-agent model for fresh sessions", async () => {
-    testState.agentConfig = { model: { primary: "ollama-cloud/deepseek-v4-flash" } };
+    testState.agentConfig = { model: { primary: "ollama-cloud/deepseek-v4-pro" } };
     testState.agentsConfig = {
       entries: {
         main: {},

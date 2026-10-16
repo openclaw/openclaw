@@ -5,10 +5,7 @@ import {
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  type OpenClawAgentDatabaseOptions,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseOperations,
@@ -25,12 +22,12 @@ import {
   withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import {
   ARCHIVE_RETENTION_BATCH_SIZE,
-  type PublishedSessionTranscriptArchive,
+  type SessionArchivePruningSnapshot,
   type SessionArchivePruningOperations,
 } from "./session-history-archive-pruning.types.js";
-import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import { maintenanceLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
@@ -40,22 +37,21 @@ export type SqliteSessionPageReclaimer = (maxPages?: number) => Promise<SqliteWa
 /** Preview reads share the history reader without waiting for archive or writer admission. */
 export async function readSqliteSessionArchivePruning(
   input: OpenClawAgentDatabaseOptions,
-): Promise<PublishedSessionTranscriptArchive | null> {
-  const incognitoBinding = captureIncognitoSessionSource({ ...input, storePath: input.path });
-  if (incognitoBinding) {
-    incognitoBinding.admissionSignal?.throwIfAborted();
-    if (!("kind" in incognitoBinding)) {
-      incognitoBinding.actor.assertReadable();
-    }
+): Promise<SessionArchivePruningSnapshot | null> {
+  if (
+    captureSessionActorStorageOwner(
+      { ...input, storePath: input.path },
+      { assertCurrent() {}, authorize() {} },
+    )
+  ) {
     return null;
   }
   const options = resolveSessionReclamationDatabaseOptions(input);
   if (!supportsOpenClawAgentDatabaseExecution(options)) {
     const { readSessionArchivePruningInDatabase } =
       await import("./session-history-archive-pruning.worker.js");
-    return withSqliteSessionDatabase(
-      options,
-      (database) => readSessionArchivePruningInDatabase(database)[0] ?? null,
+    return withSqliteSessionDatabase(options, (database) =>
+      readSessionArchivePruningInDatabase(database),
     );
   }
   const physical = readDatabasePathIdentitySync(options.path);
@@ -79,7 +75,7 @@ export async function readSqliteSessionArchivePruning(
       });
       reader.assertCurrent();
       assertExistingDatabaseIdentity(options.path, physical.key);
-      return result[0] ?? null;
+      return result;
     },
   );
 }
@@ -94,19 +90,18 @@ export async function withSqliteSessionPageReclamation<T>(
     archives: SessionArchivePruningOperations,
   ) => Promise<T>,
 ): Promise<T> {
-  const incognitoBinding = captureIncognitoSessionSource({ ...input, storePath: input.path });
-  if (incognitoBinding) {
-    incognitoBinding.admissionSignal?.throwIfAborted();
-    if (!("kind" in incognitoBinding)) {
-      incognitoBinding.actor.assertReadable();
-    }
+  if (
+    captureSessionActorStorageOwner(
+      { ...input, storePath: input.path },
+      { assertCurrent() {}, authorize() {} },
+    )
+  ) {
     throw new Error("Incognito sessions have no disk pages or archives to reclaim");
   }
   const options = resolveSessionReclamationDatabaseOptions(input);
-  const incognito = isIncognitoOpenClawAgentSqlitePath(options.path, options);
   const nativeOwner = !supportsOpenClawAgentDatabaseExecution(options);
   // Capture the original alias before admission can wait. Workers use only this physical path.
-  const physical = incognito ? undefined : readDatabasePathIdentitySync(options.path);
+  const physical = readDatabasePathIdentitySync(options.path);
   if (physical && !physical.key.startsWith("file:")) {
     throw new Error("SQLite archive pruning requires its existing database");
   }
@@ -129,7 +124,7 @@ export async function withSqliteSessionPageReclamation<T>(
       return physical ? runExclusiveSqliteTranscriptArchiveWorker(write, signal) : write();
     };
     if (nativeOwner) {
-      // Incognito and explicit Doctor/cleanup maintenance retain their existing native owner.
+      // Explicit Doctor/cleanup maintenance retains its native owner.
       const {
         readSessionArchivePruningInDatabase,
         deletePublishedSessionArchiveInDatabase,
@@ -174,7 +169,7 @@ export async function withSqliteSessionPageReclamation<T>(
               databaseOptions,
               (database) => {
                 assertNativeCurrent();
-                return readSessionArchivePruningInDatabase(database)[0] ?? null;
+                return readSessionArchivePruningInDatabase(database).archives[0] ?? null;
               },
               assertNativeCurrent,
             ),
@@ -182,7 +177,8 @@ export async function withSqliteSessionPageReclamation<T>(
             withSqliteSessionDatabase(
               databaseOptions,
               (database) =>
-                readSessionArchivePruningInDatabase(database, ARCHIVE_RETENTION_BATCH_SIZE),
+                readSessionArchivePruningInDatabase(database, ARCHIVE_RETENTION_BATCH_SIZE)
+                  .archives,
               assertNativeCurrent,
             ),
           pruneRetention: async (retention) =>
@@ -314,7 +310,7 @@ export async function withSqliteSessionPageReclamation<T>(
                   expectedIdentity,
                 });
                 assertPruningCurrent();
-                return result[0] ?? null;
+                return result.archives[0] ?? null;
               },
               readRetentionCandidates: async () => {
                 assertPruningCurrent();
@@ -324,7 +320,7 @@ export async function withSqliteSessionPageReclamation<T>(
                   limit: ARCHIVE_RETENTION_BATCH_SIZE,
                 });
                 assertPruningCurrent();
-                return result;
+                return result.archives;
               },
               pruneRetention: (retention) =>
                 write(

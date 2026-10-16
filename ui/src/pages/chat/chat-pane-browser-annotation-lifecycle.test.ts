@@ -7,13 +7,18 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { BrowserAnnotationDraft } from "../../components/browser/browser-annotation.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import "../../lib/toast-host.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   createSessionCapabilityFixture,
+  createPaneTestHost,
+  getPaneTestRuntime,
   createSessionContext,
   createTestChatPane,
   type TestChatPane,
@@ -70,7 +75,11 @@ describe("staged attachment composer adoption", () => {
     paneId: string,
     sessionKey: string,
   ): TestChatPane {
-    const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+    // SAFETY: The fixture uses the real pane runtime and its forwarded test surface.
+    const pane = createPaneTestHost(
+      "openclaw-chat-runtime-test",
+      ChatPaneRuntime,
+    ) as unknown as TestChatPane;
     Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
     pane.context = context;
     pane.paneId = paneId;
@@ -79,7 +88,7 @@ describe("staged attachment composer adoption", () => {
     vi.spyOn(pane.chatState.composerPersistence, "start").mockImplementation(() => {
       throw stopAfterRestore;
     });
-    expect(() => pane.connectedCallback()).toThrow(stopAfterRestore);
+    expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(stopAfterRestore);
     return pane;
   }
 
@@ -382,9 +391,7 @@ describe("staged attachment composer adoption", () => {
     const annotation = state.chatAttachments[0]!;
     const ordinary = storedAttachment("undo-ordinary", false);
     state.chatAttachments.push(ordinary);
-    const toastHost = document.createElement("openclaw-toast-host") as HTMLElement & {
-      updateComplete: Promise<boolean>;
-    };
+    const toastHost = document.createElement("openclaw-toast-host");
     document.body.append(toastHost);
 
     (
@@ -392,7 +399,9 @@ describe("staged attachment composer adoption", () => {
         removeBrowserAnnotation: (attachment: (typeof state.chatAttachments)[number]) => void;
       }
     ).removeBrowserAnnotation(annotation);
-    await toastHost.updateComplete;
+    await waitForSolid(() =>
+      expect(toastHost.querySelector(".app-toast__action")?.textContent).toBe("Undo"),
+    );
     expect(state.chatAttachments).toEqual([ordinary]);
     expect(getChatAttachmentDataUrl(annotation)).not.toBeNull();
 
@@ -402,7 +411,7 @@ describe("staged attachment composer adoption", () => {
       phase: "reconnecting",
       hello: null,
     });
-    toastHost.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
+    toastHost.querySelector<HTMLButtonElement>(".app-toast__action")!.click();
 
     expect(state.chatAttachments).toEqual([ordinary]);
     expect(getChatAttachmentDataUrl(annotation)).toBeNull();

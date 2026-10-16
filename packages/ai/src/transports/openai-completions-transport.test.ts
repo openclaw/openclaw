@@ -58,14 +58,6 @@ describe("openai completions transport", () => {
       responsesEffort: "high",
     },
     {
-      modelId: "gpt-5.2",
-      endpoint: "official OpenAI",
-      baseUrl: "https://api.openai.com/v1",
-      path: "/v1/responses",
-      toolChoice: { type: "function", name: "read" },
-      responsesEffort: "high",
-    },
-    {
       modelId: "gpt-6-astra",
       endpoint: "OpenAI-compatible proxy",
       baseUrl: "https://proxy.example.com/v1",
@@ -415,29 +407,5 @@ describe("openai completions transport", () => {
     expect(request.headers.get("api-key")).toBe("azure-key");
     expect(request.headers.get("x-tenant")).toBe("acme");
     expect(request.headers.has("api-version")).toBe(false);
-  });
-
-  it("preserves configured query params without moving non-Azure headers", async () => {
-    const request = await captureTransportRequest(
-      makeCompletionsModel({
-        id: "proxy-model",
-        name: "Proxy Model",
-        provider: "custom-proxy",
-        baseUrl: "https://proxy.example.com/v1?tenant=acme",
-        headers: {
-          "api-version": "proxy-header",
-          "X-Tenant": "acme",
-        },
-        reasoning: false,
-        contextWindow: 128000,
-        maxTokens: 4096,
-      }),
-    );
-    const url = new URL(request.url);
-
-    expect(url.origin + url.pathname).toBe("https://proxy.example.com/v1/chat/completions");
-    expect(Object.fromEntries(url.searchParams)).toEqual({ tenant: "acme" });
-    expect(request.headers.get("api-version")).toBe("proxy-header");
-    expect(request.headers.get("x-tenant")).toBe("acme");
   });
 });

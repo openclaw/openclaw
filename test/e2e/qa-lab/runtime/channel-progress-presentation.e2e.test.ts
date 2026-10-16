@@ -627,7 +627,7 @@ export default {
       Array.isArray(accounts) &&
       accounts.some((account) => {
         const state = asRecord(account);
-        return state.running === true && (channel !== "discord" || state.connected === true);
+        return state.running === true && state.connected === true;
       })
     );
   }, `${channel} ready`);
@@ -1171,7 +1171,10 @@ describe("channel progress presentation through an isolated Gateway", () => {
         },
         body,
       });
-      expect(delivered.ok, await delivered.text()).toBe(true);
+      expect(
+        delivered.ok,
+        `HTTP ${delivered.status}: ${(await delivered.text()).slice(0, 2000)}; logs=${gateway.logs().replaceAll(gateway.token, "[redacted]").slice(-8000)}`,
+      ).toBe(true);
       if (caseName === "visible") {
         await waitForFact(() => Boolean(releaseRequester), "requester model admission").catch(
           (error: unknown) => {
@@ -1780,7 +1783,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           },
           body,
         });
-        expect(delivered.ok, await delivered.text()).toBe(true);
+        expect(delivered.ok, `HTTP ${delivered.status}: ${await delivered.text()}`).toBe(true);
       } else {
         await injected.arrayBuffer();
       }

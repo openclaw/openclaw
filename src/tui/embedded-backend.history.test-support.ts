@@ -38,7 +38,7 @@ export function registerEmbeddedHistoryProjectionTests(params: {
       expect(queries({})).toEqual([target]);
       active = true;
       try {
-        return { kind: "complete", value: consume({ describe, present }) };
+        return consume({ describe, present });
       } finally {
         active = false;
       }

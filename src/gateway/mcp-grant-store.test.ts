@@ -495,23 +495,11 @@ describe("mcp-grant-store", () => {
     ).toBeUndefined();
   });
 
-  it("revokes client grants by token or exact Gateway runtime", () => {
-    const mintForRuntime = (runtimeOwnerToken: string, sessionKey: string) =>
-      mintMcpLoopbackClientGrant({
-        context: { sessionKey, senderIsOwner: false },
-        runtimeOwnerToken,
-      });
-    const first = mintForRuntime("runtime-one", "agent:main:first");
-    mintForRuntime("runtime-one", "agent:main:second");
-    const successor = mintForRuntime("runtime-two", "agent:main:successor");
-
-    expect(revokeMcpLoopbackClientGrantsForRuntime("runtime-one")).toBe(2);
-    expect(revokeMcpLoopbackClientGrant(first.token)).toBe(false);
-    expect(revokeMcpLoopbackClientGrant(successor.token)).toBe(true);
-    expect(revokeMcpLoopbackClientGrant(successor.token)).toBe(false);
-  });
-
   it("notifies revocation listeners for single and runtime-wide cleanup", () => {
+    const successor = mintMcpLoopbackClientGrant({
+      context: { sessionKey: "agent:main:successor", senderIsOwner: false },
+      runtimeOwnerToken: "runtime-two",
+    });
     const events: Array<{ token: string; runtimeOwnerToken: string }> = [];
     const unregister = registerMcpLoopbackClientGrantRevocationListener((event) => {
       events.push(event);
@@ -536,6 +524,7 @@ describe("mcp-grant-store", () => {
     } finally {
       unregister();
     }
+    expect(revokeMcpLoopbackClientGrant(successor.token)).toBe(true);
 
     const afterUnregister = mintMcpLoopbackClientGrant({
       context: { sessionKey: "agent:main:later", senderIsOwner: false },

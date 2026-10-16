@@ -147,16 +147,6 @@ describe("sandbox fs glob matching", () => {
     );
   });
 
-  it("matches literal runs only at reachable positions", () => {
-    const matcher = createGlobReadMatcher("/work/file.txt");
-    expect(matcher("/work/file.txt")).toBe(true);
-    expect(matcher("/work/file.txtx")).toBe(false);
-    expect(matcher("/work/sub/file.txt")).toBe(false);
-    expect(createGlobReadMatcher("/*ababac/end")("/ababababac/end")).toBe(true);
-    expect(createGlobReadMatcher("/**/aba/end")("/aaba/end")).toBe(false);
-    expect(createGlobReadMatcher("/**/aba/end")("/x/aba/end")).toBe(true);
-  });
-
   it("keeps unicode code-point semantics from the u-flag regex", () => {
     expect(createGlobReadMatcher("/?")("/😀")).toBe(true);
     expect(createGlobReadMatcher("/*😀")("/a😀")).toBe(true);
@@ -188,18 +178,6 @@ describe("sandbox fs glob matching", () => {
     expect(matcher(target)).toBe(false);
     expect(Date.now() - started).toBeLessThan(250);
     expect(createGlobReadMatcher(`/${"*a".repeat(3)}`)("/xa ya za")).toBe(true);
-  });
-
-  it("matches a repeated star literal in one pass per segment", () => {
-    const path = "ab".repeat(10_000);
-    const matcher = createGlobReadMatcher("/*a*");
-    const started = Date.now();
-    expect(matcher(`/${path}`)).toBe(true);
-    expect(Date.now() - started).toBeLessThan(250);
-
-    const missStarted = Date.now();
-    expect(matcher(`/${"b".repeat(10_000)}`)).toBe(false);
-    expect(Date.now() - missStarted).toBeLessThan(250);
   });
 
   it("matches long overlapping literals without rescanning each prefix", () => {

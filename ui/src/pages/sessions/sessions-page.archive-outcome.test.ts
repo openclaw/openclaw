@@ -4,10 +4,12 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
+import "../../lib/toast-host.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createContext,
   createGateway,
@@ -147,15 +149,14 @@ describe("Sessions archive outcome lifetime", () => {
     "restores the captured pinned session after leaving %s",
     async (navigation) => {
       const fixture = await setup();
-      const archived = fixture.page.archiveActions.archive(row);
+      const archived = fixture.page.archive(row);
       await vi.waitFor(() => expect(fixture.patches()).toHaveLength(1));
       if (navigation === "before confirmation") {
         fixture.page.remove();
       }
       fixture.pending.resolve(result);
       await archived;
-      await fixture.toast.updateComplete;
-      expect(fixture.undo()).not.toBeNull();
+      await waitForSolid(() => expect(fixture.undo()).not.toBeNull());
       fixture.page.remove();
       fixture.undo()!.click();
       await vi.waitFor(() => expect(fixture.patches()).toHaveLength(2));
@@ -177,7 +178,7 @@ describe("Sessions archive outcome lifetime", () => {
     "retires Undo on reconnect $reconnect (same client=$sameClient)",
     async ({ reconnect, sameClient }) => {
       const fixture = await setup();
-      const archived = fixture.page.archiveActions.archive(row);
+      const archived = fixture.page.archive(row);
       await vi.waitFor(() => expect(fixture.patches()).toHaveLength(1));
       const transition = () => {
         fixture.gateway.emit({ phase: "reconnecting", client: null });
@@ -193,12 +194,12 @@ describe("Sessions archive outcome lifetime", () => {
       }
       fixture.pending.resolve(result);
       await archived;
-      await fixture.toast.updateComplete;
       if (reconnect === "after confirmation") {
-        expect(fixture.undo()).not.toBeNull();
+        await waitForSolid(() => expect(fixture.undo()).not.toBeNull());
         transition();
         fixture.undo()!.click();
       } else {
+        await fixture.toast.updateComplete;
         expect(fixture.undo()).toBeNull();
       }
       expect(fixture.patches()).toHaveLength(1);
@@ -207,10 +208,10 @@ describe("Sessions archive outcome lifetime", () => {
 
   it("keeps the original durable identity when the row is replaced before Undo", async () => {
     const fixture = await setup();
-    const archived = fixture.page.archiveActions.archive(row);
+    const archived = fixture.page.archive(row);
     fixture.pending.resolve(result);
     await archived;
-    await fixture.toast.updateComplete;
+    await waitForSolid(() => expect(fixture.undo()).not.toBeNull());
     fixture.request.mockImplementation(async (method) => {
       if (method === "sessions.list") {
         return sessionsResult([{ ...row, sessionId: "replacement-session" }], 2);
@@ -234,7 +235,7 @@ describe("Sessions archive outcome lifetime", () => {
     "does not report success for a failed archive (left page=%s)",
     async (left) => {
       const fixture = await setup();
-      const archived = fixture.page.archiveActions.archive(row);
+      const archived = fixture.page.archive(row);
       await vi.waitFor(() => expect(fixture.patches()).toHaveLength(1));
       if (left) {
         fixture.page.remove();

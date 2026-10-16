@@ -5,7 +5,10 @@ import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { expandSessionRowFacts } from "../../../../packages/gateway-protocol/src/session-row-fields.js";
+import {
+  expandSessionRowFacts,
+  SESSION_ROWS_DELTA_PREFIX,
+} from "../../../../packages/gateway-protocol/src/session-row-fields.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts";
@@ -173,6 +176,13 @@ export async function requestSessionList(
   return requestSessionListParams(client, buildSessionListParams(options), isCurrent);
 }
 
+// Keep raw wire rows separate from locally reconciled/optimistic presentation.
+// Gateway publication identities retire them; eviction or a new client simply reads full rows.
+const sidebarWireRows = new WeakMap<
+  SessionRequestClient,
+  Map<string, { revision: string; sessions: SessionsListResult["sessions"] }>
+>();
+
 export async function requestSessionListParams(
   client: SessionRequestClient,
   query: Readonly<SessionsListParams & { pageSize?: number }>,
@@ -180,12 +190,48 @@ export async function requestSessionListParams(
 ): Promise<SessionsListResult | null> {
   const { pageSize, ...params } = query;
   const read = async (request: SessionsListParams) => {
-    const result = await client.request<SessionsListResult | undefined>("sessions.list", request);
-    if (!result?.sharedFacts) {
-      return result ?? null;
+    const { source: _source, ...membership } = request;
+    const key = JSON.stringify(membership);
+    const cache = sidebarWireRows.get(client);
+    const previous = request.rowMode === "sidebar" ? cache?.get(key) : undefined;
+    const result = await client.request<SessionsListResult | undefined>("sessions.list", {
+      ...request,
+      ...(previous ? { ifRowsRevision: `${SESSION_ROWS_DELTA_PREFIX}${previous.revision}` } : {}),
+    });
+    if (!result || !isCurrent()) {
+      return null;
     }
-    const { sharedFacts, ...list } = result;
-    return { ...list, sessions: expandSessionRowFacts(list.sessions, sharedFacts) };
+    const { sharedFacts, rowsUnchanged, rowsDelta, ...list } = result;
+    if (rowsUnchanged && (!previous || result.rowsRevision !== previous.revision)) {
+      throw new Error("The session query returned an unknown row revision. Try again.");
+    }
+    let sessions = rowsUnchanged
+      ? previous!.sessions
+      : sharedFacts
+        ? expandSessionRowFacts(list.sessions, sharedFacts)
+        : list.sessions;
+    if (rowsDelta) {
+      if (!previous || rowsDelta.baseRevision !== previous.revision) {
+        throw new Error("The session query returned an unknown row revision. Try again.");
+      }
+      const rows = [...previous.sessions, ...sessions];
+      sessions = rowsDelta.order.map((index) => {
+        if (!Number.isInteger(index) || index < 0 || index >= rows.length) {
+          throw new Error("The session query returned an incomplete row delta. Try again.");
+        }
+        return rows[index]!;
+      });
+    }
+    if (request.rowMode === "sidebar" && result.rowsRevision) {
+      const retained = cache ?? new Map();
+      retained.delete(key);
+      retained.set(key, { revision: result.rowsRevision, sessions });
+      if (retained.size > 16) {
+        retained.delete(retained.keys().next().value!);
+      }
+      sidebarWireRows.set(client, retained);
+    }
+    return { ...list, sessions };
   };
   if (!pageSize || !params.limit || params.limit <= pageSize) {
     return read(params);

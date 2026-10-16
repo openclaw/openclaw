@@ -1,11 +1,6 @@
 import { selectStoredSessionLineage } from "../../gateway/session-store-key.js";
 import type { GatewaySessionModelSource } from "../../gateway/session-utils-contracts.js";
-import { createGatewaySessionLineageReader } from "../../gateway/session-utils-store-lineage.js";
-import {
-  isIncognitoSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { storeTargetKey } from "./combined-store-paths.js";
@@ -23,13 +18,16 @@ export type GatewayStoredSessionTarget = GatewaySessionModelSource & {
 
 export type GatewayStoredSessionTargets = ReadonlyMap<string, GatewayStoredSessionTarget>;
 
-export type GatewaySessionLineageReader = ReturnType<typeof createGatewaySessionLineageReader>;
+export type GatewaySessionLineageReader = {
+  readStored: (agentId: string, key: string) => SessionEntry | undefined;
+  readAlias: (key: string, agentId: string) => SessionEntry | undefined;
+};
 
 export function createSessionModelSources(
   cfg: OpenClawConfig,
   diagnostics: string[],
-  preparedAgentIds?: ReadonlySet<string>,
-  preparedLineage?: GatewaySessionLineageReader,
+  preparedAgentIds: ReadonlySet<string> | undefined,
+  readQualifiedParent: GatewaySessionLineageReader,
 ) {
   const physicalStores = new Map<
     string,
@@ -59,13 +57,9 @@ export function createSessionModelSources(
         if (!logicalEntries.has(identity)) {
           logicalEntries.set(identity, entry);
         }
-        const nativeIncognito = isIncognitoSessionKey(storedKey);
-        const readerKey =
-          preparedLineage && nativeIncognito ? `${logicalAgentId}\0incognito` : logicalAgentId;
+        const readerKey = logicalAgentId;
         let read = readers.get(readerKey);
         if (!read) {
-          const readQualifiedParent =
-            (!nativeIncognito && preparedLineage) || createGatewaySessionLineageReader(cfg);
           // Capture the chosen fallback separately: it is not proof that the literal row exists.
           const selectedParents = new Map<
             string,

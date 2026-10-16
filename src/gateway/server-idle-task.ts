@@ -1,4 +1,4 @@
-import { isAbortError } from "../infra/abort-signal.js";
+import { isAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   getGatewayRestartDrainSignal,
@@ -19,6 +19,7 @@ export function scheduleGatewayIdleTask(params: {
   repeatDelayMs?: number;
   isClosing: () => boolean;
   isBusy: () => boolean;
+  waitForReady?: () => Promise<void>;
   run: (signal: AbortSignal) => Promise<void>;
   log: { warn: (message: string) => void };
   errorMessage: string;
@@ -33,7 +34,16 @@ export function scheduleGatewayIdleTask(params: {
     scheduler.schedule({
       id: params.id,
       delayMs,
-      run: () => {
+      run: async () => {
+        if (params.waitForReady) {
+          await racePromiseWithAbortSignal(params.waitForReady(), scheduler.signal).catch(
+            (error: unknown) => {
+              if (!scheduler.signal.aborted) {
+                throw error;
+              }
+            },
+          );
+        }
         if (isClosing()) {
           return undefined;
         }

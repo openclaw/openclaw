@@ -26,20 +26,13 @@ vi.mock("openclaw/plugin-sdk/database-engine-runtime", async (importOriginal) =>
     await importOriginal<typeof import("openclaw/plugin-sdk/database-engine-runtime")>();
   return {
     ...actual,
-    openEngineWorkerStore: async (...args: Parameters<typeof actual.openEngineWorkerStore>) => {
-      const worker = await actual.openEngineWorkerStore(...args);
-      if (worker) {
-        const execute = worker.execute.bind(worker);
-        vi.spyOn(worker, "execute").mockImplementation(async (command, options) => {
-          const result = await execute(command, options);
-          if (workerReads.enabled) {
-            workerReads.calls += 1;
-            workerReads.bytes += Buffer.byteLength(JSON.stringify(result) ?? "");
-          }
-          return result;
-        });
+    runEngineStoreOperation: async (...args: Parameters<typeof actual.runEngineStoreOperation>) => {
+      const result = await actual.runEngineStoreOperation(...args);
+      if (workerReads.enabled) {
+        workerReads.calls += 1;
+        workerReads.bytes += Buffer.byteLength(JSON.stringify(result) ?? "");
       }
-      return worker;
+      return result;
     },
   };
 });
@@ -239,6 +232,56 @@ afterEach(async () => {
 });
 
 describe("Team Reports schedule boundaries", () => {
+  it("keeps automatic collection off across rollover and restart while preserving manual reports", async () => {
+    vi.setSystemTime(new Date("2026-08-31T23:58:00Z"));
+    const first = await setup({
+      caughtUp: false,
+      schedule: { enabled: false, weekly: true, monthly: true },
+    });
+    const prune = vi.spyOn(first.store, "prune");
+    await first.scheduler.start();
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    expect(first.github.loadRoster).not.toHaveBeenCalled();
+    expect(await first.store.listRuns()).toEqual([]);
+    expect(await first.scheduler.status()).toMatchObject({
+      running: true,
+      scheduleEnabled: false,
+      nextDue: {},
+    });
+
+    const id = await first.scheduler.generate({ date: "2026-08-31" });
+    await first.nextRun();
+    expect(await first.store.listRuns()).toMatchObject([{ id, kind: "manual", status: "ok" }]);
+    const periods = await first.store.listPeriods();
+    expect(periods).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ period: "day", key: "2026-08-31" }),
+        expect.objectContaining({ period: "week", key: "2026-W36" }),
+        expect.objectContaining({ period: "month", key: "2026-08" }),
+      ]),
+    );
+    await vi.advanceTimersByTimeAsync(7 * 86_400_000);
+    expect(first.github.collect).toHaveBeenCalledOnce();
+    expect(prune).not.toHaveBeenCalled();
+    await first.scheduler.stop();
+
+    const restarted = await setup({
+      stateDir: first.directory,
+      caughtUp: false,
+      schedule: { enabled: false, weekly: true, monthly: true },
+    });
+    await restarted.scheduler.start();
+    await vi.advanceTimersByTimeAsync(31 * 86_400_000);
+    expect(restarted.github.loadRoster).not.toHaveBeenCalled();
+    expect(await restarted.store.listPeriods()).toEqual(periods);
+    expect(await restarted.store.listRuns()).toMatchObject([{ id, kind: "manual", status: "ok" }]);
+    expect(await restarted.scheduler.status()).toMatchObject({
+      running: true,
+      scheduleEnabled: false,
+      nextDue: {},
+    });
+  });
+
   it("reuses an accepted closed day when the first scheduled run retries a partially failed run", async () => {
     const first = await setup({ caughtUp: false });
     first.github.collect

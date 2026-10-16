@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { evaluateAttemptDecisionToolPrefilter } from "../agents/embedded-agent-runner/run/attempt-decision-prefilter.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { evaluateDecisionInRegistry } from "./runtime.js";
 import { answer, batch, config, options, registered } from "./runtime.test-support.js";
 import type { DecisionProviderV1 } from "./types.js";
@@ -11,6 +16,92 @@ afterEach(() => {
 });
 
 describe("registered decision consumer admission", () => {
+  it("reserves the fourth physical slot for requested work until optional callbacks settle", async () => {
+    const selected = {
+      agents: {
+        defaults: {
+          decisionModel: "fixture/fixture-v1",
+          experimental: { decisionAssistance: true },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(selected);
+    const started = Array.from({ length: 3 }, () => createDeferredCore());
+    const release = Array.from({ length: 3 }, () => createDeferredCore());
+    const cancelled = new AbortController();
+    let calls = 0;
+    const host = registered(async () => {
+      const index = calls++;
+      if (index < release.length) {
+        started[index]!.resolve();
+        // An abort-ignoring provider retains its physical slot until cleanup settles.
+        await release[index]!.promise;
+      }
+      return answer;
+    });
+    const providerHost = host.registry.decisionProviders[0]!.host;
+    const pending: ReturnType<typeof host.run>[] = [];
+    const prefilter = () =>
+      evaluateAttemptDecisionToolPrefilter({
+        config: selected,
+        agentId: "main",
+        supportsTurnScopedToolRestrictions: true,
+        assertActive: () => {},
+        userMessage: "Hello",
+        signal: new AbortController().signal,
+      });
+    try {
+      for (const [index, priority] of (["optional", "requested", "optional"] as const).entries()) {
+        const request = host.run(
+          { ...options(), priority, ...(index === 0 ? { signal: cancelled.signal } : {}) },
+          selected,
+        );
+        pending.push(request);
+        await Promise.race([started[index]!.promise, request]);
+        expect(calls).toBe(index + 1);
+      }
+      expect(await prefilter()).toMatchObject({
+        shouldPruneTools: false,
+        status: "unavailable",
+        reason: "overloaded",
+      });
+      expect(calls).toBe(3);
+      // Purpose is diagnostic text, not the source of admission priority.
+      await expect(
+        host.run({ ...options(), purpose: "tool-prefilter.semantic-gate" }, selected),
+      ).resolves.toMatchObject({ status: "ok" });
+      expect(calls).toBe(4);
+
+      const reason = new Error("optional consumer cancelled");
+      const rejected = expect(pending[0]!).rejects.toBe(reason);
+      cancelled.abort(reason);
+      expect(providerHost.inspect(selected).activeRequests).toBe(3);
+      expect(await prefilter()).toMatchObject({ reason: "overloaded", shouldPruneTools: false });
+      expect(calls).toBe(4);
+      release[0]!.resolve();
+      await rejected;
+      await expect(
+        host.run({ ...options(), priority: "optional" }, selected),
+      ).resolves.toMatchObject({ status: "ok" });
+      expect(calls).toBe(5);
+    } finally {
+      for (const callback of release) {
+        callback.resolve();
+      }
+      await Promise.allSettled(pending);
+    }
+    expect(providerHost.inspect(selected).activeRequests).toBe(0);
+  });
+
+  it("rejects an invalid priority before provider dispatch", async () => {
+    const call = vi.fn(async () => answer);
+    const host = registered(call);
+    const requestOptions = options();
+    Reflect.set(requestOptions, "priority", "urgent");
+    await expect(host.run(requestOptions)).rejects.toThrow("Invalid decision contract");
+    expect(call).not.toHaveBeenCalled();
+  });
+
   it("keeps revoked admission closed across provider cleanup without poisoning health", async () => {
     let current = true;
     const call = vi.fn<DecisionProviderV1["evaluate"]>(async (_batch, context) => {

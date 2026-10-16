@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -16,7 +15,7 @@ import {
   resolveDefaultWhatsAppAccountId,
 } from "./account-ids.js";
 import type { WhatsAppAccountConfig } from "./account-types.js";
-import { hasWebCredsSync } from "./creds-files.js";
+import { collectWhatsAppAuthDirs, hasWebCredsSync } from "./creds-files.js";
 
 export { listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId } from "./account-ids.js";
 
@@ -58,19 +57,7 @@ export function listWhatsAppAuthDirs(cfg: OpenClawConfig): string[] {
     authDirs.add(resolveWhatsAppAuthDir({ cfg, accountId }).authDir);
   }
 
-  try {
-    const entries = fs.readdirSync(whatsappDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      authDirs.add(path.join(whatsappDir, entry.name));
-    }
-  } catch {
-    // ignore missing dirs
-  }
-
-  return Array.from(authDirs);
+  return collectWhatsAppAuthDirs(whatsappDir, authDirs);
 }
 
 export function hasAnyWhatsAppAuth(cfg: OpenClawConfig): boolean {
@@ -140,7 +127,7 @@ export function resolveWhatsAppMediaMaxBytes(
   account: Pick<ResolvedWhatsAppAccount, "mediaMaxMb">,
 ): number {
   const mediaMaxMb =
-    typeof account.mediaMaxMb === "number" && account.mediaMaxMb > 0
+    account.mediaMaxMb !== undefined && account.mediaMaxMb > 0
       ? account.mediaMaxMb
       : DEFAULT_WHATSAPP_MEDIA_MAX_MB;
   return Math.floor(mediaMaxMb * 1024 * 1024);

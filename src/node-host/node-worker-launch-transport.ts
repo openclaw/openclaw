@@ -56,6 +56,7 @@ export type NodeWorkerChildAdapter = AwaitedStdoutChildAdapter & {
 type NodeWorkerLaunchTransportOptions = {
   bundleRoot: string;
   workerEnv: NodeJS.ProcessEnv;
+  homeDir?: string;
   nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
   engineEnv: NodeJS.ProcessEnv;
   input: NodeWorkerLaunchInput;
@@ -207,6 +208,7 @@ export async function prepareNodeWorkerLaunchTransport(
       bundleRoot: options.bundleRoot,
       bundleEntry: entry,
       workspaceDir: options.descriptor.assignment.workspaceDir,
+      homeDir: options.homeDir,
       gatewayNamespace: options.input.gatewayNamespace,
       launchId: options.input.launchId,
       env: workerEnv,

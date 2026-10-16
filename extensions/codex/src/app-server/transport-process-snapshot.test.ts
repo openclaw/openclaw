@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type PosixProcess,
   readCodexAppServerProcessCommand,
@@ -14,8 +14,22 @@ import {
 
 const procfs = vi.hoisted(() => ({
   readFile: vi.fn<(file: string) => string>(),
-  readdir: vi.fn<() => Promise<string[]>>(),
+  readdir: vi.fn<() => string[]>(),
 }));
+
+// These fixtures exercise the retained Node ps path. Bun's native path has its
+// own core tests and the signed sandbox proof.
+const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
+beforeEach(() => {
+  Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
+});
+afterEach(() => {
+  if (bunDescriptor) {
+    Object.defineProperty(process.versions, "bun", bunDescriptor);
+  } else {
+    Reflect.deleteProperty(process.versions, "bun");
+  }
+});
 
 const observedProcess: PosixProcess = {
   pid: process.pid,
@@ -59,7 +73,7 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "inspects selected procfs identities and commands despite filesystem worker starvation",
+  "inspects procfs identities, commands and full trees despite filesystem worker starvation",
   async () => {
     const stdout = await new Promise<string>((resolve, reject) => {
       execFile(
@@ -86,6 +100,7 @@ it.skipIf(process.platform === "win32")(
       outcomes: [
         { operation: "selected-identity", status: "fulfilled", observerPresent: true },
         { operation: "selected-command", status: "fulfilled", commandBytes: expect.any(Number) },
+        { operation: "full-snapshot", status: "fulfilled", observerPresent: true },
       ],
     });
   },
@@ -98,29 +113,12 @@ vi.mock("node:child_process", async (importOriginal) => {
   return {
     ...original,
     execFile: vi.fn(
-      createProcfsCommandFixture(original, (file) =>
-        procfs.readFile.getMockImplementation() ? procfs.readFile(file) : undefined,
+      createProcfsCommandFixture(
+        original,
+        (file) => (procfs.readFile.getMockImplementation() ? procfs.readFile(file) : undefined),
+        () => (procfs.readdir.getMockImplementation() ? procfs.readdir() : undefined),
       ),
     ),
-  };
-});
-
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const original = await importOriginal<typeof import("node:fs/promises")>();
-  return {
-    ...original,
-    readFile: (...args: Parameters<typeof original.readFile>) => {
-      const file = args[0];
-      return typeof file === "string" &&
-        file.startsWith("/proc/") &&
-        procfs.readFile.getMockImplementation()
-        ? Promise.resolve().then(() => procfs.readFile(file))
-        : original.readFile(...args);
-    },
-    readdir: (...args: Parameters<typeof original.readdir>) =>
-      args[0] === "/proc" && procfs.readdir.getMockImplementation()
-        ? procfs.readdir()
-        : original.readdir(...args),
   };
 });
 
@@ -341,7 +339,7 @@ describe("Codex procfs process inspector", () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       const bootId = "00000000-0000-0000-0000-000000000001";
       const neighborPid = process.pid + 1;
-      procfs.readdir.mockResolvedValue([String(process.pid), String(neighborPid)]);
+      procfs.readdir.mockReturnValue([String(process.pid), String(neighborPid)]);
       procfs.readFile.mockImplementation((file) => {
         if (file === "/proc/sys/kernel/random/boot_id") {
           return bootId;
@@ -394,7 +392,7 @@ describe.skipIf(process.platform === "win32" || process.platform === "linux")(
           `#!/usr/bin/env node
 const selected = process.argv[process.argv.indexOf("-p") + 1]?.split(",");
 if (selected?.includes("${process.pid}") && ${JSON.stringify(mode)} !== "missing observer") {
-  console.log("${process.pid} ${process.ppid} ${process.pid} S Sat Aug 29 10:00:00 2026");
+  console.log("${process.pid} ${process.ppid} ${process.pid} S 501 Sat Aug 29 10:00:00 2026");
 }
 if (${JSON.stringify(mode)} === "malformed") console.log("unusable selected process");
 `,

@@ -7,6 +7,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   pendingSessionEntryPublications,
+  markSessionSharingAuthorityUnknown,
   prepareSessionEntryPublicationFacts,
   preparedSharingReads,
   publishRetainedSessionEntryChange,
@@ -26,7 +27,10 @@ import {
   type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import { isSessionEntryReplacementReceiptUsable } from "./session-accessor.sqlite-entry-receipt.js";
-import { publishSessionEntryMaintenanceAgeChanges } from "./session-accessor.sqlite-maintenance-age.js";
+import {
+  captureSessionEntryMaintenanceAgeChange,
+  publishSessionEntryMaintenanceAgeChanges,
+} from "./session-accessor.sqlite-maintenance-age.js";
 import {
   publishRetainedSessionEntryPredicate,
   publishRetainedSessionGeneration,
@@ -38,7 +42,7 @@ import { retainSessionTranscriptWorkerPublication } from "./session-transcript-a
 import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import type { SessionEntry } from "./types.js";
 
-/** A confirmed worker result invalidates row facts without opening a parent connection. */
+/** Publish confirmed removals or invalidate incomplete row facts without a parent connection. */
 export function publishSessionEntryWorkerInvalidations(
   params: {
     agentId: string;
@@ -52,19 +56,20 @@ export function publishSessionEntryWorkerInvalidations(
   const keys = [...new Set(changedKeys)];
   const changes: SessionRowChange[] = [];
   for (const sessionKey of keys) {
+    const removed = params.removedSessionKeys?.has(sessionKey) === true;
     // Confirmed absence revokes a generation; other incomplete postimages remain unavailable.
     publishRetainedSessionEntryChange(
       params.databaseIdentity,
       sessionKey,
       undefined,
       undefined,
-      params.removedSessionKeys?.has(sessionKey) === true,
+      removed,
     );
     const change: SessionRowChange = {
       agentId: params.agentId,
       storePath: params.storePath,
       sessionKey,
-      factsInvalidated: true,
+      ...(removed ? { facts: { kind: "removed" as const } } : { factsInvalidated: true }),
     };
     bindPreparedSessionEntryPublication(change, {
       kind: "marker",
@@ -136,6 +141,7 @@ export function retainSessionEntryWorkerPublication(params: {
   let keys: string[] = [];
   const identityKey = `file:${params.databaseIdentity}`;
   let pending = false;
+  let sharingAuthorityChanged = true;
   const publication = {
     begin(
       sessionKeys: readonly string[],
@@ -169,11 +175,13 @@ export function retainSessionEntryWorkerPublication(params: {
       generationUnchangedKeys: readonly string[] = sessionKeys,
       participantProjections?: PendingSessionEntryPublication["participantProjections"],
       entryPostimages?: ReadonlyMap<string, SessionEntry>,
+      authorityChanged = true,
     ): void {
       if (pending) {
         return;
       }
       owner.participantProjections = participantProjections;
+      sharingAuthorityChanged = authorityChanged;
       publication.begin(
         sessionKeys,
         [...memberships.keys()],
@@ -185,7 +193,11 @@ export function retainSessionEntryWorkerPublication(params: {
     },
     settleChanges<T>(
       changes: readonly SessionRowChange[],
-      install: (currentKeys: ReadonlySet<string>, invalidations: readonly SessionRowChange[]) => T,
+      install: (
+        currentKeys: ReadonlySet<string>,
+        invalidations: readonly SessionRowChange[],
+        release: () => void,
+      ) => T,
     ): T {
       const current = new Set(
         changes.flatMap((change) =>
@@ -195,8 +207,14 @@ export function retainSessionEntryWorkerPublication(params: {
         ),
       );
       const invalidations = retireSupersededSessionFacts(params, owner, owner.generationUnchanged);
-      publication.settle(undefined, false);
-      return install(current, invalidations);
+      return install(current, invalidations, () => {
+        // Installing this receipt uses the native publisher, which also marks its own
+        // pending owner superseded. Those postimages are already authoritative.
+        for (const sessionKey of current) {
+          owner.superseded.delete(sessionKey);
+        }
+        publication.settle(undefined, false);
+      });
     },
     /** Metadata workers replay the same entry delta that the native producer committed. */
     settleMetadata(
@@ -219,7 +237,7 @@ export function retainSessionEntryWorkerPublication(params: {
         scope: "session-entry",
         facts: value.facts,
       }));
-      publication.settleChanges(changes, (currentKeys, invalidations) => {
+      publication.settleChanges(changes, (currentKeys, invalidations, release) => {
         const selected: SessionRowChange[] = [];
         for (const [index, record] of records.entries()) {
           if (record.receipt.source.identity !== params.databaseIdentity) {
@@ -277,6 +295,15 @@ export function retainSessionEntryWorkerPublication(params: {
           ({ receipt, sessionKey }) =>
             receipt.source.identity === params.databaseIdentity && currentKeys.has(sessionKey),
         );
+        release();
+        publishSessionEntryMaintenanceAgeChanges(
+          params.databaseIdentity,
+          identityRecords.flatMap(({ sessionKey, value }) =>
+            value.previous
+              ? []
+              : [captureSessionEntryMaintenanceAgeChange({ sessionKey, entry: value.entry })],
+          ),
+        );
         sessionChanges.emitBatch(
           [...selected, ...invalidations, ...transcriptChanges],
           undefined,
@@ -323,6 +350,11 @@ export function retainSessionEntryWorkerPublication(params: {
       } else if (replacement) {
         // Lost completion delivery does not erase this owner's acknowledged COMMIT facts.
         unknown = false;
+      }
+      if (unknown && sharingAuthorityChanged) {
+        for (const sessionKey of keys) {
+          markSessionSharingAuthorityUnknown(params.databaseIdentity, sessionKey);
+        }
       }
       const committedTranscriptChanges = [
         ...transcriptChanges,

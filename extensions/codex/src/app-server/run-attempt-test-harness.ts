@@ -305,7 +305,7 @@ async function drainActiveAppServerAttemptsForTest(): Promise<boolean> {
   }
 }
 
-function createHarnessConfig() {
+function createRunAttemptTestConfig(): NonNullable<EmbeddedRunAttemptParams["config"]> {
   return { tools: { web: { search: { enabled: false } } } };
 }
 
@@ -345,7 +345,7 @@ export function createParams(
     },
     thinkLevel: "medium",
     disableTools: false,
-    config: createHarnessConfig(),
+    config: createRunAttemptTestConfig(),
     timeoutMs: 5_000,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
@@ -406,30 +406,8 @@ export async function bindProductionHarnessHostCapabilitiesForTest(
   return close;
 }
 
-export {
-  setCodexTestModelSupportsTools,
-  createCodexRuntimePlanFixture,
-} from "./thread-lifecycle.test-fixtures.js";
-
-export function assistantMessage(text: string, timestamp: number) {
-  return {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "openai-chatgpt-responses",
-    provider: "openai",
-    model: "gpt-5.4-codex",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop" as const,
-    timestamp,
-  };
-}
+export { assistantMessage, createCodexRuntimePlanFixture } from "./test-support.js";
+export { setCodexTestModelSupportsTools } from "./thread-lifecycle.test-fixtures.js";
 
 export function userMessage(text: string, timestamp: number) {
   return {
@@ -702,7 +680,7 @@ export function setupRunAttemptTestHooks(
       vi.stubEnv("HOME", nativeSkillTestHome);
       vi.stubEnv("CODEX_HOME", "");
     }
-    setRuntimeConfigSnapshot(createHarnessConfig());
+    setRuntimeConfigSnapshot(createRunAttemptTestConfig());
     await context.codexAttemptRuntime.start();
     // createParams models an ordinary durable session; seeded native bindings
     // must have the same authoritative core owner as a real resumed conversation.

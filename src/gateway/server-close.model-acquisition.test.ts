@@ -284,6 +284,8 @@ it.each(["static catalog", "synthetic auth"] as const)(
       });
       expect(process.listenerCount(fixture.event)).toBe(fixture.listeners + 1);
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const scheduledTimeouts = vi.spyOn(globalThis, "setTimeout");
+      const clearedTimeouts = vi.spyOn(globalThis, "clearTimeout");
       publication = publishConfiguredModelRuntimeSnapshots({ cfg: fixture.config });
       await Promise.race([
         entered.promise,
@@ -297,7 +299,15 @@ it.each(["static catalog", "synthetic auth"] as const)(
         degraded: true,
         pendingAgents: ["late"],
       });
-      expect(vi.getTimerCount()).toBe(0);
+      const acquisitionTimeouts = scheduledTimeouts.mock.results.filter(
+        (_result, index) => scheduledTimeouts.mock.calls[index]?.[1] === 120_000,
+      );
+      expect(acquisitionTimeouts.length).toBeGreaterThan(0);
+      for (const timeout of acquisitionTimeouts) {
+        expect(clearedTimeouts).toHaveBeenCalledWith(timeout.value);
+      }
+      scheduledTimeouts.mockRestore();
+      clearedTimeouts.mockRestore();
       vi.useRealTimers();
       expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
       const startedAt = performance.now();

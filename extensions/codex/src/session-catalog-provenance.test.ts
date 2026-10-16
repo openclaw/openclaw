@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CodexThread } from "./app-server/protocol.js";
 import { isOpenClawManagedCodexThread } from "./session-catalog-provenance.js";
 import {
   config,
@@ -49,47 +48,11 @@ describe("Codex catalog provenance", () => {
     ).resolves.toBe(false);
   });
 
-  it("does not inspect a rollout outside the selected local sessions root", async () => {
-    const sessionsRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-codex-provenance-root-"),
-    );
-    temporaryDirectories.push(sessionsRoot);
-    const file = await writeRollout({
-      id: "outside-managed-thread",
-      originator: "openclaw",
-      source: "vscode",
-    });
+  it("requires a selected local sessions root even for API provenance", async () => {
     await expect(
       isOpenClawManagedCodexThread(
-        { id: "outside-managed-thread", path: file } as CodexThread,
-        sessionsRoot,
-      ),
-    ).resolves.toBe(false);
-    await expect(
-      isOpenClawManagedCodexThread(
-        { id: "outside-managed-thread", path: file, originator: "openclaw" } as CodexThread,
+        idleThread({ path: "/outside/rollout.jsonl", originator: "openclaw" }),
         undefined,
-      ),
-    ).resolves.toBe(false);
-  });
-
-  it("does not follow a rollout symlink outside the selected local sessions root", async () => {
-    const sessionsRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-codex-provenance-root-"),
-    );
-    temporaryDirectories.push(sessionsRoot);
-    const outside = await writeRollout({
-      id: "symlinked-managed-thread",
-      originator: "openclaw",
-      source: "vscode",
-    });
-    const linked = path.join(sessionsRoot, "rollout.jsonl");
-    await fs.symlink(outside, linked);
-
-    await expect(
-      isOpenClawManagedCodexThread(
-        { id: "symlinked-managed-thread", path: linked } as CodexThread,
-        sessionsRoot,
       ),
     ).resolves.toBe(false);
   });

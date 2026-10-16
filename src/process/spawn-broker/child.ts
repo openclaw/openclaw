@@ -15,7 +15,18 @@ import {
 
 type ChildMessage = Exclude<
   BrokerResponse,
-  { type: "ready" | "prepared" | "owned" | "pipe" | "pipe-prefix" | "execa-result" }
+  {
+    type:
+      | "ready"
+      | "startup-failed"
+      | "prepared"
+      | "owned"
+      | "pipe"
+      | "pipe-prefix"
+      | "execa-result"
+      | "file-read-chunk"
+      | "file-read-result";
+  }
 >;
 
 /** Native pipes remain native streams; only lifecycle and IPC cross the broker. */
@@ -222,6 +233,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
         this.connected = false;
         this.channel = undefined;
         this.emit("disconnect");
+        this.finishClose();
         break;
       case "ipc":
         this.emit("message", message.message);
@@ -264,7 +276,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
   }
 
   private finishClose(): void {
-    if (!this.exited || this.pipes.size > 0 || this.closed) {
+    if (!this.exited || this.channel || this.pipes.size > 0 || this.closed) {
       return;
     }
     this.closed = true;

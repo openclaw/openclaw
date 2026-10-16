@@ -20,7 +20,6 @@ import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { readAcpSessionEntryAsync, readAcpSessionMetaAsync } from "./session-meta-read.js";
 import * as metadataReads from "./session-meta-readonly.js";
-import * as storeReads from "./session-meta-store.js";
 import { upsertAcpSessionMeta } from "./session-meta-write.js";
 
 const meta: SessionAcpMeta = {
@@ -64,21 +63,7 @@ it.each(["cold-file", "incognito"] as const)(
         lifecycleRevision: "original",
         meta,
       });
-      if (incognito) {
-        const read = storeReads.readSessionEntryFromStore;
-        vi.spyOn(storeReads, "readSessionEntryFromStore").mockImplementationOnce((input) => {
-          const result = read(input);
-          queueMicrotask(() => {
-            seedCanonicalAcpSessionMeta({
-              env: state.env,
-              sessionKey: databaseKey,
-              lifecycleRevision: "replacement",
-              meta: { ...meta, runtimeSessionName: "replacement-runtime" },
-            });
-          });
-          return result;
-        });
-      } else {
+      if (!incognito) {
         await closeOpenClawAgentDatabasesAsync();
         await closeOpenClawStateDatabaseAsync();
         resetConfigRuntimeState();
@@ -131,8 +116,8 @@ it.each(["cold-file", "incognito"] as const)(
               entry: { ...entry, lifecycleRevision: "retired" },
             }),
           ).toBeUndefined();
-          sql.expectIdle();
         }
+        sql.expectIdle();
       } finally {
         sql.restore();
       }

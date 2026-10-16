@@ -258,23 +258,6 @@ describe("connect cli", () => {
     expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
   });
 
-  it("keeps the existing service path non-hosting", async () => {
-    await runConnect([setupCode(), "--service", "--display-name", "Service Node"]);
-
-    expect(mocks.runNodeHost).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gatewayBootstrapToken: "bootstrap-token",
-        stopAfterFirstConnect: true,
-      }),
-    );
-    expect(mocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
-    expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-    expect(mocks.runNodeDaemonInstall).toHaveBeenCalledWith({
-      displayName: "Service Node",
-      force: true,
-    });
-  });
-
   it.each([true])(
     "forwards repeatable command restrictions through connect (service=%s)",
     async (service) => {
@@ -288,6 +271,8 @@ describe("connect cli", () => {
       ]);
       const commands = ["fixture.list", "fixture.read"];
       expect(mocks.runNodeHost).toHaveBeenCalledWith(expect.objectContaining({ commands }));
+      expect(mocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
+      expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
       if (service) {
         expect(mocks.runNodeDaemonInstall).toHaveBeenCalledWith(
           expect.objectContaining({ commands, force: true }),

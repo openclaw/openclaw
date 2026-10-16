@@ -57,18 +57,23 @@ export async function createAgentAccountingPersistenceFixture({
   storePath,
   root,
   fixtureId,
+  incognito = false,
   registerOperation,
 }: {
   storePath: string;
   root: string;
   fixtureId: number;
+  incognito?: boolean;
   registerOperation: (operation: ReplyOperation) => void;
 }) {
-  const sessionKey = `agent:main:accounting-${fixtureId}`;
+  const sessionKey = incognito
+    ? `agent:main:dashboard:incognito-accounting-${fixtureId}`
+    : `agent:main:accounting-${fixtureId}`;
   const sessionId = `accounting-session-${fixtureId}`;
   const runId = `context-pressure-run-${fixtureId}`;
   const entry: InternalSessionEntry = {
     sessionId,
+    ...(incognito ? { incognito: true } : {}),
     lifecycleRevision: "generation-1",
     activeWriterRunId: runId,
     updatedAt: 1,
@@ -177,7 +182,6 @@ export async function createAgentAccountingPersistenceFixture({
     sessionEntry: entry,
     sessionStore,
     sessionKey,
-    generationFence: { sessionId: entry.sessionId, expectedStoreEntry: entry },
   });
   const turn: AdmittedFollowupTurn = {
     runId: context.runId,
@@ -334,9 +338,11 @@ export async function createAgentAccountingPersistenceFixture({
             prepared: {
               kind: "continue",
               activeSessionEntry: accounting.activeSessionEntry,
+              replyCompletion: { expectation: "required", outcome: "delivered" },
               // The reply was already delivered; exercise completion bookkeeping
               // without creating another pending delivery intent.
               completedSourceReplyDelivery: true,
+              reminderNoteAppended: false,
               guardedReplyPayloads: [],
               responseUsageLine: undefined,
             },

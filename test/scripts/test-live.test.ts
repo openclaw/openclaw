@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import bunPin from "../../scripts/lib/openclaw-bun.json" with { type: "json" };
 import {
   buildTestLiveEnv,
   buildTestLiveVitestArgs,
@@ -34,6 +35,7 @@ describe("scripts/test-live", () => {
     { runtime: "node", exitCode: 7 },
     { runtime: "bun", exitCode: 0 },
     { runtime: "bun", exitCode: 7 },
+    { runtime: undefined, exitCode: 0 },
   ])(
     "runs the cache package lane through $runtime and preserves exit $exitCode",
     async ({ runtime, exitCode }, { signal }) => {
@@ -56,6 +58,7 @@ describe("scripts/test-live", () => {
             "  fs.writeFileSync(process.env.OPENCLAW_CACHE_RUNTIME_RECEIPT, JSON.stringify({",
             '    runtime: process.versions.bun ? "bun" : "node", args: process.argv.slice(bootstrap ? 4 : 2),',
             "    live: process.env.OPENCLAW_LIVE_TEST, cache: process.env.OPENCLAW_LIVE_CACHE_TEST,",
+            "    selectedRuntime: process.env.OPENCLAW_VITEST_RUNTIME,",
             "  }));",
             "  process.exit(Number(process.env.OPENCLAW_FAKE_BUN_EXIT));",
             "}",
@@ -79,6 +82,8 @@ describe("scripts/test-live", () => {
               TEMP: tmp,
               NODE_OPTIONS: `--import=${preload}`,
               OPENCLAW_VITEST_RUNTIME: runtime,
+              CI: "",
+              OPENCLAW_BUN_PATH: join(root, "bun"),
               OPENCLAW_CACHE_RUNTIME_RECEIPT: receipt,
               OPENCLAW_FAKE_BUN_EXIT: String(exitCode),
             },
@@ -89,7 +94,12 @@ describe("scripts/test-live", () => {
         expect(result.error, result.stderr).toBeUndefined();
         expect(result.status, result.stderr).toBe(exitCode);
         const invocation = JSON.parse(readFileSync(receipt, "utf8"));
-        expect(invocation).toMatchObject({ runtime, live: "1", cache: "1" });
+        expect(invocation).toMatchObject({
+          runtime: runtime ?? "bun",
+          selectedRuntime: runtime ?? "bun",
+          live: "1",
+          cache: "1",
+        });
         expect(invocation.args).toContain("src/agents/live-cache-regression.live.test.ts");
       });
     },
@@ -163,6 +173,7 @@ describe("scripts/test-live", () => {
               ...process.env,
               OPENCLAW_FAKE_BUN_SIGNALED_PATH: signaledPath,
               OPENCLAW_VITEST_RUNTIME: "bun",
+              OPENCLAW_BUN_PATH: fakeBunPath,
               PATH: `${root}:${process.env.PATH ?? ""}`,
             },
             stdio: ["ignore", "pipe", "ignore"],
@@ -241,6 +252,7 @@ describe("scripts/test-live", () => {
               OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: "25",
               OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "100",
               OPENCLAW_VITEST_RUNTIME: "bun",
+              OPENCLAW_BUN_PATH: fakeBunPath,
               PATH: `${root}:${process.env.PATH ?? ""}`,
             },
             stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -308,11 +320,16 @@ function writeFakeBun(filePath: string): void {
     filePath,
     [
       "#!/usr/bin/env node",
+      'if (process.argv[2] === "--revision") {',
+      `  process.stdout.write(${JSON.stringify(`${bunPin.revision}\n`)});`,
+      "  process.exit(0);",
+      "}",
       'const { spawn } = require("node:child_process");',
       'const fs = require("node:fs");',
       'fs.writeFileSync(require("node:path").join(__dirname, "invocation.json"), JSON.stringify({',
       '  runtime: "bun", args: process.argv.slice(2), live: process.env.OPENCLAW_LIVE_TEST,',
       "  cache: process.env.OPENCLAW_LIVE_CACHE_TEST,",
+      "  selectedRuntime: process.env.OPENCLAW_VITEST_RUNTIME,",
       "  quiet: process.env.OPENCLAW_LIVE_TEST_QUIET, compileCache: process.env.NODE_DISABLE_COMPILE_CACHE,",
       "}));",
       "if (process.env.OPENCLAW_FAKE_BUN_EXIT !== undefined) process.exit(Number(process.env.OPENCLAW_FAKE_BUN_EXIT));",

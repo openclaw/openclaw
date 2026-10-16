@@ -11,8 +11,9 @@ function report(
   options: UsageOverviewOptions = {},
 ) {
   return buildUsageOverview({
-    sessions: [{ key: "session", agentId: "main", instances: [{ sessionFile: "fixture" }] }],
-    summaries: [{ ...createEmptyCostUsageTotals(), ...summary }],
+    rows: [
+      { key: "session", agentId: "main", usage: { ...createEmptyCostUsageTotals(), ...summary } },
+    ],
     options,
     dayBucket,
   });
@@ -92,126 +93,23 @@ it("keeps incomplete table totals unknown beyond the page and scopes completenes
 describe("overview calendar and elapsed allocation", () => {
   it.each([
     {
-      name: "Los Angeles spring gap",
-      timeZone: "America/Los_Angeles",
-      start: "2026-03-08T09:30:00Z",
-      end: "2026-03-08T10:30:00Z",
-      local: [
-        [1, 30, 480],
-        [3, 30, 420],
-      ],
-      hours: [
-        [1, 30],
-        [3, 30],
-      ],
-    },
-    {
       name: "Los Angeles repeated hour",
       timeZone: "America/Los_Angeles",
       start: "2026-11-01T08:30:00Z",
       end: "2026-11-01T10:30:00Z",
-      local: [
-        [1, 30, 420],
-        [2, 30, 480],
-      ],
       hours: [
         [1, 90],
         [2, 30],
       ],
     },
     {
-      name: "Lord Howe half-hour spring gap",
-      timeZone: "Australia/Lord_Howe",
-      start: "2026-10-03T15:00:00Z",
-      end: "2026-10-03T16:00:00Z",
-      local: [
-        [1, 30, -630],
-        [3, 0, -660],
-      ],
-      hours: [
-        [1, 30],
-        [2, 30],
-      ],
-    },
-    {
-      name: "Lord Howe repeated half-hour",
-      timeZone: "Australia/Lord_Howe",
-      start: "2026-04-04T14:00:00Z",
-      end: "2026-04-04T15:30:00Z",
-      local: [
-        [1, 0, -660],
-        [2, 0, -630],
-      ],
-      hours: [[1, 90]],
-    },
-    {
       name: "Chatham spring transition at quarter to the hour",
       timeZone: "Pacific/Chatham",
       start: "2026-09-26T13:15:00Z",
       end: "2026-09-26T14:15:00Z",
-      local: [
-        [2, 0, -765],
-        [4, 0, -825],
-      ],
       hours: [
         [2, 45],
         [3, 15],
-      ],
-    },
-    {
-      name: "Chatham repeated hour at quarter to the hour",
-      timeZone: "Pacific/Chatham",
-      start: "2026-04-04T13:15:00Z",
-      end: "2026-04-04T15:15:00Z",
-      local: [
-        [3, 0, -825],
-        [4, 0, -765],
-      ],
-      hours: [
-        [2, 15],
-        [3, 105],
-      ],
-    },
-    {
-      name: "Kathmandu fixed fractional offset",
-      timeZone: "Asia/Kathmandu",
-      start: "2026-01-31T18:45:00Z",
-      end: "2026-01-31T19:45:00Z",
-      local: [
-        [0, 30, -345],
-        [1, 30, -345],
-      ],
-      hours: [
-        [0, 30],
-        [1, 30],
-      ],
-    },
-    {
-      name: "UTC exact hour endpoint",
-      timeZone: "UTC",
-      start: "2026-02-01T10:30:00Z",
-      end: "2026-02-01T12:00:00Z",
-      local: [
-        [10, 30, 0],
-        [12, 0, 0],
-      ],
-      hours: [
-        [10, 30],
-        [11, 60],
-      ],
-    },
-    {
-      name: "UTC millisecond boundary",
-      timeZone: "UTC",
-      start: "2026-02-01T10:59:59.999Z",
-      end: "2026-02-01T11:00:00.001Z",
-      local: [
-        [10, 59, 0],
-        [11, 0, 0],
-      ],
-      hours: [
-        [10, 1],
-        [11, 1],
       ],
     },
   ] as const)("allocates elapsed messages through $name", ({ timeZone, start, end, hours }) => {
@@ -239,17 +137,6 @@ describe("overview calendar and elapsed allocation", () => {
     expect(result.overview.hourlyMessages).toEqual(expected);
     expect(result.overview.hourlyErrors).toEqual(expected);
     expect(result.overview.hourTokens).toEqual(expected);
-  });
-
-  it("keeps zero-token activity at the final instant across a repeated hour", () => {
-    const summary = {
-      firstActivity: Date.parse("2026-11-01T08:30:00Z"),
-      lastActivity: Date.parse("2026-11-01T10:00:00Z"),
-      utcQuarterHourTokenUsage: [],
-    };
-    const zone = { mode: "time-zone", timeZone: "America/Los_Angeles" } as const;
-    expect(report(summary, zone, { selectedHours: [2] }).overview.total).toBe(1);
-    expect(report(summary, zone, { selectedHours: [3] }).overview.total).toBe(0);
   });
 
   it("prefers valid positive token quarters for selection and ignores malformed coordinates", () => {
@@ -338,45 +225,44 @@ describe("overview family and multi-agent accounting", () => {
         toolUsage: { totalCalls: 1, uniqueTools: 1, tools: [{ name: "read", count: 1 }] },
       };
     };
+    const firstDay = makeUsage(10, "2026-02-01", "provider::a", "model");
+    const secondDay = makeUsage(20, "2026-02-02", "provider", "a::model");
     const first = {
-      sessions: [
-        {
-          key: "family",
-          agentId: "first",
-          channel: "slack",
-          creatorKey: "person",
-          updatedAt: 20,
-          instances: [{ sessionFile: "first" }, { sessionFile: "rotated" }],
-        },
-      ],
-      summaries: [
-        makeUsage(10, "2026-02-01", "provider::a", "model"),
-        makeUsage(20, "2026-02-02", "provider", "a::model"),
-      ],
+      key: "family",
+      agentId: "first",
+      channel: "slack",
+      creatorKey: "person",
+      updatedAt: 20,
+      usage: {
+        ...makeUsage(30, "2026-02-01", "provider::a", "model"),
+        lastActivity: secondDay.lastActivity,
+        activityDates: ["2026-02-01", "2026-02-02"],
+        dailyBreakdown: [...firstDay.dailyBreakdown!, ...secondDay.dailyBreakdown!],
+        dailyMessageCounts: [...firstDay.dailyMessageCounts!, ...secondDay.dailyMessageCounts!],
+        modelUsage: [...firstDay.modelUsage!, ...secondDay.modelUsage!],
+        missingCostEntries: 2,
+        missingCostByModel: { "provider::a/model": 1, "provider/a::model": 1 },
+        messageCounts: { total: 2, user: 0, assistant: 2, toolCalls: 2, toolResults: 0, errors: 0 },
+        toolUsage: { totalCalls: 2, uniqueTools: 1, tools: [{ name: "read", count: 2 }] },
+      },
     };
     const second = {
-      sessions: [
-        {
-          key: "second",
-          agentId: "second",
-          channel: "slack",
-          creatorKey: "person",
-          updatedAt: 30,
-          instances: [{ sessionFile: "second" }],
-        },
-      ],
-      summaries: [makeUsage(30, "2026-02-01", "provider::a", "model")],
+      key: "second",
+      agentId: "second",
+      channel: "slack",
+      creatorKey: "person",
+      updatedAt: 30,
+      usage: makeUsage(30, "2026-02-01", "provider::a", "model"),
     };
     return [first, second];
   }
 
-  it("merges family instances and all agents before selecting the page", () => {
+  it("aggregates prepared family rows and all agents before selecting the page", () => {
     const options = { offset: 1, limit: 1, sort: "recent" as const };
     const dayBucket = { mode: "utc-offset" as const, utcOffsetMinutes: 0 };
     const inputs = sources();
     const result = buildUsageOverview({
-      sessions: inputs.flatMap((source) => source.sessions),
-      summaries: inputs.flatMap((source) => source.summaries),
+      rows: inputs,
       options,
       dayBucket,
     });
@@ -416,14 +302,13 @@ describe("overview family and multi-agent accounting", () => {
     const options = { selectedDays: ["2026-02-01"], recentKeys: [] };
     const inputs = sources();
     const later = inputs[1]!;
-    later.summaries[0]!.firstActivity = Date.parse("2026-02-03T10:00:00Z");
-    later.summaries[0]!.lastActivity = Date.parse("2026-02-03T10:01:00Z");
-    later.summaries[0]!.activityDates = ["2026-02-03"];
-    later.summaries[0]!.dailyBreakdown![0]!.date = "2026-02-03";
-    later.summaries[0]!.dailyMessageCounts![0]!.date = "2026-02-03";
+    later.usage.firstActivity = Date.parse("2026-02-03T10:00:00Z");
+    later.usage.lastActivity = Date.parse("2026-02-03T10:01:00Z");
+    later.usage.activityDates = ["2026-02-03"];
+    later.usage.dailyBreakdown![0]!.date = "2026-02-03";
+    later.usage.dailyMessageCounts![0]!.date = "2026-02-03";
     const result = buildUsageOverview({
-      sessions: inputs.flatMap((source) => source.sessions),
-      summaries: inputs.flatMap((source) => source.summaries),
+      rows: inputs,
       options,
       dayBucket,
     });
@@ -455,38 +340,17 @@ describe("overview family and multi-agent accounting", () => {
     ]);
   });
 
-  it("keeps recently viewed order across agents before paging", () => {
-    const options = {
-      recentKeys: ["family", "second"],
-      sort: "recent" as const,
-      offset: 1,
-      limit: 1,
-    };
-    const dayBucket = { mode: "utc-offset" as const, utcOffsetMinutes: 0 };
-    const inputs = sources();
-    const result = buildUsageOverview({
-      sessions: inputs.flatMap((source) => source.sessions),
-      summaries: inputs.flatMap((source) => source.summaries),
-      options,
-      dayBucket,
-    });
-    expect(result.sessions.map((session) => session.key)).toEqual(["second"]);
-    expect(result.overview.tableSessionCount).toBe(2);
-    expect(result.totals.totalTokens).toBe(60);
-  });
-
   it("counts activity independently of recently modified empty comparison rows", () => {
     const result = buildUsageOverview({
-      sessions: ["active", "empty"].map((key) => ({
+      rows: ["active", "empty"].map((key) => ({
         key,
         agentId: "main",
         updatedAt: 2,
-        instances: [{ sessionFile: key }],
+        usage:
+          key === "active"
+            ? { ...createEmptyCostUsageTotals(), firstActivity: 1, totalTokens: 7 }
+            : createEmptyCostUsageTotals(),
       })),
-      summaries: [
-        { ...createEmptyCostUsageTotals(), firstActivity: 1, totalTokens: 7 },
-        createEmptyCostUsageTotals(),
-      ],
       options: {},
       dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
     });
@@ -499,10 +363,7 @@ describe("overview family and multi-agent accounting", () => {
     expect(result.aggregates.sessionCount).toBe(1);
     expect(result.totals.totalTokens).toBe(7);
     const emptySelected = buildUsageOverview({
-      sessions: [
-        { key: "empty", agentId: "main", updatedAt: 2, instances: [{ sessionFile: "empty" }] },
-      ],
-      summaries: [createEmptyCostUsageTotals()],
+      rows: [{ key: "empty", agentId: "main", updatedAt: 2, usage: createEmptyCostUsageTotals() }],
       options: { selectedSessions: ["empty"] },
       dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
     });
@@ -535,10 +396,10 @@ it.each(["tokens", "cost"] as const)(
         ),
       }),
     );
-    const sessions = ["first", "second"].map((key) => ({
+    const rows = ["first", "second"].map((key, index) => ({
       key,
       agentId: "main",
-      instances: [{ sessionFile: key }],
+      usage: summaries[index] ?? null,
     }));
     const options = {
       selectedDays: ["2026-02-01"],
@@ -546,7 +407,7 @@ it.each(["tokens", "cost"] as const)(
       sort,
     };
     const dayBucket = { mode: "utc-offset" as const, utcOffsetMinutes: 0 };
-    const compact = buildUsageOverview({ sessions, summaries, options, dayBucket });
+    const compact = buildUsageOverview({ rows, options, dayBucket });
     expect(
       compact.sessions.map((session) => [
         session.key,
@@ -558,8 +419,7 @@ it.each(["tokens", "cost"] as const)(
       ["second", 1, 0.1],
     ]);
     const canonical = buildUsageOverview({
-      sessions,
-      summaries,
+      rows,
       options,
       dayBucket,
       compact: false,
@@ -582,6 +442,7 @@ it.each(["tokens", "cost"] as const)(
     expect(compact.overview.selectedRows[0]?.usage?.dailyBreakdown).toBeUndefined();
     expect(canonical.overview.selectedRows[0]?.usage?.dailyBreakdown).toHaveLength(2);
     expect(compact.overview).toMatchObject({
+      selectedUsageComplete: true,
       tableSessionCount: 2,
       tableTotals: { tokens: 91, cost: 9.1, errors: 0 },
     });

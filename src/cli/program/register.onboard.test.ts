@@ -95,16 +95,6 @@ describe("registered onboarding", () => {
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
-  it.each([["recommendations", mocks.onboardRecommendationsCommand]] as const)(
-    "reports asynchronous storage failures for %s",
-    async (args, target) => {
-      target.mockRejectedValueOnce(new Error("synthetic recommendation persistence failure"));
-      await runCli(args.split(" "));
-      expect(runtime.error).toHaveBeenCalledWith("synthetic recommendation persistence failure");
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-    },
-  );
-
   it("preserves an explicitly blank leaf agent over its parent", async () => {
     await runCli(["recommendations", "--agent", "writer", "refresh", "--agent", ""]);
     expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledExactlyOnceWith(

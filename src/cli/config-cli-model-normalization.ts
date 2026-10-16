@@ -3,13 +3,15 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeSubmittedConfigModelRefs } from "../config/model-input-normalization.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { hasInstalledPluginIndexWorkspaceScopeMismatch } from "../plugins/installed-plugin-index.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import {
   isPluginMetadataSnapshotCompatible,
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import type { PathSegment } from "./config-cli-path.js";
 
 export function shouldNormalizeConfigMutationProviderCatalogs(params: {
@@ -39,34 +41,51 @@ export function shouldNormalizeConfigMutationProviderCatalogs(params: {
   );
 }
 
-export function normalizeConfigMutationModelRefs(
+export async function normalizeConfigMutationModelRefs(
   cfg: OpenClawConfig,
   options: {
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
     env?: NodeJS.ProcessEnv;
     normalizeProviderCatalogs?: boolean;
   } = {},
-): OpenClawConfig {
-  return normalizeSubmittedConfigModelRefs(
-    cfg,
-    () => {
-      const env = options.env ?? process.env;
-      const prepared = options.pluginMetadataSnapshot;
-      const pluginMetadata =
-        prepared &&
-        // Preserve global normalization policies; config reads can include workspace plugins.
-        !hasInstalledPluginIndexWorkspaceScopeMismatch(prepared.index, undefined) &&
-        isPluginMetadataSnapshotCompatible({
-          snapshot: prepared,
-          config: cfg,
-          env,
-        })
-          ? prepared
-          : loadPluginMetadataSnapshot({ config: cfg, env });
-      return pluginMetadata.owners.modelIdNormalizationPolicies;
-    },
-    options,
-  );
+): Promise<OpenClawConfig> {
+  const needsCatalogPolicy =
+    options.normalizeProviderCatalogs !== false &&
+    Object.values(cfg.models?.providers ?? {}).some(
+      (provider) =>
+        Array.isArray(provider?.models) &&
+        provider.models.some((model) => typeof model?.id === "string" && model.id.trim()),
+    );
+  if (!needsCatalogPolicy) {
+    return normalizeSubmittedConfigModelRefs(cfg, undefined, options);
+  }
+  return withArtifactPreservingStateReads(async () => {
+    const env = options.env ?? process.env;
+    const candidate = options.pluginMetadataSnapshot;
+    // Preserve global normalization policies; config reads can include workspace plugins.
+    const prepared =
+      candidate && !hasInstalledPluginIndexWorkspaceScopeMismatch(candidate.index, undefined)
+        ? candidate
+        : undefined;
+    if (prepared) {
+      const activateDiscovery = await prepareBundledDiscoveryMode(env);
+      activateDiscovery();
+    }
+    const pluginMetadata =
+      prepared &&
+      isPluginMetadataSnapshotCompatible({
+        snapshot: prepared,
+        config: cfg,
+        env,
+      })
+        ? prepared
+        : await resolvePluginMetadataSnapshotAsync({ config: cfg, env });
+    return normalizeSubmittedConfigModelRefs(
+      cfg,
+      pluginMetadata.owners.modelIdNormalizationPolicies,
+      options,
+    );
+  });
 }
 
 export function normalizeConfigMutationExplicitSetPath(path: PathSegment[]): PathSegment[] {

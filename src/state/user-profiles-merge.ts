@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { mergeUserBackgroundImages } from "./user-background.store.js";
 import { mergeUserGitHubConnection } from "./user-github-connections.kernel.js";
@@ -20,7 +20,7 @@ import {
 } from "./user-profiles-internal.js";
 
 export function mergeUserProfiles(
-  db: DatabaseSync,
+  db: EngineConnection,
   sourceProfileId: string,
   targetProfileId: string,
   now: number,

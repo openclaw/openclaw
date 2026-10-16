@@ -265,7 +265,8 @@
       {
         "id": "meta",
         "authMethods": [
-          "api-key"
+          "api-key",
+          "muse-code"
         ],
         "envVars": [
           "MODEL_API_KEY"
@@ -289,6 +290,18 @@
       "cliFlag": "--meta-api-key",
       "cliOption": "--meta-api-key <key>",
       "cliDescription": "Meta API key"
+    },
+    {
+      "provider": "meta",
+      "method": "muse-code",
+      "choiceId": "muse-code",
+      "appGuidedAuth": "device-code",
+      "choiceLabel": "Muse Code",
+      "choiceHint": "Sign in with Meta in your browser",
+      "groupId": "meta",
+      "groupLabel": "Meta",
+      "groupHint": "Meta API or Muse Code sign-in",
+      "onboardingFeatured": true
     }
   ],
   "configSchema": {

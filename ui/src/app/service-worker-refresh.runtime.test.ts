@@ -41,6 +41,46 @@ function installRegistration(active = createWorker()) {
 }
 
 describe("Control UI service-worker reconnect refresh", () => {
+  it.each(["lookup", "update", "installing"] as const)(
+    "releases reconnect after a stalled %s and ignores late completion",
+    async (phase) => {
+      vi.useFakeTimers();
+      const replacement = createWorker("replacement");
+      replacement.state = "installing";
+      const registration = installRegistration();
+      let complete = () => {};
+      if (phase === "lookup") {
+        vi.stubGlobal("navigator", {
+          serviceWorker: {
+            getRegistration: () =>
+              new Promise((resolve) => {
+                complete = () => resolve(registration);
+              }),
+          },
+        });
+      } else if (phase === "update") {
+        registration.update.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              complete = () => resolve(undefined);
+            }),
+        );
+      } else {
+        registration.installing = replacement as unknown as ServiceWorker;
+        complete = () => {
+          replacement.state = "activated";
+          replacement.dispatchEvent(new Event("statechange"));
+        };
+      }
+      const refresh = refreshControlUiServiceWorker();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(refresh).resolves.toBe(false);
+      complete();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(scheduleStaleChunkReload).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
   it("recovers a document that missed the active worker's activation", async () => {
     const active = createWorker("already-active-build");
     const registration = installRegistration(active);

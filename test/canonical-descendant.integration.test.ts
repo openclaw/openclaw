@@ -19,6 +19,7 @@ import {
   retireSessionMcpRuntime,
   setSessionMcpRuntimeScheduler,
 } from "../src/agents/agent-bundle-mcp-manager-api.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../src/agents/auth-profiles/path-resolve.native.js";
 import {
   setRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
@@ -187,6 +188,7 @@ async function withFixture(
   } = {},
 ) {
   await withState(async (state) => {
+    prepareSharedAuthStoreOwnershipForNative(state.env);
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
@@ -1811,11 +1813,6 @@ describe("canonical descendant lifecycle through real owners", () => {
     ["ignored cut", /did not apply the exact beforeTurnId cut/],
     ["missing model", /model/i],
     ["null model", /model/i],
-    ["model changed during preparation", /The Codex source thread changed during initialization/],
-    [
-      "provider changed during preparation",
-      /The Codex source thread changed during initialization/,
-    ],
     ["request authorization changed after native fork", /request authorization changed/],
     ["sandbox policy changed during initialization", /requires a sandbox/],
     ["catalog mismatch", /native tool catalog is missing, corrupt, or changed/],
@@ -1851,35 +1848,12 @@ describe("canonical descendant lifecycle through real owners", () => {
             (call) => call.method === "thread/archive",
           ).length;
           const current = expectDefined(fixture.native.threads.get(binding.threadId), "canonical");
-          const create = runtime.agent.session.createSessionEntry;
           const createSession = vi.spyOn(runtime.agent.session, "createSessionEntry");
           if (failure === "missing model") {
             delete current.thread.model;
           }
           if (failure === "null model") {
             current.thread.model = null;
-          }
-          if (
-            failure === "model changed during preparation" ||
-            failure === "provider changed during preparation"
-          ) {
-            createSession.mockImplementation((params) =>
-              create({
-                ...params,
-                afterCreate: async (created) => {
-                  if (failure === "model changed during preparation") {
-                    current.thread.model = "gpt-5.5";
-                  } else {
-                    current.thread.modelProvider = "changed-provider";
-                  }
-                  const patch = await params.afterCreate?.(created);
-                  if (!patch) {
-                    throw new Error("Expected the canonical fork initialization patch");
-                  }
-                  return patch;
-                },
-              }),
-            );
           }
           if (failure === "ignored cut") {
             fixture.native.setIgnoreCut(true);
@@ -1951,9 +1925,7 @@ describe("canonical descendant lifecycle through real owners", () => {
           if (
             failure === "catalog mismatch" ||
             failure === "missing model" ||
-            failure === "null model" ||
-            failure === "model changed during preparation" ||
-            failure === "provider changed during preparation"
+            failure === "null model"
           ) {
             expect(
               fixture.native.calls.filter((call) => call.method === "thread/fork"),

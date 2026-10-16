@@ -2,6 +2,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -169,11 +170,14 @@ export function readTranscriptMirrorFacts(
                   ),
                 ),
               )
-              .where(transcriptEventRunIdSql("event"), "=", sourceRunId)
+              .where(transcriptEventRunIdSql(database.db, "event"), "=", sourceRunId)
               .select((eb) => eb.val(1).as("is_source")),
           );
         }
-        const rows = executeSqliteQuerySync(database.db, query.orderBy("event.seq", "asc")).rows;
+        const rows = executeSqliteQuerySync(
+          database.db,
+          query.orderBy(isPostgresSqlConnection(database.db) ? "seq" : "event.seq", "asc"),
+        ).rows;
         for (const row of rows) {
           // SAFETY: event_json reconstructs the stored TranscriptEvent via transcriptEventJsonSql.
           const event = JSON.parse(row.event_json) as TranscriptEvent;

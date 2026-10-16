@@ -8,6 +8,7 @@ import {
 } from "../../bootstrap-mode.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
+import { isUnreadableWorkspaceBootstrapFile } from "../../workspace-bootstrap-read.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -22,6 +23,7 @@ export async function resolveAttemptBootstrapContext(params: {
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   bootstrapMode?: BootstrapMode;
+  deliversCompleteWorkspaceContext: boolean;
   hasCompletedBootstrapTurn: () => Promise<boolean>;
   resolveBootstrapContextForRun: () => ReturnType<typeof resolveBootstrapContextForRun>;
 }) {
@@ -31,23 +33,22 @@ export async function resolveAttemptBootstrapContext(params: {
     params.contextInjectionMode === "continuation-skip" &&
     !isHeartbeatLifecycleRun &&
     (await params.hasCompletedBootstrapTurn());
-  // Continuation-skip and explicit never both produce an empty injection set,
-  // but only a clean full bootstrap later records a durable completion marker.
   const shouldSkipBootstrapInjection =
     params.contextInjectionMode === "never" || isContinuationTurn;
+  const context = shouldSkipBootstrapInjection
+    ? { bootstrapFiles: [], contextFiles: [] }
+    : await params.resolveBootstrapContextForRun();
+  // Check both workspace layers after loading: an unreadable file must be retried next turn.
   const shouldRecordCompletedBootstrapTurn =
     !shouldSkipBootstrapInjection &&
     params.bootstrapContextMode !== "lightweight" &&
     !isHeartbeatLifecycleRun &&
-    params.bootstrapMode === "full";
+    params.bootstrapContextRunKind !== "cron" &&
+    params.deliversCompleteWorkspaceContext &&
+    !context.bootstrapFiles.some(isUnreadableWorkspaceBootstrapFile) &&
+    (params.bootstrapMode === "full" || params.contextInjectionMode === "continuation-skip");
 
-  return {
-    ...(shouldSkipBootstrapInjection
-      ? { bootstrapFiles: [], contextFiles: [] }
-      : await params.resolveBootstrapContextForRun()),
-    isContinuationTurn,
-    shouldRecordCompletedBootstrapTurn,
-  };
+  return { ...context, isContinuationTurn, shouldRecordCompletedBootstrapTurn };
 }
 
 /**

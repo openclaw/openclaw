@@ -128,8 +128,6 @@ async function saveSlackMedia(
     (signal): signal is AbortSignal => Boolean(signal),
   );
   const signal = abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0];
-  let timedOut = false;
-
   const savePromise = saveRemoteMedia({
     url,
     fetchImpl: createSlackMediaFetch(params.govSlack, params.assertReadAuthority),
@@ -150,11 +148,6 @@ async function saveSlackMedia(
     maxBytes: params.maxBytes,
     ssrfPolicy: params.govSlack ? SLACK_GOV_MEDIA_SSRF_POLICY : SLACK_MEDIA_SSRF_POLICY,
     readIdleTimeoutMs: params.readIdleTimeoutMs ?? SLACK_MEDIA_READ_IDLE_TIMEOUT_MS,
-  }).catch((error: unknown) => {
-    if (timedOut) {
-      return new Promise<never>(() => {});
-    }
-    throw error;
   });
 
   if (!totalTimeoutMs) {
@@ -164,7 +157,6 @@ async function saveSlackMedia(
     savePromise,
     totalTimeoutMs,
     () => {
-      timedOut = true;
       timeoutAbortController?.abort();
       throw new Error(`slack media download timed out after ${totalTimeoutMs}ms`);
     },
@@ -240,7 +232,6 @@ async function fetchFreshSlackFileUrl(params: {
     }
     const freshUrl = freshFile?.url_private_download ?? freshFile?.url_private;
     if (freshUrl) {
-      logVerbose(`slack: refreshed file URL via files.info for file id=${params.file.id}`);
       return freshUrl;
     }
     logVerbose(`slack: files.info returned no private URL for file id=${params.file.id}`);

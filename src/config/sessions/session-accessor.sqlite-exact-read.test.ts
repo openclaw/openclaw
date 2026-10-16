@@ -14,6 +14,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   assignSessionOwner,
   listSessionEntriesReadOnly,
@@ -21,7 +22,6 @@ import {
   loadExactSessionEntryReadOnly,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
-import { captureSessionEntryRead } from "./session-accessor.sqlite-entry-read-lifetime.js";
 import {
   prepareExactSessionEntryRowReads,
   readSessionChildEntriesInDatabase,
@@ -168,10 +168,11 @@ describe("exact SQLite session batches", () => {
         invalidateOpenClawAgentDatabaseValidation(database.path);
       }
       const sibling = openNodeSqliteDatabase(database.path);
-      sqliteQueries.clearNodeSqliteKyselyCacheForDatabase(database.db);
-      const prepare = database.db.prepare.bind(database.db);
+      const nativeDb = requireNativeSqliteDatabase(database.db);
+      sqliteQueries.clearNodeSqliteKyselyCacheForDatabase(nativeDb);
+      const prepare = nativeDb.prepare.bind(nativeDb);
       let selectedInTransaction: boolean | undefined;
-      const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+      const prepareSpy = vi.spyOn(nativeDb, "prepare").mockImplementation((sql) => {
         const statement = prepare(sql);
         if (
           selectedInTransaction === undefined &&
@@ -268,7 +269,7 @@ describe("exact SQLite session batches", () => {
     expect(listSessionEntriesReadOnly({ ...scope, projection: "list" })).toHaveLength(4);
     const database = openOpenClawAgentDatabase(scope);
     const queries = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["payload", "identity", "participants"],
       (sql) => {
         if (/from\s+"session_nodes"/i.test(sql)) {
@@ -506,9 +507,10 @@ describe("exact SQLite session batches", () => {
     );
     loadExactSessionEntryReadOnly({ ...scope, projection: "list" });
     const database = openOpenClawAgentDatabase(scope);
-    const held = captureSessionEntryRead(database, scope.sessionKey);
-    const queries = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
-      /from\s+"session_nodes"/i.test(sql) ? "entries" : null,
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["entries"],
+      (sql) => (/from\s+"session_nodes"/i.test(sql) ? "entries" : null),
     );
     try {
       expect(
@@ -518,10 +520,8 @@ describe("exact SQLite session batches", () => {
       ).toMatchObject([{ ok: true, value: [{ entry: { sessionId: "target" } }] }]);
       expect(queries.rowCounts.entries).toBe(1);
       expect(queries.textBytes.entries).toBeLessThan(1024);
-      expect(held.isCurrent()).toBe(true);
     } finally {
       queries.restore();
-      held.release();
     }
   });
 
@@ -580,7 +580,7 @@ describe("exact SQLite session batches", () => {
         .prepare("UPDATE session_participants SET actor_id = ? WHERE session_key = ?")
         .run("fresh-profile", keys[0]!);
       const queries = trackSqliteStatementExecutions(
-        database.db,
+        requireNativeSqliteDatabase(database.db),
         ["entries", "participants"],
         (sql) => {
           if (/from\s+"session_nodes"/i.test(sql)) {

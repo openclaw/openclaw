@@ -1,18 +1,18 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
   createComposerProps as props,
   findComposerButton as button,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatQuestionCard } from "./components/chat-question-card.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
@@ -176,7 +176,7 @@ function mountComposer(overrides: Parameters<typeof props>[0]) {
   const container = createComposerContainer();
   document.body.append(container);
   const composerProps = props(overrides);
-  const draw = () => render(renderChatComposer(composerProps), container);
+  const draw = () => renderComposerInto(container, composerProps);
   composerProps.onRequestUpdate = draw;
   draw();
   return { container };
@@ -184,12 +184,14 @@ function mountComposer(overrides: Parameters<typeof props>[0]) {
 
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
   // ESM imports remain live when the composer was cached by another test file.
   // Patch the shared dependencies instead of clearing isolate:false's registry.
   vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(
     discoverRealtimeTalkInputsMock,
   );
-  vi.spyOn(realtimeTalkInput.RealtimeTalkInputController.prototype, "open").mockImplementation(
+  vi.spyOn(realtimeTalkInput.RealtimeTalkInputOwner.prototype, "open").mockImplementation(
     openMicrophoneMock,
   );
 });
@@ -234,7 +236,7 @@ describe("renderChatComposer controls", () => {
     composerProps.realtimeTalkDetail = "The selected microphone is unavailable";
     composerProps.onUseSystemDefaultMicrophone = vi.fn();
     composerProps.onDismissRealtimeTalkError = dismissRecovery;
-    const draw = () => render(renderChatComposer(composerProps), container);
+    const draw = () => renderComposerInto(container, composerProps);
     composerProps.onRequestUpdate = draw;
     draw();
     await vi.advanceTimersByTimeAsync(0);
@@ -428,6 +430,9 @@ describe("renderChatComposer controls", () => {
     openMicrophoneMock.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
     vi.stubGlobal("AudioContext", DictationAudioContext);
     const request = vi.fn(async (method: string) => {
+      if (method === "talk.config") {
+        return { config: {} };
+      }
       if (method === "talk.catalog") {
         return { transcription: { ready: true } };
       }
@@ -449,7 +454,9 @@ describe("renderChatComposer controls", () => {
       gatewayClient,
       onToggleRealtimeTalk: vi.fn(),
     });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
+    );
     await vi.waitFor(() =>
       expect(container.querySelector('[data-chat-talk-capability="dictation"]')).toBeNull(),
     );
@@ -491,6 +498,9 @@ describe("renderChatComposer controls", () => {
     vi.useFakeTimers();
     discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
     const request = vi.fn(async (method: string) => {
+      if (method === "talk.config") {
+        return { config: {} };
+      }
       if (method === "talk.catalog") {
         return { realtime: { ready: true }, transcription: { ready: false } };
       }
@@ -501,14 +511,14 @@ describe("renderChatComposer controls", () => {
       gatewayClient: { request } as unknown as GatewayBrowserClient,
       onToggleRealtimeTalk,
     });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
+    );
     const microphone = button(container, t("chat.composer.startVoiceInput"));
     microphone.dispatchEvent(dictationPointer("pointerdown", 10));
     await vi.advanceTimersByTimeAsync(801);
-    const dropdown = container.querySelector<HTMLElement & { open: boolean }>(
-      "wa-dropdown.chat-talk-input-picker",
-    );
-    expect(dropdown?.open).toBe(true);
+    const dropdown = container.querySelector<HTMLElement>(".chat-talk-input-picker");
+    expect(dropdown?.hasAttribute("open")).toBe(true);
     await vi.waitFor(() =>
       expect(
         container.querySelector(
@@ -519,7 +529,7 @@ describe("renderChatComposer controls", () => {
 
     document.dispatchEvent(dictationPointer("pointerup", 10));
     microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(dropdown?.open).toBe(true);
+    expect(dropdown?.hasAttribute("open")).toBe(true);
     expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
 
     microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -530,6 +540,9 @@ describe("renderChatComposer controls", () => {
     vi.useFakeTimers();
     openMicrophoneMock.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
     const request = vi.fn(async (method: string) => {
+      if (method === "talk.config") {
+        return { config: {} };
+      }
       if (method === "talk.catalog") {
         return { realtime: { ready: true }, transcription: { ready: true } };
       }
@@ -539,7 +552,9 @@ describe("renderChatComposer controls", () => {
       gatewayClient: { request } as unknown as GatewayBrowserClient,
       onToggleRealtimeTalk: vi.fn(),
     });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
+    );
 
     const microphone = button(container, t("chat.composer.startVoiceInput"));
     microphone.dispatchEvent(dictationPointer("pointerdown", 12));
@@ -564,27 +579,25 @@ describe("renderChatComposer controls", () => {
 describe("renderChatComposer status", () => {
   it("keeps every concurrent gateway question reachable", async () => {
     const container = createComposerContainer();
-    const onRequestUpdate = vi.fn();
     const composerProps = props({
       sessionKey: "queue-test",
       gatewayQuestionPrompts: [
         questionPrompt("question-1", "First prompt"),
         questionPrompt("question-2", "Second prompt"),
       ],
-      onRequestUpdate,
     });
 
-    render(renderChatComposer(composerProps), container);
-    let panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
+    renderComposerInto(container, composerProps);
+    const panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
     expect(panel.props!.model.questions[0]?.question).toBe("First prompt");
     expect(panel.props!.model.requestPosition).toEqual({ current: 1, total: 2 });
 
     panel.props!.onNextRequest?.();
-    expect(onRequestUpdate).toHaveBeenCalledOnce();
-    render(renderChatComposer(composerProps), container);
-    panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
-    expect(panel.props!.model.questions[0]?.question).toBe("Second prompt");
-    expect(panel.props!.model.requestPosition).toEqual({ current: 2, total: 2 });
+    await waitForSolid(() => {
+      const nextPanel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
+      expect(nextPanel.props!.model.questions[0]?.question).toBe("Second prompt");
+      expect(nextPanel.props!.model.requestPosition).toEqual({ current: 2, total: 2 });
+    });
   });
 
   it("keeps fallback status in the composer without a compaction overlay", () => {

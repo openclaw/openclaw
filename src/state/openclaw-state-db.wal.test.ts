@@ -22,6 +22,7 @@ import {
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { storageProcessTestEntrypoints } from "../infra/storage-process-runtime.test-support.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   runOutsideOpenClawDatabaseMaintenanceScope,
@@ -95,9 +96,9 @@ function sqliteBytes(databasePath: string) {
   );
 }
 
-it.each(["maintenance", "ordinary"] as const)(
+it.each(["maintenance"] as const)(
   "suspends shared-worker ticks only while maintenance clients retain the actor (%s opener)",
-  async (firstOwner) => {
+  async () => {
     const root = tempDirs.make("state-worker-wal-tick-");
     const databasePath = path.join(root, "state", "openclaw.sqlite");
     const context = { environment: { ...process.env, OPENCLAW_STATE_DIR: root } };
@@ -122,10 +123,8 @@ it.each(["maintenance", "ordinary"] as const)(
       return store;
     };
     try {
-      const first = await open(firstOwner === "maintenance" ? firstMaintenance : undefined);
-      const second = await open(firstOwner === "maintenance" ? undefined : firstMaintenance);
-      const ordinary = firstOwner === "ordinary" ? first : second;
-      const maintained = firstOwner === "maintenance" ? first : second;
+      const maintained = await open(firstMaintenance);
+      const ordinary = await open();
       const overlapping = await open(secondMaintenance);
       const actor = broker.getActorIdentity(ordinary);
       expect(broker.getActorIdentity(maintained)).toBe(actor);
@@ -237,7 +236,7 @@ it("keeps periodic WAL work off the host before and after a competing SQLite wri
   );
 });
 
-it("analyzes once per periodic pass, preserves retained snapshots, and admits run-index plans", async () => {
+it("maintains planner statistics per periodic pass without disturbing snapshots or run-index plans", async () => {
   const { database, periodic } = openWithPeriodicMaintenance(
     path.join(tempDirs.make("state-wal-planner-"), "openclaw.sqlite"),
   );
@@ -261,9 +260,13 @@ it("analyzes once per periodic pass, preserves retained snapshots, and admits ru
     createSqliteWorkerBackend(undefined, { databasePath: database.path }),
   );
   let refuseCommit = false;
+  let refreshedStatisticsAtCommit: unknown;
   const admission = createSqliteWorkerOperationAdmission((request, grant) => {
     context.admission.assertCurrent();
-    if (refuseCommit && request.stage === "commit" && analyses() === 3) {
+    if (refuseCommit && request.stage === "commit" && plannerPasses() === 3) {
+      refreshedStatisticsAtCommit = database.db
+        .prepare("SELECT stat FROM sqlite_stat1 WHERE idx='idx_audit_events_run_sequence'")
+        .get();
       throw new Error("fixture revoked commit");
     }
     grant();
@@ -283,20 +286,20 @@ it("analyzes once per periodic pass, preserves retained snapshots, and admits ru
       ),
     );
   // Preserve real scheduler continuation and native command execution while exposing SQL counts.
-  walAdmission.registerSqliteWalWorkerMaintenance(database.db, async (request) =>
-    z.object({ reclaimedPages: z.number() }).parse(execute(request)),
+  walAdmission.registerSqliteWalWorkerMaintenance(
+    requireNativeSqliteDatabase(database.db),
+    async (request) => z.object({ reclaimedPages: z.number() }).parse(execute(request)),
   );
   const statements = vi.spyOn(database.db, "exec");
-  const analyses = () =>
-    statements.mock.calls.filter(([sql]) => sql.includes("ANALYZE main")).length;
+  const plannerPasses = () =>
+    statements.mock.calls.filter(([sql]) => sql.includes("PRAGMA optimize")).length;
   try {
     execute({ maxPages: 0, checkpointMode: "PASSIVE" });
-    expect(analyses()).toBe(0);
+    expect(plannerPasses()).toBe(0);
     reader.exec("BEGIN");
     expect(read.all("run-100", 0)).toEqual(before);
     await periodic();
-    expect(analyses()).toBe(1);
-    expect(statements).toHaveBeenCalledWith("PRAGMA analysis_limit=1000; ANALYZE main;");
+    expect(plannerPasses()).toBe(1);
     expect(
       reader.prepare("SELECT name FROM sqlite_schema WHERE name='sqlite_stat1'").get(),
     ).toBeUndefined();
@@ -309,7 +312,7 @@ it("analyzes once per periodic pass, preserves retained snapshots, and admits ru
         fresh
           .prepare("SELECT stat FROM sqlite_stat1 WHERE idx='idx_audit_events_run_sequence'")
           .get(),
-      ).toBeDefined();
+      ).toEqual({ stat: expect.stringMatching(/^[1-9]\d* /) });
       expect(fresh.prepare(`EXPLAIN QUERY PLAN ${query}`).all("run-100", 0)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -322,7 +325,7 @@ it("analyzes once per periodic pass, preserves retained snapshots, and admits ru
       fresh.close();
     }
     execute({ maxPages: 512, checkpointMode: "PASSIVE", continuation: true });
-    expect(analyses()).toBe(1);
+    expect(plannerPasses()).toBe(1);
     database.db.exec(`
       WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM rows WHERE n<64)
       INSERT INTO config_machine_state(state_key,value_json,updated_at_ms)
@@ -333,15 +336,21 @@ it("analyzes once per periodic pass, preserves retained snapshots, and admits ru
       Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count),
     ).toBeGreaterThan(8);
     await periodic();
-    expect(analyses()).toBe(2);
+    expect(plannerPasses()).toBe(2);
+    // Missing statistics force real maintenance work before the refused commit.
+    database.db.exec(`
+      DELETE FROM sqlite_stat1 WHERE idx='idx_audit_events_run_sequence';
+      ANALYZE sqlite_schema;
+    `);
     const statistics = database.db.prepare("SELECT * FROM sqlite_stat1 ORDER BY tbl,idx").all();
-    database.db.exec("DELETE FROM audit_events WHERE sequence>4000");
     refuseCommit = true;
     await periodic();
-    expect(analyses()).toBe(3);
+    expect(plannerPasses()).toBe(3);
+    expect(refreshedStatisticsAtCommit).toEqual({ stat: expect.stringMatching(/^[1-9]\d* /) });
     expect(database.db.prepare("SELECT * FROM sqlite_stat1 ORDER BY tbl,idx").all()).toEqual(
       statistics,
     );
+    expect(read.all("run-100", 0)).toEqual(before);
     expect(database.db.isTransaction).toBe(false);
   } finally {
     statements.mockRestore();

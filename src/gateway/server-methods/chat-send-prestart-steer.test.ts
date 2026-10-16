@@ -113,6 +113,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         initialOperation.attachBackend({
           kind: "embedded",
           runId,
+          terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
           toolAuthorityFingerprint: initialOperation.bindToolAuthorityRoute(followupRun.run),
           cancel: () => {},
           messageInjectionV2: {
@@ -342,3 +343,149 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
     }
   },
 );
+
+test("queues a fresh follow-up while stopped preparation still owns the reply slot", async ({
+  signal,
+}) => {
+  const realDispatch = await vi.importActual<typeof import("../../auto-reply/dispatch.js")>(
+    "../../auto-reply/dispatch.js",
+  );
+  const realReply = await vi.importActual<typeof import("../../auto-reply/reply/get-reply.js")>(
+    "../../auto-reply/reply/get-reply.js",
+  );
+  testState.agentConfig = { workspace: tempDirs.make("openclaw-stopped-preparation-") };
+  const { storePath } = await createSessionStoreDir();
+  const preparationStarted = createDeferred();
+  const releasePreparation = createDeferred();
+  const followupDispatched = createDeferred();
+  const followupStarted = createDeferred();
+  const followupFinished = createDeferred();
+  const followupRunId = "after-stopped-preparation";
+  const followupText = "Continue with the new request.";
+  let initialOperation: ReplyOperation | undefined;
+  let sessionKey: string | undefined;
+  const consumed: string[] = [];
+  const context = {
+    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+    chatQueuedTurns: new Map(),
+    broadcast: vi.fn((event: string, payload: unknown) => {
+      if (
+        event === "chat" &&
+        isRecord(payload) &&
+        payload.runId === followupRunId &&
+        payload.state === "final"
+      ) {
+        followupFinished.resolve();
+      }
+    }),
+  };
+  const requestOptions = { ...controlUiClient, context };
+  runtime.execute.mockImplementation(async ({ followupRun, opts, replyOperation }) => {
+    const runId = expectDefined(opts?.runId, "runtime run ID");
+    if (!initialOperation) {
+      initialOperation = expectDefined(replyOperation, "initial reply owner");
+      preparationStarted.resolve();
+      // Model execution has not begun; asynchronous workspace setup still owns the attempt.
+      await releasePreparation.promise;
+      initialOperation.abortSignal.throwIfAborted();
+    } else {
+      opts?.onAgentRunStart?.(runId);
+      await expectDefined(
+        followupRun.userTurnTranscriptRecorder,
+        "follow-up input",
+      ).persistApproved();
+      consumed.push(followupRun.prompt);
+      followupStarted.resolve();
+    }
+    return {
+      runId,
+      outcome: {
+        kind: "settled",
+        status: "ok",
+        result: { payloads: [{ text: "The new request completed." }], meta: { durationMs: 0 } },
+        resolved: { provider: "openai", model: "gpt-test" },
+        fallback: { exhausted: false, attempts: [] },
+        autoCompactionCount: 0,
+        didLogHeartbeatStrip: false,
+      },
+    };
+  });
+  dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
+    const params = raw as Parameters<typeof dispatchInboundMessage>[0];
+    try {
+      return await realDispatch.dispatchInboundMessage({
+        ...params,
+        replyResolver: realReply.getReplyFromConfig,
+      });
+    } finally {
+      if (params.replyOptions?.runId === followupRunId) {
+        followupDispatched.resolve();
+      }
+    }
+  });
+  try {
+    const created = await directSessionReq<{ key: string; runId: string }>(
+      "sessions.create",
+      { agentId: "main", message: "Prepare the initial request." },
+      requestOptions,
+    );
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    const session = expectDefined(created.payload, "created session");
+    sessionKey = session.key;
+    await withinTest(preparationStarted.promise, signal);
+    const stopped = await directSessionReq(
+      "chat.abort",
+      { sessionKey, runId: session.runId },
+      requestOptions,
+    );
+    expect(stopped.ok, JSON.stringify(stopped.error)).toBe(true);
+    expect(initialOperation?.abortSignal.aborted).toBe(true);
+    expect(replyRunRegistry.get(sessionKey)).toBe(initialOperation);
+    const sent = await directSessionReq(
+      "chat.send",
+      { sessionKey, message: followupText, idempotencyKey: followupRunId },
+      requestOptions,
+    );
+    expect(sent).toMatchObject({ ok: true, payload: { runId: followupRunId, status: "started" } });
+    await withinTest(followupDispatched.promise, signal);
+    expect(consumed).toEqual([]);
+    expect(context.chatQueuedTurns.has(followupRunId)).toBe(true);
+    expect(runtime.execute).toHaveBeenCalledOnce();
+    expect(replyRunRegistry.get(sessionKey)).toBe(initialOperation);
+    releasePreparation.resolve();
+    await withinTest(followupStarted.promise, signal);
+    await withinTest(followupFinished.promise, signal);
+    expect(consumed).toEqual([expect.stringContaining(followupText)]);
+    expect(runtime.execute).toHaveBeenCalledTimes(2);
+    expect(initialOperation?.result).toMatchObject({ kind: "aborted", code: "aborted_by_user" });
+    const entry = expectDefined(
+      loadSessionEntry({ agentId: "main", sessionKey, storePath }),
+      "session",
+    );
+    const messages = loadTranscriptEventsSync({
+      agentId: "main",
+      sessionKey,
+      sessionId: entry.sessionId,
+      storePath,
+    });
+    expect(
+      messages.filter(
+        (event) =>
+          isRecord(event) &&
+          isRecord(event.message) &&
+          event.message.role === "user" &&
+          extractTextFromChatContent(event.message.content) === followupText,
+      ),
+    ).toHaveLength(1);
+  } finally {
+    const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey] });
+    releasePreparation.resolve();
+    if (sessionKey) {
+      clearFollowupQueueForTest(sessionKey);
+    }
+    await released;
+    dispatchInboundMessageMock.mockReset();
+    runtime.execute.mockReset();
+    testState.agentConfig = undefined;
+  }
+});

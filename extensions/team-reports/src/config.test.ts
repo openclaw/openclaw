@@ -25,6 +25,18 @@ afterAll(() => {
 });
 
 describe("Team Reports configuration", () => {
+  it("defaults to automatic collection and accepts an explicit scheduling opt-out", () => {
+    expect(parseTeamReportsConfig(minimal).schedule.enabled).toBe(true);
+    for (const enabled of [true, false]) {
+      const value = { ...minimal, schedule: { enabled } };
+      expect(parseTeamReportsConfig(value).schedule.enabled).toBe(enabled);
+      expect(manifestSchema.safeParse?.(value).success).toBe(true);
+    }
+    const invalid = { ...minimal, schedule: { enabled: "false" } };
+    expect(() => parseTeamReportsConfig(invalid)).toThrow();
+    expect(manifestSchema.safeParse?.(invalid).success).toBe(false);
+  });
+
   it("rejects ambiguous people configuration in both validation surfaces", () => {
     const value = { ...minimal, people: [], peopleFile: "/tmp/people.json" };
     expect(() => parseTeamReportsConfig(value)).toThrow();

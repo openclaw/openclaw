@@ -5,6 +5,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   hasBuildArtifactAffectingChange,
+  hasControlUiPerformanceAffectingChange,
+  hasPromptSnapshotAffectingChange,
   hasQaSmokeAffectingChange,
   resolveReleaseFastLaneScope,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
@@ -18,6 +20,36 @@ import {
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("CI changed Node test plan", () => {
+  it.each([
+    {
+      lane: "QA smoke",
+      select: hasQaSmokeAffectingChange,
+      documentation: "extensions/telegram/README.md",
+      source: "extensions/telegram/src/index.ts",
+    },
+    {
+      lane: "UI performance",
+      select: hasControlUiPerformanceAffectingChange,
+      documentation: "ui/docs/design-system/README.md",
+      source: "ui/src/main.ts",
+    },
+    {
+      lane: "prompt snapshots",
+      select: hasPromptSnapshotAffectingChange,
+      documentation: "extensions/codex/README.md",
+      source: "extensions/codex/src/index.ts",
+    },
+  ])("ignores documentation in mixed $lane diffs", ({ select, documentation, source }) => {
+    expect(select([documentation, "src/utils/absolute-deadline.test.ts"])).toBe(false);
+    expect(select([documentation, source])).toBe(true);
+  });
+
+  it("keeps runtime Markdown and fixture documentation in their owner lanes", () => {
+    expect(hasQaSmokeAffectingChange(["qa/scenarios.md"])).toBe(true);
+    expect(hasQaSmokeAffectingChange(["extensions/telegram/test/fixtures/README.md"])).toBe(true);
+    expect(hasControlUiPerformanceAffectingChange(["ui/src/runtime.md"])).toBe(true);
+  });
+
   it("keeps split planner proof within native row budgets without losing cases", () => {
     const files = [
       "test/scripts/ci-changed-node-test-plan.test.ts",
@@ -66,6 +98,7 @@ describe("CI changed Node test plan", () => {
     // change dist bytes; repo scripts, workflows, and qa scenarios cannot.
     expect(hasBuildArtifactAffectingChange(["scripts/build-all.mts"])).toBe(true);
     for (const changedPath of [
+      "cli-invocation.mjs",
       "tsdown.config.ts",
       "tsdown.ai.config.ts",
       "scripts/tsdown-build.mts",

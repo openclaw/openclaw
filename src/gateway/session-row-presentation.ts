@@ -1,9 +1,10 @@
+import { randomUUID } from "node:crypto";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import {
   SESSION_DASHBOARD_ROW_FIELDS,
   SESSION_ROW_DETAIL_FIELDS,
+  SESSION_ROWS_DELTA_PREFIX,
   SESSION_SIDEBAR_ROW_FIELDS,
-  shareSessionRowFacts,
 } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -18,9 +19,9 @@ import type { GatewayClient } from "./server-methods/types.js";
 import { prepareSessionFastModePresentation } from "./session-fast-mode-presentation.js";
 import {
   projectSessionParticipant,
-  projectSessionProfileInvolvement,
+  projectSessionProfileInvolvements,
 } from "./session-identity-projection.js";
-import type { SessionEntrySelection } from "./session-list-filters.js";
+import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
@@ -37,7 +38,7 @@ import {
   projectGatewaySessionActiveRun,
   projectGatewaySessionRunState,
 } from "./session-utils-display.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
+import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
 type PresentationOptions = Omit<
   records.SnapshotOptions,
@@ -69,10 +70,18 @@ type PublicationRows = WeakMap<
   }
 >;
 type Publication = {
+  factsRevision: number;
   rows: PublicationRows;
   lists: Map<
     string,
-    { rows?: GatewaySessionRow[]; selection?: SessionEntrySelection; selectedAt?: number }
+    {
+      rows?: GatewaySessionRow[];
+      previousRows?: GatewaySessionRow[];
+      selection?: SessionEntrySelection;
+      selectedAt?: number;
+      activityExpiresAt?: number;
+      partitions?: WeakMap<object, SessionListFilteredEntries>;
+    }
   >;
 };
 type PublicationView = () => Publication;
@@ -80,21 +89,121 @@ type PublicationView = () => Publication;
 const publications = new WeakMap<
   SessionRowProjection,
   {
-    revision: object;
+    revision: object | undefined;
+    cfg: SessionRowProjection["state"]["cfg"];
+    identityRevision: object | undefined;
   } & Publication
 >();
 const encodings = new WeakMap<GatewaySessionRow, string>();
+/** Immutable row identities own field preparation; fact indexes stay response-local. */
+function createSessionRowFactSharing<T extends GatewaySessionRow>() {
+  const prepared = new WeakMap<T, [string, Partial<T>][]>();
+  return (sessions: T[]) => {
+    type SharedFact = { fact: Partial<T>; rows: number[] };
+    const candidates = new Map<string, SharedFact>();
+    const rows: GatewaySessionRow[] = [];
+    sessions.forEach((row, index) => {
+      const { key, kind, updatedAt, sessionId, rowMode } = row;
+      rows.push({ key, kind, updatedAt, sessionId, rowMode });
+      let facts = prepared.get(row);
+      if (!facts) {
+        facts = [];
+        for (const field in row) {
+          const value = row[field];
+          // Keep required fields and the projection marker readable without expanding the table.
+          if (
+            value === undefined ||
+            ["key", "kind", "updatedAt", "sessionId", "rowMode"].includes(field)
+          ) {
+            continue;
+          }
+          const fact: Partial<T> = {};
+          fact[field] = value;
+          facts.push([JSON.stringify(fact), fact]);
+        }
+        prepared.set(row, facts);
+      }
+      for (const [encoded, fact] of facts) {
+        const candidate = candidates.get(encoded);
+        if (candidate) {
+          candidate.rows.push(index);
+        } else {
+          candidates.set(encoded, { fact, rows: [index] });
+        }
+      }
+    });
+    // Facts with the same recipients share one reference, including common scalar defaults.
+    const groups = new Map<string, SharedFact>();
+    for (const candidate of candidates.values()) {
+      if (candidate.rows.length < 2) {
+        Object.assign(rows[candidate.rows[0]!]!, candidate.fact);
+        continue;
+      }
+      const key = candidate.rows.join(",");
+      const group = groups.get(key);
+      if (group) {
+        Object.assign(group.fact, candidate.fact);
+      } else {
+        groups.set(key, { fact: { ...candidate.fact }, rows: candidate.rows });
+      }
+    }
+    const sharedFacts: Partial<T>[] = [];
+    for (const group of groups.values()) {
+      const reference = sharedFacts.push(group.fact) - 1;
+      for (const index of group.rows) {
+        (rows[index]!.sharedFacts ??= []).push(reference);
+      }
+    }
+    return { sessions: rows, sharedFacts };
+  };
+}
+
+const shareSessionRowFacts = createSessionRowFactSharing<GatewaySessionRow>();
 const sharedLists = new WeakMap<
   GatewaySessionRow[],
-  ReturnType<typeof shareSessionRowFacts<GatewaySessionRow>>
+  ReturnType<typeof shareSessionRowFacts> & { rowsRevision: string }
 >();
 
-export function shareSidebarSessionRows(rows: GatewaySessionRow[]) {
+export function shareSidebarSessionRows(
+  rows: GatewaySessionRow[],
+  ifRowsRevision?: string,
+  previousRows?: GatewaySessionRow[],
+): Pick<
+  SessionsListResult,
+  "sessions" | "sharedFacts" | "rowsRevision" | "rowsUnchanged" | "rowsDelta"
+> {
   let shared = sharedLists.get(rows);
   if (!shared) {
-    shared = freezeJsonSnapshot(shareSessionRowFacts(rows));
+    shared = { ...shareSessionRowFacts(rows), rowsRevision: randomUUID() };
     registerSerializedJsonArray(shared.sessions, shared.sessions.map(serializeSessionRow));
     sharedLists.set(rows, shared);
+  }
+  const baseRevision = ifRowsRevision?.startsWith(SESSION_ROWS_DELTA_PREFIX)
+    ? ifRowsRevision.slice(SESSION_ROWS_DELTA_PREFIX.length)
+    : undefined;
+  const revision = baseRevision ?? ifRowsRevision;
+  if (revision === shared.rowsRevision) {
+    return { sessions: [], rowsRevision: shared.rowsRevision, rowsUnchanged: true };
+  }
+  if (
+    baseRevision !== undefined &&
+    previousRows &&
+    sharedLists.get(previousRows)?.rowsRevision === baseRevision
+  ) {
+    const previous = new Map(previousRows.map((row, index) => [row, index]));
+    const changed: GatewaySessionRow[] = [];
+    const order = rows.map(
+      (row) => previous.get(row) ?? previousRows.length + changed.push(row) - 1,
+    );
+    if (changed.length < rows.length) {
+      const delta = shareSessionRowFacts(changed);
+      registerSerializedJsonArray(delta.sessions, delta.sessions.map(serializeSessionRow));
+      return {
+        ...delta,
+        rowsRevision: shared.rowsRevision,
+        rowsDelta: { baseRevision, order },
+      };
+    }
   }
   return shared;
 }
@@ -116,29 +225,55 @@ export function prepareSessionRowPublication(
   read: SessionRowReadView = projection,
 ) {
   const view: PublicationView = () => {
-    const revision = projection.state.revision;
+    const { revision, cfg, rowContext } = projection.state;
+    const identityRevision = rowContext.identityProjection?.revision;
     let publication = publications.get(projection);
     if (!publication) {
       publication = {
         revision,
+        cfg,
+        identityRevision,
+        factsRevision: 0,
         rows: new WeakMap(),
         lists: new Map(),
       };
       publications.set(projection, publication);
-      const { lists } = publication;
-      projection.onSelectionChange(() => lists.clear());
-      projection.onFactsChange((change) => {
+      const retained = publication;
+      projection.onSelectionChange((change) => {
         if (change.kind === "reset") {
-          lists.clear();
+          retained.lists.clear();
+          return;
         }
-        // Retire wire snapshots even when no reader returns after a publication or disposal.
-        for (const list of lists.values()) {
-          list.rows = undefined;
+        // Unaffected immutable vectors remain comparison witnesses after selection retires.
+        retained.revision = undefined;
+        for (const list of retained.lists.values()) {
+          list.selection = undefined;
         }
       });
-    } else if (publication.revision !== revision) {
+      projection.onFactsChange((change) => {
+        retained.factsRevision++;
+        // Retire wire snapshots even when no reader returns after a publication or disposal.
+        for (const list of retained.lists.values()) {
+          if (change.kind === "reset") {
+            list.previousRows = list.rows = undefined;
+          } else if (list.rows?.some((row) => row.key === change.key)) {
+            list.previousRows = list.rows[0]?.rowMode === "sidebar" ? list.rows : undefined;
+            list.rows = undefined;
+          }
+        }
+      });
+    } else {
+      // Exact row publications cannot mask a preceding profile/configuration invalidation.
+      if (
+        (publication.revision !== undefined && publication.revision !== revision) ||
+        publication.cfg !== cfg ||
+        publication.identityRevision !== identityRevision
+      ) {
+        publication.lists.clear();
+      }
       publication.revision = revision;
-      publication.lists.clear();
+      publication.cfg = cfg;
+      publication.identityRevision = identityRevision;
     }
     return publication;
   };
@@ -164,8 +299,14 @@ export function prepareProjectedSessionPresentation(
   const publicationRows = publicationState?.rows;
   const subagentRuns = rowContext.subagentRuns.atTime(now);
   const preparedRowContext = { ...rowContext, subagentRuns };
-  const runState = (key: string, entry: records.MaterializedRow["entry"]) =>
-    projectGatewaySessionRunState({ key, entry, now, rowContext: preparedRowContext });
+  const runState = (
+    key: string,
+    {
+      entry,
+      parsedKey,
+    }: Pick<records.MaterializedRow["materialized"]["source"], "entry" | "parsedKey">,
+  ) =>
+    projectGatewaySessionRunState({ key, entry, parsedKey, now, rowContext: preparedRowContext });
   const active = (key: string, entry: records.MaterializedRow["entry"], agentId: string) =>
     projectRun?.({
       requestedKey: key,
@@ -195,8 +336,14 @@ export function prepareProjectedSessionPresentation(
   const profileId = profile
     ? projectSessionParticipant({ type: "profile", id: profile.id }, profiles).identity.id
     : undefined;
-  const listView = (opts: SessionsListParams) => {
-    const { source: _source, ...query } = opts;
+  const listView = (opts: SessionsListParams, selection = false) => {
+    const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
+    if (selection) {
+      delete query.rowMode;
+      delete query.includeDerivedTitles;
+      delete query.includeLastMessage;
+      delete query.includeActivitySummary;
+    }
     const key = JSON.stringify([
       client === undefined,
       sharing.cacheKey,
@@ -215,25 +362,56 @@ export function prepareProjectedSessionPresentation(
     }
     return view;
   };
-  const viewer = (value: SessionSharingTarget) => ({
+  const viewer = (value: SessionSharingTarget, sharingRole = sharing.roleForTarget(value)) => ({
     visibility: resolveSessionVisibility(value.entry),
     ...(profileId && !value.entry.incognito && !isIncognitoSessionKey(value.canonicalKey)
       ? {
           hiddenFromInvolvingMe:
-            projectSessionProfileInvolvement(value.entry, profileId, profiles)?.hidden ?? false,
+            (rowContext.identityProjection?.involvement ?? projectSessionProfileInvolvements)(
+              value.entry,
+              profiles,
+            ).get(profileId)?.hidden ?? false,
         }
       : {}),
-    sharingRole: sharing.roleForTarget(value),
+    sharingRole,
     sendDisabledReason:
       authorizeSessionAgentRun(
         { cfg: policyConfig, client: client ?? null, target: value },
         { policy: sharing.policy },
       )?.message ??
-      sharing.authorizeTarget(value)?.message ??
+      sharing.authorizeTarget(value, sharingRole)?.message ??
       (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
         ? "send blocked by session policy"
         : null),
   });
+  const projectModels = (
+    row: GatewaySessionRow,
+    views: Map<string, Readonly<GatewaySessionRow>> | undefined,
+    signature: string | undefined,
+  ) => {
+    const projected = models?.session(row) ?? row;
+    if (projected === row || !views || signature === undefined) {
+      return projected;
+    }
+    const modelSignature =
+      signature +
+      JSON.stringify([
+        projected.modelProvider,
+        projected.model,
+        projected.activeModelProvider,
+        projected.activeModel,
+        projected.contextBudgetStatus,
+      ]);
+    const existing = views.get(modelSignature);
+    if (existing) {
+      return existing;
+    }
+    const snapshot = Object.freeze(projected);
+    views.set(modelSignature, snapshot);
+    return snapshot;
+  };
+  // One synchronous presenter compares many rows; only changed facts become retained snapshots.
+  let facts: unknown[] = [];
   const present = (
     record: records.MaterializedRow,
     options: PresentationOptions = {},
@@ -243,6 +421,7 @@ export function prepareProjectedSessionPresentation(
     const childOwnerSessionKeys = resolveSessionChildOwners({
       key: record.key,
       entry: record.entry,
+      parsedKey: record.materialized.source.parsedKey,
       now,
       subagentRuns,
     });
@@ -276,7 +455,6 @@ export function prepareProjectedSessionPresentation(
     }
     // Keep invariant row facts out of each recipient's encoded signature. The publication
     // owns these views; in-place preview/profile/lineage updates retire the whole row's views.
-    // The materialization owns these views; the resident row survives its replacement.
     let published = publicationRows?.get(record.materialized);
     if (publicationRows) {
       const liveModel = resolveProjectedAgentRunModel({
@@ -284,8 +462,9 @@ export function prepareProjectedSessionPresentation(
         sessionId: record.entry.sessionId,
         index: rowContext.projectedAgentRuns,
       });
-      const temporal = runState(record.key, record.entry);
-      const facts = [
+      const temporal = runState(record.key, record.materialized.source);
+      facts.length = 0;
+      facts.push(
         record.profileRevision,
         record.lastMessagePreview,
         record.fallbackModel,
@@ -298,38 +477,51 @@ export function prepareProjectedSessionPresentation(
         temporal.subagentOwner,
         temporal.fields.status,
         temporal.fields.lastRunError,
+        temporal.fields.suppressErrorNotice,
         temporal.fields.subagentRunState,
         temporal.fields.hasActiveSubagentRun,
         temporal.fields.startedAt,
         temporal.fields.endedAt,
         temporal.fields.runtimeMs,
         // Transient owners can cycle without publishing a row; retire the earlier sample.
-        JSON.stringify([run, preparedFacts]),
+        run?.active,
+        run?.status,
+        JSON.stringify(run?.runIds),
+        preparedFacts?.placement || preparedFacts?.placementMove
+          ? JSON.stringify(preparedFacts)
+          : preparedFacts,
         resolveActiveSessionAgentStatus(record.entry.agentStatus, now),
         // Active budgeted goals can stamp budgetLimitedAt from enriched usage at this clock.
         record.entry.goal?.status === "active" && record.entry.goal.tokenBudget !== undefined
           ? now
           : undefined,
         record.materialized.source.childLinks?.length,
-        ...(record.materialized.source.childLinks ?? []).flatMap(({ key, entry }) => {
-          const childActive = runState(key, entry).fields.hasActiveSubagentRun;
-          return [
+      );
+      for (const child of record.materialized.source.childLinks ?? []) {
+        const { key, entry, parsedKey } = child;
+        const childActive = runState(key, child).fields.hasActiveSubagentRun;
+        facts.push(
+          key,
+          childActive,
+          resolveSessionChildOwners({
             key,
-            childActive,
-            resolveSessionChildOwners({
-              key,
-              entry,
-              now,
-              subagentRuns,
-              hasActiveRun: childActive,
-            }).includes(record.key),
-          ];
-        }),
-      ];
+            entry,
+            parsedKey,
+            now,
+            subagentRuns,
+            hasActiveRun: childActive,
+          }).includes(record.key),
+        );
+      }
       const previous = published?.facts;
-      if (!previous || !facts.every((fact, index) => fact === previous[index])) {
+      let changed = !previous || previous.length !== facts.length;
+      for (let index = 0; !changed && index < facts.length; index++) {
+        changed = facts[index] !== previous![index];
+      }
+      if (changed) {
         published = { facts, views: new Map(), target: toProjectedSessionSharingTarget(record) };
         publicationRows.set(record.materialized, published);
+        facts = [];
       }
     }
     const views = published?.views;
@@ -341,7 +533,7 @@ export function prepareProjectedSessionPresentation(
             client: client ?? null,
             sessionKey: value.canonicalKey,
             target: value,
-          }) && !sharing.authorizeTarget(value)
+          }) && !sharing.authorizeTarget(value, viewerFacts?.sharingRole)
         : undefined;
     const signature =
       views &&
@@ -359,30 +551,8 @@ export function prepareProjectedSessionPresentation(
         canEnsure,
       ]);
     const cached = signature === undefined ? undefined : views?.get(signature);
-    const projectModels = (row: GatewaySessionRow) => {
-      const projected = models?.session(row) ?? row;
-      if (projected === row || !views || signature === undefined) {
-        return projected;
-      }
-      const modelSignature =
-        signature +
-        JSON.stringify([
-          projected.modelProvider,
-          projected.model,
-          projected.activeModelProvider,
-          projected.activeModel,
-          projected.contextBudgetStatus,
-        ]);
-      const existing = views.get(modelSignature);
-      if (existing) {
-        return existing;
-      }
-      const snapshot = Object.freeze(projected);
-      views.set(modelSignature, snapshot);
-      return snapshot;
-    };
     if (cached) {
-      return projectModels(cached);
+      return projectModels(cached, views, signature);
     }
     const row = projection.present(record, {
       ...options,
@@ -457,14 +627,21 @@ export function prepareProjectedSessionPresentation(
     if (signature !== undefined) {
       // Publish the wire snapshot and its bytes together; mutable source aliases stay private.
       const encoded = JSON.stringify(row);
-      const snapshot: GatewaySessionRow = freezeJsonSnapshot(JSON.parse(encoded));
+      const snapshot = freezeJsonSnapshot(row);
       encodings.set(snapshot, encoded);
       views?.set(signature, snapshot);
-      return projectModels(snapshot);
+      return projectModels(snapshot, views, signature);
     }
-    return projectModels(row);
+    return projectModels(row, views, signature);
   };
   return {
+    get audienceKey() {
+      return JSON.stringify([
+        sharing.cacheKey,
+        presentFastMode("ultrafast"),
+        publicationState?.factsRevision,
+      ]);
+    },
     rowContext: preparedRowContext,
     active,
     sharing,
@@ -476,33 +653,35 @@ export function prepareProjectedSessionPresentation(
       );
       return record ? present(record, options) : null;
     },
-    select(opts: SessionsListParams, select: () => SessionEntrySelection) {
+    select(
+      opts: SessionsListParams,
+      select: (retained?: WeakMap<object, SessionListFilteredEntries>) => SessionEntrySelection,
+    ) {
       // These queries consume clock or transient run facts independently of row publications.
-      if (
-        opts.search ||
-        opts.spawnedBy ||
-        opts.activeOnly ||
-        opts.includeOwnerSessionCounts ||
-        opts.activityPulseBoundaries
-      ) {
+      if (opts.search || opts.spawnedBy || opts.activeOnly || opts.activityPulseBoundaries) {
         return select();
       }
-      const view = listView(opts);
+      const view = listView(opts, true);
       if (
-        view.selection &&
+        view.selectedAt !== undefined &&
         opts.activeMinutes !== undefined &&
-        (now < view.selectedAt! || now > (view.selection.activityExpiresAt ?? Infinity))
+        (now < view.selectedAt || now > (view.activityExpiresAt ?? Infinity))
       ) {
         view.selection = undefined;
+        view.partitions = undefined;
       }
       if (!view.selection) {
-        const { entries, ...facets } = select();
+        const { entries, ownerSessionProfiles, ...facets } = select(
+          (view.partitions ??= new WeakMap()),
+        );
         Object.freeze(entries);
         view.selection = Object.freeze({
-          ...freezeJsonSnapshot(structuredClone(facets)),
+          ...freezeJsonSnapshot(facets),
+          ownerSessionProfiles,
           entries,
         });
         view.selectedAt = now;
+        view.activityExpiresAt = view.selection.activityExpiresAt;
       }
       return view.selection;
     },
@@ -512,12 +691,17 @@ export function prepareProjectedSessionPresentation(
       const view = listView(opts);
       const previous = view.rows;
       if (previous?.length === rows.length && rows.every((row, index) => row === previous[index])) {
-        return previous;
+        return { sessions: previous, previousRows: view.previousRows };
       }
       Object.freeze(rows);
-      registerSerializedJsonArray(rows, rows.map(serializeSessionRow));
+      // Sidebar replies encode the fact-packed rows in shareSidebarSessionRows.
+      if (opts.rowMode !== "sidebar") {
+        registerSerializedJsonArray(rows, rows.map(serializeSessionRow));
+      } else if (previous) {
+        view.previousRows = previous;
+      }
       view.rows = rows;
-      return rows;
+      return { sessions: rows, previousRows: view.previousRows };
     },
     snapshot(query: records.Lookup, options: PresentationOptions = {}) {
       const record = projection.describe(query);

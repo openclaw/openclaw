@@ -1,10 +1,10 @@
 import { createEffect, createMemo, For, onCleanup, Show, type Accessor } from "solid-js";
-import { icons } from "../../../components/icons.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import "../../../styles/chat/composer-context-strip.css";
-import { LitContent } from "./chat-composer-interop.tsx";
+import { ComposerContent } from "./chat-composer-content.tsx";
 
 type MentionPerson = { profileId: string; label: string; name: string; avatarUrl?: string };
 
@@ -111,7 +111,9 @@ export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
       <div class="chat-reply-preview composer-context-strip" role="status">
         <span class="composer-context-strip__label">
           <span class="composer-context-strip__icon" aria-hidden="true">
-            <LitContent value={icons.bell} />
+            <ComposerContent>
+              <Icon name="bell" />
+            </ComposerContent>
           </span>
           <span class="composer-context-strip__label-text">{t("chat.mentions.selectedLabel")}</span>
         </span>
@@ -128,13 +130,13 @@ export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
           <For keyed={(person) => person.profileId} each={people()}>
             {(person, index) => (
               <span class="composer-context-strip__person" title={person().label}>
-                <LitContent
-                  value={renderChatAuthorAvatar({
+                <ChatAuthorAvatar
+                  sender={{
                     id: person().profileId,
                     name: person().name,
                     identity: { type: "profile", id: person().profileId },
                     profileAvatarUrl: person().avatarUrl,
-                  })}
+                  }}
                 />
                 <bdi class="composer-context-strip__person-name">
                   {person().name}
@@ -151,7 +153,9 @@ export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
           aria-label={t("chat.mentions.remove")}
           onClick={() => props.onRemove()}
         >
-          <LitContent value={icons.x} />
+          <ComposerContent>
+            <Icon name="x" />
+          </ComposerContent>
         </button>
       </div>
     </Show>

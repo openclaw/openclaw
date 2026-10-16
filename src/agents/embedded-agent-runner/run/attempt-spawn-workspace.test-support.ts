@@ -17,7 +17,6 @@ import type {
 } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
-import type { Model } from "../../../llm/types.js";
 // Shared harness and mocks for embedded attempt spawn-workspace tests.
 import { makeEmptyPluginMetadataOwners } from "../../../plugins/current-plugin-metadata.test-support.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -37,6 +36,8 @@ import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
+import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
 import {
   createTestPromptContextQueue,
@@ -186,6 +187,7 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     getHeader: vi.fn(() => ({ version: 3 })),
     getLeafId: vi.fn<() => string | null>(() => null),
     getLeafEntry: vi.fn(() => null),
+    hasLoadedTranscriptTail: () => true,
     getEntry: vi.fn(() => undefined),
     getEntries: vi.fn(() => []),
     getBranch,
@@ -530,10 +532,6 @@ vi.mock("../../system-prompt-params.js", () => ({
   }),
 }));
 
-vi.mock("../../system-prompt-report.js", () => ({
-  buildSystemPromptReport: () => undefined,
-}));
-
 vi.mock("../../system-prompt-config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../system-prompt-config.js")>();
   return {
@@ -857,7 +855,7 @@ export function resetEmbeddedAttemptHarness(
   });
   hoisted.subscribeEmbeddedAgentSessionMock
     .mockReset()
-    .mockImplementation(() => createSubscriptionMock());
+    .mockImplementation(params.subscribeImpl ?? (() => createSubscriptionMock()));
   hoisted.installToolResultContextGuardMock.mockReset().mockReturnValue(() => {});
   hoisted.installContextEngineLoopHookMock.mockReset().mockReturnValue(() => {});
   hoisted.flushPendingToolResultsAfterIdleMock.mockReset().mockResolvedValue(undefined);
@@ -884,9 +882,6 @@ export function resetEmbeddedAttemptHarness(
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.trajectoryEvents.length = 0;
   resetSessionManagerMocks(hoisted.sessionManager, params.sessionMessages);
-  if (params.subscribeImpl) {
-    hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
-  }
 }
 
 export async function cleanupTempPaths(tempPaths: string[]) {
@@ -907,6 +902,7 @@ export function createDefaultEmbeddedSession(params?: {
   ) => Promise<void>;
 }): MutableSession {
   let activeToolNames: string[] = [];
+  let configuredTools: Agent["state"]["tools"] = [];
   const promptContextQueue = createTestPromptContextQueue((message) => {
     session.messages = [...session.messages, message];
   });
@@ -934,8 +930,9 @@ export function createDefaultEmbeddedSession(params?: {
         await session.agent.streamFn?.(
           testModel,
           {
-            systemPrompt: session.agent.state.systemPrompt ?? "",
+            systemPrompt: session.agent.state.systemPrompt,
             messages: session.messages as Parameters<StreamFn>[1]["messages"],
+            tools: session.agent.state.tools,
           },
           {},
         );
@@ -956,6 +953,14 @@ export function createDefaultEmbeddedSession(params?: {
       // session double never emits them.
       subscribe: () => () => {},
       state: {
+        systemPrompt: "",
+        get tools() {
+          return configuredTools.filter((tool) => activeToolNames.includes(tool.name));
+        },
+        set tools(tools) {
+          configuredTools = [...tools];
+          activeToolNames = tools.map((tool) => tool.name);
+        },
         get messages() {
           return session.messages;
         },
@@ -1034,13 +1039,13 @@ export function createContextEngineBootstrapAndAssemble() {
   };
 }
 
-const testModel = {
+const testModel = makeProviderModelFixture({
+  id: "gpt-test",
   api: "openai-completions",
   provider: "openai",
-  compat: {},
+  baseUrl: "https://api.openai.com/v1",
   contextWindow: 8192,
-  input: ["text"],
-} as unknown as Model;
+});
 
 const testAuthStorage = {
   getApiKey: async () => undefined,
@@ -1146,6 +1151,12 @@ export async function createContextEngineAttemptRunner(params: {
         initialMessages: seedMessages,
         prompt: params.sessionPrompt,
       });
+    session.agent.state.systemPrompt = options.systemPrompt;
+    hoisted.systemPromptTexts.push(options.systemPrompt);
+    session.agent.state.tools = (options.customTools ?? [])
+      .filter((tool) => options.tools.includes(tool.name))
+      .map((tool) => wrapToolDefinition(tool));
+    session.setActiveToolsByName(session.agent.state.tools.map((tool) => tool.name));
     // Nested tool observations append through the same manager the runner prepared.
     session.sessionManager = options.sessionManager;
     if (session.agent.streamFn) {

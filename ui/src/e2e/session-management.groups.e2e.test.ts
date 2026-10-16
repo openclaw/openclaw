@@ -283,6 +283,9 @@ suite.define(() => {
         .poll(() => page.getByRole("menuitem", { name: "Delete…" }).isDisabled())
         .toBe(true);
       await page.keyboard.press("Escape");
+      await page.getByRole("menu", { name: "Advanced", exact: true }).waitFor({ state: "hidden" });
+      await page.keyboard.press("Escape");
+      await page.locator("openclaw-session-menu [role=menu]").first().waitFor({ state: "hidden" });
       await sidebarResearch.hover();
       await sidebarResearch.click({ button: "right" });
       await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Archive session" }));
@@ -439,7 +442,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}sessions`);
       await page.getByRole("button", { name: "Filters" }).click();
-      await page.locator("wa-popover.sessions-filter-popover[open]").waitFor();
+      await page.locator(".sessions-filter-popover:popover-open").waitFor();
       await page.locator(".session-groupby__select").selectOption("category");
       await page.getByRole("button", { name: "New group" }).click();
       const field = page.locator("openclaw-modal-dialog input");

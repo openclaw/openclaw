@@ -319,71 +319,10 @@ suite.define(() => {
         const onlineView = page.locator('[data-navigation-view="online"]');
         await onlineView.click();
         await expect.poll(() => onlineView.getAttribute("aria-pressed")).toBe("true");
-        const onlineToggle = page
-          .locator(".sidebar-online")
-          .getByRole("button", { name: "Online", exact: true });
-        await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(5);
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
-          path: path.join(outputDir, "01-sidebar-online-selected-open-light.png"),
-        });
-
-        await onlineToggle.focus();
-        await page.keyboard.press("Enter");
-        await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("false");
-        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(0);
-        await expect
-          .poll(() =>
-            page.locator(".sidebar-online .viewer-facepile").getAttribute("data-viewer-count"),
-          )
-          .toBe("5");
-        await expect
-          .poll(() => page.locator(".sidebar-online .viewer-avatar--overflow").textContent())
-          .toContain("+3");
-        await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-        await page.locator(".sidebar").screenshot({
-          animations: "disabled",
-          path: path.join(outputDir, "02-sidebar-online-user-collapsed-light.png"),
-        });
-
-        expect(
-          await page.evaluate(() => {
-            const value = localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections");
-            return value ? JSON.parse(value) : [];
-          }),
-        ).toEqual(expect.arrayContaining(["work", "online"]));
-        await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-
-        await page.reload();
-        // View selection is transient. The saved section collapse remains until Online is selected,
-        // and selecting Online deliberately expands its roster.
-        expect(
-          await page.evaluate(() =>
-            JSON.parse(
-              localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections") ?? "[]",
-            ),
-          ),
-        ).toEqual(expect.arrayContaining(["work", "online"]));
-        await onlineView.click();
-        await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
-        await onlineToggle.focus();
-        await page.keyboard.press("Enter");
-        await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("false");
-        await page.emulateMedia({ colorScheme: "dark" });
-        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
-        await page.locator(".sidebar").screenshot({
-          animations: "disabled",
-          path: path.join(outputDir, "03-sidebar-online-collapsed-dark.png"),
-        });
-        await onlineToggle.focus();
-        await page.keyboard.press("Space");
-        await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
-        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(5);
-        await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-        await page.locator(".sidebar").screenshot({
-          animations: "disabled",
-          path: path.join(outputDir, "04-sidebar-online-user-expanded-dark.png"),
+          path: path.join(outputDir, "01-sidebar-users-online-light.png"),
         });
 
         await page.evaluate(

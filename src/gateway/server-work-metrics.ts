@@ -56,7 +56,7 @@ export function startGatewayWorkMetrics(params: {
     }
     await projection.withSelectionPreparation(async () => {
       do {
-        await projection.prepareSelection(true);
+        await projection.prepareSelection({ yieldForCatalog: true });
         if (stopped || !needed() || projection !== getSessionRowProjection(params.context)) {
           return;
         }

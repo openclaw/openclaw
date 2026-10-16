@@ -2,13 +2,13 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { iconData, type IconName } from "../components/icon-data.ts";
-import type { SidebarMenusController } from "../components/sidebar-menus-controller.ts";
+import type { SidebarMenusController } from "../components/sidebar-menus-controller.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { runControlUiPluginAction } from "./control-ui-actions.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { observePluginProperties, PluginContribution } from "./control-ui-view.solid.tsx";
@@ -22,7 +22,7 @@ type ContributionsProps = {
   navigationMenus: SidebarMenusController | undefined;
   presented: boolean;
 };
-type ContributionsElement = SolidBridgeElement<ContributionsProps>;
+export type ContributionsElement = SolidBridgeElement<ContributionsProps>;
 
 function PluginContributionsContent(props: ContributionsProps, host: ContributionsElement) {
   const context = useApplication();

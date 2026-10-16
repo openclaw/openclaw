@@ -901,7 +901,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}settings/model-providers`);
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.locator('wa-dropdown-item[aria-label="Writer"]').click();
+      await agentPicker.getByRole("menuitemradio", { name: "Writer", exact: true }).click();
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Writer");

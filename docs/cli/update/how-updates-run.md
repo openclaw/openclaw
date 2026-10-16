@@ -39,6 +39,13 @@ consumes the shared deadline, so it cannot extend the update's overall budget.
 These checks belong to the installed updater; a candidate cannot change an
 older updater's already-running readiness wait.
 
+Before replacing the same installation, the updater observes the incumbent Gateway once. Failed
+readiness produces a warning and prevents automatic rollback from restarting it;
+the updater does not wait for the incumbent to recover before replacing it.
+The replacement still receives the full startup and readiness verification.
+Certifying a service rooted in a different installation, or verifying a restored
+service after restart, still waits within the existing readiness budget.
+
 On Windows, candidate commands verify their recorded handoff lease and their own
 PID/start identity even when the launcher process tree changes. A different
 immediate parent no longer causes a valid candidate to fail with `Candidate
@@ -51,6 +58,14 @@ the original refusal in its output. The updater can then revalidate and restart
 the preserved service definition. Actual loss of native service authority still
 leaves recovery pending until ownership and restoration can be verified.
 
+On Linux, service refresh repairs group/other-writable unit files and legacy
+backups created by older installers, provided they are regular files owned by
+the service account in safe directories. It backs up the prior definition and
+regenerates the unit and backup with owner-only permissions. Unsafe directories,
+foreign ownership, symlinks, and protected mounts still refuse replacement.
+This repair runs in the candidate installer, including when an older installed
+updater invokes it.
+
 Load slows updates rather than establishing failure: startup inspections and
 recovery backlogs keep acceptance pending within the installation owner's bounded
 readiness budget. The managed-release controller waits for the marker agent's
@@ -60,10 +75,11 @@ The restored predecessor uses the same acceptance rules. Wrong identity, physica
 corruption, a wrong marker reply, or exhaustion of the readiness budget still
 requires failure recovery.
 
-Channel health collection timeouts are warnings during post-update verification.
+Channel probe failures, stopped channels, and health collection timeouts are
+warnings during post-update verification.
 The Gateway must still answer, report the expected version and build, pass HTTP
-readiness, and pass the normal health-settle checks. An explicit negative channel
-probe still fails verification. Timeout warnings remain in the update report even
+readiness, and pass the normal health-settle checks. A channel fault that also
+makes HTTP readiness fail still fails verification. Timeout warnings remain in the update report even
 if a later probe completes; run `openclaw health` to check the affected channels.
 The seven-second collection budget is unchanged. Updated Gateways also avoid
 reporting collection timeouts as negative probes to older updaters, although those
@@ -439,6 +455,13 @@ warning when it has no explicit writer or migration refusal. The updater still
 validates the final config and readiness, then starts the Gateway. A child whose
 termination cannot be confirmed remains blocking because it may still write state.
 
+Offline Doctor cron inspection reuses its admitted maintenance reader after the
+backup boundary instead of creating another disposable SQLite snapshot. If optional
+memory dreaming cron ownership inspection is unavailable, Doctor retains existing
+rows and the pending plugin repair, records a warning, and continues core recovery.
+Run `openclaw doctor --fix` to retry that inspection. Cron rewrite and required
+state migration failures retain their existing safety checks.
+
 Doctor's disposable database migration and repair connections use a 64 MiB SQLite
 page-cache allowance to reduce repeated reads while rebuilding large stores.
 The allowance ends when each connection closes; serving connections keep their
@@ -455,6 +478,10 @@ after the update. Required migration, configuration, plugin, and Gateway readine
 checks still run. Standalone Doctor lint and explicitly selected `--only` checks
 keep their normal scope. The candidate recognizes the private-copy markers already
 set by the published 2026.9.4 updater, so this reduces work on that first hop too.
+When the updater is 2026.10.1 or later, each check has its own time budget, so
+the candidate measures its optional-inspection window from that check's start; a
+slow state snapshot or repair Doctor does not cause lint to defer inspections.
+With older updaters, the window still starts when validation begins.
 
 The rehearsal repair Doctor also defers pure advisory inspections, including
 security, provider catalog, and runtime tool-schema diagnostics, and records their
@@ -654,9 +681,13 @@ inspection, followed by service start
 in `restarting`. Update verification does not use model inference. In `verifying`,
 the updater checks that the managed service is running and owns its port, requires
 the normal 12-check health settle and a Gateway hello handshake matching the
-expected version and Git build identity, checks channel readiness, and requires
-HTTP 200 from `/readyz`. Plugin activation or load failures remain named warnings
+expected version and Git build identity, and requires HTTP 200 from `/readyz`.
+Plugin activation or load failures remain named warnings
 when these core checks pass; they do not turn a successful core update into an error.
+Channel probe errors, timeouts, and stopped or suppressed channels become named
+warnings after core verification succeeds. Run `openclaw channels status --probe`
+or `openclaw health --json` to diagnose them; they do not prevent verified package
+backup retirement.
 
 Managed updates from 2026.9.3 can finish migration through the new runtime
 while the original updater retains installation ownership. The new runtime checks
@@ -666,6 +697,16 @@ Git or npm installation. This continuation does not change the recovery limits b
 The new version can be running while verification fails. Recovery guidance uses the
 latest observed service state and names the running version when known; an
 earlier activation stop does not mean the service remains stopped.
+
+If update recovery finds its managed service still stopped, an unverified service
+definition or installer backup receipt does not prohibit starting the installed
+runtime. The updater preserves the existing definition, revalidates service
+ownership, restarts through the service owner, and verifies normal readiness.
+Successful recovery completes with a warning and retains package backups for
+`openclaw update repair`. Failed startup reports its concrete error and directs
+you to `openclaw update repair` and `openclaw gateway status --deep`.
+Only named data risks, such as unsettled Doctor writers or unverified migrated
+state, instruct you to keep the Gateway stopped.
 
 Respawn and update verification use the same progress-aware readiness wait as
 Gateway restart. Startup that continues making progress can use the existing
@@ -691,7 +732,7 @@ before retiring those backups. A timeout alone does not authorize a recovery
 restart or rollback; a refused rollback also leaves the candidate untouched.
 A running status alone, a failed check on an established listener, or an HTTP
 `/readyz` failure does not establish startup progress. Those unhealthy-service
-observations and concrete version, build, channel, or stopped-service failures
+observations and concrete version, build, or stopped-service failures
 remain failures with their own diagnostics. Doctor reports a qualifying startup
 timeout explicitly as `gateway-readiness-unverified`, including after migrated
 finalization, and tells the operator that readiness remains unconfirmed.

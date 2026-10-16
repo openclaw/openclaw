@@ -1,8 +1,8 @@
 import { statSync } from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../../infra/disk-space.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   parseStateLeaseProcessOwner,
   readStateLeaseProcessOwnerStatus,
@@ -81,7 +81,7 @@ function measureVolumes(demands: readonly { path: string; bytes: number }[]) {
 
 /** The writer transaction samples disk and accounts for every retained operation before admitting writes. */
 function reserveWorktreeCapacityInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: WorktreeCapacityRequest,
 ): WorktreeCapacityResult {
   const { key, owner, demands, purpose, snapshot } = input;

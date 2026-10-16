@@ -1,5 +1,4 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
@@ -9,7 +8,7 @@ import {
   observeCodexCatalogClient,
 } from "./session-catalog-events.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
-import { projectCodexCatalogPage } from "./session-catalog-projection.js";
+import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 let fixtureId = 0;
@@ -53,7 +52,6 @@ async function fixture() {
   const readNative = vi.fn(async (params: CodexThreadListParams) =>
     projectCodexCatalogPage(
       await a.client.request("thread/list", params, { timeoutMs: 1_000, catalogPreview: true }),
-      { sanitize: sanitizeTerminalText },
     ),
   );
   const index = new CodexCatalogIndex({

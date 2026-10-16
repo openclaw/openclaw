@@ -175,8 +175,10 @@ async function fixture(candidateTrap = false) {
     preload,
     `
 import cp from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
+import { PassThrough } from 'node:stream';
 import { promisify } from 'node:util';
 const root = process.env.NPM_AUTHORITY_FIXTURE;
 const isGh = command => command === 'gh' || command === root + '/bin/gh';
@@ -226,6 +228,22 @@ cp.execFile = (command, args, options, callback) => {
 cp.execFile[promisify.custom] = async (command, args, options) => {
   if (!isGh(command)) throw new Error('Unexpected async transport: ' + command);
   return { stdout: response(args).toString('utf8'), stderr: '' };
+};
+const originalSpawn = cp.spawn;
+cp.spawn = (command, args, options) => {
+  if (!isGh(command)) return originalSpawn(command, args, options);
+  const child = Object.assign(new EventEmitter(), {
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+  });
+  queueMicrotask(() => {
+    let code = 0;
+    try { child.stdout.end(response(args)); }
+    catch (error) { code = 1; child.emit('error', error); child.stdout.end(); }
+    child.stderr.end();
+    child.emit('close', code, null);
+  });
+  return child;
 };
 syncBuiltinESMExports();
 `,

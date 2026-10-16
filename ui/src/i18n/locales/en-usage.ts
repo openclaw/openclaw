@@ -64,6 +64,8 @@ const enUsage = {
     export: {
       label: "Export",
       changed: "Session context changed while preparing the export. Refresh usage and try again.",
+      incomplete:
+        "Usage data is incomplete. Refresh usage and try again, or narrow the date range.",
       sessionsCsv: "Sessions CSV",
       dailyCsv: "Daily CSV",
       json: "JSON",

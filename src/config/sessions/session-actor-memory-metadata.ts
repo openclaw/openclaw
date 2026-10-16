@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import { installSessionActorMemoryEntry } from "./session-actor-memory-entry-install.js";
 import { createSessionActorMemoryEvents } from "./session-actor-memory-events.js";
 import { initializeSessionActorMemoryEntry } from "./session-actor-memory-initialize.js";
@@ -26,7 +27,8 @@ export function createSessionActorMemoryMetadata(context: SessionActorMemoryStor
     if (
       (scope.agentId !== undefined && scope.agentId !== agentId) ||
       (scope.storePath !== undefined && scope.storePath !== path) ||
-      (scope.sessionKey !== undefined && scope.sessionKey !== state.hot.target.sessionKey)
+      (scope.sessionKey !== undefined &&
+        resolveSqliteSessionKey(scope.sessionKey, agentId) !== state.hot.target.sessionKey)
     ) {
       throw new SessionTranscriptWriterClaimReboundError();
     }

@@ -151,6 +151,23 @@ describe("msteams file consent invoke authz", () => {
     fileConsentMockState.uploadToConsentUrl.mockResolvedValue(undefined);
   });
 
+  it("rejects malformed consent without logging its content", async () => {
+    const { context, sendActivity } = createInvokeContext({
+      conversationId: "19:victim@thread.v2",
+      uploadId: "invalid-consent",
+      action: "decline",
+    });
+    const privateText = "synthetic private consent content";
+    context.activity.value = { type: "unexpected", text: privateText };
+
+    await runMSTeamsFileConsentInvokeHandler(context, log);
+
+    expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
+    expect(sendActivity).not.toHaveBeenCalled();
+    expect(JSON.stringify(log.debug.mock.calls)).not.toContain(privateText);
+    expect(log.debug).toHaveBeenCalledWith("invalid file consent invoke");
+  });
+
   it("calls updateActivity to replace the consent card when consentCardActivityId is set", async () => {
     const { uploadId, context, sendActivity, updateActivity } = createConsentInvokeHarness({
       invokeConversationId: "19:victim@thread.v2;messageid=abc123",

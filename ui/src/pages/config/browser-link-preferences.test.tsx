@@ -2,8 +2,9 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
+import { t } from "../../lib/reactive/i18n.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { BrowserLinkPreferencesRow } from "./browser-link-preferences.tsx";
 
 describe("Control UI browser link preferences row", () => {
   afterEach(() => patchSettings({ openLinksInControlUiBrowser: false }));
@@ -19,7 +20,11 @@ describe("Control UI browser link preferences row", () => {
   it("renders an accessible default-off toggle and publishes changes", () => {
     const onChange = vi.fn();
     const view = mountSolid(() => (
-      <BrowserLinkPreferencesRow enabled={false} onChange={onChange} />
+      <SettingsToggleRow
+        title={t("browserLinkPreferences.openInControlUi")}
+        checked={false}
+        onChange={onChange}
+      />
     ));
     const { container } = view;
 

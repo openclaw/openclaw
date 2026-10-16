@@ -13,6 +13,7 @@ import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   libraryAuthority,
   type SkillLibraryRequestOwner,
@@ -101,7 +102,7 @@ describe("human personal namespace authority", () => {
     const run = await admitted(
       (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!,
     );
-    const { db } = openOpenClawStateDatabase();
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
     try {
       db.setAuthorizer(() => constants.SQLITE_DENY);
       await expect(run.assertWorkspaceCurrent()).resolves.toBeUndefined();

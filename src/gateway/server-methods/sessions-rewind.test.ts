@@ -85,11 +85,13 @@ import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  listSessionEntriesCore,
-  loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  readSessionEntryReadOnlyInWorker,
+  readSessionEntrySummariesInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
@@ -411,7 +413,12 @@ describe("session message-cut methods", () => {
         message: expect.stringContaining('agent "main"'),
       }),
     );
-    expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(1);
+    expect(
+      await readSessionEntrySummariesInWorker({
+        agentId: "main",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      }),
+    ).toHaveLength(1);
 
     const rewind = await invoke("sessions.rewind", "user-entry", client, false, runtimeConfig);
     expect(rewind).toHaveBeenCalledWith(true, expect.any(Object), undefined);
@@ -433,11 +440,15 @@ describe("session message-cut methods", () => {
       expect.objectContaining({ sessionKey: expect.any(String) }),
       undefined,
     );
-    expect(loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" })).toMatchObject({
+    expect(
+      await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey: forkKey ?? "" }),
+    ).toMatchObject({
       createdActor: { type: "human", id: profile.id },
       sandbox: "required",
     });
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).not.toHaveProperty("sandbox");
+    expect(
+      await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey }),
+    ).not.toHaveProperty("sandbox");
   });
 
   it("returns an empty branch list for a not-yet-materialized session", async () => {
@@ -468,9 +479,9 @@ describe("session message-cut methods", () => {
       );
       mocks.readMediaBuffer.mockImplementation(async (id: string) => {
         const result = await readMedia(id);
-        expect(loadSessionEntry({ agentId: "main", sessionKey })?.sessionId).not.toBe(
-          sourceSessionId,
-        );
+        expect(
+          (await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey }))?.sessionId,
+        ).not.toBe(sourceSessionId);
         if (revoke) {
           current = false;
         }
@@ -655,7 +666,10 @@ describe("session message-cut methods", () => {
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(2);
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
     expect(forkKey).toBeTruthy();
-    const forkEntry = loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" });
+    const forkEntry = await readSessionEntryReadOnlyInWorker({
+      agentId: "main",
+      sessionKey: forkKey ?? "",
+    });
     expect(forkEntry).not.toHaveProperty("sandboxMode");
     expect(forkEntry).not.toHaveProperty("nativeRuntimeConsent");
     expect(forkEntry).toMatchObject({
@@ -684,9 +698,16 @@ describe("session message-cut methods", () => {
       undefined,
     );
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
-    expect(loadSessionEntry({ agentId: "main", sessionKey })?.sandboxMode).toBe("off");
     expect(
-      listSessionEntriesCore({ agentId: "main" })
+      (await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey }))?.sandboxMode,
+    ).toBe("off");
+    expect(
+      (
+        await readSessionEntrySummariesInWorker({
+          agentId: "main",
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        })
+      )
         .map((row) => row.sessionKey)
         .toSorted(),
     ).toEqual([sessionKey, forkKey ?? ""].toSorted());

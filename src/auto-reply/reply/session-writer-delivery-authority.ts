@@ -2,7 +2,7 @@ import { getOwedHarnessCompletionTask } from "../../agents/agent-harness-complet
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { logVerbose } from "../../globals.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
@@ -12,32 +12,12 @@ import {
   type SessionWriterDeliveryAuthority,
 } from "../reply-payload.js";
 
-/** Capture before preparation yields; absence and ended actors never enter native discovery. */
-export function captureSessionWriterDeliveryRead(
+/** Capture before preparation yields; ended actors never enter durable discovery. */
+function captureSessionWriterDeliveryRead(
   target: Pick<SessionWriterDeliveryAuthority, "agentId" | "sessionKey" | "storePath">,
 ): SessionWriterDeliveryAuthority["readCurrentSession"] {
-  const source = captureIncognitoSessionSource(target);
-  if (!source) {
-    return undefined;
-  }
-  const sessionKey = target.sessionKey;
-  return () => {
-    if ("kind" in source) {
-      source.assertCurrent();
-      return undefined;
-    }
-    return source.actor.sessions.readSteering(sessionKey);
-  };
-}
-
-class SessionWriterDeliveryRevokedError extends PlatformMessageNotDispatchedError {
-  constructor() {
-    super("Session writer changed before final reply delivery", {
-      cause: undefined,
-      retryable: false,
-    });
-    this.name = "SessionWriterDeliveryRevokedError";
-  }
+  const memory = captureSessionEntryMetadataRead(target, () => {});
+  return memory ? () => memory.readCurrent() : undefined;
 }
 
 function isEntryAuthorized(
@@ -87,9 +67,9 @@ export async function prepareSessionWriterDeliveryAuthority(
     projection: "list" as const,
     env,
   };
-  const readIncognito = captureSessionWriterDeliveryRead(target);
-  if (readIncognito) {
-    return { authority: { ...authority, readCurrentSession: readIncognito }, release() {} };
+  const readMemory = captureSessionWriterDeliveryRead(target);
+  if (readMemory) {
+    return { authority: { ...authority, readCurrentSession: readMemory }, release() {} };
   }
   let release = () => {};
   try {
@@ -188,6 +168,12 @@ export function assertSessionWriterDeliveryAuthorized(
   authority: SessionWriterDeliveryAuthority | undefined,
 ): void {
   if (authority && !isAuthorityCurrent(authority)) {
-    throw new SessionWriterDeliveryRevokedError();
+    throw new PlatformMessageNotDispatchedError(
+      "Session writer changed before final reply delivery",
+      {
+        cause: undefined,
+        retryable: false,
+      },
+    );
   }
 }

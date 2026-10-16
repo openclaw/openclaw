@@ -7,6 +7,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { registerAgentHarness } from "../agents/harness/registry.js";
 import { prepareWorktreeRegistryGuard } from "../agents/worktrees/registry-read.js";
 import { withWorktreeRunEnd } from "../agents/worktrees/run-end-lifecycle.js";
 import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
@@ -16,6 +17,7 @@ import {
   useManagedWorktreeTestRepository,
 } from "../agents/worktrees/service.test-support.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -24,6 +26,108 @@ import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 
 const initializeRepository = useManagedWorktreeTestRepository();
+
+for (const withSibling of [false, true]) {
+  it(`disposes run execution before joining its held worktree lease (sibling=${withSibling})`, async ({
+    signal,
+  }) => {
+    const fixture = await createGatewayMetadataCloseFixture("gateway-worktree-execution-close");
+    const disposed = createDeferred();
+    const order: string[] = [];
+    let lease: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
+    let closing: Promise<void> | undefined;
+    try {
+      const port = await fixture.reservePort();
+      const server = await fixture.start(port);
+      const kernel = expectDefined(fixture.kernels.get(port), "Gateway kernel");
+      kernel.pluginRuntime.registry.typedHooks.push({
+        pluginId: fixture.pluginId,
+        hookName: "gateway_stop",
+        source: "worktree-shutdown-fixture",
+        handler: async () => {
+          order.push("gateway_stop");
+        },
+      });
+      withPluginRuntimeRegistryScope(kernel.pluginRuntime.registry, () =>
+        registerAgentHarness({
+          id: "worktree-shutdown-fixture",
+          label: "Synthetic worktree run",
+          supports: () => ({ supported: true }),
+          runAttempt: async () => {
+            throw new Error("The shutdown fixture does not call a model");
+          },
+          async dispose() {
+            order.push("dispose");
+            disposed.resolve();
+            await lease?.release();
+          },
+        }),
+      );
+      const disposeSibling = vi.fn();
+      let sibling: Awaited<ReturnType<typeof fixture.start>> | undefined;
+      if (withSibling) {
+        fixture.config.plugins = { enabled: false };
+        const siblingPort = await fixture.reservePort();
+        sibling = await fixture.start(siblingPort);
+        const siblingKernel = expectDefined(
+          fixture.kernels.get(siblingPort),
+          "Sibling Gateway kernel",
+        );
+        expect(siblingKernel.pluginRuntime.registry).not.toBe(kernel.pluginRuntime.registry);
+        withPluginRuntimeRegistryScope(siblingKernel.pluginRuntime.registry, () =>
+          registerAgentHarness({
+            id: "sibling-worktree-shutdown-fixture",
+            label: "Synthetic sibling execution",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => {
+              throw new Error("The shutdown fixture does not call a model");
+            },
+            dispose: disposeSibling,
+          }),
+        );
+      }
+      const repoRoot = await initializeRepository(fixture.state.statePath("execution-source"));
+      const [record] = await materializeManagedWorktreeFixtures({
+        env: fixture.state.env,
+        stateDir: fixture.state.statePath(),
+        repoRoot,
+        now: 1,
+        names: ["running"],
+      });
+      lease = await acquireWorktreeRunLease(expectDefined(record, "Running worktree").id, {
+        env: fixture.state.env,
+      });
+      closing = server.close({ reason: "running tool shutdown" });
+      await withinTest(
+        awaitGateBeforeSettlement(disposed.promise, closing, "Tool execution was not cancelled"),
+        signal,
+      );
+      await withinTest(closing, signal);
+      expect(order).toEqual(["gateway_stop", "dispose"]);
+      expect(disposeSibling).not.toHaveBeenCalled();
+      if (sibling) {
+        await withinTest(sibling.close({ reason: "sibling shutdown" }), signal);
+        expect(disposeSibling).toHaveBeenCalledOnce();
+      }
+      const database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
+        readOnly: true,
+      });
+      try {
+        expect(
+          database
+            .prepare("SELECT COUNT(*) AS count FROM state_leases WHERE scope LIKE 'worktree-run:%'")
+            .get(),
+        ).toEqual({ count: 0 });
+      } finally {
+        database.close();
+      }
+    } finally {
+      await lease?.release();
+      await closing;
+      await fixture.cleanup();
+    }
+  });
+}
 
 // mock-isolation: Keep upstream polling and its agent runtime out of this close-order fixture.
 vi.mock("../sessions/session-upstream-monitor.js", () => ({

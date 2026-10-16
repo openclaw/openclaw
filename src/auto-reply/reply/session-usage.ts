@@ -50,7 +50,7 @@ export function prepareSessionUsageUpdate(params: SessionUsageUpdateParams) {
   const hasUsage = hasNonzeroUsage(params.usage);
   const hasBilling = hasBillableUsage(params.usage);
   const hasPromptTokens =
-    typeof params.promptTokens === "number" &&
+    params.promptTokens !== undefined &&
     Number.isFinite(params.promptTokens) &&
     params.promptTokens > 0;
   const hasUsableLastCallUsage =

@@ -1,13 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
-import type {
-  ConfigNodeRenderParams,
-  ConfigNodeRenderer,
-  LegacyNodeRenderer,
-} from "./config-form.node.shared.ts";
+import type { ConfigNodeRenderParams, ConfigNodeRenderer } from "./config-form.node.shared.ts";
 import { schemaType } from "./config-form.shared.ts";
 
-export type ConfigFormStructuredDraftModel = {
+export type ConfigFormStructuredDraftProps = {
   identity: string;
   sourceIdentity: unknown;
   initialValue: Record<string, unknown> | unknown[];
@@ -15,18 +11,6 @@ export type ConfigFormStructuredDraftModel = {
   renderNode: ConfigNodeRenderer;
 };
 
-export type ConfigFormStructuredDraftProps = Omit<ConfigFormStructuredDraftModel, "renderNode"> & {
-  renderNode?: LegacyNodeRenderer;
-  renderSolidNode?: ConfigNodeRenderer;
-};
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-config-form-structured-draft": HTMLElement & {
-      props?: ConfigFormStructuredDraftProps;
-    };
-  }
-}
 export function resolveStructuredDraftInitialValue(
   params: ConfigNodeRenderParams,
 ): Record<string, unknown> | unknown[] | undefined {

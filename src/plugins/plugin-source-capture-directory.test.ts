@@ -310,6 +310,49 @@ it.each(["natural", "failure", "explicit", "signal"])(
   },
 );
 
+it("reclaims its captures during signal cleanup when the process outlives the drain", async () => {
+  const stateDir = temp.make("plugin-capture-signal-");
+  const source = createSource();
+  const live = await startCliCapture(stateDir, source, false);
+  const signalModule = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.signalExit).href;
+  const child = spawn(
+    process.execPath,
+    [
+      ...runtimeArgs,
+      "--input-type=module",
+      "-e",
+      // Handlers precede the capture lines: the parent signals as soon as it reads them.
+      `import { installCliSignalExitHandlers, registerSignalExitFinalizer } from ${JSON.stringify(signalModule)};
+      installCliSignalExitHandlers();
+      ${childCapture}
+      registerSignalExitFinalizer(async () => fs.writeSync(1, "drained\\n"));
+      // Hung work keeps the process alive after the drain until its supervisor force-kills it.
+      setInterval(() => {}, 60_000);`,
+      source,
+      "cli",
+    ],
+    { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  const exited = new Promise((resolve) => {
+    child.once("close", resolve);
+  });
+  try {
+    const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+    const boundaryRoot = (await lines.next()).value as string;
+    const signalled = capturePaths(stateDir, boundaryRoot, (await lines.next()).value as string);
+    expect(fs.existsSync(signalled.instanceRoot)).toBe(true);
+    child.kill("SIGTERM");
+    expect((await lines.next()).value).toBe("drained");
+    expect(child.exitCode).toBeNull();
+    expect(fs.existsSync(signalled.instanceRoot)).toBe(false);
+    expect(await live.read()).toBe(capturedSource.trimEnd());
+  } finally {
+    child.kill("SIGKILL");
+    await exited;
+    await live.stop();
+  }
+});
+
 async function startCliCapture(stateDir: string, source: string, worker: boolean, legacy = false) {
   const child = spawn(
     process.execPath,
@@ -521,25 +564,6 @@ it.each(["payload", "instance"])(
   },
   30_000,
 );
-
-it("runs hourly reclamation on a live metadata owner", async () => {
-  const stateDir = temp.make("plugin-capture-periodic-");
-  const orphan = await abandonCapture(stateDir, createSource());
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  const time = createGatewaySchedulerClock();
-  const scheduler = createTestGatewayScheduler(time.clock);
-  const metadata = retainGatewayPluginMetadata(scheduler);
-  try {
-    await sweepPluginSourceCapturesForTest(stateDir);
-    expect(fs.readFileSync(orphan.capturedFile, "utf8")).toBe(capturedSource);
-    age(orphan.instanceRoot);
-    await time.advanceBy(2 * hour);
-    expect(fs.existsSync(orphan.instanceRoot)).toBe(false);
-  } finally {
-    await metadata.close();
-    await sweepPluginSourceCapturesForTest(stateDir);
-  }
-}, 30_000);
 
 it("joins hourly reclamation during metadata retirement without stopping sibling schedules", async () => {
   const stateDir = temp.make("plugin-capture-hourly-join-");

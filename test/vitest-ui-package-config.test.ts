@@ -11,6 +11,7 @@ import { createFixtureLifetime } from "./helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.js";
 import { loadVitestPerformanceConfig } from "./vitest/vitest.performance-config.ts";
+import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 import { createUiIsolatedVitestConfig } from "./vitest/vitest.ui-isolated.config.ts";
 import { uiNodeDrivenBrowserTestFiles, uiTimingTestFiles } from "./vitest/vitest.ui-paths.mjs";
@@ -58,7 +59,7 @@ describe("ui package vitest config", () => {
   afterEach(async () => {
     await fixture.cleanup();
     vi.unstubAllEnvs();
-    vi.doUnmock("node:child_process");
+    vi.doUnmock("../ui/src/test-helpers/playwright-chromium.ts");
     vi.resetModules();
   });
 
@@ -251,8 +252,9 @@ export default {
   test: {
     root: ${JSON.stringify(root)},
     include: ["*.test.ts"],
-    setupFiles: [${JSON.stringify(path.join(process.cwd(), "ui/src/test-helpers/lit-warnings.setup.ts"))}],
+    setupFiles: [${JSON.stringify(path.join(process.cwd(), "ui/src/test-helpers/dom.setup.ts"))}],
     environment: "jsdom", isolate: false, pool: "threads", maxWorkers: 1,
+    execArgv: ${JSON.stringify(sharedVitestConfig.test.execArgv)},
     sequence: { sequencer: class extends BaseSequencer {
       sort(files) { return files.toSorted((a, b) => a.moduleId.localeCompare(b.moduleId)); }
     } },
@@ -322,7 +324,7 @@ export default {
           name: "chromium",
           root: uiRoot,
           viteRoot: uiRoot,
-          setupFiles: [path.join(uiRoot, "src/test-helpers/lit-warnings.setup.ts")],
+          setupFiles: [path.join(uiRoot, "src/test-helpers/dom.setup.ts")],
         },
       ]);
       expect(standalone?.files).toContain(
@@ -334,7 +336,7 @@ export default {
           name: "chromium",
           root: topLevelRoot,
           viteRoot: topLevelRoot,
-          setupFiles: [path.join(topLevelRoot, "src/test-helpers/lit-warnings.setup.ts")],
+          setupFiles: [path.join(topLevelRoot, "src/test-helpers/dom.setup.ts")],
         },
       ]);
       expect(testOption?.projects).toEqual([
@@ -342,7 +344,7 @@ export default {
           name: "chromium",
           root: testRoot,
           viteRoot: testRoot,
-          setupFiles: [path.join(testRoot, "src/test-helpers/lit-warnings.setup.ts")],
+          setupFiles: [path.join(testRoot, "src/test-helpers/dom.setup.ts")],
         },
       ]);
     }));
@@ -398,19 +400,15 @@ export default {
     );
     vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", includeFile);
     vi.stubEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", runtimeIncludeFile);
-    vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", includeFile);
-    const probe = vi.fn((..._args: unknown[]) => ({ status: 0 }));
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const childProcess = await importOriginal<typeof import("node:child_process")>();
-      return {
-        ...childProcess,
-        spawnSync: (...args: Parameters<typeof childProcess.spawnSync>) =>
-          args[0] === includeFile ? probe(...args) : childProcess.spawnSync(...args),
-      };
-    });
+    // Chromium selection (which spawns the browser) must stay lazy and run once per process.
+    const resolveChromium = vi.fn((_defaultExecutablePath: string) => includeFile);
+    vi.doMock("../ui/src/test-helpers/playwright-chromium.ts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../ui/src/test-helpers/playwright-chromium.ts")>()),
+      resolvePlaywrightChromiumExecutablePath: resolveChromium,
+    }));
     vi.resetModules();
     const { default: config, createUiBrowserVitestConfig } = await import("../ui/vitest.config.ts");
-    expect(probe).not.toHaveBeenCalled();
+    expect(resolveChromium).not.toHaveBeenCalled();
     const uiRoot = path.join(process.cwd(), "ui");
     const projects = (requireTestConfig(config).projects ?? []).map(requireTestConfig);
     const browser = projects.find((project) => project.browser?.enabled);
@@ -441,7 +439,7 @@ export default {
     );
     const unpartitionedBrowser = requireTestConfig(createUiBrowserVitestConfig({}));
     expect(unpartitionedBrowser.browser?.provider?.prewarm).toEqual(expect.any(Function));
-    expect(probe).toHaveBeenCalledWith(includeFile, ["--version"], { stdio: "ignore" });
+    expect(resolveChromium).toHaveBeenCalledOnce();
     expect(unpartitionedBrowser.browser?.provider?.options).toMatchObject({
       launchOptions: {
         executablePath: includeFile,
@@ -476,7 +474,7 @@ export default {
         shouldPrewarm ? "function" : "undefined",
       );
     }
-    expect(probe).toHaveBeenCalledTimes(1);
+    expect(resolveChromium).toHaveBeenCalledTimes(1);
     writeFileSync(includeFile, JSON.stringify([...nativeFiles, ...nodeFiles]));
     const scopedRoot = requireTestConfig(
       createUiVitestConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),

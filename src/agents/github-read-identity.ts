@@ -9,6 +9,7 @@ import { mergeProcessEnv, resolveEnvironmentValue } from "../infra/process-env.j
 import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { withGitProcessOperation } from "../process/spawn-diagnostics.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { resolveGitHubHost } from "./github-host-runtime.js";
 
@@ -91,12 +92,17 @@ export async function runGitHubIdentityCommand(
   cwd?: string,
   timeoutMs = GITHUB_IDENTITY_COMMAND_TIMEOUT_MS,
 ) {
-  return await runCommandBuffered(argv, {
-    env: env ? { ...env } : {},
-    cwd,
-    timeoutMs,
-    maxOutputBytes: GITHUB_IDENTITY_OUTPUT_LIMIT_BYTES,
-  });
+  return await withGitProcessOperation(
+    "github.identity",
+    () =>
+      runCommandBuffered(argv, {
+        env: env ? { ...env } : {},
+        cwd,
+        timeoutMs,
+        maxOutputBytes: GITHUB_IDENTITY_OUTPUT_LIMIT_BYTES,
+      }),
+    "default",
+  );
 }
 
 export function normalizeGitHubToken(token: string): string {

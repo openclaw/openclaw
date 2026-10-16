@@ -66,7 +66,7 @@ async function runGroupGating(params: {
     groupHistoryLimit: 10,
     groupMemberNames: new Map(),
     logVerbose: (message) => verboseLogs.push(message),
-    replyLogger: { debug: () => {}, warn: () => {} },
+    replyLogger: { warn: () => {} },
   });
   return { result, groupHistories, verboseLogs };
 }

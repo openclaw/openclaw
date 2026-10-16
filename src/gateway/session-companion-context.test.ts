@@ -10,7 +10,9 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
@@ -24,6 +26,7 @@ afterEach(async () => {
   for (const stateDir of tempDirs.dirs) {
     await cleanupSessionStateForTest({ stateDir });
   }
+  memorySessionActorOwners.reset();
   clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
@@ -130,22 +133,64 @@ describe("session companion context", () => {
   );
 
   it("distinguishes a missing session from an empty selected transcript", async () => {
-    const missing = createScope("companion-context-missing");
-    await expect(defaultSessionCompanionContextReader.read(missing)).resolves.toEqual({
+    const scope = createScope("companion-context-empty");
+    await expect(defaultSessionCompanionContextReader.read(scope)).resolves.toEqual({
       kind: "missing",
     });
 
-    const empty = createScope("companion-context-empty");
-    await upsertSessionEntryCore(empty, { sessionId: empty.sessionId, updatedAt: 1 });
-    const result = await defaultSessionCompanionContextReader.read(empty);
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const result = await defaultSessionCompanionContextReader.read(scope);
     expect(result).toEqual({
       kind: "ready",
       context: {
         empty: true,
         messages: [],
-        sessionId: empty.sessionId,
+        sessionId: scope.sessionId,
       },
     });
+  });
+
+  it("reads current incognito context without creating missing sessions", async () => {
+    const scope = {
+      ...createScope("companion-memory"),
+      sessionKey: "agent:main:dashboard:incognito-companion",
+    };
+    const location = {
+      agentId: scope.agentId,
+      path: resolveIncognitoOpenClawAgentSqlitePath(scope),
+    };
+    expect(await defaultSessionCompanionContextReader.read(scope)).toEqual({ kind: "missing" });
+    expect(memorySessionActorOwners.read(location)).toBeUndefined();
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      incognito: true,
+    });
+    expect(await defaultSessionCompanionContextReader.currentSessionId(scope)).toBe(
+      scope.sessionId,
+    );
+    for (const [index, text] of ["First question", "Latest question"].entries()) {
+      await persistSessionTranscriptTurn(scope, {
+        messages: [
+          {
+            eventId: `question-${index}`,
+            message: { role: "user", content: text, timestamp: index },
+          },
+        ],
+        touchSessionEntry: true,
+      });
+      const result = await defaultSessionCompanionContextReader.read(scope);
+      expect(result).toMatchObject({
+        kind: "ready",
+        context: {
+          sessionId: scope.sessionId,
+          messages: expect.arrayContaining([{ role: "user", text, ts: index }]),
+        },
+      });
+    }
+    memorySessionActorOwners.closeDatabase(location);
+    expect(await defaultSessionCompanionContextReader.read(scope)).toEqual({ kind: "missing" });
+    expect(await defaultSessionCompanionContextReader.currentSessionId(scope)).toBeUndefined();
   });
 
   it("reads a bounded active SQLite tail without decoding old transcript rows", async () => {

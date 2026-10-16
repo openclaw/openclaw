@@ -158,7 +158,7 @@ Model fields:
 | `api`                  | `ModelApi`                                                     | Optional per-model API override.                                                     |
 | `baseUrl`              | `string`                                                       | Optional per-model base URL override.                                                |
 | `headers`              | `Record<string, string>`                                       | Optional per-model static headers.                                                   |
-| `input`                | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.                     |
+| `input`                | `Array<"text" \| "image" \| "video" \| "document">`            | Modalities the model accepts. Other values are silently dropped.                     |
 | `reasoning`            | `boolean`                                                      | Whether the model exposes reasoning behavior.                                        |
 | `contextWindow`        | `number`                                                       | Native provider context window.                                                      |
 | `contextWindows`       | `Array<{ id: string; label: string; contextWindow: number }>`  | Up to 16 selectable windows, normalized in ascending token-count order.              |
@@ -201,6 +201,53 @@ Catalog refresh plans keep manual root declarations separate from generated prov
 Generated cache reads for plugins with `activation.onStartup: false` require current authentication for at least one currently owned, endpoint-eligible provider in that catalog. Runtime readers use captured auth or a usable key from provider configuration; a retained catalog cannot authenticate itself. Explicitly authored rows remain separate. This membership rule does not delete stored data or grant request authority.
 
 Capabilities belong to the declared API and base URL, not only the provider/model id. When model listing enriches a cached row, it uses manifest capabilities only for a matching route; a custom endpoint must supply its own limits and capabilities.
+
+### Task-specific inference metadata
+
+A model row can declare `inference` facts for its exact served route. Manifest
+normalization and prepared catalog projection retain them. They do not register
+a transport, grant execution permission, or replace existing provider runtime
+contracts. Omitting the field preserves legacy catalog behavior. An explicit
+declaration requires `chat`; text encoding, JSON support and generic tool-choice
+flags do not establish conversational support.
+
+`inference.decision` describes a typed task separately from chat thinking:
+
+- `protocol`: a bounded provider-owned adapter identifier, not a URL or auth identity.
+- `input`: supported text/image modalities for this task.
+- `questions`: optional declared `boolean`, `choice`, `score`, `sort`, or `tags` kinds.
+  Omission means unknown support; an explicit empty declaration is invalid.
+  Each records probability semantics (`boolean`, `categorical`, `independent`,
+  `provider-defined`, or `none`) and whether it can abstain. Optional option bounds
+  include a separate image-input bound. `requiresCriteria` records whether Boolean
+  questions need an explicit rubric. Independent and provider-defined estimates
+  must not be normalized to sum to one; abstention must not become an argmax.
+- `confidence`: optional `provider-specific` or `none`. A provider-specific
+  confidence metric is distinct from a calibrated correctness probability.
+- `reasoning`: supported `auto`/`off`/`on` modes, optional default/applicable
+  question kinds, and whether execution metadata is returned. This does not
+  imply reasoning text or set the primary model effort.
+- `grounding`: web-search support and optional applicable question kinds.
+  Support is not permission for extra network access or billing.
+- `limits`: optional question, request-token, state-plus-question-token, encoded
+  input and image bounds. Unknown values stay absent. Image metadata records
+  decoded-byte limits, MIME types and remote-URL support separately.
+- `billing`: `tokens`, `decision-units`, or `requests`, with source provenance
+  (`provider-docs`, `provider-catalog`, or `configured`). Only token billing
+  accepts `usdPerMillion.input`/`output`. An absent rate is unknown; an explicit
+  zero remains zero. Subscription decision units are not converted into an
+  invented marginal dollar price.
+
+A genuinely dual-capability model may declare both tasks on the same identity.
+Typed-only routes declare `chat: false`; neither capability implies the other.
+Task metadata never supplies fallback models or ambient conversation content.
+
+Malformed explicit declarations exclude the row rather than falling back to
+a legacy chat interpretation. Unknown fields are discarded. A route change
+replaces the entire declaration rather than blending endpoints with different
+reasoning, probabilities, limits or prices. Losing declared route facts retains
+`chat: false` until the new route supplies an explicit declaration. An overlay
+that preserves the original transport also preserves its inference facts.
 
 ## modelIdNormalization reference
 

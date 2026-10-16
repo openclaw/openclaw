@@ -4,11 +4,9 @@ import {
   type SessionRowChange,
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { resolveGlobalSet, resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
-  assertSessionEntryCreationCurrent,
   readSessionEntryCreationIdentity,
   projectSessionSharingEntry,
   type CreatedSessionEntryReceipt,
@@ -23,7 +21,6 @@ import {
   type SessionEntryReplacementPublication,
   type SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
-import { stageIncognitoSharingPublication } from "./session-accessor.sqlite-incognito-sharing.js";
 import {
   projectSessionEntryPredicateChange,
   publishRetainedSessionEntryPredicate,
@@ -45,19 +42,31 @@ export const pendingSessionEntryPublications = resolveGlobalSingleton(
   Symbol.for("openclaw.pendingSessionEntryPublications"),
   () => new Map<string, Set<PendingSessionEntryPublication>>(),
 );
+const unknownSharingAuthorities = resolveGlobalSet<string>(
+  Symbol.for("openclaw.unknownSessionSharingAuthorities"),
+  "close-and-restart",
+);
+
+/** A fresh snapshot cannot settle a write whose outcome the authority owner lost. */
+export function markSessionSharingAuthorityUnknown(
+  database: SessionEntryCacheDatabase | string,
+  sessionKey: string,
+): void {
+  const identity =
+    typeof database === "string" ? database : findOpenClawAgentDatabaseIdentity(database)?.identity;
+  if (typeof identity === "string") {
+    unknownSharingAuthorities.add(`file:${identity}\0${sessionKey}`);
+  }
+}
 
 export function stageSessionSharingPublication(
   database: SessionEntryCacheDatabase,
   sessionKey: string,
   change?: Extract<SessionRowFacts, { kind: "member" | "owner" }>,
 ) {
-  const releaseIncognito = !database.db.location()
-    ? stageIncognitoSharingPublication(database.db, sessionKey)
-    : undefined;
   const reads = [...(retainedSharingReads(database, sessionKey) ?? [])];
   const token = {};
   const release = () => {
-    releaseIncognito?.();
     for (const read of reads) {
       read.pending.delete(token);
       read.predicate?.pending.delete(token);
@@ -135,41 +144,24 @@ function prepareSessionEntryReplacementChanges(
     return undefined;
   }
   const current = (key: string) => !owner.superseded.has(key);
+  const snapshot = <T>(entries: ReadonlyMap<string, T>, participants = false) =>
+    new Map(
+      [...entries].filter(
+        ([key]) =>
+          current(key) && (!participants || !replacement.unavailableParticipantKeys?.includes(key)),
+      ),
+    );
   return {
     source: replacement.source,
-    entries: new Map(
-      [...replacement.current]
-        .filter(([key]) => current(key) && !replacement.unavailableParticipantKeys?.includes(key))
-        .map(([key, entry]) => [key, freezeJsonSnapshot(entry)]),
-    ),
-    fullEntries:
-      replacement.fullEntries &&
-      new Map(
-        [...replacement.fullEntries]
-          .filter(([key]) => current(key) && !replacement.unavailableParticipantKeys?.includes(key))
-          .map(([key, entry]) => [key, freezeJsonSnapshot(entry)]),
-      ),
-    actorPostimages:
-      replacement.actorPostimages &&
-      new Map(
-        [...replacement.actorPostimages]
-          .filter(([key]) => current(key))
-          .map(([key, state]) => [key, freezeJsonSnapshot(state)]),
-      ),
+    entries: snapshot(replacement.current, true),
+    fullEntries: replacement.fullEntries && snapshot(replacement.fullEntries, true),
+    actorPostimages: replacement.actorPostimages && snapshot(replacement.actorPostimages),
     sharing: new Map(
       [...replacement.current]
         .filter(([key]) => current(key))
         .map(([key, entry]) => [key, projectSessionSharingEntry(entry)]),
     ),
-    projection:
-      replacement.projection &&
-      new Map(
-        [...replacement.projection]
-          .filter(
-            ([key]) => readCurrentSessionEntryProjection(owner, replacement, key) !== undefined,
-          )
-          .map(([key, facts]) => [key, freezeJsonSnapshot(facts)]),
-      ),
+    projection: replacement.projection && snapshot(replacement.projection),
   };
 }
 
@@ -327,7 +319,7 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
     },
     initialize: (snapshot: CommittedSessionSharingFacts) => {
       const acquisition = read.acquisition;
-      if (!active || !acquisition) {
+      if (!active || !acquisition || unknownSharingAuthorities.has(key)) {
         throw new Error("Session sharing acquisition is no longer current");
       }
       read.facts = reconcileSessionSharingAcquisition(acquisition, snapshot);
@@ -339,7 +331,8 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
     },
     readGeneration: () => (active && !generationPending() ? read.generation?.current : undefined),
     readGenerationSettings: () => (active && !pending(true) ? read.generation?.current : undefined),
-    readCurrent: () => (pending(true) ? undefined : read.facts),
+    readCurrent: () =>
+      pending(true) || unknownSharingAuthorities.has(key) ? undefined : read.facts,
     release: () => {
       if (!active) {
         return;
@@ -379,7 +372,9 @@ export function retainPreparedSessionEntryPredicate(params: {
   const isCurrent = () =>
     canRefresh() && predicate.state === "current" && !retained.hasPendingPublication();
   return {
+    prepareRead: retained.prepareRead,
     isCurrent,
+    readRetainedEntry: () => predicate.entry,
     readCurrent: () => (isCurrent() ? { entry: structuredClone(predicate.entry) } : undefined),
     canRefresh,
     captureRevision: () => predicate.revision,
@@ -473,11 +468,7 @@ function readSessionEntryCreationReceipt(
   if (!creation) {
     return undefined;
   }
-  try {
-    assertSessionEntryCreationCurrent(creation);
-  } catch {
-    return undefined;
-  }
+  // Receipt provenance lasts for the operation; effect owners still validate live authority.
   return receipt?.committed &&
     receipt.creation === creation &&
     receipt.databaseIdentity === readSessionEntryCreationIdentity(creation) &&

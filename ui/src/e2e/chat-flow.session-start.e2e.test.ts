@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
-import { openChatDetails } from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -112,7 +112,7 @@ suite.define(() => {
       expect(await progress.isVisible()).toBe(false);
       const details = await openChatDetails(page);
       await details.getByText("Global progress after startup", { exact: true }).waitFor();
-      await details.getByRole("button", { name: "Close details", exact: true }).click();
+      await closeChatDetails(page);
 
       const prompt = "send after configured inference loads";
       await composer.fill(prompt);
@@ -227,14 +227,11 @@ suite.define(() => {
       });
       await expect
         .poll(() =>
-          page.locator("openclaw-chat-pane").evaluate((pane) => {
-            const state = (
-              pane as HTMLElement & { state?: { chatModelCatalog?: Array<{ id?: string }> } }
-            ).state;
-            return state?.chatModelCatalog?.map((model) => model.id);
-          }),
+          page
+            .locator("[data-chat-model-select] .chat-controls__inline-select-label")
+            .textContent(),
         )
-        .toEqual(["hydrated-model"]);
+        .toContain("Hydrated Model");
       expect(await gateway.getRequests("agents.list")).toHaveLength(1);
     } finally {
       await suite.closeBrowserContext(context);

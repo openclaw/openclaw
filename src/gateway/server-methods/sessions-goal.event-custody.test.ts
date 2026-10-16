@@ -8,6 +8,7 @@ const edge = vi.hoisted(() => ({
   record: vi.fn(),
   emit: vi.fn(),
   current: vi.fn(),
+  fingerprint: vi.fn(),
   forbidden: vi.fn((): never => {
     throw new Error("Pure Goal RPC control crossed a native or process boundary");
   }),
@@ -67,7 +68,15 @@ vi.mock("../session-sharing.js", () => ({
     error: null,
   }),
   resolveSessionSharingTargetAsync: async () => edge.target,
-  SessionMutationAuthorizationChangedError: class extends Error {},
+  SessionMutationAuthorizationChangedError: class extends Error {
+    constructor(public error: { code: string; message: string }) {
+      super(error.message);
+    }
+  },
+}));
+// mock-isolation: Event delivery does not need routing configuration.
+vi.mock("../session-sharing-preparation.js", () => ({
+  captureSessionMutationRouting: () => () => {},
 }));
 // mock-isolation: Goal-event fixtures supply revocable authorization without loading sharing storage.
 vi.mock("../session-sharing-authorization-async.js", () => ({
@@ -88,8 +97,9 @@ vi.mock("./gateway-client-identity.js", () => ({
   gatewayClientSessionCreator: () => ({ type: "human", id: "operator" }),
 }));
 vi.mock("./session-change-event.js", () => ({ emitSessionsChanged: edge.emit }));
+// mock-isolation: Fingerprint settlement is controlled without creating a process device identity.
 vi.mock("./session-goal-request.js", () => ({
-  fingerprintSessionGoalRequest: () => "fingerprint",
+  fingerprintSessionGoalRequest: edge.fingerprint,
 }));
 
 function invoke() {
@@ -122,6 +132,9 @@ function invoke() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  edge.target.storeKey = "agent:main:goal";
+  edge.target.canonicalKey = "agent:main:goal";
+  edge.fingerprint.mockReturnValue("fingerprint");
   edge.record.mockResolvedValue(undefined);
   edge.emit.mockImplementation(() => undefined);
   edge.mutate.mockResolvedValue({

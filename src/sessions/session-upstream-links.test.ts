@@ -4,18 +4,23 @@ import { constants, StatementSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { createNativeSessionInitializationOwner } from "../agents/harness/native-session/initialization.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
+import { resetSystemEventsForTest } from "../infra/system-events.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { registerSessionStateWatch } from "./session-state-events.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { createSessionInitialization } from "./session-initialization.js";
+import { recordSessionStateEventAsync, registerSessionStateWatch } from "./session-state-events.js";
 import {
   captureSessionUpstreamLinkReadSource,
   prepareSessionUpstreamLink,
@@ -62,6 +67,7 @@ function upsertLink(
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  resetSystemEventsForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   resetConfigRuntimeState();
@@ -77,7 +83,8 @@ describe("session upstream links", () => {
     const options = createDatabaseOptions();
     const key = "agent:main:adopted:retained";
     upsertLink(key, "codex", options);
-    const { db, path: databasePath } = openOpenClawStateDatabase(options);
+    const { db: connection, path: databasePath } = openOpenClawStateDatabase(options);
+    const db = requireNativeSqliteDatabase(connection);
     const read = (sessionKey = key, agentId = "main") =>
       runSqliteReadOperationSync(db, () =>
         readSessionUpstreamLinkInDatabase(db, sessionKey, agentId),
@@ -223,6 +230,93 @@ describe("session upstream links", () => {
     ).toBeUndefined();
   });
 
+  it.each([false, true])(
+    "initializes and rolls back only its own link without caller-thread SQL (replaced: %s)",
+    async (replaced) => {
+      const database = createDatabaseOptions();
+      const input = {
+        sessionKey: "agent:main:adopted:initialization",
+        agentId: "main",
+        catalogId: "codex",
+        hostId: "gateway:local",
+        threadId: "created",
+        upstreamKind: "codex-app-server" as const,
+        upstreamRef: { threadId: "created" },
+        marker: null,
+      };
+      const identity = { sessionId: "created" };
+      const bindingStore = {};
+      const cleanup = vi.fn(async () => {});
+      const owner = createNativeSessionInitializationOwner({
+        validateBinding: (binding: string) => binding,
+        writeBinding: async () => true,
+        errors: {
+          linkChanged: "link changed",
+          bindingChanged: "binding changed",
+          linkWriteFailed: "link write failed",
+          ownerChanged: "owner changed",
+        },
+      });
+      const host = createSessionInitialization(
+        { storePath: "unused", sessionKey: input.sessionKey, sessionId: identity.sessionId },
+        () => {},
+        { config: {}, agentId: input.agentId, entry: { ...identity, updatedAt: 1 } },
+      );
+      const sql = observeMainThreadSql();
+      try {
+        const initialization = owner.prepare({
+          initialization: host.handle,
+          bindingStore,
+          identity,
+          prepareCleanup: () => cleanup,
+        });
+        await initialization.linkAsync(input);
+        const readSource = captureSessionUpstreamLinkReadSource(
+          captureOpenClawStateWorkerContext(database),
+        );
+        expect(
+          await prepareSessionUpstreamLink(readSource, input.sessionKey, input.agentId),
+        ).toMatchObject(input);
+        if (replaced) {
+          await upsertSessionUpstreamLinkAsync({ ...input, threadId: "replacement" }, database);
+        }
+        await host.rollback(async () => {
+          const rollback = owner.getRollback(
+            bindingStore,
+            { initialization: host.handle },
+            identity,
+            undefined,
+          );
+          expect(rollback).toBeTypeOf("function");
+          if (!rollback) {
+            throw new Error("Missing initialization rollback");
+          }
+          if (replaced) {
+            await expect(rollback()).rejects.toThrow("link changed");
+          } else {
+            await rollback();
+          }
+        });
+        const current = await prepareSessionUpstreamLink(
+          readSource,
+          input.sessionKey,
+          input.agentId,
+        );
+        if (replaced) {
+          expect(current).toMatchObject({ threadId: "replacement" });
+          expect(cleanup).not.toHaveBeenCalled();
+        } else {
+          expect(current).toBeUndefined();
+          expect(cleanup).toHaveBeenCalledOnce();
+        }
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+        host.close();
+      }
+    },
+  );
+
   it("observes source changes and rejects stale initialization", async () => {
     const database = createDatabaseOptions();
     const sourceKey = "agent:main:adopted:source";
@@ -270,6 +364,66 @@ describe("session upstream links", () => {
       ),
     ).toBeUndefined();
   });
+  it.each(["watch-then-link", "link-then-watch", "link-then-event"])(
+    "skips empty upstream scans until %s creates a watched link",
+    async (order) => {
+      const database = createDatabaseOptions();
+      const sessionKey = "agent:main:adopted:idle";
+      const watcherSessionKey = "agent:main:subagent:idle-watch";
+      const watch = () =>
+        registerSessionStateWatch({ watcherSessionKey, targetSessionKey: sessionKey }, database);
+      if (order === "watch-then-link") {
+        expect(await watch()).toBe(true);
+      } else {
+        upsertLink(sessionKey, "codex", database);
+      }
+      const requests = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
+      const listRequests = () =>
+        requests.mock.calls.filter(([, command]) => command.type === "sessionUpstream.listWatched");
+      expect([...(await listWatchedSessionUpstreamLinks(database))]).toEqual([]);
+      expect([...(await listWatchedSessionUpstreamLinks(database))]).toEqual([]);
+      expect(listRequests()).toHaveLength(1);
+      if (order === "watch-then-link") {
+        expect(
+          await upsertSessionUpstreamLinkAsync(
+            {
+              sessionKey,
+              agentId: "main",
+              catalogId: "codex",
+              hostId: "gateway:local",
+              threadId: "idle-thread",
+              upstreamKind: "codex-app-server",
+              upstreamRef: { source: sessionKey },
+              marker: null,
+            },
+            database,
+          ),
+        ).toBe(true);
+      } else if (order === "link-then-watch") {
+        expect(await watch()).toBe(true);
+      } else {
+        expect(
+          await recordSessionStateEventAsync(
+            {
+              sessionKey,
+              agentId: "main",
+              kind: "human_direct_message",
+              actorType: "human",
+              summary: "New upstream activity",
+              watcherSessionKeys: [watcherSessionKey],
+              watcherStorePaths: {},
+            },
+            database,
+          ),
+        ).toBeDefined();
+      }
+      expect((await listWatchedSessionUpstreamLinks(database)).get("codex")).toEqual([
+        expect.objectContaining({ sessionKey, agentId: "main" }),
+      ]);
+      expect(listRequests()).toHaveLength(2);
+    },
+  );
+
   it("returns each watched link once and skips ambiguous agent ownership without host SQL", async () => {
     const database = createDatabaseOptions();
     const watched = "agent:main:adopted:watched";

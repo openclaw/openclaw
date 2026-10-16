@@ -1,9 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.js";
-import {
-  readWorkerProjectPreparation,
-  type WorkerProviderPreparedIntent,
-} from "./preparation-identity.js";
+import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";

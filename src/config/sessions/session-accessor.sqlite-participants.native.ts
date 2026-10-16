@@ -174,7 +174,7 @@ function recordSessionParticipantWithAliasRead(
         namespace,
         existing?.actor_id ?? actorId.toWellFormed(),
       );
-      publishActor([
+      publishActor.publish([
         ...participants.filter(
           (participant) =>
             participant.identity.id !== identity.id ||

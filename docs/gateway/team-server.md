@@ -394,7 +394,8 @@ request reached Access, not that node pairing succeeded. Keep machine credential
 out of browser links and do not bypass Access for the whole Gateway.
 
 Trusted relay plugins can use [principal-bound remote ingress](/plugins/sdk-gateway-ingress)
-for a remote Control UI and MCP calls. A Team grant belongs to the verified person
+for a remote Control UI and MCP calls; [MCP Relay](/plugins/mcp-relay#team-gateways)
+uses it to bring a Team Gateway into ChatGPT and Codex. A Team grant belongs to the verified person
 who approves it in this Gateway's Control UI, never the shared owner or the
 loopback password. The plugin's consent flow should default to **Read + write**
 and offer **Full** within that person's current role. Full gives administrators

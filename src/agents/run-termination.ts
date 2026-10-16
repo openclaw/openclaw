@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { createAbortError } from "../infra/abort-signal.js";
+import { isGatewayRestartDrainError } from "../process/gateway-work-admission.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import {
   type FailoverError,
@@ -116,13 +117,14 @@ export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefi
   if (!signal?.aborted) {
     return {};
   }
-  const stopReason = isAgentRunRestartAbortReason(signal.reason)
-    ? AGENT_RUN_RESTART_ABORT_STOP_REASON
-    : isAgentRunSupersededAbortReason(signal.reason)
-      ? AGENT_RUN_SUPERSEDED_STOP_REASON
-      : isSignalTimeoutReason(signal.reason)
-        ? "timeout"
-        : AGENT_RUN_ABORTED_STOP_REASON;
+  const stopReason =
+    isAgentRunRestartAbortReason(signal.reason) || isGatewayRestartDrainError(signal.reason)
+      ? AGENT_RUN_RESTART_ABORT_STOP_REASON
+      : isAgentRunSupersededAbortReason(signal.reason)
+        ? AGENT_RUN_SUPERSEDED_STOP_REASON
+        : isSignalTimeoutReason(signal.reason)
+          ? "timeout"
+          : AGENT_RUN_ABORTED_STOP_REASON;
   return {
     aborted: true,
     stopReason,
@@ -183,7 +185,16 @@ export function resolveAgentRunErrorLifecycleFields(
     return { aborted: true, stopReason: AGENT_RUN_SUPERSEDED_STOP_REASON };
   }
   const timeout = resolveRunErrorTimeout(error);
-  return timeout ? { stopReason: "timeout", ...timeout } : {};
+  if (timeout) {
+    return { stopReason: "timeout", ...timeout };
+  }
+  // Admission closes before shutdown aborts every active turn. A refusal from
+  // that live drain is an interruption too, not a terminal provider failure.
+  // Paused admission and stale refusal errors cannot create recovery custody.
+  if (collectNestedErrorCandidates(error).some(isGatewayRestartDrainError)) {
+    return { aborted: true, stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON };
+  }
+  return {};
 }
 
 /**

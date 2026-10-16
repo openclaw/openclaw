@@ -56,10 +56,11 @@ vi.mock("node:timers/promises", async (importOriginal) => ({
 const observer = useReconcileWorkerObserver();
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => clearRuntimeConfigSnapshot());
 
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
 
 type TerminalType = Extract<
   SessionTranscriptReconcileWorkerMessage,

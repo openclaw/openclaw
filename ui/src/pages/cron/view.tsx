@@ -7,7 +7,6 @@ import type { CronProps } from "./view-types.ts";
 import "../../styles/chat/startup-layout.css";
 import "../../styles/chat/text.css";
 import "../../styles/cron.css";
-import "../../components/agent-row-chip.tsx";
 import "../../components/tooltip.ts";
 registerEnglishCatalog(registerCronEnglish);
 export function CronView(props: CronProps) {

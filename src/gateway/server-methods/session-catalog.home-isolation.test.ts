@@ -11,8 +11,10 @@ import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 
 // mock-isolation: HOME policy uses the real home path but must not open its profile database.
-vi.mock("../../state/user-profiles.js", () => ({
-  hasMultipleSessionSharingIdentities: vi.fn(() => false),
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: vi.fn(() => false),
+  readResidentUserProfileAliases: (id: string) => new Set([id]),
 }));
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");

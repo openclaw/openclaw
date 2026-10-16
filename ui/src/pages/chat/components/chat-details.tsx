@@ -1,16 +1,24 @@
-import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { Portal } from "@solidjs/web";
 import { Show, createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import "../../../styles/chat/details.css";
 
-type Props = { props?: ChatDetailsProps; presented: boolean };
-export type ChatDetails = SolidBridgeElement<Props>;
+type Props = {
+  props?: ChatDetailsProps;
+  presented: boolean;
+  mobile: boolean;
+  conversationVisible?: boolean;
+  externalTrigger?: boolean;
+};
+type Methods = { open(source: HTMLElement): void };
+export type ChatDetails = SolidBridgeElement<Props, Methods>;
+const controls = new WeakMap<HTMLElement, Methods>();
 let nextId = 0;
 
 const DETAILS_WIDTH = 352;
@@ -18,32 +26,55 @@ const DETAILS_WIDTH = 352;
 const DETAILS_DOCK_MIN_WIDTH = 1200;
 
 /** Pane-local adaptive presentation. Data and mutations remain with the pane. */
-export const ChatDetails = defineSolidBridge<Props>(
+export const ChatDetails = defineSolidBridge<Props, Methods>(
   "openclaw-chat-details",
   (props, host) => {
     const [intent, setIntent] = createSignal<"auto" | "open" | "closed">("auto");
-    const [canDock, setCanDock] = createSignal(false);
+    const [wideEnough, setWideEnough] = createSignal(false);
+    const canDock = () => !props.mobile && props.conversationVisible !== false && wideEnough();
     const opened = () =>
       props.presented && (intent() === "open" || (intent() === "auto" && canDock()));
     const docked = () => opened() && canDock();
     const surface = document.createElement("div");
     surface.style.display = "contents";
     let frame: HTMLElement | null = null;
+    let pane: HTMLElement | null = null;
     const panelId = `chat-details-${++nextId}`;
     let panel!: HTMLDivElement;
     let trigger!: HTMLButtonElement;
-    const position = () => {
-      const footer = frame?.querySelector(".chat-footer");
-      const bounds = frame?.getBoundingClientRect();
+    let opener: HTMLElement | undefined;
+    const focusSource = (mobile: boolean, externalTrigger: boolean) =>
+      mobile || externalTrigger ? opener : trigger;
+    let progressMenu: MenuHandle | undefined;
+    const mountSurface = (mobile: boolean, conversationVisible: boolean) => {
+      // Fullscreen panels hide the conversation frame, but not the pane or mobile header.
+      const parent = mobile ? host : conversationVisible ? (frame ?? host) : (pane ?? host);
+      if (surface.parentElement !== parent) {
+        parent.append(surface);
+      }
+    };
+    const position = (mobile: boolean, conversationVisible: boolean, externalTrigger: boolean) => {
+      const footerBounds = conversationVisible
+        ? frame?.querySelector(".chat-footer")?.getBoundingClientRect()
+        : undefined;
+      const bounds = (
+        mobile ? (pane ?? frame) : conversationVisible ? frame : (pane ?? host)
+      )?.getBoundingClientRect();
       if (!panel || !bounds) {
         return;
       }
-      setCanDock(bounds.width >= DETAILS_DOCK_MIN_WIDTH);
+      setWideEnough(bounds.width >= DETAILS_DOCK_MIN_WIDTH);
       if (panel.classList.contains("chat-details--docked")) {
         return;
       }
       const viewport = window.visualViewport;
-      const minimumTop = Math.max(bounds.top + 8, (viewport?.offsetTop ?? 0) + 8);
+      // A desktop-open inspector can survive a mobile resize without an opener.
+      // Keep the persistent Panels header reachable in that case too.
+      const headerBottom =
+        mobile || !conversationVisible
+          ? pane?.querySelector(".sidebar-region__header")?.getBoundingClientRect().bottom
+          : undefined;
+      const minimumTop = Math.max((headerBottom ?? bounds.top) + 8, (viewport?.offsetTop ?? 0) + 8);
       const left = Math.max(bounds.left + 8, (viewport?.offsetLeft ?? 0) + 8);
       const right = Math.min(
         bounds.right - 8,
@@ -51,25 +82,25 @@ export const ChatDetails = defineSolidBridge<Props>(
       );
       const bottom =
         Math.min(
-          footer?.getBoundingClientRect().top ?? bounds.bottom,
+          footerBounds && footerBounds.height > 0 ? footerBounds.top : bounds.bottom,
           bounds.bottom,
           (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight),
         ) - 8;
-      const triggerBounds = trigger?.getBoundingClientRect();
-      // Retain the gutter clearance when the trigger sits above the conversation.
-      const triggerBottom = triggerBounds
-        ? Math.max(triggerBounds.bottom, minimumTop + triggerBounds.height)
-        : minimumTop + 28;
-      const top = Math.max(minimumTop, Math.min(triggerBottom + 6, bottom - 120));
-      panel.style.left = `${Math.max(left, right - DETAILS_WIDTH)}px`;
+      const triggerBounds = focusSource(mobile, externalTrigger)?.getBoundingClientRect();
+      // The header is already above the frame: keep one gap below the trigger,
+      // rather than adding its height to the conversation top a second time.
+      const top = Math.max(
+        minimumTop,
+        Math.min((triggerBounds?.bottom ?? minimumTop) + 6, bottom - 120),
+      );
+      const width = mobile ? right - left : Math.min(DETAILS_WIDTH, right - left);
+      panel.style.left = `${Math.max(left, right - width)}px`;
       panel.style.top = `${top}px`;
-      panel.style.width = `${Math.max(0, Math.min(DETAILS_WIDTH, right - left))}px`;
+      panel.style.width = `${Math.max(0, width)}px`;
       panel.style.maxHeight = `${Math.max(0, bottom - top)}px`;
     };
     const hide = () => {
-      for (const menu of surface.querySelectorAll<WaDropdown>("wa-dropdown")) {
-        menu.open = false;
-      }
+      progressMenu?.overlay.request(false);
       if (panel?.matches(":popover-open")) {
         panel.hidePopover?.();
       }
@@ -78,7 +109,7 @@ export const ChatDetails = defineSolidBridge<Props>(
       hide();
       setIntent("closed");
       if (restoreFocus && host.isConnected) {
-        trigger?.focus({ preventScroll: true });
+        focusSource(props.mobile, props.externalTrigger ?? false)?.focus({ preventScroll: true });
       }
     };
     const toggle = () => {
@@ -91,6 +122,15 @@ export const ChatDetails = defineSolidBridge<Props>(
       }
       setIntent("open");
     };
+    controls.set(host, {
+      open(source) {
+        if (!props.presented) {
+          return;
+        }
+        opener = source;
+        setIntent("open");
+      },
+    });
     const outside = (event: PointerEvent) => {
       if (
         opened() &&
@@ -102,13 +142,12 @@ export const ChatDetails = defineSolidBridge<Props>(
       }
     };
     const escape = (event: KeyboardEvent) => {
-      // Dropdown properties change before Lit reflects their attributes.
       if (
         event.key === "Escape" &&
         opened() &&
         (!docked() || panel.contains(document.activeElement)) &&
         !event.defaultPrevented &&
-        ![...surface.querySelectorAll<WaDropdown>("wa-dropdown")].some((menu) => menu.open)
+        !progressMenu?.overlay.open
       ) {
         event.preventDefault();
         close(true);
@@ -131,6 +170,7 @@ export const ChatDetails = defineSolidBridge<Props>(
       () => presentation(),
       () => {
         setIntent("auto");
+        opener = undefined;
       },
     );
     createEffect(
@@ -142,52 +182,68 @@ export const ChatDetails = defineSolidBridge<Props>(
       },
     );
     createEffect(
-      () => [opened(), docked()] as const,
-      ([open, dock]) => {
+      () =>
+        [
+          opened(),
+          docked(),
+          props.mobile,
+          props.conversationVisible ?? true,
+          props.externalTrigger ?? false,
+        ] as const,
+      ([open, dock, mobile, conversationVisible, externalTrigger]) => {
         hide();
+        // Let Portal register delegated events before onSettled first mounts the surface.
+        // It can later move outside the header’s render root into the pane or frame.
+        if (surface.parentElement) {
+          mountSurface(mobile, conversationVisible);
+        }
         panel.hidden = !open;
         panel.popover = dock ? null : "manual";
         panel.style.cssText = "";
         panel.classList.toggle("chat-details--docked", dock);
         frame?.style.setProperty("--chat-details-space", dock ? DETAILS_WIDTH + "px" : "0px");
         if (open && !dock) {
-          position();
+          position(mobile, conversationVisible, externalTrigger);
           // Keep native Tab entry beside its header trigger after portaling the content.
-          panel.showPopover({ source: trigger });
+          panel.showPopover({ source: focusSource(mobile, externalTrigger) });
         }
       },
     );
+    const reposition = () => {
+      mountSurface(props.mobile, props.conversationVisible ?? true);
+      position(props.mobile, props.conversationVisible ?? true, props.externalTrigger ?? false);
+    };
     onSettled(() => {
+      pane = host.closest<HTMLElement>(".sidebar-region");
       frame =
         host.closest<HTMLElement>(".chat-main__conversation-frame") ??
         host
           .closest("openclaw-chat-pane")
           ?.querySelector<HTMLElement>(".chat-main__conversation-frame") ??
         null;
-      // Keep one content tree across overlay/dock transitions, outside the header's clipping.
-      (frame ?? host).append(surface);
       const resize =
-        typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(position);
-      for (const element of [frame, frame?.querySelector(".chat-footer")]) {
+        typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(reposition);
+      for (const element of [pane, frame, frame?.querySelector(".chat-footer")]) {
         if (element) {
           resize?.observe(element);
         }
       }
-      position();
+      reposition();
       return () => resize?.disconnect();
     });
-    window.addEventListener("resize", position);
-    window.visualViewport?.addEventListener("resize", position);
-    window.visualViewport?.addEventListener("scroll", position);
+    window.addEventListener("resize", reposition);
+    window.visualViewport?.addEventListener("resize", reposition);
+    window.visualViewport?.addEventListener("scroll", reposition);
     document.addEventListener("pointerdown", outside);
     document.addEventListener("keydown", escape);
     onCleanup(() => {
+      controls.delete(host);
       hide();
       frame?.style.removeProperty("--chat-details-space");
       surface.remove();
-      window.removeEventListener("resize", position);
-      window.visualViewport?.removeEventListener("resize", position);
-      window.visualViewport?.removeEventListener("scroll", position);
+      window.removeEventListener("resize", reposition);
+      window.visualViewport?.removeEventListener("resize", reposition);
+      window.visualViewport?.removeEventListener("scroll", reposition);
       document.removeEventListener("pointerdown", outside);
       document.removeEventListener("keydown", escape);
     });
@@ -198,6 +254,7 @@ export const ChatDetails = defineSolidBridge<Props>(
             trigger = element;
           }}
           class="chat-details-toggle"
+          hidden={props.mobile || props.externalTrigger}
           type="button"
           aria-label={t("chat.sessionDetails.title")}
           aria-controls={panelId}
@@ -219,22 +276,37 @@ export const ChatDetails = defineSolidBridge<Props>(
             role={docked() ? "complementary" : "dialog"}
             aria-label={t("chat.sessionDetails.title")}
           >
-            <div class="chat-details__toolbar">
-              <span>{t("chat.sessionDetails.title")}</span>
-              <button
-                type="button"
-                aria-label={t("chat.sessionDetails.close")}
-                onClick={() => close(true)}
-              >
-                <Icon name="x" />
-              </button>
-            </div>
+            <Show when={props.mobile || props.externalTrigger}>
+              <div class="chat-details__toolbar">
+                <span>{t("chat.sessionDetails.title")}</span>
+                <button
+                  type="button"
+                  aria-label={t("chat.sessionDetails.close")}
+                  onClick={() => close(true)}
+                >
+                  <Icon name="x" />
+                </button>
+              </div>
+            </Show>
             <Show when={scope()} keyed>
               {(_scope) => (
                 <>
-                  <ChatDetailsSession props={props.props} presented={props.presented && opened()} />
+                  <ChatDetailsSession
+                    props={props.props}
+                    presented={props.presented && opened()}
+                    dismissed={intent() === "closed"}
+                  />
                   <Show when={props.props?.progressCard || props.props?.progressCardInitialLoading}>
                     <ChatDetailsProgress
+                      onHideProgress={() => {
+                        // The top-layer inspector must not cover the Undo toast.
+                        if (!docked()) {
+                          close(true);
+                        }
+                      }}
+                      menuRef={(menu) => {
+                        progressMenu = menu;
+                      }}
                       props={props.props}
                       presented={props.presented && opened()}
                     />
@@ -251,7 +323,11 @@ export const ChatDetails = defineSolidBridge<Props>(
     properties: {
       props: { default: undefined, attribute: false },
       presented: { default: false, type: Boolean },
+      mobile: { default: false, type: Boolean, reflect: true },
+      conversationVisible: { default: true, type: Boolean },
+      externalTrigger: { default: false, type: Boolean },
     },
+    methods: { open: (host, source) => controls.get(host)?.open(source) },
   },
 );
 

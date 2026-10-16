@@ -347,6 +347,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     spawnedCwd?: string;
     /** Content-free fingerprints for checkout changes that predate this session generation. */
     sessionDiffBaseline?: SessionDiffBaseline;
+    /** Canonical existing directory owned by the user on a paired session host. */
+    deviceFolder?: { deviceId: string; path: string };
     /**
      * Managed worktree bound to this session; set with spawnedCwd at worktree
      * creation and cleared together when a plain New Chat detaches the checkout.
@@ -442,6 +444,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     status?: PersistedSessionRunStatus;
     /** Compact user-facing reason for the latest failed or timed-out run. */
     lastRunError?: string;
+    /** The latest failed run is diagnostic-only, not a request for the user to retry. */
+    suppressErrorNotice?: boolean;
     /**
      * Session-level stop cutoff captured when /stop is received.
      * Messages at/before this boundary are skipped to avoid replaying
@@ -667,6 +671,22 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Original host-admitted operator basis, owned by the exact restart source claim. */
   restartRecoveryOperatorSource?: import("../../gateway/operator-run-recovery-source.js").RestartRecoveryOperatorSource;
+  /** Unhanded exec completion obligations; no command arguments or output. */
+  pendingExecNotifications?: Record<
+    string,
+    {
+      processSessionId: string;
+      sessionId: string;
+      lifecycleRevision?: string;
+      incarnation: string;
+      startedAt: number;
+      label: string;
+      policy: Pick<
+        import("../../auto-reply/reply/session-event-contract.js").SessionEventTarget,
+        "settings" | "deliver" | "deliveryContext" | "chatType"
+      > & { toolsAllow?: readonly string[][] };
+    }
+  >;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 

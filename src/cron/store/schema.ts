@@ -1,7 +1,7 @@
-/** Kysely row types and table facade for the cron_jobs SQLite table. */
-import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+/** Kysely row types and table facade for the cron_jobs SQLite table. */
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 
 type CronJobsTable = OpenClawStateKyselyDatabase["cron_jobs"];
@@ -51,6 +51,6 @@ export type CronJobGenerationReadRow = Pick<
 export type CronJobInsert = Insertable<CronJobsTable>;
 
 /** Creates the Kysely facade scoped to cron_jobs for synchronous SQLite access. */
-export function getCronStoreKysely(db: DatabaseSync) {
+export function getCronStoreKysely(db: EngineConnection) {
   return getNodeSqliteKysely<CronStoreDatabase>(db);
 }

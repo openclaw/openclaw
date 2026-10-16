@@ -258,7 +258,12 @@ export function extractMessageText(content: unknown): string {
         if (codeBlock) {
           const lang = readStringField(codeBlock, "lang") ?? "";
           const code = readStringField(codeBlock, "code") ?? "";
-          return `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
+          let fenceLength = 3;
+          for (const match of code.matchAll(/`+/g)) {
+            fenceLength = Math.max(fenceLength, match[0].length + 1);
+          }
+          const fence = "`".repeat(fenceLength);
+          return `\n${fence}${lang}\n${code}\n${fence}\n`;
         }
 
         const header = asNullableRecord(block.header);

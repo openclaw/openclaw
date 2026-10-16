@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import { preparePluginStateRead } from "../plugin-sdk/plugin-state-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -384,11 +385,20 @@ describe("plugin state worker operations", () => {
     const second = open("receipt-second");
     await first.register("key", "original");
     const operation = first.createOperation<FixtureOperations>([first, second], handler);
+    const guard = await preparePluginStateRead(first, "key");
+    if (!guard) {
+      throw new Error("Expected an owner-published state guard");
+    }
     vi.spyOn(admission, "observeSqliteWorkerCommittedFacts").mockImplementation(() => {});
-    await expect(
-      operation.execute({ type: "move", input: { value: "committed" } }, { writeStores: [0, 1] }),
-    ).rejects.toThrow("no committed receipt");
-    expect(await first.lookup("key")).toBeUndefined();
-    expect(await second.lookup("key")).toBe("committed");
+    try {
+      await expect(
+        operation.execute({ type: "move", input: { value: "committed" } }, { writeStores: [0, 1] }),
+      ).rejects.toThrow("no committed receipt");
+      expect(await first.lookup("key")).toBeUndefined();
+      expect(await second.lookup("key")).toBe("committed");
+      expect(() => guard.read()).toThrow("unavailable");
+    } finally {
+      guard.release();
+    }
   });
 });

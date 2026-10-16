@@ -28,6 +28,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as entryReads from "./session-accessor.sqlite-entry-read.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
@@ -100,11 +101,14 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
         if (!opened.found) {
           throw new Error("Expected the retained catalog database");
         }
-        const payloads = trackSqliteStatementExecutions(opened.value.db, ["entries"], (sql) =>
-          isSessionNodePayloadSelect(sql) ||
-          (sql.includes('from "session_nodes"') && sql.includes('"entry_json"'))
-            ? "entries"
-            : null,
+        const payloads = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(opened.value.db),
+          ["entries"],
+          (sql) =>
+            isSessionNodePayloadSelect(sql) ||
+            (sql.includes('from "session_nodes"') && sql.includes('"entry_json"'))
+              ? "entries"
+              : null,
         );
         try {
           expect(read(first.revision)).toMatchObject({
@@ -178,10 +182,13 @@ it("resolves runtime targets through an admitted reader without freshness probes
         },
       });
     await read();
-    const queries = trackSqliteStatementExecutions(database.db, ["freshness"], (sql) =>
-      /^PRAGMA data_version;?$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)
-        ? "freshness"
-        : null,
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["freshness"],
+      (sql) =>
+        /^PRAGMA data_version;?$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)
+          ? "freshness"
+          : null,
     );
     try {
       expect(await read()).toMatchObject({
@@ -195,7 +202,7 @@ it("resolves runtime targets through an admitted reader without freshness probes
     }
 
     const replacement = `${database.path}.replacement`;
-    await backup(database.db, replacement);
+    await backup(requireNativeSqliteDatabase(database.db), replacement);
     await closeOpenClawAgentDatabaseByPathAsync(database.path);
     const peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(replacement);
     try {

@@ -238,6 +238,7 @@ describe("diagnostics.cpuProfile dispatch", () => {
 describe("diagnostics.heapProfile dispatch", () => {
   it.each([
     undefined,
+    { durationMs: 30_000, includeCollected: true },
     {
       durationMs: 200,
       samplingIntervalBytes: 4096,

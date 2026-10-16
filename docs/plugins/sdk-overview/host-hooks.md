@@ -52,6 +52,16 @@ generation. Registration resources remain held through admitted work and cleanup
 `dispose()` runs after the final claim releases, including any bounded idle
 retention between runs.
 
+Use `api.runContext` to share JSON-compatible, per-run data between a plugin's
+admitted agent hooks and its Gateway service registrations. Values are keyed by
+run ID, plugin ID, and namespace, so separate prepared-runtime registrations of
+the same plugin can exchange admission metadata without sharing closure state.
+Scoped hooks can access this data while their invocation is admitted; merely
+loading a plugin for inspection does not grant access, and retired registrations
+cannot read or write it. Terminal agent-event handlers can still read the data;
+the host clears it after those handlers settle. This does not grant scoped hooks
+permission to steer runs, inject prompts, or emit process-global events.
+
 Creating a configured or standalone publication does not enable this ownership.
 Existing root registries and raw SDK host registrations keep their original owner;
 borrowing an already managed generation preserves that source's ownership.
@@ -280,6 +290,35 @@ plugin code that calls
 `api.sendSessionAttachment`, `api.scheduleSessionTurn`, or
 `api.unscheduleSessionTurnsByTag` directly.
 
+`api.agent.events.registerAgentEventSubscription(...)` accepts optional `streams`
+and `phases` filters:
+
+```typescript
+api.agent.events.registerAgentEventSubscription({
+  id: "tool-starts",
+  streams: ["tool"],
+  phases: ["start"],
+  handle(event, ctx) {
+    ctx.setRunContext("lastToolStart", { timestamp: event.ts });
+  },
+});
+```
+
+Both filters must match for delivery. Omit a filter or pass an empty array to
+leave that dimension unrestricted. `phases` must be an array of non-empty
+strings; registration trims each string. A non-empty phase filter matches only
+events whose `data` is an object with a string `phase` in that list. Events with
+no phase or a non-string phase are excluded.
+Set `payload: "metadata"` to retain only own enumerable top-level `data` fields
+containing strings of at most 256 characters, numbers, booleans, or `null`, without
+reading accessors; omitted `payload` or `"full"` preserves the full cloned payload.
+
+Subscribe narrowly: event payloads are cloned per matching subscription. The
+host applies stream and phase filters before cloning payloads or allocating
+handler context. Filtering out terminal lifecycle events does not prevent
+host-owned terminal bookkeeping or run-context cleanup; cleanup still waits
+for pending subscription handlers within the host's bounded grace period.
+
 `scheduleSessionTurn(...)` is a session-scoped convenience over the Gateway
 Cron scheduler. Cron owns timing and run history; the Plugin SDK only constrains
 the target session, plugin-owned naming, and cleanup.
@@ -481,6 +520,12 @@ The `linkReader` fields are:
 | `detailMethod`  | Same-plugin read method receiving `{ url, agentId?, refresh? }` and returning a `ControlUiLinkReaderDocument`.                                                                            |
 | `previewMethod` | Optional same-plugin read method receiving `{ url, agentId? }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews. |
 | `imageMethod`   | Optional same-plugin read method receiving `{ url }` and returning `{ url, dataUrl }` for inline images.                                                                                  |
+
+A reader may set `sessionScoped: true` to receive the foreground pane's `sessionKey`
+on preview and detail requests. This is a context hint, never authority: its Gateway
+method must authorize the current operator and exact session before reading private
+data. Hovercard caches and seeds retire when that pane changes sessions. Readers
+without this flag retain the public request shape.
 
 Preview and detail requests include the selected `agentId` when available; detail
 requests also accept `refresh: true`. The receiving owner must authorize identity

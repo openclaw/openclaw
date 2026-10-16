@@ -6,7 +6,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -114,7 +114,7 @@ async function seedPendingWorkspace(scenario: RecoveryScenario) {
     | "workerPlacementDispatchService"
   >;
   const before = {
-    entry: loadSessionEntry(sessionKey).entry,
+    entry: (await loadSessionEntryAsync(sessionKey)).entry,
     placement: placements.get(sessionId),
     pending: await placements.listPendingWorkspaceResultsAsync(),
   };
@@ -130,7 +130,7 @@ async function seedPendingWorkspace(scenario: RecoveryScenario) {
     reclaim,
     waitForTurnClaimRelease,
     async expectPreserved() {
-      expect(loadSessionEntry(sessionKey).entry).toEqual(before.entry);
+      expect((await loadSessionEntryAsync(sessionKey)).entry).toEqual(before.entry);
       expect(placements.get(sessionId)).toEqual(before.placement);
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(before.pending);
     },

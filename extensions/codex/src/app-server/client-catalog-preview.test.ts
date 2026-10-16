@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CodexAppServerMessageDecoder } from "./client-message-decoder.js";
+import * as messageDecoder from "./client-message-decoder.js";
 import { createClientHarness } from "./test-support.js";
 
 const harnesses: Array<ReturnType<typeof createClientHarness>> = [];
@@ -100,9 +100,10 @@ describe("Codex catalog preview decoding", () => {
   );
 
   it("bounds catalog payloads while preserving ordinary thread/list results", async () => {
-    const parse = vi.spyOn(CodexAppServerMessageDecoder.prototype, "parse");
+    const parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
     const harness = createHarness();
-    const large = "unused native history ".repeat(100_000);
+    // Stay below the 8 MiB frame cap while exercising worker-side projection.
+    const large = "unused native history ".repeat(80_000);
     const thread = {
       id: "bounded-metadata",
       preview: "x".repeat(1024 * 1024),
@@ -117,6 +118,7 @@ describe("Codex catalog preview decoding", () => {
       { limit: 64, useStateDbOnly: true },
       { timeoutMs: 1_000, catalogPreview: true },
     );
+    expect(Buffer.byteLength(JSON.stringify(thread))).toBeLessThan(8 * 1024 * 1024);
     harness.send({ id: requestId(harness), result: { data: [thread] } });
     const page = await catalog;
     expect(page.data[0]).toMatchObject({
@@ -128,9 +130,11 @@ describe("Codex catalog preview decoding", () => {
     });
     expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(2_048);
     expect(parse).not.toHaveBeenCalled();
+    const ordinaryThread = { ...thread, preview: thread.preview.repeat(2) };
+    expect(Buffer.byteLength(JSON.stringify(ordinaryThread))).toBeGreaterThan(8 * 1024 * 1024);
     const ordinary = harness.client.request("thread/list", { limit: 64, useStateDbOnly: true });
-    harness.send({ id: requestId(harness, 1), result: { data: [thread] } });
-    await expect(ordinary).resolves.toEqual({ data: [thread] });
+    harness.send({ id: requestId(harness, 1), result: { data: [ordinaryThread] } });
+    await expect(ordinary).resolves.toEqual({ data: [ordinaryThread] });
     expect(parse).toHaveBeenCalledOnce();
   });
 

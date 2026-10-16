@@ -3,7 +3,6 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, expect, it, vi } from "vitest";
 import { runBoundedCodexAppServerTurn } from "./app-server/bounded-turn.js";
 import {
@@ -22,7 +21,7 @@ import {
 } from "./session-catalog-events.js";
 import type { StoredCodexCatalogEntry } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
-import { projectCodexCatalogPage } from "./session-catalog-projection.js";
+import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -141,14 +140,7 @@ it.each([false, true])(
       expect((await openState().entries()).filter((entry) => entry.value.kind === "row")).toEqual(
         [],
       );
-      expect(
-        (
-          await projectCodexCatalogPage(
-            { data: [native.thread] },
-            { sanitize: sanitizeTerminalText },
-          )
-        ).rows,
-      ).toEqual([]);
+      expect((await projectCodexCatalogPage({ data: [native.thread] })).rows).toEqual([]);
     } finally {
       await restarted.close();
     }

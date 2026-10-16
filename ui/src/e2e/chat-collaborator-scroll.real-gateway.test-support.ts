@@ -254,11 +254,26 @@ type ScrollSample = {
     initialized: boolean;
     runId: string | null;
     streamLength: number | null;
+    lastTop: number;
+    maintenance?: boolean;
+    programmatic?: boolean;
   };
   rows: Array<{ key?: string; height: number }>;
 };
+type ScrollPolicy = {
+  top: number;
+  distance: number;
+  lastTop?: number;
+  locked?: boolean;
+  programmatic?: boolean;
+  maintenance?: boolean;
+};
 type ScrollProbeElement = HTMLElement & {
-  scrollProof: { samples: ScrollSample[]; stop: () => void };
+  scrollProof: {
+    samples: ScrollSample[];
+    policyChanges: Array<{ before?: ScrollPolicy; after: ScrollPolicy }>;
+    stop: () => void;
+  };
 };
 export async function startScrollProbe(page: Page) {
   return page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate((element) => {
@@ -292,6 +307,9 @@ export async function startScrollProbe(page: Page) {
               initialized: state.chatHasAutoScrolled,
               runId: state.chatRunId,
               streamLength: state.chatStream?.length ?? null,
+              lastTop: state.chatLastScrollTop,
+              maintenance: state.chatIsMaintenanceScroll?.(),
+              programmatic: state.chatIsProgrammaticScroll?.(),
             }
           : undefined,
         rows: [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")].map((row) => ({
@@ -307,6 +325,32 @@ export async function startScrollProbe(page: Page) {
     };
     const before = sample();
     const samples = [before];
+    const scrollPolicy = (): ScrollPolicy => {
+      const state = element.closest<HTMLElement & { state?: ChatPageHost }>(
+        "openclaw-chat-pane",
+      )?.state;
+      return {
+        top: element.scrollTop,
+        distance: element.scrollHeight - element.clientHeight - element.scrollTop,
+        lastTop: state?.chatLastScrollTop,
+        locked: state?.chatFollowLocked,
+        programmatic: state?.chatIsProgrammaticScroll?.(),
+        maintenance: state?.chatIsMaintenanceScroll?.(),
+      };
+    };
+    const policyChanges: ScrollProbeElement["scrollProof"]["policyChanges"] = [];
+    let beforeScroll: ScrollPolicy | undefined;
+    const captureScroll = () => {
+      beforeScroll = scrollPolicy();
+    };
+    const recordScroll = () => {
+      const after = scrollPolicy();
+      if (beforeScroll?.locked !== after.locked) {
+        policyChanges.push({ before: beforeScroll, after });
+      }
+    };
+    element.addEventListener("scroll", captureScroll, true);
+    element.addEventListener("scroll", recordScroll);
     let frame = 0;
     const tick = () => {
       samples.push(sample());
@@ -314,20 +358,29 @@ export async function startScrollProbe(page: Page) {
     };
     (element as ScrollProbeElement).scrollProof = {
       samples,
-      stop: () => cancelAnimationFrame(frame),
+      policyChanges,
+      stop: () => {
+        cancelAnimationFrame(frame);
+        element.removeEventListener("scroll", captureScroll, true);
+        element.removeEventListener("scroll", recordScroll);
+      },
     };
     frame = requestAnimationFrame(tick);
     return { ...before, anchorText };
   });
 }
 export async function readScrollProbe(page: Page, stop = false) {
-  return page
+  const result = await page
     .locator(".chat-pane-cache__pane--active .chat-thread")
     .evaluate((element, shouldStop) => {
       const probe = (element as ScrollProbeElement).scrollProof;
       if (shouldStop) {
         probe.stop();
       }
-      return probe.samples;
+      return { samples: probe.samples, policyChanges: shouldStop ? probe.policyChanges : [] };
     }, stop);
+  if (result.policyChanges.length > 0) {
+    console.info("REAL_GATEWAY_SCROLL_POLICY", JSON.stringify(result.policyChanges));
+  }
+  return result.samples;
 }

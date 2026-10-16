@@ -58,8 +58,10 @@ vi.mock("../../plugins/session-conversation-binding.js", () => ({
   bindPluginSessionConversation: conversationBindingMocks.bindPluginSessionConversation,
 }));
 // mock-isolation: Control the synthetic catalog's sharing policy without opening profile storage.
-vi.mock("../../state/user-profiles.js", () => ({
-  hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
+  readResidentUserProfileAliases: (id: string) => new Set([id]),
 }));
 const { markPluginRegistryActive } = await import("../../plugins/registry-lifecycle.js");
 const { bindPluginRegistryRuntime } = await import("../../plugins/registry-runtime-binding.js");

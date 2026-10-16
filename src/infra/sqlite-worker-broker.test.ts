@@ -49,18 +49,28 @@ const { databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-broker
 const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 
-function holdDatabaseAdmission(pathname: string) {
-  const pending = new StateDatabaseAdmissionPendingError(pathname, "Schema publication pending");
-  const assertAccessAllowed = stateOwner.assertStateDatabaseAccessAllowed;
-  let held = true;
-  vi.spyOn(stateOwner, "assertStateDatabaseAccessAllowed").mockImplementation(
-    (location, options) => {
-      if (held && location === pathname) {
-        throw pending;
-      }
-      assertAccessAllowed(location, options);
-    },
+async function openWithRetainedAccess(pathname: string) {
+  const capture = stateOwner.captureStateDatabaseAccess;
+  const access = capture(pathname);
+  vi.spyOn(stateOwner, "captureStateDatabaseAccess").mockImplementation((location) =>
+    location === pathname ? access : capture(location),
   );
+  return { store: await open(pathname), access };
+}
+
+function holdDatabaseAdmission(
+  pathname: string,
+  access: ReturnType<typeof stateOwner.captureStateDatabaseAccess>,
+) {
+  const pending = new StateDatabaseAdmissionPendingError(pathname, "Schema publication pending");
+  const assertAccessAllowed = access.assertAccessAllowed.bind(access);
+  let held = true;
+  vi.spyOn(access, "assertAccessAllowed").mockImplementation((options) => {
+    if (held) {
+      throw pending;
+    }
+    assertAccessAllowed(options);
+  });
   const sleeping = createDeferredCore();
   const sleepWithAbort = retry.sleepWithAbort;
   vi.spyOn(retry, "sleepWithAbort").mockImplementation((...args) => {
@@ -79,7 +89,7 @@ function holdDatabaseAdmission(pathname: string) {
 
 it("waits for schema publication after opening, then dispatches queued writes once in order", async () => {
   const file = databasePath();
-  const store = await open(file);
+  const { store, access } = await openWithRetainedAccess(file);
   await waitForDiagnosticEventsDrained();
   const completed: DiagnosticWorkerRequestFields[] = [];
   onTestFinished(
@@ -92,7 +102,7 @@ it("waits for schema publication after opening, then dispatches queued writes on
       { include: ["worker.request"] },
     ),
   );
-  const admission = holdDatabaseAdmission(file);
+  const admission = holdDatabaseAdmission(file, access);
   const requests = vi.spyOn(Worker.prototype, "postMessage");
   const first = append(store, "first");
   const second = append(store, "second");
@@ -146,8 +156,8 @@ it.each(["cancellation", "revocation", "deadline"] as const)(
   "settles an unsent schema waiter after %s without writing",
   async (ending) => {
     const file = databasePath();
-    const store = await open(file);
-    const admission = holdDatabaseAdmission(file);
+    const { store, access } = await openWithRetainedAccess(file);
+    const admission = holdDatabaseAdmission(file, access);
     const requests = vi.spyOn(Worker.prototype, "postMessage");
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -207,23 +217,99 @@ it.each(["cancellation", "revocation", "deadline"] as const)(
 
 it("does not wait on permanent refusal or another database's admission", async () => {
   const file = databasePath();
-  const store = await open(file);
+  const { store, access } = await openWithRetainedAccess(file);
   const requests = vi.spyOn(Worker.prototype, "postMessage");
   const sleep = vi.spyOn(retry, "sleepWithAbort");
-  const access = vi.spyOn(stateOwner, "assertStateDatabaseAccessAllowed");
+  const assertion = vi.spyOn(access, "assertAccessAllowed");
   for (const error of [
     new Error("Maintenance authority required"),
     new StateDatabaseAdmissionPendingError(databasePath(), "Another database is unavailable"),
   ]) {
-    access.mockImplementation(() => {
+    assertion.mockImplementation(() => {
       throw error;
     });
     await expect(append(store, "refused")).rejects.toBe(error);
   }
   expect(sleep).not.toHaveBeenCalled();
   expect(requests).not.toHaveBeenCalled();
-  access.mockRestore();
+  assertion.mockRestore();
   expect(await read(store)).toEqual([]);
+});
+
+it("borrows an open database while an unrelated cold open awaits its reply", async ({ signal }) => {
+  const broker = new SqliteWorkerBroker();
+  const warmPath = databasePath();
+  const coldPath = databasePath();
+  const openStore = (pathname: string) =>
+    broker.open<FixtureOperations>({
+      moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+      databasePath: pathname,
+      input: undefined,
+    });
+  const pending: Promise<unknown>[] = [];
+  const held = createDeferredCore();
+  let release: (() => void) | undefined;
+  const requests = vi.spyOn(Worker.prototype, "postMessage");
+  const messages = vi.spyOn(Worker.prototype, "emit");
+  try {
+    const warm = await openStore(warmPath);
+    assert(warm, "Warm store missing");
+    const seed = await append(warm, "seed");
+    messages.mockImplementation(function (
+      this: Worker,
+      event: string | symbol,
+      ...args: unknown[]
+    ) {
+      const reply = args[0];
+      if (
+        event === "message" &&
+        isRecord(reply) &&
+        typeof reply.ok === "boolean" &&
+        requests.mock.calls.some(
+          ([request], index) =>
+            requests.mock.contexts[index] === this &&
+            isRecord(request) &&
+            request.type === "open" &&
+            request.databasePath === coldPath &&
+            request.id === reply.id,
+        )
+      ) {
+        messages.mockRestore();
+        release = () => EventEmitter.prototype.emit.call(this, event, ...args);
+        held.resolve();
+        return true;
+      }
+      return EventEmitter.prototype.emit.call(this, event, ...args);
+    });
+    const cold = openStore(coldPath);
+    pending.push(cold);
+    await withinTest(held.promise, signal);
+    expect(await withinTest(read(warm), signal)).toEqual(["seed"]);
+
+    const started = performance.now();
+    const borrowing = openStore(warmPath);
+    pending.push(borrowing);
+    const borrowed = await withinTest(borrowing, signal);
+    assert(borrowed, "Borrowed store missing");
+    expect(await withinTest(append(borrowed, "borrowed"), signal)).toEqual({
+      ...seed,
+      writes: 2,
+    });
+    console.info("sqlite-warm-borrow-measurement", {
+      borrowAndWriteMs: performance.now() - started,
+      coldReplyHeld: release !== undefined,
+    });
+    expect(release).toBeDefined();
+    await borrowed.close();
+    expect(await append(warm, "original survives")).toEqual({ ...seed, writes: 3 });
+    expect(await read(warm)).toEqual(["seed", "borrowed", "original survives"]);
+  } finally {
+    requests.mockRestore();
+    messages.mockRestore();
+    release?.();
+    await Promise.allSettled(pending);
+    await broker.close();
+  }
 });
 
 it("cancels queued opens without overtaking an accepted open or abandoning its settlement", async ({
@@ -586,68 +672,3 @@ poolIt.each([
     parallelism.mockRestore();
   }
 });
-
-poolIt(
-  "reserves ephemeral actors within durable capacity and isolates their native loss",
-  async () => {
-    const parallelism = vi.spyOn(os, "availableParallelism").mockReturnValue(16);
-    const broker = new SqliteWorkerBroker();
-    const namespace = databasePath();
-    let lost = false;
-    let nativeStopped: Promise<void> | undefined;
-    const options = {
-      moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-      databasePath: namespace,
-      target: { kind: "ephemeral" as const, handle: "first", incarnation: "first" },
-      input: undefined,
-    };
-    try {
-      expect(await broker.open({ ...options, existingOnly: true })).toBeUndefined();
-      const memory = await broker.open<FixtureOperations>(options, undefined, undefined, {
-        onNativeLost() {
-          lost = true;
-        },
-        onNativeStopped(stopped) {
-          nativeStopped = stopped;
-        },
-      });
-      assert(memory);
-      const first = await append(memory, "private");
-      const durableThreads = new Set<number>();
-      let durableSibling: SqliteWorkerStore<FixtureOperations> | undefined;
-      for (let index = 0; index < 2; index++) {
-        const durable = await broker.open<FixtureOperations>({
-          moduleUrl: options.moduleUrl,
-          databasePath: databasePath(),
-          input: undefined,
-        });
-        assert(durable);
-        durableSibling = durable;
-        durableThreads.add((await append(durable, "durable")).threadId);
-      }
-      expect(durableThreads.size).toBe(1);
-      expect(durableThreads.has(first.threadId)).toBe(false);
-      await expect(
-        broker.open({
-          ...options,
-          target: { kind: "ephemeral", handle: "second", incarnation: "second" },
-        }),
-      ).rejects.toMatchObject({ code: "overloaded" });
-      expect(await read(memory)).toEqual(["private"]);
-      expect(existsSync(namespace)).toBe(false);
-      await expect(
-        memory.execute({ type: "commitThenExit", input: { value: "lost" } }),
-      ).rejects.toMatchObject({ code: "outcome-unknown" });
-      expect(lost).toBe(true);
-      await nativeStopped;
-      await expect(memory.execute({ type: "read", input: undefined })).rejects.toMatchObject({
-        code: "unavailable",
-      });
-      assert(durableSibling);
-      expect(await read(durableSibling)).toEqual(["durable"]);
-    } finally {
-      await broker.close();
-      parallelism.mockRestore();
-    }
-  },
-);

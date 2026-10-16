@@ -30,12 +30,12 @@ it("does not exempt a kernel through an unregistered worker-named runtime wrappe
   const root = tempDirs.make("openclaw-sqlite-entry-ratchet-");
   const relative = "src/state/openclaw-state-db-maintenance.ts";
   const sources = {
-    [relative]: `export function writeCurrentStateSchemaMetadata() {
+    [relative]: `export function writeUnreviewedStateMetadata() {
       return executeSqliteQuerySync(query);
     }`,
     "src/unregistered.worker.ts": `
-      import { writeCurrentStateSchemaMetadata } from './state/openclaw-state-db-maintenance.js';
-      export function writeSchema() { return writeCurrentStateSchemaMetadata(); }
+      import { writeUnreviewedStateMetadata } from './state/openclaw-state-db-maintenance.js';
+      export function writeSchema() { return writeUnreviewedStateMetadata(); }
     `,
     "src/gateway/consumer.ts": `
       import { writeSchema } from '../unregistered.worker.js';
@@ -49,7 +49,34 @@ it("does not exempt a kernel through an unregistered worker-named runtime wrappe
   }
   expect(inventory(root).find((row) => row.file === relative)).toMatchObject({
     tier: "T1",
-    calls: [expect.objectContaining({ operation: "writeCurrentStateSchemaMetadata" })],
+    calls: [expect.objectContaining({ operation: "writeUnreviewedStateMetadata" })],
+  });
+});
+
+it("classifies only the synchronous Doctor enrollment branch as one-shot", () => {
+  const root = tempDirs.make("openclaw-sqlite-doctor-enrollment-");
+  const relative = "src/agents/auth-profiles/authorization-enrollment-runtime.ts";
+  const file = path.join(root, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    `export function enrollOwnedAuthProfileAuthorization(params) {
+      if (params.context.maintenanceScope?.ownsSchemaMaintenance) {
+        runOpenClawAgentWriteTransaction(callback);
+        return () => runOpenClawAgentWriteTransaction(callback);
+      } else {
+        runOpenClawAgentWriteTransaction(callback);
+      }
+    }`,
+  );
+  const rows = inventory(root);
+  expect(rows.map(({ tier, calls }) => [tier, calls.length])).toEqual([
+    ["T1", 2],
+    ["T3", 1],
+  ]);
+  expect(rows.find(({ tier }) => tier === "T3")?.calls[0]).toMatchObject({
+    operation: "enrollOwnedAuthProfileAuthorization",
+    guards: ["params.context.maintenanceScope?.ownsSchemaMaintenance"],
   });
 });
 
@@ -258,4 +285,38 @@ export function hasAnyMatrixAuth(database, query) {
   );
   expect(main(root, ["--base", "HEAD"])).toBe(1);
   expect(errors).toHaveBeenCalledWith(expect.stringContaining("src/runtime.ts"));
+});
+
+it("validates credential writers in current and staged sources while comparing historical counts", () => {
+  const root = tempDirs.make("openclaw-sqlite-writer-ratchet-");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+      cwd: root,
+      stdio: "pipe",
+    });
+  fs.mkdirSync(path.join(root, "src"));
+  const file = path.join(root, "src/writer.ts");
+  const unreviewed = "export function write() { scope.execute({ type: 'machineState.write' }); }";
+  fs.writeFileSync(file, unreviewed);
+  git("init");
+  git("add", ".");
+  git("commit", "-m", "historical writer");
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  fs.writeFileSync(file, "export function read() {} ");
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(main(root, ["--base", "HEAD", "--staged"])).toBe(1);
+  expect(errors).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "machineState.write credential writes require the host publication adapter",
+    ),
+  );
+  errors.mockClear();
+  fs.writeFileSync(file, unreviewed);
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(errors).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "machineState.write credential writes require the host publication adapter",
+    ),
+  );
 });

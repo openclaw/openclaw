@@ -13,6 +13,7 @@ import type {
 } from "../infra/approval-gateway-runtime.types.js";
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 // HTTP agent ingress can finish before the lazy agent.wait handler loads its recorder.
@@ -87,7 +88,7 @@ export function createGatewayInstanceRuntime(
 
   const assertDispatchAvailable = (method: string) => {
     if (closed || !options.isDispatchAvailable()) {
-      throw new Error(`Gateway instance dispatch unavailable for ${method}`);
+      throw new GatewayDispatchUnavailableError(method, !closed);
     }
   };
 

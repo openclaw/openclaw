@@ -235,7 +235,7 @@ struct QuickChatPresentationTests {
 
     func checkShortcutPresentsAnEditorWithoutRequiringForegroundOwnership() async throws {
         let application = AppKitTestSupport.application
-        #expect(AppKitTestSupport.didSetActivationPolicy)
+        #expect(AppKitTestSupport.hasAccessoryActivationPolicy)
         var shortcut: (() -> Void)?
         let model = QuickChatModel(
             sessionKeyProvider: { "agent:main:main" },

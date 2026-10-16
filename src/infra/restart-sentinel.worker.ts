@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   WorkerWriteOperationContext,
@@ -12,8 +11,10 @@ import {
   writeRestartSentinelRowIfRevisionSync,
   writeRestartSentinelRowSync,
   writeUpdateInstallReceiptRowSync,
+  type RestartSentinel,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -34,7 +35,7 @@ import type { UpdateFailureReportReceipt } from "./update-failure-report-receipt
 
 function transaction<Input, Output>(
   label: string,
-  operation: (db: DatabaseSync, input: Input) => Output,
+  operation: (db: EngineConnection, input: Input) => Output,
 ) {
   return (input: Input, { writeAdmitted }: WorkerWriteOperationContext): Output =>
     writeAdmitted(({ db }) => operation(db, input), { operationLabel: label });
@@ -42,7 +43,7 @@ function transaction<Input, Output>(
 
 function receiptTransaction<Input, Output>(
   label: string,
-  operation: (db: DatabaseSync, input: Input) => Output,
+  operation: (db: EngineConnection, input: Input) => Output,
 ) {
   return (input: Input, { write }: WorkerWriteOperationContext): Output =>
     write(
@@ -213,7 +214,7 @@ export const restartSentinelOperations = {
         current.sentinel.revision !== input.expectedRevision ||
         current.sentinel.payload.kind !== "update"
       ) {
-        return null;
+        return { sentinel: null, installReceipt: null };
       }
 
       const payload = current.sentinel.payload;
@@ -266,15 +267,24 @@ export const restartSentinelOperations = {
         ? writeRestartSentinelRowIfRevisionSync(db, payload, current.sentinel.revision)
         : current.sentinel;
       if (!finalized) {
-        return null;
+        return { sentinel: null, installReceipt: null };
       }
-      // This receipt records the install fact proven by the running process. Post-install
-      // failures such as managed-service-handoff-failed keep the sentinel in error without
-      // erasing the upstream fallback for campaign-managed detached installs (#121634).
-      if (stats.mode === "git" && verifiesInstallRoot && verifiesGitRevision && changedInstall) {
-        writeUpdateInstallReceiptRowSync(db, payload);
+      return {
+        sentinel: changed ? finalized : null,
+        installReceipt:
+          stats.mode === "git" && verifiesInstallRoot && verifiesGitRevision && changedInstall
+            ? finalized
+            : null,
+      };
+    },
+  ),
+  "restartSentinel.recordInstall": transaction(
+    "restart-sentinel.record-install",
+    (db, receipt: RestartSentinel) => {
+      const current = readRestartSentinelRowSync(db);
+      if (current.kind === "valid" && current.sentinel.revision === receipt.revision) {
+        writeUpdateInstallReceiptRowSync(db, receipt.payload);
       }
-      return changed ? finalized : null;
     },
   ),
 } satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

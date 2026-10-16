@@ -1,4 +1,4 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore as resolveStorePath } from "../../config/sessions.js";
 import {
@@ -12,6 +12,7 @@ import { addSessionMember } from "../../config/sessions/session-sharing-store.na
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
@@ -119,7 +120,7 @@ test.each([
       { agentId: "research", sessionKey, storePath },
       {
         sessionId,
-        updatedAt: 42,
+        updatedAt: Date.now(),
         displayName: "Research transcript title",
         visibility: "draft",
         createdActor: { type: "human", source: "profile", id: ownerId },
@@ -213,7 +214,8 @@ test("a hidden-foreign role cannot discover sessions through search, batch previ
       { agentId: "main", sessionKey, storePath },
       {
         sessionId,
-        updatedAt: 42,
+        // Post-write age-retention maintenance archives expired rows out of default lists.
+        updatedAt: Date.now(),
         createdActor: { type: "human", source: "profile", id: actorId },
         visibility: "shared",
       },
@@ -228,6 +230,8 @@ test("a hidden-foreign role cannot discover sessions through search, batch previ
   }
   const client = identifiedClient(ownerId);
   const options = { client, context: { getRuntimeConfig: () => cfg } };
+  const profiles = await prepareUserProfileCatalog();
+  onTestFinished(profiles.release);
 
   const searched = await directSessionReq<{ results: Array<{ sessionKey: string }> }>(
     "sessions.search",
@@ -287,7 +291,7 @@ test.each(["research", "ops"] as const)(
         { agentId, sessionKey: "global", storePath },
         {
           sessionId,
-          updatedAt: 42,
+          updatedAt: Date.now(),
           createdActor: { type: "human", source: "profile", id: profiles[agentId] },
           visibility: "shared",
         },
@@ -300,6 +304,8 @@ test.each(["research", "ops"] as const)(
         contents: ["global owner search needle"],
       });
     }
+    const catalog = await prepareUserProfileCatalog();
+    onTestFinished(catalog.release);
     const searched = await directSessionReq<{ results: Array<{ sessionKey: string }> }>(
       "sessions.search",
       { query: "global owner search needle", sessionKeys: ["global"], agentId: "research" },
@@ -327,7 +333,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
     { agentId: "main", sessionKey, storePath },
     {
       sessionId,
-      updatedAt: 42,
+      updatedAt: Date.now(),
       createdActor: { type: "human", source: "profile", id: ownerId },
       visibility: "draft",
     },
@@ -521,7 +527,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
       { agentId: "main", sessionKey, storePath },
       {
         sessionId,
-        updatedAt: 42,
+        updatedAt: Date.now(),
         createdActor: { type: "human", source: "profile", id: ownerId },
         visibility: "shared",
       },

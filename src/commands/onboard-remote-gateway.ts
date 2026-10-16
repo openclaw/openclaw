@@ -45,35 +45,16 @@ type RemoteGatewayInferenceTarget = {
 
 function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupInferenceDetection {
   return {
+    ...result,
     candidates: result.candidates.map((candidate) => ({
       ...candidate,
       // Gateway ordering is authoritative; the guided candidate shape no
       // longer permits a second client-side recommendation signal.
       recommended: false,
     })),
-    manualProviders: result.manualProviders.map(
-      ({ groupLabel: _groupLabel, ...provider }) => provider,
-    ),
     authOptions: result.authOptions ?? [],
-    ...(result.prepareOptions !== undefined
-      ? {
-          prepareOptions: result.prepareOptions.map(
-            ({ actionLabel: _actionLabel, ...option }) => option,
-          ),
-        }
-      : {}),
     recommendedInstalls: result.recommendedInstalls ?? [],
-    unavailableCandidates: (result.unavailableCandidates ?? []).map((candidate) => ({
-      id: candidate.id,
-      label: candidate.label,
-      detail: candidate.detail,
-      reason: candidate.reason,
-    })),
-    workspace: result.workspace,
-    ...(result.configuredModel !== undefined ? { configuredModel: result.configuredModel } : {}),
-    ...(result.setupModel !== undefined ? { setupModel: result.setupModel } : {}),
-    ...(result.utilityModel !== undefined ? { utilityModel: result.utilityModel } : {}),
-    setupComplete: result.setupComplete,
+    unavailableCandidates: result.unavailableCandidates ?? [],
   };
 }
 

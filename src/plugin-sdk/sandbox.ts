@@ -26,6 +26,10 @@ export type {
   SshSandboxSettings,
 } from "../agents/sandbox.js";
 export type { OpenClawConfig } from "../config/config.js";
+export type {
+  OpenClawPluginToolSandbox,
+  OpenClawPluginToolModelExecution,
+} from "../plugins/tool-types.js";
 export type { DirectoryEntry } from "../infra/directory-entries.js";
 export { prepareSandboxProcessCleanup } from "../agents/sandbox/process-cleanup.js";
 export { resolveReadOnlyWorkspaceSkillMounts } from "../agents/sandbox/workspace-mounts.js";

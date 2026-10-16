@@ -15,6 +15,7 @@ import {
 } from "./approval-callback-data.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import {
+  recordTelegramUpdateReceivedAt,
   runWithTelegramSpooledReplayUpdate,
   type TelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
@@ -348,8 +349,11 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
       },
       deserialize: (payload) => {
         const update = payload.update;
-        if (payload.preparedPollAnswer && typeof update === "object" && update !== null) {
-          recordPreparedTelegramPollAnswer(update, payload.preparedPollAnswer);
+        if (typeof update === "object" && update !== null) {
+          recordTelegramUpdateReceivedAt(update, payload.receivedAt);
+          if (payload.preparedPollAnswer) {
+            recordPreparedTelegramPollAnswer(update, payload.preparedPollAnswer);
+          }
         }
         return update;
       },

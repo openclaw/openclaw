@@ -5,7 +5,12 @@ import {
   type WorkerMachineOption,
   type WorkerProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeOptionalString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isSecretRef, isValidSecretRef } from "openclaw/plugin-sdk/secret-input";
+import type { SecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString as nonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CRABBOX_HEARTBEAT_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const PROFILE_KEYS = new Set([
@@ -16,6 +21,7 @@ const PROFILE_KEYS = new Set([
   "provider",
   "setup",
   "setupEnv",
+  "setupSecrets",
   "ttl",
   "target",
   "warmImage",
@@ -48,7 +54,7 @@ type CrabboxProfile = {
   ttl: string;
   target: CrabboxOperatingSystem;
   setup?: string;
-  setupEnv?: string[];
+  setupSecrets?: Record<string, SecretRef & { source: "store" }>;
   warmImage?: boolean;
 };
 
@@ -68,7 +74,7 @@ export const CRABBOX_OS_LABELS: Record<CrabboxOperatingSystem, string> = {
   macos: "macOS",
 };
 
-export function parseCrabboxOperatingSystem(value: unknown): CrabboxOperatingSystem {
+function parseCrabboxOperatingSystem(value: unknown): CrabboxOperatingSystem {
   if (value === undefined) {
     return "linux";
   }
@@ -106,6 +112,12 @@ function requirePositiveDuration(
   return { duration, milliseconds: Number(nanoseconds) / 1_000_000 };
 }
 
+export function parseCrabboxDurationMs(value: unknown): number | undefined {
+  const text = nonEmptyString(value);
+  const nanoseconds = text ? parsePositiveGoDurationNanoseconds(text) : undefined;
+  return nanoseconds === undefined ? undefined : Number(nanoseconds) / 1_000_000;
+}
+
 function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefined {
   if (!GO_DURATION_PATTERN.test(duration)) {
     return undefined;
@@ -134,7 +146,7 @@ function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefine
   return total > 0n ? total : undefined;
 }
 
-function heartbeatIntervalMs(idleTimeoutMs: number): number {
+export function heartbeatIntervalMs(idleTimeoutMs: number): number {
   const referenceIntervalMs = Math.max(5_000, Math.min(60_000, idleTimeoutMs / 3));
   // Crabbox's floor can exceed short accepted timeouts. Keep renewal ahead of
   // coordinator idle expiry without changing the profile contract.
@@ -173,32 +185,12 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
   if (profile.setup !== undefined && !setup) {
     throw new WorkerProviderError("Crabbox profile setup must be a non-empty command string");
   }
-  let setupEnv: string[] | undefined;
   if (profile.setupEnv !== undefined) {
-    if (!Array.isArray(profile.setupEnv)) {
-      throw new WorkerProviderError("Crabbox profile setupEnv must be an array");
-    }
-    if (profile.setupEnv.length > 16) {
-      throw new WorkerProviderError("Crabbox profile setupEnv must contain at most 16 names");
-    }
-    setupEnv = profile.setupEnv.map((name) => {
-      if (typeof name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) {
-        throw new WorkerProviderError(
-          "Crabbox profile setupEnv must contain only valid POSIX environment variable names",
-        );
-      }
-      if (name === "CRABBOX_ENV_ALLOW") {
-        throw new WorkerProviderError(`Crabbox profile setupEnv name ${name} is reserved`);
-      }
-      return name;
-    });
-    if (new Set(setupEnv).size !== setupEnv.length) {
-      throw new WorkerProviderError("Crabbox profile setupEnv must not contain duplicate names");
-    }
-    if (setupEnv.length > 0 && !setup) {
-      throw new WorkerProviderError("Crabbox profile setupEnv requires setup");
-    }
+    throw new WorkerProviderError(
+      "Crabbox profile setupEnv is retired; run openclaw doctor --fix to migrate protected, destination-bound store entries to setupSecrets. Repair any reported entries before provisioning; plaintext forwarding is unavailable.",
+    );
   }
+  const setupSecrets = parseCrabboxSetupSecrets(profile.setupSecrets);
   const desktop = profile.desktop;
   if (desktop !== undefined && typeof desktop !== "boolean") {
     throw new WorkerProviderError("Crabbox profile desktop must be a boolean");
@@ -225,32 +217,72 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
     idleTimeoutMs,
     provider,
     setup,
-    setupEnv,
+    setupSecrets,
     ttl,
     target,
     warmImage,
   };
 }
 
-function resolveCrabboxProfileSetupEnv(
-  setupEnv: readonly string[] | undefined,
-): Record<string, string> | undefined {
-  if (!setupEnv?.length) {
+/** Existing pre-egress leases retain inspection/release, never new setup or capture. */
+export function parseCrabboxCleanupProfile(profile: WorkerProfile): CrabboxProfile {
+  const { setupEnv: retiredSetupEnv, ...settings } = profile;
+  const parsed = parseCrabboxProfile(settings);
+  if (retiredSetupEnv !== undefined) {
+    parsed.warmImage = false;
+  }
+  return parsed;
+}
+
+export function parseCrabboxSetupSecrets(value: unknown): CrabboxProfile["setupSecrets"] {
+  if (value === undefined) {
     return undefined;
   }
-  return Object.fromEntries(
-    setupEnv.map((name) => {
-      const value = process.env[name];
-      if (!Object.hasOwn(process.env, name) || value === undefined) {
-        throw new Error(`Crabbox profile setupEnv variable is missing: ${name}`);
-      }
-      return [name, value];
-    }),
-  );
+  const entries = asOptionalRecord(value);
+  if (!entries) {
+    throw new WorkerProviderError("Crabbox profile setupSecrets must be a map of store SecretRefs");
+  }
+  if (Object.keys(entries).length > 16) {
+    throw new WorkerProviderError("Crabbox profile setupSecrets must contain at most 16 names");
+  }
+  const parsed: NonNullable<CrabboxProfile["setupSecrets"]> = {};
+  for (const [name, ref] of Object.entries(entries)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) {
+      throw new WorkerProviderError(
+        "Crabbox profile setupSecrets keys must be valid POSIX environment variable names",
+      );
+    }
+    if (
+      [
+        "CRABBOX_ENV_ALLOW",
+        "HOME",
+        "PATH",
+        "LANG",
+        "NODE_EXTRA_CA_CERTS",
+        "SSL_CERT_FILE",
+        "CURL_CA_BUNDLE",
+        "GIT_SSL_CAINFO",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_USE_ENV_PROXY",
+        "CRABBOX_SETUP_PROXY",
+      ].includes(name) ||
+      /^(?:https?|all|no)_proxy$/iu.test(name) ||
+      name.startsWith("OPENCLAW_")
+    ) {
+      throw new WorkerProviderError(`Crabbox profile setupSecrets name ${name} is reserved`);
+    }
+    if (!isSecretRef(ref) || !isValidSecretRef(ref) || ref.source !== "store") {
+      throw new WorkerProviderError(
+        `Crabbox profile setupSecrets entry ${name} must use a store SecretRef { source: "store", provider, id }; inline values and other sources are unavailable`,
+      );
+    }
+    parsed[name] = { source: "store", provider: ref.provider, id: ref.id };
+  }
+  return parsed;
 }
 
 // Resolve defaults only after sizing is known: placement and enrolled lease classes
-// must share the same policy without reading setup environment values during teardown.
+// must share the same policy during provisioning and teardown.
 export function resolveCrabboxWarmImageProfile(
   profile: CrabboxProfile,
   machineClass = profile.class,
@@ -265,9 +297,7 @@ export function resolveCrabboxWarmImageProfile(
     ...profile,
     class: machineClass,
     target,
-    warmImage:
-      target === "linux" &&
-      (profile.warmImage ?? (machineClass !== undefined && !profile.setupEnv?.length)),
+    warmImage: target === "linux" && (profile.warmImage ?? machineClass !== undefined),
   };
 }
 
@@ -282,7 +312,10 @@ export function resolveCrabboxWarmImageProfileKey(
         // Missing target in persisted Linux keys already means Linux.
         ...(profile.target !== "linux" ? { target: profile.target } : {}),
         setup: profile.setup ?? "",
-        setupEnvKeys: [...(profile.setupEnv ?? [])].toSorted(),
+        setupSecretMode: "protected-egress-v1",
+        setupSecrets: Object.entries(profile.setupSecrets ?? {}).toSorted(([left], [right]) =>
+          left.localeCompare(right),
+        ),
         desktop: profile.desktop ?? false,
         // Exact class is intentionally conservative; cross-class reuse comes later.
         machineClass: profile.class,
@@ -303,13 +336,34 @@ export function resolveCrabboxPreparationTarget(
     machineClass ?? parsed.class,
     os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
   );
-  return effective.warmImage && effective.class && !effective.setupEnv?.length
+  return (effective.warmImage || Object.keys(effective.setupSecrets ?? {}).length > 0) &&
+    effective.class &&
+    effective.target === "linux"
     ? {
         machineClass: effective.class,
         platform: effective.target,
         profileKey: resolveCrabboxWarmImageProfileKey(effective),
       }
     : undefined;
+}
+
+export function supportsCrabboxProjectPreparation(
+  profile: WorkerProfile,
+  machineClass?: string,
+  os?: string,
+): boolean {
+  const parsed = parseCrabboxProfile(profile);
+  const resolved = resolveCrabboxWarmImageProfile(
+    parsed,
+    machineClass ?? parsed.class,
+    os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
+  );
+  return resolved.warmImage || Object.keys(resolved.setupSecrets ?? {}).length > 0;
+}
+
+export function resolveCrabboxPreparedIdleTimeoutMs(profile: WorkerProfile): number | undefined {
+  const parsed = parseCrabboxProfile(profile);
+  return parsed.warmImage === false || parsed.target !== "linux" ? undefined : parsed.idleTimeoutMs;
 }
 
 type CrabboxProvisionProfile = CrabboxProfile &
@@ -319,7 +373,7 @@ export function resolveCrabboxProvisionProfile(
   profile: WorkerProfile,
   requestedClassValue: unknown,
   requestedOsValue?: unknown,
-): { profile: CrabboxProvisionProfile; forwardedEnv?: Record<string, string> } {
+): { profile: CrabboxProvisionProfile } {
   const configured = parseCrabboxProfile(profile);
   const requestedClass = nonEmptyString(requestedClassValue);
   if (
@@ -341,7 +395,7 @@ export function resolveCrabboxProvisionProfile(
   if (!resolved.warmImage) {
     provisionProfile = { ...resolved, warmImage: false };
   } else {
-    // Reject immutable sizing before mutable setup values can mask it on replay.
+    // Resolve immutable sizing before allocation and replay.
     if (!resolved.class) {
       throw new WorkerProviderError(
         "Crabbox warmImage requires a configured class or a placement machine class",
@@ -351,7 +405,6 @@ export function resolveCrabboxProvisionProfile(
   }
   return {
     profile: provisionProfile,
-    forwardedEnv: resolveCrabboxProfileSetupEnv(resolved.setupEnv),
   };
 }
 

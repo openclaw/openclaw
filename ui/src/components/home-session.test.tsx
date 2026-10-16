@@ -11,7 +11,7 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "./home-session-solid.tsx";
 
 // mock-isolation: Home owns attachment controls; its child chat renderer is opaque.
-vi.mock("../pages/chat/chat-pane.ts", () => {
+vi.mock("../pages/chat/chat-pane.tsx", () => {
   customElements.define("openclaw-chat-pane", class extends HTMLElement {});
   return {};
 });

@@ -1,14 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { prepareReplyToolAuthorityCallerRead } from "../../agents/harness/host-private-capabilities.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import { prepareSessionResetCleanupGuard } from "../../auto-reply/reply/session-reset-cleanup.js";
 import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
 import { createCompletionGrantLineageAdmission } from "../../gateway/tool-resolution-completion.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { upsertSessionEntryCore } from "./session-accessor.js";
+import { applySessionEntryOperation } from "./session-accessor.sqlite-entry.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
-import { prepareSessionGenerationFacts } from "./session-delivery-generation.js";
+import {
+  prepareSessionDeliveryGeneration,
+  prepareSessionGenerationFacts,
+} from "./session-delivery-generation.js";
 import { acquireSessionInputActor } from "./session-input-actor.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -58,7 +67,7 @@ async function fixture() {
       authority,
     ),
   );
-  const patch = async (value: Partial<SessionEntry>) =>
+  const patch = async (value: Partial<InternalSessionEntry>) =>
     readSessionActorStorageResult(
       await actor.storage!.mutate(
         {
@@ -72,6 +81,43 @@ async function fixture() {
 }
 
 describe("memory actor effect adapters", () => {
+  it("publishes lifecycle failure facts with the memory entry commit", async () => {
+    const f = await fixture();
+    await f.patch({ lifecycleRunId: "failed-run", startedAt: 1_000 });
+    const onCommitted = vi.fn();
+    const result = await runWithSessionActorStorage(f.binding, () =>
+      applySessionEntryOperation(
+        scope,
+        {
+          kind: "lifecycle",
+          lifecycle: {
+            canonicalKey: scope.sessionKey,
+            currentLifecycleGeneration: "test-generation",
+            exactCronRun: false,
+            lastRunError: "Provider disconnected",
+            event: {
+              sessionId: scope.sessionId,
+              runId: "failed-run",
+              ts: 2_000,
+              data: { phase: "error", error: "Provider disconnected", endedAt: 2_000 },
+            },
+          },
+        },
+        { skipMaintenance: true, onCommitted },
+      ),
+    );
+    expect(result).toMatchObject({ status: "failed", lastRunId: "failed-run" });
+    expect(f.actor.snapshot(authority)?.entry).toEqual(result);
+    expect(onCommitted).toHaveBeenCalledExactlyOnceWith(result, undefined, {
+      failedRun: {
+        runId: "failed-run",
+        error: "Provider disconnected",
+        errorKind: undefined,
+        suppressErrorNotice: false,
+      },
+    });
+  });
+
   it("acquires an input handle without transferring the caller's actor lifetime", async () => {
     const f = await fixture();
     const input = await runWithSessionActorStorage(f.binding, () =>
@@ -106,58 +152,133 @@ describe("memory actor effect adapters", () => {
     await expect(delivery.prepareCurrent()).rejects.toThrow("closed");
   });
 
-  it("reads live delivery settings and refuses a closed actor after same-key recreation", async () => {
-    const f = await fixture();
-    const delivery = await runWithSessionActorStorage(f.binding, () =>
-      prepareSessionGenerationFacts({
-        ...scope,
-        lifecycleRevision: null,
-      }),
-    );
-    await f.patch({ permissionMode: "guarded", toolOverrides: { webSearch: false } });
-    expect(delivery.readSessionSettings()).toEqual({
-      permissionMode: "guarded",
-      toolOverrides: { webSearch: false },
-    });
-    f.owner.closeSession(scope.sessionKey);
-    const replacement = await f.owner.acquire(
-      { database: f.owner.identity, sessionKey: scope.sessionKey },
-      lifetime,
-    );
-    expect(replacement.snapshot(authority)?.entry).toBeUndefined();
-    expect(() => delivery.assertCurrent()).toThrow("unavailable");
-    delivery.release();
+  it("reads unbound delivery settings and refuses a closed actor after same-key recreation", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/synthetic/delivery-effect" };
+    const target = {
+      agentId: scope.agentId,
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: scope.agentId, env }),
+    };
+    const source = { ...scope, env, storePath: target.path };
+    const facts = { ...source, lifecycleRevision: null };
+    const entry: SessionEntry = { sessionId: source.sessionId, updatedAt: 1, incognito: true };
+    try {
+      await expect(prepareSessionGenerationFacts(facts)).rejects.toThrow("no longer accepts");
+      expect(memorySessionActorOwners.read(target)).toBeUndefined();
+      await upsertSessionEntryCore(source, entry);
+      const delivery = await prepareSessionGenerationFacts(facts);
+      const effect = await prepareSessionDeliveryGeneration(facts);
+      try {
+        await upsertSessionEntryCore(source, {
+          ...entry,
+          permissionMode: "guarded",
+          toolOverrides: { webSearch: false },
+        });
+        expect(delivery.readSessionSettings()).toEqual({
+          permissionMode: "guarded",
+          toolOverrides: { webSearch: false },
+        });
+        await runExclusiveSessionLifecycleMutation("reset", {
+          scope: source.storePath,
+          identities: [source.sessionKey, source.sessionId],
+          async run() {
+            expect(() => effect.assertCurrent()).toThrow("unavailable");
+          },
+        });
+        effect.assertCurrent();
+        memorySessionActorOwners.closeSession(target, source.sessionKey);
+        await upsertSessionEntryCore(source, entry);
+        expect(() => delivery.assertCurrent()).toThrow("unavailable");
+        expect(() => effect.assertCurrent()).toThrow("unavailable");
+      } finally {
+        effect.release();
+        delivery.release();
+      }
+    } finally {
+      memorySessionActorOwners.closeDatabase(target);
+    }
   });
 
-  it("rejects a prepared reply caller when sandbox policy changes before the tool effect", async () => {
-    const f = await fixture();
-    const route = { provider: "openai", model: "test-model" };
-    const reply = runWithSessionActorStorage(f.binding, () =>
-      prepareReplyToolAuthority({
+  it("rejects an unbound reply caller when sandbox policy changes before the tool effect", async () => {
+    const stateDir = "/synthetic/reply-tool-effect";
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const target = {
+      agentId: scope.agentId,
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: scope.agentId }),
+    };
+    const source = { ...scope, storePath: target.path };
+    const entry: SessionEntry = {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      incognito: true,
+      sandboxMode: "off",
+    };
+    try {
+      await upsertSessionEntryCore(source, entry);
+      const route = { provider: "openai", model: "test-model" };
+      const reply = prepareReplyToolAuthority({
         run: {
           ...route,
-          ...scope,
+          ...source,
           sessionFile: "/synthetic/session",
           workspaceDir: "/synthetic/workspace",
           senderIsOwner: true,
           config: { agents: { defaults: { sandbox: { mode: "all" } } } },
         },
-      }),
-    );
-    const fingerprint = await reply.fingerprintAsync(route);
-    const prepared = await prepareReplyToolAuthorityCallerRead(
-      reply.projectAsync,
-      undefined,
-      fingerprint,
-      route,
-      () => {},
-    );
-    expect(prepared).toBeDefined();
-    prepared!.assertPrepared([]);
-    await f.patch({ sandboxMode: undefined });
-    expect(() => prepared!.assertPrepared([])).toThrow("policy does not match");
-    f.owner.close();
-    expect(() => prepared!.assertPrepared([])).toThrow("closed");
+      });
+      const fingerprint = await reply.fingerprintAsync(route);
+      const prepared = await prepareReplyToolAuthorityCallerRead(
+        reply.projectAsync,
+        undefined,
+        fingerprint,
+        route,
+        () => {},
+      );
+      expect(prepared).toBeDefined();
+      prepared!.assertPrepared([]);
+      await upsertSessionEntryCore(source, { ...entry, sandboxMode: undefined });
+      expect(() => prepared!.assertPrepared([])).toThrow("policy does not match");
+      memorySessionActorOwners.closeDatabase(target);
+      expect(() => prepared!.assertPrepared([])).toThrow("closed");
+    } finally {
+      memorySessionActorOwners.closeDatabase(target);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps unbound reset cleanup on the accepted session after a replacement", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/synthetic/reset-cleanup-effect" };
+    const target = {
+      agentId: scope.agentId,
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: scope.agentId, env }),
+    };
+    const source = { ...scope, env, storePath: target.path };
+    const entry: SessionEntry = {
+      sessionId: scope.sessionId,
+      lifecycleRevision: "accepted-reset",
+      updatedAt: 1,
+      incognito: true,
+    };
+    try {
+      await upsertSessionEntryCore(source, entry);
+      const guard = await prepareSessionResetCleanupGuard({
+        ...source,
+        expectedSession: entry,
+      });
+      guard.assertCurrent();
+      await upsertSessionEntryCore(source, { ...entry, label: "Unrelated edit" });
+      guard.assertCurrent();
+      await upsertSessionEntryCore(source, {
+        ...entry,
+        sessionId: "replacement-session",
+        lifecycleRevision: "replacement-reset",
+      });
+      expect(() => guard.assertCurrent()).toThrow("session changed before cleanup");
+      memorySessionActorOwners.closeDatabase(target);
+      expect(() => guard.assertCurrent()).toThrow("closed");
+      guard.release();
+    } finally {
+      memorySessionActorOwners.closeDatabase(target);
+    }
   });
 
   it("checks current requester lineage after a child is reparented", async () => {
@@ -207,7 +328,7 @@ describe("memory actor effect adapters", () => {
       }),
     );
     const prepared = await lineage.admission!.prepare();
-    expect(lineage.isCurrent()).toBe(true);
+    expect(prepared.isCurrent()).toBe(true);
     readSessionActorStorageResult(
       await child.storage!.mutate(
         {
@@ -222,7 +343,7 @@ describe("memory actor effect adapters", () => {
         authority,
       ),
     );
-    expect(lineage.isCurrent()).toBe(false);
+    expect(prepared.isCurrent()).toBe(false);
     expect(() => prepared.current!.assertCurrent([])).toThrow("requester policy");
   });
 });

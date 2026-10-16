@@ -101,7 +101,7 @@ suite.define(() => {
       await gateway.deferNext("models.authStatus");
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.locator('wa-dropdown-item[aria-label="Reviewer"]').click();
+      await agentPicker.getByRole("menuitemradio", { name: "Reviewer", exact: true }).click();
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Reviewer");

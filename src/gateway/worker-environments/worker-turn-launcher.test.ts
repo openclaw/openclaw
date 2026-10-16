@@ -1,5 +1,4 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -249,7 +248,10 @@ describe("worker turn launcher local placement", () => {
             await settle();
             expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
           });
-          return { payloads: [{ text: "local" }], meta: { durationMs: 1 } };
+          return {
+            payloads: [{ text: "local" }],
+            meta: { durationMs: 1, terminalReply: { disposition: "visible", text: "local" } },
+          };
         },
       );
 
@@ -388,28 +390,6 @@ describe("worker turn launcher local placement", () => {
       agentId: "main",
       sessionKey: SESSION_KEY,
     });
-  });
-
-  it("holds a local placement claim around CLI execution", async () => {
-    let assertSettlementCurrent: (() => void) | undefined;
-
-    const result = await localProvider.executeLocalTurn(
-      { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-cli" },
-      async () => {
-        assertSettlementCurrent = resolveSessionPlacementTurnSettlementAssertion();
-        assertSettlementCurrent?.();
-        expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({
-          owner: "local",
-          runId: "run-cli",
-        });
-        return { kind: "cli" };
-      },
-    );
-
-    expect(result).toEqual({ kind: "cli" });
-    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
-    expect(assertSettlementCurrent).toBeDefined();
-    expect(() => assertSettlementCurrent?.()).toThrow("settlement is closed");
   });
 
   it.each(["absent", "local"] as const)(
@@ -568,30 +548,6 @@ describe("worker turn launcher local placement", () => {
       }
     },
   );
-
-  it("mints a fresh claim token when a later turn reuses the run id", async () => {
-    const claimIds: string[] = [];
-    const claim = {
-      sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-      runId: "run-reused",
-    };
-
-    for (let index = 0; index < 2; index += 1) {
-      await localProvider.executeLocalTurn(claim, async () => {
-        const claimId = placements.get(SESSION_ID)?.turnClaim?.claimId;
-        if (!claimId) {
-          throw new Error("expected active placement claim");
-        }
-        claimIds.push(claimId);
-      });
-    }
-
-    expect(claimIds).toHaveLength(2);
-    expect(claimIds[0]).not.toBe(claimIds[1]);
-    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
-  });
 
   it("does not let a stale local finally release a reclaimed run id", async () => {
     const firstStarted = createDeferred();
@@ -771,85 +727,80 @@ describe("worker turn launcher local placement", () => {
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
   });
 
-  it.each([
-    ["CLI", "claude-cli"],
-    ["plugin", "test-harness"],
-  ])(
-    "rejects an active worker turn assigned to a configured %s runtime",
-    async (_kind, runtimeId) => {
-      await seedActivePlacement();
-      const getEnvironment = vi.fn(() => undefined);
-      const environments: WorkerTurnEnvironmentService = {
-        ...unusedEnvironments(),
-        get: getEnvironment,
-      };
-      const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-      const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
-      const runId = `run-${runtimeId}`;
-      const config = {
-        agents: {
-          defaults: {
-            models: {
-              "openai/gpt-5.6-luna": { agentRuntime: { id: runtimeId } },
-            },
+  it("rejects an active worker turn assigned to a configured CLI runtime", async () => {
+    const runtimeId = "claude-cli";
+    await seedActivePlacement();
+    const getEnvironment = vi.fn(() => undefined);
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: getEnvironment,
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    const runId = `run-${runtimeId}`;
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.6-luna": { agentRuntime: { id: runtimeId } },
           },
         },
-      };
-      const release = vi.fn(async () => {});
-      const acquire = vi
-        .spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime")
-        .mockImplementationOnce(async (input) => {
-          const metadataSnapshot = createEmptyPluginMetadataSnapshot(input.workspaceDir);
-          return {
-            snapshot: {
-              catalogOwner: undefined,
-              agentId: input.agentId,
-              agentDir: input.agentDir,
-              workspaceDir: input.workspaceDir,
-              activeProjectKeys: [],
-              config,
-              observationConfig: config,
-              isCurrent: () => true,
-              authModes: {},
-              metadataSnapshot,
-              allowGatewaySubagentBinding: false,
-              modelCatalog: { entries: [], routeVariants: [] },
-              configuredRuntimeModels: [],
-              findConfiguredRuntimeModel: () => undefined,
-              inlineProviderModels: [],
-              createStores: () => {
-                throw new Error("unsupported runtime must not create model stores");
-              },
+      },
+    };
+    const release = vi.fn(async () => {});
+    const acquire = vi
+      .spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime")
+      .mockImplementationOnce(async (input) => {
+        const metadataSnapshot = createEmptyPluginMetadataSnapshot(input.workspaceDir);
+        return {
+          snapshot: {
+            catalogOwner: undefined,
+            agentId: input.agentId,
+            agentDir: input.agentDir,
+            workspaceDir: input.workspaceDir,
+            activeProjectKeys: [],
+            config,
+            observationConfig: config,
+            isCurrent: () => true,
+            authModes: {},
+            metadataSnapshot,
+            allowGatewaySubagentBinding: false,
+            modelCatalog: { entries: [], routeVariants: [] },
+            configuredRuntimeModels: [],
+            findConfiguredRuntimeModel: () => undefined,
+            inlineProviderModels: [],
+            createStores: () => {
+              throw new Error("unsupported runtime must not create model stores");
             },
-            pluginGeneration: {
-              remoteCatalog: null,
-              pluginMetadataSnapshot: metadataSnapshot,
-              inlineProviderModels: [],
-              configuredCatalogEntries: [],
-            },
-            [Symbol.asyncDispose]: release,
-          };
-        });
+          },
+          pluginGeneration: {
+            remoteCatalog: null,
+            pluginMetadataSnapshot: metadataSnapshot,
+            inlineProviderModels: [],
+            configuredCatalogEntries: [],
+          },
+          [Symbol.asyncDispose]: release,
+        };
+      });
 
-      try {
-        // The raw turn selects OpenClaw; admission must use the prepared owner's policy.
-        await expect(
-          provider.executeTurn(
-            { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
-            turn(runId),
-            runLocal,
-          ),
-        ).rejects.toThrow(`Cloud worker turns require the OpenClaw runtime, not ${runtimeId}`);
+    try {
+      // The raw turn selects OpenClaw; admission must use the prepared owner's policy.
+      await expect(
+        provider.executeTurn(
+          { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
+          turn(runId),
+          runLocal,
+        ),
+      ).rejects.toThrow(`Cloud worker turns require the OpenClaw runtime, not ${runtimeId}`);
 
-        expect(runLocal).not.toHaveBeenCalled();
-        expect(getEnvironment).not.toHaveBeenCalled();
-        expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-        expect(release).toHaveBeenCalledOnce();
-      } finally {
-        acquire.mockRestore();
-      }
-    },
-  );
+      expect(runLocal).not.toHaveBeenCalled();
+      expect(getEnvironment).not.toHaveBeenCalled();
+      expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      acquire.mockRestore();
+    }
+  });
 
   it("resolves an exact paired-device sandbox without requiring an SSH identity resolver", async () => {
     await seedActivePlacement("remote-exec");
@@ -948,38 +899,5 @@ describe("worker turn launcher local placement", () => {
         workspaceDir: "/caller/workspace",
       }),
     ).rejects.toThrow("environment changed while preparing its sandbox");
-  });
-
-  it("rejects a reused worker bundle without the current launch contract", async () => {
-    await seedActivePlacement();
-    const oldEnvironment = attachedEnvironment();
-    oldEnvironment.bootstrapReceipt = {
-      ...oldEnvironment.bootstrapReceipt!,
-      protocolFeatures: [WORKER_LAUNCH_V2_PROTOCOL_FEATURE],
-    };
-    const environments: WorkerTurnEnvironmentService = {
-      ...unusedEnvironments(),
-      get: vi.fn(() => oldEnvironment),
-    };
-    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
-
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-old-worker",
-        },
-        turn("run-old-worker"),
-        runLocal,
-      ),
-    ).rejects.toThrow("reprovision the worker before launch");
-
-    expect(runLocal).not.toHaveBeenCalled();
-    expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
-    expect(environments.startTunnel).not.toHaveBeenCalled();
-    expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
   });
 });

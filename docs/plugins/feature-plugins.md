@@ -315,6 +315,13 @@ under `dist/control-ui/<content-hash>/`, then publishes their paths in
 and assets usable. `plugins validate` and `plugins build --check` detect stale
 source, assets, or generated metadata.
 
+Host runtime builds keep the authored root manifest unchanged and publish their
+browser declaration in `dist/openclaw.plugin.json`. That generated declaration
+replaces only `controlUi`; config schemas and activation still come from the root
+manifest. Explicit `plugins build` publishes the root declaration and retires
+the previous generated pointer. Both layouts keep asset paths relative to the
+plugin root.
+
 ### Solid views
 
 Solid 2 is supported for native plugin views. Use a `.tsx` browser entry and
@@ -329,10 +336,10 @@ For typechecking, set `jsx: "preserve"` and `jsxImportSource: "@solidjs/web"`.
 The framework-neutral view contract stays the same:
 
 ```tsx
-/** @jsxImportSource @solidjs/web */
-import { createSignal } from "solid-js";
 import { render } from "@solidjs/web";
 import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";
+/** @jsxImportSource @solidjs/web */
+import { createSignal } from "solid-js";
 
 const mount: ControlUiView = (container, context) => {
   const [label, setLabel] = createSignal(context.props.label ?? "Ready");
