@@ -279,7 +279,7 @@ describe("Slack monitor dispatch", () => {
     await runMention();
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock.mock.calls[0]?.[1]).toBe(
-      "PFX ⚠️ OpenClaw couldn't produce or deliver a reply. Please try again. If this keeps happening, ask the operator to check the gateway logs.",
+      "PFX No answer was returned. Ask again if you still need one.",
     );
     await expectAck();
   });

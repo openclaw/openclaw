@@ -340,7 +340,11 @@ describe("public yielded settle replay with real Gateway admission", () => {
       child.execution.interruptionReason = "gateway-restart";
       child.execution.outcome = { status: "error", error: "Interrupted by Gateway restart" };
       child.cleanupCompletedAt = child.execution.endedAt;
-      child.completion = { required: true, resultText: `retained result ${child.runId}` };
+      child.completion = {
+        required: true,
+        terminalReply: { disposition: "visible", text: `retained result ${child.runId}` },
+        resultText: `retained result ${child.runId}`,
+      };
       if (scenario === "legacy") {
         child.completionRequesterSessionId = undefined;
         child.completionRequesterLifecycleRevision = undefined;
@@ -376,7 +380,11 @@ describe("public yielded settle replay with real Gateway admission", () => {
           runId: `${child.runId}-current`,
           childSessionKey: `${child.childSessionKey}-current`,
           completionRequesterLifecycleRevision: loadSessionEntryReadOnly(scope)?.lifecycleRevision,
-          completion: { required: true, resultText: "current child result" },
+          completion: {
+            required: true,
+            terminalReply: { disposition: "visible", text: "current child result" },
+            resultText: "current child result",
+          },
         });
       }
       const runIds = cohort.map((entry) => entry.runId).toSorted();

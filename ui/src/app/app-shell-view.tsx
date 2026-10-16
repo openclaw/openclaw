@@ -16,6 +16,7 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
+import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
 import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
 import { ShellLazyOverlays, type ShellElementAttributes } from "./app-shell-lazy-view.tsx";
@@ -453,31 +454,27 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
       </div>
     </div>
   );
-  // A plugin may move the default workspace into its mountDefault target. Solid
-  // keeps owning that tree while the temporary Lit plugin host owns only its slot.
   return (
     <Show when={routeReady()} fallback={<ConnectingSplash />}>
-      <Show when={view().workspaceReplacement} fallback={workspace}>
-        <openclaw-plugin-view
-          prop:surface="workspace"
-          prop:props={{
-            sessionKey: (props.host.shellRevision(), props.host.activeSessionKey),
-            agentId: resolveUiSelectedSessionAgentId(
-              {
-                assistantAgentId:
-                  view().context.agentSelection.state.selectedId ??
-                  view().gatewaySnapshot.assistantAgentId,
-                agentsList: view().context.agents.state.agentsList,
-                hello: view().gatewaySnapshot.hello,
-              },
-              props.host.activeSessionKey,
-            ),
-            routeId: view().activeRoute,
-          }}
-          prop:defaultView={workspace}
-          prop:presented={true}
-        />
-      </Show>
+      <PluginSurface
+        surface="workspace"
+        enabled={view().workspacePluginsEnabled}
+        props={{
+          sessionKey: (props.host.shellRevision(), props.host.activeSessionKey),
+          agentId: resolveUiSelectedSessionAgentId(
+            {
+              assistantAgentId:
+                view().context.agentSelection.state.selectedId ??
+                view().gatewaySnapshot.assistantAgentId,
+              agentsList: view().context.agents.state.agentsList,
+              hello: view().gatewaySnapshot.hello,
+            },
+            props.host.activeSessionKey,
+          ),
+          routeId: view().activeRoute,
+        }}
+        renderDefault={() => workspace}
+      />
     </Show>
   );
 }

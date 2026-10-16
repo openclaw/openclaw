@@ -23,7 +23,7 @@ export type PluginInstallActionProps = {
   onInstall?: () => void;
 };
 
-export type PluginInstallActionElement = HTMLElement & { dismiss(): void };
+type PluginInstallActionElement = HTMLElement & { dismiss(): void };
 
 export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.Element {
   let host!: HTMLElement;

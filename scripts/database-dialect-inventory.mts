@@ -65,6 +65,14 @@ export function changedProductionFiles(root: string, base: string, staged: boole
 function findSites(file: string, source: ts.SourceFile): DialectSite[] {
   const sites: DialectSite[] = [];
   const add = (match: DialectMatch, position: number) => {
+    // These engine owners define/call PostgreSQL functions, not SQLite connection UDFs.
+    if (
+      match.construct === "custom-function" &&
+      (file === "src/infra/database-engine/postgres-search-schema.ts" ||
+        file === "src/infra/database-engine/postgres-vector.ts")
+    ) {
+      return;
+    }
     const { line, character } = source.getLineAndCharacterOfPosition(position);
     sites.push({
       ...match,

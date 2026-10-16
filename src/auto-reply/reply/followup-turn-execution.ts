@@ -1,3 +1,4 @@
+import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain-state.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
@@ -89,7 +90,8 @@ export async function executeFollowupTurn(params: {
   const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const progressAllowed = () =>
     deliveryAllowed() &&
-    (sourceOpts?.progressRequiresReply !== true || terminalReplyExpectation === "required");
+    (sourceOpts?.progressRequiresReply !== true ||
+      isRequiredReplyExpectation(terminalReplyExpectation));
   const currentVerboseLevel = (): VerboseLevel => {
     const level =
       turn.queued.run.verboseLevelOverride ??
@@ -205,6 +207,8 @@ export async function executeFollowupTurn(params: {
     abortSignal: turn.operation.abortSignal,
     toolsAllow: turn.queued.toolsAllow,
     disableTools: turn.queued.disableTools,
+    forceRestartSafeTools: turn.queued.forceRestartSafeTools,
+    forceCodeModeTools: turn.queued.forceCodeModeTools,
     awaitSessionDiffBaseline: turn.queued.runObservers?.awaitSessionDiffBaseline,
     onAgentRunStart: turn.queued.runObservers?.onAgentRunStart,
     onPreparedAgentRunStart: turn.queued.runObservers?.onPreparedAgentRunStart,

@@ -1,8 +1,9 @@
-import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { icons } from "../../../components/icons.ts";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import {
   openChatLayoutMenu,
   selectChatLayoutAction,
@@ -53,19 +54,19 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           {
             slot: "conversation",
             label: "Chat",
-            icon: html``,
+            icon: icons.copy,
             available: true,
             content: null,
-            loading: html``,
+            loading: solidContent(() => null, {}),
             empty: { description: "" },
           },
           {
             slot: "subagents",
             label: "Subagents",
-            icon: html``,
+            icon: icons.copy,
             available: true,
             content: null,
-            loading: html``,
+            loading: solidContent(() => null, {}),
             empty: { description: "" },
           },
         ],
@@ -73,7 +74,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           {
             id: "browser",
             label: "Toggle browser panel",
-            icon: html``,
+            icon: icons.copy,
             shortcut: KEYBOARD_SHORTCUT_COMBOS.browserPanel,
             onActivate: onBrowser,
           },
@@ -117,14 +118,14 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
             {
               id: "terminal",
               label: "Terminal",
-              icon: html``,
+              icon: icons.copy,
               shortcut: KEYBOARD_SHORTCUT_COMBOS.terminalPanel,
               onActivate: vi.fn(),
             },
             ...Array.from({ length: 7 }, (_, index) => ({
               id: `panel-${index + 1}`,
               label: `Panel ${index + 1}`,
-              icon: html``,
+              icon: icons.copy,
               onActivate: vi.fn(),
             })),
           ],
@@ -264,7 +265,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
             {
               id: "terminal",
               label: "Toggle terminal",
-              icon: html``,
+              icon: icons.copy,
               shortcut: KEYBOARD_SHORTCUT_COMBOS.terminalPanel,
               onActivate: onTerminal,
             },

@@ -295,7 +295,8 @@ Parents still waiting after yielding to children remain owned by their child bat
 
 If a delegated turn's sender authority cannot be reconstructed, automatic recovery
 stops with a recorded reason and a visible notice in the transcript or original
-channel. The notice explains how to continue in a replacement session. A saved
+channel. The notice offers **Resume** in WebChat. The click supplies current operator
+authority and continues the saved task in the same session. A saved
 delegation alone does not authorize replay after restart.
 
 Messages sent while restart recovery is waiting to start stay pending. Once
@@ -310,9 +311,21 @@ the message. A saved user message that has not reached the model remains user
 input when a subagent announcement continues the session; it is not demoted to
 background context.
 
-If automatic recovery is exhausted, the transcript remains available. Use
-**Resume in new session** in WebChat, or `/new` or `/reset` in other channels,
-to start a replacement session.
+If automatic recovery is exhausted, the unfinished task and transcript remain
+available. Use **Resume** in WebChat to continue with the same session identity,
+workspace, participants, and child sessions. Resume saves the new operator input
+and clears the restart tombstone together before starting work. It rechecks your
+current permissions; previous approvals and delegated authority are not restored.
+Completed tool results stay in the transcript, and uncertain effects must be
+inspected before being repeated. Existing restart-safe tool restrictions still
+apply to the continuation.
+
+A session already recovered into a replacement opens that replacement instead;
+resuming both could duplicate the task. If a CLI runtime cannot enforce the
+required restart-safe tools, WebChat offers **Resume in new session** instead.
+An unresolved final-delivery record must
+settle before an in-place continuation, and missing transcripts require repair.
+In other channels, `/new` or `/reset` still starts a replacement session.
 
 ## Where state lives
 
