@@ -295,8 +295,6 @@ export async function readSessionHistoryPageInWorker(
         capturedRequest.params.options,
       );
       if (accounting) {
-        stateContext.maintenanceScope?.assertAdmission();
-        stateContext.admission.assertCurrent();
         return accounting;
       }
     }

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
@@ -135,6 +136,7 @@ it("retains absent ACP metadata across async reads and follows in-process set an
     const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
     const entry = { sessionId: "session", lifecycleRevision: "original", updatedAt: 100 };
     await state.writeConfig(cfg);
+    await captureRuntimeConfigAsyncReader()();
     await replaceSessionEntry({ agentId: "main", sessionKey, env: state.env }, entry);
     openOpenClawStateDatabase({ env: state.env });
     const read = () =>

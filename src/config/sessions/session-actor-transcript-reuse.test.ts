@@ -6,6 +6,7 @@ import { capturePersistedModelPromptProjection } from "../../sessions/user-turn-
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import type { SessionActivitySummaryBatchResult } from "./activity-summary-source.types.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
@@ -51,6 +52,7 @@ function summaryFacts(source: SessionActivitySummaryBatchResult) {
 
 it("reuses durable summaries and accounting while refreshing transcript writes and resets", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    await captureRuntimeConfigAsyncReader()();
     const fixture = createSessionCompoundWorkerFixture();
     const scope = { ...fixture.scope, env };
     const answer = {
