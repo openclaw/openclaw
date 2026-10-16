@@ -264,6 +264,35 @@ it.each(["assistant", "managed", "omitted", "standalone", "aliases"] as const)(
   },
 );
 
+it("retries signed artifact downloads without forwarding gateway or requester credentials", async () => {
+  const source = managedSource();
+  const ticketedUrl = `${source}?mediaTicket=signed`;
+  const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
+  const fetch = vi
+    .fn<typeof globalThis.fetch>()
+    .mockResolvedValueOnce(new Response(null, { status: 503 }))
+    .mockResolvedValueOnce(imageResponse());
+  vi.stubGlobal("fetch", fetch);
+  draw([{ url: source, artifactId: crypto.randomUUID() }], {
+    sessionKey: "agent:main:main",
+    authToken: "must-not-be-forwarded",
+    resolveArtifactDownload,
+  });
+  intersections[0]!();
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(5_000);
+
+  expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  for (const [requestUrl, init] of fetch.mock.calls) {
+    expect(requestUrl).toBe(`${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=4&width=480`);
+    const headers = new Headers(init?.headers);
+    expect(headers.has("Authorization")).toBe(false);
+    expect(headers.has("x-openclaw-requester-session-key")).toBe(false);
+  }
+  expect(imageElement()?.getAttribute("src")).toMatch(/^blob:/u);
+});
+
 it("keeps the artifact's source session in its shared image identity", async () => {
   const artifactId = crypto.randomUUID();
   const resolveArtifactDownload = vi.fn<NonNullable<ImageRenderOptions["resolveArtifactDownload"]>>(
