@@ -21,6 +21,9 @@ import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js
 import type { OAuthCredential, RuntimeAuthProfileStore } from "./types.js";
 
 const readOptions = { allowKeychainPrompt: false, readOnly: true, syncExternalCli: false };
+const minimaxId = "minimax-portal:minimax-cli";
+const isExternal = (credential: OAuthCredential, profileId = minimaxId) =>
+  isPersistedExternalCliAuthProfile({ profileId, credential });
 const readMiniMax = vi.hoisted(() => vi.fn<() => OAuthCredential | null>(() => null));
 vi.mock("../cli-credentials.js", () => ({ readMiniMaxCliCredentialsCached: readMiniMax }));
 const credential = (overrides: Partial<OAuthCredential> = {}): OAuthCredential => ({
@@ -47,7 +50,7 @@ describe("external auth owner", () => {
   it.each(["expired", "matching-refresh", "matching-access"])(
     "preserves MiniMax provenance with %s credentials",
     async (kind) => {
-      const profileId = "minimax-portal:minimax-cli";
+      const profileId = minimaxId;
       const stored = credential({
         provider: "minimax-portal",
         expires: kind === "expired" ? 1 : Date.now() + 1_800_000,
@@ -70,21 +73,9 @@ describe("external auth owner", () => {
       if (syncedCredential?.type !== "oauth") {
         throw new Error("Expected persisted OAuth credential");
       }
-      expect(isPersistedExternalCliAuthProfile({ profileId, credential: syncedCredential })).toBe(
-        kind !== "matching-access",
-      );
-      expect(
-        isPersistedExternalCliAuthProfile({
-          profileId,
-          credential: { ...stored, authFlow: "device-code" },
-        }),
-      ).toBe(false);
-      expect(
-        isPersistedExternalCliAuthProfile({
-          profileId: "openai:default",
-          credential: credential({ authFlow: "external-cli" }),
-        }),
-      ).toBe(false);
+      expect(isExternal(syncedCredential)).toBe(kind !== "matching-access");
+      expect(isExternal({ ...stored, authFlow: "device-code" })).toBe(false);
+      expect(isExternal(credential({ authFlow: "external-cli" }), "openai:default")).toBe(false);
       expect(readMiniMax).toHaveBeenCalledOnce();
       const overlaid = createExternalAuthRuntime(() => []).overlayExternalAuthProfiles(store);
       expect(overlaid.profiles[profileId]).toEqual(synced.profiles[profileId]);
@@ -136,14 +127,9 @@ describe("external auth owner", () => {
     const pluginCredential = credential();
     const resolver = vi.fn(() => [{ profileId: "openai:default", credential: pluginCredential }]);
     const runtime = createExternalAuthRuntime(resolver);
-    const first = runtime.overlayExternalAuthProfiles(
-      { version: 1, profiles: {} },
-      { config, externalCliProviderIds: ["openai"] },
-    );
-    const next = runtime.overlayExternalAuthProfiles(first, {
-      config,
-      externalCliProviderIds: ["openai"],
-    });
+    const options = { config, externalCliProviderIds: ["openai"] };
+    const first = runtime.overlayExternalAuthProfiles({ version: 1, profiles: {} }, options);
+    const next = runtime.overlayExternalAuthProfiles(first, options);
     expect(next.profiles["openai:default"]).toEqual(pluginCredential);
     expect(next.runtimeExternalProfileIds).toEqual(["openai:default"]);
     expect(resolver).toHaveBeenCalledTimes(2);

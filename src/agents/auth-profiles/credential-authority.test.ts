@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { constants, type DatabaseSync } from "node:sqlite";
 import { MessageChannel } from "node:worker_threads";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createSqlPublicationTestConnection } from "../../../test/helpers/sql-publication-connection.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
@@ -59,6 +59,7 @@ import type { AuthProfileCredential } from "./types.js";
 const dirs = createTempDirTracker();
 const sharedPaths: string[] = [];
 const agentPaths: string[] = [];
+afterEach(() => vi.unstubAllEnvs());
 afterAll(async () => {
   for (const pathname of agentPaths) {
     await closeOpenClawAgentDatabaseByPathAsync(pathname);
@@ -78,6 +79,55 @@ const credential = (key: string): AuthProfileCredential => ({
 const store = (key: string) => ({ version: 1, profiles: { [profileId]: credential(key) } });
 const nativeRuntime = createAuthProfileStoreRuntime(createExternalAuthRuntime(() => []));
 const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
+const metadata = () => ({
+  order: { fixture: [profileId] },
+  usageStats: { [profileId]: { lastUsed: 100, cooldownUntil: 200 } },
+});
+type Fixture = ReturnType<typeof fixture>;
+
+function expectCredential(current: Fixture, key: string) {
+  expect([current.readPersisted(), current.authority.readCurrentCredential()]).toEqual([
+    credential(key),
+    credential(key),
+  ]);
+}
+
+function expectDenied(authority: Fixture["authority"], message = "authority is unavailable") {
+  expect(() => authority.readCurrentCredential()).toThrow(message);
+}
+
+function withCommit(current: Fixture, observe: () => void, operation: () => void) {
+  const spy = observePhysicalCommit(current.database.db, observe);
+  try {
+    operation();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+function withWorker<T>(
+  context: Fixture["context"],
+  operation: (owner: SqliteWorkerOperationContext) => T,
+) {
+  const { port1, port2 } = new MessageChannel();
+  const owner: SqliteWorkerOperationContext = { port: port1 };
+  try {
+    return currentSqliteWorkerOperationAdmission.run({ active: true, port: port1, owner }, () =>
+      runWithSqliteWorkerStateContext(context, () => operation(owner)),
+    );
+  } finally {
+    port1.close();
+    port2.close();
+  }
+}
+
+function runOutcome(operation: () => void, outcome: string, error: string) {
+  if (outcome === "rollback") {
+    expect(operation).toThrow(error);
+  } else {
+    operation();
+  }
+}
 
 function fixture(
   kind: "shared-state" | "agent",
@@ -121,6 +171,12 @@ function fixture(
     runAuthProfileWriteTransaction(agentDir, operation, { env });
   const write = (key: string) =>
     transact(({ db }) => writeAuthProfileJsonCell(db, "store", kind, store(key)));
+  const snapshot = () => captureAuthProfileStorePersistenceSnapshot(agentDir, { env });
+  const save = (key: string, supplied = false) =>
+    saveSdkAuthProfileStore(store(key), agentDir, saveOptions, supplied ? database : undefined);
+  const remove = () => transact(({ db }) => deleteAuthProfileJsonCell(db, "store", kind));
+  const prepareRead = (dir = agentDir, value = store("snapshot")) =>
+    nativeRuntime.prepareAuthProfileCredentialRead({ agentDir: dir, profileId, store: value });
   return {
     kind,
     env,
@@ -132,6 +188,10 @@ function fixture(
     readPersisted,
     transact,
     write,
+    snapshot,
+    save,
+    remove,
+    prepareRead,
   };
 }
 
@@ -194,8 +254,7 @@ describe.each(["shared-state", "agent"] as const)("%s credential authority", (ki
         throw new Error("cancelled native update");
       }),
     ).toThrow("cancelled native update");
-    expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
-    expect(current.readPersisted()).toEqual(credential("original"));
+    expectCredential(current, "original");
 
     const cold = current.capture();
     const capturedCredential = current.readPersisted();
@@ -208,11 +267,7 @@ describe.each(["shared-state", "agent"] as const)("%s credential authority", (ki
   it("preserves credential authority during usage, cooldown, and order-only writes", () => {
     const current = fixture(kind);
     current.transact(({ db }) => {
-      writeAuthProfileJsonCell(db, "state", kind, {
-        version: 1,
-        order: { fixture: [profileId] },
-        usageStats: { [profileId]: { lastUsed: 100, cooldownUntil: 200 } },
-      });
+      writeAuthProfileJsonCell(db, "state", kind, { version: 1, ...metadata() });
       expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
       deleteAuthProfileJsonCell(db, "state", kind);
       expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
@@ -234,50 +289,40 @@ describe.each(["shared-state", "agent"] as const)("%s credential authority", (ki
       restore();
     }
     expect(current.readPersisted()).toEqual(credential("uncertain"));
-    expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
+    expectDenied(current.authority);
     current.write("later");
     expect(current.readPersisted()).toEqual(credential("later"));
-    expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
+    expectDenied(current.authority);
     const cold = current.capture();
     cold.observe(current.readPersisted());
-    expect(() => cold.readCurrentCredential()).toThrow("authority is unavailable");
+    expectDenied(cold);
   });
 
   it("publishes native prepared saves and exact-owned secret rollback through the same authority", () => {
     const current = fixture(kind);
-    const baseline = captureAuthProfileStorePersistenceSnapshot(current.agentDir, {
-      env: current.env,
-    });
-    const commit = observePhysicalCommit(current.database.db, () => {
-      expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
-    });
-    try {
-      current.transact((database, owner) =>
-        nativeRuntime.saveAuthProfileStoreWithPreparedOwner(
-          store("applied"),
-          current.agentDir,
-          saveOptions,
-          database,
-          owner,
+    const baseline = current.snapshot();
+    withCommit(
+      current,
+      () => expectDenied(current.authority),
+      () =>
+        current.transact((database, owner) =>
+          nativeRuntime.saveAuthProfileStoreWithPreparedOwner(
+            store("applied"),
+            current.agentDir,
+            saveOptions,
+            database,
+            owner,
+          ),
         ),
-      );
-    } finally {
-      commit.mockRestore();
-    }
+    );
     expect(current.authority.readCurrentCredential()).toEqual(credential("applied"));
-    const applied = captureAuthProfileStorePersistenceSnapshot(current.agentDir, {
-      env: current.env,
-    });
-    const rollbackCommit = observePhysicalCommit(current.database.db, () => {
-      expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
-    });
-    try {
-      restoreAuthProfileStorePersistenceSnapshot(baseline, applied, current.agentDir);
-    } finally {
-      rollbackCommit.mockRestore();
-    }
-    expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
-    expect(current.readPersisted()).toEqual(credential("original"));
+    const applied = current.snapshot();
+    withCommit(
+      current,
+      () => expectDenied(current.authority),
+      () => restoreAuthProfileStorePersistenceSnapshot(baseline, applied, current.agentDir),
+    );
+    expectCredential(current, "original");
   });
 });
 
@@ -356,9 +401,9 @@ describe("credential authority captured before local database creation", () => {
     } finally {
       restore();
     }
-    expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
+    expectDenied(current.authority);
     current.transact(({ db }) => writeAuthProfileJsonCell(db, "store", "agent", store("later")));
-    expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
+    expectDenied(current.authority);
   });
 
   it("refuses a catalog receipt overtaken by a native writer on its newly created source", () => {
@@ -379,7 +424,7 @@ describe("credential authority captured before local database creation", () => {
     } finally {
       batch.finish(true);
     }
-    expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
+    expectDenied(current.authority);
     const raw = readAuthProfileJsonCellText(database.db, "store", "agent");
     expect(coercePersistedAuthProfileStore(JSON.parse(raw!))?.profiles[profileId]).toEqual(
       credential("newer-native"),
@@ -399,6 +444,11 @@ function inSdkEnvironment<T>(current: ReturnType<typeof fixture>, operation: () 
   );
 }
 
+function useReaderEnvironment(current: Fixture) {
+  vi.stubEnv("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
+  vi.stubEnv("OPENCLAW_AGENT_DIR", undefined);
+}
+
 function writeThroughSdk(
   writer: (typeof sdkWriters)[number],
   current: ReturnType<typeof fixture>,
@@ -406,7 +456,7 @@ function writeThroughSdk(
 ): void {
   inSdkEnvironment(current, () => {
     if (writer === "saveAuthProfileStore") {
-      saveSdkAuthProfileStore(store(key), current.agentDir, saveOptions);
+      current.save(key);
     } else {
       upsertSdkAuthProfile({ profileId, credential: credential(key), agentDir: current.agentDir });
     }
@@ -433,26 +483,25 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
     const marker = resolveGatewayStateOwnerPath(rootPath);
     expect(fs.existsSync(marker)).toBe(false);
     let observed: AuthProfileCredential | undefined;
-    const commit = observePhysicalCommit(current.database.db, () => {
-      expectRetainedCustody(rootPath);
-      expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
-      deferSqlitePostCommitPublication(current.database.db, () => {
-        observed = current.authority.readCurrentCredential();
-      });
-      if (outcome === "rollback") {
-        throw new Error("cancelled SDK commit");
-      }
-    });
-    try {
-      const write = () => writeThroughSdk(writer, current, "sdk-committed");
-      if (outcome === "rollback") {
-        expect(write).toThrow("cancelled SDK commit");
-      } else {
-        write();
-      }
-    } finally {
-      commit.mockRestore();
-    }
+    withCommit(
+      current,
+      () => {
+        expectRetainedCustody(rootPath);
+        expectDenied(current.authority);
+        deferSqlitePostCommitPublication(current.database.db, () => {
+          observed = current.authority.readCurrentCredential();
+        });
+        if (outcome === "rollback") {
+          throw new Error("cancelled SDK commit");
+        }
+      },
+      () =>
+        runOutcome(
+          () => writeThroughSdk(writer, current, "sdk-committed"),
+          outcome,
+          "cancelled SDK commit",
+        ),
+    );
     expect(observed).toEqual(outcome === "commit" ? credential("sdk-committed") : undefined);
     expect(current.readPersisted()).toEqual(
       credential(outcome === "commit" ? "sdk-committed" : "original"),
@@ -470,25 +519,21 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
   it("preserves credential authority throughout an SDK metadata-only save", () => {
     const current = fixture(kind);
     let commits = 0;
-    const commit = observePhysicalCommit(current.database.db, () => {
-      commits += 1;
-      expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
-    });
-    try {
-      inSdkEnvironment(current, () =>
-        saveSdkAuthProfileStore(
-          {
-            ...store("original"),
-            order: { fixture: [profileId] },
-            usageStats: { [profileId]: { lastUsed: 100, cooldownUntil: 200 } },
-          },
-          current.agentDir,
-          saveOptions,
+    withCommit(
+      current,
+      () => {
+        commits += 1;
+        expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
+      },
+      () =>
+        inSdkEnvironment(current, () =>
+          saveSdkAuthProfileStore(
+            { ...store("original"), ...metadata() },
+            current.agentDir,
+            saveOptions,
+          ),
         ),
-      );
-    } finally {
-      commit.mockRestore();
-    }
+    );
     expect(commits).toBe(1);
     expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
   });
@@ -516,8 +561,7 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
     } finally {
       fs.rmSync(marker, { force: true });
     }
-    expect(current.readPersisted()).toEqual(credential("original"));
-    expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
+    expectCredential(current, "original");
   });
 
   it.each(sdkWriters)("%s accepts an admitted state-directory alias", (writer) => {
@@ -528,21 +572,8 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
     const rootPath = path.join(alias, "state", "openclaw.sqlite");
     expect(current.context.stateIntegrity).toBeDefined();
     expect(rootPath).not.toBe(current.context.stateIntegrity?.identity.canonicalPath);
-    const { port1, port2 } = new MessageChannel();
-    try {
-      currentSqliteWorkerOperationAdmission.run(
-        { active: true, port: port1, owner: { port: port1 } },
-        () =>
-          runWithSqliteWorkerStateContext(current.context, () =>
-            writeThroughSdk(writer, current, "sdk-alias"),
-          ),
-      );
-    } finally {
-      port1.close();
-      port2.close();
-    }
-    expect(current.readPersisted()).toEqual(credential("sdk-alias"));
-    expect(current.authority.readCurrentCredential()).toEqual(credential("sdk-alias"));
+    withWorker(current.context, () => writeThroughSdk(writer, current, "sdk-alias"));
+    expectCredential(current, "sdk-alias");
   });
 
   it.each(["missing", "wrong"] as const)(
@@ -554,32 +585,16 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
       if (rootFacts === "wrong") {
         expect(stateIntegrity).toBeDefined();
       }
-      const { port1, port2 } = new MessageChannel();
-      try {
-        expect(() =>
-          currentSqliteWorkerOperationAdmission.run(
-            { active: true, port: port1, owner: { port: port1 } },
-            () =>
-              runWithSqliteWorkerStateContext({ ...current.context, stateIntegrity }, () =>
-                inSdkEnvironment(current, () =>
-                  runSqliteImmediateTransactionSync(current.database.db, () =>
-                    saveSdkAuthProfileStore(
-                      store("unowned"),
-                      current.agentDir,
-                      saveOptions,
-                      current.database,
-                    ),
-                  ),
-                ),
-              ),
+      expect(() =>
+        withWorker({ ...current.context, stateIntegrity }, () =>
+          inSdkEnvironment(current, () =>
+            runSqliteImmediateTransactionSync(current.database.db, () =>
+              current.save("unowned", true),
+            ),
           ),
-        ).toThrow("credential writes require an admitted worker");
-      } finally {
-        port1.close();
-        port2.close();
-      }
-      expect(current.readPersisted()).toEqual(credential("original"));
-      expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
+        ),
+      ).toThrow("credential writes require an admitted worker");
+      expectCredential(current, "original");
     },
   );
 
@@ -601,33 +616,19 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
               observed = current.authority.readCurrentCredential();
             });
             runSqliteImmediateTransactionSync(current.database.db, () => {
-              saveSdkAuthProfileStore(
-                store("supplied"),
-                current.agentDir,
-                saveOptions,
-                current.database,
-              );
+              current.save("supplied", true);
             });
-            saveSdkAuthProfileStore(store("latest"), current.agentDir, saveOptions);
+            current.save("latest");
             expectRetainedCustody(rootPath);
-            expect(() => current.authority.readCurrentCredential()).toThrow(
-              "authority is unavailable",
-            );
+            expectDenied(current.authority);
             if (outcome === "rollback") {
               throw new Error("cancelled SDK update");
             }
           }),
         );
-      if (outcome === "rollback") {
-        expect(save).toThrow("cancelled SDK update");
-        expect(observed).toBeUndefined();
-      } else {
-        save();
-        expect(observed).toEqual(credential("latest"));
-      }
-      const expected = credential(outcome === "commit" ? "latest" : "original");
-      expect(current.readPersisted()).toEqual(expected);
-      expect(current.authority.readCurrentCredential()).toEqual(expected);
+      runOutcome(save, outcome, "cancelled SDK update");
+      expect(observed).toEqual(outcome === "commit" ? credential("latest") : undefined);
+      expectCredential(current, outcome === "commit" ? "latest" : "original");
       const nextOwner = tryAcquireGatewayStateOwner(rootPath);
       try {
         expect(nextOwner).not.toBeNull();
@@ -649,9 +650,7 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
           lease = getStateDatabaseSchemaLease(rootPath);
           expect(lease).toBeDefined();
           expectRetainedCustody(rootPath);
-          expect(() => current.authority.readCurrentCredential()).toThrow(
-            "authority is unavailable",
-          );
+          expectDenied(current.authority);
           exec(sql);
           throw new Error("lost SDK commit acknowledgement");
         }
@@ -669,10 +668,10 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
           ),
         );
         expect(persisted).toMatchObject({ status: "readable", raw: store("unknown") });
-        expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
+        expectDenied(current.authority);
         const cold = current.capture();
         cold.observe(credential("unknown"));
-        expect(() => cold.readCurrentCredential()).toThrow("authority is unavailable");
+        expectDenied(cold);
       } finally {
         commit.mockRestore();
         lease?.release();
@@ -702,8 +701,6 @@ describe("prepared persisted credential readers", () => {
       const agentDir = path.join(shared.env.OPENCLAW_STATE_DIR, "agents", "child", "agent");
       const localPath = path.join(agentDir, "openclaw-agent.sqlite");
       agentPaths.push(localPath);
-      vi.stubEnv("OPENCLAW_STATE_DIR", shared.env.OPENCLAW_STATE_DIR);
-      vi.stubEnv("OPENCLAW_AGENT_DIR", undefined);
       const writeLocal = (key?: string) =>
         runAuthProfileWriteTransaction(
           agentDir,
@@ -713,90 +710,68 @@ describe("prepared persisted credential readers", () => {
               : deleteAuthProfileJsonCell(db, "store", "agent"),
           { env: shared.env },
         );
-      try {
-        if (localPresent) {
-          writeLocal("local-original");
-        }
-        const read = await nativeRuntime.prepareAuthProfileCredentialRead({
-          agentDir,
-          profileId,
-          store: store("snapshot-must-not-win"),
-        });
-        expect(read?.()).toEqual(credential(localPresent ? "local-original" : "original"));
-        writeLocal("local-new");
-        expect(read?.()).toEqual(credential("local-new"));
-        writeLocal();
-        expect(read?.()).toEqual(credential("original"));
-        shared.write("shared-new");
-        expect(read?.()).toEqual(credential("shared-new"));
-        const cold = await nativeRuntime.findPersistedAuthProfileCredentialAsync({
-          agentDir,
-          profileId,
-        });
-        expect(read?.()).toEqual(cold);
-        await closeOpenClawAgentDatabaseByPathAsync(localPath);
-        expect(() => read?.()).toThrow("authority is unavailable");
-      } finally {
-        vi.unstubAllEnvs();
+      useReaderEnvironment(shared);
+      if (localPresent) {
+        writeLocal("local-original");
       }
+      const read = await shared.prepareRead(agentDir, store("snapshot-must-not-win"));
+      expect(read?.()).toEqual(credential(localPresent ? "local-original" : "original"));
+      writeLocal("local-new");
+      expect(read?.()).toEqual(credential("local-new"));
+      writeLocal();
+      expect(read?.()).toEqual(credential("original"));
+      shared.write("shared-new");
+      expect(read?.()).toEqual(credential("shared-new"));
+      const cold = await nativeRuntime.findPersistedAuthProfileCredentialAsync({
+        agentDir,
+        profileId,
+      });
+      expect(read?.()).toEqual(cold);
+      await closeOpenClawAgentDatabaseByPathAsync(localPath);
+      expect(() => read?.()).toThrow("authority is unavailable");
     },
   );
 
-  it("retains scoped legacy-main credentials without consulting ambient shared ownership", async () => {
-    const current = fixture("agent");
-    const agentDir = path.dirname(current.database.path);
-    noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, current.env);
-    const ambient = fixture("shared-state");
-    ambient.write("ambient");
-    vi.stubEnv("OPENCLAW_STATE_DIR", ambient.env.OPENCLAW_STATE_DIR);
-    vi.stubEnv("OPENCLAW_AGENT_DIR", undefined);
-    try {
+  it.each(["agent", "shared-state"] as const)(
+    "retains scoped %s authority over ambient state and snapshots",
+    async (kind) => {
+      const shared = fixture(kind);
+      const agentDir =
+        kind === "agent"
+          ? path.dirname(shared.database.path)
+          : path.join(shared.env.OPENCLAW_STATE_DIR, "agents", "scoped", "agent");
+      if (kind === "agent") {
+        noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, shared.env);
+      } else {
+        agentPaths.push(path.join(agentDir, "openclaw-agent.sqlite"));
+      }
+      const ambient = fixture("shared-state");
+      ambient.write("ambient");
+      useReaderEnvironment(ambient);
       const read = await withAuthProfileStoreAgentDir(
         agentDir,
-        current.env.OPENCLAW_STATE_DIR,
+        shared.env.OPENCLAW_STATE_DIR,
         async () => {
-          const retained = await nativeRuntime.prepareAuthProfileCredentialRead({
-            agentDir,
-            profileId,
-            store: store("snapshot"),
-          });
-          expect(retained?.()).toEqual(
-            await nativeRuntime.findPersistedAuthProfileCredentialAsync({ agentDir, profileId }),
-          );
+          const retained = await shared.prepareRead(agentDir);
+          if (kind === "agent") {
+            expect(retained?.()).toEqual(
+              await nativeRuntime.findPersistedAuthProfileCredentialAsync({
+                agentDir,
+                profileId,
+              }),
+            );
+          }
           return retained;
         },
       );
       expect(read?.()).toEqual(credential("original"));
-      current.write("updated");
-      expect(read?.()).toEqual(credential("updated"));
-      current.transact(({ db }) => deleteAuthProfileJsonCell(db, "store", "agent"));
-      expect(read?.()).toBeUndefined();
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it("retains current scoped shared authority and does not revive a deleted persisted snapshot", async () => {
-    const shared = fixture("shared-state");
-    const ambient = fixture("shared-state");
-    ambient.write("ambient");
-    const agentDir = path.join(shared.env.OPENCLAW_STATE_DIR, "agents", "scoped", "agent");
-    agentPaths.push(path.join(agentDir, "openclaw-agent.sqlite"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", ambient.env.OPENCLAW_STATE_DIR);
-    vi.stubEnv("OPENCLAW_AGENT_DIR", undefined);
-    try {
-      const read = await withAuthProfileStoreAgentDir(agentDir, shared.env.OPENCLAW_STATE_DIR, () =>
-        nativeRuntime.prepareAuthProfileCredentialRead({
-          agentDir,
-          profileId,
-          store: store("snapshot"),
-        }),
-      );
-      expect(read?.()).toEqual(credential("original"));
       shared.write("shared-new");
       expect(read?.()).toEqual(credential("shared-new"));
-      shared.transact(({ db }) => deleteAuthProfileJsonCell(db, "store", "shared-state"));
+      shared.remove();
       expect(read?.()).toBeUndefined();
+      if (kind === "agent") {
+        return;
+      }
       for (const excluded of [
         { ...credential("private"), copyToAgents: false },
         {
@@ -823,8 +798,8 @@ describe("prepared persisted credential readers", () => {
         { env: shared.env },
       );
       expect(read?.()).toEqual(credential("scoped-local"));
-      shared.transact(({ db }) => deleteAuthProfileJsonCell(db, "store", "shared-state"));
-      vi.stubEnv("OPENCLAW_STATE_DIR", shared.env.OPENCLAW_STATE_DIR);
+      shared.remove();
+      useReaderEnvironment(shared);
       expect(
         await nativeRuntime.prepareAuthProfileCredentialRead({
           profileId,
@@ -837,10 +812,8 @@ describe("prepared persisted credential readers", () => {
       });
       expect(persisted).toBeTypeOf("function");
       expect(persisted?.()).toBeUndefined();
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
+    },
+  );
 });
 
 it.each(["commit", "rollback"])(
@@ -860,17 +833,16 @@ it.each(["commit", "rollback"])(
           });
         });
         expect(captured.receipt.facts.get("store")).toEqual({ kind: "postimage", value: next });
-        expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
+        expectDenied(current.authority);
         if (outcome === "rollback") {
           throw new Error("synthetic rollback");
         }
       });
-    if (outcome === "rollback") {
-      expect(transact).toThrow("synthetic rollback");
-      expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
-    } else {
-      transact();
-      expect(current.authority.readCurrentCredential()).toEqual(credential("anchored"));
+    runOutcome(transact, outcome, "synthetic rollback");
+    expect(current.authority.readCurrentCredential()).toEqual(
+      credential(outcome === "commit" ? "anchored" : "original"),
+    );
+    if (outcome === "commit") {
       expect(current.readPersisted()).toEqual(credential("anchored"));
     }
   },

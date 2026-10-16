@@ -12,7 +12,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
-import { createAuthProfileStoreFixture } from "./credential-fixtures.test-support.js";
+import { createOAuthRefreshCredential as oauth } from "./credential-fixtures.test-support.js";
 import { isSettledOAuthRefreshFailure, OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { buildRefreshContentionError } from "./oauth-refresh-lock-errors.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
@@ -78,10 +78,6 @@ afterAll(() => {
   vi.resetModules();
 });
 
-function createUsableOAuthExpiry(): number {
-  return Date.now() + 30 * 60 * 1000;
-}
-
 describe("resolveApiKeyForProfile fallback to main agent", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_AGENT_DIR", "OPENAI_API_KEY"]);
   let tmpDir: string;
@@ -89,16 +85,14 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
 
   beforeEach(async () => {
     resetFileLockStateForTest();
-    getOAuthApiKeyMock.mockReset();
-    refreshCredentialMock.mockReset().mockResolvedValue(undefined);
-    getOAuthApiKeyMock.mockImplementation(async () => {
+    getOAuthApiKeyMock.mockReset().mockImplementation(async () => {
       throw new Error("invalid_grant");
     });
+    refreshCredentialMock.mockReset().mockResolvedValue(undefined);
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-fallback-test-"));
     mainAgentDir = path.join(tmpDir, "agents", "main", "agent");
     await fs.mkdir(mainAgentDir, { recursive: true });
 
-    // Set environment variables so the default agent dir resolves under tmpDir.
     setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
     setTestEnvValue("OPENCLAW_AGENT_DIR", mainAgentDir);
     deleteTestEnvValue("OPENAI_API_KEY");
@@ -106,26 +100,23 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     setRuntimeConfigSnapshot({});
   });
 
-  function createOauthStore(params: {
-    profileId: string;
-    access?: string;
-    refresh?: string;
-    expires?: number;
-    provider?: string;
-  }): AuthProfileStore {
-    return createAuthProfileStoreFixture({
-      [params.profileId]: {
-        type: "oauth",
-        provider: params.provider ?? "openai",
-        access: params.access ?? "expired-access",
-        refresh: params.refresh ?? "expired-refresh",
-        expires: params.expires ?? 1,
-      },
-    });
+  function setup(
+    overrides: Partial<OAuthCredential> = {},
+    profileId = "openai:default",
+    persist = true,
+  ) {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: { [profileId]: oauth({ expires: 1, ...overrides }) },
+    };
+    if (persist) {
+      saveAuthProfileStore(store, mainAgentDir);
+    }
+    return { store, profileId, agentDir: mainAgentDir };
   }
 
-  function readAuthProfilesStore(agentDir: string): AuthProfileStore {
-    return loadPersistedAuthProfileStore(agentDir) ?? { version: 1, profiles: {} };
+  function readStore(): AuthProfileStore {
+    return loadPersistedAuthProfileStore(mainAgentDir) ?? { version: 1, profiles: {} };
   }
 
   afterEach(async () => {
@@ -143,25 +134,13 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
 
   it("persists a forced model-auth plugin refresh before returning", async () => {
     const { getApiKeyForModelCore } = await import("../model-auth.js");
-    const expiresIn = 86_400_000;
-    const forceRefresh = true;
-    const profileId = "openai:default";
-    const store = createOauthStore({
-      profileId,
-      provider: "openai",
-      access: "local-access",
-      refresh: "local-refresh",
-      expires: Date.now() + expiresIn,
-    });
-    saveAuthProfileStore(store, mainAgentDir);
-    const rotated: OAuthCredential = {
-      type: "oauth",
-      provider: "openai",
+    const params = setup({ expires: Date.now() + 86_400_000 });
+    const rotated = oauth({
       access: "rotated-access",
       refresh: "rotated-refresh",
       expires: Date.now() + 86_400_000,
       accountId: "acct-rotated",
-    };
+    });
     refreshCredentialMock.mockResolvedValueOnce(rotated);
     await expect(
       getApiKeyForModelCore({
@@ -171,50 +150,38 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
           api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
         }),
-        store,
-        profileId,
-        agentDir: mainAgentDir,
-        forceRefresh,
+        ...params,
+        forceRefresh: true,
         lockedProfile: true,
       }),
-    ).resolves.toMatchObject({ apiKey: rotated.access, profileId });
+    ).resolves.toMatchObject({ apiKey: rotated.access, profileId: params.profileId });
     expect(refreshCredentialMock).toHaveBeenCalledOnce();
-    expect(refreshCredentialMock.mock.calls[0]?.[0]).toMatchObject(store.profiles[profileId]!);
-    expect(readAuthProfilesStore(mainAgentDir).profiles[profileId]).toEqual(rotated);
+    expect(refreshCredentialMock.mock.calls[0]?.[0]).toMatchObject(
+      params.store.profiles[params.profileId]!,
+    );
+    expect(readStore().profiles[params.profileId]).toEqual(rotated);
   });
 
   it("fails closed for unchanged expired credentials", async () => {
-    const provider = "openai";
-    const profileId = `${provider}:default`;
-    const store = createOauthStore({
-      profileId,
-    });
-    saveAuthProfileStore(store, mainAgentDir);
+    const params = setup();
     refreshCredentialMock.mockImplementationOnce(async (credential) => credential);
-    await expect(
-      resolveApiKeyForProfile({ store, profileId, agentDir: mainAgentDir }),
-    ).rejects.toThrow(OAuthRefreshFailureError);
+    await expect(resolveApiKeyForProfile(params)).rejects.toThrow(OAuthRefreshFailureError);
     expect(refreshCredentialMock).toHaveBeenCalledOnce();
     expect(getOAuthApiKeyMock).not.toHaveBeenCalled();
-    expect(readAuthProfilesStore(mainAgentDir).profiles[profileId]).toMatchObject({
+    expect(readStore().profiles[params.profileId]).toMatchObject({
       access: expect.stringContaining(":failed:access:"),
       refresh: expect.stringContaining(":failed:refresh:"),
     });
   });
 
   it("rejects direct API-key routes before refreshing managed OAuth", async () => {
-    const profileId = "openai:user@example.test";
-    const store = createOauthStore({
-      profileId,
-    });
-    saveAuthProfileStore(store, mainAgentDir);
+    const { profileId, ...auth } = setup({}, "openai:user@example.test");
     const { hasAvailableAuthForProvider, resolveApiKeyForProviderCore } =
       await import("../model-auth.js");
     const params = {
       provider: "openai",
       modelApi: "openai-responses",
-      store,
-      agentDir: mainAgentDir,
+      ...auth,
     };
     await expect(resolveApiKeyForProviderCore(params)).rejects.toThrow(
       'No API key found for provider "openai"',
@@ -228,15 +195,11 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   });
 
   it("surfaces frozen contention once without exposing the lock path", async () => {
-    const profileId = "openai:default";
-    const store = createOauthStore({
-      profileId,
-    });
-    saveAuthProfileStore(store, mainAgentDir);
+    const params = setup();
     const lockPath = path.join(mainAgentDir, "oauth-refresh.lock");
     const refreshError = buildRefreshContentionError({
       provider: "openai",
-      profileId,
+      profileId: params.profileId,
       cause: Object.assign(new Error(`file lock timeout for ${lockPath}`), {
         code: FILE_LOCK_TIMEOUT_ERROR_CODE,
         lockPath,
@@ -244,16 +207,14 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     });
     refreshCredentialMock.mockRejectedValueOnce(Object.freeze(refreshError));
     const failure = await resolveApiKeyForProfile({
-      store,
-      profileId,
-      agentDir: mainAgentDir,
+      ...params,
       forceRefresh: true,
     }).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(OAuthRefreshFailureError);
     expect(isSettledOAuthRefreshFailure(failure)).toBe(true);
     expect(failure).toMatchObject({
       provider: "openai",
-      profileId,
+      profileId: params.profileId,
       reason: null,
       cause: { code: "refresh_contention", lockPath },
     });
@@ -267,23 +228,15 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   it.each([false, true])(
     "clears stale lastGood and respects a locked selection ($locked)",
     async (locked) => {
-      const profileId = "openai:default";
+      const params = setup({}, undefined, false);
+      const { store, profileId } = params;
       const alternateId = "openai:user@example.test";
-      const store = createOauthStore({
-        profileId,
-        provider: "openai",
-        access: "stale-access",
-        refresh: "stale-refresh",
-        expires: 1,
-      });
-      store.profiles[alternateId] = {
-        type: "oauth",
-        provider: "openai",
+      store.profiles[alternateId] = oauth({
         access: "healthy-access",
         refresh: "healthy-refresh",
-        expires: createUsableOAuthExpiry(),
+        expires: Date.now() + 30 * 60 * 1000,
         email: "user@example.test",
-      };
+      });
       store.lastGood = { openai: profileId };
       saveAuthProfileStore(store, mainAgentDir);
       getOAuthApiKeyMock.mockRejectedValueOnce(new Error("refresh_token_reused"));
@@ -291,9 +244,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
       const resolution = resolveApiKeyForProviderCore({
         provider: "openai",
         modelApi: "openai-chatgpt-responses",
-        store,
-        agentDir: mainAgentDir,
-        profileId,
+        ...params,
         lockedProfile: locked,
       });
       if (locked) {
@@ -306,7 +257,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
           source: `profile:${alternateId}`,
           mode: "oauth",
         });
-        expect(readAuthProfilesStore(mainAgentDir).lastGood).toBeUndefined();
+        expect(readStore().lastGood).toBeUndefined();
         const { markAuthProfileSuccess } = await import("./profiles.js");
         await markAuthProfileSuccess({
           store: ensureAuthProfileStore(mainAgentDir),
@@ -314,17 +265,15 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
           profileId: alternateId,
           agentDir: mainAgentDir,
         });
-        expect(readAuthProfilesStore(mainAgentDir).lastGood?.openai).toBe(alternateId);
+        expect(readStore().lastGood?.openai).toBe(alternateId);
       }
       expect(getOAuthApiKeyMock).toHaveBeenCalledOnce();
     },
   );
 
   it("preserves the refresh diagnosis when stale lastGood cleanup fails", async () => {
-    const profileId = "openai:default";
-    const store = createOauthStore({
-      profileId,
-    });
+    const params = setup({}, undefined, false);
+    const { store, profileId } = params;
     store.lastGood = { openai: profileId };
     saveAuthProfileStore(store, mainAgentDir);
     const cleanup = vi
@@ -332,11 +281,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
       .mockRejectedValueOnce(new Error("synthetic last-good cleanup failure"));
     try {
       getOAuthApiKeyMock.mockRejectedValueOnce(new Error("refresh_token_reused"));
-      const failure = await resolveApiKeyForProfile({
-        store,
-        profileId,
-        agentDir: mainAgentDir,
-      }).catch((error: unknown) => error);
+      const failure = await resolveApiKeyForProfile(params).catch((error: unknown) => error);
       expect(getOAuthApiKeyMock).toHaveBeenCalledOnce();
       expect(cleanup).toHaveBeenCalledExactlyOnceWith({
         provider: "openai",

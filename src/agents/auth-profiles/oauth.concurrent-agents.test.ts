@@ -1,19 +1,23 @@
-import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
+import { describe, expect, it, vi } from "vitest";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
-import { captureEnv } from "../../test-utils/env.js";
 import { AUTH_STORE_VERSION, MINIMAX_CLI_PROFILE_ID } from "./constants.js";
-import "./oauth-external-auth-passthrough.test-support.js";
-import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
+import {
+  candidate,
+  expired,
+  expectTerminal,
+  oauth,
+  profileId,
+  provider,
+  read,
+  useOAuthCoordinationFixture,
+} from "./oauth-coordination.test-support.js";
 import { createOAuthManager } from "./oauth-manager.js";
 import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import {
@@ -22,15 +26,7 @@ import {
   isPendingOAuthRefreshFence,
 } from "./oauth-refresh-marker.js";
 import { failOAuthRefreshPeerClaims, fenceOAuthRefreshPeers } from "./oauth-refresh-peers.js";
-import {
-  OAUTH_AGENT_ENV_KEYS,
-  createOAuthMainAgentDir,
-  createOAuthTestTempRoot,
-  createExpiredOauthStore,
-  removeOAuthTestTempRoot,
-  resolveApiKeyForProfileInTest,
-  resetOAuthProviderRuntimeMocks,
-} from "./oauth-test-utils.js";
+import { storeWith } from "./oauth-test-utils.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { removeAuthProfilesAcrossOwnerStores } from "./profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
@@ -41,119 +37,47 @@ import {
   saveAuthProfileStore,
 } from "./store-runtime.js";
 import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
+import type { OAuthCredential } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
-
-const {
-  refreshProviderOAuthCredentialWithPluginMock,
-  formatProviderAuthProfileApiKeyWithPluginMock,
-} = getOAuthProviderRuntimeMocks();
-
-let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
-let resetOAuthRefreshQueuesForTest: typeof import("./oauth.test-support.js").resetOAuthRefreshQueuesForTest;
-
-async function loadOAuthModuleForTest() {
-  ({ resolveApiKeyForProfile } = await import("./oauth.js"));
-  ({ resetOAuthRefreshQueuesForTest } = await import("./oauth.test-support.js"));
-  resetOAuthRefreshQueuesForTest();
-}
 
 vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: vi.fn(async () => null),
   getOAuthProviders: () => [{ id: "openai" }, { id: "minimax-portal" }],
 }));
+const fx = useOAuthCoordinationFixture();
 
-const profileId = "openai:default";
-const provider = "openai";
-function oauth(
-  prefix = "rotated",
-  overrides: Partial<import("./types.js").OAuthCredential> = {},
-): import("./types.js").OAuthCredential {
+function cliCredential(authFlow = "external-cli"): OAuthCredential {
   return {
     type: "oauth",
-    provider,
-    access: prefix + "-access",
-    refresh: prefix + "-refresh",
-    expires: Date.now() + 60 * 60 * 1000,
-    ...overrides,
-  };
-}
-function expired(
-  overrides: Omit<Parameters<typeof createExpiredOauthStore>[0], "profileId" | "provider"> = {},
-) {
-  return createExpiredOauthStore({ profileId, provider, ...overrides });
-}
-async function agentDirectory(name: string) {
-  const directory = path.join(tempRoot, "agents", name, "agent");
-  await fs.mkdir(directory, { recursive: true });
-  return directory;
-}
-function expectTerminal(credential: import("./types.js").AuthProfileCredential | undefined) {
-  expect(credential?.type === "oauth" && isOAuthRefreshFence(credential)).toBe(true);
-  expect(credential?.type === "oauth" && isPendingOAuthRefreshFence(credential)).toBe(false);
-}
-function candidate(agentId: string, agentDir: string) {
-  return {
-    configured: true,
-    agentId,
-    agentDir,
-    databasePath: resolveAuthProfileDatabasePath(agentDir),
-    databaseIdentity: readDatabasePathIdentitySync(resolveAuthProfileDatabasePath(agentDir)),
-    env: process.env,
+    provider: "minimax-portal",
+    authFlow,
+    access: "cached-access-token",
+    refresh: "refresh-token",
+    expires: Date.now() - 60_000,
   };
 }
 
-function read(agentDir: string | undefined) {
-  assert.ok(agentDir, "expected a seeded agent directory");
-  return loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
-}
-function resolveFrom(agentDir: string | undefined) {
-  assert.ok(agentDir, "expected a seeded agent directory");
-  return resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+function resolveManaged(
+  refreshCredential: () => Promise<OAuthCredential>,
+  agentDir: string,
+  credential: OAuthCredential,
+  onBootstrap?: () => void,
+) {
+  return createOAuthManager({
+    buildApiKey: async (_provider, value) => value.access,
+    refreshCredential,
+    canRefreshCredential: async () => true,
+    readBootstrapCredential: () => {
+      onBootstrap?.();
+      return null;
+    },
+  }).resolveOAuthAccess({
     store: ensureAuthProfileStore(agentDir),
     profileId,
+    credential,
     agentDir,
   });
 }
-
-function blockRefresh(credential: () => import("./types.js").OAuthCredential) {
-  const started = createDeferredCore();
-  const finish = createDeferredCore();
-  refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
-    started.resolve();
-    await finish.promise;
-    return credential() as never;
-  });
-  return { started: started.promise, finishRefresh: finish.resolve };
-}
-
-let tempRoot: string;
-let mainAgentDir: string;
-let envSnapshot: ReturnType<typeof captureEnv>;
-let settleCaseWork: (() => Promise<void>) | undefined;
-beforeEach(async () => {
-  envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
-  resetFileLockStateForTest();
-  resetOAuthProviderRuntimeMocks({
-    refreshProviderOAuthCredentialWithPluginMock,
-    formatProviderAuthProfileApiKeyWithPluginMock,
-  });
-  clearRuntimeAuthProfileStoreSnapshots();
-  tempRoot = await createOAuthTestTempRoot("openclaw-oauth-shard-");
-  mainAgentDir = await createOAuthMainAgentDir(tempRoot);
-  await loadOAuthModuleForTest();
-});
-afterEach(async () => {
-  await settleCaseWork?.();
-  settleCaseWork = undefined;
-  envSnapshot.restore();
-  resetFileLockStateForTest();
-  resetOAuthProviderRuntimeMocks({
-    refreshProviderOAuthCredentialWithPluginMock,
-    formatProviderAuthProfileApiKeyWithPluginMock,
-  });
-  clearRuntimeAuthProfileStoreSnapshots();
-  await removeOAuthTestTempRoot(tempRoot);
-});
 
 describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", () => {
   it("gives one copied refresh generation one durable main-store owner", async () => {
@@ -163,16 +87,16 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
     const work = new AsyncWorkScope();
     const { promise: finishRefreshGate, resolve: finishRefresh } = createDeferredCore();
     // Vitest can time out the observer before the accepted refresh finishes.
-    settleCaseWork = async () => {
+    fx.settle(async () => {
       finishRefresh();
       await work.drain();
       await readOnlyWorkers.close();
-    };
+    });
     const runCase = async () => {
       const freshExpiry = Date.now() + 60 * 60 * 1000;
       const subAgents = await Promise.all(
         Array.from({ length: 4 }, async (_, i) => {
-          const dir = path.join(tempRoot, "agents", `sub-${i}`, "agent");
+          const dir = path.join(fx.root, "agents", `sub-${i}`, "agent");
           await fs.mkdir(dir, { recursive: true });
           const local = expired({ accountId: "acct-a" });
           const credential = local.profiles[profileId];
@@ -204,12 +128,10 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       if (mainCredential?.type === "oauth") {
         mainCredential.access = "main-drifted-access";
       }
-      saveAuthProfileStore(mainStore, mainAgentDir);
+      saveAuthProfileStore(mainStore, fx.mainDir);
 
-      let callCount = 0;
       const { promise: started, resolve: markStarted } = createDeferredCore();
-      refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
-        callCount += 1;
+      fx.refresh.mockImplementation(async () => {
         markStarted();
         await finishRefreshGate;
         return oauth("cross-agent-refreshed", {
@@ -218,7 +140,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
         }) as never;
       });
 
-      const first = resolveFrom(subAgents[0]);
+      const first = fx.resolve(subAgents[0]);
       await Promise.race([started, first]);
       expect(
         resolvePersistedAuthProfileOwnerAgentDir({
@@ -235,11 +157,13 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
             ),
           ),
       );
-      expect(copiedOwner).toBeUndefined();
-      expect(independentOwner).toBe(subAgents[2]);
       // A portable copy is not fenced, but its matching refresh generation still reads main.
-      expect(portableOwner).toBeUndefined();
-      expect(callCount).toBe(1);
+      expect([copiedOwner, independentOwner, portableOwner]).toEqual([
+        undefined,
+        subAgents[2],
+        undefined,
+      ]);
+      expect(fx.refresh).toHaveBeenCalledOnce();
       for (const agentDir of subAgents.slice(0, 2)) {
         const fenced = read(agentDir);
         expect(fenced?.type === "oauth" ? fenced.access : "").toMatch(
@@ -262,7 +186,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
         apiKey: "cross-agent-refreshed-access",
         provider,
       });
-      expect(callCount).toBe(1);
+      expect(fx.refresh).toHaveBeenCalledOnce();
       for (const [index, agentDir] of subAgents.slice(0, 2).entries()) {
         const persisted = loadPersistedAuthProfileStore(agentDir);
         expect(persisted?.profiles[profileId]).toBeUndefined();
@@ -280,28 +204,28 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
 
       await removeAuthProfilesAcrossOwnerStores({
         profileIds: [profileId],
-        agentDir: mainAgentDir,
+        agentDir: fx.mainDir,
       });
-      await expect(resolveFrom(subAgents[1])).resolves.toBeNull();
+      await expect(fx.resolve(subAgents[1])).resolves.toBeNull();
       clearRuntimeAuthProfileStoreSnapshots();
-      await expect(resolveFrom(subAgents[1])).resolves.toBeNull();
-      expect(callCount).toBe(1);
-      await expect(resolveFrom(subAgents[2])).resolves.toMatchObject({
+      await expect(fx.resolve(subAgents[1])).resolves.toBeNull();
+      expect(fx.refresh).toHaveBeenCalledOnce();
+      await expect(fx.resolve(subAgents[2])).resolves.toMatchObject({
         apiKey: "independent-access",
       });
-      await expect(resolveFrom(subAgents[3])).resolves.toMatchObject({ apiKey: "portable-access" });
+      await expect(fx.resolve(subAgents[3])).resolves.toMatchObject({ apiKey: "portable-access" });
     };
     await readOnlyWorkers.run(() => work.track(runCase));
   }, 10_000);
 
   it("keeps pending observers read-only until the owner claims a late peer", async () => {
-    const latePeerAgentDir = await agentDirectory("late-peer");
+    const latePeerAgentDir = await fx.agentDirectory("late-peer");
     const originalStore = expired({ accountId: "acct-a" });
     const original = originalStore.profiles[profileId];
     if (original?.type !== "oauth") {
       throw new Error("expected original OAuth credential");
     }
-    saveAuthProfileStore(originalStore, mainAgentDir);
+    saveAuthProfileStore(originalStore, fx.mainDir);
 
     const { promise: refreshStarted, resolve: markRefreshStarted } = createDeferredCore();
     const { promise: finishRefreshGate, resolve: finishRefresh } = createDeferredCore();
@@ -310,33 +234,12 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       await finishRefreshGate;
       return oauth("rotated-a", { accountId: "acct-a" });
     });
-    const createManager = (onBootstrap?: () => void) =>
-      createOAuthManager({
-        buildApiKey: async (_provider, credential) => credential.access,
-        refreshCredential,
-        canRefreshCredential: async () => true,
-        readBootstrapCredential: () => {
-          onBootstrap?.();
-          return null;
-        },
-      });
-
-    const owner = createManager().resolveOAuthAccess({
-      store: ensureAuthProfileStore(mainAgentDir),
-      profileId,
-      credential: original,
-      agentDir: mainAgentDir,
-    });
+    const owner = resolveManaged(refreshCredential, fx.mainDir, original);
     await refreshStarted;
     writePersistedAuthProfileStoreRaw(originalStore, latePeerAgentDir);
 
     const { promise: observerEntered, resolve: markObserverEntered } = createDeferredCore();
-    const observer = createManager(markObserverEntered).resolveOAuthAccess({
-      store: ensureAuthProfileStore(mainAgentDir),
-      profileId,
-      credential: original,
-      agentDir: mainAgentDir,
-    });
+    const observer = resolveManaged(refreshCredential, fx.mainDir, original, markObserverEntered);
     await observerEntered;
     await withOAuthProfileLock({ provider, profileId }, async () => {});
 
@@ -351,8 +254,8 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
 
   it("allows only one independent manager to own a late local refresh generation", async () => {
     const [firstAgentDir, secondAgentDir] = await Promise.all([
-      agentDirectory("first"),
-      agentDirectory("second"),
+      fx.agentDirectory("first"),
+      fx.agentDirectory("second"),
     ]);
     const originalStore = expired({ accountId: "acct-a" });
     const original = originalStore.profiles[profileId];
@@ -370,33 +273,15 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       }
       return oauth("rotated-a", { accountId: "acct-a" });
     });
-    const createManager = () =>
-      createOAuthManager({
-        buildApiKey: async (_provider, credential) => credential.access,
-        refreshCredential,
-        canRefreshCredential: async () => true,
-        readBootstrapCredential: () => null,
-      });
-
-    const first = createManager().resolveOAuthAccess({
-      store: ensureAuthProfileStore(firstAgentDir),
-      profileId,
-      credential: original,
-      agentDir: firstAgentDir,
-    });
+    const first = resolveManaged(refreshCredential, firstAgentDir, original);
     await firstRefreshStarted;
     const firstFence = read(firstAgentDir);
     expect(firstFence?.type === "oauth" && isPendingOAuthRefreshFence(firstFence)).toBe(true);
 
     writePersistedAuthProfileStoreRaw(originalStore, secondAgentDir);
-    await expect(
-      createManager().resolveOAuthAccess({
-        store: ensureAuthProfileStore(secondAgentDir),
-        profileId,
-        credential: original,
-        agentDir: secondAgentDir,
-      }),
-    ).rejects.toThrow("historical OAuth refresh peer");
+    await expect(resolveManaged(refreshCredential, secondAgentDir, original)).rejects.toThrow(
+      "historical OAuth refresh peer",
+    );
 
     expect(refreshCredential).toHaveBeenCalledOnce();
     expect(read(firstAgentDir)).toEqual(firstFence);
@@ -413,8 +298,8 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       throw new Error("expected original OAuth credential");
     }
     const fence = createOAuthRefreshFence({ profileId, credential: original });
-    const unreadableAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-    const readableAgentDir = path.join(tempRoot, "agents", "peer-b", "agent");
+    const unreadableAgentDir = path.join(fx.root, "agents", "peer-a", "agent");
+    const readableAgentDir = path.join(fx.root, "agents", "peer-b", "agent");
     await fs.mkdir(unreadableAgentDir, { recursive: true });
     await fs.mkdir(readableAgentDir, { recursive: true });
     await fs.writeFile(resolveAuthProfileDatabasePath(unreadableAgentDir), "not a sqlite database");
@@ -444,11 +329,11 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
 
   it("rejects a same-generation login write while refresh owns the generation", async () => {
     const original = expired();
-    saveAuthProfileStore(original, mainAgentDir);
+    saveAuthProfileStore(original, fx.mainDir);
 
-    const { started, finishRefresh } = blockRefresh(() => oauth("rotated"));
+    const { started, finishRefresh } = fx.blockRefresh(() => oauth("rotated"));
 
-    const resolving = resolveFrom(mainAgentDir);
+    const resolving = fx.resolve(fx.mainDir);
     await started;
     const originalCredential = original.profiles[profileId];
     if (originalCredential?.type !== "oauth") {
@@ -456,40 +341,40 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
     }
     await expect(
       persistAuthProfileBatch({
-        agentDir: mainAgentDir,
+        agentDir: fx.mainDir,
         profiles: [{ profileId, credential: originalCredential }],
         resetFailureState: true,
         allowOAuthGenerationReplacement: true,
       }),
     ).rejects.toThrow("Refused to restore fenced OAuth refresh generation");
-    const ownerFence = read(mainAgentDir);
+    const ownerFence = read(fx.mainDir);
     expect(ownerFence?.type === "oauth" && isOAuthRefreshFence(ownerFence)).toBe(true);
 
     finishRefresh();
     await expect(resolving).resolves.toMatchObject({ apiKey: "rotated-access" });
-    expect(read(mainAgentDir)).toMatchObject({
+    expect(read(fx.mainDir)).toMatchObject({
       access: "rotated-access",
       refresh: "rotated-refresh",
     });
   });
 
   it("retains the consumed generation when the settlement rescan finds an unreadable candidate", async () => {
-    const peerAgentDir = await agentDirectory("peer-a");
+    const peerAgentDir = await fx.agentDirectory("peer-a");
     const originalStore = expired();
     saveAuthProfileStore(originalStore, peerAgentDir);
-    saveAuthProfileStore(originalStore, mainAgentDir);
+    saveAuthProfileStore(originalStore, fx.mainDir);
 
-    const { started, finishRefresh } = blockRefresh(() => oauth("preserved-rotation"));
+    const { started, finishRefresh } = fx.blockRefresh(() => oauth("preserved-rotation"));
 
-    const resolving = resolveFrom(peerAgentDir);
+    const resolving = fx.resolve(peerAgentDir);
     await started;
-    const unreadableAgentDir = await agentDirectory("peer-z");
+    const unreadableAgentDir = await fx.agentDirectory("peer-z");
     await fs.writeFile(resolveAuthProfileDatabasePath(unreadableAgentDir), "not a sqlite database");
     finishRefresh();
 
     await expect(resolving).rejects.toThrow("Failed to fence every historical OAuth refresh peer");
-    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledOnce();
-    for (const agentDir of [mainAgentDir, peerAgentDir]) {
+    expect(fx.refresh).toHaveBeenCalledOnce();
+    for (const agentDir of [fx.mainDir, peerAgentDir]) {
       const terminal = read(agentDir);
       expectTerminal(terminal);
       expect(terminal).not.toMatchObject({
@@ -499,13 +384,13 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
     }
 
     // Drain retained workers before resetting native fixture state and repairing the peer.
-    await closeOpenClawAgentDatabasesAsync(tempRoot);
-    closeOpenClawAgentDatabasesForTest(tempRoot);
+    await closeOpenClawAgentDatabasesAsync(fx.root);
+    closeOpenClawAgentDatabasesForTest(fx.root);
     await fs.rm(resolveAuthProfileDatabasePath(unreadableAgentDir), { force: true });
     writePersistedAuthProfileStoreRaw(originalStore, unreadableAgentDir);
 
-    await expect(resolveFrom(mainAgentDir)).resolves.toBeNull();
-    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledOnce();
+    await expect(fx.resolve(fx.mainDir)).resolves.toBeNull();
+    expect(fx.refresh).toHaveBeenCalledOnce();
     const terminalLatePeer = read(unreadableAgentDir);
     expectTerminal(terminalLatePeer);
   });
@@ -513,22 +398,22 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
   it("lets a completed re-login replace the owner while retiring consumed peers", async () => {
     const peers = await Promise.all(
       Array.from({ length: 2 }, async (_, index) => {
-        const agentDir = path.join(tempRoot, "agents", `peer-${index}`, "agent");
+        const agentDir = path.join(fx.root, "agents", `peer-${index}`, "agent");
         await fs.mkdir(agentDir, { recursive: true });
         saveAuthProfileStore(expired({ accountId: "acct-a" }), agentDir);
         return agentDir;
       }),
     );
-    saveAuthProfileStore(expired({ accountId: "acct-a" }), mainAgentDir);
+    saveAuthProfileStore(expired({ accountId: "acct-a" }), fx.mainDir);
 
-    const { started, finishRefresh } = blockRefresh(() =>
+    const { started, finishRefresh } = fx.blockRefresh(() =>
       oauth("stale-rotation", { accountId: "acct-a" }),
     );
 
-    const resolving = resolveFrom(peers[0]);
+    const resolving = fx.resolve(peers[0]);
     await started;
     await persistAuthProfileBatch({
-      agentDir: mainAgentDir,
+      agentDir: fx.mainDir,
       profiles: [
         {
           profileId,
@@ -538,14 +423,14 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       resetFailureState: true,
       allowOAuthGenerationReplacement: true,
     });
-    expect(read(mainAgentDir)).toMatchObject({
+    expect(read(fx.mainDir)).toMatchObject({
       access: "relogin-access",
       refresh: "relogin-refresh",
     });
     finishRefresh();
 
     await expect(resolving).resolves.toMatchObject({ apiKey: "relogin-access" });
-    expect(read(mainAgentDir)).toMatchObject({
+    expect(read(fx.mainDir)).toMatchObject({
       access: "relogin-access",
       refresh: "relogin-refresh",
     });
@@ -555,71 +440,50 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
   });
 
   it("rolls back the owner and fenced peers when a candidate is unreadable", async () => {
-    const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-    const unreadableAgentDir = path.join(tempRoot, "agents", "peer-z", "agent");
+    const peerAgentDir = path.join(fx.root, "agents", "peer-a", "agent");
+    const unreadableAgentDir = path.join(fx.root, "agents", "peer-z", "agent");
     await fs.mkdir(peerAgentDir, { recursive: true });
     await fs.mkdir(unreadableAgentDir, { recursive: true });
     const original = expired();
     saveAuthProfileStore(original, peerAgentDir);
-    saveAuthProfileStore(original, mainAgentDir);
+    saveAuthProfileStore(original, fx.mainDir);
     await fs.writeFile(
       path.join(unreadableAgentDir, "openclaw-agent.sqlite"),
       "not a sqlite database",
     );
-    await expect(resolveFrom(peerAgentDir)).rejects.toThrow();
-    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
-    expect(read(mainAgentDir)).toEqual(original.profiles[profileId]);
+    await expect(fx.resolve(peerAgentDir)).rejects.toThrow();
+    expect(fx.refresh).not.toHaveBeenCalled();
+    expect(read(fx.mainDir)).toEqual(original.profiles[profileId]);
     expect(read(peerAgentDir)).toEqual(original.profiles[profileId]);
   });
 });
 
 describe("OAuth external owner boundaries", () => {
   it("refuses native refresh when durable metadata assigns the owner to an external CLI", async () => {
-    const credential = createExpiredOauthStore({
-      profileId: MINIMAX_CLI_PROFILE_ID,
-      provider: "minimax-portal",
-      authFlow: "external-cli",
-    });
-    saveAuthProfileStore(credential, mainAgentDir);
+    const credential = storeWith(MINIMAX_CLI_PROFILE_ID, cliCredential());
+    saveAuthProfileStore(credential, fx.mainDir);
 
-    await expect(
-      resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-        store: ensureAuthProfileStore(mainAgentDir),
-        profileId: MINIMAX_CLI_PROFILE_ID,
-        agentDir: mainAgentDir,
-      }),
-    ).resolves.toBeNull();
-    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
-    expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[MINIMAX_CLI_PROFILE_ID]).toEqual(
+    await expect(fx.resolve(fx.mainDir, MINIMAX_CLI_PROFILE_ID)).resolves.toBeNull();
+    expect(fx.refresh).not.toHaveBeenCalled();
+    expect(loadPersistedAuthProfileStore(fx.mainDir)?.profiles[MINIMAX_CLI_PROFILE_ID]).toEqual(
       credential.profiles[MINIMAX_CLI_PROFILE_ID],
     );
   });
 
   it("lets native device-code login reclaim the reserved MiniMax CLI profile id", async () => {
-    const credential = createExpiredOauthStore({
-      profileId: MINIMAX_CLI_PROFILE_ID,
-      provider: "minimax-portal",
-      authFlow: "external-cli",
-    });
-    saveAuthProfileStore(credential, mainAgentDir);
-    const nativeCredential = createExpiredOauthStore({
-      profileId: MINIMAX_CLI_PROFILE_ID,
-      provider: "minimax-portal",
-      authFlow: "device-code",
-    }).profiles[MINIMAX_CLI_PROFILE_ID];
-    if (nativeCredential?.type !== "oauth") {
-      throw new Error("expected native MiniMax OAuth credential");
-    }
+    const credential = storeWith(MINIMAX_CLI_PROFILE_ID, cliCredential());
+    saveAuthProfileStore(credential, fx.mainDir);
+    const nativeCredential = cliCredential("device-code");
     await persistAuthProfileBatch({
-      agentDir: mainAgentDir,
+      agentDir: fx.mainDir,
       profiles: [{ profileId: MINIMAX_CLI_PROFILE_ID, credential: nativeCredential }],
       resetFailureState: true,
       allowOAuthGenerationReplacement: true,
     });
-    expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[MINIMAX_CLI_PROFILE_ID]).toEqual(
+    expect(loadPersistedAuthProfileStore(fx.mainDir)?.profiles[MINIMAX_CLI_PROFILE_ID]).toEqual(
       nativeCredential,
     );
-    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue({
+    fx.refresh.mockResolvedValue({
       type: "oauth",
       provider: "minimax-portal",
       access: "native-refreshed-access",
@@ -627,16 +491,12 @@ describe("OAuth external owner boundaries", () => {
       expires: Date.now() + 60_000,
     });
 
-    await expect(
-      resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-        store: ensureAuthProfileStore(mainAgentDir),
-        profileId: MINIMAX_CLI_PROFILE_ID,
-        agentDir: mainAgentDir,
-      }),
-    ).resolves.toMatchObject({ apiKey: "native-refreshed-access" });
-    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledOnce();
+    await expect(fx.resolve(fx.mainDir, MINIMAX_CLI_PROFILE_ID)).resolves.toMatchObject({
+      apiKey: "native-refreshed-access",
+    });
+    expect(fx.refresh).toHaveBeenCalledOnce();
     expect(
-      loadPersistedAuthProfileStore(mainAgentDir)?.profiles[MINIMAX_CLI_PROFILE_ID],
+      loadPersistedAuthProfileStore(fx.mainDir)?.profiles[MINIMAX_CLI_PROFILE_ID],
     ).toMatchObject({
       access: "native-refreshed-access",
       refresh: "native-refreshed-refresh",
@@ -644,15 +504,8 @@ describe("OAuth external owner boundaries", () => {
   });
 
   it("refuses to claim a generation still owned by a persisted external CLI profile", async () => {
-    const peerAgentDir = await agentDirectory("external-peer");
-    const credential = createExpiredOauthStore({
-      profileId: MINIMAX_CLI_PROFILE_ID,
-      provider: "minimax-portal",
-      authFlow: "external-cli",
-    }).profiles[MINIMAX_CLI_PROFILE_ID];
-    if (credential?.type !== "oauth") {
-      throw new Error("expected external OAuth credential");
-    }
+    const peerAgentDir = await fx.agentDirectory("external-peer");
+    const credential = cliCredential();
     saveAuthProfileStore(
       {
         version: AUTH_STORE_VERSION,
@@ -664,7 +517,7 @@ describe("OAuth external owner boundaries", () => {
     await expect(
       fenceOAuthRefreshPeers({
         cfg: {},
-        ownerDatabasePath: resolveAuthProfileDatabasePath(mainAgentDir),
+        ownerDatabasePath: resolveAuthProfileDatabasePath(fx.mainDir),
         profileId: MINIMAX_CLI_PROFILE_ID,
         generation: credential,
         fence: createOAuthRefreshFence({
