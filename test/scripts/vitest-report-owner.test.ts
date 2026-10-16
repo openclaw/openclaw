@@ -510,7 +510,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
           : mode === "failure" || mode === "batch-failure"
             ? "beta/one"
             : undefined;
-      const cases = expected.map(([name, status]) => [
+      const cases = expected.map(([name, status]): [string, string] => [
         name,
         name === failedName ? "failed" : status,
       ]);

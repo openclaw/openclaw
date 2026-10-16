@@ -1,52 +1,24 @@
-import { expectDefined } from "@openclaw/normalization-core";
+/** Accepted backend controls, not stale requests, own subsequent session replay. */
 import { describe, expect, it, vi } from "vitest";
 import { buildConfiguredAcpSessionKey } from "../persistent-bindings.types.js";
 import {
   AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
-  expectCalledWith,
+  createRuntime,
+  expectMockCallFields,
+  expectNoMockCallFields,
   hoisted,
   installAcpSessionManagerTestLifecycle,
-  mockMutableSession,
-  managerFixture,
+  installMutableAcpSessionMetaUpsert,
   readySessionMeta,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
 
-installAcpSessionManagerTestLifecycle();
-
-function setup(meta: SessionAcpMeta | undefined, sessionKey: string) {
-  const f = managerFixture(sessionKey);
-  const state: { currentMeta: SessionAcpMeta | undefined } = { currentMeta: meta };
-  mockMutableSession(sessionKey, state);
-  return {
-    ...f,
-    ...f.runtimeState,
-    state,
-    readMeta: () => state.currentMeta,
-  };
-}
-
-async function runTurn(
-  manager: AcpSessionManager,
-  requestId: string,
-  sessionKey = "agent:codex:acp:accepted-controls",
-  text = "continue",
-) {
-  await manager.runTurn({
-    cfg: baseCfg,
-    sessionKey,
-    text,
-    mode: "prompt",
-    requestId,
-    provenance: "system",
-  });
-}
-
 describe("AcpSessionManager accepted controls", () => {
+  installAcpSessionManagerTestLifecycle();
+
   const sessionKey = "agent:codex:acp:accepted-controls";
-  const target = { cfg: baseCfg, sessionKey };
   const model = "openai/gpt-5.6-luna";
 
   function acceptedOptions(
@@ -74,27 +46,54 @@ describe("AcpSessionManager accepted controls", () => {
   }
 
   function setupSession(thinking?: string, initialModel = model) {
-    const state = setup(
-      readySessionMeta({
-        runtimeOptions: { model: initialModel, ...(thinking ? { thinking } : {}) },
-      }),
+    const runtimeState = createRuntime();
+    let meta = readySessionMeta({
+      runtimeOptions: { model: initialModel, ...(thinking ? { thinking } : {}) },
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
       sessionKey,
+      storeSessionKey: sessionKey,
+      acp: meta,
+    }));
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(
+      async (params: {
+        mutate: (
+          current: SessionAcpMeta,
+          entry: { acp: SessionAcpMeta },
+        ) => SessionAcpMeta | null | undefined;
+      }) => {
+        meta = params.mutate(meta, { acp: meta }) ?? meta;
+        return { sessionId: "accepted-controls", updatedAt: Date.now(), acp: meta };
+      },
     );
-    state.getCapabilities.mockResolvedValue({
+    runtimeState.getCapabilities.mockResolvedValue({
       controls: ["session/set_config_option", "session/status"],
       configOptionKeys: ["model", "reasoning_effort"],
     });
-    return {
-      ...state,
-      readMeta: () => expectDefined(state.readMeta(), "session metadata"),
-    };
+    return { ...runtimeState, readMeta: () => meta, manager: new AcpSessionManager() };
+  }
+
+  async function runTurn(manager: AcpSessionManager, requestId: string) {
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "continue",
+      mode: "prompt",
+      requestId,
+      provenance: "system",
+    });
   }
 
   it("persists clamped thinking after an explicit model change", async () => {
     const state = setupSession("high", "openai/gpt-5.6-sol");
     state.setConfigOption.mockResolvedValue(acceptedOptions("medium", ["low", "medium", "high"]));
     const result = await state.manager.setSessionConfigOption({
-      ...target,
+      cfg: baseCfg,
+      sessionKey,
       key: "model",
       value: model,
     });
@@ -102,9 +101,11 @@ describe("AcpSessionManager accepted controls", () => {
     expect(result).toEqual(expectedOptions);
     expect(state.readMeta().runtimeOptions).toEqual(expectedOptions);
     await runTurn(state.manager, "after-selection");
-    expect(state.setConfigOption).not.toHaveBeenCalledWith(
-      expect.objectContaining({ key: "reasoning_effort", value: "high" }),
-    );
+    expect(
+      state.setConfigOption.mock.calls.some(
+        ([input]) => input.key === "reasoning_effort" && input.value === "high",
+      ),
+    ).toBe(false);
   });
 
   it("removes unsupported thinking before automatic effort replay", async () => {
@@ -138,7 +139,8 @@ describe("AcpSessionManager accepted controls", () => {
     });
     await runTurn(state.manager, "initial-low");
     await state.manager.updateSessionRuntimeOptions({
-      ...target,
+      cfg: baseCfg,
+      sessionKey,
       patch: { thinking: "high" },
     });
     state.setConfigOption.mockClear();
@@ -159,7 +161,8 @@ describe("AcpSessionManager accepted controls", () => {
   it("keeps accepted thinking when a later automatic control fails", async () => {
     const state = setupSession("high");
     await state.manager.updateSessionRuntimeOptions({
-      ...target,
+      cfg: baseCfg,
+      sessionKey,
       patch: { permissionProfile: "strict" },
     });
     state.getCapabilities.mockResolvedValue({ controls: ["session/set_config_option"] });
@@ -181,15 +184,26 @@ describe("AcpSessionManager accepted controls", () => {
   });
 
   it.each([
-    ["timeout", "timeout", "ACP_BACKEND_UNSUPPORTED_CONTROL", true],
-    ["effort", "reasoning_effort", "ACP_BACKEND_UNAVAILABLE", false],
+    {
+      key: "timeout",
+      wireKey: "timeout",
+      code: "ACP_BACKEND_UNSUPPORTED_CONTROL",
+      continues: true,
+    },
+    {
+      key: "effort",
+      wireKey: "reasoning_effort",
+      code: "ACP_BACKEND_UNAVAILABLE",
+      continues: false,
+    },
   ] as const)(
-    "preserves %s rejection policy after model acknowledgement",
-    async (key, wireKey, code, continues) => {
+    "preserves $key rejection policy ($code) after model acknowledgement",
+    async ({ key, wireKey, code, continues }) => {
       const state = setupSession();
       const value = key === "timeout" ? "30" : "high";
       await state.manager.updateSessionRuntimeOptions({
-        ...target,
+        cfg: baseCfg,
+        sessionKey,
         patch: { backendExtras: { [key]: value } },
       });
       state.getCapabilities.mockResolvedValue({
@@ -218,77 +232,140 @@ describe("AcpSessionManager accepted controls", () => {
   );
 });
 
-it("keeps startup omission but rejects live binding changes before overwriting accepted thinking", async () => {
-  const managerModule = await import("./manager.js");
-  const { ensureConfiguredAcpBindingSession } = await import("../persistent-bindings.lifecycle.js");
-  const spec = {
-    channel: "discord" as const,
-    accountId: "default",
-    conversationId: "configured-thinking",
-    agentId: "codex",
-    mode: "persistent" as const,
-    thinking: "off",
-  };
-  const sessionKey = buildConfiguredAcpSessionKey(spec);
-  const { runtimeState, manager, readMeta } = setup(undefined, sessionKey);
-  hoisted.readAcpSessionEntryMock.mockImplementation(() =>
-    readMeta() ? { sessionKey, storeSessionKey: sessionKey, acp: readMeta() } : null,
-  );
-  runtimeState.setConfigOption.mockImplementation(async ({ key, value }) => {
-    if (value === "off") {
-      throw new AcpRuntimeError("ACP_BACKEND_UNSUPPORTED_CONTROL", "Live off is unsupported");
-    }
-    return {
-      configOptions: [{ id: "thinking", currentValue: key === "model" ? "medium" : value }],
-    };
-  });
-  const getManager = vi.spyOn(managerModule, "getAcpSessionManager").mockReturnValue(manager);
-  const ensure = (thinking?: string, model?: string) =>
-    ensureConfiguredAcpBindingSession({ cfg: baseCfg, spec: { ...spec, thinking, model } });
-  const run = (requestId: string) => runTurn(manager, requestId, sessionKey, requestId);
-  try {
-    expect(await ensure("off")).toEqual({ ok: true, sessionKey });
-    await run("first");
-    await run("second");
-    expect(readMeta()?.runtimeOptions?.thinking).toBe("off");
+describe("AcpSessionManager configured bindings", () => {
+  installAcpSessionManagerTestLifecycle();
 
-    expect(await ensure("high")).toEqual({ ok: true, sessionKey });
-    await run("third");
-    const acceptedMeta = readMeta();
-    for (let attempt = 0; attempt < 2; attempt++) {
-      expect(await ensure("off")).toEqual({
-        ok: false,
-        sessionKey,
-        error: "Live off is unsupported",
-      });
-      expect(readMeta()).toEqual(acceptedMeta);
-    }
-    expect(await ensure()).toEqual({ ok: true, sessionKey });
-    await run("fourth");
-    expect(readMeta()?.runtimeOptions?.thinking).toBe("high");
-    expect(runtimeState.ensureSession).toHaveBeenCalledOnce();
-    expect(runtimeState.close).not.toHaveBeenCalled();
-    expect(runtimeState.runTurn).toHaveBeenCalledTimes(4);
-    runtimeState.setConfigOption.mockClear();
-    expect(await ensure("high", "openai/gpt-5.6-luna")).toEqual({ ok: true, sessionKey });
-    expect(
-      runtimeState.setConfigOption.mock.calls.map(([input]) => [input.key, input.value]),
-    ).toEqual([
-      ["model", "openai/gpt-5.6-luna"],
-      ["thinking", "high"],
-    ]);
-    expect(readMeta()?.runtimeOptions).toEqual({
-      model: "openai/gpt-5.6-luna",
-      thinking: "high",
+  it("keeps startup omission but rejects live binding changes before overwriting accepted thinking", async () => {
+    const managerModule = await import("./manager.js");
+    const { ensureConfiguredAcpBindingSession } =
+      await import("../persistent-bindings.lifecycle.js");
+    const runtimeState = createRuntime();
+    runtimeState.setConfigOption.mockImplementation(async ({ key, value }) => {
+      if (value === "off") {
+        throw new AcpRuntimeError("ACP_BACKEND_UNSUPPORTED_CONTROL", "Live off is unsupported");
+      }
+      return {
+        configOptions: [{ id: "thinking", currentValue: key === "model" ? "medium" : value }],
+      };
     });
-  } finally {
-    getManager.mockRestore();
-  }
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const spec = {
+      channel: "discord" as const,
+      accountId: "default",
+      conversationId: "configured-thinking",
+      agentId: "codex",
+      mode: "persistent" as const,
+      thinking: "off",
+    };
+    const sessionKey = buildConfiguredAcpSessionKey(spec);
+    let currentMeta: SessionAcpMeta | undefined;
+    hoisted.readAcpSessionEntryMock.mockImplementation(() =>
+      currentMeta ? { sessionKey, storeSessionKey: sessionKey, acp: currentMeta } : null,
+    );
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(
+      ({
+        mutate,
+      }: {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta },
+        ) => SessionAcpMeta | null | undefined;
+      }) => {
+        currentMeta = mutate(currentMeta, { acp: currentMeta }) ?? currentMeta;
+        return { sessionId: "configured-session", updatedAt: Date.now(), acp: currentMeta };
+      },
+    );
+    const manager = new AcpSessionManager();
+    const getManager = vi.spyOn(managerModule, "getAcpSessionManager").mockReturnValue(manager);
+    const ensure = (thinking?: string) =>
+      ensureConfiguredAcpBindingSession({ cfg: baseCfg, spec: { ...spec, thinking } });
+    const runTurn = (requestId: string) =>
+      manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey,
+        text: requestId,
+        mode: "prompt",
+        requestId,
+      });
+    try {
+      expect(await ensure("off")).toEqual({ ok: true, sessionKey });
+      await runTurn("first");
+      await runTurn("second");
+      expect(currentMeta?.runtimeOptions?.thinking).toBe("off");
+
+      expect(await ensure("high")).toEqual({ ok: true, sessionKey });
+      await runTurn("third");
+      const acceptedMeta = currentMeta;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect(await ensure("off")).toEqual({
+          ok: false,
+          sessionKey,
+          error: "Live off is unsupported",
+        });
+        expect(currentMeta).toEqual(acceptedMeta);
+      }
+      expect(await ensure()).toEqual({ ok: true, sessionKey });
+      await runTurn("fourth");
+      expect(currentMeta?.runtimeOptions?.thinking).toBe("high");
+      expect(runtimeState.ensureSession).toHaveBeenCalledOnce();
+      expect(runtimeState.close).not.toHaveBeenCalled();
+      expect(runtimeState.runTurn).toHaveBeenCalledTimes(4);
+      runtimeState.setConfigOption.mockClear();
+      expect(
+        await ensureConfiguredAcpBindingSession({
+          cfg: baseCfg,
+          spec: { ...spec, model: "openai/gpt-5.6-luna", thinking: "high" },
+        }),
+      ).toEqual({ ok: true, sessionKey });
+      expect(
+        runtimeState.setConfigOption.mock.calls.map(([input]) => [input.key, input.value]),
+      ).toEqual([
+        ["model", "openai/gpt-5.6-luna"],
+        ["thinking", "high"],
+      ]);
+      expect(currentMeta?.runtimeOptions).toEqual({
+        model: "openai/gpt-5.6-luna",
+        thinking: "high",
+      });
+    } finally {
+      getManager.mockRestore();
+    }
+  });
 });
+
 describe("AcpSessionManager runtime config validation", () => {
+  installAcpSessionManagerTestLifecycle();
   const target = { cfg: baseCfg, sessionKey: "agent:codex:acp:config" };
+  const turn = {
+    ...target,
+    text: "work",
+    mode: "prompt" as const,
+    provenance: "system" as const,
+    requestId: "run",
+  };
+  function setup(meta: SessionAcpMeta | undefined) {
+    const runtimeState = createRuntime();
+    const state = { currentMeta: meta };
+    const sessionKey = `agent:${meta?.agent ?? "codex"}:acp:config`;
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
+      sessionKey,
+      storeSessionKey: sessionKey,
+      acp: state.currentMeta,
+    }));
+    installMutableAcpSessionMetaUpsert(state);
+    return { runtimeState, state, manager: new AcpSessionManager() };
+  }
+
   it("rejects invalid options before backend controls run", async () => {
-    const { manager, runtimeState } = setup(readySessionMeta(), target.sessionKey);
+    const { manager, runtimeState } = setup(readySessionMeta());
     await expect(
       manager.setSessionConfigOption({ ...target, key: "timeout", value: "not-a-number" }),
     ).rejects.toMatchObject({ code: "ACP_INVALID_RUNTIME_OPTION" });
@@ -299,35 +376,46 @@ describe("AcpSessionManager runtime config validation", () => {
   });
 
   it.each([
-    ["dropped inherited model", "google/gemini-3.1-flash-lite", true],
-    ["accepted model", "openai/gpt-5.5", false],
-  ] as const)(
-    "persists and replays only backend-accepted options: %s",
-    async (_label, model, dropped) => {
-      const expected = dropped ? { thinking: "low" } : { model };
-      const { manager, runtimeState, state } = setup(undefined, target.sessionKey);
+    {
+      label: "dropped inherited model",
+      options: { model: "google/gemini-3.1-flash-lite", thinking: "low" },
+      appliedModel: { kind: "dropped" as const },
+      expected: { thinking: "low" },
+      controls: [["thinking", "low"]],
+    },
+    {
+      label: "accepted model",
+      options: { model: "openai/gpt-5.5" },
+      appliedModel: { kind: "applied" as const, model: "openai/gpt-5.5" },
+      expected: { model: "openai/gpt-5.5" },
+      controls: [["model", "openai/gpt-5.5"]],
+    },
+  ])(
+    "persists and replays only backend-accepted options: $label",
+    async ({ options, appliedModel, expected, controls }) => {
+      const { manager, runtimeState, state } = setup(undefined);
       runtimeState.ensureSession.mockImplementation(async ({ sessionKey }) => ({
         sessionKey,
         backend: "acpx",
         runtimeSessionName: "runtime",
-        appliedModel: dropped ? { kind: "dropped" } : { kind: "applied", model },
+        appliedModel,
       }));
       await manager.initializeSession({
         ...target,
         agent: "codex",
         mode: "persistent",
-        runtimeOptions: { model, ...(dropped ? { thinking: "low" } : {}) },
+        runtimeOptions: options,
       });
-      expectCalledWith(runtimeState.ensureSession, { model });
+      expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+        expect.objectContaining({ model: options.model }),
+      );
       expect(state.currentMeta?.runtimeOptions).toEqual(expected);
-      await runTurn(manager, "run", target.sessionKey, "work");
-      for (const [key, value] of Object.entries(expected)) {
-        expectCalledWith(runtimeState.setConfigOption, { key, value });
+      await manager.runTurn(turn);
+      for (const [key, value] of controls) {
+        expectMockCallFields(runtimeState.setConfigOption, { key, value });
       }
-      if (dropped) {
-        expect(runtimeState.setConfigOption).not.toHaveBeenCalledWith(
-          expect.objectContaining({ key: "model" }),
-        );
+      if (appliedModel.kind === "dropped") {
+        expectNoMockCallFields(runtimeState.setConfigOption, { key: "model" });
       }
       expect(runtimeState.runTurn).toHaveBeenCalledOnce();
     },
@@ -336,7 +424,6 @@ describe("AcpSessionManager runtime config validation", () => {
   it("continues after an optional thinking rejection", async () => {
     const { manager, runtimeState } = setup(
       readySessionMeta({ agent: "claude", runtimeOptions: { thinking: "off" } }),
-      "agent:claude:acp:config",
     );
     runtimeState.getCapabilities.mockResolvedValue({
       controls: ["session/set_mode", "session/set_config_option", "session/status"],
@@ -351,35 +438,73 @@ describe("AcpSessionManager runtime config validation", () => {
         });
       }
     });
-    await runTurn(manager, "run", "agent:claude:acp:config", "work");
+    await manager.runTurn({ ...turn, sessionKey: "agent:claude:acp:config" });
     expect(runtimeState.runTurn).toHaveBeenCalledOnce();
-    expectCalledWith(runtimeState.setConfigOption, { key: "effort", value: "off" });
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "effort", value: "off" }),
+    );
   });
 });
 
-it("keeps overrides and the retained handle available when reset close fails", async () => {
-  const sessionKey = "agent:codex:acp:reset-options";
-  const runtimeOptions = { cwd: "/workspace/removed", thinking: "high" };
-  const { runtimeState, manager, target, state } = setup(
-    readySessionMeta({ cwd: runtimeOptions.cwd, runtimeOptions }),
-    sessionKey,
-  );
-  await manager.getSessionStatus(target);
-  runtimeState.getStatus.mockRejectedValue(new Error("backend status unavailable"));
-  runtimeState.ensureSession.mockRejectedValue(new Error("backend cannot be started"));
-  runtimeState.close.mockRejectedValueOnce(new Error("backend close failed"));
+describe("AcpSessionManager resetSessionRuntimeOptions", () => {
+  installAcpSessionManagerTestLifecycle();
 
-  await expect(manager.resetSessionRuntimeOptions(target)).rejects.toMatchObject({
-    code: "ACP_TURN_FAILED",
-    message: "backend close failed",
+  function setupReset() {
+    const runtimeState = createRuntime();
+    const sessionKey = "agent:codex:acp:reset-options";
+    let meta = readySessionMeta({
+      cwd: "/workspace/removed",
+      runtimeOptions: { cwd: "/workspace/removed", thinking: "high" },
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
+      sessionKey,
+      storeSessionKey: sessionKey,
+      acp: meta,
+    }));
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(
+      async (params: {
+        mutate: (
+          current: SessionAcpMeta,
+          entry: { acp: SessionAcpMeta },
+        ) => SessionAcpMeta | null | undefined;
+      }) => {
+        meta = params.mutate(meta, { acp: meta }) ?? meta;
+        return { sessionId: "reset-options", updatedAt: Date.now(), acp: meta };
+      },
+    );
+    return {
+      runtimeState,
+      manager: new AcpSessionManager(),
+      target: { cfg: baseCfg, sessionKey },
+      get meta() {
+        return meta;
+      },
+    };
+  }
+
+  it("keeps overrides and the retained handle available when reset close fails", async () => {
+    const fixture = setupReset();
+    await fixture.manager.getSessionStatus(fixture.target);
+    fixture.runtimeState.getStatus.mockRejectedValue(new Error("backend status unavailable"));
+    fixture.runtimeState.ensureSession.mockRejectedValue(new Error("backend cannot be started"));
+    fixture.runtimeState.close.mockRejectedValueOnce(new Error("backend close failed"));
+
+    await expect(fixture.manager.resetSessionRuntimeOptions(fixture.target)).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+      message: "backend close failed",
+    });
+
+    expect(fixture.meta.runtimeOptions).toEqual({ cwd: "/workspace/removed", thinking: "high" });
+    expect(fixture.manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(1);
+    await expect(fixture.manager.resetSessionRuntimeOptions(fixture.target)).resolves.toEqual({});
+    expect(fixture.runtimeState.ensureSession).toHaveBeenCalledOnce();
+    expect(fixture.runtimeState.close).toHaveBeenCalledTimes(2);
+    expectMockCallFields(fixture.runtimeState.close, { reason: "reset-runtime-options" });
+    expect(fixture.meta.runtimeOptions).toBeUndefined();
+    expect(fixture.manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
   });
-
-  expect(state.currentMeta.runtimeOptions).toEqual({ cwd: "/workspace/removed", thinking: "high" });
-  expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(1);
-  await expect(manager.resetSessionRuntimeOptions(target)).resolves.toEqual({});
-  expect(runtimeState.ensureSession).toHaveBeenCalledOnce();
-  expect(runtimeState.close).toHaveBeenCalledTimes(2);
-  expectCalledWith(runtimeState.close, { reason: "reset-runtime-options" });
-  expect(state.currentMeta.runtimeOptions).toBeUndefined();
-  expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
 });
