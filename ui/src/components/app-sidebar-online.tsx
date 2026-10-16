@@ -63,7 +63,7 @@ export function resolveSidebarOnline(host: AppSidebarRenderHost) {
     statusFilter: host.people.statusFilter,
     offlineUsers:
       saved?.offlineUsers ??
-      (host.people.directory?.result?.profiles ?? [])
+      (host.peopleView?.directory()?.result?.profiles ?? [])
         .filter((profile) => !profile.mergedInto)
         .map(profilePresenceViewer),
     presenceFilter: host.people.presenceFilter,
@@ -103,7 +103,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
           ]}
           onChange={(value) => {
             if (value === "online" || value === "all") {
-              host.people.setPresenceFilter(value);
+              host.people.set("presenceFilter", value);
             }
           }}
         />
@@ -127,14 +127,14 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
         </button>
         <openclaw-sidebar-collapse-toggle prop:onToggle={() => host.onToggleSidebar?.()} />
       </div>
-      {host.people.directory?.loading && (
+      {host.peopleView?.directory()?.loading && (
         <span class="sidebar-session-empty-hint">{t("common.loading")}</span>
       )}
-      {Boolean(host.people.directory?.error) && (
+      {Boolean(host.peopleView?.directory()?.error) && (
         <button
           type="button"
           class="sidebar-online__retry"
-          onClick={() => void host.people.directory?.load(true)}
+          onClick={() => void host.peopleView?.directory()?.load(true)}
         >
           {t("presence.directoryFailed")}
         </button>

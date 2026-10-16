@@ -347,3 +347,54 @@ it.each([
     }
   },
 );
+
+it("excludes owned physical layouts while retaining runtime rowid and non-owner layout debt", () => {
+  const { root, write, git } = fixture();
+  const owners = [
+    "src/state/openclaw-agent-schema.sql",
+    "src/state/openclaw-state-schema.sql",
+    "packages/memory-host-sdk/src/memory-entry-origins.ts",
+    "src/state/sqlite-table-layout-migration.ts",
+  ];
+  const ddl = "CREATE TABLE items (id TEXT PRIMARY KEY) STRICT, WITHOUT ROWID;";
+  const source = (file: string, sql: string) =>
+    file.endsWith(".sql") ? sql : `db.exec(${JSON.stringify(sql)});`;
+  for (const file of owners) {
+    write(file, "");
+  }
+  git("add", ".");
+  git("commit", "-qm", "base");
+  const base = git("rev-parse", "HEAD");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  for (const file of owners) {
+    write(file, source(file, ddl));
+  }
+  expect(main(root, ["--base", base])).toBe(0);
+  expect(inventory(root)).toMatchObject(
+    owners.toSorted().map((file) => ({
+      file,
+      matches: [
+        { construct: "without-rowid", group: "engine-maintenance", owner: true },
+        { construct: "rowid", group: "engine-maintenance", owner: true },
+      ],
+    })),
+  );
+  const owner = "src/state/sqlite-table-layout-migration.ts";
+  write(owner, source(owner, `${ddl} SELECT rowid FROM items;`));
+  expect(main(root, ["--base", base])).toBe(1);
+  expect(
+    inventory(root)
+      .find((row) => row.file === owner)
+      ?.matches.at(-1),
+  ).toMatchObject({
+    construct: "rowid",
+    group: "design",
+    owner: false,
+  });
+  write("src/consumer.ts", source("src/consumer.ts", ddl));
+  expect(inventory(root).find((row) => row.file === "src/consumer.ts")?.matches).toMatchObject([
+    { construct: "without-rowid", group: "mechanical", owner: false },
+    { construct: "rowid", group: "design", owner: false },
+  ]);
+});

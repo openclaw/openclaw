@@ -295,7 +295,7 @@ CREATE TABLE IF NOT EXISTS session_state_heads (
   pruned_max_sequence INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (session_key, agent_id)
-) STRICT;
+) STRICT, WITHOUT ROWID;
 
 -- Notifiable watcher identity is the bare session key, matching the process-local
 -- system-event queue it feeds. Provenance distinguishes explicit immediate-wake

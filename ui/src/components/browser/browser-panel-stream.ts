@@ -2,8 +2,8 @@ import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/bro
 import type { BrowserPanelTab, BrowserRequestClient } from "./browser-client.ts";
 import { isBrowserScreencastUnsupportedError, requestBrowserScreencast } from "./browser-client.ts";
 import type {
-  BrowserPanelControllerHost,
-  BrowserPanelOperationOwnership,
+  BrowserPanelHost,
+  BrowserPanelOperations,
 } from "./browser-panel-operation-ownership.ts";
 import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
 import {
@@ -24,10 +24,10 @@ type StreamState = {
 };
 
 interface BrowserPanelStreamHost extends StreamState {
-  readonly host: BrowserPanelControllerHost;
+  readonly host: BrowserPanelHost;
   readonly mode: "interact" | "annotate" | "inspect";
   readonly operations: Pick<
-    BrowserPanelOperationOwnership,
+    BrowserPanelOperations,
     "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "forgetNavigation"
   >;
   readonly observedViewportSize: { width: number; height: number } | null;
@@ -60,7 +60,7 @@ type Attempt = {
 export class BrowserPanelStream {
   private attempt?: Attempt;
   frameRevision = 0;
-  private scope?: { client: BrowserPanelControllerHost["client"]; route: string };
+  private scope?: { client: BrowserPanelHost["client"]; route: string };
   private unsupported = false;
   private readonly lastFailures = new Map<string, number>();
   private objectUrl?: string;

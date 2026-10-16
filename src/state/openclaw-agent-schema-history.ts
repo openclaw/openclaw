@@ -3,6 +3,7 @@ import {
   AGENT_JSON_PREDICATE_SCHEMA_VERSION,
   AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION,
   AGENT_STORAGE_SCHEMA_VERSION,
+  AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
   CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
   CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION,
   SESSION_PARTICIPANTS_TABLE,
@@ -273,12 +274,39 @@ export function withoutOutboxEnqueueSequence(schema: string): string {
   );
 }
 
+const LEGACY_PARENT_INDEX = `CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent
+  ON transcript_event_identities(session_id, parent_id)
+  WHERE parent_id IS NOT NULL;
+
+`;
+
+/** Historical admission must compare the indexes installed by that release. */
+function withLegacyAgentWriteLayout(schema: string): string {
+  return schema
+    .replace(
+      /(CREATE TABLE IF NOT EXISTS memory_entry_origins \([\s\S]*?\n\) STRICT), WITHOUT ROWID;/u,
+      "$1;",
+    )
+    .replace(
+      "ON session_windows(primary_conversation_id)",
+      "ON session_windows(primary_conversation_id, updated_at DESC, session_id)",
+    )
+    .replace(
+      "CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_sequence",
+      `${LEGACY_PARENT_INDEX}CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_sequence`,
+    );
+}
+
 /** Compare historical migration targets against only the representation they support. */
 export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
+  const layoutSchemaSql =
+    targetVersion < AGENT_WRITE_LAYOUT_SCHEMA_VERSION
+      ? withLegacyAgentWriteLayout(OPENCLAW_AGENT_SCHEMA_SQL)
+      : OPENCLAW_AGENT_SCHEMA_SQL;
   const sequenceSchemaSql =
     targetVersion < AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION
-      ? withoutOutboxEnqueueSequence(OPENCLAW_AGENT_SCHEMA_SQL)
-      : OPENCLAW_AGENT_SCHEMA_SQL;
+      ? withoutOutboxEnqueueSequence(layoutSchemaSql)
+      : layoutSchemaSql;
   const predicateSchemaSql =
     targetVersion < AGENT_JSON_PREDICATE_SCHEMA_VERSION
       ? withoutAgentJsonPredicateColumns(sequenceSchemaSql)
@@ -357,7 +385,9 @@ export const AGENT_V14_CORE_SCHEMA_SQL = withLegacySessionParticipantsSchema(
     withLegacyCanonicalSessionValidationTriggers(
       withoutAgentJsonPredicateColumns(
         withoutOutboxEnqueueSequence(
-          AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL.replace(sessionSharingSchema, ""),
+          withLegacyAgentWriteLayout(
+            AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL.replace(sessionSharingSchema, ""),
+          ),
         ),
       ),
     ),

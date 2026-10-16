@@ -13,6 +13,7 @@ import {
   type WorkerSessionPlacementTransitionPatch,
 } from "./placement-record.js";
 import {
+  fromRow,
   getRequired,
   query,
   transitionValues,
@@ -155,13 +156,12 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
         const guardedUpdate = claim
           ? update.where((eb) => eb.and(turnClaimValues(claim)))
           : update.where("turn_claim_owner", "is", null);
-        const result = executeSqliteQuerySync(db, guardedUpdate);
-        if (result.numAffectedRows !== 1n) {
+        const updated = executeSqliteQuerySync(db, guardedUpdate.returningAll()).rows[0];
+        if (!updated) {
           throw new Error(`Worker session placement ${sessionId} changed during reconcile`);
         }
-        const updated = getRequired(db, sessionId);
         return {
-          placement: updated,
+          placement: fromRow(updated),
           closedClaim: projectPlacementTurnClaim(current),
         };
       });
@@ -188,7 +188,7 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
         }
         const localClaim = current.turnClaim?.owner === "local" ? current.turnClaim : null;
         const updatedAtMs = now();
-        const result = executeSqliteQuerySync(
+        const updated = executeSqliteQuerySync(
           db,
           query(db)
             .updateTable("worker_session_placements")
@@ -208,15 +208,16 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
             })
             .where("session_id", "=", sessionId)
             .where("state", "=", current.state)
-            .where("transition_generation", "=", current.generation),
-        );
-        if (result.numAffectedRows !== 1n) {
+            .where("transition_generation", "=", current.generation)
+            .returningAll(),
+        ).rows[0];
+        if (!updated) {
           throw new Error(
             `Worker session placement ${sessionId} changed during failure${alreadyFailed ? " update" : ""}`,
           );
         }
         return {
-          placement: getRequired(db, sessionId),
+          placement: fromRow(updated),
           ...(alreadyFailed ? {} : { closedClaim: projectWorkerSessionTurnClaim(current) }),
         };
       });

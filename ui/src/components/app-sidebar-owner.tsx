@@ -53,7 +53,7 @@ import type { createSidebarScroll } from "./sidebar-context-controller.ts";
 import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
-import { SidebarPeopleController } from "./sidebar-people-controller.ts";
+import { createSidebarPeople, SidebarPeoplePreferences } from "./sidebar-people.ts";
 import {
   captureSidebarSnapshotModel,
   isSidebarSnapshotSettled,
@@ -72,7 +72,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
-  readonly people = new SidebarPeopleController(this);
+  readonly people = new SidebarPeoplePreferences(() => this.requestUpdate());
+  peopleView?: ReturnType<typeof createSidebarPeople>;
   private readonly sidebarSnapshotController = new SidebarSnapshotController(this);
 
   restoreSidebarSnapshot(model: SidebarSnapshotModel): void {
@@ -108,7 +109,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.sessionProjection.children.restore([]);
     sidebarOnlineOrder(this).clear();
     this.people.resetView();
-    this.people.setPresenceFilter("online");
+    this.people.set("presenceFilter", "online");
   }
 
   sidebarSnapshotSettled(): boolean {
@@ -273,11 +274,12 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   catalogProjectGrouping: CatalogProjectGrouping = loadStoredSidebarCatalogGrouping();
 
   override dismissTransientMenus(): boolean {
-    const hadPersonCard = this.people.dismiss();
+    const hadPersonCard = this.peopleView?.dismiss() ?? false;
     return super.dismissTransientMenus() || hadPersonCard;
   }
 
   override disconnectedCallback() {
+    this.peopleView?.dismiss();
     window.removeEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
     window.removeEventListener(
       SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,

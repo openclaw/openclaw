@@ -107,6 +107,13 @@ only; retained subagent payloads are not rewritten or backfilled. Older builds
 refuse schema 25. Restore the verified pre-upgrade backup with its matching build
 for rollback; never lower schema markers.
 
+Agent [schema 28](/reference/database-schemas/agent-schema-history#agent-schema-28)
+and shared-state [schema 26](/reference/database-schemas/state-schema-history#state-schema-26)
+reduce index and table write amplification without changing logical rows or
+keys. Their SQLite rebuilds and PostgreSQL forward steps advance schema metadata
+atomically. These versions are bundled for one upgrade; older binaries require
+the verified pre-upgrade backup for rollback.
+
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still
 readable by the inspector, preflight continues checking agent stores and reports

@@ -455,10 +455,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       sessionAgentId,
     });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
-    const max = Math.min(
-      CHAT_HISTORY_MAX_ENTRIES,
-      typeof opts.limit === "number" ? opts.limit : 200,
-    );
+    const max = Math.min(CHAT_HISTORY_MAX_ENTRIES, opts.limit ?? 200);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars();
     const historyPage = await readChatHistoryPage({

@@ -2049,7 +2049,7 @@ describe("chat state render lifecycle", () => {
   function createRenderer(
     overrides: Partial<Parameters<typeof createChatState<ChatPageHost>>[0]> = {},
   ) {
-    return { requestUpdate: () => undefined, updateComplete: Promise.resolve(true), ...overrides };
+    return { invalidate: () => undefined, updateComplete: Promise.resolve(true), ...overrides };
   }
 
   function createOwner(renderer: Parameters<typeof createChatState<ChatPageHost>>[0]) {
@@ -2547,7 +2547,7 @@ describe("chat state render lifecycle", () => {
         completion = nextCommit;
       });
       const host = {
-        requestUpdate,
+        invalidate: requestUpdate,
         get updateComplete() {
           return completion;
         },
@@ -2630,7 +2630,7 @@ describe("chat state render lifecycle", () => {
 
   it("rejects lifecycle work from detached and replaced state epochs", async () => {
     const requestUpdate = vi.fn();
-    const host = createRenderer({ requestUpdate });
+    const host = createRenderer({ invalidate: requestUpdate });
     const { controller, dispose } = createOwner(host);
     const first = controller.createRenderLifecycle();
     const replacement = controller.createRenderLifecycle();
@@ -2676,7 +2676,7 @@ describe("chat state render lifecycle", () => {
         frames.delete(id);
       });
     const host = createRenderer({
-      requestUpdate: vi.fn(),
+      invalidate: vi.fn(),
     });
     const { controller, dispose } = createOwner(host);
     const renderLifecycle = controller.createRenderLifecycle();
@@ -2706,7 +2706,7 @@ describe("chat state render lifecycle", () => {
     "invalidates input history only when recall is handled: $handled",
     ({ handled, selection }) => {
       const requestUpdate = vi.fn();
-      const { controller, dispose } = createOwner(createRenderer({ requestUpdate }));
+      const { controller, dispose } = createOwner(createRenderer({ invalidate: requestUpdate }));
       const renderLifecycle = controller.createRenderLifecycle();
       const navigateHistory = vi.fn().mockReturnValue({
         handled,

@@ -36,9 +36,7 @@ export async function prepareTtsPreferences(): Promise<PreparedTtsPreferences> {
     const load = loadPath(context);
     pendingPaths.set(key, load);
     const release = () => {
-      if (pendingPaths.get(key) === load) {
-        pendingPaths.delete(key);
-      }
+      pendingPaths.delete(key);
     };
     void load.then(release, release);
     pending = load;

@@ -60,7 +60,6 @@ const STANDARD_ITEMS = {
 } as const;
 
 export function useSessionMenuEntries(
-  host: HTMLElement,
   actions: SessionMenuActions,
   readState: () => MenuState,
   options: { openInExtra?: () => readonly MenuEntry[] } = {},
@@ -72,7 +71,6 @@ export function useSessionMenuEntries(
   const disabled = (kind: SessionManagementActionKind) =>
     actions.actionDisabled(kind, actions.actionExtraDisabled(kind));
   const appearance = useSessionMenuAppearance(
-    host,
     readState,
     (kind) => actions.actionDisabled(kind),
     (action) => actions.runAction(action),
