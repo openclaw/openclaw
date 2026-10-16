@@ -16,19 +16,13 @@ const gitEnv = {
   LC_ALL: "C",
 };
 
-describe("Git updater release tag selection", () => {
-  it.each(["stable", "beta"] as const)(
-    "does not select an extended-stable-only inventory for %s",
-    (channel) => {
-      expect(selectChannelTag(["v2026.9.33", "v2026.9.34", "v2026.9.34-1"], channel)).toBeNull();
-    },
-  );
-
-  it("keeps a beta candidate when extended-stable sorts newer", () => {
-    expect(selectChannelTag(["v2026.9.34", "v2026.9.33-beta.1", "v2026.9.32"], "beta")).toBe(
-      "v2026.9.33-beta.1",
-    );
-  });
+const extendedOnly = ["v2026.9.33", "v2026.9.34", "v2026.9.34-1"];
+it.each([
+  ["stable", extendedOnly, null],
+  ["beta", extendedOnly, null],
+  ["beta", ["v2026.9.34", "v2026.9.33-beta.1", "v2026.9.32"], "v2026.9.33-beta.1"],
+] as const)("selects %s release tag from %j as %s", (channel, tags, expected) => {
+  expect(selectChannelTag(tags, channel)).toBe(expected);
 });
 
 function git(root: string, ...args: string[]) {
@@ -96,13 +90,9 @@ describe("Git updater release tag refresh", () => {
   }
 
   async function update(setup: ReturnType<typeof fixture>, channel: "stable" | "beta" = "stable") {
-    const fetches: {
-      argv: string[];
-      code: number | null;
-      tag: string;
-      local: string;
-      branch: string;
-    }[] = [];
+    const fetches: Array<
+      { argv: string[]; code: number | null } & Record<"tag" | "local" | "branch", string>
+    > = [];
     const runCommand: CommandRunner = async (argv, options) => {
       if (argv[0] !== "git") {
         throw new Error(`Unexpected build command: ${argv[0]}`);
@@ -147,7 +137,7 @@ describe("Git updater release tag refresh", () => {
 
   it("keeps beta on regular stable when extended-stable tags sort newer", async () => {
     const setup = fixture();
-    for (const tag of ["v2026.9.33", "v2026.9.34", "v2026.9.34-1"]) {
+    for (const tag of extendedOnly) {
       git(setup.seed, "tag", tag, setup.oldTag);
     }
     git(setup.seed, "push", "origin", "--tags");
@@ -174,21 +164,22 @@ describe("Git updater release tag refresh", () => {
         status: "skipped",
         reason: "already-current",
       });
-      expect(fetches).toHaveLength(2);
-      expect(fetches[0]).toMatchObject({ code: 0, tag: setup.oldTag, branch: setup.branch });
-      expect(fetches[1]).toMatchObject({
-        code: 0,
-        tag: setup.release,
-        local: setup.oldTag,
-        branch: setup.branch,
-      });
-      expect(fetches[1]?.argv).toEqual([
-        "fetch",
-        "--no-tags",
-        "--no-prune",
-        "--no-prune-tags",
-        releaseRemote,
-        "+refs/tags/*:refs/tags/*",
+      expect(fetches).toEqual([
+        expect.objectContaining({ code: 0, tag: setup.oldTag, branch: setup.branch }),
+        {
+          code: 0,
+          tag: setup.release,
+          local: setup.oldTag,
+          branch: setup.branch,
+          argv: [
+            "fetch",
+            "--no-tags",
+            "--no-prune",
+            "--no-prune-tags",
+            releaseRemote,
+            "+refs/tags/*:refs/tags/*",
+          ],
+        },
       ]);
       expect(git(setup.root, "rev-parse", "v2026.9.1")).toBe(setup.oldTag);
       expect(git(setup.root, "rev-parse", "local-only")).toBe(setup.oldTag);

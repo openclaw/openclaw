@@ -1,4 +1,5 @@
 import { fork } from "node:child_process";
+import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -32,18 +33,15 @@ import type { UpdateStepResult } from "./update-step-result.js";
 import * as windowsUser from "./windows-user-sid.js";
 
 const tempDirs = createTempDirTracker();
+const channel = "discord";
+const accountId = "primary";
 const admissionRouting = {
-  requester: {
-    channel: "discord",
-    accountId: "primary",
-    senderId: "fixture-sender",
-    authorizationSource: "owner-allowlist",
-  },
+  requester: { channel, accountId, senderId: "sender", authorizationSource: "owner-allowlist" },
   sessionKey: "agent:main:discord:channel:fixture-channel",
   deliveryContext: {
-    channel: "discord",
+    channel,
     to: "channel:fixture-channel",
-    accountId: "primary",
+    accountId,
     threadId: "fixture-thread",
   },
   campaignId: "fixture-update-campaign",
@@ -157,21 +155,19 @@ describe("update run ledger", () => {
         candidateAdmission: verdict!,
       },
     });
-    const retained = run.read()!;
-    expect(retained.origin.driver).toEqual(drivers[0]);
-    expect(retained.origin.previousDrivers).toEqual(drivers.slice(1));
-    expect(retained.origin).toMatchObject(admissionRouting);
-    expect(retained.admission?.candidateVersion).toBe(candidateVersion);
-    expect(retained.admission?.checks?.map((check) => check.name)).toEqual(
+    const retained = run.read();
+    const { origin, admission } = retained;
+    expect(origin.driver).toEqual(drivers[0]);
+    expect(origin.previousDrivers).toEqual(drivers.slice(1));
+    expect(origin).toMatchObject(admissionRouting);
+    expect(admission?.candidateVersion).toBe(candidateVersion);
+    expect(admission?.checks?.map((check) => check.name)).toEqual(
       checks.map((check) => check.name),
     );
-    expect(retained.origin.candidateAdmission?.reasons.map((reason) => reason.code)).toEqual(
+    expect(origin.candidateAdmission?.reasons.map((reason) => reason.code)).toEqual(
       verdict!.reasons.map((reason) => reason.code),
     );
-    expect(retained.origin.candidateAdmission?.facts).toMatchObject({
-      candidateVersion,
-      installedVersion,
-    });
+    expect(origin.candidateAdmission?.facts).toMatchObject({ candidateVersion, installedVersion });
     expect(renderUpdateRunReport(retained).markdown).toContain(
       "Update safety checks ran in the candidate updater",
     );
@@ -234,7 +230,7 @@ describe("update run ledger", () => {
   });
 
   it.each(["selected", "refused", "unavailable"] as const)(
-    "retains and reports snapshot capacity evidence (%s)",
+    "retains snapshot capacity evidence (%s)",
     (outcome) => {
       const options = isolatedOptions();
       const run = createLedger(options);
@@ -318,25 +314,25 @@ describe("update run ledger", () => {
     });
     expect(steps.filter((step) => step.configChange)).toHaveLength(32);
     for (const step of steps) {
-      expect(step.detail?.length ?? 0).toBeLessThanOrEqual(1024);
-      if (step.configChange) {
-        expect(
-          (step.configChange.kind === "key" ? step.configChange.key : step.configChange.message)
-            .length,
-        ).toBeLessThanOrEqual(1024);
+      const { detail, configChange: change, configWriteRefusal: refusal } = step;
+      expect(detail?.length ?? 0).toBeLessThanOrEqual(1024);
+      if (change) {
+        expect((change.kind === "key" ? change.key : change.message).length).toBeLessThanOrEqual(
+          1024,
+        );
       }
-      if (step.configWriteRefusal) {
-        expect(step.configWriteRefusal.keys).toHaveLength(32);
-        expect(step.configWriteRefusal.message.length).toBeLessThanOrEqual(1024);
-        expect(step.configWriteRefusal.reason.length).toBeLessThanOrEqual(1024);
-        expect(step.configWriteRefusal.keys.every((key) => key.length <= 1024)).toBe(true);
+      if (refusal) {
+        expect(refusal.keys).toHaveLength(32);
+        expect(refusal.message.length).toBeLessThanOrEqual(1024);
+        expect(refusal.reason.length).toBeLessThanOrEqual(1024);
+        expect(refusal.keys.every((key) => key.length <= 1024)).toBe(true);
       }
       expect(() => run.step(step)).not.toThrow();
     }
     expect(changes).toEqual(original);
   });
   it.each(["committed", "refused"] as const)(
-    "retains typed Doctor config evidence in the terminal summary (%s)",
+    "retains terminal Doctor config evidence (%s)",
     (outcome) => {
       const run = createLedger();
       const keys = ["meta", "plugins", "wizard"];
@@ -412,7 +408,7 @@ describe("update run ledger", () => {
   });
 
   it.each(["running", "terminal"] as const)(
-    "keeps phase capture synchronous and isolated for a %s row",
+    "isolates synchronous phase capture for %s rows",
     (state) => {
       const options = isolatedOptions();
       const created = createUpdateRun({ trigger: "cli", target: { kind: "git" } }, options);
@@ -524,45 +520,35 @@ describe("update run ledger", () => {
     ["failed", "failed"],
     ["succeeded", "completed"],
     ["skipped", "skipped"],
-  ] as const)(
-    "closes unfinished steps when the run becomes %s without changing recorded outcomes",
-    (status, stepStatus) => {
-      const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
-      const run = createLedger();
-      run.phase("validating", {});
-      const recordedSteps = [
-        { step: "install", status: "completed", endedAtMs: 1_000 },
-        { step: "validation attempt", status: "failed", endedAtMs: 1_000, detail: "Build failed." },
-        { step: "optional check", status: "skipped", endedAtMs: 1_000 },
-      ] as const;
-      for (const step of recordedSteps) {
-        run.step(step);
-      }
-      run.step({ step: "openclaw doctor", status: "in_progress", startedAtMs: 1_000 });
-      clock.mockReturnValue(2_000);
-      const nextAction = "Run openclaw update repair.";
-      run.finish({ status, nextAction });
-      closeOpenClawStateDatabaseForTest();
+  ] as const)("finishes %s runs without changing recorded outcomes", (status, stepStatus) => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const run = createLedger();
+    run.phase("validating", {});
+    const recordedSteps = [
+      { step: "install", status: "completed", endedAtMs: 1_000 },
+      { step: "validation attempt", status: "failed", endedAtMs: 1_000, detail: "Build failed." },
+      { step: "optional check", status: "skipped", endedAtMs: 1_000 },
+    ] as const;
+    for (const step of recordedSteps) {
+      run.step(step);
+    }
+    run.step({ step: "openclaw doctor", status: "in_progress", startedAtMs: 1_000 });
+    clock.mockReturnValue(2_000);
+    const nextAction = "Run openclaw update repair.";
+    run.finish({ status, nextAction });
+    closeOpenClawStateDatabaseForTest();
 
-      const persisted = run.read();
-      const completion = { status: stepStatus, endedAtMs: 2_000 };
-      expect(persisted).toMatchObject({ phase: "finished", origin: { nextAction } });
-      expect(persisted?.steps.filter((step) => step.step === "requested")).toEqual([
-        { step: "requested", status: "completed", startedAtMs: 1_000, endedAtMs: 1_000 },
-      ]);
-      expect(run.finish({ status, nextAction: "later" })).toEqual(persisted);
-      expect(persisted?.steps.some((step) => step.status === "in_progress")).toBe(false);
-      expect(persisted?.steps.find((step) => step.step === "openclaw doctor")).toEqual({
-        step: "openclaw doctor",
-        startedAtMs: 1_000,
-        ...completion,
-      });
-      expect(persisted?.steps.find((step) => step.step === "validating")).toMatchObject(completion);
-      for (const step of recordedSteps) {
-        expect(persisted?.steps.find((entry) => entry.step === step.step)).toEqual(step);
-      }
-    },
-  );
+    const persisted = run.read();
+    const completion = { status: stepStatus, endedAtMs: 2_000 };
+    expect(persisted).toMatchObject({ phase: "finished", origin: { nextAction } });
+    expect(persisted.steps).toEqual([
+      { step: "requested", status: "completed", startedAtMs: 1_000, endedAtMs: 1_000 },
+      expect.objectContaining({ step: "validating", ...completion }),
+      ...recordedSteps,
+      { step: "openclaw doctor", startedAtMs: 1_000, ...completion },
+    ]);
+    expect(run.finish({ status, nextAction: "later" })).toEqual(persisted);
+  });
 
   it("records post-activation repair without reopening activation or retaining completed repair timestamps", () => {
     const run = createLedger();
@@ -585,29 +571,26 @@ describe("update run ledger", () => {
     expect(run.phase("verifying", {}).phase).toBe("verifying");
   });
 
-  it.each(["bytes", "count"] as const)(
-    "rejects oversized retained step %s without changing the row",
-    (bound) => {
-      const options = isolatedOptions();
-      let saved = createUpdateRun({ trigger: "cli" }, options);
-      expect(() => {
-        for (let index = 0; index < 130; index++) {
-          saved = expectDefined(
-            recordUpdateRunStep(
-              saved.runId,
-              {
-                step: `finalize:${index}${bound === "bytes" ? "界".repeat(330) : ""}`,
-                status: "completed",
-              },
-              options,
-            ),
-            "required finalization receipt",
-          );
-        }
-      }).toThrow(/retained step.*limit/);
-      expect(getUpdateRun(saved.runId, options)).toEqual(saved);
-    },
-  );
+  it.each(["bytes", "count"] as const)("rejects oversized retained step %s atomically", (bound) => {
+    const options = isolatedOptions();
+    let saved = createUpdateRun({ trigger: "cli" }, options);
+    expect(() => {
+      for (let index = 0; index < 130; index++) {
+        saved = expectDefined(
+          recordUpdateRunStep(
+            saved.runId,
+            {
+              step: `finalize:${index}${bound === "bytes" ? "界".repeat(330) : ""}`,
+              status: "completed",
+            },
+            options,
+          ),
+          "required finalization receipt",
+        );
+      }
+    }).toThrow(/retained step.*limit/);
+    expect(getUpdateRun(saved.runId, options)).toEqual(saved);
+  });
 
   it("bounds every JSON column deterministically without splitting Unicode or losing the phase timeline", () => {
     const options = isolatedOptions();
@@ -699,15 +682,11 @@ describe("update run ledger", () => {
     run.step(step);
     const persisted = run.read();
     const serialized = JSON.stringify(persisted);
-    expect(serialized).toContain("doctor failed");
-    for (const privateValue of [
-      "/Users/example",
-      "Users\\\\example",
-      "synthetic-test-token",
-      "RAW_LOG_MUST_NOT_PERSIST",
-    ]) {
-      expect(serialized).not.toContain(privateValue);
-    }
+    expectText(
+      serialized,
+      ["doctor failed"],
+      ["/Users/example", "Users\\\\example", "synthetic-test-token", "RAW_LOG_MUST_NOT_PERSIST"],
+    );
     expect(persisted?.steps.at(-1)?.detail).toContain("~/private/config.json");
   });
 
@@ -726,19 +705,26 @@ describe("update run ledger", () => {
     run.repair({ attempt: 1, status: "failed", startedAtMs: 1, summary });
     const persisted = run.read()!;
     expect(persisted.origin.nextAction).toContain("~/.openclaw");
-    expect(persisted.repair[0]?.summary).toContain("openai/gpt-5.6-luna: use /update");
-    expect(persisted.repair[0]?.summary).toContain("https://docs.openclaw.ai/cli/update");
-    expect(persisted.repair[0]?.summary).toContain("http://host/share/x");
-    expect(persisted.repair[0]?.summary).toContain("https://host/share/x");
-    expect(persisted.repair[0]?.summary).not.toContain("\\\\host\\share");
-    for (const privateValue of [
-      "/home/operator",
-      options.env.OPENCLAW_STATE_DIR,
-      "/opt/openclaw-candidate",
-      "synthetic-test-token",
-    ]) {
-      expect(JSON.stringify(persisted)).not.toContain(privateValue);
-    }
+    expectText(
+      expectDefined(persisted.repair[0]?.summary, "repair summary"),
+      [
+        "openai/gpt-5.6-luna: use /update",
+        "https://docs.openclaw.ai/cli/update",
+        "http://host/share/x",
+        "https://host/share/x",
+      ],
+      ["\\\\host\\share"],
+    );
+    expectText(
+      JSON.stringify(persisted),
+      [],
+      [
+        "/home/operator",
+        options.env.OPENCLAW_STATE_DIR,
+        "/opt/openclaw-candidate",
+        "synthetic-test-token",
+      ],
+    );
   });
 
   it("merges independent CLI and gateway process writes into the same WAL run", async ({
@@ -756,41 +742,29 @@ describe("update run ledger", () => {
         stdio: ["ignore", "pipe", "pipe", "ipc"],
       });
       let output = "";
-      child.stdout?.on("data", (chunk) => {
-        output += chunk;
+      for (const stream of [child.stdout, child.stderr]) {
+        stream?.on("data", (chunk) => {
+          output += chunk;
+        });
+      }
+      const exited = once(child, "exit").then(([code]) => {
+        if (code !== 0) {
+          throw new Error(`${role} exited ${code}: ${output}`);
+        }
       });
-      child.stderr?.on("data", (chunk) => {
-        output += chunk;
-      });
-      const ready = new Promise<void>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("exit", (code) =>
-          reject(new Error(`${role} exited before readiness (${code}): ${output}`)),
-        );
-        child.once("message", (message) =>
-          message === "ready" ? resolve() : reject(new Error(`Unexpected ${role} message`)),
-        );
-      });
-      const exited = new Promise<void>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("exit", (code) =>
-          code === 0 ? resolve() : reject(new Error(`${role} exited ${code}: ${output}`)),
-        );
-      });
-      const written = ready.then(() =>
+      const waitFor = (expected: string) =>
         Promise.race([
-          new Promise<void>((resolve, reject) => {
-            child.once("message", (message) =>
-              message === "written"
-                ? resolve()
-                : reject(new Error(`Unexpected ${role} write message`)),
-            );
+          once(child, "message").then(([message]) => {
+            if (message !== expected) {
+              throw new Error(`Unexpected ${role} ${expected} message`);
+            }
           }),
           exited.then(() => {
-            throw new Error(`${role} exited before acknowledging writes: ${output}`);
+            throw new Error(`${role} exited before ${expected}: ${output}`);
           }),
-        ]),
-      );
+        ]);
+      const ready = waitFor("ready");
+      const written = ready.then(() => waitFor("written"));
       return { child, ready, written, exited };
     });
     try {
