@@ -1,17 +1,20 @@
 // Verifies ordered append logs retain restrictive permissions and reject symlinks.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { getQueuedFileWriter } from "./queued-file-writer.js";
+import * as logging from "../logging/subsystem.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const { warn } = vi.hoisted(() => ({ warn: vi.fn() }));
+const logger = logging.createSubsystemLogger("agents/diagnostic-writer");
+const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+const createLogger = vi.spyOn(logging, "createSubsystemLogger").mockReturnValue(logger);
+const { getQueuedFileWriter } = await import("./queued-file-writer.js");
 
-vi.mock("../logging/subsystem.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
-  createSubsystemLogger: () => ({ warn }),
-}));
+afterAll(() => {
+  createLogger.mockRestore();
+  warn.mockRestore();
+});
 beforeEach(() => {
   warn.mockClear();
 });
