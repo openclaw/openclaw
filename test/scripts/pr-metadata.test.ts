@@ -22,6 +22,14 @@ const repository = {
   nameWithOwner: "base-owner/base-repo",
   url: "https://github.com/base-owner/base-repo",
 };
+const repoName = repository.nameWithOwner;
+const enterprise = "github.enterprise.invalid";
+const repoEndpoint = (suffix = "") => `repos/${repoName}${suffix}`;
+const repoCommand = "pr_gh_plain repo view --json url";
+const authorCommand = (host = "github.com") =>
+  `printf "%s\\n" "$FAKE_GH_FIXTURE" | jq .authorSources | pr_gh commit-authors ${repoName} ${host}`;
+const quotaDetail =
+  "graphql 0/5000 reset=2027-01-15T08:00:00Z core 4900/5000 reset=2027-01-15T08:05:00Z";
 
 function revalidatedCall(endpoint: string, host = "github.com", ...flags: string[]) {
   return ["api", "--hostname", host, endpoint, ...flags, "-H", "Cache-Control: max-age=0"];
@@ -31,23 +39,25 @@ function readLines(file: string) {
   return readFileSync(file, "utf8").trim().split("\n").filter(Boolean);
 }
 
-function expectPayload(result: ReturnType<typeof readPrMetadata>, bytes: Buffer, exists = false) {
+type MetadataResult = ReturnType<typeof readPrMetadata>;
+const callsTo = (result: MetadataResult, target: string) =>
+  result.calls.filter((args) => args.includes(target));
+
+function expectPayload(result: MetadataResult, bytes: Buffer, exists = false) {
   expect(result.payloads).toEqual([
     { path: expect.any(String), base64: bytes.toString("base64"), exists },
   ]);
 }
 
-function expectSupplementalQuota(result: ReturnType<typeof readPrMetadata>) {
+function expectSupplementalQuota(result: MetadataResult) {
   expect(result.stderr).toContain("resource=core");
-  expect(result.stderr).toContain(
-    "graphql 0/5000 reset=2027-01-15T08:00:00Z core 4900/5000 reset=2027-01-15T08:05:00Z",
-  );
+  expect(result.stderr).toContain(quotaDetail);
   expect(result.stderr).toContain(
     "Supplemental quota probe (remaining/limit; not the failing response)",
   );
   expect(result.stderr).not.toContain("Wait until");
   expect(result.stderr).not.toContain("secret-response-must-not-escape");
-  expect(result.calls.filter((args) => args.includes("rate_limit"))).toHaveLength(1);
+  expect(callsTo(result, "rate_limit")).toHaveLength(1);
 }
 
 function restFile(overrides: Record<string, unknown> = {}) {
@@ -58,12 +68,59 @@ function graphqlResponse(record: unknown) {
   return { data: { repository: record } };
 }
 
-function connectionPage(nodes: unknown[], hasNextPage: boolean) {
+function pullResponse(pullRequest: unknown) {
+  return graphqlResponse({ ...repository, pullRequest });
+}
+
+function pullFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "PR_42",
+    number: 42,
+    url: `${repository.url}/pull/42`,
+    title: "Fixture",
+    state: "OPEN",
+    isDraft: false,
+    author: null,
+    baseRefName: "main",
+    baseRefOid: base,
+    headRefName: "topic",
+    headRefOid: head,
+    isCrossRepository: false,
+    headRepository: null,
+    headRepositoryOwner: null,
+    body: "",
+    changedFiles: 0,
+    additions: 0,
+    deletions: 0,
+    ...overrides,
+  };
+}
+
+function connectionPage(nodes: unknown[], hasNextPage: boolean, totalCount = 2) {
   return {
     nodes,
-    totalCount: 2,
+    totalCount,
     pageInfo: { hasNextPage, endCursor: hasNextPage ? "next" : null },
   };
+}
+
+function pullPage(field: string, nodes: unknown[], hasNextPage: boolean, totalCount = 2) {
+  return pullResponse({ [field]: connectionPage(nodes, hasNextPage, totalCount) });
+}
+
+function fallback(target: string, responses: unknown[], command: string, fixture: Fixture = {}) {
+  return readPrMetadata(
+    { coreQuotaAt: [target], graphqlResponses: responses, ...fixture },
+    command,
+  );
+}
+
+function expectResult(
+  result: MetadataResult,
+  status: number,
+  fields: Partial<MetadataResult> = {},
+) {
+  expect(result, result.stderr).toMatchObject({ status, ...fields });
 }
 
 type Fixture = {
@@ -73,19 +130,10 @@ type Fixture = {
   finalPatch?: Record<string, unknown>;
   failure?: "empty" | "exit" | "non-json" | "null" | "quota" | "forbidden";
   failureCount?: number;
-  failureTarget?:
-    | "pull"
-    | "reread"
-    | "files"
-    | "user"
-    | "permission"
-    | "browse"
-    | "checks"
-    | "repository";
+  failureTarget?: "pull" | "reread" | "files" | "user" | "permission" | "checks" | "repository";
   cacheUntilRevalidated?: boolean;
   notify?: boolean;
   ghRepo?: string;
-  ghHost?: string;
   configuredHost?: string;
   defaultRepoURL?: string;
   probeGit?: boolean;
@@ -132,13 +180,13 @@ require("node:module").syncBuiltinESMExports();
       mode: 0o755,
     });
   }
-  writeFileSync(trace, "");
-  writeFileSync(join(dir, "count"), "0");
-  writeFileSync(join(dir, "graphql-count"), "0");
-  writeFileSync(join(dir, "graphql-inputs"), "");
-  writeFileSync(join(dir, "payloads"), "");
-  writeFileSync(join(dir, "sleeps"), "");
-  writeFileSync(join(dir, "notify"), "");
+  const captures = ["trace", "graphql-inputs", "payloads", "sleeps", "notify"];
+  for (const file of captures) {
+    writeFileSync(join(dir, file), "");
+  }
+  for (const file of ["count", "graphql-count"]) {
+    writeFileSync(join(dir, file), "0");
+  }
   writeFileSync(
     gh,
     `#!/usr/bin/env node
@@ -205,10 +253,6 @@ if (args[0] === "api" && args.includes("graphql")) {
 if (args[0] === "browse") {
   if (!args.includes("--no-browser") && !process.env.GH_BROWSER) {
     throw new Error("Repository discovery must not open the configured browser");
-  }
-  if (args.includes("--no-browser") && fixture.failure === "quota" && fixture.failureTarget === "browse") {
-    console.error("HTTP 403: API rate limit exceeded");
-    process.exit(1);
   }
   if (fixture.probeGit) {
     const git = require("node:child_process").execFileSync("git", ["--version"], {encoding:"utf8"});
@@ -327,7 +371,7 @@ if (endpoint === "user") {
         PR_GH_WRITER_CONTEXT: "untrusted-inherited-context",
         FAKE_GH_NOTIFY: join(dir, "notify"),
         GH_REPO: fixture.ghRepo ?? "base-owner/base-repo",
-        GH_HOST: fixture.ghHost,
+        GH_HOST: undefined,
         ...(fixture.probeGit ? { OPENCLAW_PR_GIT: selectedGit } : {}),
         OPENCLAW_GH_BIN: fixture.protectedGh ? selectedGh : "",
         ...(fixture.protectedGh ? { GH_TOKEN: "synthetic-writer-token" } : {}),
@@ -374,8 +418,7 @@ describe("PR metadata through REST", () => {
       { commandFailure: { stdout, stderr } },
       "pr_gh_plain api repos/base-owner/base-repo",
     );
-    expect(result.status).toBe(7);
-    expect(result.stdout).toBe(stdout);
+    expectResult(result, 7, { stdout });
     if (stdout || stderr) {
       expect(result.stderr).toBe(stderr);
     } else {
@@ -426,18 +469,8 @@ describe("PR metadata through REST", () => {
     it.each(["observation", "repository only"])(
       "carries authoritative repository identity with one GraphQL PR read (%s)",
       (selection) => {
-        const pullRequest = {
-          id: "PR_42",
-          number: 42,
-          url: `${repository.url}/pull/42`,
-          title: "Fixture",
-          state: "OPEN",
-          isDraft: false,
+        const pullRequest = pullFixture({
           author: { login: "contributor", __typename: "User" },
-          baseRefName: "main",
-          baseRefOid: base,
-          headRefName: "topic",
-          headRefOid: head,
           headRepository: {
             name: "fork-repo",
             nameWithOwner: "fork-owner/fork-repo",
@@ -445,16 +478,14 @@ describe("PR metadata through REST", () => {
           },
           headRepositoryOwner: { login: "fork-owner", __typename: "User" },
           isCrossRepository: true,
-        };
-        const result = readPrMetadata(
-          {
-            ghRepo: "https://GITHUB.COM/Base-Owner/Base-Repo",
-            coreQuotaAt: ["repos/Base-Owner/Base-Repo/pulls/42"],
-            graphqlResponses: [{ data: { repository: { ...repository, pullRequest } } }],
-          },
+        });
+        const result = fallback(
+          "repos/Base-Owner/Base-Repo/pulls/42",
+          [pullResponse(pullRequest)],
           selection === "observation"
             ? 'pr_observe 42; printf "%s\\n" "$PR_OBSERVATION"'
             : "pr_gh pr view 42 --json baseRepository",
+          { ghRepo: "https://GITHUB.COM/Base-Owner/Base-Repo" },
         );
         expect(result.status, result.stderr).toBe(0);
         expect(JSON.parse(result.stdout)).toMatchObject({ baseRepository: repository });
@@ -470,15 +501,14 @@ describe("PR metadata through REST", () => {
           revalidatedCall("repos/Base-Owner/Base-Repo/pulls/42", "GITHUB.COM"),
           revalidatedCall("graphql", "GITHUB.COM", "--input", result.payloads[0]!.path),
         ]);
-        expect(result.graphqlInputs).toHaveLength(1);
-        expect(result.graphqlInputs[0]?.query).toContain(
-          "repository(owner:$owner,name:$name){id databaseId nameWithOwner url pullRequest(number:$number){",
-        );
-        expect(result.graphqlInputs[0]?.variables).toEqual({
-          owner: "Base-Owner",
-          name: "Base-Repo",
-          number: 42,
-        });
+        expect(result.graphqlInputs).toEqual([
+          {
+            query: expect.stringContaining(
+              "repository(owner:$owner,name:$name){id databaseId nameWithOwner url pullRequest(number:$number){",
+            ),
+            variables: { owner: "Base-Owner", name: "Base-Repo", number: 42 },
+          },
+        ]);
       },
     );
 
@@ -489,34 +519,27 @@ describe("PR metadata through REST", () => {
       { databaseId: 0 },
       { pullRequest: null },
     ])("rejects invalid carried repository or PR authority %j", (patch) => {
-      const result = readPrMetadata(
-        {
-          ghRepo: repository.url,
-          coreQuotaAt: ["repos/base-owner/base-repo/pulls/42"],
-          graphqlResponses: [
-            { data: { repository: { ...repository, pullRequest: { id: "PR_42" }, ...patch } } },
-          ],
-        },
+      const result = fallback(
+        repoEndpoint("/pulls/42"),
+        [graphqlResponse({ ...repository, pullRequest: { id: "PR_42" }, ...patch })],
         "pr_gh pr view 42 --json baseRepository",
+        { ghRepo: repository.url },
       );
-      expect(result.status, result.stderr).toBe(65);
-      expect(result.stdout).toBe("");
+      expectResult(result, 65, { stdout: "" });
       expect(result.calls).toHaveLength(2);
       expect(result.graphqlInputs).toHaveLength(1);
     });
 
     it("verifies the protected writer through GraphQL when REST quota is exhausted", () => {
-      const result = readPrMetadata(
-        {
-          protectedGh: true,
-          coreQuotaAt: ["user"],
-          graphqlResponses: [{ data: { viewer: { login: "fixture-writer" } } }],
-        },
+      const result = fallback(
+        "user",
+        [{ data: { viewer: { login: "fixture-writer" } } }],
         "pr_gh_writer_login github.com",
+        { protectedGh: true },
       );
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout.trim()).toBe("fixture-writer");
-      expect(result.calls.filter((call) => call.includes("graphql"))).toHaveLength(1);
+      expect(callsTo(result, "graphql")).toHaveLength(1);
     });
 
     it.each([false, true])(
@@ -538,11 +561,9 @@ describe("PR metadata through REST", () => {
             url: repository.url,
           });
         }
-        expect(result.calls.filter((call) => call.includes("graphql"))).toHaveLength(1);
+        expect(callsTo(result, "graphql")).toHaveLength(1);
         expect(result.calls).toContainEqual(["browse"]);
-        expect(
-          result.calls.filter((call) => call.includes("repos/base-owner/base-repo")),
-        ).toHaveLength(1);
+        expect(callsTo(result, repoEndpoint())).toHaveLength(1);
       },
     );
 
@@ -569,27 +590,23 @@ describe("PR metadata through REST", () => {
         const page = (login: string, permission: string, hasNextPage: boolean) =>
           graphqlResponse({
             collaborators: {
-              totalCount: 2,
+              ...connectionPage([], hasNextPage),
               edges: [{ permission, node: { login } }],
-              pageInfo: { hasNextPage, endCursor: hasNextPage ? "next" : null },
             },
           });
-        const result = readPrMetadata(
-          {
-            coreQuotaAt: ["repos/base-owner/base-repo/collaborators/human/permission"],
-            graphqlResponses:
-              mode === "unavailable"
-                ? [
-                    {
-                      data: { repository: null },
-                      errors: [{ message: "Unavailable collaborator contract" }],
-                    },
-                  ]
-                : [
-                    page("human-other", "ADMIN", true),
-                    page(mode === "exact" ? "human" : "human-another", "WRITE", false),
-                  ],
-          },
+        const result = fallback(
+          repoEndpoint("/collaborators/human/permission"),
+          mode === "unavailable"
+            ? [
+                {
+                  data: { repository: null },
+                  errors: [{ message: "Unavailable collaborator contract" }],
+                },
+              ]
+            : [
+                page("human-other", "ADMIN", true),
+                page(mode === "exact" ? "human" : "human-another", "WRITE", false),
+              ],
           "pr_gh author-permission base-owner/base-repo github.com human",
         );
         expect(result.status, result.stderr).toBe(0);
@@ -603,27 +620,21 @@ describe("PR metadata through REST", () => {
       "reads %s GraphQL comment evidence after core exhaustion",
       (mode) => {
         const node = {
-          id: "IC_1",
           databaseId: 12,
           body: "review",
           url: `${repository.url}/pull/42#issuecomment-12`,
-          createdAt: "2026-09-20T00:00:00Z",
-          updatedAt: "2026-09-20T00:00:00Z",
-          author: { id: "BOT_1", databaseId: 274271284, login: "clawsweeper", __typename: "Bot" },
+          author: { databaseId: 274271284, login: "clawsweeper", __typename: "Bot" },
         };
         const page = (nodes: unknown[], hasNextPage: boolean) =>
-          graphqlResponse({ pullRequest: { comments: connectionPage(nodes, hasNextPage) } });
-        const result = readPrMetadata(
-          {
-            coreQuotaAt: ["repos/base-owner/base-repo/issues/42/comments?per_page=100"],
-            graphqlResponses:
-              mode === "errors"
-                ? [{ ...page([node], false), errors: [{ message: "partial result" }] }]
-                : [
-                    page([node], mode !== "partial"),
-                    page([{ ...node, databaseId: mode === "duplicate" ? 12 : 13 }], false),
-                  ],
-          },
+          pullPage("comments", nodes, hasNextPage);
+        const result = fallback(
+          repoEndpoint("/issues/42/comments?per_page=100"),
+          mode === "errors"
+            ? [{ ...page([node], false), errors: [{ message: "partial result" }] }]
+            : [
+                page([node], mode !== "partial"),
+                page([{ ...node, databaseId: mode === "duplicate" ? 12 : 13 }], false),
+              ],
           "pr_gh_plain issue-comments base-owner/base-repo github.com 42",
         );
         expect(result.status, result.stderr).toBe(mode === "complete" ? 0 : 65);
@@ -645,41 +656,31 @@ describe("PR metadata through REST", () => {
     it("preserves pinned author order and human attribution through GraphQL", () => {
       const first = "1".repeat(40);
       const second = "2".repeat(40);
-      const result = readPrMetadata(
+      const human = { name: "Human", email: "human@example.invalid" };
+      const unlinked = { name: "Unlinked", email: "unlinked@example.invalid", user: null };
+      const result = fallback(
+        repoEndpoint(`/commits?sha=${second}&per_page=2`),
+        [
+          graphqlResponse({
+            commit0: {
+              oid: first,
+              author: { ...human, user: { login: "human", __typename: "User" } },
+            },
+            commit1: { oid: second, author: unlinked },
+          }),
+        ],
+        authorCommand(),
         {
           authorSources: [
             { oid: first, changesTree: true },
             { oid: second, changesTree: false },
           ],
-          coreQuotaAt: [`repos/base-owner/base-repo/commits?sha=${second}&per_page=2`],
-          graphqlResponses: [
-            graphqlResponse({
-              commit0: {
-                oid: first,
-                author: {
-                  name: "Human",
-                  email: "human@example.invalid",
-                  user: { login: "human", __typename: "User" },
-                },
-              },
-              commit1: {
-                oid: second,
-                author: { name: "Unlinked", email: "unlinked@example.invalid", user: null },
-              },
-            }),
-          ],
         },
-        'printf "%s\\n" "$FAKE_GH_FIXTURE" | jq .authorSources | pr_gh commit-authors base-owner/base-repo github.com',
       );
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual([
-        {
-          name: "Human",
-          email: "human@example.invalid",
-          user: { login: "human", type: "User" },
-          changesTree: true,
-        },
-        { name: "Unlinked", email: "unlinked@example.invalid", user: null, changesTree: false },
+        { ...human, user: { login: "human", type: "User" }, changesTree: true },
+        { ...unlinked, changesTree: false },
       ]);
     });
 
@@ -687,39 +688,26 @@ describe("PR metadata through REST", () => {
       "returns complete PR file metadata through GraphQL (truncated=%s)",
       (truncated) => {
         const page = (path: string, hasNextPage: boolean) =>
-          graphqlResponse({
-            pullRequest: {
-              files: connectionPage(
-                [{ path, additions: 1, deletions: 0, changeType: "MODIFIED" }],
-                hasNextPage,
-              ),
-            },
-          });
-        const result = readPrMetadata(
-          {
-            coreQuotaAt: ["repos/base-owner/base-repo/pulls/42"],
-            graphqlResponses: [
-              graphqlResponse({
-                pullRequest: {
-                  headRefOid: head,
-                  author: null,
-                  headRepository: null,
-                  headRepositoryOwner: null,
-                },
-              }),
-              page("src/a.ts", !truncated),
-              page("src/b.ts", false),
-            ],
-          },
+          pullPage(
+            "files",
+            [{ path, additions: 1, deletions: 0, changeType: "MODIFIED" }],
+            hasNextPage,
+          );
+        const nullableIdentity = {
+          headRefOid: head,
+          author: null,
+          headRepository: null,
+          headRepositoryOwner: null,
+        };
+        const result = fallback(
+          repoEndpoint("/pulls/42"),
+          [pullResponse(nullableIdentity), page("src/a.ts", !truncated), page("src/b.ts", false)],
           "pr_gh pr view 42 --json headRefOid,author,headRepository,headRepositoryOwner,files",
         );
         expect(result.status, result.stderr).toBe(truncated ? 65 : 0);
         if (!truncated) {
           expect(JSON.parse(result.stdout)).toEqual({
-            headRefOid: head,
-            author: null,
-            headRepository: null,
-            headRepositoryOwner: null,
+            ...nullableIdentity,
             files: ["src/a.ts", "src/b.ts"].map((path) => ({
               path,
               additions: 1,
@@ -769,12 +757,11 @@ describe("PR metadata through REST", () => {
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toBe("contributor\n");
     }
-    expect(result.calls.filter((args) => args.includes("user"))).toHaveLength(probes);
+    expect(callsTo(result, "user")).toHaveLength(probes);
   });
 
   describe("pinned source authors", () => {
-    const command =
-      'printf "%s\\n" "$FAKE_GH_FIXTURE" | jq .authorSources | pr_gh commit-authors base-owner/base-repo github.enterprise.invalid';
+    const command = authorCommand("github.enterprise.invalid");
     const sha = (index: number) => index.toString(16).padStart(40, "0");
     const source = (index: number) => ({ oid: sha(index), changesTree: index % 2 === 0 });
     const record = (index: number) => ({
@@ -784,59 +771,40 @@ describe("PR metadata through REST", () => {
     });
     const requests = (calls: string[][]) =>
       calls.map((args) => {
-        expect(args.slice(0, 3)).toEqual(["api", "--hostname", "github.enterprise.invalid"]);
-        const endpoint = args[3];
-        if (endpoint === undefined) {
-          throw new Error("Expected a commit-author API endpoint");
-        }
-        const query = new URL(endpoint, "https://github.enterprise.invalid/").searchParams;
+        expect(args.slice(0, 3)).toEqual(["api", "--hostname", enterprise]);
+        const query = new URL(args[3] ?? "", `https://${enterprise}/`).searchParams;
         return { sha: query.get("sha"), limit: Number(query.get("per_page")) };
       });
 
-    it.each([
-      { mode: "empty", count: 0, pages: [], requested: [] },
-      {
-        mode: "paginated",
-        count: 101,
-        pages: [Array.from({ length: 100 }, (_, index) => record(101 - index)), [record(1)]],
-        requested: [
-          { sha: sha(101), limit: 100 },
-          { sha: sha(1), limit: 1 },
-        ],
-      },
-      {
-        mode: "unrelated ancestry",
-        count: 4,
-        pages: [
-          [record(4), record(99), record(98), record(97)],
-          [record(3)],
-          [record(2)],
-          [record(1)],
-        ],
-        requested: [
-          { sha: sha(4), limit: 4 },
-          { sha: sha(3), limit: 1 },
-          { sha: sha(2), limit: 1 },
-          { sha: sha(1), limit: 1 },
-        ],
-      },
-    ])(
-      "resolves pinned authors in source order with bounded reads: $mode",
-      ({ count, pages, requested }) => {
-        const sources = Array.from({ length: count }, (_, index) => source(index + 1));
-        const result = readPrMetadata({ authorSources: sources, authorPages: pages }, command);
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout)).toEqual(
-          sources.map((entry, index) => ({
-            name: `Author ${index + 1}`,
-            email: `author${index + 1}@example.com`,
-            user: { login: `author${index + 1}`, type: "User" },
-            changesTree: entry.changesTree,
-          })),
-        );
-        expect(requests(result.calls)).toEqual(requested);
-      },
-    );
+    it.each([0, 101, 4])("resolves %i pinned authors in order with bounded reads", (count) => {
+      const pages =
+        count === 101
+          ? [Array.from({ length: 100 }, (_, i) => 101 - i), [1]]
+          : count === 4
+            ? [[4, 99, 98, 97], [3], [2], [1]]
+            : [];
+      const requested = count === 101 ? [101, 1] : count === 4 ? [4, 3, 2, 1] : [];
+      const sources = Array.from({ length: count }, (_, index) => source(index + 1));
+      const result = readPrMetadata(
+        { authorSources: sources, authorPages: pages.map((page) => page.map(record)) },
+        command,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual(
+        sources.map((entry, index) => ({
+          name: `Author ${index + 1}`,
+          email: `author${index + 1}@example.com`,
+          user: { login: `author${index + 1}`, type: "User" },
+          changesTree: entry.changesTree,
+        })),
+      );
+      expect(requests(result.calls)).toEqual(
+        requested.map((index, page) => ({
+          sha: sha(index),
+          limit: page ? 1 : Math.min(count, 100),
+        })),
+      );
+    });
 
     it.each([
       { fixture: { authorSources: null }, calls: 0 },
@@ -866,8 +834,7 @@ describe("PR metadata through REST", () => {
       "rejects invalid author selections or evidence after $calls reads without retrying: $fixture",
       ({ fixture, calls }) => {
         const result = readPrMetadata(fixture, command);
-        expect(result.status).toBe(65);
-        expect(result.stdout).toBe("");
+        expectResult(result, 65, { stdout: "" });
         expect(result.calls).toHaveLength(calls);
       },
     );
@@ -877,26 +844,21 @@ describe("PR metadata through REST", () => {
     [
       "qualified repo URL",
       "repository",
-      "base-owner/base-repo",
-      "pr_gh_plain repo view --json url --repo https://github.enterprise.invalid/base-owner/base-repo",
+      repoName,
+      `${repoCommand} --repo https://${enterprise}/${repoName}`,
     ],
-    [
-      "qualified GH_REPO",
-      "repository",
-      "github.enterprise.invalid/base-owner/base-repo",
-      "pr_gh_plain repo view --json url",
-    ],
+    ["qualified GH_REPO", "repository", `${enterprise}/${repoName}`, repoCommand],
     [
       "qualified short repo flag",
       "checks",
-      "base-owner/base-repo",
-      "pr_gh_plain pr checks 42 --required --json name,bucket,state -R github.enterprise.invalid/base-owner/base-repo",
+      repoName,
+      `pr_gh_plain pr checks 42 --required --json name,bucket,state -R ${enterprise}/${repoName}`,
     ],
     [
       "raw API default",
       "pull",
-      "github.enterprise.invalid/base-owner/base-repo",
-      "pr_gh_plain api repos/base-owner/base-repo/pulls/42",
+      `${enterprise}/${repoName}`,
+      `pr_gh_plain api ${repoEndpoint("/pulls/42")}`,
     ],
   ] as const)(
     "probes the failing host for %s without changing API defaults",
@@ -912,43 +874,35 @@ describe("PR metadata through REST", () => {
         },
         command,
       );
-      expect(result.status, result.stderr).toBe(75);
-      expect(result.stdout).toBe("");
-      expect(result.calls.filter((args) => args.includes("rate_limit"))).toEqual([
+      expectResult(result, 75, { stdout: "", delays: [] });
+      expect(callsTo(result, "rate_limit")).toEqual([
         ["api", ...(host ? ["--hostname", host] : []), "rate_limit"],
       ]);
-      expect(result.delays).toEqual([]);
     },
   );
-  it.each([false, true])(
-    "preserves the command result when cleanup fails (failed=%s)",
-    (failed) => {
-      const result = readPrMetadata(
-        {
-          probeGit: true,
-          cleanupFailure: true,
-          failure: failed ? "exit" : undefined,
-          failureTarget: "repository",
-        },
-        'printf "payload" | pr_gh_plain api repos/base-owner/base-repo --input - 2>&1',
-      );
-      expect(result.status, result.stderr).toBe(failed ? 7 : 0);
-      if (failed) {
-        expect(result.stdout).toBe("HTTP 503: No server is currently available\n");
-      } else {
-        expect(result.stdout).toBe(
-          JSON.stringify({
+  it.each([false, true])("preserves results despite cleanup failures (failed=%s)", (failed) => {
+    const result = readPrMetadata(
+      {
+        probeGit: true,
+        cleanupFailure: true,
+        failure: failed ? "exit" : undefined,
+        failureTarget: "repository",
+      },
+      'printf "payload" | pr_gh_plain api repos/base-owner/base-repo --input - 2>&1',
+    );
+    expectResult(result, failed ? 7 : 0, {
+      stderr: "",
+      stdout: failed
+        ? "HTTP 503: No server is currently available\n"
+        : JSON.stringify({
             id: 1,
             full_name: "base-owner/base-repo",
             html_url: "https://github.com/base-owner/base-repo",
             node_id: "R_base",
           }) + "\n",
-        );
-      }
-      expect(result.stderr).toBe("");
-      expectPayload(result, Buffer.from("payload"), true);
-    },
-  );
+    });
+    expectPayload(result, Buffer.from("payload"), true);
+  });
   it.each(["selected gh", "selected Git"])(
     "resolves and binds the default repository through %s",
     (tool) => {
@@ -1040,9 +994,7 @@ describe("PR metadata through REST", () => {
       );
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({ url: repoURL });
-      expect(result.calls).toContainEqual(
-        revalidatedCall("repos/base-owner/base-repo", enterpriseHost),
-      );
+      expect(result.calls).toContainEqual(revalidatedCall(repoEndpoint(), enterpriseHost));
       expect(result.calls).toContainEqual([
         "pr",
         "edit",
@@ -1081,9 +1033,8 @@ describe("PR metadata through REST", () => {
         },
         "source scripts/pr-lib/gates.sh; ci_dispatch 42",
       );
-      expect(result.status, result.stderr).toBe(1);
+      expectResult(result, 1, { stdout: "" });
       expect(result.stderr).toContain("missing repository identity for workflow dispatch");
-      expect(result.stdout).toBe("");
       expect(result.calls.some((args) => args[0] === "workflow")).toBe(false);
     },
   );
@@ -1109,13 +1060,8 @@ describe("PR metadata through REST", () => {
   });
   it("collects complete paginated files without requesting unrelated checks or GraphQL", () => {
     const result = readPrMetadata();
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.notifications).toBe("");
-    expect(result.attempts).toBe(2);
-    expect(
-      result.calls.filter((args) => args.includes("repos/base-owner/base-repo/pulls/42")),
-    ).toHaveLength(2);
+    expectResult(result, 0, { stderr: "", notifications: "", attempts: 2 });
+    expect(callsTo(result, repoEndpoint("/pulls/42"))).toHaveLength(2);
     expect(result.calls.filter((args) => args[0] === "api")).toHaveLength(3);
     expect(result.calls.some((args) => args.includes("repos/base-owner/base-repo"))).toBe(false);
     expect(
@@ -1196,8 +1142,7 @@ describe("PR metadata through REST", () => {
     "refuses unavailable or inconsistent REST files: $diagnostic ($fixture)",
     ({ fixture, diagnostic }) => {
       const result = readPrMetadata(fixture);
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
+      expectResult(result, 1, { stdout: "" });
       expect(result.stderr).toContain(diagnostic);
     },
   );
@@ -1220,8 +1165,7 @@ describe("PR metadata through REST", () => {
     ].map((finalPatch) => ({ phase: "post-collection", fixture: { finalPatch } })),
   ])("rejects invalid $phase PR identity: $fixture", ({ phase, fixture }) => {
     const result = readPrMetadata(fixture);
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
+    expectResult(result, 1, { stdout: "" });
     if (phase === "initial") {
       expect(result.attempts).toBe(1);
       expect(result.delays).toEqual([]);
@@ -1235,31 +1179,7 @@ describe("PR metadata through REST", () => {
   it.each(["REST", "GraphQL"])(
     "revalidates both %s observations and rejects files collected while the PR head moves",
     (transport) => {
-      const metadata = {
-        number: 42,
-        title: "Fixture",
-        state: "OPEN",
-        isDraft: false,
-        author: null,
-        baseRefName: "main",
-        baseRefOid: base,
-        headRefName: "topic",
-        headRefOid: head,
-        isCrossRepository: false,
-        headRepository: null,
-        headRepositoryOwner: null,
-        url: "https://github.com/base-owner/base-repo/pull/42",
-        body: "",
-        changedFiles: 0,
-        additions: 0,
-        deletions: 0,
-      };
-      const response = (pullRequest: unknown) =>
-        graphqlResponse({
-          ...repository,
-          pullRequest,
-        });
-      const emptyPage = { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false } };
+      const metadata = pullFixture();
       const result = readPrMetadata({
         cacheUntilRevalidated: true,
         finalPatch: { head: { sha: "b".repeat(40), ref: "topic" } },
@@ -1267,42 +1187,29 @@ describe("PR metadata through REST", () => {
           ? {
               coreQuotaAt: ["repos/base-owner/base-repo/pulls/42"],
               graphqlResponses: [
-                response(metadata),
-                response({ labels: emptyPage }),
-                response({ assignees: emptyPage }),
-                response({ files: emptyPage }),
-                response({ ...metadata, headRefOid: "b".repeat(40) }),
+                pullResponse(metadata),
+                ...["labels", "assignees", "files"].map((field) => pullPage(field, [], false, 0)),
+                pullResponse({ ...metadata, headRefOid: "b".repeat(40) }),
               ],
             }
           : {}),
       });
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
+      expectResult(result, 1, { stdout: "" });
       expect(result.stderr).toContain("PR head changed while collecting file metadata");
     },
   );
 
-  it.each<{ fixture: Fixture; attempts: number; delays: number[]; exitCode: number }>([
-    ...(["empty", "exit", "non-json", "null"] as const).map((failure) => ({
-      fixture: { failure },
-      attempts: 3,
-      delays: [1, 2],
-      exitCode: 1,
-    })),
-    { fixture: { failure: "empty", failureCount: 1 }, attempts: 3, delays: [1], exitCode: 0 },
-    {
-      fixture: { failure: "exit", failureTarget: "reread" },
-      attempts: 4,
-      delays: [1, 2],
-      exitCode: 1,
-    },
+  it.each<[Fixture, number, number[], number]>([
+    ...(["empty", "exit", "non-json", "null"] as const).map(
+      (failure): [Fixture, number, number[], number] => [{ failure }, 3, [1, 2], 1],
+    ),
+    [{ failure: "empty", failureCount: 1 }, 3, [1], 0],
+    [{ failure: "exit", failureTarget: "reread" }, 4, [1, 2], 1],
   ])(
-    "bounds metadata retries and recovers only valid reads: $fixture",
-    ({ fixture, attempts, delays, exitCode }) => {
+    "bounds metadata retries and recovers only valid reads: %j",
+    (fixture, attempts, delays, exitCode) => {
       const result = readPrMetadata(fixture);
-      expect(result.status).toBe(exitCode);
-      expect(result.attempts).toBe(attempts);
-      expect(result.delays).toEqual(delays);
+      expectResult(result, exitCode, { attempts, delays });
       if (exitCode !== 0) {
         expect(result.stdout).toBe("");
         expect(result.stderr).toContain("GitHub API failure while reading PR #42");
@@ -1311,37 +1218,25 @@ describe("PR metadata through REST", () => {
   );
 
   it.each([
-    { command: "pr_meta_json 42", failureTarget: "pull", resource: "core", exitCode: 1 },
-    { command: "ensure_gh_api_auth", failureTarget: "user", resource: "core", exitCode: 1 },
-    {
-      command: "pr_gh pr view 42 --json headRefOid --jq .headRefOid",
-      failureTarget: "pull",
-      resource: "core",
-      exitCode: 75,
-    },
-    {
-      command: "pr_gh_plain pr view 42 --json headRefOid --jq=.headRefOid",
-      failureTarget: "pull",
-      resource: "core",
-      exitCode: 75,
-    },
-    {
-      command:
-        'node --input-type=module -e \'import { execPrGh } from "./scripts/pr-lib/github.mjs"; execPrGh(["api","repos/base-owner/base-repo/pulls/42","--input","-"], {input:Buffer.from("private payload")}, "plain")\'',
-      failureTarget: "pull",
-      resource: "core",
-      exitCode: 1,
-    },
+    ["pr_meta_json 42", "pull", 1],
+    ["ensure_gh_api_auth", "user", 1],
+    ["pr_gh pr view 42 --json headRefOid --jq .headRefOid", "pull", 75],
+    ["pr_gh_plain pr view 42 --json headRefOid --jq=.headRefOid", "pull", 75],
+    [
+      'node --input-type=module -e \'import { execPrGh } from "./scripts/pr-lib/github.mjs"; execPrGh(["api","repos/base-owner/base-repo/pulls/42","--input","-"], {input:Buffer.from("private payload")}, "plain")\'',
+      "pull",
+      1,
+    ],
   ] as const)(
-    "labels supplemental quotas for a $resource failure without retrying: $command",
-    ({ command, failureTarget, resource, exitCode }) => {
+    "labels supplemental core quotas without retrying: %s",
+    (command, failureTarget, exitCode) => {
       const result = readPrMetadata({ failure: "quota", failureTarget }, command);
-      expect(result.status).toBe(exitCode);
-      expect(result.stdout).toBe("");
+      expectResult(result, exitCode, {
+        stdout: "",
+        attempts: failureTarget === "pull" ? 1 : 0,
+        delays: [],
+      });
       expectSupplementalQuota(result);
-      expect(result.stderr).toContain(`resource=${resource}`);
-      expect(result.attempts).toBe(failureTarget === "pull" ? 1 : 0);
-      expect(result.delays).toEqual([]);
       if (command.includes("--input")) {
         expectPayload(result, Buffer.from("private payload"));
       }
@@ -1356,10 +1251,7 @@ describe("merge outcome API diagnostics", () => {
       const observation = JSON.stringify({
         main: base,
         pr: {
-          state: "OPEN",
-          headRefOid: head,
-          baseRefName: "main",
-          isDraft: false,
+          ...pullFixture(),
           mergeable: "MERGEABLE",
           mergeStateStatus: "CLEAN",
           autoMergeRequest: null,
@@ -1370,8 +1262,7 @@ describe("merge outcome API diagnostics", () => {
         { failure },
         `MERGE_REPO_HOST=github.com MERGE_REPO_NAME=base-owner/base-repo PREP_HEAD_SHA=${head} merge_outcome_diagnose 42 '${observation}'; printf 'diagnostic completed\\n'`,
       );
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toBe("diagnostic completed\n");
+      expectResult(result, 0, { stdout: "diagnostic completed\n", attempts: 1, delays: [] });
       expect(result.stderr).toContain(
         "REST pulls/42: mergeable/mergeable_state unavailable (diagnostic only)",
       );
@@ -1381,15 +1272,9 @@ describe("merge outcome API diagnostics", () => {
         expect(result.stderr).not.toContain("GitHub API request failed");
       } else {
         expect(result.stderr).toContain("resource=core");
-        expect(result.stderr).toContain(
-          "graphql 0/5000 reset=2027-01-15T08:00:00Z core 4900/5000 reset=2027-01-15T08:05:00Z",
-        );
+        expect(result.stderr).toContain(quotaDetail);
       }
-      expect(result.attempts).toBe(1);
-      expect(result.delays).toEqual([]);
-      expect(result.calls.filter((args) => args.includes("rate_limit"))).toHaveLength(
-        failure === "exit" ? 0 : 1,
-      );
+      expect(callsTo(result, "rate_limit")).toHaveLength(failure === "exit" ? 0 : 1);
       expect(result.calls.every((args) => args[0] === "api")).toBe(true);
     },
   );
