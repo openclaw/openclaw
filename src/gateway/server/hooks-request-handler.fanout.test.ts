@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveHookMappings } from "../hooks-mapping.js";
 import { createHooksConfig } from "../hooks-test-helpers.js";
@@ -25,12 +25,10 @@ function completedDispatch(runId: string): HookAgentDispatchResult {
   };
 }
 
-vi.mock("../hooks.js", async () => {
-  return {
-    ...(await vi.importActual<typeof import("../hooks.js")>("../hooks.js")),
-    readJsonBody: readJsonBodyMock,
-  };
-});
+vi.mock("../hooks.js", async () => ({
+  ...(await vi.importActual<typeof import("../hooks.js")>("../hooks.js")),
+  readJsonBody: readJsonBodyMock,
+}));
 
 function createGmailHooksConfig(mapping?: {
   config: Parameters<typeof resolveHookMappings>[0];
@@ -41,25 +39,22 @@ function createGmailHooksConfig(mapping?: {
   return {
     ...canonical,
     mappings: resolveHookMappings(
-      {
-        ...policy,
-        ...(mapping?.config ?? { presets: ["gmail"] }),
-      },
+      { ...policy, ...(mapping?.config ?? { presets: ["gmail"] }) },
       mapping ? { configDir: mapping.configDir } : undefined,
     ),
     sessionPolicy: { ...canonical.sessionPolicy, ...policy },
   };
 }
 
-function createFanOutHandler(params?: {
-  dispatchWakeHook?: Parameters<typeof createHooksRequestHandler>[0]["dispatchWakeHook"];
-  dispatchAgentHook?: (
-    value: HookAgentDispatchPayload,
-  ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
-  hooksConfig?: HooksConfigResolved;
-  getHooksConfig?: () => HooksConfigResolved | null;
-  fanoutResponseDeadlineMs?: number;
-}) {
+type HandlerOptions = Parameters<typeof createHooksRequestHandler>[0];
+function createFanOutHandler(
+  params?: Partial<
+    Pick<
+      HandlerOptions,
+      "dispatchWakeHook" | "dispatchAgentHook" | "getHooksConfig" | "fanoutResponseDeadlineMs"
+    >
+  > & { hooksConfig?: HooksConfigResolved },
+) {
   const dispatchWakeHook = vi.fn(
     params?.dispatchWakeHook ?? (() => ({ eventOutcome: "queued" as const })),
   );
@@ -67,12 +62,7 @@ function createFanOutHandler(params?: {
     params?.dispatchAgentHook ??
       ((value: HookAgentDispatchPayload) => completedDispatch(`run:${value.sessionKey}`)),
   );
-  const logHooks = {
-    warn: vi.fn(),
-    debug: vi.fn(),
-    info: vi.fn(),
-    error: vi.fn(),
-  } as unknown as ReturnType<typeof createSubsystemLogger>;
+  const logHooks = { ...createSubsystemLogger("hook-fanout-test"), warn: vi.fn(), info: vi.fn() };
   const hooksConfig = params?.hooksConfig ?? createGmailHooksConfig();
   const handler = createHooksRequestHandler({
     scheduler: createTestGatewayScheduler("fake-timers"),
@@ -84,7 +74,9 @@ function createFanOutHandler(params?: {
     dispatchAgentHook,
     fanoutResponseDeadlineMs: params?.fanoutResponseDeadlineMs,
   });
-  return { handler, dispatchAgentHook, dispatchWakeHook, logHooks };
+  const startDirect = (idempotencyKey: string, waitForCompletion = false) =>
+    startRequest(handler, { message: "direct", idempotencyKey, waitForCompletion });
+  return { handler, startDirect, dispatchAgentHook, dispatchWakeHook, logHooks };
 }
 
 function startRequest(
@@ -146,10 +138,9 @@ describe("hook fan-out dispatch", () => {
         return completedDispatch(`run:${value.sessionKey}`);
       },
     });
-    const payload = { messages: [gmailMessage("m1"), gmailMessage("m2"), gmailMessage("m3")] };
+    const payload = { messages: ["m1", "m2", "m3"].map(gmailMessage) };
 
-    const firstResponse = await postGmailPayload(handler, payload, 502);
-    expect(firstResponse).toMatchObject({
+    expect(await postGmailPayload(handler, payload, 502)).toMatchObject({
       ok: false,
       runIds: ["run:hook:gmail:m1", "run:hook:gmail:m3"],
     });
@@ -162,45 +153,37 @@ describe("hook fan-out dispatch", () => {
   });
 
   test("answers before the producer client timeout when an item admission hangs", async () => {
-    const { promise: hang, resolve: releaseHang } = createDeferred<HookAgentDispatchResult>();
+    const hang = createDeferred<HookAgentDispatchResult>();
     const { handler, dispatchAgentHook } = createFanOutHandler({
       fanoutResponseDeadlineMs: 50,
       dispatchAgentHook: (value) =>
         value.sessionKey === "hook:gmail:slow"
-          ? hang
+          ? hang.promise
           : completedDispatch(`run:${value.sessionKey}`),
     });
     const payload = { messages: [gmailMessage("fast"), gmailMessage("slow")] };
 
-    const response = await postGmailPayload(handler, payload, 503);
-    expect(response).toMatchObject({
+    expect(await postGmailPayload(handler, payload, 503)).toMatchObject({
       error: expect.stringContaining("pending"),
       runIds: ["run:hook:gmail:fast"],
     });
 
-    // The pending admission settles in the background; the redelivered batch
-    // replays both items without a duplicate dispatch.
-    releaseHang(completedDispatch("run:hook:gmail:slow"));
+    hang.resolve(completedDispatch("run:hook:gmail:slow"));
     await postGmailPayload(handler, payload);
     expect(dispatchAgentHook).toHaveBeenCalledTimes(2);
   });
 
   test("dispatches identical items separately and replays each on redelivery", async () => {
-    // Two batch elements can render byte-identical actions (generic payloads;
-    // impossible for gmail ids). Both must run, and a redelivery must replay
-    // both instead of dispatching a third run.
     let runSeq = 0;
     const { handler, dispatchAgentHook } = createFanOutHandler({
       dispatchAgentHook: () => completedDispatch(`run-${runSeq++}`),
     });
     const payload = { messages: [gmailMessage("twin"), gmailMessage("twin")] };
 
-    const response = await postGmailPayload(handler, payload);
-    expect(response).toMatchObject({ runIds: ["run-0", "run-1"] });
+    expect(await postGmailPayload(handler, payload)).toMatchObject({ runIds: ["run-0", "run-1"] });
     expect(dispatchAgentHook).toHaveBeenCalledTimes(2);
 
-    const retry = await postGmailPayload(handler, payload);
-    expect(retry).toMatchObject({ runIds: ["run-0", "run-1"] });
+    expect(await postGmailPayload(handler, payload)).toMatchObject({ runIds: ["run-0", "run-1"] });
     expect(dispatchAgentHook).toHaveBeenCalledTimes(2);
   });
 
@@ -259,9 +242,7 @@ describe("hook fan-out dispatch", () => {
           { id: "a1", kind: "agent" },
         ],
       };
-      const response = await postGmailPayload(handler, payload);
-
-      expect(response).toMatchObject({ eventOutcome: "queued" });
+      expect(await postGmailPayload(handler, payload)).toMatchObject({ eventOutcome: "queued" });
       expect(dispatchWakeHook).toHaveBeenCalledTimes(2);
       expect(dispatchWakeHook.mock.calls[0]?.[0]).toMatchObject({ text: "wake:w1" });
       expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
@@ -271,8 +252,7 @@ describe("hook fan-out dispatch", () => {
       });
 
       coalesceWakes = true;
-      const replay = await postGmailPayload(handler, payload);
-      expect(replay).toMatchObject({ eventOutcome: "coalesced" });
+      expect(await postGmailPayload(handler, payload)).toMatchObject({ eventOutcome: "coalesced" });
       expect(dispatchWakeHook).toHaveBeenCalledTimes(4);
       expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
 
@@ -287,10 +267,7 @@ describe("hook fan-out dispatch", () => {
         },
         400,
       );
-      expect(invalid).toMatchObject({
-        ok: false,
-        eventOutcome: "queued",
-      });
+      expect(invalid).toMatchObject({ ok: false, eventOutcome: "queued" });
       expect(dispatchWakeHook).toHaveBeenCalledTimes(5);
       expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
     } finally {
@@ -309,82 +286,50 @@ describe("hook fan-out dispatch", () => {
       allowRequestSessionKey: true,
       allowedSessionKeyPrefixes: ["hook:gmail:"],
     };
-    const resolved = resolveHooksConfig({ hooks: baseHooks } as never);
-    // 100 messages x (20000-byte bodies x3 escaping headroom + 8KiB metadata).
-    expect(resolved?.maxBodyBytesByPath.get("gmail")).toBe(6_819_200);
-
-    const larger = resolveHooksConfig({
-      hooks: { ...baseHooks, gmail: { maxBytes: 50_000 } },
-    } as never);
-    expect(larger?.maxBodyBytesByPath.get("gmail")).toBe(100 * (50_000 * 3 + 8_192));
-
-    // Operator-controlled maxBytes must not amplify into an unbounded
-    // in-memory request allowance.
-    const huge = resolveHooksConfig({
-      hooks: { ...baseHooks, gmail: { maxBytes: 1_048_576 } },
-    } as never);
-    expect(huge?.maxBodyBytesByPath.get("gmail")).toBe(32 * 1024 * 1024);
+    const bodyLimits = [undefined, 50_000, 1_048_576].map((maxBytes) =>
+      resolveHooksConfig({
+        hooks: { ...baseHooks, ...(maxBytes === undefined ? {} : { gmail: { maxBytes } }) },
+      } as never)?.maxBodyBytesByPath.get("gmail"),
+    );
+    expect(bodyLimits).toEqual([6_819_200, 100 * (50_000 * 3 + 8_192), 32 * 1024 * 1024]);
   });
 
   test("keeps direct completion observation outside dispatch identity", async () => {
-    const { promise: admission, resolve: resolveAdmission } =
-      createDeferred<HookAgentDispatchResult>();
-    const { promise: completion, resolve: resolveCompletion } = createDeferred<{
-      status: "ok";
-      replyDisposition: "silent";
-      delivered: boolean;
-    }>();
-    const { handler, dispatchAgentHook } = createFanOutHandler({
+    const admission = createDeferred<HookAgentDispatchResult>();
+    const completion = createDeferred<HookAgentCompletion>();
+    const terminal = { status: "ok", replyDisposition: "silent", delivered: true } as const;
+    const { startDirect, dispatchAgentHook } = createFanOutHandler({
       hooksConfig: createHooksConfig(),
-      dispatchAgentHook: () => admission,
+      dispatchAgentHook: () => admission.promise,
     });
-    const startDirect = (waitForCompletion: boolean) =>
-      startRequest(handler, {
-        message: "direct",
-        idempotencyKey: "shared-request",
-        waitForCompletion,
-      });
-
-    const admittedOnly = startDirect(false);
-    const waiting = startDirect(true);
+    const admittedOnly = startDirect("shared-request");
+    const waiting = startDirect("shared-request", true);
     await vi.waitFor(() => expect(dispatchAgentHook).toHaveBeenCalledTimes(1));
 
-    resolveAdmission({ ok: true, runId: "run:shared", completion });
+    admission.resolve({ ok: true, runId: "run:shared", completion: completion.promise });
     await expectRun(admittedOnly, "run:shared");
     expect(waiting.response.getBody()).toBe("");
 
-    resolveCompletion({ status: "ok", replyDisposition: "silent", delivered: true });
-    await expectRun(waiting, "run:shared", {
-      status: "ok",
-      replyDisposition: "silent",
-      delivered: true,
-    });
-
-    const replay = startDirect(true);
-    await expectRun(replay, "run:shared", {
-      status: "ok",
-      replyDisposition: "silent",
-      delivered: true,
-    });
+    completion.resolve(terminal);
+    await expectRun(waiting, "run:shared", terminal);
+    await expectRun(startDirect("shared-request", true), "run:shared", terminal);
     expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
   });
 
   test("keeps an active admitted replay owner under terminal cache pressure", async () => {
-    const { promise: activeCompletion, resolve: resolveActiveCompletion } =
-      createDeferred<HookAgentCompletion>();
+    const completion = createDeferred<HookAgentCompletion>();
+    const terminal = { status: "ok", replyDisposition: "silent" } as const;
     let activeDispatches = 0;
-    const { handler, dispatchAgentHook } = createFanOutHandler({
+    const { startDirect, dispatchAgentHook } = createFanOutHandler({
       hooksConfig: createHooksConfig(),
       dispatchAgentHook: (value) => {
         if (value.idempotencyKey === "active-owner") {
           activeDispatches += 1;
-          return { ok: true, runId: "run:active", completion: activeCompletion };
+          return { ok: true, runId: "run:active", completion: completion.promise };
         }
         return completedDispatch(`run:${value.idempotencyKey}`);
       },
     });
-    const startDirect = (idempotencyKey: string, waitForCompletion = false) =>
-      startRequest(handler, { message: "direct", idempotencyKey, waitForCompletion });
 
     await startDirect("active-owner").handling;
 
@@ -397,8 +342,8 @@ describe("hook fan-out dispatch", () => {
     await Promise.resolve();
     expect(replay.response.getBody()).toBe("");
     expect(activeDispatches).toBe(1);
-    resolveActiveCompletion({ status: "ok", replyDisposition: "silent" });
-    await expectRun(replay, "run:active", { status: "ok", replyDisposition: "silent" });
+    completion.resolve(terminal);
+    await expectRun(replay, "run:active", terminal);
     expect(dispatchAgentHook).toHaveBeenCalledTimes(DEDUPE_MAX + 1);
   });
 
@@ -406,36 +351,34 @@ describe("hook fan-out dispatch", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-05T00:00:00.000Z"));
     try {
-      const { promise: completion, resolve: resolveCompletion } =
-        createDeferred<HookAgentCompletion>();
+      const completion = createDeferred<HookAgentCompletion>();
       let dispatches = 0;
-      const { handler } = createFanOutHandler({
+      const { startDirect } = createFanOutHandler({
         hooksConfig: createHooksConfig(),
         dispatchAgentHook: () => {
           dispatches += 1;
           return dispatches === 1
-            ? { ok: true, runId: "run:active", completion }
+            ? { ok: true, runId: "run:active", completion: completion.promise }
             : completedDispatch("run:duplicate");
         },
       });
-      const startDirect = () =>
-        startRequest(handler, { message: "direct", idempotencyKey: "delayed-admission" });
+      const replay = () => startDirect("delayed-admission");
 
-      await startDirect().handling;
+      await replay().handling;
 
       await vi.advanceTimersByTimeAsync(DEDUPE_TTL_MS + 1);
-      await expectRun(startDirect(), "run:active");
+      await expectRun(replay(), "run:active");
       expect(dispatches).toBe(1);
 
-      resolveCompletion({ status: "ok", replyDisposition: "empty" });
+      completion.resolve({ status: "ok", replyDisposition: "empty" });
       await vi.advanceTimersByTimeAsync(0);
 
       await vi.advanceTimersByTimeAsync(DEDUPE_TTL_MS);
-      await expectRun(startDirect(), "run:active");
+      await expectRun(replay(), "run:active");
       expect(dispatches).toBe(1);
 
       await vi.advanceTimersByTimeAsync(1);
-      await expectRun(startDirect(), "run:duplicate");
+      await expectRun(replay(), "run:duplicate");
       expect(dispatches).toBe(2);
     } finally {
       vi.useRealTimers();

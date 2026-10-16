@@ -77,6 +77,12 @@ function createMockLogger() {
   vi.spyOn(logger, "warn").mockImplementation(() => {});
   return logger;
 }
+function requireScope(method: string, scopes: string[] = []) {
+  const allowed = authorizeOperatorScopesForMethod(method, scopes);
+  if (!allowed.allowed) {
+    throw new Error(`missing scope: ${allowed.missingScope}`);
+  }
+}
 async function dispatchPluginRequest(
   handler: PluginRequestHandler,
   {
@@ -115,13 +121,7 @@ describe("plugin HTTP route runtime scopes", () => {
           auth,
           handler: () => {
             scope = getPluginRuntimeGatewayRequestScope();
-            const allowed = authorizeOperatorScopesForMethod(
-              "agent",
-              scope?.client?.connect.scopes ?? [],
-            );
-            if (!allowed.allowed) {
-              throw new Error(`missing scope: ${allowed.missingScope}`);
-            }
+            requireScope("agent", scope?.client?.connect.scopes);
             return true;
           },
         },
@@ -317,10 +317,7 @@ describe("plugin HTTP route runtime scopes", () => {
         handler: () => {
           const current = getPluginRuntimeGatewayRequestScope()?.client?.connect.scopes;
           scopes.push(current);
-          const allowed = authorizeOperatorScopesForMethod("set-heartbeats", current ?? []);
-          if (!allowed.allowed) {
-            throw new Error(`missing scope: ${allowed.missingScope}`);
-          }
+          requireScope("set-heartbeats", current);
           return true;
         },
       }),
@@ -332,20 +329,20 @@ describe("plugin HTTP route runtime scopes", () => {
 });
 
 type SessionReadMethod = "sessions.list" | "sessions.describe";
+type DispatchResult = Awaited<ReturnType<typeof dispatchGatewayMethod>>;
+type SessionDispatch = (method: SessionReadMethod, key?: string) => Promise<DispatchResult>;
+const sessionKey = (name: string) => `agent:main:${name}`;
 
 async function withCookieSessionReader(
   roles: boolean,
   run: (fixture: {
     readerId: string;
     ownerEmail: string;
-    dispatch: (method: SessionReadMethod, key?: string) => ReturnType<typeof dispatchGatewayMethod>;
+    dispatch: SessionDispatch;
     dispatchHttp: (
       method: SessionReadMethod,
       key?: string,
-    ) => Promise<{
-      statusCode: number;
-      result: Awaited<ReturnType<typeof dispatchGatewayMethod>> | undefined;
-    }>;
+    ) => Promise<{ statusCode: number; result: DispatchResult | undefined }>;
     blockCatalog: () => { entered: Promise<void>; release: () => void };
   }) => Promise<void>,
 ) {
@@ -381,7 +378,7 @@ async function withCookieSessionReader(
           ["dashboard:incognito-http-reader", owner.id, "shared", true],
         ] as const) {
           await upsertSessionEntryCore(
-            { agentId: "main", sessionKey: `agent:main:${name}` },
+            { agentId: "main", sessionKey: sessionKey(name) },
             {
               sessionId: name,
               updatedAt: 1,
@@ -424,7 +421,7 @@ async function withCookieSessionReader(
         }
         const cookie = value.split(";", 1)[0]!;
         const dispatchHttp = async (method: SessionReadMethod, key = "agent:main:shared") => {
-          let result: Awaited<ReturnType<typeof dispatchGatewayMethod>> | undefined;
+          let result: DispatchResult | undefined;
           const handler = setup(
             [
               createRoute({
@@ -460,7 +457,7 @@ async function withCookieSessionReader(
           ).toBe(true);
           return { statusCode: response.res.statusCode, result };
         };
-        const dispatch = async (method: SessionReadMethod, key?: string) => {
+        const dispatch: SessionDispatch = async (method, key) => {
           const { statusCode, result } = await dispatchHttp(method, key);
           expect(statusCode).toBe(200);
           if (!result) {
@@ -493,13 +490,18 @@ async function withCookieSessionReader(
   });
 }
 
-function expectSessionKeys(
-  result: Awaited<ReturnType<typeof dispatchGatewayMethod>>,
-  keys: string[],
-) {
+function expectSessionKeys(result: DispatchResult, names: string[]) {
   expect(result.ok).toBe(true);
   const payload = result.payload as { sessions: Array<{ key: string }> };
-  expect(payload.sessions.map((session) => session.key).toSorted()).toEqual(keys.toSorted());
+  expect(payload.sessions.map((session) => session.key).toSorted()).toEqual(
+    names.map(sessionKey).toSorted(),
+  );
+}
+async function expectSession(dispatch: SessionDispatch, name: string, session: unknown) {
+  expect(await dispatch("sessions.describe", sessionKey(name))).toMatchObject({
+    ok: true,
+    payload: { session },
+  });
 }
 
 describe("plugin HTTP authenticated session reads", () => {
@@ -507,22 +509,18 @@ describe("plugin HTTP authenticated session reads", () => {
     "keeps signed viewer privacy and shared access (roles=%s)",
     async (roles) => {
       await withCookieSessionReader(roles, async ({ dispatch }) => {
-        expectSessionKeys(await dispatch("sessions.list"), [
-          "agent:main:own-draft",
-          "agent:main:shared",
-        ]);
-        expect(await dispatch("sessions.describe")).toMatchObject({
-          ok: true,
-          payload: { session: { key: "agent:main:shared", sharingRole: "viewer" } },
+        expectSessionKeys(await dispatch("sessions.list"), ["own-draft", "shared"]);
+        await expectSession(dispatch, "shared", {
+          key: sessionKey("shared"),
+          sharingRole: "viewer",
         });
         // Discovery always hides foreign drafts. Existing no-roles deployments
         // still allow an explicitly addressed draft; named roles return a null row.
-        expect(await dispatch("sessions.describe", "agent:main:foreign-draft")).toMatchObject({
-          ok: true,
-          payload: {
-            session: roles ? null : { key: "agent:main:foreign-draft", sharingRole: "viewer" },
-          },
-        });
+        await expectSession(
+          dispatch,
+          "foreign-draft",
+          roles ? null : { key: sessionKey("foreign-draft"), sharingRole: "viewer" },
+        );
         expect(
           await dispatch("sessions.describe", "agent:main:dashboard:incognito-http-reader"),
         ).toMatchObject({ ok: false });
@@ -537,10 +535,7 @@ describe("plugin HTTP authenticated session reads", () => {
         true,
         async ({ readerId, ownerEmail, dispatch, dispatchHttp, blockCatalog }) => {
           if (change === "revoke") {
-            expectSessionKeys(await dispatch("sessions.list"), [
-              "agent:main:own-draft",
-              "agent:main:shared",
-            ]);
+            expectSessionKeys(await dispatch("sessions.list"), ["own-draft", "shared"]);
           }
           const gate = blockCatalog();
           const pending = dispatchHttp("sessions.list");
@@ -557,20 +552,11 @@ describe("plugin HTTP authenticated session reads", () => {
             if (change === "merge") {
               expect(response.statusCode).toBe(200);
               expect(response.result).toBeDefined();
-              expectSessionKeys(response.result!, [
-                "agent:main:own-draft",
-                "agent:main:foreign-draft",
-                "agent:main:shared",
-              ]);
-              expect(await dispatch("sessions.describe", "agent:main:foreign-draft")).toMatchObject(
-                {
-                  ok: true,
-                  payload: { session: { sharingRole: "owner" } },
-                },
-              );
+              expectSessionKeys(response.result!, ["own-draft", "foreign-draft", "shared"]);
+              await expectSession(dispatch, "foreign-draft", { sharingRole: "owner" });
             } else {
               expect(response).toEqual({ statusCode: 500, result: undefined });
-              expectSessionKeys(await dispatch("sessions.list"), ["agent:main:own-draft"]);
+              expectSessionKeys(await dispatch("sessions.list"), ["own-draft"]);
               expect(await dispatch("sessions.describe")).toMatchObject({ ok: false });
             }
           } finally {
@@ -711,18 +697,6 @@ describe("plugin HTTP routing", () => {
     expect(res.destroyed).toBe(true);
     expect(end).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith("plugin http route failed (route): Error: boom");
-  });
-
-  it("claims and rejects matched gateway upgrades when auth was not satisfied", async () => {
-    const handleUpgrade = vi.fn(() => true);
-    const { upgrade } = setup([route({ auth: "gateway", handleUpgrade })]);
-    const socket = createMockUpgradeSocket();
-    const closed = once(socket, "close");
-    expect(await upgrade({ url: "/hook" } as IncomingMessage, socket, Buffer.alloc(0))).toBe(true);
-    await closed;
-    expect(handleUpgrade).not.toHaveBeenCalled();
-    expect(socket.destroyed).toBe(true);
-    expect(socket.chunks.join("")).toContain("HTTP/1.1 401 Unauthorized");
   });
 });
 
@@ -938,25 +912,30 @@ describe("plugin suspension admission", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it("rejects a new upgrade with HTTP 503 after admission closes", async () => {
-    const upgrade = vi.fn(() => true);
-    const { upgrade: dispatch } = suspensionSetup([
-      suspensionRoute({ handler: () => false, handleUpgrade: upgrade }),
+  it.each([
+    ["gateway", "401 Unauthorized"],
+    ["plugin", "503 Service Unavailable"],
+  ] as const)("claims and rejects %s upgrades with HTTP %s", async (auth, status) => {
+    const handleUpgrade = vi.fn(() => true);
+    const { upgrade } = suspensionSetup([
+      suspensionRoute({ auth, handler: () => false, handleUpgrade }),
     ]);
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
+    const suspension = auth === "plugin" ? tryBeginGatewaySuspendAdmission(() => {}) : undefined;
+    if (auth === "plugin") {
+      expect(suspension?.commit()).toBe(true);
+    }
     const socket = createMockUpgradeSocket();
     const closed = once(socket, "close");
-
-    await expect(dispatch(socket)).resolves.toBe(true);
+    await expect(upgrade(socket)).resolves.toBe(true);
     await closed;
-
-    expect(upgrade).not.toHaveBeenCalled();
+    expect(handleUpgrade).not.toHaveBeenCalled();
     expect(socket.destroyed).toBe(true);
-    expect(socket.chunks.join("")).toContain("HTTP/1.1 503 Service Unavailable");
-    expect(socket.chunks.join("")).toContain("Gateway websocket admission closed");
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-    expect(suspension?.release()).toBe(true);
+    expect(socket.chunks.join("")).toContain(`HTTP/1.1 ${status}`);
+    if (auth === "plugin") {
+      expect(socket.chunks.join("")).toContain("Gateway websocket admission closed");
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(suspension?.release()).toBe(true);
+    }
   });
 
   it("releases upgrade admission after fallthrough and failure", async () => {
