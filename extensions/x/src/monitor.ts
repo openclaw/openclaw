@@ -424,7 +424,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
           },
         },
         delivery: {
-          // Only declared successes reach X. Failures go to the configured route or are dropped.
+          // Runtime status notices need no model outcome. Model failures remain withheld.
           preparePayload: async (payload, info) => {
             if (info.kind !== "final") {
               return null;
@@ -444,7 +444,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
               log.info(`reply dropped post=${post.id} reason=${text ? "silent" : "empty"}`);
               return null;
             }
-            if (turnOutcome !== "success") {
+            if (turnOutcome !== "success" && !payload.isStatusNotice) {
               await withhold(turnOutcome, text);
               return null;
             }

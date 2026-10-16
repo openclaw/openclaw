@@ -84,16 +84,26 @@ export function registerFollowupOwnerPolicyCases({
   admitFollowupTurn: typeof admitFollowupTurnImpl;
   state: { admitReply: Mock; resolveConfig: Mock; preflight: Mock };
 }): void {
-  it.each([false, true])(
-    "resolves owner privileges at the admission fence after enqueue owner=%s",
-    async (enqueuedOwner) => {
+  it.each([
+    { match: "sender-id", enqueuedOwner: false },
+    { match: "sender-id", enqueuedOwner: true },
+    { match: "sender-e164", enqueuedOwner: false },
+    { match: "sender-e164", enqueuedOwner: true },
+  ] as const)(
+    "resolves $match owner privileges at the admission fence after enqueue owner=$enqueuedOwner",
+    async ({ match, enqueuedOwner }) => {
       const queued = createRun();
+      const channel = match === "sender-e164" ? "whatsapp" : "telegram";
+      const senderId = match === "sender-e164" ? "123456789@lid" : "alice";
+      const senderE164 = match === "sender-e164" ? "+15555550123" : undefined;
+      const configuredOwner = `${channel}:${senderE164 ?? senderId}`;
+      const otherOwner = `${channel}:other`;
       const originalConfig = {
-        commands: { ownerAllowFrom: [enqueuedOwner ? "telegram:alice" : "telegram:other"] },
+        commands: { ownerAllowFrom: [enqueuedOwner ? configuredOwner : otherOwner] },
       };
       const admittedOwner = !enqueuedOwner;
       const admittedConfig = {
-        commands: { ownerAllowFrom: [admittedOwner ? "telegram:alice" : "telegram:other"] },
+        commands: { ownerAllowFrom: [admittedOwner ? configuredOwner : otherOwner] },
       };
       const laterConfig = { ...admittedConfig, tools: { deny: ["message"] } };
       const operation = createOperation();
@@ -104,10 +114,11 @@ export function registerFollowupOwnerPolicyCases({
       queued.run.config = originalConfig;
       queued.readAdmissionConfig = createRuntimeConfigReader(originalConfig);
       queued.run.requesterOrigin = {
-        sessionKey: "agent:original:telegram:direct:alice",
-        messageProvider: "telegram",
+        sessionKey: `agent:original:${channel}:direct:${senderId}`,
+        messageProvider: channel,
         accountId: "work",
-        senderId: "alice",
+        senderId,
+        senderE164,
       };
       queued.run.senderId = "receiver";
       queued.run.senderIsOwner = enqueuedOwner;
@@ -128,6 +139,8 @@ export function registerFollowupOwnerPolicyCases({
         }
         const execution = result.turn.queued;
         expect(execution.run.config).toEqual(admittedConfig);
+        expect(execution.run.requesterOrigin?.senderId).toBe(senderId);
+        expect(execution.run.requesterOrigin?.senderE164).toBe(senderE164);
         expect(execution.run.senderIsOwner).toBe(admittedOwner);
         expect(execution.run.traceAuthorized).toBe(admittedOwner);
         expect(resolveAdmittedToolAuthority(result.turn).capabilityProfile.sender.isOwner).toBe(
@@ -142,6 +155,8 @@ export function registerFollowupOwnerPolicyCases({
         } else {
           expect(assertOwner).toThrow("Channel operator authority changed");
         }
+        expect(queued.run.requesterOrigin?.senderId).toBe(senderId);
+        expect(queued.run.requesterOrigin?.senderE164).toBe(senderE164);
         expect(queued.run.senderIsOwner).toBe(enqueuedOwner);
         expect(queued.run.config).toBe(originalConfig);
       } finally {

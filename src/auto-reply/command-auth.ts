@@ -579,15 +579,17 @@ export async function resolveCommandAuthorizationAsync(
 
 export function isConfiguredCommandOwner(
   cfg: OpenClawConfig,
-  requester: { channel?: string; accountId?: string; senderId?: string },
+  requester: { channel?: string; accountId?: string; senderId?: string; senderE164?: string },
 ): boolean {
   const providerId = normalizeAnyChannelId(requester.channel) ?? requester.channel;
   const plugin = providerId ? getLoadedChannelPluginForRead(providerId) : undefined;
   const params = { cfg, plugin, providerId, accountId: requester.accountId };
   const owners = stripWildcardAllowFrom(resolveOwnerAllowFromList(params));
-  return resolveSenderCandidates({ ...params, senderId: requester.senderId }).some((sender) =>
-    owners.includes(sender),
-  );
+  return resolveSenderCandidates({
+    ...params,
+    senderId: requester.senderId,
+    senderE164: requester.senderE164,
+  }).some((sender) => owners.includes(sender));
 }
 
 /** Synchronous CLI capture; deferred effects retain its original person-access grant. */
@@ -673,7 +675,7 @@ export type PreparedCommandOwnerAuthority = Readonly<{
 export async function prepareCommandOwnerAuthority(
   cfg: OpenClawConfig,
   requester:
-    | { channel?: string; accountId?: string; senderId?: string }
+    | { channel?: string; accountId?: string; senderId?: string; senderE164?: string }
     | CommandOwnerReference
     | ResolvedChannelOperatorIdentity,
   stateOptions: OpenClawStateDatabaseOptions = {},

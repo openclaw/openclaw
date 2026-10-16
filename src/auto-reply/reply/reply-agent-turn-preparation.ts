@@ -297,6 +297,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
           channel: origin.messageProvider,
           accountId: origin.accountId ?? undefined,
           senderId: origin.senderId ?? undefined,
+          senderE164: origin.senderE164 ?? undefined,
         });
         assertAdmissionCurrent();
         run.senderIsOwner = owner.isCurrent(config);

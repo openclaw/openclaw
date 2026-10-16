@@ -10,6 +10,8 @@ import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import { resolveEffectiveToolPolicy, resolveTrustedGroupId } from "./agent-tools.policy.js";
 import type { DelegatedToolDenyFloor } from "./delegated-tool-policy.js";
 import { normalizeInheritedToolDenylist } from "./inherited-tool-deny.js";

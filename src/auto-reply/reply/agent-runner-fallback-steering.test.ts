@@ -349,7 +349,8 @@ describe("ordinary steering into automatic model fallback", () => {
           });
           operation.attachBackend({
             kind: "embedded",
-            terminalReplyExpectation: "result-required",
+            terminalReplyExpectation:
+              explicitSteer || collaborative ? "required" : "result-required",
             supportsTranscriptCommitWait: true,
             cancel: vi.fn(),
             messageInjectionV2: {

@@ -33,6 +33,7 @@ import {
   clearAgentRunContext,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import {
@@ -59,6 +60,63 @@ export function registerPendingRequesterAuthorityCases({
     common: Parameters<typeof runPreparedReply>[0]["ctx"],
   ) => Pick<Parameters<typeof runPreparedReply>[0], "ctx" | "sessionCtx">;
 }): void {
+  it.each([
+    {
+      name: "direct From without sender fields",
+      context: { ChatType: "direct", From: " discord:alice " },
+      senderId: "discord:alice",
+      senderE164: undefined,
+    },
+    {
+      name: "direct From with blank sender fields",
+      context: { ChatType: "direct", From: "discord:alice", SenderId: " ", SenderE164: " " },
+      senderId: "discord:alice",
+      senderE164: undefined,
+    },
+    {
+      name: "group input without a sender",
+      context: { ChatType: "group", From: "discord:alice" },
+      senderId: undefined,
+      senderE164: undefined,
+    },
+    {
+      name: "conversation-shaped From without chat type",
+      context: { From: "discord:channel:123" },
+      senderId: undefined,
+      senderE164: undefined,
+    },
+    {
+      name: "explicit raw sender fields",
+      context: {
+        ChatType: "direct",
+        From: "discord:alice",
+        SenderId: "transport-identity",
+        SenderE164: "+15550100100",
+      },
+      senderId: "transport-identity",
+      senderE164: "+15550100100",
+    },
+    {
+      name: "phone identity without a sender id",
+      context: { ChatType: "direct", From: "discord:alice", SenderE164: "+15550100100" },
+      senderId: undefined,
+      senderE164: "+15550100100",
+    },
+  ])("captures requester identity for $name", async ({ context, senderId, senderE164 }) => {
+    const params = baseParams();
+    params.command.senderId = "configured-owner-alias";
+    await runPrepared({
+      ...params,
+      conversation: undefined,
+      ...turn("continue the work", { ...createProviderSurface("discord"), ...context }),
+    });
+    const { followupRun } = requireRunReplyAgentCall();
+    expect(followupRun.run.requesterOrigin).toMatchObject({ senderId, senderE164 });
+    expect(readUserTurnRequesterOrigin(followupRun.userTurnTranscriptRecorder)).toMatchObject({
+      senderId,
+      senderE164,
+    });
+  });
   it.each(["fresh-non-owner", "fresh-owner", "inter-session", "heartbeat", "replay"] as const)(
     "retires pending owner task authority only for new channel input: %s",
     async (kind) => {

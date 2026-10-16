@@ -31,11 +31,11 @@ import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatError, broadcastChatTerminal } from "./chat-broadcast.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
-import type { createChatSendInjectionDisposition } from "./chat-send-message-injection.js";
 import {
   readChatSendReplyPayload,
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
+import type { createChatSendInjectionDisposition } from "./chat-send-message-injection.js";
 import {
   classifyAcceptedChatSendFailure,
   shouldRetainAcceptedChatSendRetryIdentity,

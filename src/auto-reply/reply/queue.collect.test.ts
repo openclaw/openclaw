@@ -48,7 +48,6 @@ import {
   FollowupRunDeferredError,
   isFollowupRunAborted,
   type InternalFollowupRun,
-  type QueuedFollowupReplyBatch,
 } from "./queue/types.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-overflow-session-");

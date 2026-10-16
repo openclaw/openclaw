@@ -465,6 +465,7 @@ export async function prepareAgentRunUserTurn(params: {
             channel: requesterOrigin.messageProvider,
             accountId: requesterOrigin.accountId ?? undefined,
             senderId: requesterOrigin.senderId ?? undefined,
+            senderE164: requesterOrigin.senderE164 ?? undefined,
           })
         : undefined;
     params.assertCurrent();

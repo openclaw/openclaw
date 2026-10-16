@@ -20,6 +20,7 @@ export function registerAgentOwnerPolicyCases(): void {
     admin: boolean;
     authenticatedProfile?: true;
     requesterOrigin?: RequesterOrigin;
+    ownerAllowFrom?: string[];
     expectedOwner: boolean;
     expectedSenderRestriction?: true;
   }>([
@@ -62,6 +63,19 @@ export function registerAgentOwnerPolicyCases(): void {
       expectedSenderRestriction: true,
     },
     {
+      name: "configured external owner by preserved E164",
+      admin: false,
+      requesterOrigin: {
+        sessionKey: "agent:main:source",
+        messageProvider: "whatsapp",
+        senderId: "123456789@lid",
+        senderE164: "+15555550123",
+      },
+      ownerAllowFrom: ["whatsapp:+15555550123"],
+      expectedOwner: true,
+      expectedSenderRestriction: true,
+    },
+    {
       name: "System admin with session-only origin",
       admin: true,
       requesterOrigin: { sessionKey: "agent:main:source" },
@@ -91,10 +105,14 @@ export function registerAgentOwnerPolicyCases(): void {
       admin,
       authenticatedProfile,
       requesterOrigin,
+      ownerAllowFrom,
       expectedOwner,
       expectedSenderRestriction,
     }) => {
-      const cfg = { tools: { toolsBySender: { "*": { deny: ["exec"] } } } };
+      const cfg = {
+        ...(ownerAllowFrom ? { commands: { ownerAllowFrom } } : {}),
+        tools: { toolsBySender: { "*": { deny: ["exec"] } } },
+      };
       mocks.loadConfigReturn = cfg;
       primeMainAgentRun({ cfg });
       mocks.agentCommand.mockClear();
