@@ -27,10 +27,7 @@ const browser = vi.hoisted(() => ({
   ownership: vi.fn(),
   closeOwned: vi.fn(),
 }));
-vi.mock("./browser/client.js", () => ({
-  browserOpenTab: browser.open,
-  browserTabs: browser.tabs,
-}));
+vi.mock("./browser/client.js", () => ({ browserOpenTab: browser.open, browserTabs: browser.tabs }));
 vi.mock("./browser/cdp.helpers.js", () => ({
   resolveCdpTabOwnership: browser.ownership,
   closeTrackedCdpTarget: browser.closeOwned,

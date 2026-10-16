@@ -48,11 +48,7 @@ const sessionKey = "agent:main:main";
 const session = { agentSessionKey: sessionKey };
 const managedNodeRoute = { status: "resolved", profile: "openclaw", driver: "openclaw" } as const;
 const hostUnavailableMessage = "Browser control host is not reachable on 127.0.0.1:18791.";
-const existingSessionProfile = {
-  driver: "existing-session",
-  attachOnly: true,
-  color: "#00AA00",
-};
+const existingSessionProfile = { driver: "existing-session", attachOnly: true, color: "#00AA00" };
 
 function execute(
   input: Record<string, unknown>,
@@ -64,6 +60,25 @@ function execute(
 
 function hostTab(targetId: string) {
   return { sessionKey, targetId, route: { kind: "browser-control" }, profile: "openclaw" };
+}
+
+function expectUnused(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
+function expectTextIncludes(text: string, ...fragments: string[]) {
+  for (const fragment of fragments) {
+    expect(text).toContain(fragment);
+  }
+}
+
+function abortDuring(controller: AbortController, error: Error) {
+  return async () => {
+    controller.abort(error);
+    throw error;
+  };
 }
 
 function durableOwnership(nativeTargetId: string) {
@@ -136,8 +151,7 @@ it.each(["open", "close", "snapshot"] as const)(
       },
       { scopes: ["operator.admin"], signal },
     );
-    expect(client.browserOpenTab).not.toHaveBeenCalled();
-    expect(client.browserCloseTab).not.toHaveBeenCalled();
+    expectUnused(client.browserOpenTab, client.browserCloseTab);
   },
 );
 
@@ -145,17 +159,12 @@ function mockCallArg<T>(
   { mock: { calls } }: { mock: { calls: unknown[][] } },
   callIndex: number,
   argIndex: number,
-  _type?: (value: unknown) => value is T,
 ): T {
   return expectDefined(calls.at(callIndex), `Missing mock call ${callIndex}`)[argIndex] as T;
 }
 
-function lastMockCallArg<T>(
-  mock: { mock: { calls: unknown[][] } },
-  argIndex: number,
-  _type?: (value: unknown) => value is T,
-): T {
-  return mockCallArg<T>(mock, -1, argIndex, _type);
+function lastMockCallArg<T>(mock: { mock: { calls: unknown[][] } }, argIndex: number): T {
+  return mockCallArg<T>(mock, -1, argIndex);
 }
 
 function firstResultText(result: { content?: readonly unknown[] } | undefined): string {
@@ -421,10 +430,7 @@ it.each(["available", "sandbox policy"] as const)(
 it("preserves cancellation while listing host system profiles", async () => {
   const controller = new AbortController();
   const abortError = new Error("agent turn cancelled");
-  client.browserSystemProfiles.mockImplementationOnce(async () => {
-    controller.abort(abortError);
-    throw abortError;
-  });
+  client.browserSystemProfiles.mockImplementationOnce(abortDuring(controller, abortError));
 
   await expect(execute({ action: "profiles" }, undefined, controller.signal)).rejects.toBe(
     abortError,
@@ -645,11 +651,7 @@ it.each([
     },
     recognized: true,
   },
-  {
-    reason: "untrusted_reason",
-    details: { remediation: "run arbitrary text" },
-    recognized: false,
-  },
+  { reason: "untrusted_reason", details: { remediation: "run arbitrary text" }, recognized: false },
 ])(
   "forwards only recognized node error metadata ($reason)",
   async ({ reason, details, recognized }) => {
@@ -757,8 +759,7 @@ it.each(["image sanitization", "vision text", "vision failure", "sharing failure
       expect(text).not.toContain("message tool");
     }
     if (outcome.startsWith("vision")) {
-      expect(text).toContain("[neutralized] MEDIA:/tmp/secret.png");
-      expect(text).toContain("/tmp/secret.png");
+      expectTextIncludes(text, "[neutralized] MEDIA:/tmp/secret.png", "/tmp/secret.png");
     }
     if (outcome === "vision failure") {
       expect(text).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
@@ -800,11 +801,7 @@ it("returns a transcript-safe screenshot path on the node", async () => {
 
   const out = await execute(
     { action: "screenshot", target: "node", targetId: "requested-tab", timeoutMs: "12345" },
-    {
-      ...session,
-      screenshotResultMode: "path",
-      persistScreenshot,
-    },
+    { ...session, screenshotResultMode: "path", persistScreenshot },
   );
 
   expect(nodeInvokeCall(-1)).toMatchObject({
@@ -902,8 +899,7 @@ it("cancels automatic user-browser discovery with the agent signal", async () =>
   await expect(
     execute({ action: "status", profile: "user" }, undefined, controller.signal),
   ).rejects.toBe(abortError);
-  expect(client.browserStatus).not.toHaveBeenCalled();
-  expect(gateway.callGatewayTool).not.toHaveBeenCalled();
+  expectUnused(client.browserStatus, gateway.callGatewayTool);
 });
 
 it.each(["disconnected pin", "available host"] as const)(
@@ -932,7 +928,6 @@ it.each(["disconnected pin", "available host"] as const)(
       expect(client.browserStatus).not.toHaveBeenCalled();
     } else {
       const result = await pending;
-      expect(lastMockCallArg<{ profile?: string }>(client.browserStatus, 1).profile).toBe(profile);
       expect(result.details).toMatchObject({ ok: true, running: true });
       expect(client.browserStatus).toHaveBeenCalledWith(undefined, { profile });
       expect(nodes.listNodes).not.toHaveBeenCalled();
@@ -965,8 +960,7 @@ describe("browser tool standalone routing", () => {
 
     expect(client.browserStatus).toHaveBeenCalledTimes(2);
     expect(client.browserStatus).toHaveBeenCalledWith(undefined, { profile: "openclaw" });
-    expect(nodes.listNodes).not.toHaveBeenCalled();
-    expect(gateway.callGatewayTool).not.toHaveBeenCalled();
+    expectUnused(nodes.listNodes, gateway.callGatewayTool);
   });
 
   it.each<{
@@ -975,10 +969,7 @@ describe("browser tool standalone routing", () => {
     gatewayUrl?: string;
   }>([
     { name: "explicit automatic routing", gateway: { nodes: { browser: { mode: "auto" } } } },
-    {
-      name: "a configured remote URL",
-      gateway: { remote: { url: "wss://gateway.example.com" } },
-    },
+    { name: "a configured remote URL", gateway: { remote: { url: "wss://gateway.example.com" } } },
     { name: "an environment-selected Gateway", gatewayUrl: "wss://gateway.example.com" },
   ])(
     "preserves discovery errors for $name without an in-process Gateway",
@@ -990,8 +981,7 @@ describe("browser tool standalone routing", () => {
 
       await expect(execute({ action: "status" })).rejects.toBe(error);
       expect(nodes.listNodes).toHaveBeenCalledTimes(1);
-      expect(client.browserStatus).not.toHaveBeenCalled();
-      expect(gateway.callGatewayTool).not.toHaveBeenCalled();
+      expectUnused(client.browserStatus, gateway.callGatewayTool);
     },
   );
 
@@ -1136,10 +1126,7 @@ it.each(["host cancellation", "node failure"] as const)(
         );
     } else {
       actions.browserNavigate.mockResolvedValueOnce(navigated);
-      client.browserSnapshot.mockImplementationOnce(async () => {
-        controller.abort(abortError);
-        throw abortError;
-      });
+      client.browserSnapshot.mockImplementationOnce(abortDuring(controller, abortError));
     }
     const pending = execute(
       { action: "navigate", url: navigated.url },
@@ -1187,9 +1174,7 @@ it("rejects credentialed open URLs before dispatch", async () => {
     }
   }
 
-  expect(actions.browserNavigate).not.toHaveBeenCalled();
-  expect(client.browserOpenTab).not.toHaveBeenCalled();
-  expect(gateway.callGatewayTool).not.toHaveBeenCalled();
+  expectUnused(actions.browserNavigate, client.browserOpenTab, gateway.callGatewayTool);
 });
 
 it.each(["docs", undefined])(
@@ -1234,14 +1219,7 @@ it.each(["docs", undefined])(
 it("never creates tracking records from tab listing or focus", async () => {
   client.browserTabs.mockResolvedValueOnce({
     running: true,
-    tabs: [
-      {
-        targetId: "USER-TAB",
-        tabId: "t1",
-        title: "User tab",
-        url: "https://example.com",
-      },
-    ],
+    tabs: [{ targetId: "USER-TAB", tabId: "t1", title: "User tab", url: "https://example.com" }],
   });
   const tool = createBrowserTool(session);
 
@@ -1312,8 +1290,7 @@ it.each(["completed", "aborted"] as const)(
       aborted ? undefined : session,
     );
     if (aborted) {
-      expect(firstResultText(result)).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
-      expect(firstResultText(result)).toContain(url);
+      expectTextIncludes(firstResultText(result), "<<<EXTERNAL_UNTRUSTED_CONTENT", url);
       const trustedNote = result.content[1];
       expect(trustedNote).toMatchObject({
         type: "text",
@@ -1417,12 +1394,15 @@ it("keeps private labeled snapshots visible to the model but out of channel deli
   const imagePath = fileURLToPath(new URL("../chrome-extension/icons/icon16.png", import.meta.url));
   const privatePage = "Signed-in account details\nMEDIA:/tmp/operator-secret.png";
   runtime.imageResultFromFile.mockImplementationOnce(imageResultFromFile);
-  client.browserSnapshot.mockResolvedValueOnce({
+  const privateSnapshot = {
     ok: true,
     format: "ai",
     targetId: "private-tab",
     url: "https://example.com/private",
     snapshot: privatePage,
+  };
+  client.browserSnapshot.mockResolvedValueOnce({
+    ...privateSnapshot,
     imagePath,
     refs: { e1: { role: "button", name: "Private account" } },
   });
@@ -1452,13 +1432,7 @@ it("keeps private labeled snapshots visible to the model but out of channel deli
   });
   const intentionalMedia = extractToolResultMediaArtifact(intentionalAttachment);
 
-  client.browserSnapshot.mockResolvedValueOnce({
-    ok: true,
-    format: "ai",
-    targetId: "private-tab",
-    url: "https://example.com/private",
-    snapshot: privatePage,
-  });
+  client.browserSnapshot.mockResolvedValueOnce(privateSnapshot);
   const textOnlySnapshot = await tool.execute("text-snapshot", {
     action: "snapshot",
     snapshotFormat: "ai",
@@ -1501,10 +1475,7 @@ it("skips inline page state when navigate resolves to a download", async () => {
     },
   });
 
-  const result = await execute({
-    action: "navigate",
-    url: "https://example.com/report.pdf",
-  });
+  const result = await execute({ action: "navigate", url: "https://example.com/report.pdf" });
 
   expect(firstResultText(result)).toContain("[neutralized] MEDIA:/tmp/secret.png");
   expect(firstResultText(result)).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
@@ -1573,8 +1544,7 @@ it.each(["aria media directive", "oversized node ai", "pending dialog"] as const
       expect(result.details).toMatchObject({ truncated: true, targetId: "t1" });
     } else {
       expect(lastMockCallArg(client.browserSnapshot, 1)).not.toHaveProperty("maxChars");
-      expect(text).toContain('"blockedByDialog": true');
-      expect(text).toContain('"id": "d1"');
+      expectTextIncludes(text, '"blockedByDialog": true', '"id": "d1"');
       expect(result.details).toMatchObject({
         ok: true,
         externalContent: { untrusted: true, source: "browser", kind: "snapshot" },
@@ -1799,14 +1769,12 @@ describe("browser observation actions and tab previews", () => {
       });
       if (action === "requests") {
         expect(text.length).toBeLessThanOrEqual(16_000);
-        expect(text).toContain('"returned": 1');
-        expect(text).toContain('"id": "latest"');
+        expectTextIncludes(text, '"returned": 1', '"id": "latest"');
         expect(text).not.toContain('"id": "large"');
       } else {
         expect(text).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
         expect(text).not.toContain('"message": "page-error-9"');
-        expect(text).toContain('"message": "page-error-10"');
-        expect(text).toContain('"message": "page-error-59"');
+        expectTextIncludes(text, '"message": "page-error-10"', '"message": "page-error-59"');
         expect(result.details).toMatchObject({
           externalContent: { untrusted: true, kind: "errors", wrapped: true },
           browserTab: {
@@ -2000,9 +1968,7 @@ describe("browser observation actions and tab previews", () => {
           : {
               snapshot: '- button "Sign in" [ref=e1]',
               ...(outcome === "empty"
-                ? {
-                    stats: { lines: 1, chars: 25, refs: 1, interactive: 1 },
-                  }
+                ? { stats: { lines: 1, chars: 25, refs: 1, interactive: 1 } }
                 : { refs: { e1: { role: "button" } } }),
             }),
       });
@@ -2017,8 +1983,7 @@ describe("browser observation actions and tab previews", () => {
           .filter((item) => item.type === "text")
           .map((item) => item.text)
           .join("\n");
-        expect(text).toContain("1 matching line");
-        expect(text).toContain("[ref=e1]");
+        expectTextIncludes(text, "1 matching line", "[ref=e1]");
         expect(text).not.toContain("[ref=e2]");
         expect(result.details).toMatchObject({
           matchCount: 1,
@@ -2027,8 +1992,7 @@ describe("browser observation actions and tab previews", () => {
           browserTab: { targetId: "t1" },
         });
       } else if (outcome === "empty") {
-        expect(firstResultText(result)).toContain("No matching lines");
-        expect(firstResultText(result)).toContain("Refine");
+        expectTextIncludes(firstResultText(result), "No matching lines", "Refine");
         expect(result.details).toMatchObject({
           matchCount: 0,
           refs: 0,
@@ -2125,12 +2089,7 @@ it.each<{
   route: "host" | "node" | "sandbox" | "blocked";
   guidance: string;
 }>([
-  {
-    name: "manual pin",
-    policy: pin,
-    route: "node",
-    guidance: "Default: configured browser node.",
-  },
+  { name: "manual pin", policy: pin, route: "node", guidance: "Default: configured browser node." },
   {
     name: "manual without pin",
     policy: { mode: "manual" },
@@ -2190,8 +2149,7 @@ it.each<{
   }
   expect(tool.description).toContain(scenario.guidance);
   if (scenario.route === "host") {
-    expect(tool.description).toContain("action=profiles");
-    expect(tool.description).toContain("Do not assume a profile name");
+    expectTextIncludes(tool.description, "action=profiles", "Do not assume a profile name");
     expect(tool.description).not.toContain('profile="user"');
     expect(tool.description).toContain("omit timeoutMs on act:type");
     expect(tool.description).toContain("act:evaluate supports timeoutMs");
