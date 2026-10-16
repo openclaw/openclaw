@@ -241,10 +241,10 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         `INSERT INTO "${globalAnchor.namespace}".agent_databases (agent_id, path, schema_version, last_seen_at) VALUES ('retained', $1, $2, 1)`,
         [agentPath, OPENCLAW_AGENT_SCHEMA_VERSION],
       );
-      const postgresConfig: OpenClawConfig = {
+      const postgresConfig = {
         ...config,
         database: { ...config.database, engine: "postgres" },
-      };
+      } satisfies OpenClawConfig;
       const deferredRegistry = await preparePostgresBackupDiscovery({
         stateDir: state.stateDir,
         config: postgresConfig,

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
@@ -46,7 +47,7 @@ export async function preflightOpenClawDatabaseSchemaContexts(options: {
     // exact roots share discovery without reordering other profiles' refusals.
     if (
       previous?.env.OPENCLAW_STATE_DIR === stateDir &&
-      previous.databaseEngineSelection === context.databaseEngineSelection
+      isDeepStrictEqual(previous.databaseEngineSelection, context.databaseEngineSelection)
     ) {
       previous.configuredAgentDatabaseCandidatePaths.push(
         ...context.configuredAgentDatabaseCandidatePaths,
