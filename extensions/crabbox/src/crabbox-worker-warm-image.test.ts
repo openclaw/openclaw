@@ -2,7 +2,6 @@ import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import {
@@ -10,13 +9,11 @@ import {
   createWorkerArchiveFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
-import {
-  listCrabboxWarmImages,
-  recoverCrabboxWarmImageCapture,
-} from "./crabbox-worker-warm-image-store.js";
+import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
   captureWarmImage,
   createWarmProvider,
+  jsonResult,
   provisionWarmProfile,
   CHECKPOINT_ID,
   CLASSLESS_PROFILE,
@@ -125,27 +122,25 @@ describe("Crabbox profile warm images", () => {
     const unrelatedTemp = path.join(tmp, "unrelated", "keep");
     const repoConfig = path.join(workdir, ".npmrc");
     const homeConfig = path.join(home, ".gitconfig");
-    fs.mkdirSync(workspace, { recursive: true });
-    fs.mkdirSync(path.dirname(npmCache), { recursive: true });
+    const write = (file: string, contents: string) => {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, contents);
+    };
     fs.mkdirSync(bin);
     const runtimeNode = path.join(home, ".openclaw-worker", "runtime-node", "node");
     fs.mkdirSync(path.dirname(runtimeNode), { recursive: true });
     fs.symlinkSync(process.execPath, runtimeNode);
     fs.writeFileSync(path.join(bin, "node"), "#!/bin/sh\nexit 97\n", { mode: 0o700 });
-    fs.mkdirSync(path.dirname(envFile), { recursive: true });
-    fs.mkdirSync(path.dirname(scrubScript), { recursive: true });
-    fs.writeFileSync(envFile, "CRABBOX_WORKER_BOOTSTRAP_TOKEN=synthetic-expired-token");
-    fs.writeFileSync(egressEnvFile, "SETUP_TOKEN=synthetic-sentinel");
+    write(envFile, "CRABBOX_WORKER_BOOTSTRAP_TOKEN=synthetic-expired-token");
+    write(egressEnvFile, "SETUP_TOKEN=synthetic-sentinel");
     for (const file of [setupCa, fixedSetupCa, unrelatedTemp, repoConfig, homeConfig]) {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, "preserved configuration or temporary data");
+      write(file, "preserved configuration or temporary data");
     }
-    fs.writeFileSync(scrubScript, scrubInput);
-    fs.writeFileSync(path.join(workspace, "private.txt"), "session workspace bytes");
-    fs.writeFileSync(npmCache, "reusable npm package");
+    write(scrubScript, scrubInput);
+    write(path.join(workspace, "private.txt"), "session workspace bytes");
+    write(npmCache, "reusable npm package");
     for (const file of [path.join(sshWorkspace, "private.txt"), bundle, gitSeed]) {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, file);
+      write(file, file);
     }
     const runtime = path.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
     fs.mkdirSync(runtime, { recursive: true });
@@ -184,7 +179,7 @@ describe("Crabbox profile warm images", () => {
         await nodeClosed;
       }
     };
-    try {
+    const runScrub = () =>
       execFileSync("/bin/bash", [scrubScript], {
         cwd: workdir,
         env: {
@@ -194,6 +189,8 @@ describe("Crabbox profile warm images", () => {
           PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
         },
       });
+    try {
+      runScrub();
       if (nodeClosed) {
         expect((await nodeClosed)[1]).toBe("SIGTERM");
       }
@@ -202,54 +199,37 @@ describe("Crabbox profile warm images", () => {
     }
     expect(fs.existsSync(runtime)).toBe(true);
     expect(fs.readlinkSync(runtimeNode)).toBe(process.execPath);
-    expect(fs.existsSync(path.join(home, ".openclaw", "cloud-workers"))).toBe(false);
-    expect(fs.existsSync(sshWorkspace)).toBe(false);
-    expect(fs.existsSync(envFile)).toBe(false);
-    expect(fs.existsSync(egressEnvFile)).toBe(false);
-    expect(fs.existsSync(path.dirname(setupCa))).toBe(false);
-    expect(fs.existsSync(path.dirname(fixedSetupCa))).toBe(false);
+    for (const file of [
+      path.join(home, ".openclaw", "cloud-workers"),
+      sshWorkspace,
+      envFile,
+      egressEnvFile,
+      path.dirname(setupCa),
+      path.dirname(fixedSetupCa),
+      scrubScript,
+    ]) {
+      expect(fs.existsSync(file)).toBe(false);
+    }
     for (const file of [unrelatedTemp, repoConfig, homeConfig]) {
       expect(fs.readFileSync(file, "utf8")).toBe("preserved configuration or temporary data");
     }
-    expect(fs.existsSync(scrubScript)).toBe(false);
     expect(fs.readFileSync(npmCache, "utf8")).toBe("reusable npm package");
     expect(fs.readFileSync(bundle, "utf8")).toBe(bundle);
     expect(fs.readFileSync(gitSeed, "utf8")).toBe(gitSeed);
-    fs.mkdirSync(path.dirname(envFile), { recursive: true });
-    fs.mkdirSync(path.dirname(scrubScript), { recursive: true });
-    fs.writeFileSync(envFile, "CRABBOX_WORKER_BOOTSTRAP_TOKEN=synthetic-expired-token");
-    fs.writeFileSync(scrubScript, scrubInput);
+    write(envFile, "CRABBOX_WORKER_BOOTSTRAP_TOKEN=synthetic-expired-token");
+    write(scrubScript, scrubInput);
     fs.writeFileSync(
       path.join(bin, "rm"),
       '#!/bin/sh\ncase "$*" in *".crabbox/env"*) exit 7;; esac\nexec /bin/rm "$@"\n',
       { mode: 0o700 },
     );
-    expect(() =>
-      execFileSync("/bin/bash", [scrubScript], {
-        cwd: workdir,
-        env: {
-          ...process.env,
-          HOME: home,
-          TMPDIR: tmp,
-          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-        },
-      }),
-    ).toThrow();
+    expect(runScrub).toThrow();
     expect(fs.existsSync(envFile)).toBe(true);
-    expect(captureCalls[1]?.argv.slice(1)).toEqual([
-      "checkpoint",
-      "create",
-      "--provider",
-      "aws",
-      "--id",
-      LEASE_ID,
-      "--mode",
-      "native",
-      "--wait",
-      "--wait-timeout",
-      "2700000ms",
-      "--json",
-    ]);
+    expect(captureCalls[1]?.argv.slice(1)).toEqual(
+      `checkpoint create --provider aws --id ${LEASE_ID} --mode native --wait --wait-timeout 2700000ms --json`.split(
+        " ",
+      ),
+    );
     calls.length = 0;
     await provisionWarmProfile(provider, PROFILE, `provision:v2:${"2".repeat(64)}`);
     expect(calls.some(({ argv }) => argv[2] === "inspect")).toBe(false);
@@ -258,46 +238,27 @@ describe("Crabbox profile warm images", () => {
   });
 
   it.each([
-    {
-      backend: "azure",
-      kind: "azure-os-disk-snapshot",
-      nativeState: "available",
-      sourceLifecycleMs: 0,
-    },
-    {
-      backend: "daytona",
-      kind: "daytona-snapshot",
-      nativeState: "active",
-      sourceLifecycleMs: 3 * 60_000,
-    },
-    {
-      backend: "machine0",
-      kind: "machine0-image",
-      nativeState: "ACTIVE",
-      sourceLifecycleMs: 30 * 60_000,
-    },
-  ])(
-    "reuses waited $backend images without repeating readiness inspection",
-    async ({ backend, kind, nativeState, sourceLifecycleMs }) => {
+    ["azure", "azure-os-disk-snapshot", "available", 0],
+    ["daytona", "daytona-snapshot", "active", 3 * 60_000],
+    ["machine0", "machine0-image", "ACTIVE", 30 * 60_000],
+  ] as const)(
+    "reuses waited %s images without repeating readiness inspection",
+    async (backend, kind, nativeState, sourceLifecycleMs) => {
       const profile = { ...PROFILE, provider: backend };
       const { provider, calls } = createWarmProvider(({ argv }) => {
         if (argv[2] === "create") {
-          return commandResult({
-            stdout: JSON.stringify({
-              id: CHECKPOINT_ID,
-              kind,
-              leaseId: LEASE_ID,
-              native: { state: nativeState },
-            }),
+          return jsonResult({
+            id: CHECKPOINT_ID,
+            kind,
+            leaseId: LEASE_ID,
+            native: { state: nativeState },
           });
         }
         if (argv[2] === "inspect") {
-          return commandResult({
-            stdout: JSON.stringify({
-              localState: "metadata_available",
-              providerState: nativeState,
-              nextAction: "fork_or_delete",
-            }),
+          return jsonResult({
+            localState: "metadata_available",
+            providerState: nativeState,
+            nextAction: "fork_or_delete",
           });
         }
         return undefined;
@@ -307,18 +268,9 @@ describe("Crabbox profile warm images", () => {
       const create = calls.find(({ argv }) => argv[2] === "create");
       expect(create?.argv).toEqual([
         expect.any(String),
-        "checkpoint",
-        "create",
-        "--provider",
-        backend,
-        "--id",
-        LEASE_ID,
-        "--mode",
-        "native",
-        "--wait",
-        "--wait-timeout",
-        "2700000ms",
-        "--json",
+        ...`checkpoint create --provider ${backend} --id ${LEASE_ID} --mode native --wait --wait-timeout 2700000ms --json`.split(
+          " ",
+        ),
         ...(["azure", "daytona"].includes(backend) ? ["--no-reboot=false"] : []),
         ...(backend === "machine0" ? ["--strategy", "image"] : []),
       ]);
@@ -342,35 +294,23 @@ describe("Crabbox profile warm images", () => {
     },
   );
 
-  it.each<{
-    action: "run" | "create";
-    name: string;
-    result: Partial<SpawnResult>;
-    captureUncertain?: boolean;
-  }>([
-    {
-      action: "create",
-      name: "capture was not submitted",
-      captureUncertain: false,
-      result: {
-        code: 7,
-        stdout: JSON.stringify({
-          schema: "crabbox.checkpoint.create.failure.v1",
-          outcome: "not_submitted",
-          provider: PROFILE.provider,
-          leaseId: LEASE_ID,
-          checkpointId: CHECKPOINT_ID,
-          localReservation: "removed",
-        }),
-        stderr: "image submission rejected; source rollback failed",
-      },
-    },
-  ])("warns once and still stops the enrolled lease when $name", async (testCase) => {
-    const { action, result, captureUncertain = action === "create" } = testCase;
+  it("warns once and still stops the enrolled lease when capture was not submitted", async () => {
+    const result = commandResult({
+      code: 7,
+      stderr: "image submission rejected; source rollback failed",
+      stdout: JSON.stringify({
+        schema: "crabbox.checkpoint.create.failure.v1",
+        outcome: "not_submitted",
+        provider: PROFILE.provider,
+        leaseId: LEASE_ID,
+        checkpointId: CHECKPOINT_ID,
+        localReservation: "removed",
+      }),
+    });
     let tearingDown = false;
     const { provider, calls, warn } = createWarmProvider(({ argv }) => {
-      if (tearingDown && (argv[1] === action || argv[2] === action)) {
-        return commandResult(result);
+      if (tearingDown && argv[2] === "create") {
+        return result;
       }
       return undefined;
     });
@@ -387,84 +327,62 @@ describe("Crabbox profile warm images", () => {
 
     tearingDown = false;
     calls.length = 0;
-    if (captureUncertain) {
-      // Failed creation can retain a paid artifact; retry requires explicit cleanup acknowledgment.
-      const capture = (await listCrabboxWarmImages(crabboxState))[0]?.capture;
-      expect(capture).toBeDefined();
-      expect(warn.mock.calls[0]?.[0]).toContain("--recover");
-      await recoverCrabboxWarmImageCapture(crabboxState, capture!.selector, true);
-    } else {
-      expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
-      expect(warn.mock.calls[0]?.[0]).not.toContain("--recover");
-    }
+    expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
+    expect(warn.mock.calls[0]?.[0]).not.toContain("--recover");
     await captureWarmImage(provider);
     expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
     expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
   });
 
-  it.each([{ machineClass: "standard", warmImage: true }])(
-    "recovers enrolled class after restart (configured=$machineClass, warmImage=$warmImage)",
-    async ({ machineClass, warmImage }) => {
-      const initial = createWarmProvider();
-      const profile = {
-        ...CLASSLESS_PROFILE,
-        ...(warmImage === undefined ? {} : { warmImage }),
-        ...(machineClass ? { class: machineClass } : {}),
-      };
-      const lease = await provisionWarmProfile(initial.provider, profile, OPERATION_ID, "fast");
-      await initial.provider.dispose();
+  it("recovers enrolled class after restart", async () => {
+    const initial = createWarmProvider();
+    const profile = PROFILE;
+    const lease = await provisionWarmProfile(initial.provider, profile, OPERATION_ID, "fast");
+    await initial.provider.dispose();
 
-      const restarted = createWarmProvider(undefined, initial.stateDir);
-      await restarted.provider.inspect({ leaseId: lease.leaseId, profile });
-      await destroyAndWait(restarted.provider, {
-        leaseId: lease.leaseId,
-        profile,
-      });
+    const restarted = createWarmProvider(undefined, initial.stateDir);
+    await restarted.provider.inspect({ leaseId: lease.leaseId, profile });
+    await destroyAndWait(restarted.provider, {
+      leaseId: lease.leaseId,
+      profile,
+    });
 
-      expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
+    expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
 
-      restarted.calls.length = 0;
-      await provisionWarmProfile(
-        restarted.provider,
-        profile,
-        `provision:v2:${"1".repeat(64)}`,
-        "standard",
-      );
-      expect(restarted.calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
-      expect(restarted.calls.some(({ argv }) => argv[2] === "fork")).toBe(false);
+    restarted.calls.length = 0;
+    await provisionWarmProfile(
+      restarted.provider,
+      profile,
+      `provision:v2:${"1".repeat(64)}`,
+      "standard",
+    );
+    expect(restarted.calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
+    expect(restarted.calls.some(({ argv }) => argv[2] === "fork")).toBe(false);
 
-      restarted.calls.length = 0;
-      await provisionWarmProfile(
-        restarted.provider,
-        profile,
-        `provision:v2:${"2".repeat(64)}`,
-        "fast",
-      );
-      const fork = restarted.calls.find(({ argv }) => argv[2] === "fork")?.argv;
-      expect(fork?.[fork.indexOf("--class") + 1]).toBe("fast");
-    },
-  );
+    restarted.calls.length = 0;
+    await provisionWarmProfile(
+      restarted.provider,
+      profile,
+      `provision:v2:${"2".repeat(64)}`,
+      "fast",
+    );
+    const fork = restarted.calls.find(({ argv }) => argv[2] === "fork")?.argv;
+    expect(fork?.[fork.indexOf("--class") + 1]).toBe("fast");
+  });
 
-  it.each(["standard"])(
-    "never snapshots an inspection-only lease with configured class %s",
-    async (machineClass) => {
-      const { provider, calls } = createWarmProvider();
-      const lease = {
-        leaseId: LEASE_ID,
-        profile: {
-          ...CLASSLESS_PROFILE,
-          warmImage: true,
-          ...(machineClass ? { class: machineClass } : {}),
-        },
-      };
+  it("never snapshots an inspection-only lease with a configured class", async () => {
+    const { provider, calls } = createWarmProvider();
+    const lease = {
+      leaseId: LEASE_ID,
+      profile: PROFILE,
+    };
 
-      await provider.inspect(lease);
-      await destroyAndWait(provider, lease);
+    await provider.inspect(lease);
+    await destroyAndWait(provider, lease);
 
-      expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
-      expect(calls.at(-1)?.argv[1]).toBe("stop");
-    },
-  );
+    expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
+    expect(calls.at(-1)?.argv[1]).toBe("stop");
+  });
 
   it.each([
     ["the captured runtime", NODE_RUNTIME_IDENTITY, false],
@@ -495,62 +413,46 @@ describe("Crabbox profile warm images", () => {
     },
   );
 
-  it.each([{ name: "the fork fails", result: { code: 7, stderr: "snapshot unavailable" } }])(
-    "does not change a checkpoint-bound lease to cold when $name",
-    async ({ result }) => {
-      const { provider, calls } = createWarmProvider(({ argv }) =>
-        argv[2] === "fork" ? commandResult(result) : undefined,
-      );
-      await captureWarmImage(provider);
-      calls.length = 0;
+  it("does not change a checkpoint-bound lease to cold when the fork fails", async () => {
+    const { provider, calls } = createWarmProvider(({ argv }) =>
+      argv[2] === "fork" ? commandResult({ code: 7, stderr: "snapshot unavailable" }) : undefined,
+    );
+    await captureWarmImage(provider);
+    calls.length = 0;
 
-      await expect(provisionWarmProfile(provider)).rejects.toThrow();
+    await expect(provisionWarmProfile(provider)).rejects.toThrow();
 
-      const fork = calls.find(({ argv }) => argv[2] === "fork")?.argv;
-      const warmup = calls.find(({ argv }) => argv[1] === "warmup")?.argv;
-      expect(fork?.[fork.indexOf("--lease-id") + 1]).toBe(LEASE_ID);
-      expect(warmup).toBeUndefined();
-      calls.length = 0;
-      await expect(provisionWarmProfile(provider)).rejects.toThrow();
-      expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
-      expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
-    },
-  );
+    const fork = calls.find(({ argv }) => argv[2] === "fork")?.argv;
+    const warmup = calls.find(({ argv }) => argv[1] === "warmup")?.argv;
+    expect(fork?.[fork.indexOf("--lease-id") + 1]).toBe(LEASE_ID);
+    expect(warmup).toBeUndefined();
+    calls.length = 0;
+    await expect(provisionWarmProfile(provider)).rejects.toThrow();
+    expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
+    expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
+  });
 
-  it.each([["unverified_ref", "fork_or_delete_local", "warmup", true]])(
-    "verifies pending image state %s/action %s before %s",
-    async (providerState, nextAction, expectedCommand, retained) => {
-      const { provider, calls } = createWarmProvider(({ argv }) =>
-        argv[2] === "inspect"
-          ? commandResult({
-              stdout: JSON.stringify({
-                localState: "metadata_available",
-                ...(providerState ? { providerState } : {}),
-                nextAction,
-              }),
-            })
-          : undefined,
-      );
-      await captureWarmImage(provider);
-      // Older captures can retain a pending projection; verify that stored state on reuse.
-      const store = openWarmImageStore();
-      const { key, value } = store.entries()[0]!;
-      store.update(key, () => ({ ...value, image: { ...value.image!, state: "pending" } }));
-      calls.length = 0;
+  it("verifies an unverified pending image before falling back to cold", async () => {
+    const { provider, calls } = createWarmProvider(({ argv }) =>
+      argv[2] === "inspect"
+        ? jsonResult({
+            localState: "metadata_available",
+            providerState: "unverified_ref",
+            nextAction: "fork_or_delete_local",
+          })
+        : undefined,
+    );
+    await captureWarmImage(provider);
+    // Older captures can retain a pending projection; verify that stored state on reuse.
+    const store = openWarmImageStore();
+    const { key, value } = store.entries()[0]!;
+    store.update(key, () => ({ ...value, image: { ...value.image!, state: "pending" } }));
+    calls.length = 0;
 
-      const lease = await provisionWarmProfile(provider);
+    const lease = await provisionWarmProfile(provider);
 
-      expect(
-        calls.some(({ argv }) => argv[1] === expectedCommand || argv[2] === expectedCommand),
-      ).toBe(true);
-      if (retained) {
-        await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
-        expect(calls.some(({ argv }) => argv[2] === "create")).toBe(false);
-      } else {
-        expect(calls.some(({ argv }) => argv[2] === "delete")).toBe(true);
-        await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
-        expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
-      }
-    },
-  );
+    expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
+    await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
+    expect(calls.some(({ argv }) => argv[2] === "create")).toBe(false);
+  });
 });

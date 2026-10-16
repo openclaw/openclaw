@@ -128,17 +128,11 @@ describe("Crabbox warm-image CLI", () => {
     await expect(assertCrabboxWarmImageMigrationReady(crabboxState)).resolves.toBeUndefined();
   });
 
-  it.each([
-    {
-      name: "missing selector",
-      args: ["--acknowledge-provider-cleanup"],
-      error: "requires --recover",
-    },
-  ])("rejects $name without clearing durable ownership", async ({ args, error }) => {
+  it("rejects missing selector without clearing durable ownership", async () => {
     const record = pendingCapture();
     openWarmImageStore().register("profile", record);
 
-    await expect(runCli(...args)).rejects.toThrow(error);
+    await expect(runCli("--acknowledge-provider-cleanup")).rejects.toThrow("requires --recover");
 
     expect(openWarmImageStore().lookup("profile")).toEqual(record);
   });

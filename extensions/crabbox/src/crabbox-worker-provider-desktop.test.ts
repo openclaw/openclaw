@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
+import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
 import { commandResult, nodeEnrollmentFixture } from "./crabbox-worker-provider.test-support.js";
@@ -24,6 +25,20 @@ function inspectJson(overrides: Record<string, unknown> = {}): string {
     sshUser: "openclaw",
     ...overrides,
   });
+}
+
+function provisionDesktop(
+  provider: WorkerProvider,
+  profile: WorkerProfile = PROFILE,
+  options?: Parameters<WorkerProvider["provision"]>[2],
+) {
+  return provisionWarmProfile(
+    provider,
+    { ...profile, desktop: true },
+    OPERATION_ID,
+    undefined,
+    options,
+  );
 }
 
 describe("Crabbox desktop provisioning", () => {
@@ -53,13 +68,7 @@ describe("Crabbox desktop provisioning", () => {
       };
       const options = osOverride ? { os: target } : undefined;
       expect(provider.supportsProjectPreparation?.(profile, "standard", options?.os)).toBe(false);
-      const result = await provisionWarmProfile(
-        provider,
-        profile,
-        OPERATION_ID,
-        undefined,
-        options,
-      );
+      const result = await provisionDesktop(provider, profile, options);
       expect(result.node).toEqual({ deviceId: "device-1" });
       expect(result.desktop).toMatchObject({
         protocol: "rfb",
@@ -125,11 +134,9 @@ describe("Crabbox desktop provisioning", () => {
     });
 
     let completed = false;
-    const provision = provisionWarmProfile(
+    const provision = provisionDesktop(
       provider,
-      { ...PROFILE, provider: providerId, desktop: true },
-      OPERATION_ID,
-      undefined,
+      { ...PROFILE, provider: providerId },
       {
         beginNodeEnrollment: async () => {
           setupOrder.push("enrollment");
@@ -167,11 +174,9 @@ describe("Crabbox desktop provisioning", () => {
         ],
       },
     });
-    expect(calls.find((call) => call.argv[1] === "warmup")).toEqual(
-      expect.objectContaining({
-        options: expect.objectContaining({ timeoutMs: 100 * 60_000 }),
-      }),
-    );
+    expect(calls.find((call) => call.argv[1] === "warmup")).toMatchObject({
+      options: { timeoutMs: 100 * 60_000 },
+    });
     expect(calls.find((call) => call.argv[1] === "warmup")?.argv.slice(-4)).toEqual([
       "--desktop",
       "--browser",
@@ -209,32 +214,26 @@ describe("Crabbox desktop provisioning", () => {
         return undefined;
       });
 
-      const failure = await provisionWarmProfile(
-        provider,
-        { ...PROFILE, desktop: true },
-        OPERATION_ID,
-        undefined,
-        {
-          beginNodeEnrollment: async () => {
-            if (failurePoint === "enrollment preparation") {
-              throw new Error("enrollment preparation failed");
-            }
-            return {
-              mode: "resume" as const,
-              deviceId: "device-bound",
-              openclawVersion: "2026.8.1",
-              nodeBootstrap: createNodeBootstrapFixture(),
-              displayName: "Bound worker",
-              waitForDeviceId: async () => {
-                if (failurePoint === "enrollment completion") {
-                  throw new Error("enrollment completion failed");
-                }
-                return "device-bound";
-              },
-            };
-          },
+      const failure = await provisionDesktop(provider, PROFILE, {
+        beginNodeEnrollment: async () => {
+          if (failurePoint === "enrollment preparation") {
+            throw new Error("enrollment preparation failed");
+          }
+          return {
+            mode: "resume" as const,
+            deviceId: "device-bound",
+            openclawVersion: "2026.8.1",
+            nodeBootstrap: createNodeBootstrapFixture(),
+            displayName: "Bound worker",
+            waitForDeviceId: async () => {
+              if (failurePoint === "enrollment completion") {
+                throw new Error("enrollment completion failed");
+              }
+              return "device-bound";
+            },
+          };
         },
-      ).catch((error: unknown) => error);
+      }).catch((error: unknown) => error);
       expect(WorkerProviderError.isCleanupComplete(failure)).toBe(true);
       if (!WorkerProviderError.isCleanupComplete(failure)) {
         throw new Error("expected confirmed worker cleanup");
@@ -261,66 +260,56 @@ describe("Crabbox desktop provisioning", () => {
   );
 
   it.each([
-    { name: "missing account", sshUser: undefined, afterSetup: false, stopFails: false },
-    {
-      name: "malformed account after setup",
-      sshUser: "bad user",
-      afterSetup: true,
-      stopFails: false,
+    ["missing account", undefined, false, false],
+    ["malformed account after setup", "bad user", true, false],
+    ["malformed account and failed stop", "bad user", false, true],
+  ] as const)(
+    "settles macOS desktop cleanup for %s",
+    async (_name, sshUser, afterSetup, stopFails) => {
+      let setupCompleted = false;
+      const { provider, calls } = createWarmProvider(({ argv, options }) => {
+        if (argv[1] === "inspect") {
+          return commandResult({
+            stdout: inspectJson({ sshUser: afterSetup && !setupCompleted ? "openclaw" : sshUser }),
+          });
+        }
+        if (argv[1] === "run" && options.input === "profile-setup") {
+          setupCompleted = true;
+        }
+        if (argv[1] === "stop" && stopFails) {
+          return commandResult({ code: 9, stderr: "lease stop failed" });
+        }
+        return undefined;
+      });
+      const beginNodeEnrollment = vi.fn(async () => {
+        throw new Error("enrollment must not begin for an invalid desktop account");
+      });
+      const failure = await provisionDesktop(
+        provider,
+        {
+          ...PROFILE,
+          target: "macos",
+          ...(afterSetup ? { setup: "profile-setup" } : {}),
+        },
+        { beginNodeEnrollment },
+      ).catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        code: stopFails ? "cleanup_indeterminate" : "cleanup_complete",
+        leaseId: LEASE_ID,
+        provisionError: { message: expect.stringContaining("account") },
+        ...(stopFails
+          ? { cleanupError: { message: expect.stringContaining("lease stop failed") } }
+          : {}),
+      });
+      expect(beginNodeEnrollment).not.toHaveBeenCalled();
+      expect(calls.filter(({ argv }) => argv[1] === "inspect")).toHaveLength(afterSetup ? 2 : 1);
+      expect(
+        calls.filter(({ argv }) => argv[1] === "run").map(({ options }) => options.input),
+      ).toEqual(afterSetup ? ["profile-setup"] : []);
+      expect(
+        calls.filter(({ argv }) => argv[1] === "stop").map(({ argv }) => argv.slice(1)),
+      ).toEqual([["stop", "--provider", "aws", "--id", LEASE_ID]]);
+      expect(calls.some(({ argv }) => argv[1] === "heartbeat")).toBe(false);
     },
-    {
-      name: "malformed account and failed stop",
-      sshUser: "bad user",
-      afterSetup: false,
-      stopFails: true,
-    },
-  ])("settles macOS desktop cleanup for $name", async ({ sshUser, afterSetup, stopFails }) => {
-    let setupCompleted = false;
-    const { provider, calls } = createWarmProvider(({ argv, options }) => {
-      if (argv[1] === "inspect") {
-        return commandResult({
-          stdout: inspectJson({ sshUser: afterSetup && !setupCompleted ? "openclaw" : sshUser }),
-        });
-      }
-      if (argv[1] === "run" && options.input === "profile-setup") {
-        setupCompleted = true;
-      }
-      if (argv[1] === "stop" && stopFails) {
-        return commandResult({ code: 9, stderr: "lease stop failed" });
-      }
-      return undefined;
-    });
-    const beginNodeEnrollment = vi.fn(async () => {
-      throw new Error("enrollment must not begin for an invalid desktop account");
-    });
-    const failure = await provisionWarmProfile(
-      provider,
-      {
-        ...PROFILE,
-        target: "macos",
-        desktop: true,
-        ...(afterSetup ? { setup: "profile-setup" } : {}),
-      },
-      OPERATION_ID,
-      undefined,
-      { beginNodeEnrollment },
-    ).catch((error: unknown) => error);
-    expect(failure).toMatchObject({
-      code: stopFails ? "cleanup_indeterminate" : "cleanup_complete",
-      leaseId: LEASE_ID,
-      provisionError: { message: expect.stringContaining("account") },
-      ...(stopFails
-        ? { cleanupError: { message: expect.stringContaining("lease stop failed") } }
-        : {}),
-    });
-    expect(beginNodeEnrollment).not.toHaveBeenCalled();
-    expect(calls.filter(({ argv }) => argv[1] === "inspect")).toHaveLength(afterSetup ? 2 : 1);
-    expect(
-      calls.filter(({ argv }) => argv[1] === "run").map(({ options }) => options.input),
-    ).toEqual(afterSetup ? ["profile-setup"] : []);
-    expect(calls.filter(({ argv }) => argv[1] === "stop").map(({ argv }) => argv.slice(1))).toEqual(
-      [["stop", "--provider", "aws", "--id", LEASE_ID]],
-    );
-    expect(calls.some(({ argv }) => argv[1] === "heartbeat")).toBe(false);
-  });
+  );
 });

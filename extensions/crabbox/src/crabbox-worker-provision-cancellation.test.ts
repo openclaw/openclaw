@@ -2,27 +2,17 @@ import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { openWarmImageStore } from "./crabbox-state.test-support.js";
-import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
-import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import { commandResult, nodeEnrollmentFixture } from "./crabbox-worker-provider.test-support.js";
 import {
   captureWarmImage,
   createProjectOptions,
   createWarmProvider,
+  jsonResult,
   provisionWarmProfile,
   LEASE_ID,
   OPERATION_ID,
   PROFILE,
 } from "./crabbox-worker-warm-image.test-support.js";
-
-const enrollment = (waitForDeviceId: () => Promise<string>) => ({
-  mode: "connect" as const,
-  setupCode: "setup-code",
-  setupId: "setup-id",
-  openclawVersion: "2026.8.1",
-  nodeBootstrap: createNodeBootstrapFixture(),
-  displayName: "Cancelled worker",
-  waitForDeviceId,
-});
 
 describe("Crabbox provisioning cancellation", () => {
   it.each([
@@ -91,7 +81,7 @@ describe("Crabbox provisioning cancellation", () => {
       ...(phase === "enrollment diagnostics"
         ? {
             beginNodeEnrollment: async () =>
-              enrollment(async () => {
+              nodeEnrollmentFixture("setup-code", "Cancelled worker", async () => {
                 throw new Error("enrollment expired");
               }),
           }
@@ -133,13 +123,11 @@ describe("Crabbox provisioning cancellation", () => {
       ({ argv }) => {
         if (argv[1] === "inspect") {
           inspected.resolve();
-          return commandResult({
-            stdout: JSON.stringify({
-              id: LEASE_ID,
-              state: "starting",
-              ready,
-              providerMetadata: { instanceProfileAttached: false },
-            }),
+          return jsonResult({
+            id: LEASE_ID,
+            state: "starting",
+            ready,
+            providerMetadata: { instanceProfileAttached: false },
           });
         }
         return undefined;
@@ -181,7 +169,7 @@ describe("Crabbox provisioning cancellation", () => {
     const operation = provisionWarmProfile(provider, PROFILE, OPERATION_ID, undefined, {
       signal: controller.signal,
       beginNodeEnrollment: async () =>
-        enrollment(async () => {
+        nodeEnrollmentFixture("setup-code", "Cancelled worker", async () => {
           waiting.resolve();
           return await enrolled.promise;
         }),
