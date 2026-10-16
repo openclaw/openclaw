@@ -1,7 +1,5 @@
-// E2E Run With Pty tests cover e2e run with pty script behavior.
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import os from "node:os";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,6 +14,13 @@ const posixIt = process.platform === "win32" ? it.skip : it;
 const testNodeExecPath = resolveTestNodeExecPath();
 const fixtureLifetime = createFixtureLifetime();
 afterEach(() => fixtureLifetime.cleanup());
+
+function withPtyFixture(run: (root: string, logPath: string) => Promise<void>) {
+  return fixtureLifetime.run(() => {
+    const root = fixtureLifetime.createTempDir("openclaw-run-with-pty-");
+    return run(root, path.join(root, "pty.log"));
+  });
+}
 
 async function runPtyProbe(
   logPath: string,
@@ -60,87 +65,56 @@ async function runPtyProbe(
 
 describe("run-with-pty", () => {
   it("rejects loose terminal dimension env values", ({ signal }) =>
-    fixtureLifetime.run(async () => {
-      const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-with-pty-"));
-      const logPath = path.join(tempRoot, "pty.log");
-      try {
-        const result = await runPtyProbe(logPath, signal, { COLUMNS: "120cols" });
-
-        expect(result.code).not.toBe(0);
-        expect(result.stderr).toContain("invalid COLUMNS: 120cols");
-      } finally {
-        await rm(tempRoot, { recursive: true, force: true });
-      }
+    withPtyFixture(async (_root, logPath) => {
+      const result = await runPtyProbe(logPath, signal, { COLUMNS: "120cols" });
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("invalid COLUMNS: 120cols");
     }));
 
   it("forwards stdin through a PTY and writes the transcript log", ({ signal }) =>
-    fixtureLifetime.run(async () => {
-      const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-with-pty-"));
-      const logPath = path.join(tempRoot, "pty.log");
-      try {
-        const result = await runPtyProbe(logPath, signal);
-        const log = await readFile(logPath, "utf8");
-
-        expect(result).toMatchObject({ code: 0, stderr: "" });
-        expect(result.stdout).toContain("prompt");
-        expect(result.stdout).toContain("got:abc");
-        expect(log).toContain("prompt");
-        expect(log).toContain("got:abc");
-      } finally {
-        await rm(tempRoot, { recursive: true, force: true });
+    withPtyFixture(async (_root, logPath) => {
+      const result = await runPtyProbe(logPath, signal);
+      const log = await readFile(logPath, "utf8");
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      for (const output of [result.stdout, log]) {
+        expect(output).toContain("prompt");
+        expect(output).toContain("got:abc");
       }
     }));
 
   it("caps noisy PTY output in stdout and transcript logs", ({ signal }) =>
-    fixtureLifetime.run(async () => {
-      const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-with-pty-"));
-      const logPath = path.join(tempRoot, "pty.log");
-      try {
-        const result = await runPtyProbe(
-          logPath,
-          signal,
-          { OPENCLAW_E2E_PTY_OUTPUT_MAX_BYTES: "64" },
-          [testNodeExecPath, "-e", "process.stdout.write('x'.repeat(2048))"],
-          "",
-        );
-        const log = await readFile(logPath, "utf8");
-        const marker = "[run-with-pty output truncated after 64 bytes]";
-
-        expect(result).toMatchObject({ code: 0, stderr: "" });
-        expect(result.stdout).toContain(marker);
-        expect(log).toContain(marker);
-        expect(result.stdout.length).toBeLessThan(512);
-        expect(log.length).toBeLessThan(512);
-      } finally {
-        await rm(tempRoot, { recursive: true, force: true });
+    withPtyFixture(async (_root, logPath) => {
+      const result = await runPtyProbe(
+        logPath,
+        signal,
+        { OPENCLAW_E2E_PTY_OUTPUT_MAX_BYTES: "64" },
+        [testNodeExecPath, "-e", "process.stdout.write('x'.repeat(2048))"],
+        "",
+      );
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      for (const output of [result.stdout, await readFile(logPath, "utf8")]) {
+        expect(output).toContain("[run-with-pty output truncated after 64 bytes]");
+        expect(output.length).toBeLessThan(512);
       }
     }));
 
   it("fails when the transcript log cannot be written", ({ signal }) =>
-    fixtureLifetime.run(async () => {
-      const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-with-pty-"));
-      try {
-        const result = await runPtyProbe(
-          tempRoot,
-          signal,
-          {},
-          [testNodeExecPath, "-e", "console.log('ready')"],
-          "",
-        );
-
-        expect(result.code).toBe(1);
-        expect(result.stderr).toContain("run-with-pty transcript log failed:");
-      } finally {
-        await rm(tempRoot, { recursive: true, force: true });
-      }
+    withPtyFixture(async (tempRoot) => {
+      const result = await runPtyProbe(
+        tempRoot,
+        signal,
+        {},
+        [testNodeExecPath, "-e", "console.log('ready')"],
+        "",
+      );
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("run-with-pty transcript log failed:");
     }));
 
   posixIt(
     "escalates forwarded termination signals for PTY commands that ignore them",
     ({ signal }) =>
-      fixtureLifetime.run(async () => {
-        const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-with-pty-"));
-        const logPath = path.join(tempRoot, "pty.log");
+      withPtyFixture(async (tempRoot, logPath) => {
         const descendantPidPath = path.join(tempRoot, "descendant.pid");
         let descendantPid: number | null = null;
         const probeCode = `
@@ -204,7 +178,6 @@ setInterval(() => {}, 1000);
           if (descendantPid && isProcessAlive(descendantPid)) {
             process.kill(descendantPid, "SIGKILL");
           }
-          await rm(tempRoot, { recursive: true, force: true });
         }
       }),
   );
