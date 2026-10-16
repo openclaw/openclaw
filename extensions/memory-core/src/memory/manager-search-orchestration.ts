@@ -1,5 +1,5 @@
 import { getAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, formatErrorMessageRaw } from "openclaw/plugin-sdk/error-runtime";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
@@ -221,7 +221,8 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
               },
             );
           } else {
-            log.warn(`memory sync failed (search-bootstrap): ${String(err)}`);
+            // Log-bound warnings stay raw; masking is the egress sinks' job.
+            log.warn(`memory sync failed (search-bootstrap): ${formatErrorMessageRaw(err)}`);
           }
         }
         indexState = await readIndexState();
@@ -353,7 +354,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       ) {
         const trackedSearchSync = this.syncPublishedIndexInBackground({ reason: "search" })
           .catch((err: unknown) => {
-            log.warn(`memory sync failed (search): ${String(err)}`);
+            log.warn(`memory sync failed (search): ${formatErrorMessageRaw(err)}`);
           })
           .finally(() => {
             this.activeBackgroundSearchSyncs.delete(trackedSearchSync);
