@@ -136,21 +136,6 @@ function firstParagraph(content: string): string | undefined {
     .find(Boolean);
 }
 
-/**
- * Reads a Claude command as text, refusing bytes we cannot decode: the importer
- * writes this content verbatim into a generated SKILL.md, so replacement
- * decoding would persist U+FFFD over the operator's original command text.
- */
-async function readClaudeCommandContent(sourcePath: string): Promise<string> {
-  const bytes = await fs.readFile(sourcePath);
-  if (!isUtf8(bytes)) {
-    throw new Error(
-      `Claude command file is not valid UTF-8: ${sourcePath}. Re-save or re-encode the file as UTF-8, then rerun the migration.`,
-    );
-  }
-  return bytes.toString("utf8");
-}
-
 function generatedCommandSkillContent(params: {
   skillName: string;
   sourceLabel: string;
@@ -192,10 +177,16 @@ export async function applyGeneratedSkillItem(
         : path.basename(item.source);
     const skillName =
       typeof item.details?.skillName === "string" ? item.details.skillName : sanitizeName(item.id);
+    const bytes = await fs.readFile(item.source);
+    if (!isUtf8(bytes)) {
+      throw new Error(
+        `Claude command file is not valid UTF-8: ${item.source}. Re-save or re-encode the file as UTF-8, then rerun the migration.`,
+      );
+    }
     const content = generatedCommandSkillContent({
       skillName,
       sourceLabel,
-      commandContent: await readClaudeCommandContent(item.source),
+      commandContent: bytes.toString("utf8"),
     });
     const backupPath = targetExists
       ? await backupMigrationItemTarget(item.target, reportDir, { dereference: true })
