@@ -179,7 +179,7 @@ describe("chat pane assistant identity snapshots", () => {
     pane.render = () => ({
       layout: null,
       capabilityDialogs: undefined,
-      providerReviewSource: undefined,
+      providerReviewSource: { state: pane.state, canWrite: false },
     });
 
     try {
