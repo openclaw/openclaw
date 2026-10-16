@@ -27,6 +27,12 @@ import {
 } from "./tui-session-projection.js";
 import { getPendingSubmitAcceptedRunId, getPendingSubmitDraft } from "./tui-submit-state.js";
 
+function expectUnused(...mocks: ReturnType<typeof vi.fn>[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
 type Harness = ReturnType<typeof createTuiCommandHandlersHarness>;
 
 function selectorOf(harness: Harness): SelectableOverlay {
@@ -44,14 +50,10 @@ function userMessage(id: string, seq: number, runId: string) {
 describe("tui command handlers", () => {
   it("reopens /question locally without sending a chat turn", async () => {
     const reopenQuestion = vi.fn();
-    const { handleCommand, sendChat, addPendingUser } = createTuiCommandHandlersHarness({
-      opts: { local: true },
-      reopenQuestion,
-    });
-    await handleCommand("/question");
+    const h = createTuiCommandHandlersHarness({ opts: { local: true }, reopenQuestion });
+    await h.handleCommand("/question");
     expect(reopenQuestion).toHaveBeenCalledOnce();
-    expect(sendChat).not.toHaveBeenCalled();
-    expect(addPendingUser).not.toHaveBeenCalled();
+    expectUnused(h.sendChat, h.addPendingUser);
   });
 
   it("does not open an agent picker from a cached roster after refresh failure", async () => {
@@ -118,15 +120,12 @@ describe("tui command handlers", () => {
         .mockResolvedValue({ sessions: [{ key: "agent:main:current", updatedAt: 1 }] }),
       agents: [{ id: "main", name: "Main Agent" }],
     });
-
     const olderPicker = harness.handleCommand("/agents");
     const [ownsRefresh] = refreshAgents.mock.calls[0] as [(() => boolean) | undefined];
     await harness.handleCommand("/sessions");
     expect(ownsRefresh?.()).toBe(false);
-
     pendingRefresh.resolve({ ok: true, value: undefined });
     await olderPicker;
-
     expect(harness.openOverlay).toHaveBeenCalledOnce();
   });
 
@@ -206,17 +205,15 @@ describe("tui command handlers", () => {
   );
 
   it("scopes an explicit timeout override to one message", async () => {
-    const { handleCommand, sendMessage, sendChat, state } = createTuiCommandHandlersHarness();
-
-    await sendMessage("automatic hatch", 300_000);
-    state.pendingSubmit = null;
-    await handleCommand("do not do that");
-
-    expect(sendChat).toHaveBeenNthCalledWith(
+    const h = createTuiCommandHandlersHarness();
+    await h.sendMessage("automatic hatch", 300_000);
+    h.state.pendingSubmit = null;
+    await h.handleCommand("do not do that");
+    expect(h.sendChat).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ message: "automatic hatch", timeoutMs: 300_000 }),
     );
-    expect(sendChat).toHaveBeenNthCalledWith(
+    expect(h.sendChat).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ message: "do not do that", timeoutMs: undefined }),
     );
@@ -341,9 +338,7 @@ describe("tui command handlers", () => {
         runUsageCostCommand: null,
       });
       await h.handleCommand(command);
-      expect(h.sendChat).not.toHaveBeenCalled();
-      expect(h.addPendingUser).not.toHaveBeenCalled();
-      expect(h.patchSession).not.toHaveBeenCalled();
+      expectUnused(h.sendChat, h.addPendingUser, h.patchSession);
       expect(h.addSystem).toHaveBeenCalledWith(
         `${command} is not available in local embedded mode; message not sent`,
       );
@@ -370,10 +365,8 @@ describe("tui command handlers", () => {
     await h.handleCommand(command);
     expectSendChatFields(h.sendChat, { sessionKey: "agent:main:main", message: command });
     expect(h.sendChat).toHaveBeenCalledOnce();
-    expect(h.patchSession).not.toHaveBeenCalled();
-    expect(h.runGoalCommand).not.toHaveBeenCalled();
+    expectUnused(h.patchSession, h.runGoalCommand, h.addSystem);
     expect(h.runUsageCostCommand).not.toHaveBeenCalled();
-    expect(h.addSystem).not.toHaveBeenCalled();
   });
 
   it.each(["/goal start ship", "/usage cost"])(
@@ -408,9 +401,7 @@ describe("tui command handlers", () => {
           agentId: "work",
         });
         expect(h.addSystem).toHaveBeenCalledWith("💸 Usage cost");
-        expect(h.sendChat).not.toHaveBeenCalled();
-        expect(h.patchSession).not.toHaveBeenCalled();
-        expect(h.addPendingUser).not.toHaveBeenCalled();
+        expectUnused(h.sendChat, h.patchSession, h.addPendingUser);
       }
     },
   );
@@ -445,9 +436,7 @@ describe("tui command handlers", () => {
         result.resolve({ text: "private status", continuationPrompt: "PRIVATE_OBJECTIVE" });
       }
       await pending;
-      expect(h.sendChat).not.toHaveBeenCalled();
-      expect(h.addSystem).not.toHaveBeenCalled();
-      expect(h.refreshSessionInfo).not.toHaveBeenCalled();
+      expectUnused(h.sendChat, h.addSystem, h.refreshSessionInfo);
     },
   );
 
@@ -464,7 +453,6 @@ describe("tui command handlers", () => {
       }),
       refreshSessionInfo: vi.fn(() => refresh.promise),
     });
-
     const pending = harness.handleCommand("/goal start private objective");
     await vi.waitFor(() => expect(harness.refreshSessionInfo).toHaveBeenCalledOnce());
     harness.state.currentAgentId = "ops";
@@ -472,59 +460,45 @@ describe("tui command handlers", () => {
     harness.state.currentSessionId = "ops-session";
     refresh.resolve();
     await pending;
-
     expect(harness.sendChat).not.toHaveBeenCalled();
   });
 
   it("sends the selected context mode through the gateway command path", async () => {
-    const { handleCommand, sendChat, openOverlay, closeOverlay, overlayHandle } =
-      createTuiCommandHandlersHarness();
-
-    await handleCommand("/context");
-    expect(sendChat).not.toHaveBeenCalled();
-    expect(openOverlay).toHaveBeenCalledOnce();
-    const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
+    const h = createTuiCommandHandlersHarness();
+    await h.handleCommand("/context");
+    expect(h.sendChat).not.toHaveBeenCalled();
+    expect(h.openOverlay).toHaveBeenCalledOnce();
+    const selector = firstMockArg(h.openOverlay, "openOverlay") as SelectableOverlay;
     selector?.onSelect?.({ value: "detail", label: "detail" });
     await flushAsyncSelect();
-
-    expectSendChatFields(sendChat, {
-      sessionKey: "agent:main:main",
-      message: "/context detail",
-    });
-    expect(closeOverlay).toHaveBeenCalledTimes(1);
-    expect(closeOverlay).toHaveBeenCalledWith(overlayHandle);
+    expectSendChatFields(h.sendChat, { sessionKey: "agent:main:main", message: "/context detail" });
+    expect(h.closeOverlay).toHaveBeenCalledExactlyOnceWith(h.overlayHandle);
   });
 
   it.each(["/gateway-status"])("keeps gateway diagnostics on %s", async (command) => {
-    const { handleCommand, getGatewayStatus, addSystem, addUser, sendChat } =
-      createTuiCommandHandlersHarness({
-        getGatewayStatus: vi.fn().mockResolvedValue({
-          runtimeVersion: "1.2.3",
-          channelSummary: ["Telegram: not configured"],
-          sessions: { count: 2, defaults: { model: "gpt-5.4", contextTokens: 200000 } },
-        }),
-      });
-
-    await handleCommand(command);
-
-    expect(getGatewayStatus).toHaveBeenCalledTimes(1);
-    expect(addUser).not.toHaveBeenCalled();
-    expect(sendChat).not.toHaveBeenCalled();
-    expect(addSystem).toHaveBeenCalledWith("Gateway status");
-    expect(addSystem).toHaveBeenCalledWith("Version: 1.2.3");
-    expect(addSystem).toHaveBeenCalledWith("  Telegram: not configured");
-    expect(addSystem).toHaveBeenCalledWith("Stored sessions: 2");
-    expect(addSystem).not.toHaveBeenCalledWith("Active sessions: 2");
+    const h = createTuiCommandHandlersHarness({
+      getGatewayStatus: vi.fn().mockResolvedValue({
+        runtimeVersion: "1.2.3",
+        channelSummary: ["Telegram: not configured"],
+        sessions: { count: 2, defaults: { model: "gpt-5.4", contextTokens: 200000 } },
+      }),
+    });
+    await h.handleCommand(command);
+    expect(h.getGatewayStatus).toHaveBeenCalledTimes(1);
+    expectUnused(h.addUser, h.sendChat);
+    expect(h.addSystem).toHaveBeenCalledWith("Gateway status");
+    expect(h.addSystem).toHaveBeenCalledWith("Version: 1.2.3");
+    expect(h.addSystem).toHaveBeenCalledWith("  Telegram: not configured");
+    expect(h.addSystem).toHaveBeenCalledWith("Stored sessions: 2");
+    expect(h.addSystem).not.toHaveBeenCalledWith("Active sessions: 2");
   });
 
   it("returns to OpenClaw with an optional request", async () => {
-    const { handleCommand, addSystem, requestExit, sendChat } = createTuiCommandHandlersHarness();
-
-    await handleCommand("/openclaw restart gateway");
-
-    expect(sendChat).not.toHaveBeenCalled();
-    expect(addSystem).toHaveBeenCalledWith("returning to OpenClaw with request: restart gateway");
-    expect(requestExit).toHaveBeenCalledWith({
+    const h = createTuiCommandHandlersHarness();
+    await h.handleCommand("/openclaw restart gateway");
+    expect(h.sendChat).not.toHaveBeenCalled();
+    expect(h.addSystem).toHaveBeenCalledWith("returning to OpenClaw with request: restart gateway");
+    expect(h.requestExit).toHaveBeenCalledWith({
       exitReason: "return-to-system-agent",
       systemAgentMessage: "restart gateway",
     });
@@ -636,8 +610,7 @@ describe("tui command handlers", () => {
     h.state.pendingSubmit = { phase: "accepted", runId: "public-run", draftText: null };
     history.resolve();
     await pending;
-    expect(h.addSystem).not.toHaveBeenCalled();
-    expect(h.setActivityStatus).not.toHaveBeenCalled();
+    expectUnused(h.addSystem, h.setActivityStatus);
     expect(h.state.activeChatRunId).toBe("public-run");
     expect(h.state.pendingSubmit?.runId).toBe("public-run");
   });
@@ -659,8 +632,7 @@ describe("tui command handlers", () => {
       if (status === "in_flight") {
         expect(h.noteLocalBtwRunId).toHaveBeenCalledWith(sent.runId);
         expect(h.noteLocalBtwRunId).toHaveBeenCalledWith("accepted-btw");
-        expect(h.noteLocalRunId).not.toHaveBeenCalled();
-        expect(h.addUser).not.toHaveBeenCalled();
+        expectUnused(h.noteLocalRunId, h.addUser);
         expect(h.state.sessionProjection).toBeUndefined();
         expect(h.setActivityStatus).not.toHaveBeenCalled();
       } else {
@@ -768,8 +740,7 @@ describe("tui command handlers", () => {
             },
       );
       await h.handleCommand(`/${command}`);
-      expect(h.createSession).not.toHaveBeenCalled();
-      expect(h.resetSession).not.toHaveBeenCalled();
+      expectUnused(h.createSession, h.resetSession);
       expect(h.addSystem).toHaveBeenCalledWith(`abort the current run before /${command}`);
     },
   );
@@ -874,9 +845,7 @@ describe("tui command handlers", () => {
       resetSession: vi.fn().mockRejectedValue(new Error("\u001b[31mreset unavailable\u001b[0m")),
       sessionProjection,
     });
-
     await harness.handleCommand("/reset");
-
     expect(harness.state.sessionProjection?.messages).toEqual([message]);
     expect(harness.applySessionMutationResult).not.toHaveBeenCalled();
     expect(harness.addSystem).toHaveBeenCalledWith("reset failed: reset unavailable");
@@ -917,11 +886,7 @@ describe("tui command handlers", () => {
     {
       command: "/think on",
       params: {
-        sessionInfo: {
-          modelProvider: "opencode-go",
-          model: "minimax-m3",
-          thinkingLevels: [],
-        },
+        sessionInfo: { modelProvider: "opencode-go", model: "minimax-m3", thinkingLevels: [] },
       },
       patch: { key: "agent:main:main", thinkingLevel: "high" },
     },
@@ -1004,11 +969,13 @@ describe("tui command handlers", () => {
         responseUsage: "tokens",
         effectiveResponseUsage: "tokens",
       });
-      expect(h.applySessionInfoFromPatch).not.toHaveBeenCalled();
-      expect(h.refreshSessionInfo).not.toHaveBeenCalled();
-      expect(h.loadHistory).not.toHaveBeenCalled();
-      expect(h.clearTools).not.toHaveBeenCalled();
-      expect(h.addSystem).not.toHaveBeenCalled();
+      expectUnused(
+        h.applySessionInfoFromPatch,
+        h.refreshSessionInfo,
+        h.loadHistory,
+        h.clearTools,
+        h.addSystem,
+      );
     },
   );
 
@@ -1057,8 +1024,7 @@ describe("tui command handlers", () => {
     const pending = h.handleCommand("/verbose full");
     await entered.promise;
     expect(h.loadHistory).toHaveBeenCalledOnce();
-    expect(h.refreshSessionInfo).not.toHaveBeenCalled();
-    expect(h.clearTools).not.toHaveBeenCalled();
+    expectUnused(h.refreshSessionInfo, h.clearTools);
     h.addSystem.mockClear();
     h.state.currentAgentId = "ops";
     h.state.currentSessionKey = "agent:ops:public";
@@ -1117,11 +1083,13 @@ describe("tui command handlers", () => {
         command === "new" ? "replacement-session" : fails ? "first-session" : "second-session",
       );
       expect(h.state.sessionInfo).toEqual(sessionInfo);
-      expect(h.setSession).not.toHaveBeenCalled();
-      expect(h.applySessionMutationResult).not.toHaveBeenCalled();
-      expect(h.refreshSessionInfo).not.toHaveBeenCalled();
-      expect(h.loadHistory).not.toHaveBeenCalled();
-      expect(h.addSystem).not.toHaveBeenCalled();
+      expectUnused(
+        h.setSession,
+        h.applySessionMutationResult,
+        h.refreshSessionInfo,
+        h.loadHistory,
+        h.addSystem,
+      );
     },
   );
 
@@ -1134,12 +1102,11 @@ describe("tui command handlers", () => {
     const h = createTuiCommandHandlersHarness({ opts: { local: command === "/side" } });
     await h.handleCommand(command);
     expect(h.addSystem).toHaveBeenCalledWith(usage);
-    expect(h.patchSession).not.toHaveBeenCalled();
-    expect(h.sendChat).not.toHaveBeenCalled();
+    expectUnused(h.patchSession, h.sendChat);
   });
 
   it("uses the active session's supported thinking levels in help and command usage", async () => {
-    const { handleCommand, addSystem } = createTuiCommandHandlersHarness({
+    const h = createTuiCommandHandlersHarness({
       sessionInfo: {
         modelProvider: "minimax",
         model: "MiniMax-M3",
@@ -1149,15 +1116,13 @@ describe("tui command handlers", () => {
         ],
       },
     });
-
-    await handleCommand("/help");
-    await handleCommand("/think");
-
-    expect(addSystem).toHaveBeenNthCalledWith(
+    await h.handleCommand("/help");
+    await h.handleCommand("/think");
+    expect(h.addSystem).toHaveBeenNthCalledWith(
       1,
       expect.stringContaining("/think <off|max|default>"),
     );
-    expect(addSystem).toHaveBeenNthCalledWith(2, "usage: /think <off|max|default>");
+    expect(h.addSystem).toHaveBeenNthCalledWith(2, "usage: /think <off|max|default>");
   });
 
   it.each(["disconnected", "pending"] as const)(
@@ -1173,8 +1138,7 @@ describe("tui command handlers", () => {
             },
       );
       await h.handleCommand("/context detail");
-      expect(h.sendChat).not.toHaveBeenCalled();
-      expect(h.addUser).not.toHaveBeenCalled();
+      expectUnused(h.sendChat, h.addUser);
       if (reason === "disconnected") {
         expect(h.addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
         expect(h.setActivityStatus).toHaveBeenLastCalledWith("disconnected");
@@ -1209,15 +1173,10 @@ describe("tui command handlers", () => {
 
   it("routes slash stop to session abort when there is no tracked run", async () => {
     const abortActive = vi.fn().mockResolvedValue(undefined);
-    const { handleCommand, sendChat, addPendingUser } = createTuiCommandHandlersHarness({
-      abortActive,
-    });
-
-    await handleCommand("/stop");
-
+    const h = createTuiCommandHandlersHarness({ abortActive });
+    await h.handleCommand("/stop");
     expect(abortActive).toHaveBeenCalledWith({ preferActive: true });
-    expect(sendChat).not.toHaveBeenCalled();
-    expect(addPendingUser).not.toHaveBeenCalled();
+    expectUnused(h.sendChat, h.addPendingUser);
   });
 
   it.each([0, 1])("refreshes the local auth flow and reports exit %s", async (exitCode) => {
@@ -1337,7 +1296,6 @@ describe("tui command handlers", () => {
           ? { listModels: vi.fn(() => deferred.promise) }
           : { listSessions: vi.fn(() => deferred.promise) }),
       });
-
       const pending = harness.handleCommand(`/${picker}`);
       harness.state.currentSessionId = "replacement-session";
       harness.state.sessionGeneration += 1;
@@ -1347,7 +1305,6 @@ describe("tui command handlers", () => {
           : { sessions: [{ key: "agent:main:main", updatedAt: 1 }] },
       );
       await pending;
-
       if (picker === "models") {
         const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
         expect(selector.items).toEqual([]);
@@ -1361,9 +1318,7 @@ describe("tui command handlers", () => {
   it("shows current-session usage-cost failures without invoking the model", async () => {
     const runUsageCostCommand = vi.fn().mockRejectedValue(new Error("session costs unavailable"));
     const harness = createTuiCommandHandlersHarness({ opts: { local: true }, runUsageCostCommand });
-
     await harness.handleCommand("/usage cost");
-
     expect(harness.addSystem).toHaveBeenCalledWith("usage cost failed: session costs unavailable");
     expect(harness.sendChat).not.toHaveBeenCalled();
   });
