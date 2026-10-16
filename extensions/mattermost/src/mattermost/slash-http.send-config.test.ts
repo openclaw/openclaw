@@ -178,6 +178,9 @@ vi.mock("./slash-commands.js", () => ({
   resolveCommandText: mockState.resolveCommandText,
 }));
 
+let deliverMattermostReplyPayload: typeof import("./reply-delivery.js").deliverMattermostReplyPayload;
+let sendMattermostTyping: typeof import("./client.js").sendMattermostTyping;
+
 let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashCommandHttpHandler;
 let clearMattermostSlashCommandValidationCacheForAccount: typeof import("./slash-http.js").clearMattermostSlashCommandValidationCacheForAccount;
 const callbackUrlFixture = "https://gateway.example.com/slash";
@@ -251,6 +254,8 @@ describe("slash-http cfg threading", () => {
     vi.resetModules();
     ({ createSlashCommandHttpHandler, clearMattermostSlashCommandValidationCacheForAccount } =
       await import("./slash-http.js"));
+    ({ deliverMattermostReplyPayload } = await import("./reply-delivery.js"));
+    ({ sendMattermostTyping } = await import("./client.js"));
   });
 
   afterEach(() => {
@@ -529,5 +534,135 @@ describe("slash-http cfg threading", () => {
         }),
       }),
     );
+  });
+  describe("command typed in a thread", () => {
+    const channelSessionKey = "agent:agent-1:mattermost:session:1";
+    const threadSessionKey = `${channelSessionKey}:thread:root-1`;
+    const threadPayload = {
+      token: "valid-token",
+      command: "/oc_models",
+      text: "status",
+      channel_id: "chan-1",
+      user_id: "user-1",
+      user_name: "alice",
+      team_id: "team-1",
+      root_id: "root-1",
+    };
+
+    function createThreadHandler() {
+      return createSlashCommandHttpHandler({
+        account: accountFixture,
+        cfg: {} as OpenClawConfig,
+        runtime: {} as RuntimeEnv,
+        registeredCommands: [
+          {
+            id: "cmd-1",
+            teamId: "team-1",
+            trigger: "oc_models",
+            token: "valid-token",
+            url: callbackUrlFixture,
+            managed: false,
+          },
+        ],
+      });
+    }
+
+    function deliverWhenDispatched() {
+      mockState.dispatchInbound.mockImplementationOnce((async (params: {
+        delivery: { deliver: (payload: { text: string }) => Promise<unknown> };
+        replyPipeline: { typing: { start: () => Promise<void> } };
+      }) => {
+        await params.replyPipeline.typing.start();
+        await params.delivery.deliver({ text: "Status: ok" });
+      }) as never);
+      vi.mocked(deliverMattermostReplyPayload).mockResolvedValueOnce({
+        visibleReplySent: true,
+      } as never);
+    }
+
+    it("replies in the thread", async () => {
+      mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(null);
+      mockState.parseSlashCommandPayload.mockReturnValueOnce(threadPayload);
+      deliverWhenDispatched();
+
+      await createThreadHandler()(createRequest(), createResponse().res);
+
+      expect(deliverMattermostReplyPayload).toHaveBeenCalledWith(
+        expect.objectContaining({ channelId: "chan-1", replyToId: "root-1" }),
+      );
+      expect(sendMattermostTyping).toHaveBeenCalledWith(expect.anything(), {
+        channelId: "chan-1",
+        parentId: "root-1",
+      });
+      expect(mockState.dispatchInbound).toHaveBeenCalledWith(
+        expect.objectContaining({
+          route: expect.objectContaining({ sessionKey: threadSessionKey }),
+          ctxPayload: expect.objectContaining({
+            SessionKey: threadSessionKey,
+            ParentSessionKey: channelSessionKey,
+            MessageThreadId: "root-1",
+          }),
+        }),
+      );
+    });
+
+    it("posts the model picker in the thread", async () => {
+      mockState.parseSlashCommandPayload.mockReturnValueOnce(threadPayload);
+
+      await createThreadHandler()(createRequest(), createResponse().res);
+
+      expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
+        "channel:chan-1",
+        "No models available.",
+        expect.objectContaining({ replyToId: "root-1" }),
+      );
+      expect(mockState.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionKey: threadSessionKey }),
+      );
+    });
+
+    it("posts the error fallback in the thread", async () => {
+      mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(null);
+      mockState.parseSlashCommandPayload.mockReturnValueOnce(threadPayload);
+      mockState.dispatchInbound.mockRejectedValueOnce(new Error("boom"));
+
+      await createThreadHandler()(createRequest(), createResponse().res);
+
+      expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
+        "channel:chan-1",
+        "Sorry, something went wrong processing that command.",
+        expect.objectContaining({ replyToId: "root-1" }),
+      );
+    });
+
+    it("keeps flat DMs flat when direct replies are not threaded", async () => {
+      mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(null);
+      mockState.parseSlashCommandPayload.mockReturnValueOnce({
+        ...threadPayload,
+        channel_id: "dm-1",
+      });
+      mockState.authorizeMattermostCommandInvocation.mockReturnValueOnce({
+        ok: true,
+        commandAuthorized: true,
+        channelInfo: { id: "dm-1", type: "D", name: "alice", display_name: "Alice" },
+        kind: "direct",
+        chatType: "direct",
+        channelName: "alice",
+        channelDisplay: "Alice",
+        roomLabel: "Alice",
+      });
+      deliverWhenDispatched();
+
+      await createThreadHandler()(createRequest(), createResponse().res);
+
+      const delivered = vi.mocked(deliverMattermostReplyPayload).mock.lastCall?.[0];
+      expect(delivered?.channelId).toBe("dm-1");
+      expect(delivered?.replyToId).toBeUndefined();
+      expect(mockState.dispatchInbound).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          route: expect.objectContaining({ sessionKey: channelSessionKey }),
+        }),
+      );
+    });
   });
 });

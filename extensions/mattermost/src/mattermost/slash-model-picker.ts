@@ -21,8 +21,10 @@ export async function deliverMattermostSlashModelPicker(params: {
   commandText: string;
   messageSid: string;
   entry: MattermostModelPickerEntry;
+  replyRootId?: string;
 }): Promise<boolean> {
   const { cfg, route, accountId, channelId, senderId, commandText, messageSid, entry } = params;
+  const replyToId = params.replyRootId; // keep the picker in the thread the command came from
   const sessionEntry = await getSessionEntryAsync({
     agentId: route.agentId,
     storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
@@ -34,7 +36,7 @@ export async function deliverMattermostSlashModelPicker(params: {
     const delivered = await sendMessageMattermost(
       `channel:${channelId}`,
       [data.refreshWarning, "No models available."].filter(Boolean).join("\n\n"),
-      { cfg, accountId },
+      { cfg, accountId, replyToId },
     );
     await recordDeliveredCommandExchange({
       config: cfg,
@@ -69,7 +71,7 @@ export async function deliverMattermostSlashModelPicker(params: {
   const delivered = await sendMessageMattermost(
     `channel:${channelId}`,
     [data.refreshWarning, view.text].filter(Boolean).join("\n\n"),
-    { cfg, accountId, buttons: view.buttons },
+    { cfg, accountId, buttons: view.buttons, replyToId },
   );
   await recordDeliveredCommandExchange({
     config: cfg,

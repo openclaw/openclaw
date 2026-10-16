@@ -121,6 +121,19 @@ export function formatMattermostFinalDeliveryOutcomeLog(params: {
   return undefined;
 }
 
+export function resolveMattermostEffectiveReplyToId(params: {
+  kind: ChatType;
+  postId?: string | null;
+  replyToMode: "off" | "first" | "all" | "batched";
+  threadRootId?: string | null;
+}): string | undefined {
+  // Flat DMs never thread; rooms retain existing roots even when new replies are off.
+  return params.kind === "direct" && params.replyToMode === "off"
+    ? undefined
+    : (normalizeOptionalString(params.threadRootId) ??
+        (params.replyToMode !== "off" ? normalizeOptionalString(params.postId) : undefined));
+}
+
 export function resolveMattermostThreadSessionContext(params: {
   baseSessionKey: string;
   kind: ChatType;
@@ -128,12 +141,7 @@ export function resolveMattermostThreadSessionContext(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   threadRootId?: string | null;
 }): { effectiveReplyToId?: string; sessionKey: string; parentSessionKey?: string } {
-  // Flat DMs never thread; rooms retain existing roots even when new replies are off.
-  const effectiveReplyToId =
-    params.kind === "direct" && params.replyToMode === "off"
-      ? undefined
-      : (normalizeOptionalString(params.threadRootId) ??
-        (params.replyToMode !== "off" ? normalizeOptionalString(params.postId) : undefined));
+  const effectiveReplyToId = resolveMattermostEffectiveReplyToId(params);
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: params.baseSessionKey,
     threadId: effectiveReplyToId,
