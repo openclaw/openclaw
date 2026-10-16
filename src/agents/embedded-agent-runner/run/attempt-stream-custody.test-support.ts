@@ -66,54 +66,40 @@ export async function createStreamCustodyFixture(
   await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
   const manager = SessionManager.open(target, root);
   manager.appendMessage({ role: "user", content: "Synthetic history", timestamp: 1 });
-  manager.appendMessage(
-    options.anthropicCompaction?.owner ?? {
-      ...createAssistant(model, [
-        ...(options.thinkingRecovery
-          ? [
-              {
-                type: "thinking" as const,
-                thinking: "Synthetic historical reasoning",
-                thinkingSignature: "c3ludGhldGljLXNpZ25hdHVyZQ==",
-              },
-            ]
-          : []),
-        { type: "text", text: "Synthetic checkpoint owner" },
-      ]),
-      ...(!options.thinkingRecovery
-        ? {
-            providerReplay: {
-              v: 1,
-              type: "openai-responses-compaction",
-              ...checkpoint,
-              replayIndex: 0,
-              provider: model.provider,
-              api: model.api,
-              model: model.id,
-              baseUrlHash: "synthetic",
-            },
-          }
-        : {}),
-    },
-  );
+  const owner =
+    options.anthropicCompaction?.owner ??
+    createAssistant(model, [{ type: "text", text: "Synthetic checkpoint owner" }]);
+  if (!options.anthropicCompaction) {
+    if (options.thinkingRecovery) {
+      owner.content.unshift({
+        type: "thinking",
+        thinking: "Synthetic historical reasoning",
+        thinkingSignature: "c3ludGhldGljLXNpZ25hdHVyZQ==",
+      });
+    } else {
+      owner.providerReplay = {
+        v: 1,
+        type: "openai-responses-compaction",
+        ...checkpoint,
+        replayIndex: 0,
+        provider: model.provider,
+        api: model.api,
+        model: model.id,
+        baseUrlHash: "synthetic",
+      };
+    }
+  }
+  manager.appendMessage(owner);
+  const assistants = () =>
+    manager
+      .getBranch()
+      .flatMap((entry) =>
+        entry.type === "message" && entry.message.role === "assistant" ? [entry.message] : [],
+      );
   const checkpointPresent = () =>
-    manager
-      .getBranch()
-      .some(
-        (entry) =>
-          entry.type === "message" &&
-          entry.message.role === "assistant" &&
-          entry.message.providerReplay?.data === checkpoint.data,
-      );
+    assistants().some((message) => message.providerReplay?.data === checkpoint.data);
   const thinkingPresent = () =>
-    manager
-      .getBranch()
-      .some(
-        (entry) =>
-          entry.type === "message" &&
-          entry.message.role === "assistant" &&
-          entry.message.content.some((block) => block.type === "thinking"),
-      );
+    assistants().some((message) => message.content.some((block) => block.type === "thinking"));
   const replayPresent = options.thinkingRecovery ? thinkingPresent : checkpointPresent;
   expect(replayPresent(), "fixture replay must survive durable append").toBe(true);
   const controller = new AbortController();

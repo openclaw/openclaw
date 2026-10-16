@@ -101,15 +101,21 @@ function anthropicSse(events: Array<Record<string, unknown>>): Response {
 
 function observeSettlement<T>(promise: Promise<T>) {
   let settled = false;
-  void promise.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
+  const markSettled = () => {
+    settled = true;
+  };
+  void promise.then(markSettled, markSettled);
   return () => settled;
+}
+
+function textAssistant(text: string, model = testModel) {
+  return createAssistant(model, [{ type: "text", text }]);
+}
+
+function completedStream(text: string) {
+  const stream = createAssistantMessageEventStream();
+  stream.end(textAssistant(text));
+  return stream;
 }
 
 function createFixture(
@@ -145,10 +151,10 @@ describe("installed replay repair ownership", () => {
       expect(fixture.input.setup.prepStages.snapshot().stages.map(({ name }) => name)).toEqual([
         "model-dispatch",
       ]);
-      firstSource.end(createAssistant(testModel, [{ type: "text", text: "Older result" }]));
+      firstSource.end(textAssistant("Older result"));
       await first.result();
       expect(fixture.streamGuards.isModelCallActive()).toBe(true);
-      secondSource.end(createAssistant(testModel, [{ type: "text", text: "Current result" }]));
+      secondSource.end(textAssistant("Current result"));
       await second.result();
       expect(fixture.streamGuards.isModelCallActive()).toBe(false);
     } finally {
@@ -164,7 +170,7 @@ describe("installed replay repair ownership", () => {
       (model) => {
         source.push({
           type: "start",
-          partial: createAssistant(model, [{ type: "text", text: "Synthetic partial" }]),
+          partial: textAssistant("Synthetic partial", model),
         });
         return source;
       },
@@ -190,9 +196,7 @@ describe("installed replay repair ownership", () => {
       await nextTurn();
       // Closing the consumer does not certify that the actual provider pump ended.
       expect(drained()).toBe(false);
-      source.end(
-        createAssistant(fixture.attempt.model, [{ type: "text", text: "Synthetic completion" }]),
-      );
+      source.end(textAssistant("Synthetic completion", fixture.attempt.model));
       await draining;
     } finally {
       source.end(createAssistant(fixture.attempt.model, []));
@@ -228,9 +232,7 @@ describe("installed replay repair ownership", () => {
             stream.push({
               type: "done",
               reason: "stop",
-              message: createAssistant(model, [
-                { type: "text", text: "Synthetic recovered response" },
-              ]),
+              message: textAssistant("Synthetic recovered response", model),
             });
           }
           return failureMode === "promised-stream-rejection" ? Promise.resolve(stream) : stream;
@@ -274,7 +276,7 @@ describe("installed replay repair ownership", () => {
   ] as const)(
     "keeps $boundary behind the admitted transcript repair (tools=$tools)",
     async ({ boundary, tools }) => {
-      const final = createAssistant(testModel, [{ type: "text", text: "Synthetic response" }]);
+      const final = textAssistant("Synthetic response");
       const fixture = await createFixture(
         (_model, _context, options) => {
           (options as ReplayOptions).onCompactionRejected?.(checkpoint);
@@ -437,9 +439,7 @@ describe("installed replay repair ownership", () => {
       const drained = observeSettlement(draining);
       await nextTurn();
       expect(drained()).toBe(false);
-      const late = createAssistantMessageEventStream();
-      late.end(createAssistant(testModel, [{ type: "text", text: "Late response" }]));
-      source.resolve(late);
+      source.resolve(completedStream("Late response"));
       await nextTurn();
       expect(drained()).toBe(false);
       held.release();
@@ -462,7 +462,7 @@ describe("installed replay repair ownership", () => {
       const entered = createDeferred();
       const sourceNext = createDeferred<IteratorResult<AssistantMessageEvent>>();
       const sourceReturn = createDeferred<IteratorResult<AssistantMessageEvent>>();
-      const final = createAssistant(testModel, [{ type: "text", text: "Late response" }]);
+      const final = textAssistant("Late response");
       const returnSource = vi.fn(() => sourceReturn.promise);
       const fixture = await createFixture(() => ({
         [Symbol.asyncIterator]: () => ({
@@ -522,11 +522,7 @@ describe("installed replay repair ownership", () => {
     });
     const writeStarted = createDeferred();
     let prompting = false;
-    const provider = vi.fn(() => {
-      const stream = createAssistantMessageEventStream();
-      stream.end(createAssistant(testModel, [{ type: "text", text: "Synthetic response" }]));
-      return stream;
-    });
+    const provider = vi.fn(() => completedStream("Synthetic response"));
     const fixture = await createFixture(provider, {
       withSessionWriteSettlement: (operation) =>
         lifecycle.withTranscriptWrite(() => {
@@ -604,7 +600,7 @@ describe("installed replay repair ownership", () => {
   });
 
   it("does not classify a completed native producer's queued repair as provider silence", async () => {
-    const final = createAssistant(testModel, [{ type: "text", text: "Native terminal" }]);
+    const final = textAssistant("Native terminal");
     const fixture = await createFixture((_model, _context, options) => {
       (options as ReplayOptions).onCompactionRejected?.(checkpoint);
       const stream = createAssistantMessageEventStream();
