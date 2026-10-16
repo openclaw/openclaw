@@ -297,7 +297,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: resolveManagedResourceStateDir keeps plugin-managed model caches and binaries on the operator root during redirected agent exec.
       // +2: shared SystemOne question encoder and response decoder on the Decisions facade.
       // +4: capability-aware auth context and transport model types in core/plugin-entry.
-      3822,
+      // +1: formatErrorMessageRaw keeps log-bound warning text raw until the egress sinks mask it.
+      3823,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -344,7 +345,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same openRecord helper; ToolArgumentValidationError is construct-only.
       // +1: resolveManagedResourceStateDir keeps plugin-managed model caches and binaries on the operator root during redirected agent exec.
       // +2: the same shared SystemOne codec functions.
-      2214,
+      // +1: the same policy-free error formatting export for raw log writes.
+      2215,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
