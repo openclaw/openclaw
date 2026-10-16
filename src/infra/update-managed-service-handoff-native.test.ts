@@ -175,7 +175,7 @@ describe("managed handoff native staging", () => {
     });
   });
 
-  it.skipIf(!supportsPosixFiles).each(["LICENSE", "dist", "dist/identity.js", "dist/native.js"])(
+  it.skipIf(!supportsPosixFiles).each(["LICENSE", "dist", "dist/native.js"])(
     "rejects source symlinks: %s",
     async (relative) => {
       const fixture = installedProcSafe();

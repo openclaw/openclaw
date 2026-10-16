@@ -1,7 +1,10 @@
 import type { RawBuilder, Selectable } from "kysely";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { emptyOutboundDeliveryQueueAdmission } from "./delivery-queue-cache.js";
+import {
+  emptyOutboundDeliveryQueueAdmission,
+  failedDeliveryQueueHealthAdmission,
+} from "./delivery-queue-cache.js";
 import { deriveDeliveryQueueRetentionColumns } from "./delivery-queue-retention-columns.js";
 import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
 import {
@@ -123,13 +126,16 @@ export function pruneDeliveryQueueTombstones(
         ),
       ),
   );
+  if ((result.numAffectedRows ?? 0n) > 0n) {
+    publishSqliteDatabaseAdmission(db, failedDeliveryQueueHealthAdmission, undefined);
+  }
   const ordinaryPruned = prefix ? false : pruneOrdinaryDeliveryReceipts(db, now);
   return (result.numAffectedRows ?? 0n) > 0n || ordinaryPruned;
 }
 
 /** Cheap maintenance cleanup: age predicates only, with no window sort. */
 export function pruneDeliveryQueueTombstoneAges(db: EngineConnection, now: number): void {
-  executeSqliteQuerySync(
+  const result = executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<DeliveryQueueDatabase>(db)
       .deleteFrom("delivery_queue_entries")
@@ -147,6 +153,9 @@ export function pruneDeliveryQueueTombstoneAges(db: EngineConnection, now: numbe
         ),
       ),
   );
+  if ((result.numAffectedRows ?? 0n) > 0n) {
+    publishSqliteDatabaseAdmission(db, failedDeliveryQueueHealthAdmission, undefined);
+  }
   pruneOrdinaryDeliveryReceipts(db, now);
 }
 
@@ -185,7 +194,11 @@ export function terminalizeBoundDeliveryQueueEntry(
           failed_at: now,
         })
     : queueDb.deleteFrom("delivery_queue_entries").where((eb) => eb.and(expected));
-  return executeSqliteQuerySync(db, query).numAffectedRows === 1n;
+  const changed = executeSqliteQuerySync(db, query).numAffectedRows === 1n;
+  if (changed) {
+    publishSqliteDatabaseAdmission(db, failedDeliveryQueueHealthAdmission, undefined);
+  }
+  return changed;
 }
 
 function pruneOrdinaryDeliveryReceipts(db: EngineConnection, now: number): boolean {
@@ -361,6 +374,7 @@ export function upsertBoundDeliveryQueueEntryInDatabase(
   if (changed) {
     // Every queue insertion/replacement passes here; deletion cannot make an empty queue nonempty.
     publishSqliteDatabaseAdmission(database.db, emptyOutboundDeliveryQueueAdmission, undefined);
+    publishSqliteDatabaseAdmission(database.db, failedDeliveryQueueHealthAdmission, undefined);
   }
   return changed;
 }

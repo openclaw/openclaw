@@ -7,8 +7,8 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { runCrabboxProcess } from "./crabbox-process.js";
 import { crabboxExecutionError, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
-export const CRABBOX_MIN_VERSION = "0.73.0";
-export const CRABBOX_NONBLOCKING_CAPTURE_VERSION = "0.78.0";
+export const CRABBOX_MIN_VERSION = "0.77.0";
+export const CRABBOX_NONBLOCKING_CAPTURE_VERSION = "0.79.0";
 const RELEASE_URL = `https://github.com/openclaw/crabbox/releases/download/v${CRABBOX_MIN_VERSION}`;
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
 // Gateway startup contention can delay an otherwise healthy executable probe.
@@ -254,7 +254,7 @@ async function publishInstallation(params: {
       }
       try {
         signal.throwIfAborted();
-        // Publish the whole distribution so Darwin companion executables stay beside the CLI.
+        // Runtime packs and companion executables must stay beside the CLI.
         await fs.rename(payload, destination);
         return { binary, version: params.version };
       } catch (error) {

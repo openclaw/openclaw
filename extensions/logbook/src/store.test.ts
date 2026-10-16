@@ -167,12 +167,6 @@ describe("LogbookStore", () => {
       }),
       draft({ title: "Review", category: "review", appPrimary: undefined, appSecondary: "" }),
     ]);
-    const database = new DatabaseSync(path.join(dir, "logbook.sqlite"));
-    try {
-      database.prepare("UPDATE cards SET distractions = ? WHERE title = ?").run("{", "Review");
-    } finally {
-      database.close();
-    }
     const cards = await store.cardsForDay(DAY);
     expect(cards.map((card) => card.title)).toEqual(["Card", "Review"]);
     expect(cards[1]).toMatchObject({
@@ -199,6 +193,14 @@ describe("LogbookStore", () => {
       cards: [],
       stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
     });
+    const database = new DatabaseSync(path.join(dir, "logbook.sqlite"));
+    try {
+      database.prepare("UPDATE cards SET distractions = ? WHERE title = ?").run("{", "Review");
+    } finally {
+      database.close();
+    }
+    await expect(store.cardsForDay(DAY)).rejects.toThrow(/JSON/);
+    await expect(store.timelineForDay(DAY)).rejects.toThrow(/JSON/);
   });
 
   it("keeps frame metadata when a retained file cannot be removed", async () => {

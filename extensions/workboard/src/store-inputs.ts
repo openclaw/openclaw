@@ -52,6 +52,7 @@ export type WorkboardUpdateCardOptions = {
   expectedUpdatedAt?: number;
   ownerSlot?: { ownerId: string; now: number };
   preserveProofId?: string;
+  preserveNotificationId?: string;
 };
 export type WorkboardCommentInput = { body?: unknown };
 export type WorkboardLinkInput = {

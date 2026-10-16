@@ -13,16 +13,14 @@ import "../../../components/elapsed-time.tsx";
 import "./chat-session-panels.css";
 import "./chat-processes-panel.css";
 
-type Methods = { refresh(): Promise<void> };
-export type ChatProcessesPanel = SolidBridgeElement<SessionPanelProps, Methods>;
+export type ChatProcessesPanel = SolidBridgeElement<SessionPanelProps>;
 
-export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps, Methods>(
+export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps>(
   "openclaw-chat-processes-panel",
-  (props, host) => {
+  (props) => {
     const [selected, setSelected] = createSignal<string | null>(null);
     const [finishedOpen, setFinishedOpen] = createSignal(false);
     const data = useSessionPanel(props, ProcessesPanelData, () => setSelected(null));
-    host.refresh = () => data().refresh();
     createEffect(
       () => Boolean(data().error && !data().rows.length),
       (denied) => {
@@ -199,7 +197,6 @@ export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps, Methods>(
       agentId: { default: "main", attribute: false },
       presented: { default: true, type: Boolean },
     },
-    methods: { refresh: () => Promise.resolve() },
   },
 );
 

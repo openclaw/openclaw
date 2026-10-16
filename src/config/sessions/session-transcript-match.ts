@@ -1,5 +1,6 @@
 import path from "node:path";
 import {
+  createVisibleAssistantResultEventMatcher,
   matchesTranscriptEvent,
   type SessionTranscriptEventMatch,
 } from "../../sessions/transcript-visible-record.js";
@@ -20,7 +21,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
-import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
+import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-read.js";
 import type { SessionTranscriptEventMatchRequest } from "./session-transcript-worker-read.types.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -31,10 +32,14 @@ export function findTranscriptEventMatchingInDatabase(
   request: SessionTranscriptEventMatchRequest,
 ): { event: TranscriptEvent } | undefined {
   const { target, match } = request;
+  const matchesVisibleFinal =
+    match.kind === "visible-final"
+      ? createVisibleAssistantResultEventMatcher(match.runId)
+      : undefined;
   const matches = (event: TranscriptEvent) => {
     const entryId = readTranscriptEventId(event);
     return (
-      matchesTranscriptEvent(event, match) &&
+      (matchesVisibleFinal ? matchesVisibleFinal(event) : matchesTranscriptEvent(event, match)) &&
       (match.kind !== "active-assistant" ||
         Boolean(
           entryId &&
@@ -90,23 +95,9 @@ export async function findTranscriptEvent(
       owner.assertCurrent();
     };
     try {
-      return await readRestoredSessionTranscript(
-        captured,
+      return await readRestoredSessionTranscriptInWorker(
+        { scope: captured, resolved: target, owner, assertCurrent },
         () => owner.findTranscriptEvent({ target, match: selection }),
-        {
-          assertCurrent,
-          coldRead: {
-            target,
-            readMetadata: async () => {
-              const metadata = await owner.readColdMetadata({
-                sessionId: target.sessionId,
-                env: captured.env,
-              });
-              assertCurrent();
-              return metadata.archive;
-            },
-          },
-        },
       );
     } finally {
       assertCurrent();

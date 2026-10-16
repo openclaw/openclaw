@@ -1,18 +1,11 @@
-import { html, nothing } from "lit";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { t } from "../../../i18n/index.ts";
-import type {
-  QuestionPanelOptions,
-  QuestionPanelProps,
-  QuestionPanelQuestion,
-} from "./chat-question-types.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
+import { ChatQuestionSummary } from "./chat-question-summary.tsx";
+import type { QuestionPanelOptions, QuestionPanelProps } from "./chat-question-types.ts";
 import "./chat-question-card-view.tsx";
 
-export type {
-  QuestionPanelOptions,
-  QuestionPanelProps,
-  QuestionPanelQuestion,
-} from "./chat-question-types.ts";
+export type { QuestionPanelOptions, QuestionPanelProps } from "./chat-question-types.ts";
 
 export function createGatewayQuestionPanelProps(
   prompt: QuestionPrompt,
@@ -65,45 +58,8 @@ export function createGatewayQuestionPanelProps(
   };
 }
 
-function terminalAnswer(prompt: QuestionPrompt, question: QuestionPanelQuestion): string {
-  if (prompt.status === "cancelled") {
-    return t("chat.questions.skipped");
-  }
-  if (prompt.status === "expired") {
-    return t("chat.questions.expired");
-  }
-  if (prompt.status === "unavailable") {
-    return t("chat.questions.unavailable");
-  }
-  if (question.isSecret) {
-    return t("chat.questions.answered");
-  }
-  const answer = prompt.answers?.answers[question.questionId]?.join(", ");
-  return (
-    answer ||
-    t(prompt.answeredElsewhere ? "chat.questions.answeredElsewhere" : "chat.questions.answered")
-  );
-}
-
 export function renderChatQuestionSummary(prompt: QuestionPrompt) {
-  if (prompt.status === "pending") {
-    return nothing;
-  }
-  return html`
-    <div class="chat-question-summary" aria-label=${t("chat.questions.summaryLabel")}>
-      ${prompt.questions.map(
-        (question) => html`
-          <div class="chat-question-summary__item">
-            <div class="chat-question-summary__prompt">${question.question}</div>
-            <div class="chat-question-summary__line">
-              <strong>${question.header}:</strong>
-              <span>${terminalAnswer(prompt, question)}</span>
-            </div>
-          </div>
-        `,
-      )}
-    </div>
-  `;
+  return solidContent(ChatQuestionSummary, { prompt });
 }
 
 export type { ChatQuestionCard } from "./chat-question-card-view.tsx";

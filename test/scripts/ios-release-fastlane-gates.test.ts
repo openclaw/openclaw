@@ -966,7 +966,9 @@ def sh(command, *arguments, **_options)
     @owned[udid] = { "name" => args[3], "udid" => udid, "runtime" => args[5], "state" => "Shutdown" }
     return udid
   elsif args[0, 3] == ["xcrun", "simctl", "bootstatus"]
-    @owned.fetch(args[3])["state"] = "Booted"
+    device = @owned.fetch(args[3])
+    # CI observed bootstatus exiting 0 after CoreSimulator shut the Watch down mid-boot.
+    device["state"] = @scenario == "boot-ended" && device.fetch("name").include?("Apple Watch") ? "Shutdown" : "Booted"
     raise "boot failed" if @scenario == "boot-failure"
   elsif args[0, 3] == ["xcrun", "simctl", "shutdown"]
     raise "cleanup failed" if @scenario == "capture-cleanup-failure" || @scenario == "cleanup-failure"
@@ -985,7 +987,7 @@ def sh(command, *arguments, **_options)
   end
 end
 
-results = %w[combined diagnostics iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure capture-failure capture-cleanup-failure cleanup-failure].map do |scenario|
+results = %w[combined diagnostics iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     @owned, @created = {}, 0
@@ -1156,6 +1158,21 @@ puts JSON.generate(results)
     expect(row("busy").error).toContain("shut down the 1 active simulator");
     expect(row("busy").lifecycle).toEqual([]);
     expect(row("boot-failure").error).toBe("boot failed");
+    expect(row("boot-ended")).toMatchObject({
+      error:
+        "Task-owned screenshot simulator 00000000-0000-0000-0000-000000000003 is Shutdown, not Booted; CoreSimulator ended its session.",
+      pngs: 8,
+    });
+    expect(row("boot-ended").lifecycle.slice(-3)).toEqual([
+      [
+        "create",
+        "Apple Watch Ultra 3 (49mm)",
+        "watch-type",
+        "com.apple.CoreSimulator.SimRuntime.watchOS-27-0",
+      ],
+      ["bootstatus", "00000000-0000-0000-0000-000000000003", "-b"],
+      ["delete", "00000000-0000-0000-0000-000000000003"],
+    ]);
     expect(row("capture-failure").error).toBe("capture failed");
     expect(row("capture-cleanup-failure").error).toBe("capture failed");
     expect(row("cleanup-failure").error).toBe("cleanup failed");

@@ -23,39 +23,35 @@ function buildPlan(params: Parameters<typeof buildCliRespawnPlan>[0]) {
 }
 
 describe("buildCliRespawnPlan", () => {
-  it("returns null when respawn policy skips the argv", () => {
-    expect(
-      buildPlan({
-        argv: ["node", "openclaw", "--help"],
-        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-      }),
-    ).toBeNull();
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it.each([["gateway", "--ambient-channels", "run"]])(
-    "keeps foreground Gateway ambient channel options in process: %j",
-    (...args) => {
-      for (const platform of ["darwin", "linux", "win32"] as const) {
-        expect(
-          buildPlan({
-            argv: ["node", "openclaw", ...args],
-            autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-            platform,
-          }),
-        ).toBeNull();
-      }
+  it.each([undefined, "--max-old-space-size=4096"])(
+    "suppresses standalone warnings through NODE_OPTIONS while preserving %s",
+    (nodeOptions) => {
+      vi.stubGlobal("__openclawStandaloneRootUrl", "file:///app/runtime/");
+      const argv = [
+        "bun",
+        "/app/runtime/openclaw.mjs",
+        "--profile",
+        "work",
+        "config",
+        "get",
+        "gateway.mode",
+      ];
+      const respawnPlan = expectCliRespawnPlan(
+        buildPlan({ argv, env: { NODE_OPTIONS: nodeOptions }, platform: "darwin" }),
+      );
+
+      expect(respawnPlan.argv).toEqual(argv.slice(2));
+      expect(respawnPlan.env.NODE_OPTIONS).toBe(
+        nodeOptions ? `${nodeOptions} ${EXPERIMENTAL_WARNING_FLAG}` : EXPERIMENTAL_WARNING_FLAG,
+      );
+      expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBe("1");
+      expect(buildPlan({ argv, env: respawnPlan.env, platform: "darwin" })).toBeNull();
     },
   );
-
-  it("does not detach native hook relays through a startup respawn", () => {
-    expect(
-      buildPlan({
-        argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
-        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-        platform: "linux",
-      }),
-    ).toBeNull();
-  });
 
   it.each(["linux", "win32"] as const)(
     "leaves foreground Gmail shutdown with its lifecycle owner on %s",

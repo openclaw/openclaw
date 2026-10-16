@@ -1,10 +1,8 @@
 import { consumeResponseBytes, decodeTextPrefix } from "@openclaw/normalization-core";
 import {
-  asDateTimestampMs,
   asFiniteNumber,
   asPositiveFiniteNumber,
   MAX_TIMER_TIMEOUT_SECONDS,
-  resolveExpiresAtMsFromDurationMs,
   resolveIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -46,8 +44,8 @@ export function readCache<T>(
   if (!entry || ttlMs <= 0) {
     return null;
   }
-  const now = asDateTimestampMs(Date.now());
-  if (now === undefined || now >= entry.expiresAt) {
+  const now = Date.now();
+  if (now >= entry.expiresAt) {
     cache.delete(key);
     return null;
   }
@@ -61,18 +59,14 @@ export function writeCache<T>(
   value: T,
   ttlMs: number,
 ) {
-  if (ttlMs <= 0) {
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
     return;
   }
   const now = Date.now();
-  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now });
-  if (expiresAt === undefined) {
-    return;
-  }
   pruneMapToMaxSize(cache, DEFAULT_CACHE_MAX_ENTRIES - 1);
   cache.set(key, {
     value,
-    expiresAt,
+    expiresAt: now + ttlMs,
     insertedAt: now,
   });
 }

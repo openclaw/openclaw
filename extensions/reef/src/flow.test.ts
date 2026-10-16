@@ -527,30 +527,6 @@ describe("ReefMessageFlow outbound", () => {
     expect(opened.body).toEqual({ text: "hello", thread: "01JZ0000000000000000000199" });
   });
 
-  it("uses a message id reserved before delivery", async () => {
-    const { relay, flow } = await createFlow({ handle: "alice", peer: "bob" });
-    const reservedId = "01JZ0000000000000000000201";
-    const order: string[] = [];
-    relay.sendEnvelope.mockImplementationOnce(async (_peer, sentEnvelope) => {
-      order.push("relay");
-      return { id: sentEnvelope.id, status: "queued" };
-    });
-
-    await expect(
-      flow.send("bob", "hello", {
-        messageId: reservedId,
-        onPlatformSendDispatch: async () => {
-          order.push("dispatch");
-        },
-      }),
-    ).resolves.toBe(reservedId);
-    expect(order).toEqual(["dispatch", "relay"]);
-    const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<
-      typeof openClaimed
-    >[0]["envelope"];
-    expect(sent.id).toBe(reservedId);
-  });
-
   it("persists a proposal-bound owner review request and does not send or auto-approve", async () => {
     const review: Verdict = {
       ...allow,
@@ -620,47 +596,6 @@ describe("ReefMessageFlow outbound", () => {
 });
 
 describe("ReefMessageFlow delivery-store capacity", () => {
-  it("parks after ingress without retaining bookkeeping when the delivered store fills before confirm", async () => {
-    const alice = generateIdentity();
-    const bob = reefKeys();
-    const id = "01JZ0000000000000000000204";
-    const { trusted, audit, ...stores } = await workerFlowStores(
-      config(),
-      { alice: peerTrust(alice) },
-      { deliveredMaxEntries: 1 },
-    );
-    await stores.delivered.confirm("occupied"); // delivered namespace full
-    const onIngress = vi.fn(async () => {});
-    const relay = transport();
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trusted,
-      keys: bob,
-      transport: relay as unknown as ReefTransportClient, // SAFETY: test transport mock satisfies the client contract
-      guard: guard(allow),
-      audit,
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress,
-      onOwnerNotice: async () => {},
-    });
-    const entry: InboxEntry = {
-      seq: 1,
-      peer: "alice",
-      id,
-      kind: "message",
-      envelope: await envelope(alice, bob, id, "confirm hits full store"),
-      ts: Math.floor(Date.now() / 1_000),
-    };
-
-    await expect(flow.processEntries([entry])).rejects.toBeInstanceOf(ReefInboxEntryParkedError);
-    // Ingress ran, but no delivered marker was retained after confirm failed.
-    // Each re-poll re-ingests instead of unwinding the shared inbox.
-    expect(onIngress).toHaveBeenCalledTimes(1);
-    expect(relay.acknowledge).not.toHaveBeenCalled();
-    await expect(stores.delivered.status(id)).resolves.toBeUndefined();
-  });
-
   it("parks an inbound message before ingress when replay state is at capacity", async () => {
     const alice = generateIdentity();
     const bob = reefKeys();

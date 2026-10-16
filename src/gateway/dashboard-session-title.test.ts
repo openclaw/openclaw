@@ -321,12 +321,12 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     const params = titleParams();
     const background = maybeGenerateDashboardSessionTitle(params);
     const onError = vi.fn();
-    const onPersisted = vi.fn();
+    const onTitleStateChanged = vi.fn();
     const worktree = generateWorktreeSessionTitle({
       ...params,
       sessionKey: "dashboard:chat-1",
       onError,
-      onPersisted,
+      onTitleStateChanged,
     });
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(worktree).resolves.toBeUndefined();
@@ -334,7 +334,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     naming.resolve("Release Planning");
     await expect(background).resolves.toBe(true);
     expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
-    expect(onPersisted).not.toHaveBeenCalled();
+    expect(onTitleStateChanged).not.toHaveBeenCalled();
     expect(loadSessionEntry()).toMatchObject({ displayName: "Release Planning" });
   });
 
@@ -346,8 +346,8 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       generateConversationLabelWithFallback.mockReturnValue(naming.promise);
       const params = titleParams();
       const onError = vi.fn();
-      const onPersisted = vi.fn();
-      const worktree = generateWorktreeSessionTitle({ ...params, onError, onPersisted });
+      const onTitleStateChanged = vi.fn();
+      const worktree = generateWorktreeSessionTitle({ ...params, onError, onTitleStateChanged });
       const background = maybeGenerateDashboardSessionTitle(params);
 
       await vi.advanceTimersByTimeAsync(8_000);
@@ -368,7 +368,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
         displayName:
           outcome === "generated" ? "Release Planning" : expect.stringMatching(/^[a-z]+-[a-z]+$/),
       });
-      expect(onPersisted).toHaveBeenCalledOnce();
+      expect(onTitleStateChanged).toHaveBeenCalledTimes(2);
       expect(updateSessionEntry).toHaveBeenCalledOnce();
       expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
     },
@@ -381,8 +381,12 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     for (let attempt = 0; attempt < failures; attempt++) {
       updateSessionEntry.mockRejectedValueOnce(new Error("temporary write failure"));
     }
-    const onPersisted = vi.fn();
-    const worktree = generateWorktreeSessionTitle({ ...params, onError: vi.fn(), onPersisted });
+    const onTitleStateChanged = vi.fn();
+    const worktree = generateWorktreeSessionTitle({
+      ...params,
+      onError: vi.fn(),
+      onTitleStateChanged,
+    });
     const background = maybeGenerateDashboardSessionTitle(params);
     const expected =
       failures === 1
@@ -393,7 +397,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
 
     expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(2);
     expect(updateSessionEntry).toHaveBeenCalledTimes(2);
-    expect(onPersisted).not.toHaveBeenCalled();
+    expect(onTitleStateChanged).toHaveBeenCalledTimes(2);
     expect(loadSessionEntry().displayName).toBe(failures === 1 ? "Release Planning" : undefined);
   });
 
@@ -414,12 +418,12 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       loadSessionEntry.mockReturnValue({ ...baseEntry, ...patch });
       return loadSessionEntry();
     });
-    const onPersisted = vi.fn();
+    const onTitleStateChanged = vi.fn();
     const worktree = generateWorktreeSessionTitle({
       ...titleParams(),
       commitGuard,
       onError: vi.fn(),
-      onPersisted,
+      onTitleStateChanged,
     });
     const rejected = expect(worktree).rejects.toThrow("run closed");
     await writePrepared.promise;
@@ -427,7 +431,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     releaseWrite.resolve();
     await rejected;
     expect(loadSessionEntry()).not.toHaveProperty("displayName");
-    expect(onPersisted).not.toHaveBeenCalled();
+    expect(onTitleStateChanged).toHaveBeenCalledTimes(2);
   });
 
   it("deduplicates concurrent title requests for one session generation", async () => {
@@ -643,14 +647,18 @@ describe("worktree title source lifecycle", () => {
         return { ...current };
       });
       const onError = vi.fn();
-      const onPersisted = vi.fn(() => persisted.resolve());
+      const onTitleStateChanged = vi.fn(() => {
+        if (current.displayName) {
+          persisted.resolve();
+        }
+      });
       const request = context.run("caller", () =>
         owner.run(() =>
           generateWorktreeSessionTitle({
             ...sourceTitleParams("success"),
             withSource: source.withSource,
             onError,
-            onPersisted,
+            onTitleStateChanged,
           }),
         ),
       );
@@ -690,7 +698,7 @@ describe("worktree title source lifecycle", () => {
         expect(writeContext).not.toBe(source.entered[0]);
         expect(writeAssertions).toEqual([writeContext]);
         expect(source.closed).toEqual(source.entered);
-        expect(onPersisted).toHaveBeenCalledOnce();
+        expect(onTitleStateChanged).toHaveBeenCalledTimes(2);
         expect(current.displayName).toBe("Scoped release planning");
       } finally {
         continueGeneration.resolve();

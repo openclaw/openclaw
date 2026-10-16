@@ -374,6 +374,16 @@ test("sessions.delete broadcasts the removed generation after a replacement appe
   expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("generation-b");
   expect(broadcast.mock.calls.map(([event, payload]) => ({ event, payload }))).toEqual([
     {
+      event: "socket.drain",
+      payload: {
+        sessionKey,
+        agentId: "main",
+        sessionId: "generation-a",
+        reason: "delete",
+        ts: expect.any(Number),
+      },
+    },
+    {
       event: "sessions.changed",
       payload: {
         sessionKey,

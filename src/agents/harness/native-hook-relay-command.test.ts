@@ -6,9 +6,12 @@ const mocks = vi.hoisted(() => ({
   packageRoot: "/openclaw-package",
 }));
 
-vi.mock("node:fs", () => ({
-  existsSync: (candidate: string) => mocks.existingPaths.has(candidate),
-}));
+vi.mock("node:fs", async () => {
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
+  return mockNodeBuiltinModule(() => vi.importActual<typeof import("node:fs")>("node:fs"), {
+    existsSync: (candidate) => typeof candidate === "string" && mocks.existingPaths.has(candidate),
+  });
+});
 
 vi.mock("../../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync: () => mocks.packageRoot,

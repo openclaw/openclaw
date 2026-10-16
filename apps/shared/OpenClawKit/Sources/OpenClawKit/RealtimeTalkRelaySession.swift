@@ -422,7 +422,7 @@ public final class RealtimeTalkRelaySession {
             self.relaySessionId = relaySessionId
             // Acknowledgments need identity during startup; routing stays gated until replay finishes.
             self.output.withLock { $0.relaySessionId = relaySessionId }
-            let supportsBargeIn = await resolveSupportsBargeIn(result)
+            let supportsBargeIn = await resolveSupportsBargeIn(result, lifecycleGeneration: lifecycleGeneration)
             switch await lifecycleStatus(lifecycleGeneration) {
             case .current: break
             case .cancelledLocally: return
@@ -610,7 +610,10 @@ public final class RealtimeTalkRelaySession {
         }
     }
 
-    private func resolveSupportsBargeIn(_ session: TalkSessionCreateResult) async -> Bool? {
+    private func resolveSupportsBargeIn(
+        _ session: TalkSessionCreateResult,
+        lifecycleGeneration: UInt64) async -> Bool?
+    {
         var payload: [String: AnyCodable] = [:]
         if let provider = (session.provider ?? self.options.provider)?.trimmedNonEmpty {
             payload["provider"] = AnyCodable(provider)
@@ -620,7 +623,7 @@ public final class RealtimeTalkRelaySession {
         }
         // A talk-only client may create sessions without permission to read the catalog.
         // Unknown capability leaves interruption ownership with the provider.
-        guard let response = try? await self.transport.request("talk.catalog", payload, 8000),
+        guard let response = try? await self.requestTalkCatalog(payload, lifecycleGeneration: lifecycleGeneration),
               let catalog = try? JSONDecoder().decode(TalkCatalogResult.self, from: response)
         else { return nil }
         let provider = (payload["provider"]?.stringValue
@@ -631,6 +634,30 @@ public final class RealtimeTalkRelaySession {
                 entry["aliases"]?.arrayValue?.contains { $0.stringValue?.lowercased() == provider } == true
         }?.dictionaryValue
         return entry?["supportsBargeIn"]?.boolValue ?? true
+    }
+
+    private func requestTalkCatalog(
+        _ payload: [String: AnyCodable],
+        lifecycleGeneration: UInt64) async throws -> Data
+    {
+        let deadline = ProcessInfo.processInfo.systemUptime + 10
+        var timeoutMs: Double = 8000
+        while true {
+            try Task.checkCancellation()
+            guard await self.lifecycleStatus(lifecycleGeneration) == .current else { throw CancellationError() }
+            do {
+                return try await self.transport.request("talk.catalog", payload, timeoutMs)
+            } catch let error as GatewayResponseError {
+                guard error.method == "talk.catalog", error.code == "UNAVAILABLE",
+                      error.detailsReason == "talk-catalog-warming", error.details["retryable"]?.boolValue == true
+                else { throw error }
+                let delayMs = max(250, error.details["retryAfterMs"]?.intValue ?? 250)
+                guard ProcessInfo.processInfo.systemUptime + Double(delayMs) / 1000 < deadline else { throw error }
+                try await Task.sleep(for: .milliseconds(delayMs))
+                timeoutMs = (deadline - ProcessInfo.processInfo.systemUptime) * 1000
+                guard timeoutMs > 0 else { throw error }
+            }
+        }
     }
 
     private func drainOutputEffects() {

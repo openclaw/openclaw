@@ -150,7 +150,8 @@ export function createSessionActorMemoryPending(
           row.session_id === query.sessionId &&
           row.consumed_event_id === null,
       );
-      const total = query.id === undefined ? rows.length : undefined;
+      const total =
+        query.id === undefined && query.includeTotal !== false ? rows.length : undefined;
       if (total === 0) {
         return { rows: [], total };
       }

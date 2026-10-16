@@ -28,7 +28,6 @@ import {
   updateSkillEnabled,
   type SkillsState,
 } from "../../lib/skills/index.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { PluginIconController, pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
 import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
 import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
@@ -573,19 +572,18 @@ class SkillsPageState {
 
 export type SkillsPageProps = { routeData?: SkillsRouteData; surface?: "discovery" | "settings" };
 
-export const SkillsPage = defineSolidBridge<SkillsPageProps>(
-  "openclaw-skills-page",
-  (props) => {
-    const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-    const state = new SkillsPageState(useApplication(), props, revision, () => {
-      setRevision((value) => value + 1);
-    });
-    return state.render();
-  },
-  {
-    properties: {
-      routeData: { default: undefined, attribute: false },
-      surface: { default: "settings", attribute: false },
-    },
-  },
-);
+export function SkillsPage(props: SkillsPageProps) {
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const state = new SkillsPageState(useApplication(), props, revision, () => {
+    setRevision((value) => value + 1);
+  });
+  return <openclaw-skills-page>{state.render()}</openclaw-skills-page>;
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-skills-page": HTMLAttributes<HTMLElement>;
+    }
+  }
+}

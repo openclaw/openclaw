@@ -126,6 +126,9 @@ extension CLIInstaller {
         let state = AppProfile.current.stateDirectoryURL()
         guard let cli else {
             await statusHandler("Preparing OpenClaw…")
+            if try await GatewayLaunchAgentManager.runtimePinRecord(
+                stateDirectory: state, profile: .current)?.status == .migrationPending
+            { return try await manager.currentBundledRuntime().packageRoot.path }
             return try await BundledRuntime.seed().packageRoot.path
         }
         if GatewayLaunchAgentManager.bundledRuntimeReplacementError(
@@ -174,14 +177,14 @@ extension CLIInstaller {
         let repair = versionSatisfied && (pending?.coreUpdate == .gateway || pending?.coreUpdate == .legacyCanonical)
         if versionSatisfied, !repair { return cli.prefix.last ?? status.location }
         let checkCurrent: @MainActor @Sendable () async throws -> Void = {
-            let hasRuntimePin = try await GatewayLaunchAgentManager.hasRuntimePin(
+            let pin = try await GatewayLaunchAgentManager.runtimePinRecord(
                 stateDirectory: state, profile: .current)
             let ownsRuntime = cli.prefix.first.map {
                 GatewayLaunchAgentManager.isManagedNode($0, stateDirectory: state) ||
                     GatewayLaunchAgentManager.bundledRuntimeReplacementError(
                         appManaged: true, installedRuntimePath: $0, stateDirectory: state) == nil
             } ?? false
-            guard ownsRuntime, !cli.hadRuntimePin, !hasRuntimePin,
+            guard ownsRuntime, pin?.status == .migrationPending || (!cli.hadRuntimePin && pin == nil),
                   Self.managedSetupPolicyAllowsUpdate(cli: cli),
                   repair || CLIInstallPrompter.shouldAutomaticallyRepair(
                       status: status,

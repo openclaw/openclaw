@@ -357,7 +357,7 @@ DSN. Restore verifies the matched set and creates a fresh owned PostgreSQL
 namespace before publishing its anchor. Retain the displaced namespace until
 recovery is confirmed.
 
-For SQLite, Git-backed backups dump each selected database into deterministic `schema.sql`,
+For SQLite, Git-backed backups dump each selected database into consistently ordered `schema.sql`,
 `manifest.json`, and per-table JSONL files, then create one commit for the
 whole run. Unchanged database content produces no commit, so Git stores and
 pushes only content changes by construction. OpenClaw stages only the
@@ -515,7 +515,7 @@ into live state or agent roots and has no force or in-place mode. Treat the
 restored directory as sensitive: it can contain credentials, auth profiles,
 sessions, and workspace data.
 
-Before restoring, ensure the target filesystem has room for the archive's full
+Before restoring, check that the target filesystem has room for the archive's full
 uncompressed payload, plus extraction overhead, while the live tree remains in
 place. Renaming or moving the live tree to a sibling path on the same filesystem
 does not free its blocks; a full restore therefore needs space for a second tree.

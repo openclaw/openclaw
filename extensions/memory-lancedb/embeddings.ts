@@ -301,13 +301,12 @@ class ProviderAdapterEmbeddings implements Embeddings {
   async embed(
     agentId: string,
     text: string,
-    embeddingConfig: EmbeddingConfig,
+    embedding: EmbeddingConfig,
     timeoutMs?: number,
   ): Promise<number[]> {
     if (this.closed) {
       throw new Error("memory-lancedb embeddings are closed");
     }
-    const embedding = { ...embeddingConfig };
     const fingerprint = embeddingConfigFingerprint(embedding);
     this.invalidate(fingerprint);
     const entry = this.getProvider(normalizeAgentId(agentId), embedding);
@@ -444,11 +443,10 @@ export function createEmbeddings(api: OpenClawPluginApi): Embeddings & { start()
         closed = false;
       }
     },
-    async embed(agentId, text, embeddingConfig, timeoutMs) {
+    async embed(agentId, text, embedding, timeoutMs) {
       if (closed) {
         throw new Error("memory-lancedb embeddings are closed");
       }
-      const embedding = { ...embeddingConfig };
       if (embedding.provider === "openai" && embedding.apiKey) {
         provider.invalidate();
         const fingerprint = embeddingConfigFingerprint(embedding);

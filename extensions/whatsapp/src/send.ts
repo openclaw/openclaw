@@ -357,27 +357,19 @@ export async function sendReactionWhatsApp(
     chatJid: redactedChatJid,
     messageId,
   });
-  try {
-    const jid = toWhatsappJid(chatJid);
-    const redactedJid = redactIdentifier(jid);
-    outboundLog.info(`Sending reaction "${emoji}" -> message ${messageId}`);
-    logger.info({ chatJid: redactedJid, messageId, emoji }, "sending reaction");
-    await active.sendReaction(
-      chatJid,
-      messageId,
-      emoji,
-      options.fromMe ?? false,
-      options.participant,
-    );
-    outboundLog.info(`Sent reaction "${emoji}" -> message ${messageId}`);
-    logger.info({ chatJid: redactedJid, messageId, emoji }, "sent reaction");
-  } catch (err) {
-    logger.error(
-      { err: String(err), chatJid: redactedChatJid, messageId, emoji },
-      "failed to send reaction via web session",
-    );
-    throw err;
-  }
+  const jid = toWhatsappJid(chatJid);
+  const redactedJid = redactIdentifier(jid);
+  outboundLog.info(`Sending reaction "${emoji}" -> message ${messageId}`);
+  logger.info({ chatJid: redactedJid, messageId, emoji }, "sending reaction");
+  await active.sendReaction(
+    chatJid,
+    messageId,
+    emoji,
+    options.fromMe ?? false,
+    options.participant,
+  );
+  outboundLog.info(`Sent reaction "${emoji}" -> message ${messageId}`);
+  logger.info({ chatJid: redactedJid, messageId, emoji }, "sent reaction");
 }
 
 export async function sendPollWhatsApp(
@@ -398,30 +390,25 @@ export async function sendPollWhatsApp(
     correlationId,
     to: redactedTo,
   });
-  try {
-    const jid = toWhatsappJid(to);
-    const redactedJid = redactIdentifier(jid);
-    const normalized = normalizePollInput(poll, { maxOptions: 12 });
-    outboundLog.info(`Sending poll -> ${redactedJid}`);
-    logger.info(
-      {
-        jid: redactedJid,
-        optionCount: normalized.options.length,
-        maxSelections: normalized.maxSelections,
-      },
-      "sending poll",
-    );
-    if (!isWhatsAppNewsletterJid(jid)) {
-      await active.assertSendReady?.(to);
-    }
-    const result = requireWhatsAppAcceptedSendResult(await active.sendPoll(to, normalized));
-    const messageId = result.messageId;
-    const durationMs = Date.now() - startedAt;
-    outboundLog.info(`Sent poll ${messageId} -> ${redactedJid} (${durationMs}ms)`);
-    logger.info({ jid: redactedJid, messageId }, "sent poll");
-    return { messageId, toJid: resolveActualSentRemoteJid(result, jid) };
-  } catch (err) {
-    logger.error({ err: String(err), to: redactedTo }, "failed to send poll via web session");
-    throw err;
+  const jid = toWhatsappJid(to);
+  const redactedJid = redactIdentifier(jid);
+  const normalized = normalizePollInput(poll, { maxOptions: 12 });
+  outboundLog.info(`Sending poll -> ${redactedJid}`);
+  logger.info(
+    {
+      jid: redactedJid,
+      optionCount: normalized.options.length,
+      maxSelections: normalized.maxSelections,
+    },
+    "sending poll",
+  );
+  if (!isWhatsAppNewsletterJid(jid)) {
+    await active.assertSendReady?.(to);
   }
+  const result = requireWhatsAppAcceptedSendResult(await active.sendPoll(to, normalized));
+  const messageId = result.messageId;
+  const durationMs = Date.now() - startedAt;
+  outboundLog.info(`Sent poll ${messageId} -> ${redactedJid} (${durationMs}ms)`);
+  logger.info({ jid: redactedJid, messageId }, "sent poll");
+  return { messageId, toJid: resolveActualSentRemoteJid(result, jid) };
 }

@@ -7,7 +7,6 @@ import { appendSessionTranscriptMessagesByIdentity } from "openclaw/plugin-sdk/s
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readCodexSessionMeta } from "../session-catalog-provenance.js";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
-import { readCodexRolloutSnapshot } from "../session-rollout-snapshot.js";
 import { codexUpstreamBaseline } from "../session-upstream-marker.js";
 import { prepareCanonicalCodexFork } from "./canonical-fork-preparation.js";
 import { claimCodexAppServerLiveThread, hasCodexAppServerLiveThread } from "./client-runtime.js";
@@ -140,18 +139,21 @@ export async function forkCanonicalCodexSession(params: {
               ownership.assertCurrent();
             }
           };
-          const snapshot = await readCodexRolloutSnapshot({
-            sessionsRoot: context.localSessionsRoot!,
-            rolloutPath: resolved.canonical.thread.path!,
-            threadId: sourceBinding.threadId,
-            assertCurrent,
-          });
+          const metadata = await readCodexSessionMeta(
+            context.localSessionsRoot!,
+            resolved.canonical.thread.path!.replace(/\.zst$/, ""),
+            sourceBinding.threadId,
+            { canonicalSource: true },
+          );
           assertCurrent();
+          if (!metadata) {
+            throw new Error("The source Codex rollout metadata could not be verified");
+          }
           if (!sourceBinding.dynamicToolsFingerprint) {
             throw new Error("The source session has no verified native catalog binding");
           }
           const sourceCatalog = parseCodexNativeToolCatalog(
-            snapshot.metadata,
+            metadata,
             sourceBinding.threadId,
             sourceBinding.dynamicToolsFingerprint,
           );
@@ -165,10 +167,6 @@ export async function forkCanonicalCodexSession(params: {
             sandbox: fork.sandbox,
             dynamicTools: sourceCatalog,
           });
-          assertCurrent();
-          await snapshot.assertUnchanged();
-          assertCurrent();
-          await resolved.canonical.assertUnchanged();
           assertCurrent();
           if (!isDeepStrictEqual(bindingStore.read(sourceIdentity), sourceBinding)) {
             throw new Error("Codex source binding changed during preparation");
@@ -239,7 +237,7 @@ export async function forkCanonicalCodexSession(params: {
               "Codex did not apply the exact beforeTurnId cut. Reconnect to a compatible server and retry.",
             );
           }
-          const metadata = response.thread.path
+          const childMetadata = response.thread.path
             ? await readCodexSessionMeta(
                 context.localSessionsRoot!,
                 response.thread.path,
@@ -247,22 +245,18 @@ export async function forkCanonicalCodexSession(params: {
               )
             : undefined;
           assertCurrent();
-          if (!metadata || metadata.model_provider !== modelProvider) {
+          if (!childMetadata || childMetadata.model_provider !== modelProvider) {
             throw new Error("The fresh Codex fork metadata could not be verified");
           }
-          const childCatalog = parseCodexNativeToolCatalog(metadata, freshThreadId);
+          const childCatalog = parseCodexNativeToolCatalog(childMetadata, freshThreadId);
           if (!isDeepStrictEqual(sourceCatalog, childCatalog)) {
             throw new Error("Codex fork did not preserve the actual native tool catalog");
           }
-          await snapshot.assertUnchanged();
-          assertCurrent();
           await checkCodexThreadAppAvailability({
             client: context.client,
             threadId: freshThreadId,
             appIds: prepared.provisionalAppIds,
           });
-          assertCurrent();
-          await resolved.canonical.assertUnchanged();
           assertCurrent();
           try {
             await refreshCodexThreadPolicy({
@@ -279,29 +273,18 @@ export async function forkCanonicalCodexSession(params: {
             }
             throw error;
           }
-          const appended = await appendSessionTranscriptMessagesByIdentity({
+          await appendSessionTranscriptMessagesByIdentity({
             config,
             storePath: resolveStorePath(config.session?.store, { agentId: created.agentId }),
             agentId: created.agentId,
             sessionKey: created.key,
             sessionId: created.sessionId,
             messages: resolved.canonical.prefix.map((entry) => ({
-              message: structuredClone(entry.message),
+              message: entry.message,
               idempotencyLookup: "scan" as const,
             })),
           });
           assertCurrent();
-          if (
-            appended.length !== resolved.canonical.prefix.length ||
-            appended.some(
-              (item, index) =>
-                !item.appended ||
-                !isDeepStrictEqual(item.message, resolved.canonical.prefix[index]?.message) ||
-                (index > 0 && item.effectiveParentId !== appended[index - 1]?.messageId),
-            )
-          ) {
-            throw new Error("The saved Codex display prefix could not be copied completely");
-          }
           await initialization.linkAsync({
             sessionKey: created.key,
             agentId: created.agentId,
@@ -333,8 +316,6 @@ export async function forkCanonicalCodexSession(params: {
           assertCurrent();
           await ownership.release(freshThreadId, assertCurrent);
           subscriptionReleased = true;
-          initialization.assertCurrent();
-          await resolved.canonical.assertUnchanged();
           initialization.assertCurrent();
           if (!isDeepStrictEqual(bindingStore.read(sourceIdentity), sourceBinding)) {
             throw new Error("Codex source binding changed before fork readiness");

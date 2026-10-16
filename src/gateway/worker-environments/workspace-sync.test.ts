@@ -90,10 +90,11 @@ describe("worker workspace command transport retry", () => {
   );
 
   it("runs never commands once without changing the selected port", async () => {
-    // Pin the clock: the impl derives the dispatch timeout from a Date.now()
-    // deadline, so real elapsed ms between admission and dispatch would turn
-    // the exact 777 assertion below into a loaded-runner flake.
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    // Pin the clock: the impl derives the dispatch timeout from a
+    // performance.now() deadline, so real elapsed ms between admission and
+    // dispatch would turn the exact 777 assertion below into a loaded-runner
+    // flake.
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
     const run = vi.fn(async (argv: string[], _options: CommandOptions) =>
       argv.at(-1)?.includes("never-command") ? result(255) : result(),
     );
@@ -121,7 +122,7 @@ describe("worker workspace command transport retry", () => {
 
   it("gives an idempotent fallback only the remaining operation timeout", async () => {
     let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const run = vi.fn(async (argv: string[], _options: CommandOptions) => {
       if (sshArgvPort(argv) === 2222) {
         now += 175;

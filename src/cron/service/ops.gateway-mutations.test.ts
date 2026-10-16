@@ -56,9 +56,22 @@ async function withCronGateway(
   await withOpenClawTestState({ prefix: "cron-mutation-dispatch-" }, async (state) => {
     resetCommandQueueStateForTest();
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
+      agents: {
+        entries: { main: {} },
+        defaults: { workspace: state.workspaceDir, model: "openai/gpt-4.1" },
+      },
       cron: { enabled: false },
     };
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "openai:mutation-fixture": {
+          type: "api_key",
+          provider: "openai",
+          key: "synthetic-mutation-inference-key",
+        },
+      },
+    });
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
     const storePath = state.statePath("cron", "jobs.json");

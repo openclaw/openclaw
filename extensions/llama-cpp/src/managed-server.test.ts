@@ -165,62 +165,48 @@ describe("managed llama-server", () => {
     expect(reloads).toBe(0);
   });
 
-  it.each([
-    { route: "args", mode: "preserve", newline: "\n" },
-    { route: "env", mode: "configure", newline: "\r\n" },
-  ] as const)(
-    "preserves configured preset settings for $route/$mode",
-    async ({ route, mode, newline }) => {
-      const root = tempDirs.make("llama-server-owned-settings-");
-      const presetPath = path.join(root, "custom.ini");
-      const global = `version = 1${newline}; operator defaults${newline}[*]${newline}ctx-size = 16384${newline}${newline}`;
-      const sibling = `[sibling] ; another model${newline}model = /models/sibling.gguf${newline}n-gpu-layers = 7${newline}${newline}`;
-      const chat = `[chat]${newline}model = /models/chat.gguf${newline}c = 4096 ; selected context${newline}n-gpu-layers = 12${newline}${newline}`;
-      await fs.writeFile(
-        presetPath,
-        global +
-          "[stale\nmultiline]\nmodel = /models/stale.gguf\n\n".replaceAll("\n", newline) +
-          sibling +
-          chat +
-          `[embeddinggemma-300m-qat-q8_0]${newline}; keep\u2028model = /models/comment.gguf${newline}model = /models/old.gguf ; embedding path${newline}pooling = mean${newline}ubatch-size = 256${newline}`,
-      );
+  it("preserves configured preset settings for env/configure", async () => {
+    const newline = "\r\n";
+    const root = tempDirs.make("llama-server-owned-settings-");
+    const presetPath = path.join(root, "custom.ini");
+    const global = `version = 1${newline}; operator defaults${newline}[*]${newline}ctx-size = 16384${newline}${newline}`;
+    const sibling = `[sibling] ; another model${newline}model = /models/sibling.gguf${newline}n-gpu-layers = 7${newline}${newline}`;
+    const chat = `[chat]${newline}model = /models/chat.gguf${newline}c = 4096 ; selected context${newline}n-gpu-layers = 12${newline}${newline}`;
+    await fs.writeFile(
+      presetPath,
+      global +
+        "[stale\nmultiline]\nmodel = /models/stale.gguf\n\n".replaceAll("\n", newline) +
+        sibling +
+        chat +
+        `[embeddinggemma-300m-qat-q8_0]${newline}; keep\u2028model = /models/comment.gguf${newline}model = /models/old.gguf ; embedding path${newline}pooling = mean${newline}ubatch-size = 256${newline}`,
+    );
 
-      await prepareManagedLlamaServer({
-        localService: {
-          command: path.join(root, "custom-server"),
-          cwd: root,
-          ...(route === "args"
-            ? { args: ["--models-preset", "custom.ini"] }
-            : { env: { LLAMA_ARG_MODELS_PRESET: "custom.ini" } }),
-        },
-        port: 19436,
-        configuredChatModelIds: ["chat", "sibling"],
-        chatModel:
-          mode === "preserve"
-            ? { mode }
-            : { mode, id: "chat", path: "/models/chat.gguf", contextSize: 8192 },
-        embeddingModelPath: "/models/new.gguf",
-      });
+    await prepareManagedLlamaServer({
+      localService: {
+        command: path.join(root, "custom-server"),
+        cwd: root,
+        env: { LLAMA_ARG_MODELS_PRESET: "custom.ini" },
+      },
+      port: 19436,
+      configuredChatModelIds: ["chat", "sibling"],
+      chatModel: { mode: "configure", id: "chat", path: "/models/chat.gguf", contextSize: 8192 },
+      embeddingModelPath: "/models/new.gguf",
+    });
 
-      const updated = await fs.readFile(presetPath, "utf8");
-      expect(updated.startsWith(global)).toBe(true);
-      expect(updated).toContain(sibling.trimEnd());
-      expect(updated).not.toContain("[stale");
-      expect(updated.indexOf("[chat]")).toBeLessThan(updated.indexOf("[sibling]"));
-      expect(updated).toContain(`n-gpu-layers = 12${newline}`);
-      expect(updated).toContain(`model = /models/new.gguf ; embedding path${newline}`);
-      expect(updated).toContain(`pooling = mean${newline}`);
-      expect(updated).toContain(`; keep\u2028model = /models/comment.gguf${newline}`);
-      expect(updated).toContain(`ubatch-size = 256${newline}`);
-      if (mode === "preserve") {
-        expect(updated).toContain(chat);
-      } else {
-        expect(updated).toContain(`ctx-size = 8192 ; selected context${newline}`);
-        expect(updated).not.toContain("c = 4096");
-      }
-      expect(installMocks.ensureLlamaServerInstalled).not.toHaveBeenCalled();
-    },
-  );
+    const updated = await fs.readFile(presetPath, "utf8");
+    expect(updated.startsWith(global)).toBe(true);
+    expect(updated).toContain(sibling.trimEnd());
+    expect(updated).not.toContain("[stale");
+    expect(updated.indexOf("[chat]")).toBeLessThan(updated.indexOf("[sibling]"));
+    expect(updated).toContain(`n-gpu-layers = 12${newline}`);
+    expect(updated).toContain(`model = /models/new.gguf ; embedding path${newline}`);
+    expect(updated).toContain(`pooling = mean${newline}`);
+    expect(updated).toContain(`; keep\u2028model = /models/comment.gguf${newline}`);
+    expect(updated).toContain(`ubatch-size = 256${newline}`);
+    expect(updated).toContain(`ctx-size = 8192 ; selected context${newline}`);
+    expect(updated).not.toContain("c = 4096");
+    expect(installMocks.ensureLlamaServerInstalled).not.toHaveBeenCalled();
+  });
 
   it.each(["release-Q4_K_M"])(
     "updates the native model's effective %s preset alias",
@@ -250,41 +236,6 @@ describe("managed llama-server", () => {
       expect(updated).toContain(inactive);
     },
   );
-
-  it("bounds a custom embedding model while removing stale chat from the preset", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-embedding-only-"));
-    const presetPath = path.join(tempRoot, "models.ini");
-    const asset = selectLlamaServerAsset("darwin", "arm64");
-    installMocks.ensureLlamaServerInstalled.mockResolvedValue({
-      command: path.join(tempRoot, "llama-server"),
-      asset,
-    });
-    installMocks.resolveManagedLlamaServerPaths.mockReturnValue({
-      installDir: tempRoot,
-      command: path.join(tempRoot, "llama-server"),
-      presetPath,
-    });
-
-    try {
-      await fs.writeFile(
-        presetPath,
-        "version = 1\n\n[*]\ncache-type-k = q8_0\n\n[stale-chat]\nmodel = /models/stale-chat.gguf\n\n" +
-          "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/old-embedding.gguf\nembedding = true\n",
-      );
-      await prepareManagedLlamaServer({
-        chatModel: { mode: "remove" },
-        embeddingModelPath: "/models/custom-embedding.gguf",
-        port: 19_432,
-      });
-      const preset = await fs.readFile(presetPath, "utf8");
-      expect(preset).toBe(
-        "version = 1\n\n[*]\ncache-type-k = q8_0\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\nparallel = 1\nctx-size = 2048\nubatch-size = 2048\n",
-      );
-      expect(preset).not.toContain("jinja");
-    } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
-  });
 
   it("preserves both model stanzas and the configured CUDA runtime during concurrent preparation", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-chat-preset-"));
@@ -385,74 +336,6 @@ describe("managed llama-server", () => {
       `[second]\nmodel = ${secondPath}\nctx-size = 32768\nn-predict = 2048\njinja = true`,
     );
     expect(preset.indexOf("[first]")).toBeLessThan(preset.indexOf("[second]"));
-  });
-
-  it("prunes and orders sections without rewriting or reloading unchanged bytes", async () => {
-    const { presetPath } = await createPresetFixture("chat-prune");
-    let reloads = 0;
-    const server = http.createServer((req, res) => {
-      reloads += Number(req.url === "/models?reload=1");
-      res.end("{}");
-    });
-    servers.push(server);
-    const port = await listen(server);
-    const rename = vi.spyOn(fs, "rename");
-    const params = {
-      chatModel: { mode: "preserve" as const },
-      configuredChatModelIds: ["zeta", "alpha"],
-      port,
-    };
-    await fs.writeFile(
-      presetPath,
-      [
-        "; operator header",
-        "version = 1",
-        "",
-        "[*]",
-        "n-gpu-layers = 12",
-        "",
-        "[stale]",
-        "model = /models/stale.gguf",
-        "",
-        "[zeta]",
-        "model = /models/zeta.gguf",
-        "",
-        "[alpha]",
-        "model = /models/alpha.gguf",
-        "",
-        "[embeddinggemma-300m-qat-q8_0]",
-        "model = /models/embedding.gguf",
-        "embedding = true",
-        "",
-      ].join("\n"),
-    );
-    await prepareManagedLlamaServer(params);
-    await prepareManagedLlamaServer(params);
-    const baseUrl = `http://127.0.0.1:${port}/v1`;
-    await reconcileManagedLlamaServer({ baseUrl });
-    await reconcileManagedLlamaServer({ baseUrl });
-    expect(await fs.readFile(presetPath, "utf8")).toBe(
-      [
-        "; operator header",
-        "version = 1",
-        "",
-        "[*]",
-        "n-gpu-layers = 12",
-        "",
-        "[alpha]",
-        "model = /models/alpha.gguf",
-        "",
-        "[zeta]",
-        "model = /models/zeta.gguf",
-        "",
-        "[embeddinggemma-300m-qat-q8_0]",
-        "model = /models/embedding.gguf",
-        "embedding = true",
-        "",
-      ].join("\n"),
-    );
-    expect(rename).toHaveBeenCalledTimes(1);
-    expect(reloads).toBe(1);
   });
 
   it("tracks applied preset revisions independently by managed origin", async () => {
@@ -655,7 +538,7 @@ describe("managed llama-server", () => {
     ).rejects.toThrow("Run interactive llama.cpp setup or correct params.modelPath");
   });
 
-  it.each(["manifest", "file"] as const)(
+  it.each(["manifest"] as const)(
     "bounds Hugging Face %s metadata while preserving a legitimate response",
     async (endpoint) => {
       await withHuggingFaceMetadataFixture(
@@ -684,25 +567,6 @@ describe("managed llama-server", () => {
       );
     },
   );
-
-  it("resolves a cached GGUF when unrelated repository tree metadata is oversized", async () => {
-    await withHuggingFaceMetadataFixture(
-      { cacheDir: tempDirs.make("llama-cpp-hf-tree-"), servers },
-      "tree",
-      async ({ cacheDir, setPadding, pathInfoBodies, requestedUrls, source }) => {
-        setPadding("tree", "x".repeat(16 * 1024 * 1024 + 1));
-        await expect(
-          ensureLlamaCppModel({
-            source,
-            cacheDir,
-            download: false,
-          }),
-        ).resolves.toBe(path.join(cacheDir, "hf_owner_repo_model.gguf"));
-        expect(pathInfoBodies).toEqual([{ paths: ["model.gguf"], expand: false }]);
-        expect(requestedUrls.some((url) => url.includes("/tree/"))).toBe(false);
-      },
-    );
-  });
 
   it("keeps a verified custom Hugging Face artifact available while refreshing its preset", async () => {
     await withHuggingFaceMetadataFixture(

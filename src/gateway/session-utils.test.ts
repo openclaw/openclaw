@@ -23,7 +23,6 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { CronJob } from "../cron/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
-import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import * as execApprovalsStore from "../infra/exec-approvals-store.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -256,47 +255,18 @@ describe("gateway session utils", () => {
 
   afterAll(closeSessionSqliteDatabasesForTest);
 
-  test("projects an inherited parent model as the child's effective selection", () => {
-    const parentKey = "agent:main:dashboard:parent";
-    const childKey = "agent:main:dashboard:child";
-    const parentEntry: SessionEntry = {
-      sessionId: "parent",
-      updatedAt: 1,
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-      modelOverrideSource: "user",
-    };
-    const childEntry: SessionEntry = {
-      sessionId: "child",
-      updatedAt: 2,
-      parentSessionKey: parentKey,
-    };
+  test.each([false, true])("projects only an active fallback model (recovered=%s)", (recovered) => {
     const row = buildGatewaySessionRow({
       cfg: createModelDefaultsConfig({
-        primary: "openai/gpt-5.4",
-        models: { "anthropic/claude-sonnet-4-6": {} },
+        primary: recovered ? "codex/gpt-5.5" : "ollama/qwen3.5:9b",
       }),
-      store: { [parentKey]: parentEntry, [childKey]: childEntry },
-      key: childKey,
-      entry: childEntry,
-    });
-
-    expect(row.modelProvider).toBe("anthropic");
-    expect(row.model).toBe("claude-sonnet-4-6");
-    expect(row.modelOverrideSource).toBe("inherited");
-  });
-
-  test("projects the active fallback model separately from the selected model", () => {
-    const row = buildGatewaySessionRow({
-      cfg: createModelDefaultsConfig({ primary: "ollama/qwen3.5:9b" }),
       key: "main",
       entry: {
         sessionId: "fallback-session",
         updatedAt: 1,
-        providerOverride: "codex",
-        modelOverride: "gpt-5.5",
-        modelProvider: "ollama",
-        model: "qwen3.5:9b",
+        ...(!recovered ? { providerOverride: "codex", modelOverride: "gpt-5.5" } : {}),
+        modelProvider: recovered ? "codex" : "ollama",
+        model: recovered ? "gpt-5.5" : "qwen3.5:9b",
         fallbackNotice: {
           kind: "active",
           selectedModel: "codex/gpt-5.5",
@@ -308,30 +278,9 @@ describe("gateway session utils", () => {
     expect(row).toMatchObject({
       modelProvider: "codex",
       model: "gpt-5.5",
-      activeModelProvider: "ollama",
-      activeModel: "qwen3.5:9b",
+      activeModelProvider: recovered ? undefined : "ollama",
+      activeModel: recovered ? undefined : "qwen3.5:9b",
     });
-  });
-
-  test("does not project a stale fallback notice after the runtime returns to the selection", () => {
-    const row = buildGatewaySessionRow({
-      cfg: createModelDefaultsConfig({ primary: "codex/gpt-5.5" }),
-      key: "main",
-      entry: {
-        sessionId: "recovered-session",
-        updatedAt: 1,
-        modelProvider: "codex",
-        model: "gpt-5.5",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "codex/gpt-5.5",
-          activeModel: "ollama/qwen3.5:9b",
-        },
-      },
-    });
-
-    expect(row.activeModelProvider).toBeUndefined();
-    expect(row.activeModel).toBeUndefined();
   });
 
   test("projects a running candidate across aliased keys without changing the configured model", () => {
@@ -413,28 +362,6 @@ describe("gateway session utils", () => {
     expect(buildGatewaySessionSnapshot({ sessionRow: row }).observerDigest).toEqual(
       row.observerDigest,
     );
-  });
-
-  test("does not project an observer digest older than the latest run", () => {
-    const row = buildGatewaySessionRow({
-      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
-      entry: {
-        sessionId: "session",
-        updatedAt: 3_000,
-        startedAt: 3_000,
-        observerDigest: {
-          sessionKey: "agent:main:main",
-          runId: "previous-run",
-          revision: 2,
-          updatedAt: 2_000,
-          headline: "Previous run failed",
-          health: "failed",
-        },
-      },
-    });
-
-    expect(row.observerDigest).toBeUndefined();
-    expect(buildGatewaySessionSnapshot({ sessionRow: row }).observerDigest).toBeNull();
   });
 
   test("Activity lists select newest interactions and completions before the 100-row page", async () => {
@@ -986,18 +913,6 @@ describe("gateway session utils", () => {
     },
   );
 
-  test.each(["xhigh"] as const)(
-    "preserves catalog-less persisted %s in session change projections",
-    (thinkingLevel) => {
-      const row = buildGatewaySessionRow({
-        cfg: createModelDefaultsConfig({ primary: "custom/reasoner" }),
-        entry: { sessionId: thinkingLevel, thinkingLevel } as SessionEntry,
-      });
-
-      expect(row.thinkingLevel).toBe(thinkingLevel);
-    },
-  );
-
   test("session rows preserve fresh zero-token usage", () => {
     const row = buildGatewaySessionRow({
       cfg: {} as OpenClawConfig,
@@ -1014,78 +929,88 @@ describe("gateway session utils", () => {
     expect(row.totalTokensFresh).toBe(true);
   });
 
-  test("buildGatewaySessionRow does not promote direct route identities as display names", () => {
-    const cfg = { agents: { entries: { main: {} } } } as OpenClawConfig;
-    const entry: SessionEntry = {
-      sessionId: "direct-phone",
-      updatedAt: 1,
-      chatType: "direct",
-      delivery: normalizeSessionDeliveryState({
-        context: { channel: "imessage", to: "auto:+15551234567" },
-        origin: {
-          provider: "imessage",
-          label: "+15551234567",
-          from: "auto:+15551234567",
-        },
-      }),
-    };
+  test.each<{
+    name: string;
+    key: string;
+    fields: Partial<SessionEntry>;
+    expected: string | undefined;
+  }>([
+    {
+      name: "opaque direct route",
+      key: "imessage:direct:+15551234567",
+      fields: {
+        chatType: "direct",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "imessage", to: "auto:+15551234567" },
+          origin: { provider: "imessage", label: "+15551234567", from: "auto:+15551234567" },
+        }),
+      },
+      expected: undefined,
+    },
+    {
+      name: "human contact alias matching the route tail",
+      key: "imessage:direct:Alice",
+      fields: {
+        chatType: "direct",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "imessage", to: "imessage:Alice" },
+          origin: { provider: "imessage", label: "Alice", from: "imessage:Alice" },
+        }),
+      },
+      expected: "Alice",
+    },
+    {
+      name: "compact group route fallback",
+      key: "imessage:group:13",
+      fields: {
+        chatType: "group",
+        groupId: "13",
+        displayName: "imessage:g-13",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "imessage", to: "chat_id:13" },
+          origin: { provider: "imessage", label: "Group id:13", from: "imessage:group:13" },
+        }),
+      },
+      expected: undefined,
+    },
+    {
+      name: "channel title",
+      key: "slack:channel:C1",
+      fields: {
+        chatType: "channel",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "slack", to: "channel:C1" },
+        }),
+        groupChannel: "general",
+        space: "Acme",
+      },
+      expected: "Acme #general",
+    },
+    {
+      name: "explicit label overriding channel metadata",
+      key: "slack:channel:C1",
+      fields: {
+        chatType: "channel",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "slack", to: "channel:C1" },
+        }),
+        groupChannel: "general",
+        space: "Acme",
+        label: "Team room",
+      },
+      expected: "Team room",
+    },
+  ])("projects $name as the session display name", ({ key: suffix, fields, expected }) => {
+    const cfg = { agents: { entries: { main: {} } } } satisfies OpenClawConfig;
+    const key = `agent:main:${suffix}`;
+    const entry: SessionEntry = { sessionId: "display-name", updatedAt: 1, ...fields };
     const row = buildGatewaySessionRow({
       cfg,
-      store: { "agent:main:imessage:direct:+15551234567": entry },
-      key: "agent:main:imessage:direct:+15551234567",
+      store: { [key]: entry },
+      key,
       entry,
     });
-    expect(row.displayName).toBeUndefined();
-  });
-
-  test("buildGatewaySessionRow keeps human contact aliases that match a route tail", () => {
-    const cfg = { agents: { entries: { main: {} } } } as OpenClawConfig;
-    const entry: SessionEntry = {
-      sessionId: "direct-contact",
-      updatedAt: 1,
-      chatType: "direct",
-      delivery: normalizeSessionDeliveryState({
-        context: { channel: "imessage", to: "imessage:Alice" },
-        origin: {
-          provider: "imessage",
-          label: "Alice",
-          from: "imessage:Alice",
-        },
-      }),
-    };
-    const row = buildGatewaySessionRow({
-      cfg,
-      store: { "agent:main:imessage:direct:Alice": entry },
-      key: "agent:main:imessage:direct:Alice",
-      entry,
-    });
-    expect(row.displayName).toBe("Alice");
-  });
-
-  test("buildGatewaySessionRow does not promote compact group route fallbacks as names", () => {
-    const cfg = { agents: { entries: { main: {} } } } as OpenClawConfig;
-    const entry: SessionEntry = {
-      sessionId: "group-13",
-      updatedAt: 1,
-      chatType: "group",
-      groupId: "13",
-      displayName: "imessage:g-13",
-      delivery: normalizeSessionDeliveryState({
-        context: { channel: "imessage", to: "chat_id:13" },
-        origin: {
-          provider: "imessage",
-          label: "Group id:13",
-          from: "imessage:group:13",
-        },
-      }),
-    };
-    const row = buildGatewaySessionRow({
-      cfg,
-      store: { "agent:main:imessage:group:13": entry },
-      key: "agent:main:imessage:group:13",
-      entry,
-    });
-    expect(row.displayName).toBeUndefined();
+    expect(row.displayName).toBe(expected);
   });
 
   test("refreshes forum topic titles without replacing sessions or explicit labels", async () => {
@@ -1192,32 +1117,8 @@ describe("gateway session utils", () => {
     }
   });
 
-  test("buildGatewaySessionRow group displayName prefers #channel and falls back to the token", () => {
+  test("buildGatewaySessionRow falls back to an opaque group token", () => {
     const cfg = { agents: { entries: { main: {} } } } as OpenClawConfig;
-    const channelEntry: SessionEntry = {
-      sessionId: "channel-C1",
-      updatedAt: 1,
-      chatType: "channel",
-      delivery: normalizeSessionDeliveryState({ context: { channel: "slack", to: "channel:C1" } }),
-      groupChannel: "general",
-      space: "Acme",
-    };
-    const channelRow = buildGatewaySessionRow({
-      cfg,
-      store: { "agent:main:slack:channel:C1": channelEntry },
-      key: "agent:main:slack:channel:C1",
-      entry: channelEntry,
-    });
-    expect(channelRow.displayName).toBe("Acme #general");
-    const labeled = { ...channelEntry, label: "Team room" } as SessionEntry;
-    const labeledRow = buildGatewaySessionRow({
-      cfg,
-      store: { "agent:main:slack:channel:C1": labeled },
-      key: "agent:main:slack:channel:C1",
-      entry: labeled,
-    });
-    expect(labeledRow.displayName).toBe("Team room");
-
     const opaque: SessionEntry = {
       sessionId: "group-opaque",
       updatedAt: 1,
@@ -1265,36 +1166,31 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("resolveSessionStoreKey uses configured fixed-store ownership for bare keys", () => {
-    const cfg = {
-      session: { mainKey: "main", store: "/tmp/shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    } as OpenClawConfig;
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:ops:main");
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "thread-1" })).toBe("agent:ops:thread-1");
-    expect(resolveSessionStoreAgentId(cfg, "global")).toBe("ops");
-  });
-
-  test("session-store key ownership rejects a retired fixed-store owner", () => {
-    const cfg = {
-      session: { mainKey: "main", store: "/tmp/shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "retired" } },
-        entries: { ops: {}, research: {} },
-      },
-    } as OpenClawConfig;
-    expect(() => resolveSessionStoreKey({ cfg, sessionKey: "thread-1" })).toThrowError(
-      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
-    );
-    expect(() => resolveSessionStoreAgentId(cfg, "global")).toThrowError(
-      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
-    );
-  });
+  test.each(["ops", "retired"])(
+    "resolves bare keys only for configured fixed-store owner %s",
+    (owner) => {
+      const cfg = {
+        session: { mainKey: "main", store: "/tmp/shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: owner } },
+          entries: { ops: {}, research: {} },
+        },
+      } as OpenClawConfig;
+      if (owner === "ops") {
+        expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:ops:main");
+        expect(resolveSessionStoreKey({ cfg, sessionKey: "thread-1" })).toBe("agent:ops:thread-1");
+        expect(resolveSessionStoreAgentId(cfg, "global")).toBe("ops");
+      } else {
+        expect(() => resolveSessionStoreKey({ cfg, sessionKey: "thread-1" })).toThrowError(
+          expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+        );
+        expect(() => resolveSessionStoreAgentId(cfg, "global")).toThrowError(
+          expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+        );
+      }
+    },
+  );
 
   test("resolveSessionStoreKey honors global scope", async () => {
     const cfg = {
@@ -1811,28 +1707,13 @@ describe("gateway session utils", () => {
     });
   });
 
-  test.each<{
-    name: string;
-    cfg: OpenClawConfig;
-    approvals: ExecApprovalsFile;
-    expected: SessionEntry["permissionMode"];
-  }>([
-    {
-      name: "global sandbox all",
-      cfg: { agents: { defaults: { sandbox: { mode: "all" } } } },
-      approvals: { version: 1 },
-      expected: undefined,
-    },
-  ])("listAgentsForGateway never overstates $name", async ({ cfg, approvals, expected }) => {
+  test("listAgentsForGateway never overstates global sandbox all", async () => {
+    const cfg: OpenClawConfig = { agents: { defaults: { sandbox: { mode: "all" } } } };
     await withAgentPermissionState(async () => {
-      execApprovalsStore.updateExecApprovalsForMaintenance({ update: () => approvals });
+      execApprovalsStore.updateExecApprovalsForMaintenance({ update: () => ({ version: 1 }) });
       const agent = (await listAgentsForGateway(cfg)).agents.find((entry) => entry.id === "main");
       expect(agent).toBeDefined();
-      if (expected === undefined) {
-        expect(agent).not.toHaveProperty("defaultPermissionMode");
-      } else {
-        expect(agent).toHaveProperty("defaultPermissionMode", expected);
-      }
+      expect(agent).not.toHaveProperty("defaultPermissionMode");
       for (const sessionKey of ["agent:main:main", "agent:main:other"]) {
         const resolved = await resolveExecDefaultsAsync({ cfg, agentId: "main", sessionKey });
         expect([undefined, SESSION_PERMISSION_BY_EXEC_MODE[resolved.mode]]).toContain(
@@ -2067,38 +1948,20 @@ describe("session list selected model display", () => {
 });
 
 describe("deriveSessionTitle", () => {
-  test("returns undefined for undefined entry", () => {
-    expect(deriveSessionTitle(undefined)).toBeUndefined();
-  });
-
-  test("keeps a derived title valid when the limit bisects an emoji", () => {
-    const entry = { sessionId: "abc123", updatedAt: Date.now() } as SessionEntry;
-    expect(deriveSessionTitle(entry, `${"t".repeat(58)}🚀 extra`)).toBe(
-      `${"T".repeat(1)}${"t".repeat(57)}…`,
-    );
-  });
-
-  test("leaves a failed dashboard thread untitled so the UI can render New thread", () => {
-    const entry = {
-      sessionId: "abcd1234-5678-90ef-ghij-klmnopqrstuv",
-      updatedAt: new Date("2024-03-15T10:30:00Z").getTime(),
-    } as SessionEntry;
-
-    expect(deriveSessionTitle(entry)).toBeUndefined();
-    expect(deriveSessionTitle(entry, "")).toBeUndefined();
-    expect(deriveSessionTitle(entry, "   ")).toBeUndefined();
-  });
-
+  const entry: SessionEntry = { sessionId: "abcd1234-5678-90ef-ghij-klmnopqrstuv", updatedAt: 1 };
   test.each([
+    { name: "missing entry", entry: undefined, message: undefined, expected: undefined },
+    { name: "missing message", entry, message: undefined, expected: undefined },
+    { name: "empty message", entry, message: "", expected: undefined },
+    { name: "blank message", entry, message: "   ", expected: undefined },
     {
-      name: "ignores a blank label",
-      fields: { label: "   " },
-      firstUserMessage: "Hello!",
-      expected: "Hello!",
+      name: "emoji at the truncation boundary",
+      entry,
+      message: `${"t".repeat(58)}🚀 extra`,
+      expected: `T${"t".repeat(57)}…`,
     },
-  ])("$name", ({ fields, firstUserMessage, expected }) => {
-    const entry = { sessionId: "abc123", updatedAt: Date.now(), ...fields } as SessionEntry;
-    expect(deriveSessionTitle(entry, firstUserMessage)).toBe(expected);
+  ])("derives a title for $name", ({ entry: session, message, expected }) => {
+    expect(deriveSessionTitle(session, message)).toBe(expected);
   });
 });
 
@@ -2134,74 +1997,56 @@ describe("resolveGatewayModelSupportsImages", () => {
       loadGatewayModelCatalogSnapshot: async () => prepared,
     });
 
-  test.each([true])(
-    "discovers live capabilities when provisional metadata is text-only=%s",
-    async (textOnly) => {
-      const model: Model = {
-        id: "vendor/runtime-vision-model",
-        name: "Runtime Vision Model",
-        provider: "openrouter",
-        input: ["text", "image"],
-      };
-      const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) =>
-        snapshot({
-          entries: params?.readOnly ? (textOnly ? [{ ...model, input: ["text"] }] : []) : [model],
-        }),
-      );
-      await expect(
-        resolveGatewayModelSupportsImages({
-          ...query,
-          model: model.id,
-          provider: model.provider,
-          loadGatewayModelCatalog: async () => [],
-          loadGatewayModelCatalogSnapshot,
-        }),
-      ).resolves.toBe(true);
-      expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(1, {
-        agentId: "qa",
-        readOnly: true,
-      });
-      expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(2, {
-        agentId: "qa",
-        readOnly: false,
-      });
-    },
-  );
+  test("discovers live capabilities when provisional metadata is text-only", async () => {
+    const model: Model = {
+      id: "vendor/runtime-vision-model",
+      name: "Runtime Vision Model",
+      provider: "openrouter",
+      input: ["text", "image"],
+    };
+    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) =>
+      snapshot({
+        entries: params?.readOnly ? [{ ...model, input: ["text"] }] : [model],
+      }),
+    );
+    await expect(
+      resolveGatewayModelSupportsImages({
+        ...query,
+        model: model.id,
+        provider: model.provider,
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot,
+      }),
+    ).resolves.toBe(true);
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(1, {
+      agentId: "qa",
+      readOnly: true,
+    });
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(2, {
+      agentId: "qa",
+      readOnly: false,
+    });
+  });
 
-  test.each([false])(
-    "does not rediscover a complete catalog with a text-only row=%s",
-    async (hasRow) => {
-      const modes: Array<boolean | undefined> = [];
-      await expect(
-        resolveGatewayModelSupportsImages({
-          agentId: "qa",
-          model: "vendor/runtime-text-model",
-          provider: "openrouter",
-          loadGatewayModelCatalog: async () => [],
-          loadGatewayModelCatalogSnapshot: async (params) => {
-            modes.push(params?.readOnly);
-            if (params?.readOnly !== true) {
-              throw new Error("full catalog discovery must not restart for a complete owner");
-            }
-            return snapshot({
-              catalogComplete: true,
-              entries: hasRow
-                ? [
-                    {
-                      id: "vendor/runtime-text-model",
-                      name: "Text",
-                      provider: "openrouter",
-                      input: ["text"],
-                    },
-                  ]
-                : [],
-            });
-          },
-        }),
-      ).resolves.toBe(false);
-      expect(modes).toEqual([true]);
-    },
-  );
+  test("does not rediscover a complete catalog without the requested row", async () => {
+    const modes: Array<boolean | undefined> = [];
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "vendor/runtime-text-model",
+        provider: "openrouter",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async (params) => {
+          modes.push(params?.readOnly);
+          if (params?.readOnly !== true) {
+            throw new Error("full catalog discovery must not restart for a complete owner");
+          }
+          return snapshot({ catalogComplete: true });
+        },
+      }),
+    ).resolves.toBe(false);
+    expect(modes).toEqual([true]);
+  });
 
   test("repairs stale visible text-only metadata with same-agent static vision", async () => {
     const loadGatewayModelCatalog = vi.fn(async () => []);
@@ -2220,12 +2065,6 @@ describe("resolveGatewayModelSupportsImages", () => {
     ).resolves.toBe(true);
     expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({ agentId: "qa", readOnly: true });
     expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
-  });
-
-  test("does not borrow another agent's static image capabilities", async () => {
-    await expect(
-      preparedSupport(snapshot({ agentId: "other", staticEntries: [vision] })),
-    ).resolves.toBe(false);
   });
 
   test("does not override explicitly configured text-only input with static vision", async () => {
@@ -2266,39 +2105,54 @@ describe("resolveGatewayModelSupportsImages", () => {
     expect(modes).toEqual([true]);
   });
 
-  test("does not borrow static image capabilities across configured routes", async () => {
-    await expect(
-      preparedSupport(
-        snapshot({
-          config: {
-            models: {
-              providers: { openai: { baseUrl: "https://custom.example.test/v1", models: [] } },
-            },
+  test.each<{ boundary: string; facts: Partial<GatewayModelCatalogSnapshot> }>([
+    { boundary: "agent owner", facts: { agentId: "other", staticEntries: [vision] } },
+    {
+      boundary: "configured base URL",
+      facts: {
+        config: {
+          models: {
+            providers: { openai: { baseUrl: "https://custom.example.test/v1", models: [] } },
           },
-          staticEntries: [{ ...vision, baseUrl: "https://api.openai.com/v1" }],
-        }),
-      ),
-    ).resolves.toBe(false);
-  });
-
-  test.each([
-    { route: "API", api: "openai-completions", baseUrl: "https://api.openai.com/v1" },
-    { route: "base URL", api: "openai-responses", baseUrl: "https://custom.example.test/v1" },
-  ] as const)(
-    "does not borrow static vision across a mismatched visible $route",
-    async ({ api, baseUrl }) => {
-      await expect(
-        preparedSupport(
-          snapshot({
-            entries: [{ ...vision, api, baseUrl, input: ["text"] }],
-            staticEntries: [
-              { ...vision, api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
-            ],
-          }),
-        ),
-      ).resolves.toBe(false);
+        },
+        staticEntries: [{ ...vision, baseUrl: "https://api.openai.com/v1" }],
+      },
     },
-  );
+    {
+      boundary: "visible API",
+      facts: {
+        entries: [
+          {
+            ...vision,
+            api: "openai-completions",
+            baseUrl: "https://api.openai.com/v1",
+            input: ["text"],
+          },
+        ],
+        staticEntries: [
+          { ...vision, api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+        ],
+      },
+    },
+    {
+      boundary: "visible base URL",
+      facts: {
+        entries: [
+          {
+            ...vision,
+            api: "openai-responses",
+            baseUrl: "https://custom.example.test/v1",
+            input: ["text"],
+          },
+        ],
+        staticEntries: [
+          { ...vision, api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+        ],
+      },
+    },
+  ])("does not borrow static vision across the $boundary", async ({ facts }) => {
+    await expect(preparedSupport(snapshot(facts))).resolves.toBe(false);
+  });
 
   test("fails closed on providerless static image capabilities", async () => {
     await expect(

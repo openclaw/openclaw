@@ -240,6 +240,9 @@ output warns that matches may be incomplete. With `--json`, the response adds
 `stale: true`, plus `warning` and `action` fields. Treat an empty `results`
 array as authoritative only when `stale` is absent.
 
+If recording a search for later memory promotion fails, search still returns
+its matches with a warning naming the recording error.
+
 The Control UI's Memories tab shows the same warning and recovery guidance
 alongside stale search results, and clears them after a fresh search.
 
@@ -584,7 +587,7 @@ facts into `MEMORY.md`). Only deep writes to `MEMORY.md`.
 - Human-readable phase output goes to `DREAMS.md` (or an existing `dreams.md`).
   By default (`dreaming.storage.mode: "separate"`) each phase also writes a
   standalone report to `memory/dreaming/<phase>/YYYY-MM-DD.md`; set `mode:
-"inline"` to fold reports into the daily memory file instead, or `"both"`
+  "inline"` to fold reports into the daily memory file instead, or `"both"`
   for both.
 - Scheduled and manual `memory promote` runs share the same deep-phase ranking
   signals and default thresholds; explicit CLI flags remain one-run overrides.

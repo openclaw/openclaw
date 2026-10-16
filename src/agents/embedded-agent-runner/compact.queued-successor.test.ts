@@ -172,6 +172,49 @@ beforeEach(async () => {
 });
 
 describe("queued compaction successor ownership", () => {
+  it.each([false, true])(
+    "hydrates post-compaction history only for a requested rewrite (rewrite=%s)",
+    async (rewrite) => {
+      await withPersistentTranscriptFixture(async ({ request, transcriptBefore }) => {
+        const open = vi.spyOn(PersistentSessionManager, "openAsync");
+        const reload = vi.spyOn(
+          PersistentSessionManager.prototype,
+          "reloadPersistedTranscriptAsync",
+        );
+        contextEngineCompactMock.mockResolvedValueOnce(completed(sessionId));
+        maintain.mockImplementationOnce(async ({ runtimeContext }) => {
+          if (rewrite) {
+            return await runtimeContext!.rewriteTranscriptEntries!(request);
+          }
+          return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+        });
+        try {
+          await expect(compact(compactParams())).resolves.toMatchObject({
+            ok: true,
+            compacted: true,
+          });
+          expect(maintain).toHaveBeenCalledOnce();
+          expect(open).toHaveBeenCalledTimes(rewrite ? 1 : 0);
+          expect(reload).not.toHaveBeenCalled();
+          const transcript = loadTranscriptEventsSync(target());
+          if (rewrite) {
+            expect(transcript).toContainEqual(
+              expect.objectContaining({
+                type: "message",
+                message: { role: "user", content: "rewritten", timestamp: 2 },
+              }),
+            );
+          } else {
+            expect(transcript).toEqual(transcriptBefore);
+          }
+        } finally {
+          open.mockRestore();
+          reload.mockRestore();
+        }
+      });
+    },
+  );
+
   it.each([
     { nativePinned: false, observedHarness: "openclaw" },
     { nativePinned: true, observedHarness: "codex" },

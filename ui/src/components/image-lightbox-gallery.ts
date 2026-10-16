@@ -22,13 +22,14 @@ export class ImageLightboxGalleryController {
   current: ImageLightboxItem | undefined;
   busy = false;
   failed = false;
+  upgrading = false;
+  upgradeFailed = false;
   videoStatus: "preparing" | "ready" | "unavailable" = "preparing";
   videoRetryable = true;
   private video?: HTMLVideoElement;
   private disconnectVideo?: () => void;
   private gallery: ImageLightboxGallery | undefined;
-  private generation = 0;
-  private readonly images = new Map<number, Promise<ImageLightboxItem | null>>();
+  private images = new Map<number, Promise<ImageLightboxItem | null>>();
 
   constructor(private readonly notify: () => void) {}
 
@@ -43,12 +44,12 @@ export class ImageLightboxGalleryController {
     this.current = initial;
     // The opener retains and releases the initial image independently of the modal.
     const preview = { ...initial, release: undefined };
-    if (initial.loadFullResolution) {
-      void this.prepare(this.index, initial.loadFullResolution, preview);
+    if (initial.loadDisplayImage) {
+      void this.prepare(this.index, initial.loadDisplayImage, preview);
     } else {
       this.images.set(this.index, Promise.resolve(preview));
     }
-    this.preloadNeighbors();
+    this.evictDistantImages();
   }
 
   private prepare(
@@ -56,20 +57,21 @@ export class ImageLightboxGalleryController {
     load: () => Promise<ImageLightboxItem | null>,
     preview?: ImageLightboxItem,
   ) {
-    const generation = this.generation;
-    const pending = Promise.resolve()
-      .then(() => (generation === this.generation ? load() : null))
+    if (preview) {
+      this.upgrading = true;
+      this.upgradeFailed = false;
+    }
+    const pending: Promise<ImageLightboxItem | null> = Promise.resolve()
+      .then(() => (this.images.get(index) === pending ? load() : null))
       .then(decodeImage)
       .catch(() => null)
       .then((item) => {
-        if (
-          preview &&
-          item &&
-          generation === this.generation &&
-          this.images.get(index) === pending &&
-          this.index === index
-        ) {
-          this.current = item;
+        if (preview && this.images.get(index) === pending && this.index === index) {
+          this.upgrading = false;
+          this.upgradeFailed = !item;
+          if (item) {
+            this.current = item;
+          }
           this.notify();
         }
         if (!item && !preview && this.images.get(index) === pending) {
@@ -83,15 +85,16 @@ export class ImageLightboxGalleryController {
 
   dispose() {
     this.stopPlayer();
-    this.generation += 1;
     for (const image of this.images.values()) {
       void image.then((item) => item?.release?.());
     }
-    this.images.clear();
+    this.images = new Map();
     this.gallery = undefined;
     this.current = undefined;
     this.busy = false;
     this.failed = false;
+    this.upgrading = false;
+    this.upgradeFailed = false;
   }
 
   canMove(delta: number) {
@@ -103,13 +106,13 @@ export class ImageLightboxGalleryController {
     if (this.busy || !this.canMove(delta)) {
       return false;
     }
-    const generation = this.generation;
+    const images = this.images;
     const next = this.index + delta;
     this.busy = true;
     this.failed = false;
     this.notify();
     const item = await this.load(next, true);
-    if (generation !== this.generation) {
+    if (images !== this.images) {
       return false;
     }
     this.busy = false;
@@ -118,7 +121,9 @@ export class ImageLightboxGalleryController {
       this.stopPlayer();
       this.index = next;
       this.current = item;
-      this.preloadNeighbors();
+      this.upgrading = false;
+      this.upgradeFailed = false;
+      this.evictDistantImages();
     }
     this.notify();
     return item !== null;
@@ -184,22 +189,24 @@ export class ImageLightboxGalleryController {
     return this.prepare(index, () => load(retryFailed));
   }
 
-  private preloadNeighbors() {
+  retryDisplayImage() {
+    const current = this.current;
+    if (!current?.loadDisplayImage || this.upgrading) {
+      return;
+    }
+    void this.prepare(this.index, current.loadDisplayImage, current);
+    this.notify();
+  }
+
+  private evictDistantImages() {
     for (const [index, image] of this.images) {
       if (Math.abs(index - this.index) > 1) {
         this.images.delete(index);
         void image.then((item) => item?.release?.());
       }
     }
-    // Do not prepare hidden players or capture neighbor tickets speculatively.
-    if (this.current?.kind === "video") {
-      return;
-    }
-    for (const index of [this.index - 1, this.index + 1]) {
-      if (index >= 0 && index < this.count) {
-        void this.load(index);
-      }
-    }
+    // Only selected media starts network/decode work; opening a gallery must
+    // not download its neighbors on cellular. Already visited images stay warm.
   }
 }
 

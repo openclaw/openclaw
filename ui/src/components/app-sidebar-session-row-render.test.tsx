@@ -92,6 +92,40 @@ function mountObservedHost(
   };
 }
 
+it("hides archived pages in the restored sidebar before live data arrives", async () => {
+  const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
+  gateway.publish({ client: null, phase: "connecting", hello: null });
+  const context = createContext(gateway.gateway, createSessions("main", []));
+  const { sidebar: host } = await mountSidebarContext(context);
+  host.restoreSidebarSnapshot({
+    ...emptySnapshot,
+    mode: "roster",
+    navigationView: "pages",
+    pageScopeId: context.agentSelection.state.scopeId,
+    pages: snapshotSessions([
+      projectSidebarSession({
+        key: "agent:main:active",
+        label: "Active dashboard",
+        hasBoard: true,
+      }),
+      projectSidebarSession({
+        key: "agent:main:archived",
+        label: "Archived dashboard",
+        hasBoard: true,
+        archived: true,
+      }),
+    ]),
+  });
+  host.requestUpdate();
+  await host.updateComplete;
+
+  expect(
+    host.querySelector('.sidebar-pages [data-session-key="agent:main:active"]'),
+  ).not.toBeNull();
+  expect(host.querySelector('.sidebar-pages [data-session-key="agent:main:archived"]')).toBeNull();
+  expect(host.querySelector(".sidebar-pages .sidebar-session-sort")).toBeNull();
+});
+
 it("paints the restored roster and workspace in the first sidebar update", async () => {
   const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
   gateway.publish({ client: null, phase: "connecting", hello: null });
@@ -109,12 +143,10 @@ it("paints the restored roster and workspace in the first sidebar update", async
   await host.updateComplete;
 
   expect(host.querySelector('aside[data-snapshot-state="cached"]')).not.toBeNull();
-  const roster = host.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-    "openclaw-sidebar-agent-roster",
+  expect(host.querySelector("openclaw-sidebar-agent-roster")).not.toBeNull();
+  await waitForSolid(() =>
+    expect(host.querySelector('[data-agent-group="main"]')?.textContent).toContain("Harbor"),
   );
-  expect(roster).not.toBeNull();
-  await roster!.updateComplete;
-  expect(host.querySelector('[data-agent-group="main"]')?.textContent).toContain("Harbor");
   expect(host.querySelector('[data-avatar="⚓"]')).not.toBeNull();
 });
 
@@ -257,6 +289,26 @@ it("renders the saved chip identity before agent discovery without reviving anot
   update();
   expect(container.querySelector("openclaw-sidebar-agent-card")).toBeNull();
   expect(container.querySelector(".sidebar-workspace-header")).not.toBeNull();
+});
+
+it("retains the workspace name DOM across unrelated sidebar publications and renames", () => {
+  const { host, container } = createHost();
+  host.restoreSidebarSnapshot(emptySnapshot);
+  const update = mountObservedHost(host, container, renderSidebarAgentCard);
+  const name = () => container.querySelector(".sidebar-agent-card__name-text");
+  const original = name();
+  expect(original?.textContent).toBe("Harbor");
+
+  update();
+  expect(name()).toBe(original);
+
+  host.restoreSidebarSnapshot({
+    ...emptySnapshot,
+    brand: { ...emptySnapshot.brand, name: "Harbor renamed" },
+  });
+  update();
+  expect(name()).toBe(original);
+  expect(name()?.textContent).toBe("Harbor renamed");
 });
 
 it("keeps the rendered preview slot after caching without restoring live run authority", () => {

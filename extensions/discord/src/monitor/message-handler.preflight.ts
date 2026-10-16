@@ -28,7 +28,7 @@ import {
   resolveDiscordMemberAccessState,
   resolveDiscordMentionPolicy,
 } from "./allow-list.js";
-import { resolveDiscordChannelInfoSafe, resolveDiscordChannelNameSafe } from "./channel-access.js";
+import { resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
 import { resolveDiscordSystemLocation, resolveTimestampMs } from "./format.js";
 import {
@@ -50,7 +50,6 @@ import {
   isDiscordThreadChannelMessage,
   matchesActiveDiscordMentionPatterns,
   resolveDiscordMentionState,
-  resolveInjectedBoundThreadLookupRecord,
   shouldIgnoreBoundThreadWebhookMessage,
 } from "./message-handler.preflight-helpers.js";
 import { buildDiscordPreflightHistoryEntry } from "./message-handler.preflight-history.js";
@@ -123,31 +122,8 @@ async function resolveDiscordHistoryMediaForPendingRecord(params: {
   if (imageAttachments.length === 0 && stickers.length === 0) {
     return [];
   }
-  const rawData = (() => {
-    try {
-      return params.message.rawData;
-    } catch {
-      return {};
-    }
-  })();
-  const mediaMessage = Object.assign(
-    Object.create(Object.getPrototypeOf(params.message)),
-    params.message,
-  ) as typeof params.message;
-  Object.defineProperties(mediaMessage, {
-    attachments: { value: imageAttachments },
-    rawData: {
-      value: {
-        ...rawData,
-        attachments: imageAttachments,
-        sticker_items: stickers,
-        stickers,
-      },
-    },
-    stickers: { value: stickers },
-  });
   const mediaList = await resolveMediaList(
-    mediaMessage,
+    { attachments: imageAttachments, stickers },
     Math.min(params.preflight.mediaMaxBytes, DISCORD_HISTORY_MEDIA_MAX_BYTES),
     {
       fetchImpl: params.preflight.discordRestFetch,
@@ -253,10 +229,7 @@ export async function preflightDiscordMessage(
   // messages should reach the single authoritative binding lookup below.
   const injectedBoundThreadBinding =
     !isDirectMessage && !isGroupDm && (webhookId || author.bot)
-      ? resolveInjectedBoundThreadLookupRecord({
-          threadBindings: params.threadBindings,
-          threadId: messageChannelId,
-        })
+      ? params.threadBindings.getByThreadId?.(messageChannelId)
       : undefined;
   const ignoreBoundThreadMessage = (
     threadBinding: Parameters<typeof shouldIgnoreBoundThreadWebhookMessage>[0]["threadBinding"],
@@ -556,9 +529,7 @@ export async function preflightDiscordMessage(
     isGuildMessage,
     isThread: Boolean(threadChannel),
     botId,
-    threadOwnerId: threadChannel
-      ? (resolveDiscordChannelInfoSafe(threadChannel).ownerId ?? channelInfo?.ownerId)
-      : undefined,
+    threadOwnerId: threadChannel ? (threadChannel.ownerId ?? channelInfo?.ownerId) : undefined,
     channelConfig,
     guildInfo,
   });

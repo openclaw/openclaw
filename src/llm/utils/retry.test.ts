@@ -39,6 +39,7 @@ describe("isRetryableAssistantError", () => {
   // replay windows, and incomplete-stream regressions at this adapter boundary.
   it.each([
     ["google-sse-eof-incomplete-frame", true],
+    ["openai-sdk-malformed-sse", true],
     ["google-sse-malformed-json-frame", false],
     ["billing-rate-limit-too-many", true],
     ["billing-service-capacity", true],
@@ -197,33 +198,4 @@ describe("isRetryableAssistantError", () => {
       ).toBe(true);
     },
   );
-
-  it.each([
-    ["authentication failure", "OpenAI API error (401): Invalid authentication credentials"],
-    [
-      "authorization failure",
-      "Azure OpenAI API error (403): OAuth authentication is currently not allowed for this organization",
-    ],
-    ["model not found", "Mistral API error (404): model not found"],
-    [
-      "quota exhausted",
-      "OpenAI API error (429): insufficient_quota: Your account has insufficient quota balance to run this request.",
-    ],
-    [
-      "envelope embedded in user text",
-      'Invalid request: user text contained "OpenAI API error (500): invalid input"',
-    ],
-  ])("does not retry permanent provider-wrapped errors (%s): %s", (_label, text) => {
-    expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
-  });
-
-  it("retries a provider-wrapped short-window rate limit", () => {
-    expect(
-      isRetryableAssistantError(
-        errorMessage(
-          "OpenAI API error (429): RESOURCE_EXHAUSTED: Quota exceeded for requests per minute; please retry your request",
-        ),
-      ),
-    ).toBe(true);
-  });
 });

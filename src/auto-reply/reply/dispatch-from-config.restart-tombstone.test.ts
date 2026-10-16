@@ -21,7 +21,7 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const notice =
-  "My session in this room ended during restart recovery. Use /reset or /new to start a replacement session.";
+  "My session in this room ended during restart recovery. Use Resume in WebChat, or /reset or /new to start a replacement session.";
 const databaseIdentity = Symbol("restart-tombstone-database");
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
@@ -172,7 +172,7 @@ describe("restart tombstone channel feedback", () => {
     await rejectInbound();
     expect(deliver).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        text: expect.stringContaining("WebChat and use Resume in new session"),
+        text: expect.stringContaining("WebChat and use Resume."),
       }),
       expect.objectContaining({ kind: "final" }),
     );

@@ -155,6 +155,12 @@ vi.mock("./session-cold-storage-read.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-cold-storage-read.js")>();
   return {
     ...actual,
+    readRestoredSessionTranscriptInWorker: (
+      ...args: Parameters<typeof actual.readRestoredSessionTranscriptInWorker>
+    ) =>
+      args[0].scope.sessionId === "delta"
+        ? args[1]()
+        : actual.readRestoredSessionTranscriptInWorker(...args),
     readRestoredSessionTranscript: (
       ...args: Parameters<typeof actual.readRestoredSessionTranscript>
     ) =>

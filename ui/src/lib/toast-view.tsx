@@ -1,26 +1,8 @@
 import { createMemo } from "solid-js";
 import { Icon } from "../components/solid/icon.tsx";
-import { LitContent } from "../lit/solid-content.tsx";
 import { formatUiExternalText } from "./format-error.ts";
 import { t } from "./reactive/i18n.ts";
 import { resolveToastAnchorRect, type ToastOptions, type ToastDismissReason } from "./toast.ts";
-
-/** Unported callers may still supply a Lit template; this span is its only renderer. */
-function ToastContent(props: {
-  class: string;
-  content: ToastOptions["message"];
-  hidden?: boolean;
-}) {
-  return (
-    <span class={props.class} aria-hidden={props.hidden ? "true" : undefined}>
-      {typeof props.content === "string" ? (
-        formatUiExternalText(props.content)
-      ) : (
-        <LitContent value={props.content} />
-      )}
-    </span>
-  );
-}
 
 export function ToastView(props: {
   toast: ToastOptions | null;
@@ -32,6 +14,15 @@ export function ToastView(props: {
   transitionEnd(): void;
 }) {
   const anchor = createMemo(() => resolveToastAnchorRect(props.toast?.anchor));
+  const content = createMemo(() => props.toast?.message);
+  const message = createMemo(() => {
+    const value = content();
+    if (typeof value === "string") {
+      return formatUiExternalText(value);
+    }
+    // Snapshot only on message changes: inserting a fragment consumes its children.
+    return value instanceof DocumentFragment ? Array.from(value.childNodes) : value;
+  });
   return (
     <>
       {props.toast ? (
@@ -71,9 +62,11 @@ export function ToastView(props: {
           }}
         >
           {props.toast.icon ? (
-            <ToastContent class="app-toast__icon" content={props.toast.icon} hidden />
+            <span class="app-toast__icon" aria-hidden="true">
+              <Icon name={props.toast.icon} />
+            </span>
           ) : undefined}
-          <ToastContent class="app-toast__message" content={props.toast.message} />
+          <span class="app-toast__message">{message()}</span>
           {props.toast.actionLabel && props.toast.onAction ? (
             <button
               type="button"

@@ -78,6 +78,12 @@ hold that preparation lease for their entire lifetime. Captured workspace author
 filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner
 during preparation prevents those effects rather than rejecting only afterward.
+Stopping a run blocks new commands and file operations while allowing its accepted
+workspace changes to finish checkpointing. Accepted command cleanup retains the
+workspace owner until finalization finishes, even after the parent exits.
+Settlement still requires the original
+session and worktree binding and live Gateway ownership; a replacement session or
+unresolved checkpoint failure cannot be reported as a clean stop.
 Conflicts preserve both versions and block further
 settlement until resolved. A retry or restart recovers the same pending result.
 Archive, reset, and deletion settle changes before retiring their runtimes;
@@ -109,6 +115,8 @@ a copy, staging stops with the same warning while the original remains available
 **Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) as read-only instruction roots; other private workspace files remain writable. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.
 
 Local container mounts and sandbox file tools enforce these read-only roots.
+Generated skill copies carry their own Git ignore rule, so ordinary Git discovery
+omits them while tracked changes and other project files remain visible.
 The Gateway refreshes its own mirrored copies even when an earlier copy inherited
 read-only directory permissions; no manual permission repair is needed.
 SSH and OpenShell shell execution relies on the remote host or OpenShell policy

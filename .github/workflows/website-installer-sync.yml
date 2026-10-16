@@ -40,7 +40,7 @@ env:
 
 jobs:
   static:
-    runs-on: ubuntu-24.04
+    runs-on: &linux_runner_ubuntu ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,7 +76,7 @@ jobs:
           }
 
   linux-docker:
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,7 +100,7 @@ jobs:
             bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
 
   debian-installer:
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -128,7 +128,7 @@ jobs:
           CONTAINER
 
   linux-build-tools-failure:
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -193,7 +193,7 @@ jobs:
           CONTAINER
 
   linux-non-root:
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -236,7 +236,7 @@ jobs:
       fail-fast: false
       matrix:
         user: [root, non-root]
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -250,6 +250,7 @@ jobs:
           if [[ "$INSTALL_USER" == "root" ]]; then
             timeout --kill-after=30s 20m docker run --rm -i \
               -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
+              -v "$RUNNER_TEMP/fedora-dnf:/var/log" \
               fedora:44 \
               bash -s <<'CONTAINER'
           set -euo pipefail
@@ -259,10 +260,11 @@ jobs:
           else
             timeout --kill-after=30s 20m docker run --rm -i \
               -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
+              -v "$RUNNER_TEMP/fedora-dnf:/var/log" \
               fedora:44 \
               bash -s <<'CONTAINER'
           set -euo pipefail
-          dnf install -y -q sudo shadow-utils
+          rpm -q sudo shadow-utils >/dev/null 2>&1 || dnf install -y -q sudo shadow-utils
           useradd --create-home --shell /bin/bash installer
           printf '%s\n' 'installer ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/installer
           chmod 0440 /etc/sudoers.d/installer
@@ -280,13 +282,20 @@ jobs:
           CONTAINER
           fi
 
+      - name: Fedora package-manager diagnostics
+        if: failure()
+        run: |
+          if sudo test -f "$RUNNER_TEMP/fedora-dnf/dnf5.log"; then
+            sudo tail -n 200 "$RUNNER_TEMP/fedora-dnf/dnf5.log"
+          fi
+
   macos-installer:
     runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -310,7 +319,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -385,7 +394,7 @@ jobs:
     if: >
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && inputs.sync_website)
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     env:
       OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}
     steps:
@@ -437,7 +446,7 @@ jobs:
 
       - name: Setup Node.js
         if: steps.changes.outputs.changed == 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
 

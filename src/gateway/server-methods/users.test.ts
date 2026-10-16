@@ -114,6 +114,7 @@ describe("users gateway methods", () => {
     avatar_mime: null,
     avatar_sha256: null,
     merged_into: null,
+    created_at: profile.createdAt,
     updated_at: profile.updatedAt,
     role: null,
     has_avatar: 0,

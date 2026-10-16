@@ -14,7 +14,7 @@ import {
   scheduleFollowupDrain,
 } from "../../auto-reply/reply/queue.js";
 import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.js";
-import { resetRecentQueuedMessageIdDedupe } from "../../auto-reply/reply/queue/enqueue.test-support.js";
+import { resetRecentQueuedMessageIdDedupe } from "../../auto-reply/reply/queue/recent-message-ids.test-support.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import type { ReplyOperationRunState } from "../../auto-reply/reply/reply-operation-run-state.js";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";

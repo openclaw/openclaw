@@ -37,6 +37,14 @@ The built-in SQLite store reads only the selected workspace's state for lookups
 and cleanup. Corrupt JSON in another workspace does not block these operations;
 corrupt JSON in a live record in the selected workspace still reports a storage error.
 
+Dreaming artifact repair prunes recall entries for archived source paths immediately
+after a successful move, removing their phase signals in the same SQLite worker
+transaction. Failed moves leave recall intact, and sources that still exist remain
+eligible. The file move and database cleanup are separate operations: a crash or
+cleanup failure between them leaves dangling entries for the next nightly repair
+to remove. The repair result reports cleanup failures without hiding a completed
+archive.
+
 Long-term promotion still writes only to `MEMORY.md`.
 Deep reports summarize why ranked candidates were not promoted, using counts by
 rejection category without copying rejected snippets or source identifiers.

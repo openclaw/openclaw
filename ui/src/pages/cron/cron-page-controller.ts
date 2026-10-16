@@ -9,6 +9,7 @@ import {
   addCronJob,
   cancelCronEdit,
   createInitialCronState,
+  hasCronFormErrors,
   invalidateCronRefresh,
   loadCronJobsPage,
   loadCronStatus,
@@ -44,6 +45,8 @@ import {
   invalidateStaleDeliveryRoute,
   requiresDirectoryReload,
 } from "./delivery-conversations.ts";
+import { CronEventEditorController } from "./event-editor.ts";
+import { resolveCronEventPatch, validateCronEventSelection } from "./event-source.ts";
 import { CronRouteSelection, resolveCronRouteData } from "./route-model.ts";
 import { CronRunTranscript } from "./run-transcript.tsx";
 import type { CronDetailTab, CronListTab, CronProps } from "./view-types.ts";
@@ -99,6 +102,15 @@ export class CronPageController {
     captureConnection: () => this.gateway.capture(),
     isCurrentConnection: (scope) => this.gateway.isCurrent(scope),
     notify: (cronState) => this.publishCronState(cronState),
+  });
+  readonly eventSource = new CronEventEditorController({
+    currentCronState: () => this.cron,
+    context: () => this.context,
+    canManage: () => this.canManageCron,
+    isConnected: () => this.active && this.host.isConnected,
+    captureConnection: () => this.gateway.capture(),
+    isCurrentConnection: (scope) => this.gateway.isCurrent(scope),
+    notify: () => this.publish(),
   });
   private heartbeatScratchRequest = 0;
   private pageHidden = document.visibilityState === "hidden";
@@ -234,6 +246,7 @@ export class CronPageController {
       this.bindContext();
     }
     this.preparePanel();
+    this.eventSource.sync();
     this.notify();
   }
 
@@ -242,6 +255,7 @@ export class CronPageController {
     this.stopModelSuggestions = undefined;
     this.runTranscript.close();
     this.clearHeartbeatScratch();
+    this.eventSource.reset();
     invalidateCronRefresh(this.cron);
     const connected = snapshot.phase === "connected";
     const cron = createInitialCronState({
@@ -458,7 +472,10 @@ export class CronPageController {
       return;
     }
     const current = this.cron.cronForm;
-    const resolvedPatch = invalidateStaleDeliveryRoute(current, patch);
+    const resolvedPatch = invalidateStaleDeliveryRoute(
+      current,
+      resolveCronEventPatch(current, patch),
+    );
     const next = normalizeCronFormState({ ...this.cron.cronForm, ...resolvedPatch }, resolvedPatch);
     this.cron.cronForm = next;
     this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
@@ -527,6 +544,7 @@ export class CronPageController {
     this.clearHeartbeatScratch();
     this.routeSelection.target = null;
     // Retire discovery before resetting its editor's form.
+    this.eventSource.reset();
     this.deliveryDirectory.retireEditor();
     cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
     this.cron.cronCreateOpen = createOpen;
@@ -624,6 +642,16 @@ export class CronPageController {
   }
 
   submitForm(runNow = false) {
+    // Synchronize the revision-bound catalog before validating a possibly replaced definition.
+    this.eventSource.sync();
+    const eventErrors = validateCronEventSelection(this.cron.cronForm, this.eventSource.view);
+    if (hasCronFormErrors(eventErrors)) {
+      // Catalog/schema feedback is derived from the current source in the view,
+      // not retained on the form after discovery finishes or changes revision.
+      this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
+      this.publishCronState();
+      return;
+    }
     const connectionScope = this.gateway.capture();
     const editorGeneration = this.deliveryDirectory.generation;
     this.runCronAdminTask(async (cronState) => {

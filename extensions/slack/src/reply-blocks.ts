@@ -70,31 +70,6 @@ export function normalizeSlackReplyPayload(payload: ReplyPayload): ReplyPayload 
   };
 }
 
-export function parseSlackReplyBlockSegments(value: unknown): SlackReplyBlockSegment[] | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!Array.isArray(value)) {
-    throw new Error("Slack rendered presentation segments must be an array");
-  }
-  return value.map((raw): SlackReplyBlockSegment => {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      throw new Error("Slack rendered presentation segment must be an object");
-    }
-    const segment = raw as { blocks?: unknown; kind?: unknown; mrkdwn?: unknown; text?: unknown };
-    if (segment.kind === "text" && typeof segment.text === "string" && segment.mrkdwn === false) {
-      return { kind: "text", text: segment.text, mrkdwn: false };
-    }
-    if (segment.kind === "blocks") {
-      const blocks = parseSlackBlocksInput(segment.blocks) as SlackBlock[] | undefined;
-      if (blocks?.length) {
-        return { kind: "blocks", blocks };
-      }
-    }
-    throw new Error("Slack rendered presentation segment is invalid");
-  });
-}
-
 export type SlackReplyDeliveryMessage = {
   text: string;
   blocks?: SlackBlock[];
@@ -178,7 +153,6 @@ export type PreparedSlackReply = {
 /** One attempt owns its authored compilation; media captions retain a separate delivery policy. */
 export function prepareSlackReply(payload: ReplyPayload): PreparedSlackReply {
   const text = payload.text;
-  const source = { ...payload, text };
   let authoredChunks: readonly string[] | undefined;
   let structuredContent: boolean | undefined;
   let materialized: SlackReplyBlockResolution | undefined;
@@ -186,21 +160,22 @@ export function prepareSlackReply(payload: ReplyPayload): PreparedSlackReply {
   let preview: SlackReplyRenderPlan | undefined;
   const resolveAuthoredTextChunks = () =>
     (authoredChunks ??= markdownToSlackMrkdwnChunks(text?.trim() ?? "", SLACK_SECTION_TEXT_MAX));
-  const hasStructuredContent = () => (structuredContent ??= hasSlackReplyStructuredContent(source));
+  const hasStructuredContent = () =>
+    (structuredContent ??= hasSlackReplyStructuredContent(payload));
   const resolve = (materializeAuthoredText: boolean) =>
     materializeAuthoredText
-      ? (materialized ??= resolveSlackReplyBlockResolution(source, {
+      ? (materialized ??= resolveSlackReplyBlockResolution(payload, {
           materializeAuthoredText: true,
           resolveAuthoredTextChunks,
         }))
-      : (unmaterialized ??= resolveSlackReplyBlockResolution(source));
+      : (unmaterialized ??= resolveSlackReplyBlockResolution(payload));
   return {
     payload,
     resolveDelivery: () =>
-      resolve(!resolveSendableOutboundReplyParts(source).hasMedia && hasStructuredContent()),
+      resolve(!resolveSendableOutboundReplyParts(payload).hasMedia && hasStructuredContent()),
     resolvePreview: (override = text) => {
       if (override !== text) {
-        return prepareSlackReply({ ...source, text: override }).resolvePreview();
+        return prepareSlackReply({ ...payload, text: override }).resolvePreview();
       }
       return (preview ??= projectSlackReplyRenderPlan(
         text,

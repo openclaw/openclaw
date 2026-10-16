@@ -17,9 +17,10 @@ struct RealtimeTalkRelaySessionTests {
         #expect(RealtimeTalkRecovery.restartDelayNanoseconds(attempt: 3) == nil)
     }
 
-    @Test(arguments: [false, true])
+    @Test(arguments: [false, true], [false, true])
     func `voice selection is opt in and replacement carries its change id`(
-        supportsVoiceSelection: Bool) async throws
+        supportsVoiceSelection: Bool,
+        warmingCatalog: Bool) async throws
     {
         let requests = RealtimeRelayStartupRequestLog()
         let events = AsyncStream<EventFrame>.makeStream()
@@ -53,6 +54,19 @@ struct RealtimeTalkRelaySessionTests {
                         return resultData
                     }
                     if method == "talk.catalog" {
+                        if warmingCatalog,
+                           await requests.snapshot().filter({ $0.method == "talk.catalog" }).count == 1
+                        {
+                            throw GatewayResponseError(
+                                method: method,
+                                code: "UNAVAILABLE",
+                                message: "Talk catalog is warming",
+                                details: [
+                                    "reason": AnyCodable("talk-catalog-warming"),
+                                    "retryable": AnyCodable(true),
+                                    "retryAfterMs": AnyCodable(250),
+                                ])
+                        }
                         return try realtimeRelayCatalogData()
                     }
                     return Data("{\"ok\":true}".utf8)
@@ -70,6 +84,7 @@ struct RealtimeTalkRelaySessionTests {
 
         #expect(session.voiceSessionId == "relay-1")
         #expect(session.isReady)
+        #expect(await requests.snapshot().filter { $0.method == "talk.catalog" }.count == (warmingCatalog ? 2 : 1))
         let create = try #require(await requests.snapshot().first?.params)
         #expect(create["sessionKey"]?.stringValue == "chat-1")
         #expect(create["voiceChangeId"]?.stringValue == (supportsVoiceSelection ? "change-1" : nil))

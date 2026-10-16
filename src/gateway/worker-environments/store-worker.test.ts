@@ -143,7 +143,12 @@ it.each([
     if (kind === "repair") {
       const result = await migrate();
       expect(result.warnings).toEqual([]);
-      expect(result.changes).toContain("Rebuilt canonical shared-state SQLite indexes (1)");
+      using repaired = nodeSqlite.openNodeSqliteDatabase(database.path, { readOnly: true });
+      expect(
+        repaired
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_audit_events_time'")
+          .get(),
+      ).toEqual({ name: "idx_audit_events_time" });
       expect(() => store.list()).toThrow("inventory has closed");
       const reopened = await createWorkerEnvironmentStore({ database });
       expect(reopened.list()).toEqual([]);

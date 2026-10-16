@@ -162,8 +162,9 @@ export function applyJobResult(
       deliveryState.deliverySuppressionReason,
     );
 
-  // Track consecutive errors for backoff / auto-disable; skipped runs use a
-  // separate counter so skip alerts do not affect retry behavior.
+  // Cancellations preserve the streak without counting as a job failure.
+  // Skipped runs use a separate counter so skip alerts do not affect retries.
+  const runFailed = result.status === "error" && result.errorClassification?.kind !== "aborted";
   const previousConsecutiveErrors = job.state.consecutiveErrors ?? 0;
   const computeNaturalNext = (restartInterval: boolean) => {
     try {
@@ -182,7 +183,9 @@ export function applyJobResult(
   };
   const alertConfig = resolveFailureAlert(state, job);
   if (result.status === "error") {
-    job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
+    if (runFailed) {
+      job.state.consecutiveErrors = previousConsecutiveErrors + 1;
+    }
     job.state.consecutiveSkipped = 0;
   } else if (result.status === "skipped") {
     job.state.consecutiveErrors = 0;
@@ -224,7 +227,7 @@ export function applyJobResult(
     if (opts.replaySchedule && job.schedule.kind !== "at") {
       applyReplaySchedule();
     }
-    if (shouldDelete) {
+    if (shouldDelete || job.schedule.kind === "event") {
       job.state.nextRunAtMs = undefined;
     }
     const failureNotification = finalizeCronFailureNotifications(state, {
@@ -261,7 +264,11 @@ export function applyJobResult(
     job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
     job.state.forcePreservedNextRunAtMs = previousScheduleState.forcePreservedNextRunAtMs;
   } else if (!shouldDelete) {
-    if (preserveOneShotSchedule) {
+    if (job.schedule.kind === "event") {
+      // The transferred ingress receipt owns this occurrence. A timer retry
+      // would lose its immutable event and could repeat an external side effect.
+      job.state.nextRunAtMs = undefined;
+    } else if (preserveOneShotSchedule) {
       job.state.nextRunAtMs = previousScheduleState.nextRunAtMs;
       job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
       job.state.forcePreservedNextRunAtMs = oneShotOccurrenceAtMs;
@@ -368,7 +375,7 @@ export function applyJobResult(
       job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
       job.state.forcePreservedNextRunAtMs = previousScheduleState.nextRunAtMs;
     } else if (
-      result.status === "error" &&
+      runFailed &&
       isJobEnabled(job) &&
       maybeAutoDisableCronJobAfterRunFailure({
         job,

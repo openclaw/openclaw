@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
+import * as logger from "../logger.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -153,6 +154,28 @@ describe("exec security floor", () => {
 
     expect(result.details.status).toBe("completed");
     expect(optionalRuntimeImports).toEqual({ reviewer: 0, followup: 0 });
+  });
+
+  it("records elevated execution without logging the command payload", async () => {
+    const logInfo = vi.spyOn(logger, "logInfo").mockImplementation(() => {});
+    try {
+      const tool = createExecTool({
+        host: "gateway",
+        mode: "full",
+        elevated: { enabled: true, allowed: true, defaultLevel: "full" },
+      });
+      const result = await tool.execute("call-elevated-private-payload", {
+        command: "echo private-elevated-payload",
+        elevated: true,
+      });
+
+      expect(result.details.status).toBe("completed");
+      expect((result.content[0] as { text?: string }).text).toContain("private-elevated-payload");
+      expect(logInfo).toHaveBeenCalledWith("exec: elevated command");
+      expect(JSON.stringify(logInfo.mock.calls)).not.toContain("private-elevated-payload");
+    } finally {
+      logInfo.mockRestore();
+    }
   });
 
   it("ignores model-supplied ask overrides when configured ask is off", async () => {

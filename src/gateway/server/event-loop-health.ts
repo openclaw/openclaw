@@ -4,7 +4,10 @@ import { isMainThread, Worker } from "node:worker_threads";
 import type { Static } from "typebox";
 import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
 import type { GatewayEventLoopHealthSchema } from "../../../packages/gateway-protocol/src/schema/runtime-vitals.js";
-import { hasInternalDiagnosticEventInterest } from "../../infra/diagnostic-event-listener-presence.js";
+import {
+  hasInternalDiagnosticEventInterest,
+  onInternalDiagnosticEventInterest,
+} from "../../infra/diagnostic-event-listener-presence.js";
 import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent,
@@ -416,7 +419,7 @@ export function createGatewayEventLoopHealthMonitor(
       id: "event-loop-health",
       delayMs,
       phase: delayMs === IDLE_SAMPLE_INTERVAL_MS ? "maintenance" : undefined,
-      // Let the blocking callback's after hook publish its stall before resetting the window.
+      // Let the blocking task scope publish its stall before resetting the window.
       run: () => queueMicrotask(sample),
     });
     sampleDueAt = nowMs() + (job.atMs - scheduler.now());
@@ -426,6 +429,13 @@ export function createGatewayEventLoopHealthMonitor(
   if (histogram) {
     captureWorkerCpu(lastWallAt);
   }
+  const unsubscribeInterest = onInternalDiagnosticEventInterest("gateway.event_loop.sample", () => {
+    const now = nowMs();
+    const nextSampleAt = Math.max(now, lastWallAt + SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS);
+    if (histogram && nextSampleAt < sampleDueAt) {
+      samplingJob = scheduleSample(nextSampleAt - now);
+    }
+  });
 
   const reset = () => {
     stalls.reset();
@@ -458,6 +468,7 @@ export function createGatewayEventLoopHealthMonitor(
     },
     reset,
     stop: () => {
+      unsubscribeInterest();
       flightRecorder.stop();
       stalls.stop();
       samplingJob?.cancel();

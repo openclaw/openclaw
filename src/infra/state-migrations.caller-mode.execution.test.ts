@@ -6,6 +6,10 @@ import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  resolveDaemonRuntimePinStorePath,
+  withDaemonRuntimePinStore,
+} from "../daemon/runtime-pin-store.js";
+import {
   EMPTY_LEGACY_SESSION_SURFACES,
   type PreparedLegacySessionSurfaces,
 } from "../plugins/legacy-session-surfaces.types.js";
@@ -345,16 +349,28 @@ describe("legacy state migration caller execution", () => {
       warnings: [],
     });
     expect(plan.steps.find((step) => step.id === "config-machine-state")).toMatchObject({
-      source: [{ kind: "path", path: fixture.configPath }],
-      target: [{ kind: "sqlite", path: stateDatabasePath }],
+      source: [
+        { kind: "path", path: fixture.configPath },
+        { kind: "sqlite", path: stateDatabasePath },
+      ],
+      target: [
+        { kind: "sqlite", path: stateDatabasePath },
+        { kind: "sqlite", path: resolveDaemonRuntimePinStorePath(fixture.env) },
+      ],
       requiredness: "conditional",
       outcome: "planned",
     });
     expect(
       result.stepReceipts.find((receipt) => receipt.id === "config-machine-state"),
     ).toMatchObject({
-      source: [{ kind: "path", path: fixture.configPath }],
-      target: [{ kind: "sqlite", path: stateDatabasePath }],
+      source: [
+        { kind: "path", path: fixture.configPath },
+        { kind: "sqlite", path: stateDatabasePath },
+      ],
+      target: [
+        { kind: "sqlite", path: stateDatabasePath },
+        { kind: "sqlite", path: resolveDaemonRuntimePinStorePath(fixture.env) },
+      ],
       outcome: "completed",
       warnings: [],
     });
@@ -387,6 +403,53 @@ describe("legacy state migration caller execution", () => {
         fixture.env,
       ),
     ).not.toBeNull();
+  });
+
+  it("stops later Doctor migrations when runtime pin ownership conflicts", async () => {
+    const fixture = await makeFixture();
+    const { execPath } = writeLegacyDoctorSources(fixture.stateDir);
+    const originalExec = fs.readFileSync(execPath, "utf8");
+    const stateKey = `daemon-runtime-pin:${"a".repeat(64)}`;
+    stateDatabase.runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
+          stateKey,
+          '{"revision":"source"}',
+          10,
+        );
+      },
+      { env: fixture.env },
+    );
+    withDaemonRuntimePinStore(fixture.env, true, (db) => {
+      db.prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)").run(
+        stateKey,
+        '{"revision":"target"}',
+        20,
+      );
+    });
+
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      doctorOnlyStateMigrations: true,
+      env: fixture.env,
+      homedir: () => fixture.homeDir,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
+
+    expect(
+      result.stepReceipts.find((receipt) => receipt.id === "config-machine-state"),
+    ).toMatchObject({
+      outcome: "refused",
+      refusal: {
+        code: "step-refused",
+        message: expect.stringContaining("Daemon runtime pin migration conflict"),
+      },
+    });
+    expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
+      outcome: "refused",
+      refusal: { code: "blocked-by-prior-refusal" },
+    });
+    expect(fs.readFileSync(execPath, "utf8")).toBe(originalExec);
   });
 
   it("relocates the legacy state root before running Doctor-owned migrations", async () => {

@@ -164,7 +164,9 @@ describeControlUiE2e("session pull request chips", () => {
 
     const openChip = chips.first();
     await expect.poll(() => openChip.getAttribute("data-state")).toBe("open");
-    await expect.poll(() => openChip.locator(".chat-pr__number").textContent()).toBe("#103469");
+    await expect
+      .poll(() => openChip.locator(".chat-pr__number").textContent())
+      .toBe("openclaw/openclaw#103469");
     await expect
       .poll(() => openChip.locator(".chat-pr__repo").textContent())
       .toBe("fix(macos): tighten the link-browser tab header");
@@ -244,7 +246,7 @@ describeControlUiE2e("session pull request chips", () => {
     await expect.poll(() => chips.count()).toBe(2);
     await expect
       .poll(() => chips.first().locator(".chat-pr__number").textContent())
-      .toBe("#103469");
+      .toBe("openclaw/openclaw#103469");
   });
 
   it.each([

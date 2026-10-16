@@ -7,6 +7,13 @@ import { text } from "node:stream/consumers";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { openLocalFileSafely } from "@openclaw/fs-safe/root";
 import { formatErrorMessage } from "./errors.js";
+import {
+  readUint32,
+  SQLITE_WAL_MAGIC_BE,
+  SQLITE_WAL_MAGIC_LE,
+  type SqliteChecksumByteOrder,
+  sqliteWalChecksum,
+} from "./sqlite-wal-checksum.js";
 
 const SQLITE_FILE_HEADER = Buffer.from("SQLite format 3\0", "utf8");
 const SQLITE_SHM_REGION_BYTES = 32_768;
@@ -14,15 +21,12 @@ const SQLITE_WAL_INDEX_HEADER_COPY_BYTES = 48;
 const SQLITE_WAL_INDEX_HEADER_BYTES = SQLITE_WAL_INDEX_HEADER_COPY_BYTES * 2;
 const SQLITE_WAL_INDEX_VERSION = 3_007_000;
 const SQLITE_WAL_HEADER_BYTES = 32;
-const SQLITE_WAL_MAGIC_LE = 0x377f_0682;
-const SQLITE_WAL_MAGIC_BE = 0x377f_0683;
 const SQLITE_SHM_VOLATILE_RANGES = [
   [96, 120],
   [128, 132],
 ] as const;
 const SNAPSHOT_HASH_BUFFER_BYTES = 1024 * 1024;
 
-type SqliteChecksumByteOrder = "BE" | "LE";
 type SnapshotEntry = {
   path: string;
   stat: Awaited<ReturnType<typeof fs.lstat>>;
@@ -32,23 +36,6 @@ export type ConfigInputHashes = {
   root: string;
   includes: readonly { path: string; hash: string }[];
 };
-
-function readUint32(buffer: Buffer, offset: number, byteOrder: SqliteChecksumByteOrder): number {
-  return byteOrder === "LE" ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
-}
-
-function sqliteWalChecksum(
-  buffer: Buffer,
-  byteOrder: SqliteChecksumByteOrder,
-): readonly [number, number] {
-  let first = 0;
-  let second = 0;
-  for (let offset = 0; offset < buffer.length; offset += 8) {
-    first = (first + readUint32(buffer, offset, byteOrder) + second) >>> 0;
-    second = (second + readUint32(buffer, offset + 4, byteOrder) + first) >>> 0;
-  }
-  return [first, second];
-}
 
 async function digestFile(
   filePath: string,

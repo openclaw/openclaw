@@ -277,7 +277,7 @@ export async function prepareUserProfileRolePolicyAuthority(
 ) {
   return prepareUserProfileAuthorityRead(profileId, options, "authority", async (context) => {
     const source = { path: context.admission.databasePath };
-    if (isUserProfileCatalogReady(source)) {
+    if (isUserProfileCatalogReady(source.path)) {
       const profile = readResidentUserProfileIdentity(profileId, source);
       return (
         profile && {
@@ -318,7 +318,7 @@ async function prepareUserProfileAuthority(
       context,
     ): Promise<(UserProfileAuthority & { listItem?: UserProfileListItem }) | undefined> => {
       const source = { path: context.admission.databasePath };
-      if (!includeProfile && isUserProfileCatalogReady(source)) {
+      if (!includeProfile && isUserProfileCatalogReady(source.path)) {
         const profile = readResidentUserProfileIdentity(profileId, source);
         return (
           profile && {

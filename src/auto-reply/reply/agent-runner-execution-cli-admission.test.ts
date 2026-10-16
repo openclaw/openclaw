@@ -7,12 +7,14 @@ import { buildCliRunResult } from "../../agents/cli-runner/cli-run-settlement.js
 import { executeDeps } from "../../agents/cli-runner/execute-deps.js";
 import { executePreparedCliRun } from "../../agents/cli-runner/execute.js";
 import { buildCliMcpGrantContext } from "../../agents/cli-runner/mcp-grant-context.js";
+import { prepareCliRunTerminalReply } from "../../agents/cli-runner/terminal-reply.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -190,11 +192,15 @@ describe("executeAgentTurn: CLI admission", () => {
         agentMeta: { sessionId: settledBinding.sessionId, cliSessionBinding: settledBinding },
       },
     };
+    const cliContext = buildPreparedCliRunContext();
     state.runCliAgentMock.mockResolvedValueOnce(
       rejected
         ? buildCliRunResult({
-            context: buildPreparedCliRunContext(),
+            context: cliContext,
             output: { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
+            preparedReply: prepareCliRunTerminalReply(cliContext, {
+              text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+            }),
             effectiveCliSessionId: settledBinding.sessionId,
             bindingFlushOk: kind !== "rejected-clear",
             usedHistoryPrompt: false,
@@ -408,11 +414,14 @@ describe("executeAgentTurn: CLI admission", () => {
         followupRun.currentInboundEventKind = "room_event";
       }
       state.isCliProviderMock.mockImplementation((provider) => provider === "claude-cli");
+      const context = buildPreparedCliRunContext();
+      const output = {
+        text: kind === "rejected-clear" ? GENERIC_EXTERNAL_RUN_FAILURE_TEXT : "Captured reply",
+      };
       const candidate = buildCliRunResult({
-        context: buildPreparedCliRunContext(),
-        output: {
-          text: kind === "rejected-clear" ? GENERIC_EXTERNAL_RUN_FAILURE_TEXT : "Captured reply",
-        },
+        context,
+        output,
+        preparedReply: prepareCliRunTerminalReply(context, output),
         effectiveCliSessionId: "replacement-native-session",
         bindingFlushOk: kind !== "rejected-clear",
         usedHistoryPrompt: false,
@@ -509,7 +518,15 @@ describe("executeAgentTurn: CLI admission", () => {
         "claude-cli": { sessionId: "new-native-session", forceReuse: true },
       },
     };
-    state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
+    Object.freeze(admittedSessionEntry);
+    state.runCliAgentMock.mockImplementationOnce(async (run: RunCliAgentParams) => {
+      const candidateEntry: InternalSessionEntry | undefined = run.sessionEntry;
+      if (!candidateEntry) {
+        throw new Error("Missing admitted CLI entry");
+      }
+      candidateEntry.activeWriterRunId = "cli-writer";
+      return { payloads: [{ text: "done" }], meta: {} };
+    });
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-sonnet-4-6";
@@ -535,7 +552,11 @@ describe("executeAgentTurn: CLI admission", () => {
         0,
         "CLI run params",
       )[0] as RunCliAgentParams;
-      expect(run.sessionEntry).toBe(admittedSessionEntry);
+      expect(run.sessionEntry).toMatchObject({
+        ...admittedSessionEntry,
+        activeWriterRunId: "cli-writer",
+      });
+      expect(admittedSessionEntry).not.toHaveProperty("activeWriterRunId");
       expect(run.sessionEntry?.sessionRoot).toBe("/workspace/project");
       expect(run.cliSessionId).toBe("new-native-session");
       expect(run.cliSessionBinding).toMatchObject({

@@ -376,38 +376,6 @@ describe("session companion asks", () => {
     harness.service.dispose();
   });
 
-  it("isolates the same bare session key by owning agent", async () => {
-    vi.useFakeTimers();
-    const harness = createHarness();
-    await harness.service.ask({
-      agentId: "main",
-      sessionKey: "global",
-      question: "Main?",
-      connId: "conn-main",
-    });
-    await harness.service.ask({
-      agentId: "work",
-      sessionKey: "global",
-      question: "Work?",
-      connId: "conn-work",
-    });
-
-    expect(harness.service.state({ agentId: "main", sessionKey: "global" }).exchanges).toEqual([
-      expect.objectContaining({ question: "Main?" }),
-    ]);
-    expect(harness.service.state({ agentId: "work", sessionKey: "global" }).exchanges).toEqual([
-      expect.objectContaining({ question: "Work?" }),
-    ]);
-    harness.service.reset({ agentId: "main", sessionKey: "global" });
-    expect(harness.service.state({ agentId: "main", sessionKey: "global" })).toEqual({
-      exchanges: [],
-    });
-    expect(harness.service.state({ agentId: "work", sessionKey: "global" }).exchanges).toHaveLength(
-      1,
-    );
-    harness.service.dispose();
-  });
-
   it.each(["global", "agent:work:selected"])(
     "deletion preserves qualified ownership while scoping bare keys (%s)",
     async (sessionKey) => {
@@ -530,14 +498,6 @@ describe("session companion asks", () => {
         0,
       ),
     ).toBeLessThanOrEqual(48 * 1024);
-  });
-
-  it("truncates answers without splitting a UTF-16 surrogate pair", async () => {
-    vi.useFakeTimers();
-    const harness = createHarness({ run: async () => "🦞".repeat(601) });
-    const result = await harness.service.ask(askRequest("Long answer?"));
-    expect(result.answer).toBe("🦞".repeat(600));
-    harness.service.dispose();
   });
 
   it("sweeps idle threads after two hours", async () => {

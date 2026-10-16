@@ -398,6 +398,23 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 1");
     expect(panel.querySelector(".lr-tab-header")).toBeNull();
     expect(panel.hostedTabs).toMatchObject([{ label: "Item 1", url: itemUrl(1) }]);
+    const actions = panel.hostedActions!;
+    const header = document.body.appendChild(document.createElement("header"));
+    header.append(actions);
+    const newTab = actions.querySelector<HTMLButtonElement>("button")!;
+    newTab.focus();
+    panel.available = false;
+    await panel.updateComplete;
+    expect(newTab.disabled).toBe(true);
+    panel.available = true;
+    await panel.updateComplete;
+    expect(panel.hostedActions).toBe(actions);
+    expect(actions.querySelector("button")).toBe(newTab);
+    expect(newTab.disabled).toBe(false);
+    newTab.click();
+    await panel.updateComplete;
+    expect(panel.hostedTabs).toHaveLength(2);
+    await panel.closeHostedTab(panel.activeHostedTabId!);
     panel.tabsInHeader = false;
     await panel.updateComplete;
     expect(panel.querySelector(".lr-tab-header")).not.toBeNull();
@@ -406,6 +423,9 @@ describe("Plugin link reader panel", () => {
     expect(panel.hostedTabs).toEqual([]);
     expect(panel.querySelector(".link-reader-panel")).toBeNull();
     expect(localStorage.getItem(storageKey)).toBeNull();
+    panel.remove();
+    await Promise.resolve();
+    expect(header.childElementCount).toBe(0);
   });
 
   it("loads only an explicitly selected item and persists layout, not content or history", async () => {
@@ -486,6 +506,9 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 2");
     expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(2);
     expect(panel.querySelectorAll(".tabstrip-tab__icon svg")).toHaveLength(2);
+    const hostedTabs = panel.hostedTabs;
+    expect(hostedTabs.every((tab) => tab.icon instanceof SVGSVGElement)).toBe(true);
+    expect(hostedTabs[0]!.icon).not.toBe(panel.hostedTabs[0]!.icon);
     open(panel, itemUrl(1), undefined, true);
     await expectTitle(panel, "Item 1");
     expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(2);

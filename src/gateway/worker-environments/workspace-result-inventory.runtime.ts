@@ -232,6 +232,7 @@ export async function collectStagedWorkerArtifacts(
       })),
   ].toSorted((left, right) => left.path.localeCompare(right.path));
   const selected = snapshot.changedEntries.find((entry) => entry.path === input.previewPath);
+  const download = snapshot.changedEntries.find((entry) => entry.path === input.downloadPath);
   const preview =
     selected?.type === "file" && selected.size <= WORKSPACE_PREVIEW_MAX_BYTES
       ? await readStagedWorkerWorkspaceEntries({
@@ -247,5 +248,8 @@ export async function collectStagedWorkerArtifacts(
     changedEntries: snapshot.changedEntries,
     changes,
     ...(preview === undefined ? {} : { preview: ownedWorkerBytes(preview) }),
+    ...(download?.type === "file"
+      ? { downloadObjectId: snapshot.objectsByPath.get(download.path)!.objectId }
+      : {}),
   };
 }

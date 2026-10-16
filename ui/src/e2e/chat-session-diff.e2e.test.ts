@@ -786,9 +786,7 @@ suite.define(() => {
     // The section-title button opens the same scope menu as the footer.
     await gateway.deferNext("sessions.diff");
     await panel.locator(".session-diff__section-title").click();
-    await page
-      .locator('openclaw-session-diff-menu wa-dropdown-item[value="scope:uncommitted"]')
-      .click();
+    await page.locator('openclaw-session-diff-menu button[value="scope:uncommitted"]').click();
     await expect.poll(() => panel.locator("openclaw-panel-loading-skeleton").count()).toBe(1);
     expect(await panel.locator(".session-diff__file").count()).toBe(0);
     await gateway.resolveDeferred("sessions.diff");
@@ -802,9 +800,7 @@ suite.define(() => {
 
     await gateway.deferNext("sessions.diff");
     await panel.locator(".session-diff__footer").click();
-    await page
-      .locator('openclaw-session-diff-menu wa-dropdown-item[value="scope:commit:abc1234"]')
-      .click();
+    await page.locator('openclaw-session-diff-menu button[value="scope:commit:abc1234"]').click();
     await expect.poll(() => panel.locator("openclaw-panel-loading-skeleton").count()).toBe(1);
     expect(await panel.locator(".session-diff__file").count()).toBe(0);
     await gateway.resolveDeferred("sessions.diff");

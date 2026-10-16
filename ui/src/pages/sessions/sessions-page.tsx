@@ -5,9 +5,8 @@ import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { i18n } from "../../i18n/index.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectI18n, t } from "../../lib/reactive/i18n.ts";
+import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import "../../styles/settings.css";
 import type { SessionsRouteData } from "./route.ts";
@@ -25,9 +24,8 @@ export function SessionsPageContent(props: { controller: SessionsPageController 
     subscribe: (owner, notify) => owner.subscribe(notify),
     equality: "revision",
   });
-  const locale = projectI18n(i18n);
   const view = createMemo(() => {
-    locale.revision();
+    i18nRevision();
     return projection.read();
   });
   const menu = createMemo(() => {

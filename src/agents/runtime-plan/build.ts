@@ -1,8 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
-import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   resolveProviderRuntimePluginHandle,
@@ -87,12 +85,6 @@ export function buildAgentRuntimeDeliveryPlan(
   const config = asOpenClawConfig(params.config);
   const providerRuntimeHandle = resolvePreparedProviderRuntimeHandle(params);
   return {
-    isSilentPayload(payload): boolean {
-      return (
-        isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN) &&
-        !hasReplyPayloadContent({ ...payload, text: undefined }, { trimText: true })
-      );
-    },
     resolveFollowupRoute(routeParams) {
       return resolveProviderFollowupFallbackRoute({
         provider: params.provider,

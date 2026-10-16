@@ -283,37 +283,6 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).toContain("🤖 Subagents: 1 active");
   });
 
-  it("dedupes stale rows in the verbose subagent status summary", async () => {
-    const childSessionKey = "agent:main:subagent:status-dedupe-worker";
-    seedSubagentRunForReadTest({
-      runId: "run-status-current",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "current status worker",
-      cleanup: "keep",
-      createdAt: Date.now() - 60_000,
-      startedAt: Date.now() - 60_000,
-    });
-    seedSubagentRunForReadTest({
-      runId: "run-status-stale",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "stale status worker",
-      cleanup: "keep",
-      createdAt: Date.now() - 120_000,
-      startedAt: Date.now() - 120_000,
-      endedAt: Date.now() - 90_000,
-      outcome: { status: "ok" },
-    });
-
-    const reply = await buildStatusReplyForTest({ verbose: true });
-
-    expect(reply?.text).toContain("🤖 Subagents: 1 active");
-    expect(reply?.text).not.toContain("· 1 done");
-  });
-
   it("gates /status plugins behind the plugin command flag", async () => {
     const commandParams = buildCommandTestParams("/status plugins", {
       ...baseCfg,

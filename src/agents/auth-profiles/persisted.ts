@@ -8,10 +8,12 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
+import { copyAuthProfileAuthorizationInheritance } from "./authorization-lifetime.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { hasOidcRegistration, isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import { hasOAuthIdentity, isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
+import { serializeAuthProfileCredential } from "./persisted-credential.js";
 import { coercePersistedAuthProfileStore } from "./persisted-store.js";
 import { removePersonalAuthProfileReferences } from "./runtime-external-profile-references.js";
 import {
@@ -453,18 +455,11 @@ export function buildPersistedAuthProfileSecretsStore(
       (shouldPersistProfile && !shouldPersistProfile({ profileId, credential }))
     ) {
       delete profiles[profileId];
-    } else if (credential.type === "api_key" && credential.keyRef && credential.key !== undefined) {
-      const { key: _key, ...sanitized } = credential;
-      profiles[profileId] = sanitized;
-    } else if (
-      credential.type === "token" &&
-      credential.tokenRef &&
-      credential.token !== undefined
-    ) {
-      const { token: _token, ...sanitized } = credential;
-      profiles[profileId] = sanitized;
+    } else {
+      profiles[profileId] = serializeAuthProfileCredential(credential);
     }
   }
+  copyAuthProfileAuthorizationInheritance(store.profiles, profiles);
 
   return {
     version: AUTH_STORE_VERSION,

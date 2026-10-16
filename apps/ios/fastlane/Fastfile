@@ -79,6 +79,8 @@ APP_STORE_SCREENSHOT_LIMIT_PER_SET = 10
 APP_STORE_SCREENSHOT_SET_DELETE_TIMEOUT_SECONDS = 120
 APP_STORE_SCREENSHOT_PROCESSING_TIMEOUT_SECONDS = 3600
 APP_STORE_SCREENSHOT_PROCESSING_POLL_SECONDS = 5
+APP_STORE_SCREENSHOT_PROCESSING_RETRY_SECONDS = 600
+APP_STORE_SCREENSHOT_PROCESSING_MAX_RETRIES = 2
 APP_STORE_BUILD_PROCESSING_TIMEOUT_SECONDS = 3600
 IOS_BUILD_UPLOAD_STATES = [
   "AWAITING_UPLOAD",
@@ -241,9 +243,17 @@ def require_idle_screenshot_simulators!
 end
 
 def require_exclusive_screenshot_simulator!(udid, diagnostics)
-  active = available_simulator_devices.select { |device| device.fetch("state") != "Shutdown" }
+  devices = available_simulator_devices
+  active = devices.select { |device| device.fetch("state") != "Shutdown" }
   diagnostics.events.last["activeSimulatorCount"] = active.length if diagnostics
-  UI.user_error!("Screenshot capture requires its task-owned simulator to be the only active simulator.") unless active.map { |device| device.fetch("udid") } == [udid]
+  others = active.reject { |device| device.fetch("udid") == udid }
+  unless others.empty?
+    listed = others.map { |device| "#{device.fetch("name")} (#{device.fetch("udid")}, #{device.fetch("state")})" }.join(", ")
+    UI.user_error!("Screenshot capture requires its task-owned simulator to be the only active simulator; also active: #{listed}.")
+  end
+  # `simctl bootstatus -b` can exit 0 after CoreSimulator ends a boot.
+  state = devices.find { |device| device.fetch("udid") == udid }&.fetch("state") || "missing"
+  UI.user_error!("Task-owned screenshot simulator #{udid} is #{state}, not Booted; CoreSimulator ended its session.") unless state == "Booted"
 end
 
 def with_screenshot_simulator(template, diagnostics: nil)
@@ -1071,29 +1081,51 @@ def app_store_screenshot_state_counts(screenshots)
   screenshots.map { |screenshot| (screenshot.asset_delivery_state || {})["state"] || "UNKNOWN" }.tally
 end
 
-def wait_for_app_store_screenshots_processing!(screenshot_ids:, locale:, display_type:)
+def wait_for_app_store_screenshots_processing!(app_screenshot_set:, screenshots:, screenshot_ids:, locale:, display_type:)
   timeout_seconds = app_store_screenshot_processing_timeout_seconds
   deadline = Time.now + timeout_seconds
+  retry_at = Time.now + APP_STORE_SCREENSHOT_PROCESSING_RETRY_SECONDS
+  retries = 0
   loop do
-    screenshots = screenshot_ids.map do |screenshot_id|
+    remote_screenshots = screenshot_ids.map do |screenshot_id|
       Spaceship::ConnectAPI.get_app_screenshot(app_screenshot_id: screenshot_id).first
     end
 
-    failed = screenshots.select(&:error?)
+    failed = remote_screenshots.select(&:error?)
     unless failed.empty?
       details = failed.map { |screenshot| "#{screenshot.file_name}: #{screenshot.error_messages.join(', ')}" }
       UI.user_error!("App Store Connect failed processing #{locale} #{display_type} screenshots: #{details.join('; ')}.")
     end
-    return screenshots if screenshots.all?(&:complete?)
+    return screenshot_ids if remote_screenshots.all?(&:complete?)
 
     if Time.now >= deadline
-      states = app_store_screenshot_state_counts(screenshots)
+      states = app_store_screenshot_state_counts(remote_screenshots)
+      incomplete = remote_screenshots.reject(&:complete?).map { |screenshot| "#{screenshot.file_name} (#{screenshot.id})" }
       UI.user_error!(
-        "Timed out after #{timeout_seconds}s waiting for App Store Connect to process #{locale} #{display_type} screenshots: #{states}."
+        "Timed out after #{timeout_seconds}s waiting for App Store Connect to process #{locale} #{display_type} screenshots: #{states}. Incomplete: #{incomplete.join(', ')}."
       )
     end
 
-    UI.verbose("Waiting for #{locale} #{display_type} screenshots to finish processing: #{app_store_screenshot_state_counts(screenshots)}.")
+    if Time.now >= retry_at && retries < APP_STORE_SCREENSHOT_PROCESSING_MAX_RETRIES
+      # Apple can leave a committed upload stuck without reporting an error.
+      # Replace only that known asset; transport errors must not trigger reuploads.
+      remote_screenshots.each_with_index do |screenshot, index|
+        next unless (screenshot.asset_delivery_state || {})["state"] == "UPLOAD_COMPLETE"
+
+        UI.important(
+          "Replacing stalled #{locale} #{display_type} screenshot #{screenshot.file_name} (#{screenshot.id}); " \
+            "retry #{retries + 1}/#{APP_STORE_SCREENSHOT_PROCESSING_MAX_RETRIES}."
+        )
+        screenshot.delete!
+        uploaded = app_screenshot_set.upload_screenshot(path: screenshots.fetch(index).path, wait_for_processing: false)
+        screenshot_ids[index] = uploaded.id
+      end
+      retries += 1
+      retry_at = Time.now + APP_STORE_SCREENSHOT_PROCESSING_RETRY_SECONDS
+      next
+    end
+
+    UI.verbose("Waiting for #{locale} #{display_type} screenshots to finish processing: #{app_store_screenshot_state_counts(remote_screenshots)}.")
     sleep(APP_STORE_SCREENSHOT_PROCESSING_POLL_SECONDS)
   end
 end
@@ -1165,7 +1197,9 @@ def replace_app_store_screenshot_set!(localization:, display_type:, screenshots:
     )
     uploaded.id
   end
-  wait_for_app_store_screenshots_processing!(
+  uploaded_ids = wait_for_app_store_screenshots_processing!(
+    app_screenshot_set: app_screenshot_set,
+    screenshots: screenshots,
     screenshot_ids: uploaded_ids,
     locale: localization.locale,
     display_type: display_type

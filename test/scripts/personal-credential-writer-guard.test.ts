@@ -101,6 +101,7 @@ it.each([
   "(await import('./state/user-model-accounts.js'))['SELECT']();",
   "const [{ SELECT: selected }] = await Promise.all([import('./state/user-model-accounts.js')]); selected();",
   "import('./state/user-model-accounts.js').then(({ SELECT: selected }) => selected());",
+  "import('./state/user-model-accounts.js').then(({ SELECT: selected }: { SELECT: () => void }) => selected());",
   "Promise.all([import('./state/user-model-accounts.js')]).then(([accounts]) => accounts.SELECT());",
 ])("checks a selected dynamic import without charging unused sibling exports: %s", (consumer) => {
   const source = `${owner}\nexport function listUserProfileAuthLinksAsync() {}`;
@@ -491,15 +492,19 @@ it("requires the host publication adapter for direct and aliased machine-state c
       "machineState.write credential writes require the host publication adapter",
     ),
   ]);
-  expect(
-    inspect({
-      "src/new-writer.ts": source.replace("type: command", "type: 'machineState.write'"),
-    }),
-  ).toEqual([
-    expect.stringContaining(
-      "machineState.write credential writes require the host publication adapter",
-    ),
-  ]);
+  for (const command of [
+    "'machineState.write'",
+    "`machineState.write`",
+    "'machineState\\u002ewrite'",
+  ]) {
+    const direct = source.replace("type: command", `type: ${command}`);
+    expect(inspect({ "src/state/config-machine-state-async.ts": direct })).toEqual([]);
+    expect(inspect({ "src/new-writer.ts": direct })).toEqual([
+      expect.stringContaining(
+        "machineState.write credential writes require the host publication adapter",
+      ),
+    ]);
+  }
 });
 
 const authRuntime = "src/agents/auth-profiles/store-runtime.ts";
@@ -700,17 +705,77 @@ it("permits fixed noncredential generic writer keys without granting a caller ex
   ).toEqual([]);
 });
 
-it("requires host publication for auth-store commands, including literal aliases", () => {
-  const source = `async function runPreparedAuthProfileStoreUpdate() {
-    const type = 'authProfiles.update' as const;
+it.each([
+  [
+    "src/agents/auth-profiles/store-update.ts",
+    "runPreparedAuthProfileStoreUpdate",
+    "authProfiles.update",
+  ],
+  [
+    "src/agents/auth-profiles/authorization-enrollment-runtime.ts",
+    "enrollOwnedAuthProfileAuthorization",
+    "authProfiles.enrollAuthorization",
+  ],
+])("requires host publication for credential command aliases in %s", (adapter, entry, command) => {
+  const source = `async function ${entry}() {
+    const type = '${command}' as const;
     await scope.execute({ type, input: {} });
   }`;
-  expect(inspect({ "src/agents/auth-profiles/store-update.ts": source })).toEqual([]);
+  expect(inspect({ [adapter]: source })).toEqual([]);
   expect(inspect({ "src/new-writer.worker.ts": source })).toEqual([
-    expect.stringContaining(
-      "authProfiles.update credential writes require the host publication adapter",
-    ),
+    expect.stringContaining(`${command} credential writes require the host publication adapter`),
   ]);
+});
+
+it("restricts authorization enrollment to admitted workers and its offline Doctor owner", () => {
+  const sources = {
+    "src/agents/auth-profiles/sqlite-json-write.ts": `export function writeAuthProfileJsonCell() {}`,
+    "src/agents/auth-profiles/authorization-enrollment.ts": `
+      import { writeAuthProfileJsonCell } from './sqlite-json-write.js';
+      export function enrollAuthProfileAuthorizationInDatabase() { writeAuthProfileJsonCell(); }
+    `,
+    "src/agents/auth-profiles/store.worker.ts": `
+      import { enrollAuthProfileAuthorizationInDatabase } from './authorization-enrollment.js';
+      export const operations = {
+        'authProfiles.enrollAuthorization': () => enrollAuthProfileAuthorizationInDatabase(),
+      };
+    `,
+    "src/agents/auth-profiles/inline-usage.worker.ts": `
+      import { enrollAuthProfileAuthorizationInDatabase } from './authorization-enrollment.js';
+      export function bindSqliteWorkerBackend() {
+        return { execute() { enrollAuthProfileAuthorizationInDatabase(); } };
+      }
+    `,
+    "src/agents/auth-profiles/authorization-enrollment-runtime.ts": `
+      import { enrollAuthProfileAuthorizationInDatabase } from './authorization-enrollment.js';
+      export function enrollOwnedAuthProfileAuthorization(context) {
+        if (context.maintenanceScope?.ownsSchemaMaintenance) {
+          enrollAuthProfileAuthorizationInDatabase();
+        }
+      }
+    `,
+  };
+  expect(inspect(sources)).toEqual([]);
+  const runtime = "src/agents/auth-profiles/authorization-enrollment-runtime.ts";
+  expect(
+    inspect({
+      ...sources,
+      [runtime]:
+        sources[runtime] +
+        `
+        export function unownedSibling() { enrollAuthProfileAuthorizationInDatabase(); }
+      `,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+  expect(
+    inspect({
+      ...sources,
+      "src/new-writer.worker.ts": `
+        import { enrollAuthProfileAuthorizationInDatabase } from './agents/auth-profiles/authorization-enrollment.js';
+        enrollAuthProfileAuthorizationInDatabase();
+      `,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
 });
 
 it("keeps catalog capture and worker write custody behind the reviewed batch entry", () => {
@@ -860,4 +925,27 @@ it("keeps session membership writes with the worker and canonical entry owners",
     expect.stringContaining("unreviewed session membership writer reference"),
     expect.stringContaining("raw authority-table write"),
   ]);
+});
+
+it.each([
+  "import selected from './state/user-model-accounts.js'; selected();",
+  "import { default as selected } from './state/user-model-accounts.js'; selected();",
+  "export { default as selected } from './state/user-model-accounts.js';",
+  "import * as accounts from './state/user-model-accounts.js'; accounts.default();",
+])("checks default writer bindings without charging unrelated exports: %s", (consumer) => {
+  expect(
+    inspect(
+      { "src/consumer.ts": consumer },
+      `${owner}\nexport default function listUserProfileAuthLinksAsync() {}`,
+    ),
+  ).toEqual([]);
+  expect(
+    inspect(
+      { "src/consumer.ts": consumer },
+      owner.replace(
+        "export function connectUserModelAccount",
+        "export default function connectUserModelAccount",
+      ),
+    ),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
 });

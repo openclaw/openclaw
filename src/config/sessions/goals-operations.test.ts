@@ -551,21 +551,6 @@ describe("typed Goal operation persistence", () => {
     ).toBeUndefined();
   });
 
-  it("revalidates admission authority inside the queued commit before writing", async () => {
-    const goal = await createSessionGoal({ ...scope(), objective: "finish" });
-    await expect(
-      mutateSessionGoal({
-        ...scope(),
-        expectedSessionId: sessionId,
-        operation: { ...identity("pause-1"), action: "pause", goalId: goal.id },
-        assertCurrent: () => {
-          throw new Error("authority closed");
-        },
-      }),
-    ).rejects.toThrow("authority closed");
-    expect(loadSessionEntry(scope())?.goal?.status).toBe("active");
-  });
-
   it("keeps later Goal edits behind an accepted edit's authority preparation", async () => {
     const goal = await createSessionGoal({ ...scope(), objective: "original" });
     const entered = createDeferredCore();

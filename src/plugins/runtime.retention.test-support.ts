@@ -436,27 +436,28 @@ switch (process.argv[2]) {
     break;
   }
   case "cache": {
-    const { cache, signal, reference } = await retireCapturedCallback();
-    await collect();
-    assert.equal(reference.deref(), undefined, "Retired cache retained its callback capture");
-    assert.equal(getPluginCacheRetirementSignal(cache), signal);
-    assert.equal(signal.aborted, true);
-    const reason: unknown = signal.reason;
-    const defaultReason: unknown = AbortSignal.abort().reason;
-    assert.ok(reason instanceof DOMException);
-    assert.ok(defaultReason instanceof DOMException);
-    assert.equal(reason.name, defaultReason.name);
-    assert.equal(reason.code, defaultReason.code);
-    assert.equal(reason.message, defaultReason.message);
-    assert.equal(typeof reason.stack, "string");
-    assert.throws(
-      () => signal.throwIfAborted(),
-      (error) => error === reason,
-    );
-    assert.deepEqual(await retirePluginCache(cache), emptyResult);
-    const other = createPluginCache();
-    await retirePluginCache(other);
-    assert.notEqual(getPluginCacheRetirementSignal(other).reason, reason);
+    await inspectAfterFrameRelease(retireCapturedCallback, async ({ cache, signal, reference }) => {
+      await collect();
+      assert.equal(reference.deref(), undefined, "Retired cache retained its callback capture");
+      assert.equal(getPluginCacheRetirementSignal(cache), signal);
+      assert.equal(signal.aborted, true);
+      const reason: unknown = signal.reason;
+      const defaultReason: unknown = AbortSignal.abort().reason;
+      assert.ok(reason instanceof DOMException);
+      assert.ok(defaultReason instanceof DOMException);
+      assert.equal(reason.name, defaultReason.name);
+      assert.equal(reason.code, defaultReason.code);
+      assert.equal(reason.message, defaultReason.message);
+      assert.equal(typeof reason.stack, "string");
+      assert.throws(
+        () => signal.throwIfAborted(),
+        (error) => error === reason,
+      );
+      assert.deepEqual(await retirePluginCache(cache), emptyResult);
+      const other = createPluginCache();
+      await retirePluginCache(other);
+      assert.notEqual(getPluginCacheRetirementSignal(other).reason, reason);
+    });
     break;
   }
   default:

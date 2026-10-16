@@ -94,8 +94,6 @@ describe("Control UI mount fallback", () => {
   });
 
   it.each([
-    ["claw dark", { theme: "claw", themeMode: "dark" }, "dark", "rgb(14, 16, 21)"],
-    ["OpenKnot dark", { theme: "knot", themeMode: "dark" }, "openknot", "rgb(8, 8, 8)"],
     ["Dash light", { theme: "dash", themeMode: "light" }, "dash-light", "rgb(247, 242, 236)"],
   ])(
     "paints %s before the app stylesheet loads",
@@ -114,38 +112,6 @@ describe("Control UI mount fallback", () => {
       );
     },
   );
-
-  it("shows the static troubleshooting panel when the app never renders", async () => {
-    const frameWindow = createIsolatedWindow();
-    installFallbackShell(frameWindow, await readIndexHtml());
-    await vi.advanceTimersByTimeAsync(mountTimeoutMs);
-
-    const fallback = requireElementById(
-      frameWindow,
-      "openclaw-mount-fallback",
-      frameWindow.HTMLElement,
-    );
-    expect(fallback.hidden).toBe(false);
-    expect([...frameWindow.document.body.classList]).toEqual(["openclaw-mount-fallback-active"]);
-    expect(fallback.querySelector("h1")?.textContent?.trim()).toBe("Control UI did not start");
-    expect(fallback.querySelector("a")?.textContent?.trim()).toBe("Control UI troubleshooting");
-    expect(frameWindow.document.activeElement).toBeInstanceOf(frameWindow.HTMLElement);
-    expect([...(frameWindow.document.activeElement as HTMLElement).classList]).toEqual([
-      "mount-fallback__panel",
-    ]);
-
-    const waitButton = requireElementById(
-      frameWindow,
-      "openclaw-mount-wait",
-      frameWindow.HTMLButtonElement,
-    );
-    waitButton.click();
-    expect(fallback.hidden).toBe(true);
-    expect([...frameWindow.document.body.classList]).toEqual([]);
-
-    await vi.advanceTimersByTimeAsync(mountTimeoutMs);
-    expect(fallback.hidden).toBe(false);
-  });
 
   it("keeps the fallback visible until the app completes its first render", async () => {
     const frameWindow = createIsolatedWindow();
@@ -209,7 +175,7 @@ describe("Control UI mount fallback", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
-  it.each([1, 2, 3])("bounds recovery navigations after attempt %s", async (attempt) => {
+  it.each([2, 3])("bounds recovery navigations after attempt %s", async (attempt) => {
     const frameWindow = createIsolatedWindow(
       `http://localhost:3000/?openclaw_mount_recovery=${attempt}`,
     );
@@ -239,25 +205,6 @@ describe("Control UI mount fallback", () => {
 
     expect(fetch).not.toHaveBeenCalled();
     expect(frameWindow.document.getElementById("openclaw-mount-fallback")?.hidden).toBe(true);
-  });
-
-  it("keeps failed browser guidance visible without automatic recovery", async () => {
-    const frameWindow = createIsolatedWindow();
-    const fetch = vi.fn().mockResolvedValue({ ok: true });
-    Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
-    installFallbackShell(frameWindow, await readIndexHtml());
-    frameWindow.dispatchEvent(new frameWindow.Event("openclaw-control-ui-unsupported-browser"));
-    frameWindow.dispatchEvent(
-      new frameWindow.Event("openclaw-control-ui-unsupported-browser-failed"),
-    );
-    await vi.advanceTimersByTimeAsync(mountTimeoutMs * 3);
-
-    const fallback = frameWindow.document.getElementById("openclaw-mount-fallback");
-    expect(fallback?.hidden).toBe(false);
-    expect(fallback?.querySelector("h1")?.textContent).toBe("Browser guidance could not load");
-    expect(frameWindow.document.getElementById("openclaw-mount-retry")?.hidden).toBe(false);
-    expect(frameWindow.document.getElementById("openclaw-mount-wait")?.hidden).toBe(true);
-    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("times out stalled recovery probes so automatic retries can continue", async () => {

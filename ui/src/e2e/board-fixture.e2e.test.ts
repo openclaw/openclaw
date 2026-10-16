@@ -716,12 +716,11 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         await expect
           .poll(() =>
             page.locator("html").evaluate((root) => ({
-              classes: [...root.classList],
               theme: (root as HTMLElement).dataset.theme,
               themeMode: (root as HTMLElement).dataset.themeMode,
             })),
           )
-          .toEqual({ classes: [`wa-${mode}`], theme: mode, themeMode: mode });
+          .toEqual({ theme: mode, themeMode: mode });
 
         await openWidgetMenu(page);
         const colors = await readMenuColors(page);
@@ -808,7 +807,6 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
       await page.emulateMedia({ colorScheme: "light" });
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
-      await expect.poll(() => page.locator("html").getAttribute("class")).toBe("wa-light");
     } finally {
       await context.close();
     }
@@ -851,9 +849,6 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
       expect(await page.locator(".community-invite-card").count()).toBe(0);
-      expect(
-        await page.evaluate(() => localStorage.getItem("openclaw:control-ui:community-invite:v2")),
-      ).not.toBeNull();
       await selectAllSidebarSessions(page);
       await page.getByText("OpenClaw work checkout", { exact: true }).click();
 

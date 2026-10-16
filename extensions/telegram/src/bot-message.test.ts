@@ -50,6 +50,10 @@ type TelegramMessageProcessorTurnContext = Parameters<
   ReturnType<typeof createTelegramMessageProcessor>
 >[0]["turnContext"];
 
+function unexpectedBotDependency(): never {
+  throw new Error("Message processor fixtures mock context construction and dispatch");
+}
+
 describe("telegram bot message processor", () => {
   beforeEach(() => {
     buildTelegramMessageContext.mockClear();
@@ -61,7 +65,35 @@ describe("telegram bot message processor", () => {
 
   const telegramDepsForTest = {
     upsertChannelPairingRequest,
-  } as unknown as TelegramBotDeps;
+    getRuntimeConfig: unexpectedBotDependency,
+    getSessionEntryAsync: unexpectedBotDependency,
+    resolveStorePath: unexpectedBotDependency,
+    readChannelAllowFromStore: unexpectedBotDependency,
+    enqueueRoutedSystemEvent: unexpectedBotDependency,
+    dispatchReplyWithBufferedBlockDispatcher: unexpectedBotDependency,
+    buildModelsProviderData: unexpectedBotDependency,
+    prepareSkillCommandsForAgents: unexpectedBotDependency,
+    wasSentByBot: unexpectedBotDependency,
+    buildChannelInboundEventContext: unexpectedBotDependency,
+    readAmbientTranscriptWatermarkAsync: unexpectedBotDependency,
+    readSessionUpdatedAtAsync: unexpectedBotDependency,
+    recordInboundSession: unexpectedBotDependency,
+    resolveAmbientTranscriptWatermarkKey: unexpectedBotDependency,
+    resolveInboundLastRouteSessionKey: unexpectedBotDependency,
+    resolvePinnedMainDmOwnerFromAllowlist: unexpectedBotDependency,
+    recordChannelActivity: unexpectedBotDependency,
+    loadWebMedia: unexpectedBotDependency,
+    syncTelegramMenuCommands: unexpectedBotDependency,
+    resolveApproval: unexpectedBotDependency,
+    createTelegramDraftStream: unexpectedBotDependency,
+    deliverReplies: unexpectedBotDependency,
+    deliverStructuredReplies: unexpectedBotDependency,
+    deliverStructuredInboundReplyWithMessageSendContext: unexpectedBotDependency,
+    emitTelegramMessageSentHooks: unexpectedBotDependency,
+    editMessageTelegram: unexpectedBotDependency,
+    recordOutboundMessageForPromptContext: unexpectedBotDependency,
+    createChannelMessageReplyPipeline: unexpectedBotDependency,
+  } satisfies TelegramBotDeps;
 
   const baseTurnContext = {
     cfg: {},
