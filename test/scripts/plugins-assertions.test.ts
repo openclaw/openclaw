@@ -124,7 +124,7 @@ async function clawhubPreflight(
     { signal, executable: process.execPath },
   );
   if (result.error) {
-    throw result.error;
+    throw new Error("ClawHub preflight command failed", { cause: result.error });
   }
   return result;
 }

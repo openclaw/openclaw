@@ -22,6 +22,9 @@ const providerTimeout = {
   providerStarted: true,
 } as const;
 type Source = "agent" | "chat";
+type TerminationFields = ReturnType<
+  Parameters<typeof createAgentLifecycleTerminalBackstop>[0]["resolveTerminationFields"]
+>;
 type Publication = Parameters<typeof setGatewayDedupeEntry>[0];
 type DedupeOptions = Pick<Publication, "session" | "startNewAttempt"> & {
   ts?: number;
@@ -329,20 +332,23 @@ describe("waitForAgentJob settled execution", () => {
       { status: "timeout", stopReason: "timeout", timeoutPhase: "provider" },
     ],
     ["yielded execution", { meta: { yielded: true } }, { status: "ok", yielded: true }],
-  ] as const)("publishes %s without retry grace", async (_label, result, expected, termination) => {
-    const phase = result instanceof Error ? "error" : "end";
-    const job = createJob("settled-execution");
-    await job.assertSettled(expected, async () => {
-      const lifecycle = createAgentLifecycleTerminalBackstop({
-        runId: job.runId,
-        startedAt: 1_000,
-        getLifecycleGeneration: getAgentEventLifecycleGeneration,
-        resolveTerminationFields: () => termination ?? {},
+  ] as const)(
+    "publishes %s without retry grace",
+    async (_label, result, expected, termination?: TerminationFields) => {
+      const phase = result instanceof Error ? "error" : "end";
+      const job = createJob("settled-execution");
+      await job.assertSettled(expected, async () => {
+        const lifecycle = createAgentLifecycleTerminalBackstop({
+          runId: job.runId,
+          startedAt: 1_000,
+          getLifecycleGeneration: getAgentEventLifecycleGeneration,
+          resolveTerminationFields: () => termination ?? {},
+        });
+        job.emit({ phase: "start", startedAt: 1_000 });
+        lifecycle.capture(phase, result);
+        await expect(job.wait()).resolves.toBeNull();
+        lifecycle.emit(phase, result);
       });
-      job.emit({ phase: "start", startedAt: 1_000 });
-      lifecycle.capture(phase, result);
-      await expect(job.wait()).resolves.toBeNull();
-      lifecycle.emit(phase, result);
-    });
-  });
+    },
+  );
 });
