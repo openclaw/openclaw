@@ -19,8 +19,6 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, expect, it, vi } from "vitest";
-import { defaultTelegramBotDeps } from "./bot-deps.js";
-import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createTelegramBot } from "./bot.js";
 import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
@@ -40,6 +38,23 @@ const downstream = vi.hoisted(() =>
   })),
 );
 const sessionDirs = useSessionStoreTempDirs(afterAll, "telegram-native-admission-");
+const menuSyncs = vi.hoisted(() => new Set<Promise<void>>());
+
+vi.mock("./bot-native-command-menu.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./bot-native-command-menu.js")>();
+  return {
+    ...actual,
+    syncTelegramMenuCommands: (params: Parameters<typeof actual.syncTelegramMenuCommands>[0]) => {
+      const pending = actual.syncTelegramMenuCommands(params);
+      menuSyncs.add(pending);
+      return pending;
+    },
+  };
+});
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
+  readChannelAllowFromStore: vi.fn(async () => []),
+}));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
@@ -128,7 +143,6 @@ it.each(["none", "middleware", "handler"] as const)(
     });
     const telegramTransport = { fetch, sourceFetch: fetch, close: async () => {} };
     let monitor: ReturnType<typeof createTelegramTransportIngressMonitor> | undefined;
-    let menuSync: Promise<void> | undefined;
     const handlerAnswerRead = Promise.withResolvers<void>();
     const getHandlerAnswer = callbackQueryAnswerState.getTelegramCallbackQueryAnswerPromise;
     const readHandlerAnswer = vi
@@ -153,13 +167,6 @@ it.each(["none", "middleware", "handler"] as const)(
         botInfo: telegramBotInfoForTest,
         config: cfg,
         telegramTransport,
-        telegramDeps: {
-          ...defaultTelegramBotDeps,
-          syncTelegramMenuCommands: (params) => (menuSync = syncTelegramMenuCommands(params)),
-          getRuntimeConfig: () => cfg,
-          prepareSkillCommandsForAgents: async () => [],
-          readChannelAllowFromStore: async () => [],
-        },
         runtime: {
           log: () => {},
           error: (error) => runtimeErrors.push(error),
@@ -300,7 +307,8 @@ it.each(["none", "middleware", "handler"] as const)(
       }
       await monitor?.waitForIdle();
       await monitor?.stop();
-      await menuSync;
+      await Promise.all(menuSyncs);
+      menuSyncs.clear();
       readHandlerAnswer.mockRestore();
       await telegramTransport.close();
       server.closeAllConnections();

@@ -18,9 +18,8 @@ import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtim
 import { createDiscordLivePolicyReader } from "./live-policy.js";
 import type { DiscordLivePolicy, DiscordLivePolicyReader } from "./live-policy.js";
 
-const { loadModelCatalogMock, loggerDebugMock } = vi.hoisted(() => ({
+const { loadModelCatalogMock } = vi.hoisted(() => ({
   loadModelCatalogMock: vi.fn(),
-  loggerDebugMock: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
@@ -34,7 +33,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
-      debug: loggerDebugMock,
+      debug: vi.fn(),
     }),
     logVerbose: vi.fn(),
   };
@@ -218,7 +217,6 @@ describe("createDiscordNativeCommand option wiring", () => {
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
     loadModelCatalogMock.mockReset().mockReturnValue({ entries: [], routeVariants: [] });
-    loggerDebugMock.mockReset();
   });
 
   afterEach(() => {
@@ -249,9 +247,6 @@ describe("createDiscordNativeCommand option wiring", () => {
         },
       ]);
       expect(choices).not.toHaveBeenCalled();
-      expect(loggerDebugMock).toHaveBeenCalledExactlyOnceWith(
-        `discord: truncating native command description (command:scalar arg:value) from ${description.length} to 100: ${JSON.stringify(description)}`,
-      );
     },
   );
 

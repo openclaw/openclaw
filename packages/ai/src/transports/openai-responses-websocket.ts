@@ -78,7 +78,7 @@ export function resolveNativeOpenAIResponsesWebSocketMode(
   if (transport !== "websocket" && transport !== "websocket-cached" && transport !== "auto") {
     return undefined;
   }
-  if (getAiTransportHost().requiresManagedTransport(model)) {
+  if (getAiTransportHost().requiresManagedTransport(model, "fetch")) {
     return undefined;
   }
   return supportsNativeOpenAIResponsesEndpoint(model) ? transport : undefined;

@@ -519,7 +519,9 @@ export class ChatComposerCapabilityHost {
         void this.library.load(true);
       },
       onLoadView: (view) => {
-        if (!current()) return;
+        if (!current()) {
+          return;
+        }
         if (
           (view === "skills" || view.startsWith("library:")) &&
           !this.library.result &&

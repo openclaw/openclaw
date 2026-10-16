@@ -13,7 +13,7 @@ import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import {
   type LoginFailureFeedback,

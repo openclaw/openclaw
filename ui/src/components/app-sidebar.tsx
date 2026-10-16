@@ -14,7 +14,7 @@ import {
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { PluginView } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";

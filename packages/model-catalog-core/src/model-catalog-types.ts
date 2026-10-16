@@ -255,6 +255,8 @@ export type ModelCatalogModel = {
 };
 
 export type ModelCatalogProvider = {
+  /** Credential owner; omitted providers keep agent-owned profile/env/config auth. */
+  authScope?: "agent" | "plugin";
   baseUrl?: string;
   api?: ModelCatalogApi;
   headers?: Record<string, string>;

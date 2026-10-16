@@ -23,7 +23,7 @@ import {
 } from "./browser-client.ts";
 import { BrowserPanelDownload } from "./browser-panel-download.ts";
 import { BrowserPanelInputOwner } from "./browser-panel-input-owner.ts";
-import { BrowserPanelNativeController } from "./browser-panel-native-controller.ts";
+import { createBrowserPanelNative, type BrowserPanelNative } from "./browser-panel-native-owner.ts";
 import {
   BrowserPanelOperationOwnership,
   type BrowserPanelControllerHost,
@@ -59,7 +59,8 @@ export class BrowserPanelController implements PanelLifecycleController {
   urlDraft = "";
   pendingNewTab = false;
 
-  readonly native: BrowserPanelNativeController;
+  readonly native: BrowserPanelNative;
+  addressInput?: HTMLInputElement;
   readonly operations: BrowserPanelOperationOwnership;
   readonly pendingInput = new BrowserPanelPendingInput();
   readonly download = new BrowserPanelDownload(this);
@@ -74,21 +75,12 @@ export class BrowserPanelController implements PanelLifecycleController {
     this.operations = new BrowserPanelOperationOwnership(host);
     this.input = new BrowserPanelInputOwner(this);
     this.stream = new BrowserPanelStream(this);
-    this.native = new BrowserPanelNativeController(this);
+    this.native = createBrowserPanelNative(this);
     host.addController(this);
-  }
-
-  hostConnected(): void {
-    this.native.connect();
-  }
-
-  hostUpdated(): void {
-    this.native.presentation.update();
   }
 
   hostDisconnected(): void {
     this.suspendView();
-    this.native.disconnect();
   }
 
   suspendView(): void {
@@ -631,7 +623,7 @@ export class BrowserPanelController implements PanelLifecycleController {
     const epoch = this.operations.epoch;
     void this.host.updateComplete.then(() => {
       if (this.operations.isLive(epoch)) {
-        this.host.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus();
+        this.addressInput?.focus();
       }
     });
   }

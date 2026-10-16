@@ -9,7 +9,7 @@ import { PanelTabStrip } from "../../../components/panel-tab-strip-solid.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";

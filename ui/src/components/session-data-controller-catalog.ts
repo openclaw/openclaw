@@ -10,13 +10,13 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import type { SolidControllerHost } from "../lib/reactive/solid-controller-host.ts";
 import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import {
   buildCatalogSessionKey,
   type CatalogSessionContinuedDetail,
 } from "../lib/sessions/catalog-key.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
-import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import {
   refreshSessionCatalogsLive,
   SessionCatalogLiveState,

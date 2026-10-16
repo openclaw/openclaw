@@ -47,66 +47,25 @@ describe("openclaw-board-view retention", () => {
     expect(messages.map((message) => message.mock.calls.length)).toEqual([0, 0, 0]);
     expect(cells.map((cell) => cell.querySelector("iframe"))).toEqual(frames);
 
-    // Availability and connection-authority changes still reach the active cell.
+    const gateway = context.gateway.snapshot;
+    const hello = gatewayHelloForMethods([], ["operator.read"]);
     const transitions: Array<[string, () => void]> = [
-      [
-        "restart",
-        () => {
-          context.gateway.snapshot.restartPending = true;
-        },
-      ],
-      [
-        "restart settled",
-        () => {
-          context.gateway.snapshot.restartPending = false;
-        },
-      ],
-      [
-        "suspension",
-        () => {
-          context.gateway.snapshot.suspensionPhase = "draining";
-        },
-      ],
-      [
-        "accepting",
-        () => {
-          context.gateway.snapshot.suspensionPhase = "accepting";
-        },
-      ],
-      [
-        "client",
-        () => {
-          context.gateway.snapshot.client = createTestGatewayClient(async () => ({}));
-        },
-      ],
+      ["restart", () => (gateway.restartPending = true)],
+      ["restart settled", () => (gateway.restartPending = false)],
+      ["suspension", () => (gateway.suspensionPhase = "draining")],
+      ["accepting", () => (gateway.suspensionPhase = "accepting")],
+      ["client", () => (gateway.client = createTestGatewayClient(async () => ({})))],
       [
         "hello/auth/recovery",
-        () => {
-          const hello = gatewayHelloForMethods([], ["operator.read"]);
-          context.gateway.snapshot.hello = {
+        () =>
+          (gateway.hello = {
             ...hello,
             auth: { ...hello.auth, recoveryScope: "new-principal" },
-          };
-        },
+          }),
       ],
-      [
-        "credentials/account",
-        () => {
-          Object.assign(context.gateway, { connectionRevision: 1 });
-        },
-      ],
-      [
-        "disconnect",
-        () => {
-          context.gateway.snapshot.phase = "reconnecting";
-        },
-      ],
-      [
-        "reconnect",
-        () => {
-          context.gateway.snapshot.phase = "connected";
-        },
-      ],
+      ["credentials/account", () => Object.assign(context.gateway, { connectionRevision: 1 })],
+      ["disconnect", () => (gateway.phase = "reconnecting")],
+      ["reconnect", () => (gateway.phase = "connected")],
     ];
     for (const [label, change] of transitions) {
       messages.forEach((message) => message.mockClear());
@@ -234,10 +193,8 @@ describe("openclaw-board-view retention", () => {
 
     view.snapshot = snapshot({ revision: 2, widgets: [] });
     await settleCells(view);
-    expect(cell.isConnected).toBe(true);
+    expect(cell).toMatchObject({ isConnected: true, active: false, hidden: true });
     expect(cell.widget).toBe(widget);
-    expect(cell.active).toBe(false);
-    expect(cell.hidden).toBe(true);
 
     teardown.resolve();
     await settleCells(view);

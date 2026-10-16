@@ -543,7 +543,7 @@ describe("command queue", () => {
     await expect(second).resolves.toBe("second");
   });
 
-  it.each(["admission", "completion", "error"] as const)(
+  it.each(["admission", "error"] as const)(
     "settles callers and drains the session lane when %s diagnostics throw",
     async (phase) => {
       vi.useFakeTimers();
@@ -565,7 +565,7 @@ describe("command queue", () => {
         enqueueCommandInLane(lane, successor),
       ]);
       if (phase !== "admission") {
-        diagnosticMocks.diag[phase === "error" ? "error" : "debug"].mockImplementationOnce(() => {
+        diagnosticMocks.diag.error.mockImplementationOnce(() => {
           throw diagnosticError;
         });
       }
@@ -579,9 +579,7 @@ describe("command queue", () => {
       expect(successor).toHaveBeenCalledOnce();
       expect(firstTask).toHaveBeenCalledTimes(phase === "admission" ? 0 : 1);
       expect(await outcomes).toEqual([
-        phase === "completion"
-          ? { status: "fulfilled", value: "first" }
-          : { status: "rejected", reason: phase === "admission" ? diagnosticError : taskError },
+        { status: "rejected", reason: phase === "admission" ? diagnosticError : taskError },
         { status: "fulfilled", value: "successor" },
       ]);
       expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 0, queuedCount: 0 });

@@ -85,10 +85,18 @@ The supported PostgreSQL families are:
   agent directories, use the selected engine through the existing agent workers.
   Transcript payloads are stored as plain JSON on PostgreSQL. Transcript text search
   uses the engine's admitted full-text capability and requires `unaccent`.
-  Memory indexing remains unavailable until the memory owner supports PostgreSQL;
-  requests fail with `DATABASE_SEARCH_CAPABILITY_UNAVAILABLE`.
-  Existing SQLite agent stores cannot switch engines; agent ports and backup
-  providers are not available yet. PostgreSQL agent schemas support current-version
+  Memory text and vector admission are owned by the memory engine. Port and backup
+  validate its recorded search extensions against those owner definitions.
+  Existing agent stores support bidirectional ports and matched backups, including
+  retained registry paths and explicit session or agent directories. Older SQLite
+  schemas migrate only in the port's private copy. Compressed transcript events
+  become plain JSON on PostgreSQL; transcript search is rebuilt before publication.
+  Rebuildable memory indexes are omitted. Their rebuild hook remains explicitly
+  pending the memory owner's rebuild entry point; empty metadata requests reindexing.
+  Canonical memory origins and
+  tombstones remain intact. Duplicate-key voice JSON refuses the port with a hashed
+  row locator. Cold archive references are retained; user backups embed their blobs.
+  PostgreSQL agent schemas support current-version
   bootstrap only and reject schema drift before exposing the store.
 - **Workboard:** runtime storage, bidirectional database ports, and matched backups.
 - **Logbook:** runtime frames, batches, observations, cards, and standups;
@@ -504,6 +512,12 @@ canonical data, so they are retained rather than rebuilt. Exact captures keep
 secrets and transient rows; user exports apply the existing shared-state sanitizer.
 Restore uses normal owner admission, including PostgreSQL catalog drift checks.
 
+Matched agent backups retain PostgreSQL sequence high-watermarks, including retired
+outbox rows. A reverse port uses SQLite's native allocator: plain `INTEGER PRIMARY
+KEY` columns allocate after the largest retained row, while `AUTOINCREMENT` columns
+retain their recorded high-watermark. Retained outbox order is preserved in both
+directions.
+
 Preserve the complete matched set: an anchor alone contains
 no PostgreSQL rows. Existing format-1 SQLite backups remain readable.
 
@@ -527,17 +541,15 @@ Release packages declare supported engines in the optional
 `openclaw.databaseEngines` array in `package.json`, next to
 `openclaw.updateAdmissionProtocol`. An absent array means `["sqlite"]`; the
 admission protocol remains `1`. PostgreSQL targets also declare
-`openclaw.postgresFamilies`: the supported family IDs (`state`, `workboard`,
-`logbook`, and `team-reports`). On installations configured for PostgreSQL,
+`openclaw.postgresFamilies`: the supported family IDs (`state`, `agent`,
+`workboard`, `logbook`, and `team-reports`). On installations configured for PostgreSQL,
 the updater checks every selected family and retained physical store, including
 disabled plugins. Missing engine or family support refuses before stopping the
 previous Gateway or mutating data.
 Reverse-port to SQLite with the current compatible binary, or stay on the
-current version. PostgreSQL agent runtime support does not yet include a port
-and exact-backup provider. A global PostgreSQL configuration selects that family,
-so updates currently refuse it with the previous Gateway kept running until the
-agent provider is available. The four supported providers can capture and restore
-their stores independently; they do not make a full PostgreSQL-agent update safe.
+current version. Homogeneous PostgreSQL installations include agent stores in
+preflight, exact capture, and custody-backed rollback, including retained registry
+paths. Updates with mixed engines or explicit family overrides remain refused.
 
 Shared-state preflight reads registry, plugin installation, schema-version and
 retained-agent facts through an admitted read-only PostgreSQL transaction in a

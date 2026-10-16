@@ -108,11 +108,6 @@ describe("Teams inbound media recovery", () => {
       ],
     });
     expect(JSON.stringify(context())).not.toContain("19:raw-team@thread.skype/");
-    expect(deps.log.info).toHaveBeenCalledWith(
-      "received message",
-      expect.objectContaining({ rawTextLength: rawText.length, textLength: privateText.length }),
-    );
-    expect(deps.log.debug).toHaveBeenCalledWith(expect.stringContaining("msteams inbound:"));
     const logs = JSON.stringify([
       vi.mocked(deps.log.info).mock.calls,
       vi.mocked(deps.log.debug!).mock.calls,

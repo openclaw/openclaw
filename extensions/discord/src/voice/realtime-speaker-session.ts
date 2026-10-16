@@ -20,7 +20,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { DiscordVoiceIngressContext } from "./ingress.js";
-import { formatRealtimeInfoLog, shouldLogRealtimeVerboseEvent } from "./log-preview.js";
+import { formatRealtimeInfoLog } from "./log-preview.js";
 import { DiscordRealtimeConsults, type AgentProxyConsultState } from "./realtime-consults.js";
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
 import type { DiscordRealtimePlayer } from "./realtime-player.js";
@@ -30,13 +30,12 @@ import {
 } from "./realtime-recording.js";
 import { resolveDiscordRealtimeSpeakerConfig } from "./realtime-speaker-config.js";
 import { DiscordRealtimeTurns } from "./realtime-turns.js";
-import {
-  logVoiceVerbose,
-  type DiscordVoiceMode,
-  type VoiceRealtimeAgentTurnParams,
-  type VoiceRealtimeSpeakerContext,
-  type VoiceRealtimeSpeakerTurn,
-  type VoiceSessionEntry,
+import type {
+  DiscordVoiceMode,
+  VoiceRealtimeAgentTurnParams,
+  VoiceRealtimeSpeakerContext,
+  VoiceRealtimeSpeakerTurn,
+  VoiceSessionEntry,
 } from "./session.js";
 
 const logger = createSubsystemLogger("discord/voice");
@@ -220,7 +219,7 @@ export class DiscordRealtimeSpeakerSession {
     const onReady = () => {
       this.markProviderGenerationObserved();
       if (this.markLifecycleReady()) {
-        this.playback.drainQueuedExactSpeechMessages("provider-ready");
+        this.playback.drainQueuedExactSpeechMessages();
       }
     };
     this.bridge = this.harness.createBridge({
@@ -279,9 +278,6 @@ export class DiscordRealtimeSpeakerSession {
           return;
         }
         this.markProviderGenerationObserved();
-        if (isFinal && text.trim()) {
-          logger.info(`discord voice: realtime ${role} transcript (${text.length} chars)`);
-        }
         if (isFinal && role === "assistant") {
           this.playback.suppressDuplicateControlSpeech(text);
         }
@@ -363,7 +359,7 @@ export class DiscordRealtimeSpeakerSession {
       return;
     }
     this.markProviderGenerationObserved();
-    this.playback.drainQueuedExactSpeechMessages("provider-connected");
+    this.playback.drainQueuedExactSpeechMessages();
     logger.info(
       `discord voice: realtime bridge ready mode=${this.params.mode} provider=${resolved.provider.id} model=${resolvedModel ?? "default"} voice=${resolvedVoice ?? "default"}`,
     );
@@ -624,7 +620,6 @@ export class DiscordRealtimeSpeakerSession {
     ) {
       this.markProviderGenerationObserved();
     }
-    const detail = event.detail ? ` ${event.detail}` : "";
     if (event.direction === "client" && event.type === "session.continuity.reset") {
       this.resetProviderContinuity(event.type);
     }
@@ -633,9 +628,6 @@ export class DiscordRealtimeSpeakerSession {
     }
     if (event.direction === "server" && event.type === "input_audio_buffer.speech_started") {
       this.turns.resetPartialWakeNameTracking();
-    }
-    if (shouldLogRealtimeVerboseEvent(event)) {
-      logVoiceVerbose(`realtime ${event.direction}:${event.type}${detail}`);
     }
     const info = formatRealtimeInfoLog(event);
     if (info) {

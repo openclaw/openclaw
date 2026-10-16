@@ -23,6 +23,7 @@ const io = vi.hoisted(() => ({
   source: vi.fn(),
   load: vi.fn(),
   report: vi.fn(),
+  withdraw: vi.fn(),
 }));
 vi.mock(
   "../agents/main-session-recovery/main-session-restart-recovery-shared.js",
@@ -51,12 +52,11 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
   appendSessionTranscriptReport: io.report,
 }));
-vi.mock("../config/sessions/transcript-write-context.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/sessions/transcript-write-context.js")>()),
-  withSessionTranscriptWriteAssertion: (_scope: unknown, guard: () => void, run: () => unknown) => {
-    guard();
-    return run();
-  },
+vi.mock("../config/sessions/session-pending-input-withdrawal.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../config/sessions/session-pending-input-withdrawal.js")
+  >()),
+  discardSessionPendingInput: io.withdraw,
 }));
 vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
@@ -147,10 +147,72 @@ beforeEach(() => {
     store: { [key]: key === delivery.source.sessionKey ? sourceEntry : targetEntry },
   }));
   io.report.mockResolvedValue({ ok: true });
+  io.withdraw.mockResolvedValue(true);
 });
 afterEach(() => {
   vi.useRealTimers();
   clearRuntimeConfigSnapshot();
+});
+
+it("settles replaced-endpoint inputs durably so the second restart is silent", async () => {
+  const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+  const { openOpenClawAgentDatabase } = await import("../state/openclaw-agent-db.js");
+  const { writeSessionEntry } =
+    await import("../config/sessions/session-accessor.sqlite-entry-store.js");
+  const { stageSessionPendingInput } =
+    await import("../config/sessions/session-accessor.pending-inputs.js");
+  const history = await vi.importActual<
+    typeof import("../config/sessions/session-pending-input-history.js")
+  >("../config/sessions/session-pending-input-history.js");
+  const source = await vi.importActual<
+    typeof import("../config/sessions/session-pending-input-source.js")
+  >("../config/sessions/session-pending-input-source.js");
+  const reports = await import("../config/sessions/session-accessor.sqlite-transcript-reports.js");
+  const withdrawal = await vi.importActual<
+    typeof import("../config/sessions/session-pending-input-withdrawal.js")
+  >("../config/sessions/session-pending-input-withdrawal.js");
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const scope = { ...delivery.target, storePath: database.path };
+    writeSessionEntry(database, scope.sessionKey, targetEntry);
+    const receipt = await stageSessionPendingInput(scope, {
+      runId: delivery.runId,
+      message: input.message,
+      assertCurrent() {},
+    });
+    expect(receipt).toBeDefined();
+    receipt!.finish("interrupted");
+    await receipt!.settled?.();
+    sourceEntry = { ...sourceEntry, lifecycleRevision: "source-after-reset" };
+    io.discover.mockResolvedValue([{ agentId: "main", storePath: database.path }]);
+    io.pending.mockImplementation(history.readSessionSendRecoveryPage);
+    io.source.mockImplementation(source.readPendingInputSource);
+    io.report.mockImplementation(reports.appendSessionTranscriptReport);
+    io.withdraw.mockImplementation(withdrawal.discardSessionPendingInput);
+
+    await recoverSessionSendDeliveries(context, controller().signal);
+    expect(dispatch).not.toHaveBeenCalled();
+    const notice = await reports.readLatestSessionTranscriptReport(scope, [
+      "session-send-recovery-blocked",
+    ]);
+    expect(notice).toMatchObject({
+      ok: true,
+      value: { content: expect.stringContaining("session was reset, archived, or replaced") },
+    });
+    expect(await history.listSessionPendingInputs(scope)).toMatchObject({
+      items: [{ state: "cancelled", message: { display: false } }],
+    });
+
+    warn.mockClear();
+    io.report.mockClear();
+    await recoverSessionSendDeliveries(context, controller().signal);
+    expect(warn).not.toHaveBeenCalled();
+    expect(io.report).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(
+      await reports.readLatestSessionTranscriptReport(scope, ["session-send-recovery-blocked"]),
+    ).toEqual(notice);
+  });
 });
 
 it("retries transient admission with the saved input and delivery identity, in order", async () => {
@@ -243,6 +305,9 @@ it.each(["reset", "replaced", "archive", "permission", "consumed", "abort"] as c
     await Promise.all([recovery, vi.runAllTimersAsync()]);
     expect(dispatch).toHaveBeenCalledOnce();
     expect(io.report).toHaveBeenCalledTimes(change === "consumed" || change === "abort" ? 0 : 1);
+    expect(io.withdraw).toHaveBeenCalledTimes(
+      change === "reset" || change === "replaced" || change === "archive" ? 1 : 0,
+    );
     if (
       change === "reset" ||
       change === "replaced" ||
@@ -259,6 +324,33 @@ it.each(["reset", "replaced", "archive", "permission", "consumed", "abort"] as c
     }
   },
 );
+
+it("logs replacement identity and age without session keys or message content", async () => {
+  sourceEntry = { ...sourceEntry, lifecycleRevision: "source-after-reset" };
+  vi.setSystemTime(10_001);
+  await recoverSessionSendDeliveries(context, controller().signal);
+  const warning = warn.mock.calls[0]![0] as string;
+  expect(warning).toContain('"inputId":"saved-input"');
+  expect(warning).toContain('"ageMs":10000');
+  expect(warning).toContain('"endpoint":"source"');
+  expect(warning).toContain('"previousGeneration":"source-before-reset"');
+  expect(warning).toContain('"currentGeneration":"source-after-reset"');
+  expect(warning).toMatch(/"sessionKeyHash":"[a-f0-9]{16}"/u);
+  expect(warning).not.toContain(delivery.source.sessionKey);
+  expect(warning).not.toContain(delivery.target.sessionKey);
+  expect(warning).not.toContain(delivery.message);
+});
+
+it("retains replaced-endpoint inputs when the durable notice is refused", async () => {
+  sourceEntry = { ...sourceEntry, sessionId: "replacement" };
+  io.report.mockResolvedValue({ ok: false });
+  await recoverSessionSendDeliveries(context, controller().signal);
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(io.withdraw).not.toHaveBeenCalled();
+  expect(warn).toHaveBeenCalledWith(
+    "Could not record blocked agent-update delivery notice; inputs retained.",
+  );
+});
 
 const privateDatabasePath = "/synthetic/private/agents/main/openclaw-agent.sqlite";
 const quarantineCommand = `mv ${privateDatabasePath} /synthetic/private/quarantine/`;

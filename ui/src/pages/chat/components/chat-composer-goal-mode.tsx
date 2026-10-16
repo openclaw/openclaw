@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { Show } from "solid-js";
 import "../../../styles/chat/composer-context-strip.css";
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -18,7 +18,7 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
   const mode = () => readProps().goalDraftMode ?? null;
   const liveMode = (props: ChatComposerProps) =>
     (props.draftSource ? props.draftSource.read().goalDraftMode : props.goalDraftMode) ?? null;
-  const [pending, setPending] = createSignal<ChatGoalDraftMode | null>(null);
+  const [pending, setPending] = state.goalPending;
   // Updaters read staged writes too, so a second action cannot beat the render flush.
   const pendingNow = (current: ChatGoalDraftMode | null) =>
     current !== null && setPending((value) => value) === current;

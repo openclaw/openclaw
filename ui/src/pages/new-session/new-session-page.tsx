@@ -11,7 +11,7 @@ import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
 import "../../styles/new-session-attachment-panel.css";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";

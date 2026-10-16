@@ -1,7 +1,14 @@
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  recordInboundSession,
+  upsertChannelPairingRequest,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   createSubsystemLogger,
   danger,
@@ -10,7 +17,13 @@ import {
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { TelegramBotDeps } from "./bot-deps.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import {
+  readSessionUpdatedAtAsync,
+  readAmbientTranscriptWatermarkAsync,
+  resolveAmbientTranscriptWatermarkKey,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { createTelegramDirectAvatarResolver } from "./bot-message-avatar.js";
 import {
@@ -61,7 +74,6 @@ type TelegramMessageProcessorDeps = Omit<
   | "ackReactionScope"
 > & {
   runtime: RuntimeEnv;
-  telegramDeps: TelegramBotDeps;
   buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   telegramTransport?: TelegramTransport;
   opts: Pick<
@@ -121,17 +133,17 @@ export function resolveTelegramMessageTurnSettings(params: {
 export const createTelegramMessageProcessor = (
   deps: TelegramMessageProcessorDeps,
 ): RegisterTelegramHandlerParams["processMessage"] => {
-  const { runtime, telegramDeps, buildContext, opts, ...contextOptions } = deps;
+  const { runtime, buildContext, opts, ...contextOptions } = deps;
   const { bot, account } = contextOptions;
   const sessionRuntime = {
-    buildChannelInboundEventContext: buildContext ?? telegramDeps.buildChannelInboundEventContext,
-    readSessionUpdatedAtAsync: telegramDeps.readSessionUpdatedAtAsync,
-    readAmbientTranscriptWatermarkAsync: telegramDeps.readAmbientTranscriptWatermarkAsync,
-    recordInboundSession: telegramDeps.recordInboundSession,
-    resolveAmbientTranscriptWatermarkKey: telegramDeps.resolveAmbientTranscriptWatermarkKey,
-    resolveInboundLastRouteSessionKey: telegramDeps.resolveInboundLastRouteSessionKey,
-    resolvePinnedMainDmOwnerFromAllowlist: telegramDeps.resolvePinnedMainDmOwnerFromAllowlist,
-    resolveStorePath: telegramDeps.resolveStorePath,
+    buildChannelInboundEventContext: buildContext ?? buildChannelInboundEventContext,
+    readSessionUpdatedAtAsync,
+    readAmbientTranscriptWatermarkAsync,
+    recordInboundSession,
+    resolveAmbientTranscriptWatermarkKey,
+    resolveInboundLastRouteSessionKey,
+    resolvePinnedMainDmOwnerFromAllowlist,
+    resolveStorePath,
   };
   const resolveDirectAvatar = createTelegramDirectAvatarResolver({
     api: bot.api,
@@ -140,7 +152,7 @@ export const createTelegramMessageProcessor = (
     token: opts.token,
     transport: deps.telegramTransport,
   });
-  const contextRuntime = { recordChannelActivity: telegramDeps.recordChannelActivity };
+  const contextRuntime = { recordChannelActivity };
 
   return async ({
     ctx: primaryCtx,
@@ -183,7 +195,7 @@ export const createTelegramMessageProcessor = (
       ...turnSettings,
       runtime: contextRuntime,
       sessionRuntime,
-      upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
+      upsertPairingRequest: upsertChannelPairingRequest,
     });
     if (!context) {
       if (ingressDebugEnabled && ingressReceivedAtMs && ingressContextStartMs) {
@@ -235,7 +247,6 @@ export const createTelegramMessageProcessor = (
           streamMode: turnSettings.streamMode,
           textLimit: turnSettings.textLimit,
           telegramCfg: turnTelegramCfg,
-          telegramDeps,
           opts,
           retryDispatchErrors: spooledReplay,
           suppressFailureFallback: spooledReplay,

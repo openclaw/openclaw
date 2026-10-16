@@ -21,7 +21,6 @@ import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import * as transcriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import { telegramPlugin } from "./channel.js";
@@ -435,7 +434,6 @@ export function createTelegramDispatchHttpFixture() {
       >;
       replyToMode?: "off" | "all" | "first" | "batched";
       accountId?: string;
-      telegramDeps?: TelegramBotDeps;
       telegramCfg?: Parameters<typeof dispatchTelegramMessage>[0]["telegramCfg"];
       cfg?: OpenClawConfig;
       onDispatch?: (cfg: OpenClawConfig) => void;
@@ -544,7 +542,6 @@ export function createTelegramDispatchHttpFixture() {
         streamMode: scenario?.mode ?? "progress",
         textLimit: scenario?.textLimit ?? 4096,
         telegramCfg,
-        telegramDeps: scenario?.telegramDeps,
         retryDispatchErrors: true,
         turnAdoptionLifecycle: scenario?.turnAdoptionLifecycle,
         suppressFailureFallback: scenario?.suppressFailureFallback,

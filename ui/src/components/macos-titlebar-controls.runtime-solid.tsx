@@ -1,6 +1,6 @@
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import "./tooltip.ts";
 

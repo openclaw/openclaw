@@ -132,7 +132,7 @@ it.each([true])(
               providerId: "fixture",
               pluginId: record.id,
               configured: true,
-              credentialReady: true,
+              credentialReady: false,
               callable: true,
               successCount: 1,
               activeRequests: 0,

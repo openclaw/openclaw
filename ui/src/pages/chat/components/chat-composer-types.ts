@@ -1,5 +1,6 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
+import type { Signal, StoreSetter } from "solid-js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -208,6 +209,7 @@ type ScopedComposerDraft = {
 
 export type ChatComposerState = SkillMenuState &
   SlashMenuState & {
+    goalPending: Signal<ChatGoalDraftMode | null>;
     composerComposing: boolean;
     editRevision: number;
     mentionMenu: HumanMentionMenu;
@@ -215,11 +217,14 @@ export type ChatComposerState = SkillMenuState &
     mentionInput?: HumanMentionInput;
     composerInputIntentKey: string | null;
     pendingClearedSubmittedDraft: ScopedComposerDraft | null;
-    goalExpandedId: string | null;
-    activeQuestionKey: string | null;
-    gatewayQuestionIds: Set<string>;
-    asyncQuestionIds: Set<string>;
-    questionCollapsed: boolean;
+    presentation: {
+      goalExpandedId: string | null;
+      activeQuestionKey: string | null;
+      gatewayQuestionIds: Set<string>;
+      asyncQuestionIds: Set<string>;
+      questionCollapsed: boolean;
+    };
+    updatePresentation: StoreSetter<ChatComposerState["presentation"]>;
     questionTakeoverActive: boolean;
     restoreComposerFocus: boolean;
     composerInput: HTMLElement | null;

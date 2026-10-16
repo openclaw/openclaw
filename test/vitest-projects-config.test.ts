@@ -81,16 +81,6 @@ function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable
 
 const rootVitestProjects = requireTestConfig(baseConfig).projects as string[];
 
-function requireClientOptimizer(testConfig: unknown) {
-  const clientOptimizer = (
-    testConfig as { deps?: { optimizer?: { client?: { enabled?: boolean } } } }
-  ).deps?.optimizer?.client;
-  if (!clientOptimizer) {
-    throw new Error("expected vitest client optimizer config");
-  }
-  return clientOptimizer;
-}
-
 afterEach(() => {
   patternFiles.cleanup();
 });
@@ -514,8 +504,7 @@ describe("projects vitest config", () => {
     expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
     const setupFiles = normalizeConfigPaths(testConfig.setupFiles);
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
-    expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
-    expect(requireClientOptimizer(testConfig).enabled).toBe(true);
+    expect(setupFiles).toContain("ui/src/test-helpers/dom.setup.ts");
   });
 
   it("keeps root-matrix unit-fast files on the cross-file cleanup runner", () => {

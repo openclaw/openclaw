@@ -12,6 +12,7 @@ import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createGoalComposer } from "./chat-composer-goal-mode.tsx";
 import { createComposerPrediction } from "./chat-composer-prediction.ts";
+import { createComposerQuestionPanel } from "./chat-composer-question.tsx";
 import { composerDraftKey, getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.tsx";
@@ -85,12 +86,19 @@ export function ChatComposer(props: ChatComposerProps) {
       idle: !isChatRunWorking(currentProps) && !currentProps.sending && !currentProps.queue.length,
     };
   });
+  const questionPanel = createComposerQuestionPanel(() => currentProps, state, composition);
   const context = createMemo(() => {
     draftState();
     revision();
     computingFrame = true;
     try {
-      return createChatComposerContext(currentProps, interaction, goalComposer, prediction);
+      return createChatComposerContext(
+        currentProps,
+        interaction,
+        goalComposer,
+        prediction,
+        questionPanel(),
+      );
     } finally {
       computingFrame = false;
     }

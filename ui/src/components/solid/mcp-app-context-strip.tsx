@@ -15,7 +15,7 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { Icon } from "./icon.tsx";
 import "../../styles/mcp-app-extensions.css";
 

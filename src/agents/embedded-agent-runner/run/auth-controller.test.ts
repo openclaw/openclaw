@@ -568,7 +568,7 @@ describe("createEmbeddedRunAuthController", () => {
     },
   );
 
-  it("unwraps a sentinel for runtime auth exchange but keeps auth storage opaque", async () => {
+  it("keeps credentials opaque until the runtime auth exchange boundary", async () => {
     const harness = createMutableAuthControllerHarness();
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
     const secret = "runtime-exchange-source-secret";
@@ -595,9 +595,7 @@ describe("createEmbeddedRunAuthController", () => {
     expect(mocks.getApiKeyForModelCore).toHaveBeenCalledWith(
       expect.objectContaining({ secretSentinels: true }),
     );
-    expect(mocks.prepareProviderRuntimeAuth).toHaveBeenCalledWith(
-      expect.objectContaining({ context: expect.objectContaining({ apiKey: secret }) }),
-    );
+    expect(mocks.prepareProviderRuntimeAuth.mock.calls[0]?.[0]?.context.apiKey).toBe(sentinel);
     const storedApiKey = setRuntimeApiKey.mock.calls[0]?.[1];
     expect(storedApiKey && looksLikeSecretSentinel(storedApiKey)).toBe(true);
     expect(storedApiKey && resolveSecretSentinel(storedApiKey)).toBe("runtime-exchange-token");

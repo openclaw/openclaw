@@ -566,7 +566,9 @@ export function ChatComposerPlusMenu(props: { menu: ChatComposerPlusMenuProps })
       load: props.menu.capabilityMenu?.onLoadView,
     }),
     ({ open, view, load }) => {
-      if (open) load?.(view);
+      if (open) {
+        load?.(view);
+      }
     },
   );
   const resolved = createMemo(() => {

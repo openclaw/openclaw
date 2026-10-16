@@ -142,7 +142,14 @@ async function runEmbeddedAttemptOwned(
   let queueYieldInterruptForSession: (() => void) | null = null;
   const sessionResources = createEmbeddedAttemptSessionResources(runAbortController.signal);
   const cleanupStep = (step: string, cleanup: () => Promise<void>) =>
-    runOwnedAgentCleanup({ ...params, step, cleanup, log });
+    runOwnedAgentCleanup({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      oneShotCliRun: params.oneShotCliRun,
+      step,
+      cleanup,
+      log,
+    });
   const cleanupEmbeddedPrepResourcesAfterEarlyExit = async () => {
     if (toolSearchCatalogApplied) {
       clearToolSearchCatalog({ catalogRef: toolSearchCatalogRef });

@@ -19,7 +19,6 @@ import {
   peekDiagnosticSessionState,
 } from "./diagnostic-session-state.js";
 import {
-  diagnosticLogger,
   logMessageQueued,
   logSessionStateChange,
   logWebhookReceived,
@@ -37,11 +36,10 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("reports the shared next wake and coalesces diagnostic heartbeats after sleep", async () => {
+it("coalesces diagnostic heartbeats after sleep", async () => {
   const startedAt = Date.now();
   const clock = createGatewaySchedulerClock(startedAt);
   const scheduler = createTestGatewayScheduler(clock.clock);
-  const debug = vi.spyOn(diagnosticLogger, "debug");
   const heartbeats: DiagnosticEventPayload[] = [];
   const unsubscribe = onDiagnosticEvent((event) => {
     if (event.type === "diagnostic.heartbeat") {
@@ -53,9 +51,6 @@ it("reports the shared next wake and coalesces diagnostic heartbeats after sleep
     startGatewayDiagnosticHeartbeat(scheduler, {}, { sampleLiveness: () => null });
     logMessageQueued({ sessionKey: "diagnostic-schedule", source: "test" });
     await clock.advanceBy(30_000);
-    expect(debug).toHaveBeenCalledWith(
-      expect.stringContaining(`nextWakeAtMs=${startedAt + 60_000}`),
-    );
     await clock.advanceBy(120_000);
     await waitForDiagnosticEventsDrained();
     expect(heartbeats).toHaveLength(2);

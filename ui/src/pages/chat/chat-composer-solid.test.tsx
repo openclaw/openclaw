@@ -186,15 +186,22 @@ it("does not clear a replacement goal mode when an earlier submit completes", as
   expect(view.container.querySelector("textarea")!.value).toBe("Replacement objective");
 });
 
-it("settles an accepted goal against its draft owner after the composer unmounts", async () => {
+it.each([false, true])("settles an accepted goal after unmount (remount=%s)", async (remount) => {
   const result = createDeferred<boolean>();
+  const onGoalSubmit = vi.fn(() => result.promise);
   const { state, view, enter } = mountOwnedComposer({
     draft: "Updated objective",
     goalDraftMode: { action: "edit", goalId: "goal-one", previousDraft: "Conversation draft" },
-    onGoalSubmit: () => result.promise,
+    onGoalSubmit,
   });
   enter();
   disposeComposer(view.container);
+  if (remount) {
+    view.update((props) => props);
+    expect(view.container.querySelector("textarea")!.readOnly).toBe(true);
+    enter();
+    expect(onGoalSubmit).toHaveBeenCalledOnce();
+  }
   result.resolve(true);
   await result.promise;
   flush();

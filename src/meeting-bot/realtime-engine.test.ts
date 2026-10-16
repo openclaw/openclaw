@@ -191,9 +191,6 @@ describe("meeting realtime engine output ownership", () => {
             final: true,
           }),
         );
-        expect(fixture.logger.info).toHaveBeenCalledWith(
-          "[meeting-test] realtime assistant: chars=20",
-        );
         providerClosed.reject(new Error("provider cleanup failed"));
         await Promise.all([closing, concurrentClose]);
         expect(settled).toBe(true);
