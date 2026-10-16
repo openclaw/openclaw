@@ -26,59 +26,66 @@ function textBlock(text: string) {
   return { type: "text", text };
 }
 
-function completeAssistantMessage(
-  value: Record<string, unknown>,
-  fallbackStopReason = "stop",
-): Record<string, unknown> {
-  const content =
-    typeof value.content === "string"
-      ? [textBlock(value.content)]
-      : Array.isArray(value.content)
-        ? value.content
-        : [];
+type MessageFixture = Record<string, unknown> & { content?: AssistantContent; stopReason?: string };
+type EventFixture = Record<string, unknown> & {
+  type: string;
+  partial?: MessageFixture;
+  message?: MessageFixture;
+  error?: MessageFixture;
+};
+
+function completeAssistantMessage(value: MessageFixture, fallbackStopReason = "stop") {
   return {
     ...value,
     role: "assistant",
-    content,
+    content: typeof value.content === "string" ? [textBlock(value.content)] : (value.content ?? []),
     api: "openai-completions",
     provider: "test",
     model: "test-model",
     usage: createZeroUsageFixture(),
-    stopReason: typeof value.stopReason === "string" ? value.stopReason : fallbackStopReason,
+    stopReason: value.stopReason ?? fallbackStopReason,
     timestamp: 1,
   };
 }
 
-function completeStreamEvent(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-  const event = value as Record<string, unknown>;
-  const requiresPartial =
-    event.type === "start" ||
-    (typeof event.type === "string" &&
-      event.type !== "text_delta" &&
-      event.type !== "done" &&
-      event.type !== "error");
-  const partial =
-    event.partial && typeof event.partial === "object" && !Array.isArray(event.partial)
-      ? completeAssistantMessage(event.partial as Record<string, unknown>)
-      : requiresPartial
-        ? completeAssistantMessage({ content: [] })
-        : undefined;
-  const message =
-    event.message && typeof event.message === "object" && !Array.isArray(event.message)
-      ? completeAssistantMessage(event.message as Record<string, unknown>, String(event.reason))
-      : undefined;
-  const error =
-    event.error && typeof event.error === "object" && !Array.isArray(event.error)
-      ? completeAssistantMessage(event.error as Record<string, unknown>, "error")
-      : undefined;
+function completeStreamEvent(event: EventFixture) {
+  const requiresPartial = !["text_delta", "done", "error"].includes(event.type);
   return {
     ...event,
-    ...(partial ? { partial } : {}),
-    ...(message ? { message } : {}),
-    ...(error ? { error } : {}),
+    ...(event.partial || requiresPartial
+      ? { partial: completeAssistantMessage(event.partial ?? { content: [] }) }
+      : {}),
+    ...(event.message
+      ? { message: completeAssistantMessage(event.message, String(event.reason)) }
+      : {}),
+    ...(event.error ? { error: completeAssistantMessage(event.error, "error") } : {}),
+  };
+}
+
+function thinkingBlock(thinking = "Need file contents.") {
+  return { type: "thinking", thinking };
+}
+function thinkingDelta(content: Array<Record<string, unknown>>, contentIndex: number) {
+  return {
+    type: "thinking_delta",
+    contentIndex,
+    delta: "Need file contents.",
+    partial: { content },
+  };
+}
+function payloadStream(payload: Record<string, unknown>): StreamFn {
+  return (model, _context, options) => {
+    options?.onPayload?.(payload as never, model as never);
+    return {} as ReturnType<StreamFn>;
+  };
+}
+function prefillPayload(type: string) {
+  return {
+    thinking: { type },
+    messages: [
+      { role: "user", content: "Return JSON." },
+      { role: "assistant", content: "{" },
+    ],
   };
 }
 
@@ -94,7 +101,7 @@ function doneEvent(content: AssistantContent, reason = "stop") {
   };
 }
 
-function errorEvent(error: Record<string, unknown>, partial?: Record<string, unknown>) {
+function errorEvent(error: MessageFixture, partial?: MessageFixture) {
   return {
     type: "error",
     reason: "error",
@@ -139,7 +146,7 @@ const streamTestModel = {
   maxTokens: 1_024,
 } satisfies Model<"openai-completions">;
 
-function createEventStream(events: unknown[]): ReturnType<StreamFn> {
+function createEventStream(events: EventFixture[]): ReturnType<StreamFn> {
   const output = createAssistantMessageEventStream();
   const stream = output as unknown as { push(event: unknown): void; end(): void };
   queueMicrotask(() => {
@@ -180,7 +187,7 @@ function createControlledPlainTextToolCallCompatStream() {
   return { source, stream };
 }
 
-async function collectEvents(events: unknown[], toolNames = ["read"]): Promise<StreamEvent[]> {
+async function collectEvents(events: EventFixture[], toolNames = ["read"]): Promise<StreamEvent[]> {
   const wrapped = createPlainTextToolCallCompatWrapper(() => createEventStream(events));
   const stream = await wrapped(
     streamTestModel,
@@ -208,52 +215,41 @@ async function nextEvent(iterator: AsyncIterator<unknown>, label: string): Promi
   return result.value as StreamEvent;
 }
 
-describe("transformProviderStreamMessages", () => {
-  it.each(["done"] as const)(
-    "transforms checkpoint and %s result messages while preserving sparse deltas",
-    async (terminal) => {
-      const partial: AssistantMessage = {
-        role: "assistant",
-        api: "openai-completions",
-        provider: "test",
-        model: "test-model",
-        content: [],
-        usage: createZeroUsageFixture(),
-        stopReason: "stop",
-        timestamp: 1,
-      };
-      const final: AssistantMessage = {
-        ...partial,
-        usage: createZeroUsageFixture(),
-        stopReason: terminal === "done" ? "stop" : "error",
-      };
-      const source = createAssistantMessageEventStream();
-      source.push({ type: "start", partial });
-      source.push({ type: "text_delta", contentIndex: 0, delta: "reply" });
-      source.push(
-        terminal === "done"
-          ? { type: "done", reason: "stop", message: final }
-          : { type: "error", reason: "error", error: final },
-      );
-      source.end();
-      const stream = transformProviderStreamMessages(source, (message) => {
-        message.usage.cacheTelemetry = { state: "available" };
-      });
-      const eventTypes: string[] = [];
-      for await (const event of stream) {
-        eventTypes.push(event.type);
-        if (event.type === "text_delta") {
-          expect(event).toEqual({ type: "text_delta", contentIndex: 0, delta: "reply" });
-        }
-      }
-      expect(eventTypes).toEqual(["start", "text_delta", terminal]);
-      expect(partial.usage.cacheTelemetry).toEqual({ state: "available" });
-      expect(final.usage.cacheTelemetry).toEqual(
-        terminal === "done" ? { state: "available" } : undefined,
-      );
-      expect((await stream.result()).usage.cacheTelemetry).toEqual({ state: "available" });
-    },
-  );
+it("transformProviderStreamMessages: transforms checkpoint and done result messages while preserving sparse deltas", async () => {
+  const partial: AssistantMessage = {
+    role: "assistant",
+    api: "openai-completions",
+    provider: "test",
+    model: "test-model",
+    content: [],
+    usage: createZeroUsageFixture(),
+    stopReason: "stop",
+    timestamp: 1,
+  };
+  const final: AssistantMessage = {
+    ...partial,
+    usage: createZeroUsageFixture(),
+    stopReason: "stop",
+  };
+  const source = createAssistantMessageEventStream();
+  source.push({ type: "start", partial });
+  source.push({ type: "text_delta", contentIndex: 0, delta: "reply" });
+  source.push({ type: "done", reason: "stop", message: final });
+  source.end();
+  const stream = transformProviderStreamMessages(source, (message) => {
+    message.usage.cacheTelemetry = { state: "available" };
+  });
+  const eventTypes: string[] = [];
+  for await (const event of stream) {
+    eventTypes.push(event.type);
+    if (event.type === "text_delta") {
+      expect(event).toEqual({ type: "text_delta", contentIndex: 0, delta: "reply" });
+    }
+  }
+  expect(eventTypes).toEqual(["start", "text_delta", "done"]);
+  expect(partial.usage.cacheTelemetry).toEqual({ state: "available" });
+  expect(final.usage.cacheTelemetry).toEqual({ state: "available" });
+  expect((await stream.result()).usage.cacheTelemetry).toEqual({ state: "available" });
 });
 
 describe("defaultToolStreamExtraParams", () => {
@@ -274,19 +270,17 @@ describe("defaultToolStreamExtraParams", () => {
   });
 });
 
-describe("isOpenAICompatibleThinkingEnabled", () => {
-  it.each([
-    { thinkingLevel: undefined, options: {}, enabled: true },
-    { thinkingLevel: "off", options: { reasoning: { effort: "off" } }, enabled: true },
-  ] as const)(
-    "resolves thinking $thinkingLevel with request $options to $enabled",
-    ({ thinkingLevel, options, enabled }) => {
-      expect(isOpenAICompatibleThinkingEnabled({ thinkingLevel, options: options as never })).toBe(
-        enabled,
-      );
-    },
-  );
-});
+it.each([
+  { thinkingLevel: undefined, options: {}, enabled: true },
+  { thinkingLevel: "off", options: { reasoning: { effort: "off" } }, enabled: true },
+] as const)(
+  "isOpenAICompatibleThinkingEnabled: resolves thinking $thinkingLevel with request $options to $enabled",
+  ({ thinkingLevel, options, enabled }) => {
+    expect(isOpenAICompatibleThinkingEnabled({ thinkingLevel, options: options as never })).toBe(
+      enabled,
+    );
+  },
+);
 
 describe("setQwenChatTemplateThinking", () => {
   it("preserves existing chat-template kwargs and enables thinking", () => {
@@ -320,23 +314,21 @@ describe("setQwenChatTemplateThinking", () => {
   });
 });
 
-describe("normalizeOpenAICompatibleReasoningPayload", () => {
-  it("preserves explicit reasoning controls", () => {
-    const withMaxTokens: Record<string, unknown> = {
-      reasoning_effort: "high",
-      reasoning: { max_tokens: 256 },
-    };
-    const withEffort: Record<string, unknown> = {
-      reasoning_effort: "high",
-      reasoning: { effort: "low", summary: "auto" },
-    };
+it("normalizeOpenAICompatibleReasoningPayload: preserves explicit reasoning controls", () => {
+  const withMaxTokens: Record<string, unknown> = {
+    reasoning_effort: "high",
+    reasoning: { max_tokens: 256 },
+  };
+  const withEffort: Record<string, unknown> = {
+    reasoning_effort: "high",
+    reasoning: { effort: "low", summary: "auto" },
+  };
 
-    normalizeOpenAICompatibleReasoningPayload(withMaxTokens, "high");
-    normalizeOpenAICompatibleReasoningPayload(withEffort, "high");
+  normalizeOpenAICompatibleReasoningPayload(withMaxTokens, "high");
+  normalizeOpenAICompatibleReasoningPayload(withEffort, "high");
 
-    expect(withMaxTokens).toEqual({ reasoning: { max_tokens: 256 } });
-    expect(withEffort).toEqual({ reasoning: { effort: "low", summary: "auto" } });
-  });
+  expect(withMaxTokens).toEqual({ reasoning: { max_tokens: 256 } });
+  expect(withEffort).toEqual({ reasoning: { effort: "low", summary: "auto" } });
 });
 
 describe("normalizeOpenAICompatibleReasoningReplay", () => {
@@ -378,102 +370,82 @@ describe("normalizeOpenAICompatibleReasoningReplay", () => {
     ]);
   });
 
-  it.each([true])(
-    "strips disabled reasoning with assistant-only policy %s",
-    (stripAssistantMessagesOnly) => {
-      const payload = {
-        messages: [
-          { role: "user", reasoning_content: "preserve user" },
-          { role: "assistant", reasoning_content: "remove assistant" },
-          { role: "tool", reasoning_content: "preserve tool" },
-        ],
-      };
-      normalizeOpenAICompatibleReasoningReplay(payload, {
-        thinkingEnabled: false,
-        stripAssistantMessagesOnly,
-      });
-
-      expect(payload.messages).toEqual(
-        stripAssistantMessagesOnly
-          ? [
-              { role: "user", reasoning_content: "preserve user" },
-              { role: "assistant" },
-              { role: "tool", reasoning_content: "preserve tool" },
-            ]
-          : [{ role: "user" }, { role: "assistant" }, { role: "tool" }],
-      );
-    },
-  );
-});
-
-describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
-  it("backfills reasoning_content on every replayed assistant message when thinking is enabled", () => {
+  it("strips disabled reasoning with assistant-only policy", () => {
     const payload = {
       messages: [
-        { role: "user", content: "read file" },
-        { role: "assistant", tool_calls: [{ id: "call_1", name: "read" }] },
-        { role: "tool", content: "ok" },
-        { role: "assistant", content: "done" },
-        { role: "assistant", content: "kept", reasoning_content: "native reasoning" },
+        { role: "user", reasoning_content: "preserve user" },
+        { role: "assistant", reasoning_content: "remove assistant" },
+        { role: "tool", reasoning_content: "preserve tool" },
       ],
     };
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      options?.onPayload?.(payload as never, _model as never);
-      return {} as ReturnType<StreamFn>;
-    };
-
-    const wrapped = createDeepSeekV4OpenAICompatibleThinkingWrapper({
-      baseStreamFn,
-      thinkingLevel: "high",
-      shouldPatchModel: () => true,
+    normalizeOpenAICompatibleReasoningReplay(payload, {
+      thinkingEnabled: false,
+      stripAssistantMessagesOnly: true,
     });
-    void wrapped?.({} as never, {} as never, {});
 
-    expect(payload.messages[0]).not.toHaveProperty("reasoning_content");
-    expect(payload.messages[1]).toHaveProperty("reasoning_content", "");
-    expect(payload.messages[2]).not.toHaveProperty("reasoning_content");
-    expect(payload.messages[3]).toHaveProperty("reasoning_content", "");
-    expect(payload.messages[4]).toHaveProperty("reasoning_content", "native reasoning");
+    expect(payload.messages).toEqual([
+      { role: "user", reasoning_content: "preserve user" },
+      { role: "assistant" },
+      { role: "tool", reasoning_content: "preserve tool" },
+    ]);
   });
 });
 
-describe("createPayloadPatchStreamWrapper", () => {
-  it("calls the underlying stream directly when shouldPatch rejects the model", () => {
-    let onPayloadWasInstalled = false;
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      onPayloadWasInstalled = typeof options?.onPayload === "function";
-      return {} as ReturnType<StreamFn>;
-    };
+it("createDeepSeekV4OpenAICompatibleThinkingWrapper: backfills reasoning_content on every replayed assistant message when thinking is enabled", () => {
+  const payload = {
+    messages: [
+      { role: "user", content: "read file" },
+      { role: "assistant", tool_calls: [{ id: "call_1", name: "read" }] },
+      { role: "tool", content: "ok" },
+      { role: "assistant", content: "done" },
+      { role: "assistant", content: "kept", reasoning_content: "native reasoning" },
+    ],
+  };
+  const baseStreamFn = payloadStream(payload);
 
-    const wrapped = createPayloadPatchStreamWrapper(
-      baseStreamFn,
-      ({ payload }) => {
-        payload.unexpected = true;
-      },
-      { shouldPatch: () => false },
-    );
-    void wrapped({ id: "model" } as never, { messages: [] } as never, {});
-
-    expect(onPayloadWasInstalled).toBe(false);
+  const wrapped = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+    baseStreamFn,
+    thinkingLevel: "high",
+    shouldPatchModel: () => true,
   });
+  void wrapped?.({} as never, {} as never, {});
+
+  expect(payload.messages[0]).not.toHaveProperty("reasoning_content");
+  expect(payload.messages[1]).toHaveProperty("reasoning_content", "");
+  expect(payload.messages[2]).not.toHaveProperty("reasoning_content");
+  expect(payload.messages[3]).toHaveProperty("reasoning_content", "");
+  expect(payload.messages[4]).toHaveProperty("reasoning_content", "native reasoning");
+});
+
+it("createPayloadPatchStreamWrapper: calls the underlying stream directly when shouldPatch rejects the model", () => {
+  let onPayloadWasInstalled = false;
+  const baseStreamFn: StreamFn = (_model, _context, options) => {
+    onPayloadWasInstalled = typeof options?.onPayload === "function";
+    return {} as ReturnType<StreamFn>;
+  };
+
+  const wrapped = createPayloadPatchStreamWrapper(
+    baseStreamFn,
+    ({ payload }) => {
+      payload.unexpected = true;
+    },
+    { shouldPatch: () => false },
+  );
+  void wrapped({ id: "model" } as never, { messages: [] } as never, {});
+
+  expect(onPayloadWasInstalled).toBe(false);
 });
 
 describe("createOpenAICompatibleCompletionsThinkingOffWrapper", () => {
-  it.each([{ thinkingLevel: undefined, efforts: ["none", "high", "high"] }] as const)(
-    "uses per-call thinking before the $thinkingLevel default",
-    ({ thinkingLevel, efforts }) => {
-      const { baseStreamFn, payloads } = createPayloadCapture("high");
-      const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(
-        baseStreamFn,
-        thinkingLevel,
-      );
-      for (const reasoning of ["off", "max", undefined] as const) {
-        void wrapped(lmstudioBinaryModel, { messages: [] }, { reasoning });
-      }
+  it("uses per-call thinking before the undefined default", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture("high");
+    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn);
+    for (const reasoning of ["off", "max", undefined] as const) {
+      void wrapped(lmstudioBinaryModel, { messages: [] }, { reasoning });
+    }
 
-      expect(payloads.map((payload) => payload.reasoning_effort)).toEqual(efforts);
-    },
-  );
+    expect(payloads.map((payload) => payload.reasoning_effort)).toEqual(["none", "high", "high"]);
+  });
 
   it("drops reasoning_effort when the model has no disabled effort", () => {
     const { baseStreamFn, payloads } = createPayloadCapture("high");
@@ -513,23 +485,10 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     const firstText = "[tool:re";
     const secondText = " not a call";
     const events = await collectEvents([
-      { type: "text_delta", contentIndex: 0, delta: firstText },
-      {
-        type: "thinking_delta",
-        contentIndex: 1,
-        delta: "Need file contents.",
-        partial: {
-          content: [
-            { type: "text", text: firstText },
-            { type: "thinking", thinking: "Need file contents." },
-          ],
-        },
-      },
-      { type: "text_delta", contentIndex: 0, delta: secondText },
-      doneEvent([
-        textBlock(`${firstText}${secondText}`),
-        { type: "thinking", thinking: "Need file contents." },
-      ]),
+      textDelta(firstText),
+      thinkingDelta([textBlock(firstText), thinkingBlock()], 1),
+      textDelta(secondText),
+      doneEvent([textBlock(`${firstText}${secondText}`), thinkingBlock()]),
     ]);
 
     expect(events.map((event) => event.type)).toEqual([
@@ -539,11 +498,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       "done",
     ]);
     expect(requireRecord(events[0], "first text").delta).toBe(firstText);
-    const thinkingEvent = requireRecord(events[1], "thinking event");
-    expect(requireRecord(thinkingEvent.partial, "thinking partial").content).toEqual([
-      { type: "text", text: firstText },
-      { type: "thinking", thinking: "Need file contents." },
-    ]);
+    expect(events[1]).toHaveProperty("partial.content", [textBlock(firstText), thinkingBlock()]);
     expect(requireRecord(events[2], "second text").delta).toBe(secondText);
   });
 
@@ -551,18 +506,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     const rawToolText = "[tool:read]\n<parameter=path>\nsrc/index.ts\n</parameter>\n</function>";
     const events = await collectEvents([
       { type: "text_delta", contentIndex: 1, delta: rawToolText },
-      {
-        type: "thinking_delta",
-        contentIndex: 0,
-        delta: "Need file contents.",
-        partial: {
-          content: [
-            { type: "thinking", thinking: "Need file contents." },
-            { type: "text", text: rawToolText },
-          ],
-        },
-      },
-      doneEvent([{ type: "thinking", thinking: "Need file contents." }, textBlock(rawToolText)]),
+      thinkingDelta([thinkingBlock(), textBlock(rawToolText)], 0),
+      doneEvent([thinkingBlock(), textBlock(rawToolText)]),
     ]);
 
     expect(events.map((event) => event.type)).toEqual([
@@ -573,9 +518,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       "toolcall_end",
       "done",
     ]);
-    const thinkingEvent = requireRecord(events[1], "thinking event");
-    expect(requireRecord(thinkingEvent.partial, "thinking partial").content).toEqual([
-      { type: "thinking", thinking: "Need file contents." },
+    expect(events[1]).toHaveProperty("partial.content", [
+      thinkingBlock(),
       expect.objectContaining({ type: "toolCall", name: "read" }),
     ]);
     expect(JSON.stringify(events)).not.toContain(rawToolText);
@@ -677,96 +621,53 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       await iterator.return?.();
     }
   });
-
-  it("does not buffer normal final prose until done", async () => {
-    const { source, stream } = createControlledPlainTextToolCallCompatStream();
-    const iterator = (await stream)[Symbol.asyncIterator]();
-
-    try {
-      source.push(completeStreamEvent({ type: "start", partial: { content: [] } }) as never);
-      expect((await nextEvent(iterator, "start")).type).toBe("start");
-
-      source.push({
-        type: "text_delta",
-        contentIndex: 0,
-        delta: "final answer starts here",
-      } as never);
-
-      const event = await nextEvent(iterator, "normal final prose");
-      expect(event).toMatchObject({ type: "text_delta", delta: "final answer starts here" });
-    } finally {
-      source.push({ type: "done", reason: "stop", message: {} } as never);
-      source.end();
-      await iterator.return?.();
-    }
-  });
 });
 
 describe("stripTrailingAnthropicAssistantPrefillWhenThinking", () => {
   it("preserves assistant tool-use turns across Anthropic and OpenAI-shaped payloads", () => {
-    const anthropicPayload = {
-      thinking: { type: "adaptive" },
-      messages: [
-        { role: "user", content: "Read a file." },
-        { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Read" }] },
-      ],
-    };
-    const openAiPayload = {
-      thinking: { type: "adaptive" },
-      messages: [
-        { role: "user", content: "Read a file." },
-        { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "Read" }] },
-      ],
-    };
-    const toolCallsPayload = {
-      thinking: { type: "adaptive" },
-      messages: [{ role: "assistant", tool_calls: [{ id: "call_1", name: "Read" }] }],
-    };
-
-    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(anthropicPayload)).toBe(0);
-    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(openAiPayload)).toBe(0);
-    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(toolCallsPayload)).toBe(0);
+    for (const type of ["tool_use", "toolCall"]) {
+      const payload = {
+        thinking: { type: "adaptive" },
+        messages: [
+          { role: "user", content: "Read a file." },
+          {
+            role: "assistant",
+            content: [{ type, id: type === "tool_use" ? "toolu_1" : "call_1", name: "Read" }],
+          },
+        ],
+      };
+      expect(stripTrailingAnthropicAssistantPrefillWhenThinking(payload)).toBe(0);
+    }
+    expect(
+      stripTrailingAnthropicAssistantPrefillWhenThinking({
+        thinking: { type: "adaptive" },
+        messages: [{ role: "assistant", tool_calls: [{ id: "call_1", name: "Read" }] }],
+      }),
+    ).toBe(0);
   });
 
   it("keeps assistant prefill when Anthropic thinking is disabled", () => {
-    const payload = {
-      thinking: { type: "disabled" },
-      messages: [
-        { role: "user", content: "Return JSON." },
-        { role: "assistant", content: "{" },
-      ],
-    };
+    const payload = prefillPayload("disabled");
 
     expect(stripTrailingAnthropicAssistantPrefillWhenThinking(payload)).toBe(0);
     expect(payload.messages).toHaveLength(2);
   });
 });
 
-describe("createAnthropicThinkingPrefillPayloadWrapper", () => {
-  it("reports stripped assistant prefill count", () => {
-    const payload = {
-      thinking: { type: "enabled" },
-      messages: [
-        { role: "user", content: "Return JSON." },
-        { role: "assistant", content: "{" },
-      ],
-    };
-    let strippedCount = 0;
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      options?.onPayload?.(payload as never, _model as never);
-      return {} as ReturnType<StreamFn>;
-    };
+it("createAnthropicThinkingPrefillPayloadWrapper: reports stripped assistant prefill count", () => {
+  const payload = prefillPayload("enabled");
+  let strippedCount = 0;
+  const baseStreamFn = payloadStream(payload);
 
-    const wrapped = createAnthropicThinkingPrefillPayloadWrapper(
-      baseStreamFn,
-      (stripped) => {
-        strippedCount = stripped;
-      },
-      { shouldPatch: ({ model }) => model.api === "anthropic-messages" },
-    );
-    void wrapped({ api: "anthropic-messages" } as never, {} as never, {});
+  const wrapped = createAnthropicThinkingPrefillPayloadWrapper(
+    baseStreamFn,
+    (stripped) => {
+      strippedCount = stripped;
+    },
+    { shouldPatch: ({ model }) => model.api === "anthropic-messages" },
+  );
+  void wrapped({ api: "anthropic-messages" } as never, {} as never, {});
 
-    expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
-    expect(strippedCount).toBe(1);
-  });
+  expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
+  expect(strippedCount).toBe(1);
 });

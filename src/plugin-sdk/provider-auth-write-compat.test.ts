@@ -36,6 +36,35 @@ afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
 });
 
+function makeAgentDir(profiles?: AuthProfileStore["profiles"]) {
+  const agentDir = path.join(
+    tempDirs.make("openclaw-provider-auth-sdk-"),
+    "agents",
+    "work",
+    "agent",
+  );
+  fs.mkdirSync(agentDir, { recursive: true });
+  if (profiles) {
+    saveAuthProfileStore({ version: 1, profiles }, agentDir);
+  }
+  return agentDir;
+}
+
+const apiKey = (key: string, provider = "sample") => ({ type: "api_key" as const, provider, key });
+const envRef = (id: string, normalized = false) => ({
+  source: "env" as const,
+  ...(normalized ? { provider: "default" } : {}),
+  id,
+});
+
+function refProfile(field: "keyRef" | "tokenRef", id: string, normalized = false) {
+  return {
+    type: field === "keyRef" ? "api_key" : "token",
+    provider: "sample",
+    [field]: envRef(id, normalized),
+  };
+}
+
 describe("provider auth write compatibility", () => {
   it("keeps the shipped write parameter contracts on both SDK subpaths", () => {
     type ShippedFields = "profileId" | "credential" | "agentDir" | "stateDir";
@@ -64,36 +93,20 @@ describe("provider auth write compatibility", () => {
   });
 
   it("preserves SDK callback inputs and refuses lossy SecretRef writes", async () => {
-    const root = tempDirs.make("openclaw-provider-auth-callback-");
-    const agentDir = path.join(root, "agents", "work", "agent");
-    fs.mkdirSync(agentDir, { recursive: true });
+    const agentDir = makeAgentDir();
     const legacy: AuthProfileStore = { version: 1, profiles: {} };
     Object.assign(legacy.profiles, {
-      "sample:saved": {
-        type: "token",
-        provider: "sample",
-        tokenRef: { source: "env", id: "SYNTHETIC_SAVED_TOKEN" },
-      },
+      "sample:saved": refProfile("tokenRef", "SYNTHETIC_SAVED_TOKEN"),
     });
     saveAuthProfileStore(legacy, agentDir);
-    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["sample:saved"]).toEqual({
-      type: "token",
-      provider: "sample",
-      tokenRef: { source: "env", provider: "default", id: "SYNTHETIC_SAVED_TOKEN" },
-    });
+    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["sample:saved"]).toEqual(
+      refProfile("tokenRef", "SYNTHETIC_SAVED_TOKEN", true),
+    );
     const updater = vi.fn((store: AuthProfileStore) => {
-      store.profiles["sample:new"] = { type: "api_key", provider: "sample", key: "synthetic-key" };
+      store.profiles["sample:new"] = apiKey("synthetic-key");
       Object.assign(store.profiles, {
-        "sample:ref": {
-          type: "api_key",
-          provider: "sample",
-          keyRef: { source: "env", id: "SYNTHETIC_AUTH_KEY" },
-        },
-        "sample:token": {
-          type: "token",
-          provider: "sample",
-          tokenRef: { source: "env", id: "SYNTHETIC_AUTH_TOKEN" },
-        },
+        "sample:ref": refProfile("keyRef", "SYNTHETIC_AUTH_KEY"),
+        "sample:token": refProfile("tokenRef", "SYNTHETIC_AUTH_TOKEN"),
       });
       return true;
     });
@@ -106,22 +119,16 @@ describe("provider auth write compatibility", () => {
     expect(updater).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ version: 1, profiles: expect.any(Object) }),
     );
-    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["sample:new"]).toEqual({
-      type: "api_key",
-      provider: "sample",
-      key: "synthetic-key",
-    });
+    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["sample:new"]).toEqual(
+      apiKey("synthetic-key"),
+    );
     for (const store of [updated, loadPersistedAuthProfileStore(agentDir)]) {
-      expect(store?.profiles["sample:ref"]).toEqual({
-        type: "api_key",
-        provider: "sample",
-        keyRef: { source: "env", provider: "default", id: "SYNTHETIC_AUTH_KEY" },
-      });
-      expect(store?.profiles["sample:token"]).toEqual({
-        type: "token",
-        provider: "sample",
-        tokenRef: { source: "env", provider: "default", id: "SYNTHETIC_AUTH_TOKEN" },
-      });
+      expect(store?.profiles["sample:ref"]).toEqual(
+        refProfile("keyRef", "SYNTHETIC_AUTH_KEY", true),
+      );
+      expect(store?.profiles["sample:token"]).toEqual(
+        refProfile("tokenRef", "SYNTHETIC_AUTH_TOKEN", true),
+      );
     }
     const admitted = loadPersistedAuthProfileStore(agentDir);
     assert(admitted);
@@ -163,27 +170,13 @@ describe("provider auth write compatibility", () => {
     { name: "provider-auth", upsert: upsertAuthProfileWithLock },
     { name: "throwing provider-auth-api-key", upsert: upsertAuthProfileWithLockOrThrow },
   ])("ignores internal write controls through $name", async ({ upsert }) => {
-    const root = tempDirs.make("openclaw-provider-auth-sdk-");
-    const agentDir = path.join(root, "agents", "work", "agent");
-    fs.mkdirSync(agentDir, { recursive: true });
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "sample:existing": {
-            type: "api_key",
-            provider: "sample",
-            key: "old-key",
-            displayName: "Old account",
-          },
-        },
-      },
-      agentDir,
-    );
+    const agentDir = makeAgentDir({
+      "sample:existing": { ...apiKey("old-key"), displayName: "Old account" },
+    });
     const params = {
       agentDir,
       profileId: "sample:existing",
-      credential: { type: "api_key" as const, provider: "sample", key: "new-key" },
+      credential: apiKey("new-key"),
       preserveApiKeyMetadata: true,
       validateCurrentCredential: () => {
         throw new Error("Internal callback must not control plugin writes");
@@ -192,26 +185,15 @@ describe("provider auth write compatibility", () => {
 
     await upsert(params);
 
-    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["sample:existing"]).toEqual({
-      type: "api_key",
-      provider: "sample",
-      key: "new-key",
-    });
+    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["sample:existing"]).toEqual(
+      apiKey("new-key"),
+    );
   });
 
   it("preserves nullable failures on both shipped Plugin SDK subpaths", async () => {
-    const root = tempDirs.make("openclaw-provider-auth-sdk-");
-    const agentDir = path.join(root, "agents", "work", "agent");
-    fs.mkdirSync(agentDir, { recursive: true });
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openai:existing": { type: "api_key", provider: "openai", key: "sk-existing" },
-        },
-      },
-      agentDir,
-    );
+    const agentDir = makeAgentDir({
+      "openai:existing": apiKey("sk-existing", "openai"),
+    });
     openOpenClawAgentDatabase({
       agentId: "work",
       path: resolveAuthProfileDatabasePath(agentDir),
@@ -221,11 +203,7 @@ describe("provider auth write compatibility", () => {
       updateAuthProfileStoreWithLock({
         agentDir,
         updater: (store) => {
-          store.profiles["openai:existing"] = {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-updated",
-          };
+          store.profiles["openai:existing"] = apiKey("sk-updated", "openai");
           return true;
         },
       }),
@@ -240,7 +218,7 @@ describe("provider auth write compatibility", () => {
       upsertApiKeyProfileWithLock({
         agentDir,
         profileId: "openai:new",
-        credential: { type: "api_key", provider: "openai", key: "sk-new" },
+        credential: apiKey("sk-new", "openai"),
       }),
     ).resolves.toBeNull();
   });

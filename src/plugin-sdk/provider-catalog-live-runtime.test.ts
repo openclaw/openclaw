@@ -28,59 +28,95 @@ function buildModel(id: string): ModelDefinitionConfig {
   };
 }
 
+const catalogEndpoint = "https://provider.example.test/v1/models";
+const defaultProvider = {
+  api: "openai-completions" as const,
+  baseUrl: "https://provider.example.test/v1",
+};
+
+function guardedResponse(
+  body: unknown,
+  finalUrl = catalogEndpoint,
+  release = vi.fn(async () => undefined),
+) {
+  return {
+    response: body instanceof Response ? body : new Response(JSON.stringify(body)),
+    finalUrl,
+    release,
+  };
+}
+
+function fetchIds(
+  fetchGuard: LiveModelCatalogFetchGuard,
+  params: Partial<Parameters<typeof fetchLiveProviderModelIds>[0]> = {},
+) {
+  return fetchLiveProviderModelIds({
+    providerId: "provider",
+    endpoint: catalogEndpoint,
+    fetchGuard,
+    ...params,
+  });
+}
+
+const row = (id: string, extra: Record<string, unknown> = {}) => ({
+  id,
+  object: "model",
+  ...extra,
+});
+function requestHeaders(mock: MockedFunction<LiveModelCatalogFetchGuard>, index = 0) {
+  const headers = mock.mock.calls[index]?.[0].init?.headers;
+  expect(headers).toBeInstanceOf(Headers);
+  return headers as Headers;
+}
+
 function buildFetchGuard(body: unknown): {
   fetchGuard: LiveModelCatalogFetchGuard;
   fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard>;
   release: ReturnType<typeof vi.fn>;
 } {
   const release = vi.fn(async () => undefined);
-  const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
-    response: new Response(JSON.stringify(body)),
-    finalUrl: "https://provider.example.test/v1/models",
-    release,
-  }));
+  const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () =>
+    guardedResponse(body, catalogEndpoint, release),
+  );
   return { fetchGuard: fetchGuardMock, fetchGuardMock, release };
 }
 
 describe("provider-catalog-live-runtime", () => {
-  it.each(["id"])(
-    "retains raw %s identities for read-time diagnostics before chat filtering",
-    async (idField) => {
-      const { fetchGuard, fetchGuardMock } = buildFetchGuard({
-        data: [
-          { [idField]: "chat-local", object: "model" },
-          { id: "local/chat-local", object: "model" },
-          { id: "embed-local", object: "embedding" },
-        ],
-      });
-      const result = await buildOpenAICompatibleLiveProviderCatalog({
-        providerId: "local",
-        discoveryMode: "strict",
-        fetchGuard,
-        providerConfig: {
-          api: "openai-completions",
+  it("retains raw id identities for read-time diagnostics before chat filtering", async () => {
+    const { fetchGuard, fetchGuardMock } = buildFetchGuard({
+      data: [
+        row("chat-local"),
+        row("local/chat-local"),
+        { id: "embed-local", object: "embedding" },
+      ],
+    });
+    const result = await buildOpenAICompatibleLiveProviderCatalog({
+      providerId: "local",
+      discoveryMode: "strict",
+      fetchGuard,
+      providerConfig: {
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:1234/v1",
+        models: [],
+      },
+    });
+    expect(result?.outcomes).toEqual([
+      {
+        provider: "local",
+        status: "ready",
+        modelIdCatalog: {
           baseUrl: "http://127.0.0.1:1234/v1",
-          models: [],
+          modelIds: ["chat-local", "local/chat-local", "embed-local"],
         },
-      });
-      expect(result?.outcomes).toEqual([
-        {
-          provider: "local",
-          status: "ready",
-          modelIdCatalog: {
-            baseUrl: "http://127.0.0.1:1234/v1",
-            modelIds: ["chat-local", "local/chat-local", "embed-local"],
-          },
-        },
-      ]);
-      expect(result).toMatchObject({
-        provider: {
-          models: expect.arrayContaining([expect.objectContaining({ id: "chat-local" })]),
-        },
-      });
-      expect(fetchGuardMock).toHaveBeenCalledOnce();
-    },
-  );
+      },
+    ]);
+    expect(result).toMatchObject({
+      provider: {
+        models: expect.arrayContaining([expect.objectContaining({ id: "chat-local" })]),
+      },
+    });
+    expect(fetchGuardMock).toHaveBeenCalledOnce();
+  });
 
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
@@ -90,47 +126,41 @@ describe("provider-catalog-live-runtime", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([NON_ENV_SECRETREF_MARKER])(
-    "fetches and dedupes live model ids with opaque resolved auth %s",
-    async (discoveryApiKey) => {
-      const { fetchGuard, fetchGuardMock, release } = buildFetchGuard({
-        data: [
-          { id: "model-a", object: "model" },
-          { id: "model-b", object: "model" },
-          { id: "embedding-a", object: "embedding" },
-          { id: "model-a", object: "model" },
-        ],
-      });
-      const controller = new AbortController();
+  it("fetches and dedupes live model ids with opaque resolved auth", async () => {
+    const discoveryApiKey = NON_ENV_SECRETREF_MARKER;
+    const { fetchGuard, fetchGuardMock, release } = buildFetchGuard({
+      data: [
+        row("model-a"),
+        row("model-b"),
+        { id: "embedding-a", object: "embedding" },
+        row("model-a"),
+      ],
+    });
+    const controller = new AbortController();
 
-      await expect(
-        fetchLiveProviderModelIds({
-          providerId: "provider",
-          endpoint: "https://provider.example.test/v1/models",
-          apiKey: NON_ENV_SECRETREF_MARKER,
-          discoveryApiKey,
-          fetchGuard,
-          signal: controller.signal,
-          timeoutMs: 1234,
-        }),
-      ).resolves.toEqual(["model-a", "model-b"]);
-
-      expect(fetchGuardMock).toHaveBeenCalledTimes(1);
-      const request = fetchGuardMock.mock.calls[0]?.[0];
-      expect(request).toMatchObject({
-        url: "https://provider.example.test/v1/models",
-        auditContext: "provider-model-discovery",
+    await expect(
+      fetchIds(fetchGuard, {
+        apiKey: NON_ENV_SECRETREF_MARKER,
+        discoveryApiKey,
         signal: controller.signal,
-      });
-      expect(request?.timeoutMs).toBeGreaterThan(0);
-      expect(request?.timeoutMs).toBeLessThanOrEqual(1234);
-      expect(Number.isInteger(request?.timeoutMs)).toBe(true);
-      const headers = request?.init?.headers;
-      expect(headers).toBeInstanceOf(Headers);
-      expect((headers as Headers).get("authorization")).toBe(`Bearer ${discoveryApiKey}`);
-      expect(release).toHaveBeenCalledTimes(1);
-    },
-  );
+        timeoutMs: 1234,
+      }),
+    ).resolves.toEqual(["model-a", "model-b"]);
+
+    expect(fetchGuardMock).toHaveBeenCalledTimes(1);
+    const request = fetchGuardMock.mock.calls[0]?.[0];
+    expect(request).toMatchObject({
+      url: "https://provider.example.test/v1/models",
+      auditContext: "provider-model-discovery",
+      signal: controller.signal,
+    });
+    expect(request?.timeoutMs).toBeGreaterThan(0);
+    expect(request?.timeoutMs).toBeLessThanOrEqual(1234);
+    expect(Number.isInteger(request?.timeoutMs)).toBe(true);
+    const headers = requestHeaders(fetchGuardMock);
+    expect(headers.get("authorization")).toBe(`Bearer ${discoveryApiKey}`);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
 
   it("does not send non-secret SecretRef markers as live catalog bearer tokens", async () => {
     const { fetchGuard, fetchGuardMock } = buildFetchGuard({ data: [] });
@@ -141,11 +171,8 @@ describe("provider-catalog-live-runtime", () => {
     }));
 
     await expect(
-      fetchLiveProviderModelIds({
-        providerId: "provider",
-        endpoint: "https://provider.example.test/v1/models",
+      fetchIds(fetchGuard, {
         apiKey: NON_ENV_SECRETREF_MARKER,
-        fetchGuard,
         buildRequestHeaders,
       }),
     ).resolves.toEqual([]);
@@ -154,10 +181,9 @@ describe("provider-catalog-live-runtime", () => {
       apiKey: undefined,
       discoveryApiKey: undefined,
     });
-    const headers = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
-    expect(headers).toBeInstanceOf(Headers);
-    expect((headers as Headers).get("authorization")).toBeNull();
-    expect((headers as Headers).get("x-api-key")).toBeNull();
+    const headers = requestHeaders(fetchGuardMock);
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("x-api-key")).toBeNull();
   });
 
   it("contextualizes paginated malformed JSON through the guarded network path", async () => {
@@ -170,7 +196,7 @@ describe("provider-catalog-live-runtime", () => {
       response.end(
         requests === 1
           ? JSON.stringify({
-              data: [{ id: "model-a", object: "model" }],
+              data: [row("model-a")],
               next: "/models?page=2",
             })
           : credential,
@@ -222,28 +248,24 @@ describe("provider-catalog-live-runtime", () => {
     const release = vi.fn(async () => undefined);
     const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
       .fn()
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            data: [{ id: "model-a", object: "model" }],
-            links: { next: "?page=2" },
-          }),
+      .mockResolvedValueOnce(
+        guardedResponse(
+          { data: [row("model-a")], links: { next: "?page=2" } },
+          "https://redirected.example.test/v1/models/",
+          release,
         ),
-        finalUrl: "https://redirected.example.test/v1/models/",
-        release,
-      })
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ data: [{ id: "model-b", object: "model" }] })),
-        finalUrl: "https://redirected.example.test/v1/models/?page=2",
-        release,
-      });
+      )
+      .mockResolvedValueOnce(
+        guardedResponse(
+          { data: [row("model-b")] },
+          "https://redirected.example.test/v1/models/?page=2",
+          release,
+        ),
+      );
 
     await expect(
-      fetchLiveProviderModelIds({
-        providerId: "provider",
-        endpoint: "https://provider.example.test/v1/models",
+      fetchIds(fetchGuardMock, {
         discoveryApiKey: "provider-token",
-        fetchGuard: fetchGuardMock,
         buildRequestHeaders: ({ discoveryApiKey }) => ({
           Accept: "application/json",
           ...(discoveryApiKey ? { Authorization: `Bearer ${discoveryApiKey}` } : {}),
@@ -252,69 +274,48 @@ describe("provider-catalog-live-runtime", () => {
       }),
     ).resolves.toEqual(["model-a", "model-b"]);
 
-    const firstHeaders = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
-    const secondHeaders = fetchGuardMock.mock.calls[1]?.[0].init?.headers;
-    expect(firstHeaders).toBeInstanceOf(Headers);
-    expect(secondHeaders).toBeInstanceOf(Headers);
-    expect((firstHeaders as Headers).get("authorization")).toBe("Bearer provider-token");
-    expect((firstHeaders as Headers).get("chatgpt-account-id")).toBe("acct-1");
+    const firstHeaders = requestHeaders(fetchGuardMock);
+    const secondHeaders = requestHeaders(fetchGuardMock, 1);
+    expect(firstHeaders.get("authorization")).toBe("Bearer provider-token");
+    expect(firstHeaders.get("chatgpt-account-id")).toBe("acct-1");
     expect(fetchGuardMock.mock.calls[1]?.[0].url).toBe(
       "https://redirected.example.test/v1/models/?page=2",
     );
-    expect((secondHeaders as Headers).get("authorization")).toBeNull();
-    expect((secondHeaders as Headers).get("chatgpt-account-id")).toBeNull();
-    expect((secondHeaders as Headers).get("accept")).toBe("application/json");
+    expect(secondHeaders.get("authorization")).toBeNull();
+    expect(secondHeaders.get("chatgpt-account-id")).toBeNull();
+    expect(secondHeaders.get("accept")).toBe("application/json");
   });
 
   it("fails truncated live catalog pagination instead of returning partial rows", async () => {
     const release = vi.fn(async () => undefined);
     const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async ({ url }) => {
       const page = Number(new URL(url).searchParams.get("after") ?? "0");
-      return {
-        response: new Response(
-          JSON.stringify({
-            data: [{ id: `model-${page}`, object: "model" }],
-            has_more: true,
-            next_cursor: String(page + 1),
-          }),
-        ),
-        finalUrl: url,
+      return guardedResponse(
+        {
+          data: [{ id: `model-${page}`, object: "model" }],
+          has_more: true,
+          next_cursor: String(page + 1),
+        },
+        url,
         release,
-      };
+      );
     });
 
-    await expect(
-      fetchLiveProviderModelIds({
-        providerId: "provider",
-        endpoint: "https://provider.example.test/v1/models",
-        fetchGuard: fetchGuardMock,
-      }),
-    ).rejects.toThrow("provider model discovery exceeded 50 pages before the catalog completed");
+    await expect(fetchIds(fetchGuardMock)).rejects.toThrow(
+      "provider model discovery exceeded 50 pages before the catalog completed",
+    );
 
     expect(fetchGuardMock).toHaveBeenCalledTimes(50);
     expect(release).toHaveBeenCalledTimes(50);
   });
 
   it("fails explicit incomplete live catalog pagination without a supported next page", async () => {
-    const release = vi.fn(async () => undefined);
-    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
-      response: new Response(
-        JSON.stringify({
-          data: [{ id: "model-a", object: "model" }],
-          has_more: true,
-        }),
-      ),
-      finalUrl: "https://provider.example.test/v1/models",
-      release,
-    }));
+    const { release, fetchGuardMock } = buildFetchGuard({
+      data: [row("model-a")],
+      has_more: true,
+    });
 
-    await expect(
-      fetchLiveProviderModelIds({
-        providerId: "provider",
-        endpoint: "https://provider.example.test/v1/models",
-        fetchGuard: fetchGuardMock,
-      }),
-    ).rejects.toThrow(
+    await expect(fetchIds(fetchGuardMock)).rejects.toThrow(
       "provider model discovery did not include a supported next page before the catalog completed",
     );
 
@@ -322,61 +323,46 @@ describe("provider-catalog-live-runtime", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it.each([2_000])(
-    "uses one timeout budget after a %i ms wall-clock step",
-    async (wallClockStep) => {
-      vi.useFakeTimers();
-      try {
-        const release = vi.fn(async () => undefined);
-        const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
-          .fn()
-          .mockImplementationOnce(async () => {
-            await vi.advanceTimersByTimeAsync(800);
-            vi.setSystemTime(Date.now() + wallClockStep);
-            return {
-              response: new Response(
-                JSON.stringify({
-                  data: [{ id: "model-a", object: "model" }],
-                  has_more: true,
-                  next_cursor: "cursor-2",
-                }),
-              ),
-              finalUrl: "https://provider.example.test/v1/models",
-              release,
-            };
-          })
-          .mockImplementationOnce(async () => ({
-            response: new Response(JSON.stringify({ data: [{ id: "model-b", object: "model" }] })),
-            finalUrl: "https://provider.example.test/v1/models?after=cursor-2",
+  it("uses one timeout budget after a 2000 ms wall-clock step", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => undefined);
+      const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          await vi.advanceTimersByTimeAsync(800);
+          vi.setSystemTime(Date.now() + 2_000);
+          return guardedResponse(
+            { data: [row("model-a")], has_more: true, next_cursor: "cursor-2" },
+            catalogEndpoint,
             release,
-          }));
+          );
+        })
+        .mockImplementationOnce(async () =>
+          guardedResponse({ data: [row("model-b")] }, catalogEndpoint + "?after=cursor-2", release),
+        );
 
-        await expect(
-          fetchLiveProviderModelIds({
-            providerId: "provider",
-            endpoint: "https://provider.example.test/v1/models",
-            fetchGuard: fetchGuardMock,
-            timeoutMs: 1_000,
-          }),
-        ).resolves.toEqual(["model-a", "model-b"]);
+      await expect(
+        fetchIds(fetchGuardMock, {
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toEqual(["model-a", "model-b"]);
 
-        expect(fetchGuardMock).toHaveBeenCalledTimes(2);
-        expect(fetchGuardMock.mock.calls[0]?.[0].timeoutMs).toBe(1_000);
-        expect(fetchGuardMock.mock.calls[1]?.[0].timeoutMs).toBe(200);
-        expect(release).toHaveBeenCalledTimes(2);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
+      expect(fetchGuardMock).toHaveBeenCalledTimes(2);
+      expect(fetchGuardMock.mock.calls[0]?.[0].timeoutMs).toBe(1_000);
+      expect(fetchGuardMock.mock.calls[1]?.[0].timeoutMs).toBe(200);
+      expect(release).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("bounds an unbounded live catalog success stream and cancels the body", async () => {
     const encoder = new TextEncoder();
     let pullCount = 0;
     let cancelled = false;
-    const release = vi.fn(async () => undefined);
-    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
-      response: new Response(
+    const { release, fetchGuardMock } = buildFetchGuard(
+      new Response(
         new ReadableStream<Uint8Array>({
           pull(controller) {
             pullCount += 1;
@@ -394,15 +380,9 @@ describe("provider-catalog-live-runtime", () => {
         }),
         { headers: { "content-type": "application/json" } },
       ),
-      finalUrl: "https://provider.example.test/v1/models",
-      release,
-    }));
+    );
 
-    const error = await fetchLiveProviderModelIds({
-      providerId: "provider",
-      endpoint: "https://provider.example.test/v1/models",
-      fetchGuard: fetchGuardMock,
-    }).catch((err: unknown) => err);
+    const error = await fetchIds(fetchGuardMock).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(/Live model catalog response exceeded \d+ bytes/);
@@ -415,9 +395,8 @@ describe("provider-catalog-live-runtime", () => {
     try {
       const encoder = new TextEncoder();
       let cancelReason: unknown;
-      const release = vi.fn(async () => undefined);
-      const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
-        response: new Response(
+      const { release, fetchGuardMock } = buildFetchGuard(
+        new Response(
           new ReadableStream<Uint8Array>({
             start(controller) {
               // Emit a partial JSON prefix and then idle forever without closing.
@@ -429,14 +408,9 @@ describe("provider-catalog-live-runtime", () => {
           }),
           { headers: { "content-type": "application/json" } },
         ),
-        finalUrl: "https://provider.example.test/v1/models",
-        release,
-      }));
+      );
 
-      const resultPromise = fetchLiveProviderModelIds({
-        providerId: "provider",
-        endpoint: "https://provider.example.test/v1/models",
-        fetchGuard: fetchGuardMock,
+      const resultPromise = fetchIds(fetchGuardMock, {
         timeoutMs: 1234,
       }).catch((err: unknown) => err);
 
@@ -456,20 +430,11 @@ describe("provider-catalog-live-runtime", () => {
   });
 
   it("throws structured HTTP errors after releasing guarded fetches", async () => {
-    const release = vi.fn(async () => undefined);
     const response = new Response("{}", { status: 401 });
     const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
-    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
-      response,
-      finalUrl: "https://provider.example.test/v1/models",
-      release,
-    }));
+    const { release, fetchGuardMock } = buildFetchGuard(response);
 
-    const error = await fetchLiveProviderModelIds({
-      providerId: "provider",
-      endpoint: "https://provider.example.test/v1/models",
-      fetchGuard: fetchGuardMock,
-    }).catch((err: unknown) => err);
+    const error = await fetchIds(fetchGuardMock).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(LiveModelCatalogHttpError);
     expect(error).toMatchObject({ status: 401 });
@@ -479,11 +444,11 @@ describe("provider-catalog-live-runtime", () => {
 
   it("shows every listed chat model, excludes non-chat rows and keeps static rows on failure", async () => {
     const { fetchGuard, fetchGuardMock } = buildFetchGuard([
-      { id: "model-a", object: "model", output_modalities: ["image"] },
-      { id: "model-b", object: "model" },
-      { id: "unknown-model", object: "model" },
-      { id: "sunsetting-chat", object: "model", shutdown_date: "2999-01-01" },
-      { id: "vision-chat", object: "model", pipeline_tag: "image-text-to-text" },
+      row("model-a", { output_modalities: ["image"] }),
+      row("model-b"),
+      row("unknown-model"),
+      row("sunsetting-chat", { shutdown_date: "2999-01-01" }),
+      row("vision-chat", { pipeline_tag: "image-text-to-text" }),
       ...[
         "gpt-realtime-2",
         "gpt-audio-mini",
@@ -492,34 +457,22 @@ describe("provider-catalog-live-runtime", () => {
         "babbage-002",
         "gpt-3.5-turbo-instruct",
       ].map((id) => ({ id, object: "model" })),
-      { id: "retired-chat", object: "model", shutdown_date: "2000-01-01" },
+      row("retired-chat", { shutdown_date: "2000-01-01" }),
     ]);
-    const providerConfig = {
-      api: "openai-completions" as const,
-      baseUrl: "https://provider.example.test/v1",
-    };
     const models = [buildModel("model-a"), buildModel("model-b")];
-
-    const first = await buildLiveModelProviderConfig({
-      providerId: "provider",
-      endpoint: "https://provider.example.test/v1/models",
-      providerConfig,
-      apiKey: "PROVIDER_API_KEY",
-      discoveryApiKey: "resolved-provider-key",
-      fetchGuard,
-      models,
-      ttlMs: 60_000,
-    });
-    const second = await buildLiveModelProviderConfig({
-      providerId: "provider",
-      endpoint: "https://provider.example.test/v1/models",
-      providerConfig,
-      apiKey: "PROVIDER_API_KEY",
-      discoveryApiKey: "resolved-provider-key",
-      fetchGuard,
-      models,
-      ttlMs: 60_000,
-    });
+    const buildProvider = () =>
+      buildLiveModelProviderConfig({
+        providerId: "provider",
+        endpoint: catalogEndpoint,
+        providerConfig: defaultProvider,
+        apiKey: "PROVIDER_API_KEY",
+        discoveryApiKey: "resolved-provider-key",
+        fetchGuard,
+        models,
+        ttlMs: 60_000,
+      });
+    const first = await buildProvider();
+    const second = await buildProvider();
 
     expect(fetchGuardMock).toHaveBeenCalledTimes(1);
     expect(first.apiKey).toBe("PROVIDER_API_KEY");
@@ -533,15 +486,7 @@ describe("provider-catalog-live-runtime", () => {
 
     clearLiveCatalogCacheForTests();
     fetchGuardMock.mockRejectedValueOnce(new Error("network unavailable"));
-    const fallback = await buildLiveModelProviderConfig({
-      providerId: "provider",
-      endpoint: "https://provider.example.test/v1/models",
-      providerConfig,
-      apiKey: "PROVIDER_API_KEY",
-      discoveryApiKey: "resolved-provider-key",
-      fetchGuard,
-      models,
-    });
+    const fallback = await buildProvider();
 
     expect(fallback.apiKey).toBe("PROVIDER_API_KEY");
     expect(fallback.models.map((model) => model.id)).toEqual(["model-a", "model-b"]);
@@ -553,7 +498,7 @@ describe("provider-catalog-live-runtime", () => {
         { slug: "model-a" },
         { slug: "fresh-chat" },
         { slug: "fresh-embedding" },
-        { id: "model-b", object: "model" },
+        row("model-b"),
       ],
     });
     const models = [buildModel("model-a"), buildModel("model-b")];
@@ -561,11 +506,11 @@ describe("provider-catalog-live-runtime", () => {
     const provider = await buildLiveModelProviderConfig({
       discoveryMode: "strict",
       providerId: "provider",
-      endpoint: "https://provider.example.test/v1/models",
-      providerConfig: { api: "openai-completions", baseUrl: "https://provider.example.test/v1" },
+      endpoint: catalogEndpoint,
+      providerConfig: defaultProvider,
       fetchGuard,
       models,
-      readModelId: (row) => readLiveModelCatalogStringField(row, "slug"),
+      readModelId: (entry) => readLiveModelCatalogStringField(entry, "slug"),
     });
 
     expect(provider.models).toEqual([
@@ -577,37 +522,29 @@ describe("provider-catalog-live-runtime", () => {
   it("builds newly listed text models from OpenAI-compatible catalog metadata", async () => {
     const { fetchGuard, fetchGuardMock } = buildFetchGuard({
       data: [
-        {
-          id: "chat-v2",
-          object: "model",
+        row("chat-v2", {
           active: true,
           context_window: 262_144,
           max_completion_tokens: 32_768,
           input_modalities: ["text", "image"],
           features: ["reasoning"],
-        },
-        { id: "text-embedding-4", object: "model" },
-        { id: "gpt-image-2-oai", object: "model" },
-        { id: "retired-chat", object: "model", active: false },
-        { id: "archived-chat", object: "model", archived: true },
-        { id: "deprecated-chat", object: "model", deprecated: true },
-        {
-          id: "fim-only",
-          object: "model",
+        }),
+        row("text-embedding-4"),
+        row("gpt-image-2-oai"),
+        row("retired-chat", { active: false }),
+        row("archived-chat", { archived: true }),
+        row("deprecated-chat", { deprecated: true }),
+        row("fim-only", {
           capabilities: { completion_chat: false, completion_fim: true },
-        },
-        { id: "image-generation-v2", object: "model", features: ["image_generation"] },
-        {
-          id: "chat-and-image-v2",
-          object: "model",
+        }),
+        row("image-generation-v2", { features: ["image_generation"] }),
+        row("chat-and-image-v2", {
           capabilities: { completion_chat: true },
           features: ["image_generation"],
-        },
-        {
-          id: "image-only",
-          object: "model",
+        }),
+        row("image-only", {
           output_modalities: ["image"],
-        },
+        }),
       ],
     });
 
@@ -633,14 +570,13 @@ describe("provider-catalog-live-runtime", () => {
       }),
     ]);
     expect(fetchGuardMock.mock.calls[0]?.[0].url).toBe("https://provider.example.test/v1/models");
-    const headers = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
-    expect(headers).toBeInstanceOf(Headers);
-    expect((headers as Headers).get("authorization")).toBe("Bearer provider-key");
+    const headers = requestHeaders(fetchGuardMock);
+    expect(headers.get("authorization")).toBe("Bearer provider-key");
   });
 
   it("supports provider-specific model-list paths and headers", async () => {
     const { fetchGuard, fetchGuardMock } = buildFetchGuard({
-      data: [{ id: "claude-next", object: "model" }],
+      data: [row("claude-next")],
     });
 
     await buildOpenAICompatibleLiveModelProviderConfig({
@@ -662,10 +598,9 @@ describe("provider-catalog-live-runtime", () => {
     });
 
     expect(fetchGuardMock.mock.calls[0]?.[0].url).toBe("https://provider.example.test/v1/models");
-    const headers = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
-    expect(headers).toBeInstanceOf(Headers);
-    expect((headers as Headers).get("x-api-key")).toBe("provider-key");
-    expect((headers as Headers).get("anthropic-version")).toBe("2023-06-01");
+    const headers = requestHeaders(fetchGuardMock);
+    expect(headers.get("x-api-key")).toBe("provider-key");
+    expect(headers.get("anthropic-version")).toBe("2023-06-01");
   });
 
   it("does not send credentials to a fixed discovery endpoint after a base URL override", async () => {

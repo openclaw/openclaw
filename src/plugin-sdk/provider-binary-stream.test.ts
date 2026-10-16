@@ -3,6 +3,20 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createBoundedProviderBinaryStream } from "./provider-binary-stream.js";
 
+function bound(
+  source: ReadableStream<Uint8Array>,
+  cleanup: () => Promise<void>,
+  overrides: Partial<Omit<Parameters<typeof createBoundedProviderBinaryStream>[1], "cleanup">> = {},
+) {
+  return createBoundedProviderBinaryStream(source, {
+    maxBytes: 8,
+    createOverflowError: () => new Error("overflow"),
+    createReleaseError: () => new Error("released"),
+    ...overrides,
+    cleanup,
+  });
+}
+
 describe("createBoundedProviderBinaryStream", () => {
   it("shares finalization when source cancellation reenters release", async () => {
     const reentered: Promise<void>[] = [];
@@ -11,12 +25,7 @@ describe("createBoundedProviderBinaryStream", () => {
     });
     const cleanup = vi.fn(async () => {});
     const source = new ReadableStream<Uint8Array>({ cancel });
-    const bounded = createBoundedProviderBinaryStream(source, {
-      maxBytes: 8,
-      createOverflowError: () => new Error("overflow"),
-      createReleaseError: () => new Error("released"),
-      cleanup,
-    });
+    const bounded = bound(source, cleanup);
     await bounded.release();
     await Promise.all(reentered);
     expect(cancel).toHaveBeenCalledOnce();
@@ -40,12 +49,7 @@ describe("createBoundedProviderBinaryStream", () => {
         cancel,
       });
       const cleanup = vi.fn(async () => {});
-      const bounded = createBoundedProviderBinaryStream(source, {
-        maxBytes: 8,
-        createOverflowError: () => new Error("overflow"),
-        createReleaseError: () => new Error("released"),
-        cleanup,
-      });
+      const bounded = bound(source, cleanup);
       const reader = bounded.stream.getReader();
       try {
         if (ending === "eof") {
@@ -79,13 +83,7 @@ describe("createBoundedProviderBinaryStream", () => {
         expect(source.locked).toBe(false);
         await cleaned.promise;
       });
-      const options = {
-        maxBytes: 8,
-        createOverflowError: () => new Error("overflow"),
-        createReleaseError: () => reason,
-        cleanup,
-      };
-      const bounded = createBoundedProviderBinaryStream(source, options);
+      const bounded = bound(source, cleanup, { createReleaseError: () => reason });
       let settled = false;
       const result = (
         operation === "cancel" ? bounded.stream.cancel(reason) : bounded.release()
@@ -139,13 +137,7 @@ describe("createBoundedProviderBinaryStream", () => {
           throw cleanupError;
         }
       });
-      const options = {
-        maxBytes: 8,
-        createOverflowError: () => new Error("overflow"),
-        createReleaseError: () => reason,
-        cleanup,
-      };
-      const bounded = createBoundedProviderBinaryStream(source, options);
+      const bounded = bound(source, cleanup, { createReleaseError: () => reason });
       const earlyCancel = first === "cancel" ? bounded.stream.cancel(reason) : undefined;
       const pendingRelease = bounded.release();
       const pendingCancel = earlyCancel ?? bounded.stream.cancel(reason);
@@ -192,13 +184,7 @@ describe("createBoundedProviderBinaryStream", () => {
       },
     });
     const cleanup = vi.fn(() => cleaned.promise);
-    const options = {
-      maxBytes: 4,
-      createOverflowError: () => overflow,
-      createReleaseError: () => new Error("released"),
-      cleanup,
-    };
-    const bounded = createBoundedProviderBinaryStream(source, options);
+    const bounded = bound(source, cleanup, { maxBytes: 4, createOverflowError: () => overflow });
     const reader = bounded.stream.getReader();
     try {
       await expect(reader.read()).resolves.toEqual({
@@ -241,11 +227,10 @@ describe("createBoundedProviderBinaryStream", () => {
       const cleanup = vi.fn(async () => {
         await capture.body?.cancel();
       });
-      const bounded = createBoundedProviderBinaryStream(response.body!, {
+      const bounded = bound(response.body!, cleanup, {
         maxBytes: kind === "overflow" ? 4 : 8,
         createOverflowError: () => expected,
         createReleaseError: () => expected,
-        cleanup,
       });
       const reader = bounded.stream.getReader();
       const operation = (async () => {
