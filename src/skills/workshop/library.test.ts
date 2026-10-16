@@ -52,7 +52,9 @@ describe("workshop library", () => {
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(path.join(skillDir, "SKILL.md"), Buffer.alloc(1024 * 1024 + 1, "x"));
 
-    await expect(listWorkshopSkills({}, "main")).rejects.toThrow(/File exceeds 1048576 bytes/);
+    await expect(listWorkshopSkills({}, "main")).rejects.toThrow(
+      /file exceeds limit of 1048576 bytes/,
+    );
   });
 
   it("skips directories without SKILL.md but still lists hand-edited broken frontmatter", async () => {
