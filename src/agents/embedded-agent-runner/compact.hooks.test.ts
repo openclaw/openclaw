@@ -1759,7 +1759,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
   });
 
-  it("drains committed maintenance before rejecting a manual request pinned to its predecessor", async () => {
+  it("drains committed maintenance before reporting a failed manual request pinned to its predecessor", async () => {
     const { acceptCompactionSuccessor } = await import("./compaction-successor.js");
     const params = wrappedCompactionArgs({ trigger: "manual" });
     const predecessor = expectDefined(
@@ -1820,9 +1820,15 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       expect(events).toEqual([]);
       expect(contextEngineCompactMock).not.toHaveBeenCalled();
       releaseCleanup.resolve();
-      await expect(pending).rejects.toThrow("session writer claim changed");
+      await expect(pending).resolves.toEqual({
+        ok: false,
+        compacted: false,
+        compactionKind: "context-engine",
+        reason: "session writer claim changed before transcript persistence",
+        result: undefined,
+      });
       await settled;
-      expect(events).toEqual(["maintenance cleanup finished", "manual rejected"]);
+      expect(events).toEqual(["maintenance cleanup finished", "manual resolved"]);
       expect(contextEngineCompactMock).not.toHaveBeenCalled();
       expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
       expect(runCliAgentMock).not.toHaveBeenCalled();
