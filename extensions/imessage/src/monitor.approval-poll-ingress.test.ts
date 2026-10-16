@@ -150,9 +150,7 @@ describe("iMessage approval poll durable ingress", () => {
   it("completes a handled approval vote instead of abandoning it for replay", async () => {
     arrangeNotification();
     maybeResolveIMessageApprovalPollVoteMock.mockResolvedValue(true);
-
     await runMonitor();
-
     expect(ingressLifecycleMocks.onAdopted).toHaveBeenCalledTimes(1);
     expect(ingressLifecycleMocks.onAbandoned).not.toHaveBeenCalled();
   });
@@ -161,9 +159,7 @@ describe("iMessage approval poll durable ingress", () => {
     arrangeNotification();
     maybeResolveIMessageApprovalPollVoteMock.mockRejectedValue(new Error("gateway unavailable"));
     const runtime = createRuntimeSpies();
-
     await runMonitor({}, runtime);
-
     expect(ingressLifecycleMocks.onAdopted).not.toHaveBeenCalled();
     expect(ingressLifecycleMocks.onAbandoned).toHaveBeenCalledTimes(1);
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("gateway unavailable"));

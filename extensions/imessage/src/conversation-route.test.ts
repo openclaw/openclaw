@@ -49,7 +49,11 @@ function createBinding(overrides: Partial<SessionBindingRecord> = {}): SessionBi
     bindingId: "default:+15555550123",
     targetSessionKey: "agent:bound:acp:session-1",
     targetKind: "session",
-    conversation: { channel: "imessage", accountId: "default", conversationId: "+15555550123" },
+    conversation: {
+      channel: "imessage",
+      accountId: "default",
+      conversationId: directMessage.sender,
+    },
     status: "active",
     boundAt: 1,
     ...overrides,
@@ -96,39 +100,60 @@ describe("resolveIMessageConversationRoute", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it.each(["ambiguous", "conflicting"] as const)(
-    "selects the bound agent before %s ordinary routing",
-    async (routing) => {
-      const { touchAsync: touch } = registerBinding(createBinding());
-      const cfg: OpenClawConfig = {
+  it.each([
+    ["ambiguous", false, []],
+    ["conflicting", false, configuredCfg.bindings],
+    ["group", true, []],
+  ] as const)("selects the bound agent for %s routing", async (_, group, bindings) => {
+    const target = group ? "agent:bound:home" : "agent:bound:acp:session-1";
+    const binding = createBinding({ targetSessionKey: target });
+    const ref = { ...binding.conversation, conversationId: group ? "42" : directMessage.sender };
+    binding.conversation = ref;
+    const inspect = vi.fn<NonNullable<SessionBindingAdapter["inspectByConversationAsync"]>>(
+      async (input) => (input.conversationId === ref.conversationId ? binding : null),
+    );
+    const { touchAsync: touch } = registerBinding(binding, {
+      resolveByConversation: () => (group ? null : binding),
+      inspectByConversationAsync: inspect,
+    });
+    const result = await resolveIMessageConversationRoute({
+      ...directMessage,
+      isGroup: group,
+      peerId: ref.conversationId,
+      chatId: group ? 42 : undefined,
+      cfg: {
         ...baseCfg,
-        session: { mainKey: "home", dmScope: "per-account-channel-peer", groupScope: "main" },
-        bindings: routing === "ambiguous" ? [] : configuredCfg.bindings,
-      };
-
-      const result = await resolve(cfg);
-
-      expect(result.route).toMatchObject({
+        bindings: [...bindings],
+        session: {
+          mainKey: "home",
+          groupScope: "main",
+          ...(group ? {} : { dmScope: "per-account-channel-peer" as const }),
+        },
+      },
+    });
+    expect(result).toMatchObject({
+      bindingResolution: null,
+      route: {
         agentId: "bound",
-        sessionKey: "agent:bound:acp:session-1",
+        sessionKey: target,
         mainSessionKey: "agent:bound:home",
-        dmScope: "per-account-channel-peer",
         groupScope: "main",
-        lastRoutePolicy: "session",
-        matchedBy: "binding.channel",
-      });
-      expect(result.bindingResolution).toBeNull();
-      expect(touch).toHaveBeenCalledExactlyOnceWith("default:+15555550123", undefined);
-    },
-  );
+        lastRoutePolicy: group ? "main" : "session",
+        ...(group ? {} : { dmScope: "per-account-channel-peer", matchedBy: "binding.channel" }),
+      },
+    });
+    expect(touch).toHaveBeenCalledExactlyOnceWith("default:+15555550123", undefined);
+    if (group) {
+      expect(inspect).toHaveBeenCalledExactlyOnceWith(ref);
+    }
+  });
 
   it("uses explicit bound-agent metadata for the global session sentinel", async () => {
-    const targetSessionKey = "global";
-    registerBinding(createBinding({ targetSessionKey, metadata: { agentId: "bound" } }));
+    registerBinding(createBinding({ targetSessionKey: "global", metadata: { agentId: "bound" } }));
     const result = await resolve({ ...baseCfg, bindings: [] });
     expect(result.route).toMatchObject({
       agentId: "bound",
-      sessionKey: targetSessionKey,
+      sessionKey: "global",
       mainSessionKey: "agent:bound:main",
     });
   });
@@ -136,29 +161,26 @@ describe("resolveIMessageConversationRoute", () => {
   it("retains ordinary agent selection for a sentinel without an explicit bound agent", async () => {
     registerBinding(createBinding({ targetSessionKey: "global" }));
     const result = await resolve(configuredCfg);
-    expect(result.route).toMatchObject({ agentId: "codex", sessionKey: "global" });
-    expect(result.bindingResolution).toBeNull();
+    expect(result).toMatchObject({
+      route: { agentId: "codex", sessionKey: "global" },
+      bindingResolution: null,
+    });
     await expect(resolve({ ...baseCfg, bindings: [] })).rejects.toMatchObject({
       code: "AGENT_SELECTION_REQUIRED",
     });
   });
 
   it.each([
-    { name: "absent", binding: null },
-    { name: "empty", binding: createBinding({ targetSessionKey: " " }) },
-    {
-      name: "cron",
-      binding: createBinding({ targetSessionKey: "agent:bound:cron:job:run:proof" }),
-    },
-  ])("preserves configured readiness for $name runtime bindings", async ({ binding }) => {
+    ["absent", null],
+    ["empty", createBinding({ targetSessionKey: " " })],
+    ["cron", createBinding({ targetSessionKey: "agent:bound:cron:job:run:proof" })],
+  ] as const)("preserves configured readiness for %s runtime bindings", async (_, binding) => {
     const { touchAsync: touch } = registerBinding(binding);
     const result = await resolve(configuredCfg);
     expect(result.route.agentId).toBe("codex");
     expect(result.bindingResolution?.record.targetSessionKey).toBe(result.route.sessionKey);
     expect(result.bindingResolution?.record.conversation).toEqual({
-      channel: "imessage",
-      accountId: "default",
-      conversationId: directMessage.sender,
+      ...createBinding().conversation,
       parentConversationId: undefined,
     });
     expect(touch).not.toHaveBeenCalled();
@@ -179,8 +201,10 @@ describe("resolveIMessageConversationRoute", () => {
       }),
     );
     const result = await resolve();
-    expect(result.route).toMatchObject({ agentId: "main", sessionKey: "agent:main:main" });
-    expect(result.bindingResolution).toBeNull();
+    expect(result).toMatchObject({
+      route: { agentId: "main", sessionKey: "agent:main:main" },
+      bindingResolution: null,
+    });
     expect(touch).toHaveBeenCalledExactlyOnceWith("default:+15555550123", undefined);
   });
 
@@ -188,35 +212,6 @@ describe("resolveIMessageConversationRoute", () => {
     const { touchAsync: touch } = registerBinding(createBinding({ targetSessionKey: "agent:" }));
     await expect(resolve(configuredCfg)).rejects.toThrow("Malformed agent session key");
     expect(touch).not.toHaveBeenCalled();
-  });
-
-  it("uses the group conversation identity and the bound agent's global scope", async () => {
-    const binding = createBinding({
-      targetSessionKey: "agent:bound:home",
-      conversation: { channel: "imessage", accountId: "default", conversationId: "42" },
-    });
-    const inspect = vi.fn<NonNullable<SessionBindingAdapter["inspectByConversationAsync"]>>(
-      async (ref) => (ref.conversationId === "42" ? binding : null),
-    );
-    registerBinding(binding, {
-      resolveByConversation: () => null,
-      inspectByConversationAsync: inspect,
-    });
-    const result = await resolveIMessageConversationRoute({
-      ...directMessage,
-      isGroup: true,
-      peerId: "42",
-      chatId: 42,
-      cfg: { ...baseCfg, bindings: [], session: { mainKey: "home", groupScope: "main" } },
-    });
-    expect(result.route).toMatchObject({
-      agentId: "bound",
-      sessionKey: "agent:bound:home",
-      mainSessionKey: "agent:bound:home",
-      groupScope: "main",
-      lastRoutePolicy: "main",
-    });
-    expect(inspect).toHaveBeenCalledExactlyOnceWith(binding.conversation);
   });
 
   it("waits for activity persistence without replacing the captured route", async () => {

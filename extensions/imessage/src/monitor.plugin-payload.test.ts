@@ -21,23 +21,21 @@ import type { createIMessageRpcClient } from "./client.js";
 import { createIMessageConversationBindingManagerV2 } from "./conversation-bindings.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import { runInboundWithDispatch } from "./monitor.last-route.test-support.js";
-import type { IMessagePayload } from "./monitor/types.js";
+import type { IMessagePayload, MonitorIMessageOpts } from "./monitor/types.js";
 import { setCachedIMessagePrivateApiStatus } from "./private-api-status.js";
 import { getIMessageRuntime } from "./runtime.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
-const waitForTransportReadyMock = vi.hoisted(() =>
-  vi.fn<typeof waitForTransportReady>(async () => {}),
-);
-const createIMessageRpcClientMock = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
-const shouldDebounceTextInboundMock = vi.hoisted(() => vi.fn(() => false));
-const directDeliveryProof = vi.hoisted(() => ({
+const waitReady = vi.hoisted(() => vi.fn<typeof waitForTransportReady>(async () => {}));
+const createClient = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
+const shouldDebounce = vi.hoisted(() => vi.fn(() => false));
+const delivery = vi.hoisted(() => ({
   flush: false,
   onFlushed: undefined as (() => void) | undefined,
 }));
 
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
-  waitForTransportReady: waitForTransportReadyMock,
+  waitForTransportReady: waitReady,
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
@@ -55,28 +53,39 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
         debouncer: {
           enqueue: async (entry: unknown) => {
             opts.shouldDebounce(entry);
-            if (directDeliveryProof.flush) {
+            if (delivery.flush) {
               try {
                 await opts.onFlush([entry], createTestInboundDebounceFlush).completion;
               } finally {
-                directDeliveryProof.onFlushed?.();
+                delivery.onFlushed?.();
               }
             }
           },
         },
       }),
     ),
-    shouldDebounceTextInbound: shouldDebounceTextInboundMock,
+    shouldDebounceTextInbound: shouldDebounce,
   };
 });
 
 vi.mock("./client.js", () => ({
-  createIMessageRpcClient: createIMessageRpcClientMock,
+  createIMessageRpcClient: createClient,
 }));
 
 vi.mock("./monitor/abort-handler.js", () => ({
   attachIMessageMonitorAbortHandler: vi.fn(() => () => {}),
 }));
+
+function runMonitor(
+  config: MonitorIMessageOpts["config"],
+  runtime?: MonitorIMessageOpts["runtime"],
+) {
+  return monitorIMessageProvider({
+    scheduler: createTestPluginServiceScheduler(),
+    config: { ...config, session: { mainKey: "main" } },
+    runtime,
+  });
+}
 
 describe("iMessage plugin payload attachments", () => {
   let message: IMessagePayload;
@@ -86,7 +95,7 @@ describe("iMessage plugin payload attachments", () => {
     | undefined;
   beforeEach(() => {
     installIMessageStateRuntimeForTest();
-    waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
+    waitReady.mockReset().mockResolvedValue(undefined);
     message = {
       id: 1,
       guid: "plugin-payload-guid-1",
@@ -97,7 +106,7 @@ describe("iMessage plugin payload attachments", () => {
     };
     afterNotify = async () => {};
     nativeClient = undefined;
-    createIMessageRpcClientMock.mockReset().mockImplementation(async (params) => {
+    createClient.mockReset().mockImplementation(async (params) => {
       if (!params?.onNotification) {
         if (!nativeClient) {
           throw new Error("expected iMessage notification handler");
@@ -113,9 +122,9 @@ describe("iMessage plugin payload attachments", () => {
         stop: vi.fn(async () => {}),
       } as never;
     });
-    shouldDebounceTextInboundMock.mockReset().mockReturnValue(false);
-    directDeliveryProof.flush = false;
-    directDeliveryProof.onFlushed = undefined;
+    shouldDebounce.mockReset().mockReturnValue(false);
+    delivery.flush = false;
+    delivery.onFlushed = undefined;
   });
 
   afterEach(() => {
@@ -130,29 +139,15 @@ describe("iMessage plugin payload attachments", () => {
       text: "https://example.com/article",
       attachments: [
         {
-          original_path:
-            "/Users/openclaw/Library/Messages/Attachments/AA/BB/link.pluginPayloadAttachment",
-          mime_type: null,
-          missing: false,
-          transfer_name: "link.pluginPayloadAttachment",
-          uti: "com.apple.messages.pluginPayloadAttachment",
+          original_path: "/link.pluginPayloadAttachment",
         },
       ],
     };
 
-    await monitorIMessageProvider({
-      scheduler: createTestPluginServiceScheduler(),
-      config: {
-        channels: { imessage: { includeAttachments: true, dmPolicy: "open" } },
-        session: { mainKey: "main" },
-      } as never,
-    });
+    await runMonitor({ channels: { imessage: { includeAttachments: true, dmPolicy: "open" } } });
 
-    expect(shouldDebounceTextInboundMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "https://example.com/article",
-        hasMedia: false,
-      }),
+    expect(shouldDebounce).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "https://example.com/article", hasMedia: false }),
     );
   });
 
@@ -162,9 +157,9 @@ describe("iMessage plugin payload attachments", () => {
   ] as const)(
     "settles direct $kind delivery through actual provider, hooks, and SQLite ($visible)",
     async ({ kind, text, visible }) => {
-      directDeliveryProof.flush = true;
+      delivery.flush = true;
       const flushed = Promise.withResolvers<void>();
-      directDeliveryProof.onFlushed = flushed.resolve;
+      delivery.onFlushed = flushed.resolve;
       const errors = vi.fn();
       const messageSent = vi.fn();
       const registry = createTestRegistry([
@@ -189,8 +184,7 @@ describe("iMessage plugin payload attachments", () => {
 
       const dispatch = vi.fn<typeof dispatchReplyWithBufferedBlockDispatcher>(async (params) => {
         if (kind === "final") {
-          // Only model output is injected: preparation, final dispatch, durable sending,
-          // native RPC, receipts, message_sent, and echo persistence stay production-owned.
+          // Inject only model output; delivery and persistence remain production-owned.
           return await dispatchReplyWithBufferedBlockDispatcher({
             ...params,
             replyResolver: async () => {
@@ -206,10 +200,7 @@ describe("iMessage plugin payload attachments", () => {
           visibleReplySent: false,
           suppression: { reason: "no_visible_result" },
         });
-        return {
-          queuedFinal: false,
-          counts: { tool: 1, block: 0, final: 0 },
-        };
+        return { queuedFinal: false, counts: { tool: 1, block: 0, final: 0 } };
       });
       vi.spyOn(channelInbound, "runChannelInboundEvent").mockImplementation(async (params) =>
         runInboundWithDispatch(params, dispatch, (durable) => {
@@ -231,7 +222,6 @@ describe("iMessage plugin payload attachments", () => {
       };
       message = {
         ...message,
-        id: 91,
         guid: `monitor-${kind}-${visible}-guid`,
         text: "exercise actual direct delivery",
         created_at: new Date().toISOString(),
@@ -240,9 +230,8 @@ describe("iMessage plugin payload attachments", () => {
 
       try {
         await withPluginRuntimeRegistryScope(registry, () =>
-          monitorIMessageProvider({
-            scheduler: createTestPluginServiceScheduler(),
-            config: {
+          runMonitor(
+            {
               plugins: { slots: { memory: "none" } },
               channels: {
                 imessage: {
@@ -252,10 +241,9 @@ describe("iMessage plugin payload attachments", () => {
                 },
               },
               messages: { inbound: { debounceMs: 0 } },
-              session: { mainKey: "main" },
-            } as never,
-            runtime: { error: errors, exit: vi.fn(), log: vi.fn() },
-          }),
+            },
+            { error: errors, exit: vi.fn(), log: vi.fn() },
+          ),
         );
       } finally {
         bindings.stop();

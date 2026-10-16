@@ -211,16 +211,7 @@ describe("imessage monitor gating + envelope builders", () => {
 
   it("uses short message ids in context and keeps the full guid for actions", async () => {
     const cfg = baseCfg();
-    const inbound = message({
-      guid: "full-message-guid",
-      chat_id: 42,
-      chat_guid: "iMessage;+;chat0000",
-      chat_identifier: "thread-42",
-      sender: "+15550002222",
-      text: "@openclaw ping",
-      chat_name: "Lobster Squad",
-      participants: ["+1555", "+1556"],
-    });
+    const inbound = message({ guid: "full-message-guid" });
     const ctxPayload = await buildDispatchContextPayload({ cfg, message: inbound });
 
     expect(ctxPayload).toMatchObject({ MessageSid: "1", MessageSidFull: "full-message-guid" });
@@ -248,12 +239,7 @@ describe("imessage monitor gating + envelope builders", () => {
       });
       const ctxPayload = await buildDispatchContextPayload({ cfg: baseCfg(), message: inbound });
 
-      expect(ctxPayload).toMatchObject({
-        ReplyToId: expected,
-        ReplyToBody: "original message",
-        ReplyToSender: "+15559998888",
-      });
-      expect(ctxPayload.Body ?? "").toContain(`[Replying to +15559998888 id:${expected}]`);
+      expectQuote(ctxPayload, "original message", expected);
       expect(ctxPayload.Body ?? "").toContain("original message");
     },
   );
@@ -322,8 +308,10 @@ describe("imessage monitor gating + envelope builders", () => {
         is_group: false,
       }),
     });
-    expect(decision.isGroup).toBe(true);
-    expect(decision.route.sessionKey).toBe("agent:main:imessage:group:2");
+    expect(decision).toMatchObject({
+      isGroup: true,
+      route: { sessionKey: "agent:main:imessage:group:2" },
+    });
   });
 
   it("allows group messages when requireMention is true but no mentionPatterns exist", async () => {
@@ -354,31 +342,23 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("honors group allowlist and ignores pairing-store senders in groups", async () => {
-    const cfg = baseCfg({ groupPolicy: "allowlist" });
-
     const groupHistories = new Map();
-    const denied = await resolveDecision({
-      cfg,
-      message: message({ chat_id: 202, text: "@openclaw hi" }),
+    const options = {
+      cfg: baseCfg({ groupPolicy: "allowlist" }),
       allowFrom: ["*"],
       groupAllowFrom: ["chat_id:101"],
       groupPolicy: "allowlist",
       dmPolicy: "pairing",
       storeAllowFrom: ["+15550003333"],
       groupHistories,
+    };
+    const denied = await resolveDecision({
+      ...options,
+      message: message({ chat_id: 202, text: "@openclaw hi" }),
     });
     expect(denied.kind).toBe("drop");
 
-    const allowed = await resolveDecision({
-      cfg,
-      message: message({ id: 33 }),
-      allowFrom: ["*"],
-      groupAllowFrom: ["chat_id:101"],
-      groupPolicy: "allowlist",
-      dmPolicy: "pairing",
-      storeAllowFrom: ["+15550003333"],
-      groupHistories,
-    });
+    const allowed = await resolveDecision({ ...options, message: message({ id: 33 }) });
     expect(allowed.kind).toBe("dispatch");
   });
 
@@ -411,21 +391,11 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(decision).toEqual({ kind: "drop", reason: "not in groupAllowFrom" });
   });
 
-  it("does not authorize group control commands from conversation allowlist entries", async () => {
-    const decision = await resolveGroup(message({ id: 34, text: "/status" }), {
-      allowFrom: [],
-      groupAllowFrom: ["chat_id:101"],
-    });
-
-    expect(decision).toEqual({ kind: "drop", reason: "control command (unauthorized)" });
-  });
-
-  it("does not authorize group control commands from legacy conversation allowFrom entries", async () => {
-    const decision = await resolveGroup(message({ id: 36, text: "/status" }), {
-      groupAllowFrom: [],
-      allowLegacyConversationAllowFromForGroup: true,
-    });
-
+  it.each([
+    { allowFrom: [], groupAllowFrom: ["chat_id:101"] },
+    { groupAllowFrom: [], allowLegacyConversationAllowFromForGroup: true },
+  ])("does not authorize group control commands from conversation entries: %j", async (options) => {
+    const decision = await resolveGroup(message({ text: "/status" }), options);
     expect(decision).toEqual({ kind: "drop", reason: "control command (unauthorized)" });
   });
 

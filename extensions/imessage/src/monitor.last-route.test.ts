@@ -49,6 +49,7 @@ import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 const ANCHOR_REPAIR_GUID = "11111111-1111-4111-8111-111111111111";
 const WATCH_SUBSCRIBE_PARAMS = { attachments: false, include_reactions: true } as const;
 const WATCH_SUBSCRIBE_OPTIONS = { timeoutMs: 10_000 } as const;
+const UNAVAILABLE_API = { available: false, v2Ready: false, selectors: {}, rpcMethods: [] };
 const EMPTY_DISPATCH_RESULT = {
   queuedFinal: false,
   counts: { tool: 0, block: 0, final: 0 },
@@ -100,9 +101,7 @@ function expectRpc(
 }
 
 async function expectDispatches(count = 1) {
-  await vi.waitFor(() => {
-    expect(dispatchMock).toHaveBeenCalledTimes(count);
-  });
+  await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(count));
 }
 
 function createIMessageTestRequest(
@@ -123,11 +122,7 @@ async function settleNotifications(): Promise<void> {
 }
 
 function expireCachedPrivateApiStatus(): void {
-  setCachedIMessagePrivateApiStatus(
-    "imsg",
-    { available: false, v2Ready: false, selectors: {}, rpcMethods: [] },
-    1,
-  );
+  setCachedIMessagePrivateApiStatus("imsg", UNAVAILABLE_API, 1);
   getCachedIMessagePrivateApiStatus("imsg");
 }
 
@@ -236,15 +231,11 @@ describe("iMessage monitor last-route updates", () => {
     installIMessageStateRuntimeForTest();
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createClientMock.mockReset();
-    probeIMessagePrivateApiMock.mockReset().mockImplementation(
-      async (cliPath) =>
-        getCachedIMessagePrivateApiStatus(cliPath) ?? {
-          available: false,
-          v2Ready: false,
-          selectors: {},
-          rpcMethods: [],
-        },
-    );
+    probeIMessagePrivateApiMock
+      .mockReset()
+      .mockImplementation(
+        async (cliPath) => getCachedIMessagePrivateApiStatus(cliPath) ?? UNAVAILABLE_API,
+      );
     readChannelAllowFromStoreMock.mockReset().mockResolvedValue([]);
     ensureReadyMock.mockReset().mockResolvedValue({ ok: true });
     dispatchMock.mockClear();
@@ -278,38 +269,22 @@ describe("iMessage monitor last-route updates", () => {
     return {
       id,
       guid,
-      chat_id: message.chat_id ?? 123,
-      chat_guid: message.chat_guid,
-      chat_identifier: message.chat_identifier,
-      sender: message.sender ?? DEFAULT_SENDER,
-      is_from_me: message.is_from_me ?? false,
-      text: message.text ?? "hello",
-      is_group: message.is_group ?? false,
-      created_at: message.created_at ?? new Date().toISOString(),
-      destination_caller_id: message.destination_caller_id,
+      chat_id: 123,
+      sender: DEFAULT_SENDER,
+      is_from_me: false,
+      text: "hello",
+      is_group: false,
+      created_at: new Date().toISOString(),
+      ...message,
     };
   }
 
   it.each([
-    {
-      name: "SMS",
-      group: false,
-      id: 101,
-      chat: 123,
-      guid: "SMS;-;+15550001111",
-      reply: "reply over the originating service",
-    },
-    {
-      name: "group",
-      group: true,
-      id: 103,
-      chat: 456,
-      guid: "iMessage;+;chat456",
-      reply: "group reply",
-    },
-  ])(
-    "preserves $name through final delivery and last-route",
-    async ({ name, group, id, chat, guid, reply }) => {
+    ["SMS", false, 101, 123, "SMS;-;+15550001111", "reply over the originating service"],
+    ["group", true, 103, 456, "iMessage;+;chat456", "group reply"],
+  ] as const)(
+    "preserves %s through final delivery and last-route",
+    async (name, group, id, chat, guid, reply) => {
       enablePrivateApi(["watch.subscribe", "send", "typing", "read"]);
       const configuredStore = path.join(
         createTestStateDir("openclaw-imsg-route-"),
@@ -371,37 +346,6 @@ describe("iMessage monitor last-route updates", () => {
     },
   );
 
-  function createAnchorlessDirectPair(id: number, text: string, isFromMe: boolean) {
-    return {
-      notification: {
-        id,
-        guid: ANCHOR_REPAIR_GUID,
-        chat_id: 0,
-        chat_guid: "",
-        chat_identifier: "",
-        sender: "+15550000001",
-        destination_caller_id: "+15550000001",
-        is_from_me: false,
-        is_group: false,
-        service: "iMessage",
-        text,
-        created_at: new Date().toISOString(),
-      },
-      history: {
-        id,
-        guid: ANCHOR_REPAIR_GUID,
-        chat_id: 42,
-        chat_guid: "iMessage;-;+15550000002",
-        chat_identifier: "+15550000002",
-        sender: "+15550000002",
-        destination_caller_id: "+15550000001",
-        is_from_me: isFromMe,
-        is_group: false,
-        service: "iMessage",
-      },
-    };
-  }
-
   function makeWatchClient(params: WatchClientParams = {}) {
     let onNotification:
       | NonNullable<NonNullable<Parameters<typeof createIMessageRpcClient>[0]>["onNotification"]>
@@ -429,7 +373,7 @@ describe("iMessage monitor last-route updates", () => {
       : undefined;
     const client = {
       request: vi.fn(
-        createIMessageTestRequest(params.requests ?? { "watch.subscribe": { subscription: 1 } }),
+        createIMessageTestRequest({ "watch.subscribe": { subscription: 1 }, ...params.requests }),
       ),
       waitForClose: vi.fn(() => onClose?.(notify) ?? Promise.resolve()),
       stop: vi.fn(async () => {}),
@@ -623,14 +567,12 @@ describe("iMessage monitor last-route updates", () => {
 
     const client = await runMessageCase({
       requests: {
-        "watch.subscribe": { subscription: 1 },
         "messages.history": { messages: [] },
       },
       auxiliaryRequests: { typing: { ok: true }, read: { ok: true } },
-      message: {
-        ...inbound(82, "acp-failed-82"),
+      message: inbound(82, "acp-failed-82", {
         attachments: [{ mime_type: "image/png", missing: true }],
-      },
+      }),
       monitor: createConfiguredBindingMonitor({
         runtime,
         imessage: { includeAttachments: true, dmHistoryLimit: 3 },
@@ -712,7 +654,6 @@ describe("iMessage monitor last-route updates", () => {
 
     const client = await runMessageCase({
       requests: {
-        "watch.subscribe": { subscription: 1 },
         typing: { ok: true },
       },
       message: inbound(7, "typing-keepalive-guid-7"),
@@ -721,8 +662,6 @@ describe("iMessage monitor last-route updates", () => {
 
     await vi.waitFor(() => {
       expectRpc(client, "typing", { typing: true });
-    });
-    await vi.waitFor(() => {
       expectRpc(client, "typing", { typing: false });
     });
   });
@@ -731,7 +670,6 @@ describe("iMessage monitor last-route updates", () => {
     enablePrivateApi(["watch.subscribe", "send", "typing"]);
     const watchClient = makeWatchClient({
       requests: {
-        "watch.subscribe": { subscription: 1 },
         typing: { ok: true },
       },
       auxiliaryRequests: { typing: { ok: true } },
@@ -782,60 +720,45 @@ describe("iMessage monitor last-route updates", () => {
     expectRpc(auxiliaryClient, "typing", { typing: true });
   });
 
-  for (const { name, id, guid, monitor } of [
-    ...(["thinking"] as const).map((typingMode) => ({
-      name: `does not start direct tool typing when typingMode is ${typingMode}`,
-      id: 8,
-      guid: `typing-mode-${typingMode}-guid-8`,
-      monitor: {
-        imessage: { sendReadReceipts: false },
-        agents: { defaults: { typingMode } },
-      },
-    })),
+  it.each([
     {
-      name: "does not start direct tool typing when sendPolicy denies source delivery",
-      id: 9,
-      guid: "send-policy-guid-9",
-      monitor: {
-        imessage: { sendReadReceipts: false },
-        session: { sendPolicy: { default: "deny" } },
-      },
+      name: "typingMode is thinking",
+      monitor: { agents: { defaults: { typingMode: "thinking" } } },
     },
-  ]) {
-    it(name, async () => {
-      enablePrivateApi(["watch.subscribe", "send", "typing"]);
-      dispatchMock.mockImplementationOnce(async (params) => {
-        expect([
-          params.replyOptions?.suppressDefaultToolProgressMessages,
-          params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed,
-          params.replyOptions?.onToolStart,
-        ]).toEqual([undefined, undefined, undefined]);
-        return EMPTY_DISPATCH_RESULT;
-      });
-
-      const client = await runMessageCase({
-        requests: { "watch.subscribe": { subscription: 1 } },
-        message: inbound(id, guid),
-        monitor,
-      });
-
-      await expectDispatches();
-      expect(client.request).not.toHaveBeenCalledWith(
-        "typing",
-        expect.objectContaining({ typing: true }),
-        expect.anything(),
-      );
+    {
+      name: "sendPolicy denies source delivery",
+      monitor: { session: { sendPolicy: { default: "deny" } } },
+    },
+  ])("does not start direct tool typing when $name", async ({ name, monitor }) => {
+    enablePrivateApi(["watch.subscribe", "send", "typing"]);
+    dispatchMock.mockImplementationOnce(async (params) => {
+      expect([
+        params.replyOptions?.suppressDefaultToolProgressMessages,
+        params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed,
+        params.replyOptions?.onToolStart,
+      ]).toEqual([undefined, undefined, undefined]);
+      return EMPTY_DISPATCH_RESULT;
     });
-  }
+
+    const client = await runMessageCase({
+      message: inbound(8, name),
+      monitor: { ...monitor, imessage: { sendReadReceipts: false } },
+    });
+
+    await expectDispatches();
+    expect(client.request).not.toHaveBeenCalledWith(
+      "typing",
+      expect.objectContaining({ typing: true }),
+      expect.anything(),
+    );
+  });
 
   it("does not wait for read receipts before dispatching the inbound turn", async () => {
     enablePrivateApi(["watch.subscribe", "read"]);
     const watchClient = await runMessageCase({
       auxiliaryRequests: { read: () => new Promise(() => {}) },
       message: inbound(11, "read-receipt-guid-11"),
-      afterNotify: async () => {
-        await expectDispatches();
-      },
+      afterNotify: expectDispatches,
     });
     const readClient = watchClient.auxiliaryClient!;
 
@@ -887,12 +810,9 @@ describe("iMessage monitor last-route updates", () => {
   it("routes legacy catchup through durable ingress and rejects a live GUID overlap", async () => {
     const dbPath = await createRecoveryChatDb("openclaw-imsg-catchup-window-");
     const createdAt = new Date().toISOString();
-    const historyMessage = inbound(4995, "CATCHUP-LIVE-OVERLAP-GUID", {
-      created_at: createdAt,
-    });
+    const historyMessage = inbound(4995, "CATCHUP-LIVE-OVERLAP-GUID", { created_at: createdAt });
     const client = await runMessageCase({
       requests: {
-        "watch.subscribe": { subscription: 1 },
         "chats.list": { chats: [{ id: 123, last_message_at: createdAt }] },
         "messages.history": { messages: [historyMessage] },
       },
@@ -916,9 +836,7 @@ describe("iMessage monitor last-route updates", () => {
     const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
 
     const client = await runMessageCase({
-      message: inbound(4995, "FIRST-RUN-HISTORY-GUID-4995", {
-        created_at: thirtyMinAgo,
-      }),
+      message: inbound(4995, "FIRST-RUN-HISTORY-GUID-4995", { created_at: thirtyMinAgo }),
       monitor: { imessage: { dbPath } },
     });
 
@@ -933,9 +851,7 @@ describe("iMessage monitor last-route updates", () => {
 
     await runMessageCase({
       messages: [
-        inbound(5001, "SUPPRESSED-GUID", {
-          created_at: thirtyMinAgo,
-        }),
+        inbound(5001, "SUPPRESSED-GUID", { created_at: thirtyMinAgo }),
         inbound(5001, "SUPPRESSED-GUID"),
       ],
       monitor: { imessage: { dbPath } },
@@ -952,9 +868,7 @@ describe("iMessage monitor last-route updates", () => {
 
     const client = await runMessageCase({
       messages: [4995, 4996].map((id) =>
-        inbound(id, `FAILED-REPLAY-GUID-${id}`, {
-          created_at: thirtyMinAgo,
-        }),
+        inbound(id, `FAILED-REPLAY-GUID-${id}`, { created_at: thirtyMinAgo }),
       ),
       monitor: { imessage: { dbPath } },
     });
@@ -1030,7 +944,6 @@ describe("iMessage monitor last-route updates", () => {
 
     makeWatchClient({
       requests: {
-        "watch.subscribe": { subscription: 1 },
         "chats.list": { chats: [{ id: 349 }] },
         "messages.history": (params) => {
           expect(params?.chat_id).toBe(349);
@@ -1053,20 +966,15 @@ describe("iMessage monitor last-route updates", () => {
           };
         },
       },
-      message: {
-        id: 9500,
-        guid: "ANCHORLESS-GROUP-GUID",
+      message: inbound(9500, "ANCHORLESS-GROUP-GUID", {
         chat_id: 0,
         sender: "+15550001111",
-        is_from_me: false,
         text: "@openclaw check this https://example.com",
-        is_group: false,
         chat_guid: "",
         chat_identifier: "",
         chat_name: "",
         participants: null,
-        created_at: new Date().toISOString(),
-      },
+      }),
     });
 
     await runIMessageMonitor({
@@ -1088,22 +996,38 @@ describe("iMessage monitor last-route updates", () => {
 
   it("suppresses anchorless watch payloads when authoritative history is from-me (#104136)", async () => {
     const runtime = createRuntimeSpies();
-    const { notification, history } = createAnchorlessDirectPair(
-      9501,
-      "outgoing row with broken direction",
-      true,
-    );
+    const common = {
+      id: 9501,
+      guid: ANCHOR_REPAIR_GUID,
+      is_group: false,
+      service: "iMessage",
+      destination_caller_id: "+15550000001",
+    };
+    const history = {
+      ...common,
+      chat_id: 42,
+      chat_guid: "iMessage;-;+15550000002",
+      chat_identifier: "+15550000002",
+      sender: "+15550000002",
+      is_from_me: true,
+    };
 
     await runMessageCase({
       requests: {
-        "watch.subscribe": { subscription: 1 },
         "chats.list": { chats: [{ id: 42 }] },
         "messages.history": (params) => {
           expect(params?.chat_id).toBe(42);
           return { messages: [history] };
         },
       },
-      message: notification,
+      message: inbound(common.id, common.guid, {
+        ...common,
+        chat_id: 0,
+        chat_guid: "",
+        chat_identifier: "",
+        sender: "+15550000001",
+        text: "outgoing row with broken direction",
+      }),
       monitor: {
         imessage: { allowFrom: ["+15550000002"] },
         runtime,
@@ -1123,12 +1047,9 @@ describe("iMessage monitor last-route updates", () => {
       .spyOn(iMessageMediaStaging, "stageIMessageAttachments")
       .mockResolvedValue({ attachments: [], unavailableCount: 0 });
     await runMessageCase({
-      message: {
-        ...inbound(1, "dropped-media-policy-guid-1", {
-          text: "no mention here",
-          chat_id: 123,
-          is_group: true,
-        }),
+      message: inbound(1, "dropped-media-policy-guid-1", {
+        text: "no mention here",
+        is_group: true,
         attachments: [
           {
             original_path: "/Users/openclaw/Library/Messages/Attachments/AA/BB/photo.heic",
@@ -1136,7 +1057,7 @@ describe("iMessage monitor last-route updates", () => {
             missing: false,
           },
         ],
-      },
+      }),
       monitor: {
         allowlist: false,
         imessage: {
@@ -1166,13 +1087,11 @@ describe("iMessage monitor last-route updates", () => {
     });
     const runtime = createRuntimeSpies();
     await runMessageCase({
-      message: {
-        ...inbound(1, name, {
-          text: "",
-          chat_identifier: DEFAULT_SENDER,
-        }),
+      message: inbound(1, name, {
+        text: "",
+        chat_identifier: DEFAULT_SENDER,
         attachments: [MISSING_IMAGE, ...(pdf ? [PDF] : [])],
-      },
+      }),
       monitor: {
         runtime,
         imessage: {
