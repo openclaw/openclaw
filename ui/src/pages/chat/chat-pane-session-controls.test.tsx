@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
+import { createComponent, createSignal, Show } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ChatAccountSelection,
@@ -17,9 +17,7 @@ import {
   createGatewayHarness,
   createTestSessionCapability,
 } from "../../lib/sessions/session-capability.test-support.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -43,6 +41,7 @@ import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 type ComposerControlsParams = Parameters<typeof renderChatPaneComposerControls>[0];
+type AccountSection = NonNullable<ReturnType<typeof renderChatModelAccountControl>>;
 
 function renderControls(
   state: ChatPageHost,
@@ -74,24 +73,36 @@ describe("chat account selection", () => {
       chatAccountSelection: selection,
       requestUpdate: () => draw(),
     };
+    let updateSection!: (section: AccountSection | undefined) => void;
+    mountSolid(
+      () => {
+        const [section, setSection] = createSignal<AccountSection>();
+        updateSection = setSection;
+        return (
+          <Show when={section()}>
+            {(activeSection) => <ChatModelAccountSectionView {...activeSection().viewProps(0)} />}
+          </Show>
+        );
+      },
+      { container },
+    );
     const onSelect = vi.fn(async () => true);
     const onManage = vi.fn();
     const draw = () => {
-      const section = renderChatModelAccountControl({
-        owner: state,
-        client: state.client,
-        selection: state.chatAccountSelection,
-        model: "openai/gpt-5.5",
-        disabled: false,
-        ownsSelection: () => current,
-        onSelect,
-        onManage,
-        onRequestUpdate: () => draw(),
-      });
-      renderPaneLegacyContent(
-        section ? solidContent(ChatModelAccountSectionView, section.viewProps(0)) : undefined,
-        container,
+      updateSection(
+        renderChatModelAccountControl({
+          owner: state,
+          client: state.client,
+          selection: state.chatAccountSelection,
+          model: "openai/gpt-5.5",
+          disabled: false,
+          ownsSelection: () => current,
+          onSelect,
+          onManage,
+          onRequestUpdate: () => draw(),
+        }),
       );
+      flush();
     };
     draw();
     return {

@@ -5,7 +5,7 @@ import { createDirectorySync, createFileSync } from "@openclaw/fs-safe/advanced"
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { resolveStateDir } from "../config/paths.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
-import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
@@ -156,7 +156,7 @@ export function readDaemonRuntimePinValue(db: DatabaseSync, key: string): unknow
 
 const unshippedMigrations = new Set<string>();
 export function completeUnshippedDaemonRuntimePinMigration(env: NodeJS.ProcessEnv): boolean {
-  if (!getDatabaseEngineSelection()?.input) {
+  if (!getDatabaseEngineInput("state")) {
     return false;
   }
   const pathname = resolveDaemonRuntimePinStorePath(env);

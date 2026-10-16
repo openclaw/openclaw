@@ -8,7 +8,7 @@ export type SubagentRegistryWrite = {
   deleteRunIds: readonly string[];
   terminalEvents?: readonly Pick<
     SessionStateWorkerOperations["sessionState.record"]["input"],
-    "event" | "now" | "acpControl" | "sessionEntryCurrentSource"
+    "event" | "now" | "sessionEntryCurrentSource"
   >[];
 };
 

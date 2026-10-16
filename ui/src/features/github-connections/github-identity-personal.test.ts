@@ -6,7 +6,12 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/users.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { GitHubIdentityController } from "./github-identity-controller.ts";
+import { cleanupSolid } from "../../test-helpers/solid-cleanup.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import {
+  createGitHubIdentityForTest,
+  type TestGitHubIdentity,
+} from "./github-identity.test-support.ts";
 
 const code = {
   requestId: "33333333-3333-4333-8333-333333333333",
@@ -49,8 +54,8 @@ function setup(respond: (method: string, params?: unknown) => Promise<unknown>) 
   const runExternalMutation = vi.fn(async () => {
     throw new Error("Personal flow touched shared config");
   });
-  const controller = new GitHubIdentityController({ requestUpdate: vi.fn(), runExternalMutation });
-  const sync = (overrides: Partial<Parameters<GitHubIdentityController["sync"]>[0]> = {}) =>
+  const controller = createGitHubIdentityForTest({ runExternalMutation });
+  const sync = (overrides: Partial<Parameters<TestGitHubIdentity["sync"]>[0]> = {}) =>
     controller.sync({
       client,
       connected: true,
@@ -66,6 +71,7 @@ function setup(respond: (method: string, params?: unknown) => Promise<unknown>) 
 }
 
 afterEach(() => {
+  cleanupSolid();
   vi.useRealTimers();
 });
 
@@ -93,25 +99,29 @@ describe("personal GitHub connection ownership", () => {
       throw new Error(`unexpected method ${method}`);
     });
     await controller.verify();
-    expect(controller.system).toEqual(system);
-    expect(controller.personal).toEqual(disconnected);
-    expect(controller.scope).toBe("personal");
+    expect(controller.read().system).toEqual(system);
+    expect(controller.read().personal).toEqual(disconnected);
+    expect(controller.read().scope).toBe("personal");
     controller.showPatFallback();
     controller.setDraft("token", "not-a-personal-PAT");
     await controller.configure();
     await controller.inherit();
-    expect(controller.patVisible).toBe(false);
-    expect(controller.draft.token).toBe("");
+    flush();
+    expect(controller.read().patVisible).toBe(false);
+    expect(controller.read().draft.token).toBe("");
     await controller.startAuthorization();
-    expect(controller.authorization).toMatchObject({ phase: "code", userCode: code.userCode });
+    expect(controller.read().authorization).toMatchObject({
+      phase: "code",
+      userCode: code.userCode,
+    });
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(controller.personal).toEqual(connected);
+    expect(controller.read().personal).toEqual(connected);
     await controller.startAuthorization();
-    expect(controller.personal).toEqual(connected);
+    expect(controller.read().personal).toEqual(connected);
     await vi.advanceTimersByTimeAsync(1_000);
     await controller.disconnect();
-    expect(controller.personal).toEqual(disconnected);
-    expect(controller.system).toEqual(system);
+    expect(controller.read().personal).toEqual(disconnected);
+    expect(controller.read().system).toEqual(system);
     expect(methods).toEqual([
       "users.github.status",
       "users.github.authorize.start",
@@ -149,18 +159,21 @@ describe("personal GitHub connection ownership", () => {
       return { cancelled: true };
     });
     await controller.verify();
-    expect(controller.authorization).toMatchObject({ phase: "code", userCode: code.userCode });
+    expect(controller.read().authorization).toMatchObject({
+      phase: "code",
+      userCode: code.userCode,
+    });
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(controller.authorization).toMatchObject({ phase: "pending", slowedDown: true });
+    expect(controller.read().authorization).toMatchObject({ phase: "pending", slowedDown: true });
     await vi.advanceTimersByTimeAsync(3_999);
     expect(request).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
-    expect(controller.authorization).toMatchObject({ phase: "network_error" });
+    expect(controller.read().authorization).toMatchObject({ phase: "network_error" });
     await vi.advanceTimersByTimeAsync(5_999);
     expect(request).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(1);
-    expect(controller.authorization).toEqual({ phase: "idle" });
-    expect(controller.personal).toEqual(connected);
+    expect(controller.read().authorization).toEqual({ phase: "idle" });
+    expect(controller.read().personal).toEqual(connected);
     expect(runExternalMutation).not.toHaveBeenCalled();
     controller.dispose();
   });
@@ -185,10 +198,10 @@ describe("personal GitHub connection ownership", () => {
       }
       response.resolve({ personal: { ...connected, pending: code }, system });
       await verification;
-      expect(controller.personal).toBeNull();
-      expect(controller.system).toBeNull();
-      expect(controller.authorization).toEqual({ phase: "idle" });
-      expect(controller.loading).toBe(false);
+      expect(controller.read().personal).toBeNull();
+      expect(controller.read().system).toBeNull();
+      expect(controller.read().authorization).toEqual({ phase: "idle" });
+      expect(controller.read().loading).toBe(false);
       controller.dispose();
     },
   );
@@ -232,9 +245,9 @@ describe("personal GitHub connection ownership", () => {
       );
       await pending;
       await vi.advanceTimersByTimeAsync(0);
-      expect(controller.personal).toBeNull();
-      expect(controller.authorization).toEqual({ phase: "idle" });
-      expect(controller.busy).toBe(false);
+      expect(controller.read().personal).toBeNull();
+      expect(controller.read().authorization).toEqual({ phase: "idle" });
+      expect(controller.read().busy).toBe(false);
       if (phase !== "disconnect") {
         expect(request).toHaveBeenCalledWith("users.github.authorize.cancel", {
           requestId: code.requestId,
@@ -250,9 +263,9 @@ describe("personal GitHub connection ownership", () => {
       throw new Error("Identity synchronization failed");
     });
     await controller.verify();
-    expect(controller.error).toContain("Identity synchronization failed");
-    expect(controller.personal).toBeNull();
-    expect(controller.system).toBeNull();
+    expect(controller.read().error).toContain("Identity synchronization failed");
+    expect(controller.read().personal).toBeNull();
+    expect(controller.read().system).toBeNull();
     sync({ target: null, authorizable: false, statusReadable: false });
     await controller.startAuthorization();
     await controller.disconnect();

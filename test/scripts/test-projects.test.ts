@@ -2084,7 +2084,7 @@ export const single = {
     }
   });
 
-  it("keeps the broad changed run available for unknown root surfaces", () => {
+  it("keeps the broad changed run available for unknown root surfaces", async () => {
     expect(
       resolveChangedTargetArgs(
         ["--changed", "origin/main"],
@@ -2093,6 +2093,48 @@ export const single = {
         { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
       ),
     ).toBeNull();
+    const lanes = await import("../../scripts/changed-lanes.mts");
+    const changedPaths = vi
+      .spyOn(lanes, "listChangedPathsFromGit")
+      .mockReturnValue(["unknown/file.txt"]);
+    try {
+      const specs = createVitestRunSpecs(["--changed", "origin/main"], {
+        baseEnv: { OPENCLAW_TEST_CHANGED_BROAD: "1" },
+      });
+      expect(specs.map(({ config, includePatterns }) => ({ config, includePatterns }))).toEqual([
+        { config: "test/vitest/vitest.unit.config.ts", includePatterns: null },
+      ]);
+    } finally {
+      changedPaths.mockRestore();
+    }
+  });
+
+  it.each([false, true])("resolves standalone changed specs (watch=%s)", async (watch) => {
+    const lanes = await import("../../scripts/changed-lanes.mts");
+    const target = "test/scripts/run-node-lifecycle.test.ts";
+    const changedPaths = vi.spyOn(lanes, "listChangedPathsFromGit").mockReturnValue([target]);
+    try {
+      const specs = createVitestRunSpecs(
+        [...(watch ? ["--watch"] : []), "--changed", "origin/main"],
+        { baseEnv: {} },
+      );
+      expect(
+        specs.map(({ config, includePatterns, watchMode }) => ({
+          config,
+          includePatterns,
+          watchMode,
+        })),
+      ).toEqual([
+        {
+          config: "test/vitest/vitest.tooling.config.ts",
+          includePatterns: [target],
+          watchMode: watch,
+        },
+      ]);
+      expect(changedPaths).toHaveBeenCalledTimes(1);
+    } finally {
+      changedPaths.mockRestore();
+    }
   });
 
   it("skips app-only changes because app tests are separate from Vitest lanes", () => {

@@ -297,16 +297,22 @@ describe("action label/data surrogate-safe truncation", () => {
     expect(buttons).toMatchObject({
       template: {
         actions: [expectedUnavailableCallbackAction],
-        defaultAction: expectedUnavailableLink,
       },
     });
 
+    expect(buttons).not.toHaveProperty("template.defaultAction");
     const carousel = normalizeLineMessage({
       type: "template",
       altText: "Pick",
       template: {
         type: "carousel",
-        columns: [{ text: "Pick", actions: [oversizedPostback], defaultAction: oversizedUri }],
+        columns: [
+          {
+            text: "Pick",
+            actions: [oversizedPostback],
+            defaultAction: { type: "uri", uri: "https://example.com" },
+          },
+        ],
       },
     });
     expect(carousel).toMatchObject({
@@ -314,11 +320,102 @@ describe("action label/data surrogate-safe truncation", () => {
         columns: [
           {
             actions: [expectedUnavailableCallbackAction],
-            defaultAction: expectedUnavailableLink,
           },
         ],
       },
     });
+    expect(carousel).not.toHaveProperty("template.columns.0.defaultAction");
+  });
+
+  it.each([
+    ["2026-06-01t09:00", "2026-06-01T10:00", true],
+    ["2026-06-01T10:00", "2026-06-01t09:00", false],
+    ["2026-06-01T09:00", "2026-06-01t09:00", false],
+  ] as const)("compares picker bounds without rewriting %s / %s", (min, max, valid) => {
+    const action = normalizeLineAction({
+      type: "datetimepicker",
+      data: "",
+      mode: "datetime",
+      min,
+      max,
+    });
+    if (action.type !== "datetimepicker") {
+      throw new Error("Expected date picker");
+    }
+    expect(action.min).toBe(valid ? min : undefined);
+    expect(action.max).toBe(valid ? max : undefined);
+  });
+
+  it("preserves quick-reply-only controls and removes unusable optional actions", () => {
+    const normalized = normalizeLineMessage({
+      type: "template",
+      altText: "Carousel",
+      template: {
+        type: "image_carousel",
+        columns: [
+          { imageUrl: "https://example.com/image.png", action: { type: "uri", uri: "line://app" } },
+        ],
+      },
+      quickReply: {
+        items: [
+          { action: { type: "camera", label: "Camera" } },
+          { action: { type: "cameraRoll", label: "Photos" } },
+          { action: { type: "location", label: "Location" } },
+          { action: { type: "postback", label: "Run", data: "", text: "Legacy" } },
+        ],
+      },
+    });
+    expect(normalized.quickReply?.items).toEqual([
+      { type: "action", action: { type: "camera", label: "Camera" } },
+      { type: "action", action: { type: "cameraRoll", label: "Photos" } },
+      { type: "action", action: { type: "location", label: "Location" } },
+      {
+        type: "action",
+        action: { type: "postback", label: "Run", data: "", displayText: "Legacy" },
+      },
+    ]);
+    if (normalized.type !== "template" || normalized.template.type !== "image_carousel") {
+      throw new Error("Expected carousel");
+    }
+    expect(normalized.template.columns[0]?.action).toEqual({ type: "uri", uri: "line://app" });
+    const flex = normalizeLineMessage({
+      type: "flex",
+      altText: "Controls",
+      contents: {
+        type: "bubble",
+        body: {
+          type: "box",
+          layout: "vertical",
+          contents: [
+            { type: "button", action: { type: "uri", uri: "https://example.com" } },
+            {
+              type: "text",
+              text: "Status",
+              action: { type: "richmenuswitch", richMenuAliasId: "menu", data: "" },
+            },
+          ],
+        },
+      },
+    });
+    expect(flex).toMatchObject({
+      contents: {
+        body: {
+          contents: [
+            { type: "button", action: { type: "message", label: "Unavailable" } },
+            { type: "text", text: "Status" },
+            { type: "text", text: expect.stringContaining("rich menus") },
+          ],
+        },
+      },
+    });
+    if (
+      flex.type !== "flex" ||
+      flex.contents.type !== "bubble" ||
+      flex.contents.body?.type !== "box"
+    ) {
+      throw new Error("Expected bubble");
+    }
+    expect(flex.contents.body.contents[1]).not.toHaveProperty("action");
   });
 
   it("normalizes every length-constrained raw action field", () => {
@@ -329,7 +426,7 @@ describe("action label/data surrogate-safe truncation", () => {
         uri: "https://e.example",
         altUri: { desktop: `https://e.example/?q=${"x".repeat(1200)}` },
       }),
-    ).toEqual(expectedUnavailableLink);
+    ).toEqual({ type: "uri", label: "Open", uri: "https://e.example" });
 
     const postback = normalizeLineAction({
       type: "postback",
@@ -349,6 +446,7 @@ describe("action label/data surrogate-safe truncation", () => {
         type: "postback",
         label: "Open",
         data: "action=open",
+        inputOption: "openKeyboard",
         fillInText: "x".repeat(301),
       }),
     ).toEqual(expectedUnavailableMessageText);

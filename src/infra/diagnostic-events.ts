@@ -674,6 +674,19 @@ type DiagnosticModelCallErrorEvent = DiagnosticModelCallEndedEvent & {
   memory?: DiagnosticMemoryUsage;
 };
 
+type DiagnosticModelResponseObservedEvent = Omit<
+  DiagnosticModelCallBaseEvent,
+  "observationUnit" | "promptStats" | "upstreamRequestIdHash"
+> & {
+  type: "model.response.observed";
+  upstreamRequestIdHash: string;
+  /** The event timestamp is receipt time, not a provider completion boundary. */
+  timestampSource: "receipt";
+  usageSource: "native-normalized";
+  usageScope: "response";
+  usage?: DiagnosticModelCallUsage;
+};
+
 type DiagnosticModelCallPromptStats = Readonly<{
   inputMessagesCount?: number;
   inputMessagesChars?: number;
@@ -809,6 +822,7 @@ export type DiagnosticEventPayload =
   | DiagnosticModelCallStartedEvent
   | DiagnosticModelCallCompletedEvent
   | DiagnosticModelCallErrorEvent
+  | DiagnosticModelResponseObservedEvent
   | (DiagnosticBaseEvent & {
       type: "secret.egress";
       outcome: "forwarded" | "refused";
@@ -969,6 +983,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.started",
   "model.call.completed",
   "model.call.error",
+  "model.response.observed",
   "run.progress",
   "run.execution_phase",
   "agent.commentary",

@@ -545,43 +545,52 @@ describe("session organizer destructive confirmations", () => {
     });
   });
 
-  it("surfaces a forced worktree removal that could not create a snapshot", async () => {
-    const harness = createHarness({
-      ...destructiveHarness,
-      methods: [...destructiveHarness.methods, "worktrees.remove"],
-    });
-    harness.deleteOne.mockResolvedValueOnce({
-      deleted: true,
-      worktreePreserved: {
+  it.each(["snapshot failure", "request rejection"] as const)(
+    "surfaces one forced worktree removal %s after confirmed session deletion",
+    async (failure) => {
+      const harness = createHarness({
+        ...destructiveHarness,
+        methods: [...destructiveHarness.methods, "worktrees.remove"],
+      });
+      harness.deleteOne.mockResolvedValueOnce({
+        deleted: true,
+        worktreePreserved: {
+          id: "wt-1",
+          branch: "feature",
+          path: "/tmp/worktree",
+          reason: "snapshot-failed",
+        },
+      } as never);
+      const rejection = new Error("worktree removal failed");
+      if (failure === "snapshot failure") {
+        harness.request.mockResolvedValueOnce({
+          removed: true,
+          snapshotError: "nested gitlink",
+        } as never);
+      } else {
+        harness.request.mockRejectedValueOnce(rejection);
+      }
+
+      const pending = deleteSession(harness.host, sessionRow(0), harness.scope);
+      answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+      const worktreeActions = await waitForConfirmDialogActions();
+      expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+        "OpenClaw could not create a safety snapshot",
+      );
+      answerConfirmDialog(worktreeActions, "confirm");
+      await pending;
+
+      expect(harness.request).toHaveBeenCalledWith("worktrees.remove", {
         id: "wt-1",
-        branch: "feature",
-        path: "/tmp/worktree",
-        reason: "snapshot-failed",
-      },
-    } as never);
-    harness.request.mockResolvedValueOnce({
-      removed: true,
-      snapshotError: "nested gitlink",
-    } as never);
-
-    const pending = deleteSession(harness.host, sessionRow(0), harness.scope);
-    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
-    const worktreeActions = await waitForConfirmDialogActions();
-    expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      "OpenClaw could not create a safety snapshot",
-    );
-    answerConfirmDialog(worktreeActions, "confirm");
-    await pending;
-
-    expect(harness.request).toHaveBeenCalledWith("worktrees.remove", {
-      id: "wt-1",
-      force: true,
-    });
-    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
-      harness.scope,
-      "nested gitlink",
-    );
-  });
+        force: true,
+      });
+      expect(harness.publishSessionMutationError).toHaveBeenCalledOnce();
+      expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
+        harness.scope,
+        failure === "snapshot failure" ? "nested gitlink" : rejection,
+      );
+    },
+  );
 
   it.each([
     { name: "sidebar opt-out", offerSkip: true, reset: false, confirm: false },

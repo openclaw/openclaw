@@ -1,6 +1,7 @@
 import type {
   ModelCatalogContextWindowOption,
   ModelCatalogStatus,
+  ModelInferenceCapabilities,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
 import type { ThinkingLevelMap } from "../llm/types.js";
@@ -18,6 +19,8 @@ export type ModelCatalogEntry = {
   providerOrder?: number;
   alias?: string;
   api?: ModelApi;
+  /** Declared task support for the exact physical route; not authorization or readiness. */
+  inference?: ModelInferenceCapabilities;
   /** Private transport provenance for route matching; never project directly to clients. */
   baseUrl?: string;
   contextWindow?: number;

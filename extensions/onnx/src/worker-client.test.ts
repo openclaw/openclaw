@@ -9,6 +9,7 @@ import {
   type FixtureReceiptChannel,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createOnnxProvider } from "./decisions.js";
 import type { ClassificationInput } from "./models/types.js";
 import { InferenceWorkerClient } from "./worker-client.js";
 
@@ -216,6 +217,55 @@ describe("InferenceWorkerClient", () => {
       await client.stop();
     }
   });
+
+  it.for(["closed", "throws"] as const)(
+    "skips queued decisions whose admission %s without restarting the warm worker",
+    async (mode, { signal: testSignal }) => {
+      const { client, events, waitForHeldClassification, release } = fixture();
+      const provider = createOnnxProvider(client, vi.fn());
+      const evaluate = (text: string, isAdmissible?: () => boolean) =>
+        provider.evaluate(
+          {
+            state: text,
+            questions: {
+              needed: {
+                type: "boolean",
+                criteria: { true: "Work is needed", false: "No work is needed" },
+              },
+            },
+          },
+          {
+            model: "gliclass-edge-v3.0",
+            signal: signal(),
+            deadlineMonotonicMs: performance.now() + 30_000,
+            isAdmissible,
+          },
+        );
+      const active = evaluate("wait");
+      try {
+        const started = await waitForHeldClassification(active, testSignal);
+        let admitted = true;
+        const queued = evaluate("revoked", () => {
+          if (!admitted && mode === "throws") {
+            throw new Error("consumer authority closed");
+          }
+          return admitted;
+        });
+        admitted = false;
+        const survivor = evaluate("survivor");
+        release();
+        const outcomes = await Promise.all([active, queued, survivor]);
+        const classifications = events().filter((event) => event.kind === "classify");
+        expect(classifications.map((event) => event.text)).toEqual(["wait", "survivor"]);
+        expect(outcomes.map((outcome) => outcome.status)).toEqual(["ok", "unavailable", "ok"]);
+        expect(classifications.every((event) => event.pid === started.pid)).toBe(true);
+        expect(alive(started.pid)).toBe(true);
+      } finally {
+        release();
+        await client.stop();
+      }
+    },
+  );
 
   it("joins native process exit before settling active cancellation and restarts surviving queued work", async () => {
     const { client, waitFor } = fixture();

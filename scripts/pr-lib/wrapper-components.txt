@@ -83,6 +83,7 @@ packages/model-catalog-core/src/model-catalog-pricing.ts
 packages/model-catalog-core/src/model-catalog-reasoning.ts
 packages/model-catalog-core/src/model-catalog-refs.ts
 packages/model-catalog-core/src/model-catalog-types.ts
+packages/model-catalog-core/src/model-inference-capabilities.ts
 packages/model-catalog-core/src/provider-id.ts
 packages/model-catalog-core/src/provider-model-id-normalization.ts
 packages/model-catalog-core/src/provider-model-id-normalize.ts
@@ -252,6 +253,7 @@ src/agents/agent-runtime-id.ts
 src/agents/agent-scope-config.ts
 src/agents/agent-scope.ts
 src/agents/auth-profiles/authorization-contract.ts
+src/agents/auth-profiles/persisted-rows-receipt.ts
 src/agents/auth-profiles/sqlite-json.ts
 src/agents/auth-profiles/store-unreadable-error.ts
 src/agents/auth-profiles/store-update-commit.ts
@@ -369,6 +371,7 @@ src/infra/database-engine/postgres-schema.ts
 src/infra/database-engine/postgres-search-schema.ts
 src/infra/database-engine/postgres-search.ts
 src/infra/database-engine/postgres-vector.ts
+src/infra/database-engine/registry.ts
 src/infra/database-engine/search.ts
 src/infra/database-engine/sqlite-full-text.ts
 src/infra/database-engine/sqlite-search-schema.ts
@@ -1099,6 +1102,7 @@ src/infra/sqlite-existing-database.ts
 src/infra/sqlite-file-copy.ts
 src/infra/sqlite-file-generation-worker.ts
 src/infra/sqlite-file-generation.ts
+src/infra/sqlite-file-path.ts
 src/infra/sqlite-files.ts
 src/infra/sqlite-handle-lifecycle.ts
 src/infra/sqlite-index-recovery.ts
@@ -2193,6 +2197,7 @@ packages/ai/src/internal/shared.ts
 packages/ai/src/media-payload.ts
 packages/ai/src/model-utils.ts
 packages/ai/src/provider-options.ts
+packages/ai/src/provider-types.ts
 packages/ai/src/providers/anthropic-model-contract.ts
 packages/ai/src/providers/github-copilot-request-facts.ts
 packages/ai/src/providers/openai-reasoning-effort.ts

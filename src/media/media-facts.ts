@@ -55,6 +55,9 @@ export function attachRuntimePromptMediaFacts<T extends object>(
   }
   Object.defineProperty(message, RUNTIME_PROMPT_MEDIA_FACTS, {
     configurable: true,
+    // Symbols survive in-memory projections without entering transcript JSON.
+    enumerable: true,
+    writable: true,
     value: normalized,
   });
   return message;

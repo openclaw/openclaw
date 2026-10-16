@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import {
@@ -132,6 +133,21 @@ it("substitutes exact declared identities without widening or reordering discove
     expect.soft(second).toBe(supplier);
     target.tools = [tool(["z"])];
     expect(adoptRuntimeToolRegistrations(target, runtime, config)).toBe(target);
+  } finally {
+    markPluginRegistryRetired(runtime);
+  }
+});
+
+it("matches tools without entering unrelated plugin metadata", async () => {
+  const { runtime, target, tool } = createAdoptionPair({});
+  const donor = tool(["owner_tool"]);
+  const unrelated = new PluginInstance("unrelated");
+  const foreign = { ...tool(unrelated.wrap(["foreign_tool"])), pluginId: "unrelated" };
+  runtime.tools.push(foreign, donor);
+  target.tools.push(tool(["owner_tool"]), foreign);
+  await unrelated.dispose();
+  try {
+    expect(adoptRuntimeToolRegistrations(target, runtime, {}).tools).toEqual([donor, foreign]);
   } finally {
     markPluginRegistryRetired(runtime);
   }

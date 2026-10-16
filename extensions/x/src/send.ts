@@ -14,7 +14,7 @@ import { sendXReply, XPartialReplyError, type XVisibleWorkSession } from "./repl
 import { getXRuntime } from "./runtime.js";
 import { XBudgetExceededError } from "./spend.js";
 import { normalizeXReplyTarget } from "./target.js";
-import { openXWorkOrigins } from "./work-origin.js";
+import { resolveXWorkOrigin } from "./work-origin.js";
 
 function rethrowReplyAuthorizationError(cause: unknown): never {
   if (cause instanceof XAllowlistChangedError) {
@@ -67,7 +67,7 @@ export async function sendXDelivery(params: {
   const readConfig = createRuntimeConfigReader(params.cfg);
   const runtime = getXRuntime();
   const origin = params.sessionKey
-    ? await openXWorkOrigins(runtime).lookup(params.sessionKey)
+    ? await resolveXWorkOrigin(runtime, params.sessionKey, params.cfg)
     : undefined;
   const assertHandoff = () => {
     try {

@@ -10,7 +10,7 @@ import type {
 import { isImageWithMediaPayload } from "./media-payload.js";
 import { preparedRequestSuffix } from "./provider-options.js";
 import { transformProviderMessages as transformMessages } from "./provider-transcript-transform.js";
-import type { ProviderMessage } from "./provider-types.js";
+import type { ProviderContext, ProviderMessage, ProviderModel } from "./provider-types.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
@@ -20,8 +20,6 @@ import {
   hasRuntimeContextMarker,
   isRuntimeContextMessage,
   runtimeContextContentToText,
-  type Context,
-  type Model,
   type ThinkingContent,
   type ToolCall,
 } from "./types.js";
@@ -38,7 +36,7 @@ type ChatCompletionContentPartVideo = {
 };
 
 /** Whether replayed messages require a tools marker for proxy compatibility. */
-export function hasToolCallHistory(messages: Context["messages"]): boolean {
+export function hasToolCallHistory(messages: ProviderContext["messages"]): boolean {
   return messages.some(
     (message) =>
       message.role === "toolResult" ||
@@ -50,8 +48,8 @@ export function hasToolCallHistory(messages: Context["messages"]): boolean {
 
 /** Convert a normalized transcript to OpenAI Chat Completions messages. */
 export function convertMessages(
-  model: Model<"openai-completions">,
-  context: Context,
+  model: ProviderModel,
+  context: ProviderContext,
   compat: ResolvedOpenAICompletionsCompat,
   options: {
     cacheOptOutIndexes?: Set<number>;

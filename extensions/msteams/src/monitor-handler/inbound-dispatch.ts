@@ -21,10 +21,6 @@ import type { prepareMSTeamsInboundContent } from "./inbound-content.js";
 import type { assembleMSTeamsInboundFacts } from "./inbound-facts.js";
 import type { prepareMSTeamsThreadRouting, resolveMSTeamsThreadContext } from "./thread-context.js";
 
-type MSTeamsInboundDispatchResult =
-  | { kind: "completed"; finalResponses: number }
-  | { kind: "failed" };
-
 export async function dispatchMSTeamsInboundTurn(params: {
   cfg: MSTeamsMessageHandlerDeps["cfg"];
   accountPolicyCfg: MSTeamsMessageHandlerDeps["cfg"];
@@ -47,7 +43,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
   mentionWasEffective: boolean;
   conversationHistories: Map<string, HistoryEntry[]>;
   historyLimit: number;
-}): Promise<MSTeamsInboundDispatchResult> {
+}): Promise<void> {
   const core = getMSTeamsRuntime();
   const {
     cfg,
@@ -169,7 +165,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
     boundIngress.commandAccess.shouldBlockControlCommand
   ) {
     log.info("dropping message (dispatch-time account authorization changed)");
-    return { kind: "completed", finalResponses: 0 };
+    return;
   }
   const ctxPayload = core.channel.inbound.buildContext({
     channelIngress: boundIngress.channelIngress,
@@ -346,7 +342,6 @@ export async function dispatchMSTeamsInboundTurn(params: {
         `msteams: delivered ${counts.final} repl${counts.final === 1 ? "y" : "ies"} to ${teamsTo}`,
       );
     }
-    return { kind: "completed", finalResponses: counts.final };
   } catch (err) {
     log.error("dispatch failed", { error: formatUnknownError(err) });
     runtime.error(`msteams dispatch failed: ${formatUnknownError(err)}`);
@@ -358,6 +353,5 @@ export async function dispatchMSTeamsInboundTurn(params: {
     } catch {
       // Best effort.
     }
-    return { kind: "failed" };
   }
 }

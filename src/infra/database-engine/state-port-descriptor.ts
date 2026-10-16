@@ -20,7 +20,20 @@ import { withEngineStoreAdmission } from "./admission-scope.js";
 import { openEngineStore } from "./open.js";
 import { DatabasePortDataError, type PortDescriptor, type PortTable } from "./port-descriptor.js";
 
-export async function loadStatePortDescriptor(): Promise<PortDescriptor> {
+export async function loadStatePortDescriptor(
+  sourceVersion = OPENCLAW_STATE_SCHEMA_VERSION,
+): Promise<PortDescriptor> {
+  if (sourceVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
+    const backup = stateEngineSchema.postgresMigrations?.find(
+      (step) => step.version === sourceVersion + 1,
+    )?.backup;
+    if (!backup || backup.version !== sourceVersion || backup.id !== "state") {
+      throw new DatabasePortDataError(
+        `Missing shared-state PostgreSQL backup descriptor for version ${sourceVersion}`,
+      );
+    }
+    return backup;
+  }
   const catalog = statePostgresRuntime.expectedCatalog;
   // The generated catalog owns these tagged facts; project only the copy fields.
   const columns = catalog.filter(

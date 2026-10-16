@@ -16,7 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ContentPresentation as SolidContentPresentation } from "../lib/solid/presentation.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { LitContent, mountLitContent, solidContent } from "./solid-content.tsx";
+import { LitContent, solidContent } from "./solid-content.tsx";
 
 describe("Lit and Solid content boundaries", () => {
   it("settles parent refs after mounting nested Solid content through Lit", () => {
@@ -37,7 +37,7 @@ describe("Lit and Solid content boundaries", () => {
     expect(settled).toHaveBeenCalledExactlyOnceWith(true);
   });
 
-  it("updates a retained media mount and clears its range before remounting", () => {
+  it("updates a retained Lit boundary and clears its range before remounting", () => {
     const disconnected = vi.fn();
     class MediaContent extends AsyncDirective {
       render(value: string) {
@@ -51,27 +51,32 @@ describe("Lit and Solid content boundaries", () => {
     const media = directive(MediaContent);
     const content = (label: string) => html`<button>${media(label)}</button>`;
     const container = document.body.appendChild(document.createElement("div"));
-    let mounted = mountLitContent(content("First"), container);
+    const [label, setLabel] = createSignal("First");
+    const boundary = () => <LitContent value={content(label())} />;
+    let mounted = mountSolid(boundary, { container });
     try {
       const button = container.querySelector("button")!;
-      mounted = mountLitContent(content("Second"), container);
+      setLabel("Second");
+      flush();
       expect(container.querySelector("button")).toBe(button);
       expect(button.textContent).toBe("Second");
       expect(disconnected).not.toHaveBeenCalled();
 
-      mounted.dispose();
-      mounted.dispose();
+      mounted.unmount();
+      mounted.unmount();
       expect(container.childNodes).toHaveLength(0);
       expect(disconnected).toHaveBeenCalledOnce();
 
-      mounted = mountLitContent(content("Third"), container);
+      setLabel("Third");
+      flush();
+      mounted = mountSolid(boundary, { container });
       expect(container.querySelector("button")?.textContent).toBe("Third");
       expect(container.querySelector("button")).not.toBe(button);
-      mounted.dispose();
+      mounted.unmount();
       expect(container.childNodes).toHaveLength(0);
       expect(disconnected).toHaveBeenCalledTimes(2);
     } finally {
-      mounted.dispose();
+      mounted.unmount();
       container.remove();
     }
   });

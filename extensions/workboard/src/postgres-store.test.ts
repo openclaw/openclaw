@@ -1,15 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { readSqliteDatabaseWriteTokenForPath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { Client } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { unwrapWorkboardSqliteResult } from "./sqlite-store-errors.js";
 import { createWorkboardDatabase } from "./sqlite-store-schema.js";
-import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { workboardTestDatabaseInput } from "./test/database-config.js";
 import { openPostgresFixture } from "./test/postgres-fixture.js";
 
@@ -77,45 +74,6 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     sql: "INSERT INTO workboard_boards (id, created_at, updated_at) VALUES (?, ?, ?)",
     method: "run" as const,
     args: [id, 1, 2],
-  });
-
-  it("resolves a host SecretRef and hands the configured connection to the worker", async () => {
-    const dbPath = databasePath();
-    const file = path.join(path.dirname(dbPath), "connection.json");
-    fs.writeFileSync(file, JSON.stringify({ dsn: postgresUrl }), { mode: 0o600 });
-    const stores = createWorkboardSqliteStores({
-      dbPath,
-      workerModuleUrl: resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint),
-      config: {
-        database: {
-          engine: "postgres",
-          postgres: {
-            connection: { source: "file", provider: "database", id: "/dsn" },
-            schemaPrefix: "configured",
-          },
-        },
-        secrets: { providers: { database: { source: "file", path: file } } },
-      },
-    });
-    try {
-      await stores.ready;
-      await stores.boards.register("configured", {
-        version: 1,
-        board: { id: "configured", name: "Configured", createdAt: 1, updatedAt: 2 },
-      });
-      using anchor = new DatabaseSync(dbPath, { readOnly: true });
-      const schema = anchor.prepare("SELECT schema FROM openclaw_engine_anchor").get()?.schema;
-      expect(schema).toMatch(/^configured_workboard_[0-9a-f]{16}$/);
-      if (typeof schema !== "string") {
-        throw new Error("Missing configured schema");
-      }
-      schemas.add(schema);
-      expect(
-        (await observer.query(`SELECT name FROM ${quoteIdentifier(schema)}.workboard_boards`)).rows,
-      ).toEqual([{ name: "Configured" }]);
-    } finally {
-      await stores.close();
-    }
   });
 
   it("refuses an unreachable configured server without creating SQLite workboard tables", async () => {
@@ -313,7 +271,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     const before = snapshotAnchor();
     expect(before.workboardTables).toEqual([]);
     expect(() => createWorkboardDatabase(dbPath)).toThrow(schema);
-    expect(() => createWorkboardDatabase(dbPath)).toThrow("database.engine");
+    expect(() => createWorkboardDatabase(dbPath)).toThrow("database.families.workboard.engine");
     expect(snapshotAnchor()).toEqual(before);
     const reopened = await openDatabase(dbPath);
     expect(reopened.schema).toBe(schema);

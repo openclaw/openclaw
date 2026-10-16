@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { assertUpdateDatabaseEngineContexts } from "./update-database-engine-admission.js";
 
@@ -58,6 +59,97 @@ it("admits a matching PostgreSQL target without changing its anchor", async () =
   const before = await fs.readFile(file);
   await assertUpdateDatabaseEngineContexts([context], ["sqlite", "postgres"]);
   expect(await fs.readFile(file)).toEqual(before);
+});
+
+it.each([
+  { engine: "sqlite", families: { workboard: { engine: "postgres" } } },
+  { engine: "postgres", families: { workboard: { engine: "sqlite" } } },
+  { engine: "sqlite", families: { state: { engine: "postgres" } } },
+] satisfies NonNullable<OpenClawConfig["database"]>[])(
+  "refuses mixed-engine updates even when the candidate supports PostgreSQL (%j)",
+  async (database) => {
+    const { file, context } = await store("sqlite");
+    const before = await fs.readFile(file);
+    const activate = vi.fn();
+    await expect(
+      assertUpdateDatabaseEngineContexts(
+        [{ ...context, config: { ...context.config, database } }],
+        ["sqlite", "postgres"],
+      ).then(activate),
+    ).rejects.toThrow(/update for mixed-engine installs is not supported yet; use a single engine/);
+    expect(activate).not.toHaveBeenCalled();
+    expect(await fs.readFile(file)).toEqual(before);
+  },
+);
+
+it("checks every context before accepting a PostgreSQL-capable candidate", async () => {
+  const { context } = await store("sqlite");
+  await expect(
+    assertUpdateDatabaseEngineContexts(
+      [
+        context,
+        { ...context, config: { database: { families: { state: { engine: "postgres" } } } } },
+      ],
+      ["postgres"],
+    ),
+  ).rejects.toThrow(/update for mixed-engine installs is not supported yet/);
+});
+
+it.each([
+  { engine: "sqlite", families: {} },
+  { engine: "sqlite", families: { agent: { engine: "sqlite" } } },
+  {
+    engine: "sqlite",
+    families: {
+      state: { engine: "postgres" },
+      agent: { engine: "postgres" },
+      workboard: { engine: "postgres" },
+      logbook: { engine: "postgres" },
+      "team-reports": { engine: "postgres" },
+    },
+  },
+  {
+    engine: "postgres",
+    families: {
+      state: { engine: "sqlite" },
+      agent: { engine: "sqlite" },
+      workboard: { engine: "sqlite" },
+      logbook: { engine: "sqlite" },
+      "team-reports": { engine: "sqlite" },
+    },
+  },
+] satisfies NonNullable<OpenClawConfig["database"]>[])(
+  "refuses family-config updates until targets understand the config shape (%j)",
+  async (database) => {
+    const { file, context } = await store("sqlite");
+    const before = await fs.readFile(file);
+    const activate = vi.fn();
+    await expect(
+      assertUpdateDatabaseEngineContexts(
+        [{ ...context, config: { ...context.config, database } }],
+        ["sqlite", "postgres"],
+      ).then(activate),
+    ).rejects.toThrow(/Update with database\.families overrides.*matching database\.engine/);
+    expect(activate).not.toHaveBeenCalled();
+    expect(await fs.readFile(file)).toEqual(before);
+  },
+);
+
+it("protects selected PostgreSQL families before any anchor has been created", async () => {
+  const { context } = await store("sqlite");
+  const postgres = {
+    ...context,
+    config: {
+      ...context.config,
+      database: { engine: "postgres" },
+    } satisfies OpenClawConfig,
+  };
+  await expect(assertUpdateDatabaseEngineContexts([postgres], ["sqlite"])).rejects.toThrow(
+    /target does not support the configured PostgreSQL families.*Reverse-port to SQLite/,
+  );
+  await expect(
+    assertUpdateDatabaseEngineContexts([postgres], ["sqlite", "postgres"]),
+  ).resolves.toBeUndefined();
 });
 
 it("leaves a SQLite install unchanged when the target omits its optional declaration", async () => {

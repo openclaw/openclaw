@@ -146,6 +146,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     harnessId: runtime.agentHarness.id,
     harnessRuntime: runtime.agentHarness.id,
     preparedAuthPlan: runtime.activePreparedAuthPlan,
+    transportConfig: runtime.transportConfig,
     metadataSnapshot: runtime.pluginMetadataSnapshot,
     providerRuntimeHandle: runtime.providerRuntimeHandle,
     config: params.config,
@@ -437,6 +438,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     agentDir,
     preparedModelRuntime: runInput.preparedModelRuntime,
     config: params.config,
+    transportConfig: runtime.transportConfig,
     toolOverrides: params.toolOverrides,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     ...(attemptContextEngine
@@ -527,7 +529,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     model: applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(effectiveModel, runtime.apiKeyInfo),
       runtime.runtimeAuthState !== null ? null : runtime.apiKeyInfo,
-      params.config,
+      runtime.transportConfig,
     ),
     resolvedApiKey: resolvedAttemptApiKey,
     authProfileId: runtime.lastProfileId,

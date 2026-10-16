@@ -17,10 +17,11 @@ import {
   validateCommandLaneGroupSpec,
 } from "./command-queue.capacity-groups.js";
 import {
-  createLaneQueue,
   dequeueLaneQueue,
   enqueueLaneQueue,
   type CommandLaneTaskMarker,
+  getDefaultLaneConcurrency,
+  getLaneState,
   getQueueState,
   type LaneState,
   normalizeLane,
@@ -120,30 +121,6 @@ function isQuietProbeLane(lane: string): boolean {
 
 function getLaneDepth(state: LaneState): number {
   return state.queue.length + state.activeTasks.size;
-}
-
-function getDefaultLaneConcurrency(lane: string): number {
-  return lane.startsWith(SUBAGENT_LANE_PREFIX) && !lane.startsWith(SWARM_LANE_PREFIX)
-    ? (getQueueState().lanes.get(CommandLane.Subagent)?.maxConcurrent ?? 1)
-    : 1;
-}
-
-function getLaneState(lane: string): LaneState {
-  const queueState = getQueueState();
-  const existing = queueState.lanes.get(lane);
-  if (existing) {
-    return existing;
-  }
-  const created: LaneState = {
-    lane,
-    queue: createLaneQueue(),
-    activeTasks: new Map(),
-    maxConcurrent: getDefaultLaneConcurrency(lane),
-    draining: false,
-    generation: 0,
-  };
-  queueState.lanes.set(lane, created);
-  return created;
 }
 
 function retireIdleScopedCommandLane(state: LaneState): void {
