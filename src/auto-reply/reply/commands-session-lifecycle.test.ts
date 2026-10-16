@@ -34,49 +34,18 @@ function normalizeCommandContextText(value: unknown): string {
   return "";
 }
 
-function resolveThreadTargetId(raw?: string): string | undefined {
-  const trimmed = raw?.trim() ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed
-    .replace(/^thread-chat:/i, "")
-    .replace(/^channel:/i, "")
-    .trim();
-}
-
-function resolveThreadCommandConversation(params: ResolveCommandConversationParams) {
+function resolveCommandConversation(params: ResolveCommandConversationParams, room = false) {
+  const target = (raw?: string) =>
+    raw
+      ?.trim()
+      .replace(room ? /^room-chat:/i : /^thread-chat:/i, "")
+      .replace(room ? /^(room|channel):/i : /^channel:/i, "")
+      .trim();
   const parentConversationId = firstText([
-    resolveThreadTargetId(params.threadParentId),
-    resolveThreadTargetId(params.originatingTo),
-    resolveThreadTargetId(params.commandTo),
-    resolveThreadTargetId(params.fallbackTo),
-  ]);
-  if (params.threadId) {
-    return {
-      conversationId: params.threadId,
-      ...(parentConversationId ? { parentConversationId } : {}),
-    };
-  }
-  return parentConversationId ? { conversationId: parentConversationId } : null;
-}
-
-function resolveRoomId(raw?: string): string | undefined {
-  const trimmed = raw?.trim() ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed
-    .replace(/^room-chat:/i, "")
-    .replace(/^(room|channel):/i, "")
-    .trim();
-}
-
-function resolveRoomCommandConversation(params: ResolveCommandConversationParams) {
-  const parentConversationId = firstText([
-    resolveRoomId(params.originatingTo),
-    resolveRoomId(params.commandTo),
-    resolveRoomId(params.fallbackTo),
+    room ? undefined : target(params.threadParentId),
+    target(params.originatingTo),
+    target(params.commandTo),
+    target(params.fallbackTo),
   ]);
   if (params.threadId) {
     return {
@@ -98,7 +67,7 @@ const hoisted = vi.hoisted(() => {
   const sessionBindingUnbindMock = vi.fn();
   function createRuntimeChannel(
     id: string,
-    resolveCommandConversation: (params: ResolveCommandConversationParams) => {
+    resolveConversation: (params: ResolveCommandConversationParams) => {
       conversationId: string;
       parentConversationId?: string;
     } | null,
@@ -115,7 +84,7 @@ const hoisted = vi.hoisted(() => {
         id,
         meta: {},
         config: { hasPersistedAuthState: () => false },
-        bindings: { resolveCommandConversation },
+        bindings: { resolveCommandConversation: resolveConversation },
         conversationBindings,
       },
     };
@@ -124,13 +93,13 @@ const hoisted = vi.hoisted(() => {
     channels: [
       createRuntimeChannel(
         threadChannel,
-        resolveThreadCommandConversation,
+        resolveCommandConversation,
         setThreadBindingIdleTimeoutBySessionKeyMock,
         setThreadBindingMaxAgeBySessionKeyMock,
       ),
       createRuntimeChannel(
         roomChannel,
-        resolveRoomCommandConversation,
+        (params) => resolveCommandConversation(params, true),
         setMatrixThreadBindingIdleTimeoutBySessionKeyMock,
         setMatrixThreadBindingMaxAgeBySessionKeyMock,
       ),
@@ -243,54 +212,40 @@ function buildSessionCommandParams(
   };
 }
 
-function createThreadCommandParams(commandBody: string, overrides?: Record<string, unknown>) {
+function channelCommandParams(
+  commandBody: string,
+  channel: string,
+  threadId?: string,
+  overrides?: Record<string, unknown>,
+) {
   return buildSessionCommandParams(commandBody, {
-    Provider: THREAD_CHANNEL,
-    Surface: THREAD_CHANNEL,
-    OriginatingChannel: THREAD_CHANNEL,
-    OriginatingTo: "channel:thread-1",
+    Provider: channel,
+    Surface: channel,
+    OriginatingChannel: channel,
+    OriginatingTo: channel === THREAD_CHANNEL ? "channel:thread-1" : "room:!room:example.org",
     AccountId: "default",
-    MessageThreadId: "thread-1",
+    ...(threadId ? { MessageThreadId: threadId } : {}),
     ...overrides,
   });
 }
 
+function createThreadCommandParams(commandBody: string, overrides?: Record<string, unknown>) {
+  return channelCommandParams(commandBody, THREAD_CHANNEL, "thread-1", overrides);
+}
+
 function createRoomThreadCommandParams(commandBody: string, overrides?: Record<string, unknown>) {
-  return buildSessionCommandParams(commandBody, {
-    Provider: ROOM_CHANNEL,
-    Surface: ROOM_CHANNEL,
-    OriginatingChannel: ROOM_CHANNEL,
-    OriginatingTo: "room:!room:example.org",
-    AccountId: "default",
-    MessageThreadId: "$thread-1",
-    ...overrides,
-  });
+  return channelCommandParams(commandBody, ROOM_CHANNEL, "$thread-1", overrides);
 }
 
 function createRoomTriggerThreadCommandParams(
   commandBody: string,
   overrides?: Record<string, unknown>,
 ) {
-  return buildSessionCommandParams(commandBody, {
-    Provider: ROOM_CHANNEL,
-    Surface: ROOM_CHANNEL,
-    OriginatingChannel: ROOM_CHANNEL,
-    OriginatingTo: "room:!room:example.org",
-    AccountId: "default",
-    MessageThreadId: "$root",
-    ...overrides,
-  });
+  return channelCommandParams(commandBody, ROOM_CHANNEL, "$root", overrides);
 }
 
 function createRoomCommandParams(commandBody: string, overrides?: Record<string, unknown>) {
-  return buildSessionCommandParams(commandBody, {
-    Provider: ROOM_CHANNEL,
-    Surface: ROOM_CHANNEL,
-    OriginatingChannel: ROOM_CHANNEL,
-    OriginatingTo: "room:!room:example.org",
-    AccountId: "default",
-    ...overrides,
-  });
+  return channelCommandParams(commandBody, ROOM_CHANNEL, undefined, overrides);
 }
 
 function createLifecycleBinding(

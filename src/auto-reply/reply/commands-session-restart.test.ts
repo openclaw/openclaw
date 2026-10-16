@@ -115,8 +115,18 @@ function restartCommandParams(overrides?: Partial<HandleCommandsParams>): Handle
   } as HandleCommandsParams;
 }
 
-function firstRestartSentinelPayload() {
-  return mocks.writeRestartSentinel.mock.calls[0]?.[0];
+async function withRestartSignal(run: () => Promise<void>) {
+  const handler = () => {};
+  process.on("SIGUSR2", handler);
+  try {
+    await run();
+  } finally {
+    process.removeListener("SIGUSR2", handler);
+  }
+}
+
+function adoptionParams(onAdopted: () => void | Promise<void>) {
+  return restartCommandParams({ opts: { turnAdoptionLifecycle: { onAdopted } } });
 }
 
 describe("handleRestartCommand", () => {
@@ -133,9 +143,7 @@ describe("handleRestartCommand", () => {
   });
 
   it("prepares the routed sentinel only when SIGUSR2 restart emits", async () => {
-    const handler = () => {};
-    process.on("SIGUSR2", handler);
-    try {
+    await withRestartSignal(async () => {
       const params = restartCommandParams();
       params.command.assertOwnerCurrent = vi.fn();
       const result = await handleRestartCommand(params, true);
@@ -150,14 +158,13 @@ describe("handleRestartCommand", () => {
       await scheduledArgs?.emitHooks?.beforeEmit?.();
 
       expect(mocks.writeRestartSentinel).toHaveBeenCalledOnce();
-      const sentinelPayload = firstRestartSentinelPayload();
-      expect(sentinelPayload?.kind).toBe("restart");
-      expect(sentinelPayload?.status).toBe("ok");
-      expect(sentinelPayload?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
-      expect(sentinelPayload?.continuation).toBeNull();
-    } finally {
-      process.removeListener("SIGUSR2", handler);
-    }
+      expect(mocks.writeRestartSentinel.mock.calls[0]?.[0]).toMatchObject({
+        kind: "restart",
+        status: "ok",
+        sessionKey: "agent:main:telegram:direct:123:thread:thread-1",
+        continuation: null,
+      });
+    });
   });
 
   it("adopts the durable ingress claim before scheduling the restart", async () => {
@@ -166,24 +173,14 @@ describe("handleRestartCommand", () => {
       order.push("schedule");
       return { scheduled: true };
     });
-    const handler = () => {};
-    process.on("SIGUSR2", handler);
-    try {
+    await withRestartSignal(async () => {
       await handleRestartCommand(
-        restartCommandParams({
-          opts: {
-            turnAdoptionLifecycle: {
-              onAdopted: () => {
-                order.push("adopt");
-              },
-            },
-          } as HandleCommandsParams["opts"],
+        adoptionParams(() => {
+          order.push("adopt");
         }),
         true,
       );
-    } finally {
-      process.removeListener("SIGUSR2", handler);
-    }
+    });
 
     // Unadopted at restart => drain releases with recordAttempt:false and the
     // successor replays /restart, restarting again forever.
@@ -198,14 +195,8 @@ describe("handleRestartCommand", () => {
     });
 
     await handleRestartCommand(
-      restartCommandParams({
-        opts: {
-          turnAdoptionLifecycle: {
-            onAdopted: () => {
-              order.push("adopt");
-            },
-          },
-        } as HandleCommandsParams["opts"],
+      adoptionParams(() => {
+        order.push("adopt");
       }),
       true,
     );
@@ -216,14 +207,8 @@ describe("handleRestartCommand", () => {
   it("does not restart when ingress adoption was lost to another owner", async () => {
     await expect(
       handleRestartCommand(
-        restartCommandParams({
-          opts: {
-            turnAdoptionLifecycle: {
-              onAdopted: () => {
-                throw new Error("ingress adoption lost: guillotined");
-              },
-            },
-          } as HandleCommandsParams["opts"],
+        adoptionParams(() => {
+          throw new Error("ingress adoption lost: guillotined");
         }),
         true,
       ),

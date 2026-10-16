@@ -25,8 +25,6 @@ import { buildStatusPluginsReply, buildStatusText } from "./commands-status.js";
 import { buildKiraStatusReply, buildStatusReplyForTest } from "./commands-status.test-support.js";
 import { baseCommandTestConfig, buildCommandTestParams } from "./commands.test-harness.js";
 
-// Tests status command rendering for sessions, agents, and diagnostics.
-
 type LoadProviderUsageSummary =
   typeof import("../../infra/provider-usage.js").loadProviderUsageSummary;
 
@@ -47,22 +45,20 @@ const activeProviderThinkingMock = vi.hoisted(() => ({
 type StatusPluginHealthSnapshot =
   import("../../status/status-plugin-health.js").StatusPluginHealthSnapshot;
 
-const pluginHealthRuntimeMock = vi.hoisted(() => ({
-  collectInstalledPluginHealthSnapshot: vi.fn(async (): Promise<StatusPluginHealthSnapshot> => ({
+const pluginHealthRuntimeMock = vi.hoisted(() => {
+  const emptySnapshot = (): StatusPluginHealthSnapshot => ({
     plugins: [],
     diagnostics: [],
     contextEngineQuarantines: [],
     runtimeToolQuarantines: [],
     channelPluginFailures: [],
-  })),
-  collectRuntimePluginHealthSnapshot: vi.fn((): StatusPluginHealthSnapshot => ({
-    plugins: [],
-    diagnostics: [],
-    contextEngineQuarantines: [],
-    runtimeToolQuarantines: [],
-    channelPluginFailures: [],
-  })),
-}));
+  });
+  return {
+    emptySnapshot,
+    collectInstalledPluginHealthSnapshot: vi.fn(async () => emptySnapshot()),
+    collectRuntimePluginHealthSnapshot: vi.fn(emptySnapshot),
+  };
+});
 
 vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/provider-usage.js")>();
@@ -111,28 +107,42 @@ const codexStatusModel: ModelDefinitionConfig = {
 
 type StatusTextParams = Parameters<typeof buildStatusText>[0];
 
-function createStatusSessionParams(statusChannel = "mobilechat") {
-  return {
-    sessionKey: "agent:main:main",
-    parentSessionKey: "agent:main:main",
-    sessionScope: "per-sender",
-    statusChannel,
-  } satisfies Partial<StatusTextParams>;
+const statusDefaults = {
+  sessionKey: "agent:main:main",
+  parentSessionKey: "agent:main:main",
+  sessionScope: "per-sender",
+  statusChannel: "mobilechat",
+  resolvedFastMode: false,
+  resolvedVerboseLevel: "off",
+  resolvedReasoningLevel: "off",
+  resolveDefaultThinkingLevel: async () => undefined,
+  isGroup: false,
+  defaultGroupActivation: () => "mention",
+} satisfies Partial<StatusTextParams>;
+
+function renderStatus(
+  params: Omit<StatusTextParams, keyof typeof statusDefaults> & Partial<StatusTextParams>,
+) {
+  return buildStatusText({ ...statusDefaults, ...params });
 }
 
-function createStatusDisplayParams(
-  resolvedFastMode = false,
-  resolveDefaultThinkingLevel: StatusTextParams["resolveDefaultThinkingLevel"] = async () =>
-    undefined,
-) {
-  return {
-    resolvedFastMode,
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel,
-    isGroup: false,
-    defaultGroupActivation: () => "mention",
-  } satisfies Partial<StatusTextParams>;
+const codexRuntimeConfig = {
+  ...baseCfg,
+  agents: { defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } } },
+} satisfies OpenClawConfig;
+
+function mockSelectedProviderUsage() {
+  const resetAt = (Math.floor(Date.now() / 1000) + 60 * 60) * 1000;
+  providerUsageMock.loadProviderUsageSummary.mockImplementation(
+    async ({ providers = [] } = {}) => ({
+      updatedAt: Date.now(),
+      providers: providers.map((provider) =>
+        provider === "openai"
+          ? { provider, displayName: "OpenAI", windows: [{ label: "5h", usedPercent: 9, resetAt }] }
+          : { provider, displayName: "DeepSeek", windows: [], summary: "Balance ¥42.50" },
+      ),
+    }),
+  );
 }
 
 function registerStatusCodexHarness(): void {
@@ -150,17 +160,6 @@ function registerStatusCodexHarness(): void {
     },
   };
   registerAgentHarness(harness, { ownerPluginId: "codex" });
-}
-
-function saveStatusTestAuthProfile(params: {
-  dir: string;
-  profileId: string;
-  provider: "openai" | "anthropic";
-}): void {
-  saveStatusTestAuthProfiles({
-    dir: params.dir,
-    profiles: [{ profileId: params.profileId, provider: params.provider }],
-  });
 }
 
 function saveStatusTestAuthProfiles(params: {
@@ -208,21 +207,13 @@ afterEach(() => {
   activeProviderThinkingMock.resolveThinkingProfile.mockReset();
   activeProviderThinkingMock.resolveThinkingProfile.mockReturnValue(undefined);
   pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockReset();
-  pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockResolvedValue({
-    plugins: [],
-    diagnostics: [],
-    contextEngineQuarantines: [],
-    runtimeToolQuarantines: [],
-    channelPluginFailures: [],
-  });
+  pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockImplementation(async () =>
+    pluginHealthRuntimeMock.emptySnapshot(),
+  );
   pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot.mockReset();
-  pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot.mockReturnValue({
-    plugins: [],
-    diagnostics: [],
-    contextEngineQuarantines: [],
-    runtimeToolQuarantines: [],
-    channelPluginFailures: [],
-  });
+  pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot.mockImplementation(
+    pluginHealthRuntimeMock.emptySnapshot,
+  );
 });
 
 describe("buildStatusReply subagent summary", () => {
@@ -321,24 +312,15 @@ describe("buildStatusReply subagent summary", () => {
           "utf-8",
         );
 
-        const text = await buildStatusText({
-          cfg: {
-            ...baseCfg,
-            agents: {
-              defaults: {
-                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
-              },
-            },
-          },
+        const text = await renderStatus({
+          cfg: codexRuntimeConfig,
           sessionEntry: {
             sessionId: "sess-status-codex-home-oauth",
             updatedAt: 0,
           },
-          ...createStatusSessionParams(),
           provider: "openai",
           model: "gpt-5.5",
           contextTokens: 32_000,
-          ...createStatusDisplayParams(),
         });
 
         const normalized = normalizeTestText(text);
@@ -379,25 +361,16 @@ describe("buildStatusReply subagent summary", () => {
           ],
         });
 
-        await buildStatusText({
-          cfg: {
-            ...baseCfg,
-            agents: {
-              defaults: {
-                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
-              },
-            },
-          },
+        await renderStatus({
+          cfg: codexRuntimeConfig,
           sessionEntry: {
             sessionId: "sess-status-codex-stale-profile",
             updatedAt: 0,
             authProfileOverride: "anthropic:work",
           },
-          ...createStatusSessionParams(),
           provider: "openai",
           model: "gpt-5.5",
           contextTokens: 32_000,
-          ...createStatusDisplayParams(),
         });
 
         const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
@@ -410,34 +383,9 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("uses the session-selected provider for /status usage when runtime state is stale", async () => {
-    const usageResetBase = Math.floor(Date.now() / 1000);
-    providerUsageMock.loadProviderUsageSummary.mockImplementation(
-      async ({ providers = [] } = {}) => ({
-        updatedAt: Date.now(),
-        providers: providers.map((provider) =>
-          provider === "openai"
-            ? {
-                provider: "openai",
-                displayName: "OpenAI",
-                windows: [
-                  {
-                    label: "5h",
-                    usedPercent: 9,
-                    resetAt: (usageResetBase + 60 * 60) * 1000,
-                  },
-                ],
-              }
-            : {
-                provider,
-                displayName: "DeepSeek",
-                windows: [],
-                summary: "Balance ¥42.50",
-              },
-        ),
-      }),
-    );
+    mockSelectedProviderUsage();
 
-    const text = await buildStatusText({
+    const text = await renderStatus({
       cfg: {
         ...baseCfg,
         agents: {
@@ -455,11 +403,10 @@ describe("buildStatusReply subagent summary", () => {
         modelProvider: "deepseek",
         model: "deepseek-v4-flash",
       },
-      ...createStatusSessionParams("telegram"),
+      statusChannel: "telegram",
       provider: "deepseek",
       model: "deepseek-v4-flash",
       contextTokens: 1_000_000,
-      ...createStatusDisplayParams(),
       modelAuthOverride: "oauth (openai:status)",
       activeModelAuthOverride: "api-key",
     });
@@ -478,36 +425,12 @@ describe("buildStatusReply subagent summary", () => {
   it("uses provider-qualified model overrides for /status usage lookup", async () => {
     await withTempHome(
       async (dir) => {
-        saveStatusTestAuthProfile({ dir, profileId: "openai:status", provider: "openai" });
-
-        const usageResetBase = Math.floor(Date.now() / 1000);
-        providerUsageMock.loadProviderUsageSummary.mockImplementation(
-          async ({ providers = [] } = {}) => ({
-            updatedAt: Date.now(),
-            providers: providers.map((provider) =>
-              provider === "openai"
-                ? {
-                    provider: "openai",
-                    displayName: "OpenAI",
-                    windows: [
-                      {
-                        label: "5h",
-                        usedPercent: 9,
-                        resetAt: (usageResetBase + 60 * 60) * 1000,
-                      },
-                    ],
-                  }
-                : {
-                    provider,
-                    displayName: "DeepSeek",
-                    windows: [],
-                    summary: "Balance ¥42.50",
-                  },
-            ),
-          }),
-        );
-
-        const text = await buildStatusText({
+        saveStatusTestAuthProfiles({
+          dir,
+          profiles: [{ profileId: "openai:status", provider: "openai" }],
+        });
+        mockSelectedProviderUsage();
+        const text = await renderStatus({
           cfg: {
             ...baseCfg,
             models: {
@@ -534,11 +457,10 @@ describe("buildStatusReply subagent summary", () => {
             updatedAt: 0,
             modelOverride: "openai/gpt-5.5",
           },
-          ...createStatusSessionParams("telegram"),
+          statusChannel: "telegram",
           provider: "deepseek",
           model: "deepseek-v4-flash",
           contextTokens: 1_000_000,
-          ...createStatusDisplayParams(),
         });
 
         const normalized = normalizeTestText(text);
@@ -563,19 +485,17 @@ describe("buildStatusReply subagent summary", () => {
       defaultLevel: "max",
     });
 
-    const text = await buildStatusText({
+    const text = await renderStatus({
       cfg: baseCfg,
       sessionEntry: {
         sessionId: "sess-status-kimi-k3",
         updatedAt: 0,
         thinkingLevel: "off",
       },
-      ...createStatusSessionParams(),
       provider: "moonshot",
       model: "kimi-k3",
       contextTokens: 262_144,
       resolvedThinkLevel: "off",
-      ...createStatusDisplayParams(),
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
     });

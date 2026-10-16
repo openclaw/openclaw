@@ -16,6 +16,15 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { buildStatusReplyForTest } from "./commands-status.test-support.js";
 
+type AgentEvent = Parameters<typeof emitAgentEvent>[0];
+function emit(runId: string, stream: AgentEvent["stream"], data: AgentEvent["data"]) {
+  emitAgentEvent({ runId, stream, data });
+}
+
+function workerDetail(reply: Awaited<ReturnType<typeof buildStatusReplyForTest>>, task: string) {
+  return reply?.text?.split("\n").find((line) => line.includes(`• ${task}`));
+}
+
 vi.mock("../../status/status-plugin-health.runtime.js", () => ({
   collectRuntimePluginHealthSnapshot: () => ({
     plugins: [],
@@ -57,98 +66,56 @@ describe("buildStatusReply execution observations", () => {
     });
     registerAgentRunContext(runId, { sessionKey: childSessionKey, projectSessionActive: true });
     try {
-      emitAgentEvent({
-        runId,
-        stream: "tool",
-        data: { phase: "start", name: "read", toolCallId: "status-read" },
-      });
+      emit(runId, "tool", { phase: "start", name: "read", toolCallId: "status-read" });
       registerAgentRunContext(runId, { verboseLevel: "on" });
       const running = await buildStatusReplyForTest({});
-      const runningDetail = running?.text
-        ?.split("\n")
-        .find((line) => line.includes("• observed worker"));
+      const runningDetail = workerDetail(running, "observed worker");
       expect(running?.text).toContain("Subagents: 1 active");
       expect(runningDetail).toMatch(/running/i);
       expect(runningDetail).toMatch(/\bread\b/);
 
-      emitAgentEvent({
-        runId,
-        stream: "execution",
-        data: { approval: { id: "status-approval", state: "pending" } },
-      });
+      emit(runId, "execution", { approval: { id: "status-approval", state: "pending" } });
       const approval = await buildStatusReplyForTest({});
-      const approvalDetail = approval?.text
-        ?.split("\n")
-        .find((line) => line.includes("• observed worker"));
+      const approvalDetail = workerDetail(approval, "observed worker");
       expect(approvalDetail).toMatch(/wait.*approval/i);
       expect(approvalDetail).not.toMatch(/\brunning\b/i);
 
-      emitAgentEvent({
-        runId,
-        stream: "execution",
-        data: { approval: { id: "overlapping-approval", state: "pending" } },
-      });
-      emitAgentEvent({
-        runId,
-        stream: "execution",
-        data: { approval: { id: "status-approval", state: "resolved" } },
-      });
+      emit(runId, "execution", { approval: { id: "overlapping-approval", state: "pending" } });
+      emit(runId, "execution", { approval: { id: "status-approval", state: "resolved" } });
       expect((await buildStatusReplyForTest({}))?.text).toMatch(/wait.*approval/i);
-      emitAgentEvent({
-        runId,
-        stream: "execution",
-        data: { approval: { id: "overlapping-approval", state: "resolved" } },
-      });
-      emitAgentEvent({
-        runId,
-        stream: "tool",
-        data: { phase: "start", name: "read", toolCallId: "status-read" },
-      });
+      emit(runId, "execution", { approval: { id: "overlapping-approval", state: "resolved" } });
+      emit(runId, "tool", { phase: "start", name: "read", toolCallId: "status-read" });
       const resumed = await buildStatusReplyForTest({});
-      const resumedDetail = resumed?.text
-        ?.split("\n")
-        .find((line) => line.includes("• observed worker"));
+      const resumedDetail = workerDetail(resumed, "observed worker");
       expect(resumedDetail).toMatch(/\brunning\b/i);
       expect(resumedDetail).toMatch(/\bread\b/);
       expect(resumedDetail).not.toMatch(/approval/i);
       expect(resumed?.text).toContain("Subagents: 1 active");
-      emitAgentEvent({
-        runId,
-        stream: "tool",
-        data: { phase: "result", name: "read", toolCallId: "status-read" },
-      });
+      emit(runId, "tool", { phase: "result", name: "read", toolCallId: "status-read" });
       const settledTool = await buildStatusReplyForTest({});
-      const settledDetail = settledTool?.text
-        ?.split("\n")
-        .find((line) => line.includes("• observed worker"));
+      const settledDetail = workerDetail(settledTool, "observed worker");
       expect(settledDetail).toMatch(/running/i);
       expect(settledDetail).not.toMatch(/\bread\b/);
-      emitAgentEvent({
-        runId,
-        stream: "execution",
-        data: {
-          state: "waiting",
-          wait: { kind: "approval" },
-          sourceId: "native-observer",
-          executionId: "native-turn",
-        },
+      emit(runId, "execution", {
+        state: "waiting",
+        wait: { kind: "approval" },
+        sourceId: "native-observer",
+        executionId: "native-turn",
       });
       expect((await buildStatusReplyForTest({}))?.text).toMatch(/wait.*approval/i);
-      emitAgentEvent({
-        runId,
-        stream: "execution",
-        data: { state: "running", sourceId: "native-observer", executionId: "native-turn" },
+      emit(runId, "execution", {
+        state: "running",
+        sourceId: "native-observer",
+        executionId: "native-turn",
       });
-      emitAgentEvent({
-        runId,
-        stream: "execution",
-        data: { state: "unknown", sourceId: "retired-observer", invalidate: true },
+      emit(runId, "execution", {
+        state: "unknown",
+        sourceId: "retired-observer",
+        invalidate: true,
       });
       const nativeResumed = await buildStatusReplyForTest({});
       expect(nativeResumed?.text).toContain("Subagents: 1 active");
-      expect(
-        nativeResumed?.text?.split("\n").find((line) => line.includes("• observed worker")),
-      ).toMatch(/running/i);
+      expect(workerDetail(nativeResumed, "observed worker")).toMatch(/running/i);
     } finally {
       clearAgentRunContext(runId);
     }
@@ -177,15 +144,13 @@ describe("buildStatusReply execution observations", () => {
         if (!previousContext) {
           throw new Error("Expected previous execution context");
         }
-        emitAgentEvent({
-          runId: previousRunId,
-          stream: "tool",
-          data: { phase: "start", name: "old-tool", toolCallId: "previous-tool" },
+        emit(previousRunId, "tool", {
+          phase: "start",
+          name: "old-tool",
+          toolCallId: "previous-tool",
         });
-        emitAgentEvent({
-          runId: previousRunId,
-          stream: "execution",
-          data: { approval: { id: "previous-approval", state: "pending" } },
+        emit(previousRunId, "execution", {
+          approval: { id: "previous-approval", state: "pending" },
         });
         expect((await buildStatusReplyForTest({}))?.text).toMatch(/wait.*approval/i);
         seedSubagentRunForReadTest({
@@ -210,9 +175,7 @@ describe("buildStatusReply execution observations", () => {
           );
         }
         const reply = await buildStatusReplyForTest({});
-        const detail = reply?.text
-          ?.split("\n")
-          .find((line) => line.includes("• replacement worker"));
+        const detail = workerDetail(reply, "replacement worker");
 
         expect(reply?.text).toContain("Subagents: 1 active");
         expect(detail).toMatch(replacement === "incarnation" ? /running/i : /unknown|unavailable/i);
@@ -260,9 +223,7 @@ describe("buildStatusReply execution observations", () => {
     });
 
     const reply = await buildStatusReplyForTest({});
-    const detail = reply?.text
-      ?.split("\n")
-      .find((line) => line.includes("• delivery orchestrator"));
+    const detail = workerDetail(reply, "delivery orchestrator");
 
     expect(reply?.text).toContain("Subagents: 1 active");
     expect(detail).toMatch(/pending|delivery|settle/i);

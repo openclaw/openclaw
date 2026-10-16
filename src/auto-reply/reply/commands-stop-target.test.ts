@@ -86,16 +86,12 @@ vi.mock("./reply-run-registry.js", () => ({
   resolveReplyOperationsForSession: vi.fn(() => []),
 }));
 
-const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) => {
-  const values: string[] = [];
-  for (const entry of allowFrom) {
-    const value = String(entry).trim();
-    if (value) {
-      values.push(value);
-    }
-  }
-  return values;
-};
+const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) =>
+  allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+
+function expectStoppedReply(result: Awaited<ReturnType<typeof handleStopCommand>>, text: string) {
+  expect(result).toEqual({ shouldContinue: false, reply: { text } });
+}
 
 let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 
@@ -183,10 +179,7 @@ describe("handleStopCommand target fallback", () => {
 
     const result = await handleStopCommand(params, true);
 
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "⚙️ Agent was aborted." },
-    });
+    expectStoppedReply(result, "⚙️ Agent was aborted.");
     expect(abortSessionRunTargetWithOutcomeMock).toHaveBeenCalledWith({
       agentId: "target",
       key: "agent:target:telegram:direct:123",
@@ -197,10 +190,12 @@ describe("handleStopCommand target fallback", () => {
       persistAbortTargetEntryMock.mock.calls[0],
       "persisted abort target",
     );
-    expect(persistAbortTargetParams?.key).toBe("agent:target:telegram:direct:123");
-    expect(persistAbortTargetParams?.entry).toBeUndefined();
+    expect(persistAbortTargetParams).toMatchObject({
+      key: "agent:target:telegram:direct:123",
+      entry: undefined,
+      storePath: "/tmp/sessions.json",
+    });
     expect(persistAbortTargetParams?.sessionStore).toBe(params.sessionStore);
-    expect(persistAbortTargetParams?.storePath).toBe("/tmp/sessions.json");
     const [stopSubagentsParams] = expectDefined(
       stopSubagentsForRequesterMock.mock.calls[0],
       "subagent stop target",
@@ -233,10 +228,7 @@ describe("handleStopCommand target fallback", () => {
 
     const result = await handleStopCommand(params, true);
 
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "Agent reply is already finalizing and can no longer be aborted." },
-    });
+    expectStoppedReply(result, "Agent reply is already finalizing and can no longer be aborted.");
     expect(formatAbortReplyTextMock).toHaveBeenCalledWith(0, "finalizing", 0);
     expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
   });
@@ -281,12 +273,10 @@ describe("handleStopCommand target fallback", () => {
 
     const result = await handleStopCommand(params, true);
 
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: {
-        text: "⚙️ Agent was aborted. One sub-agent could not be stopped. Retry /stop.",
-      },
-    });
+    expectStoppedReply(
+      result,
+      "⚙️ Agent was aborted. One sub-agent could not be stopped. Retry /stop.",
+    );
     expect(formatAbortReplyTextMock).toHaveBeenCalledWith(0, undefined, 1);
   });
 
@@ -323,10 +313,7 @@ describe("handleStopCommand target fallback", () => {
 
     expect(auth.senderIsOwner).toBe(false);
     expect(auth.isAuthorizedSender).toBe(false);
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "You are not authorized to use this command." },
-    });
+    expectStoppedReply(result, "You are not authorized to use this command.");
     expect(abortSessionRunTargetWithOutcomeMock).not.toHaveBeenCalled();
     expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
     expect(createInternalHookEventMock).not.toHaveBeenCalled();

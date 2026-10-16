@@ -46,9 +46,7 @@ type UsageFooterScenario = {
   name: string;
   command: string;
   targetUsage?: "off" | "tokens" | "full";
-  wrapperUsage?: "off" | "tokens" | "full";
   configDefault?: "off" | "tokens" | "full";
-  shareTargetEntry?: boolean;
   expectedUsage: "off" | "tokens" | "full" | undefined;
   expectedText: string;
 };
@@ -85,7 +83,7 @@ vi.mock("../../agents/fast-mode.js", async () => {
   };
 });
 
-function buildUsageParams(): HandleCommandsParams {
+function buildUsageParams(command = "/usage cost"): HandleCommandsParams {
   return {
     cfg: {
       commands: { text: true },
@@ -97,7 +95,7 @@ function buildUsageParams(): HandleCommandsParams {
       CommandSource: "text",
     },
     command: {
-      commandBodyNormalized: "/usage cost",
+      commandBodyNormalized: command,
       isAuthorizedSender: true,
       senderIsOwner: true,
       senderId: "owner",
@@ -134,28 +132,15 @@ function buildCostTotals(overrides: Partial<CostUsageTotals> = {}): CostUsageTot
   };
 }
 
-function expectSessionCostArgs(): Record<string, unknown> {
-  expect(loadSessionCostSummaryMock).toHaveBeenCalledTimes(1);
-  const call = loadSessionCostSummaryMock.mock.calls[0] as unknown[] | undefined;
+function expectArgs(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
+  expect(mock).toHaveBeenCalledTimes(1);
+  const call = mock.mock.calls[0];
   if (!call) {
-    throw new Error("expected loadSessionCostSummary call");
+    throw new Error("expected mock call");
   }
   const args = call[0];
   if (!args || typeof args !== "object") {
-    throw new Error("expected loadSessionCostSummary args");
-  }
-  return args as Record<string, unknown>;
-}
-
-function expectFastModeArgs(): Record<string, unknown> {
-  expect(resolveFastModeStateMock).toHaveBeenCalledTimes(1);
-  const call = resolveFastModeStateMock.mock.calls[0] as unknown[] | undefined;
-  if (!call) {
-    throw new Error("expected resolveFastModeState call");
-  }
-  const args = call[0];
-  if (!args || typeof args !== "object") {
-    throw new Error("expected resolveFastModeState args");
+    throw new Error("expected mock args");
   }
   return args as Record<string, unknown>;
 }
@@ -186,9 +171,10 @@ describe("handleUsageCommand", () => {
     const result = await handleUsageCommand(buildUsageParams(), true);
 
     expect(result?.shouldContinue).toBe(false);
-    const args = expectSessionCostArgs();
-    expect(args.agentId).toBe("target");
-    expect(args.sessionId).toBe("session-1");
+    expect(expectArgs(loadSessionCostSummaryMock)).toMatchObject({
+      agentId: "target",
+      sessionId: "session-1",
+    });
     expect(loadCostUsageSummaryMock).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "target" }),
     );
@@ -201,9 +187,10 @@ describe("handleUsageCommand", () => {
 
     await handleUsageCommand(params, true);
 
-    const args = expectSessionCostArgs();
-    expect(args.agentId).toBe("other");
-    expect(args.sessionTarget).toMatchObject({ agentId: "other", sessionKey: "global" });
+    expect(expectArgs(loadSessionCostSummaryMock)).toMatchObject({
+      agentId: "other",
+      sessionTarget: { agentId: "other", sessionKey: "global" },
+    });
     expect(resolveSessionAgentIdMock).not.toHaveBeenCalled();
   });
 
@@ -223,13 +210,14 @@ describe("handleUsageCommand", () => {
 
     await handleUsageCommand(params, true);
 
-    const args = expectSessionCostArgs();
-    expect(args.sessionId).toBe("target-session");
-    expect(args.sessionTarget).toMatchObject({
-      agentId: "target",
+    expect(expectArgs(loadSessionCostSummaryMock)).toMatchObject({
       sessionId: "target-session",
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
+      sessionTarget: {
+        agentId: "target",
+        sessionId: "target-session",
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
     });
   });
 
@@ -257,8 +245,7 @@ describe("handleUsageCommand", () => {
       expectedText: "⚙️ Usage footer: tokens.",
     },
   ] satisfies UsageFooterScenario[])("$name", async (scenario: UsageFooterScenario) => {
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = scenario.command;
+    const params = buildUsageParams(scenario.command);
     if (scenario.configDefault) {
       params.cfg = { ...params.cfg, messages: { responseUsage: scenario.configDefault } };
     }
@@ -268,27 +255,12 @@ describe("handleUsageCommand", () => {
       ...(scenario.targetUsage ? { responseUsage: scenario.targetUsage } : {}),
     };
     params.sessionStore = { [params.sessionKey]: targetEntry };
-    if (scenario.shareTargetEntry) {
-      params.sessionEntry = targetEntry;
-    } else if (scenario.wrapperUsage) {
-      params.sessionEntry = {
-        sessionId: "wrapper-session",
-        updatedAt: Date.now(),
-        responseUsage: scenario.wrapperUsage,
-      };
-    }
 
     const result = await handleUsageCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toBe(scenario.expectedText);
     expect(params.sessionStore[params.sessionKey]?.responseUsage).toBe(scenario.expectedUsage);
-    if (scenario.shareTargetEntry) {
-      expect(params.sessionEntry?.responseUsage).toBe(scenario.expectedUsage);
-    }
-    if (scenario.wrapperUsage) {
-      expect(params.sessionEntry?.responseUsage).toBe(scenario.wrapperUsage);
-    }
   });
 });
 
@@ -304,24 +276,23 @@ describe("handleFastCommand", () => {
   });
 
   it("uses the canonical target session agent for /fast status", async () => {
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = "/fast status";
+    const params = buildUsageParams("/fast status");
     params.provider = "openai";
     params.model = "gpt-5.4";
 
     const result = await handleFastCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    const args = expectFastModeArgs();
-    expect(args.agentId).toBe("target");
-    expect(args.provider).toBe("openai");
-    expect(args.model).toBe("gpt-5.4");
+    expect(expectArgs(resolveFastModeStateMock)).toMatchObject({
+      agentId: "target",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
     expect(result?.reply?.text).toContain("Current fast mode: on");
   });
 
   it("prefers the target session entry from sessionStore for /fast status", async () => {
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = "/fast status";
+    const params = buildUsageParams("/fast status");
     params.provider = "openai";
     params.model = "gpt-5.4";
     params.sessionEntry = {
@@ -339,17 +310,15 @@ describe("handleFastCommand", () => {
 
     await handleFastCommand(params, true);
 
-    const args = expectFastModeArgs();
-    const sessionEntry = args.sessionEntry as Record<string, unknown> | undefined;
-    expect(sessionEntry?.sessionId).toBe("target-session");
-    expect(sessionEntry?.fastMode).toBe(true);
+    expect(expectArgs(resolveFastModeStateMock)).toMatchObject({
+      sessionEntry: { sessionId: "target-session", fastMode: true },
+    });
   });
 
   it.each([["ultrafast", "⚙️ Ultrafast mode enabled."]])(
     "keeps the /fast %s reply without a target entry",
     async (mode, text) => {
-      const params = buildUsageParams();
-      params.command.commandBodyNormalized = `/fast ${mode}`;
+      const params = buildUsageParams(`/fast ${mode}`);
       params.sessionEntry = undefined;
 
       expect(await handleFastCommand(params, true)).toEqual({
@@ -362,8 +331,7 @@ describe("handleFastCommand", () => {
   );
 
   it("rejects an invalid /fast mode without mutating the target", async () => {
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = "/fast invalid";
+    const params = buildUsageParams("/fast invalid");
     const target = { sessionId: "target-session", updatedAt: 1, fastMode: true };
     params.sessionEntry = target;
     params.sessionStore = { [params.sessionKey]: target };
@@ -378,8 +346,7 @@ describe("handleFastCommand", () => {
 
   it.each(["default"])("reports a /fast %s persistence conflict", async (mode) => {
     await withTempDir("openclaw-fast-conflict-", async (dir) => {
-      const params = buildUsageParams();
-      params.command.commandBodyNormalized = `/fast ${mode}`;
+      const params = buildUsageParams(`/fast ${mode}`);
       params.storePath = path.join(dir, "sessions.json");
       const target = { sessionId: "missing-session", updatedAt: 1, fastMode: true };
       params.sessionEntry = target;

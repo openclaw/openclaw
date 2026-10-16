@@ -11,6 +11,25 @@ function withTempStore<T>(run: (storePath: string) => Promise<T>): Promise<T> {
   return run(path.join(sessionDirs.make(), "sessions.json"));
 }
 
+function commandFixture(storePath: string, entry: SessionEntry, sessionKey = "agent:main:command") {
+  const sessionStore = { [sessionKey]: entry };
+  return {
+    sessionStore,
+    read: () => loadSessionEntry({ storePath, sessionKey }),
+    replace: (next: SessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
+    persist: (overrides: Partial<Parameters<typeof persistCommandSession>[0]> = {}) =>
+      persistCommandSession({
+        sessionEntry: entry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        ...overrides,
+      }),
+    abort: (abortCutoff?: Parameters<typeof persistAbortTargetEntry>[0]["abortCutoff"]) =>
+      persistAbortTargetEntry({ entry, key: sessionKey, sessionStore, storePath, abortCutoff }),
+  };
+}
+
 describe("commands session store persistence", () => {
   it("does not recreate a missing row without explicit create ownership", async () => {
     await withTempStore(async (storePath) => {
@@ -20,19 +39,9 @@ describe("commands session store persistence", () => {
         updatedAt: 1,
         responseUsage: "tokens",
       };
-      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-
-      await expect(
-        persistCommandSession({
-          sessionEntry: entry,
-          sessionStore,
-          sessionKey,
-          storePath,
-          touchedFields: ["responseUsage"],
-        }),
-      ).resolves.toBe(false);
-
-      expect(loadSessionEntry({ storePath, sessionKey })).toBeUndefined();
+      const fixture = commandFixture(storePath, entry, sessionKey);
+      await expect(fixture.persist({ touchedFields: ["responseUsage"] })).resolves.toBe(false);
+      expect(fixture.read()).toBeUndefined();
     });
   });
 
@@ -67,39 +76,27 @@ describe("commands session store persistence", () => {
         storePath,
       });
       await replaceSessionEntry({ storePath, sessionKey: otherKey }, { ...otherEntry });
-      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+      const { sessionStore, persist, read } = commandFixture(storePath, entry, sessionKey);
       const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(200).mockReturnValue(400);
 
       try {
-        await expect(
-          persistCommandSession({
-            sessionEntry: entry,
-            sessionStore,
-            sessionKey,
-            storePath,
-          }),
-        ).resolves.toBe(true);
+        await expect(persist()).resolves.toBe(true);
       } finally {
         nowSpy.mockRestore();
       }
 
-      const persisted = loadSessionEntry({ storePath, sessionKey });
+      const persisted = read();
       const persistedOther = loadSessionEntry({ storePath, sessionKey: otherKey });
       expect(entry.updatedAt).not.toBe(1);
-      expect(sessionStore[sessionKey]).toMatchObject({
-        sessionId: "command-session",
-        label: "After rename",
-        model: "gpt-5.5",
-      });
-      expect(sessionStore[sessionKey]?.updatedAt).toBeGreaterThanOrEqual(concurrentUpdatedAt);
-      expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
-      expect(persisted).toMatchObject({
-        sessionId: "command-session",
-        label: "After rename",
-        model: "gpt-5.5",
-      });
-      expect(persisted?.updatedAt).toBeGreaterThanOrEqual(concurrentUpdatedAt);
-      expect(persisted?.pinnedAt).toBeUndefined();
+      for (const current of [sessionStore[sessionKey], persisted]) {
+        expect(current).toMatchObject({
+          sessionId: "command-session",
+          label: "After rename",
+          model: "gpt-5.5",
+        });
+        expect(current?.updatedAt).toBeGreaterThanOrEqual(concurrentUpdatedAt);
+        expect(current?.pinnedAt).toBeUndefined();
+      }
       expect(persistedOther).toStrictEqual(otherEntry);
     });
   });
@@ -122,21 +119,11 @@ describe("commands session store persistence", () => {
         delivery: { kind: "none" },
         queueMode: "interrupt",
       };
-      await replaceSessionEntry({ storePath, sessionKey }, rotatedEntry);
-      const sessionStore = { [sessionKey]: sessionEntry };
-
-      await expect(
-        persistCommandSession({
-          initialSessionEntry: initialEntry,
-          sessionEntry,
-          sessionStore,
-          sessionKey,
-          storePath,
-        }),
-      ).resolves.toBe(false);
-
-      expect(sessionStore[sessionKey]).toEqual(rotatedEntry);
-      expect(loadSessionEntry({ storePath, sessionKey })).toEqual(rotatedEntry);
+      const fixture = commandFixture(storePath, sessionEntry, sessionKey);
+      await fixture.replace(rotatedEntry);
+      await expect(fixture.persist({ initialSessionEntry: initialEntry })).resolves.toBe(false);
+      expect(fixture.sessionStore[sessionKey]).toEqual(rotatedEntry);
+      expect(fixture.read()).toEqual(rotatedEntry);
     });
   });
 
@@ -154,21 +141,15 @@ describe("commands session store persistence", () => {
         updatedAt: 2,
         sendPolicy: "allow",
       };
-      await replaceSessionEntry({ storePath, sessionKey }, concurrentEntry);
-      const sessionStore = { [sessionKey]: sessionEntry };
-
+      const fixture = commandFixture(storePath, sessionEntry, sessionKey);
+      await fixture.replace(concurrentEntry);
       await expect(
-        persistCommandSession({
+        fixture.persist({
           initialSessionEntry: initialEntry,
-          sessionEntry,
-          sessionStore,
-          sessionKey,
-          storePath,
           touchedFields: ["sendPolicy"],
         }),
       ).resolves.toBe(false);
-
-      expect(sessionStore[sessionKey]).toMatchObject({
+      expect(fixture.sessionStore[sessionKey]).toMatchObject({
         sessionId: "session-1",
         sendPolicy: "allow",
       });
@@ -194,22 +175,16 @@ describe("commands session store persistence", () => {
         delivery: { kind: "none" },
         groupActivationNeedsSystemIntro: false,
       };
-      await replaceSessionEntry({ storePath, sessionKey }, concurrentEntry);
-      const sessionStore = { [sessionKey]: sessionEntry };
-
+      const fixture = commandFixture(storePath, sessionEntry, sessionKey);
+      await fixture.replace(concurrentEntry);
       await expect(
-        persistCommandSession({
+        fixture.persist({
           initialSessionEntry: initialEntry,
-          sessionEntry,
-          sessionStore,
-          sessionKey,
-          storePath,
           touchedFields: ["groupActivation", "groupActivationNeedsSystemIntro"],
         }),
       ).resolves.toBe(false);
-
-      expect(sessionStore[sessionKey]).toEqual(concurrentEntry);
-      expect(loadSessionEntry({ storePath, sessionKey })).toEqual(concurrentEntry);
+      expect(fixture.sessionStore[sessionKey]).toEqual(concurrentEntry);
+      expect(fixture.read()).toEqual(concurrentEntry);
     });
   });
 
@@ -222,26 +197,20 @@ describe("commands session store persistence", () => {
       };
       await replaceSessionEntry({ storePath, sessionKey }, { ...persistedEntry });
       const entry: SessionEntry = { ...persistedEntry, sendPolicy: "allow" };
-      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-
+      const fixture = commandFixture(storePath, entry, sessionKey);
       await expect(
-        persistCommandSession({
+        fixture.persist({
           initialSessionEntry: { ...persistedEntry },
-          sessionEntry: entry,
-          sessionStore,
-          sessionKey,
-          storePath,
           touchedFields: ["sendPolicy"],
         }),
       ).resolves.toBe(true);
-
-      const persisted = loadSessionEntry({ storePath, sessionKey });
+      const persisted = fixture.read();
       expect(persisted).toMatchObject({
         sessionId: "tombstone-session",
         sendPolicy: "allow",
         updatedAt: 0,
       });
-      expect(sessionStore[sessionKey]?.updatedAt).toBe(0);
+      expect(fixture.sessionStore[sessionKey]?.updatedAt).toBe(0);
     });
   });
 
@@ -254,19 +223,9 @@ describe("commands session store persistence", () => {
       };
       await replaceSessionEntry({ storePath, sessionKey }, { ...persistedEntry });
       const entry: SessionEntry = { ...persistedEntry };
-      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-
-      await expect(
-        persistAbortTargetEntry({
-          entry,
-          key: sessionKey,
-          sessionStore,
-          storePath,
-          abortCutoff: { messageSid: "77", timestamp: 456 },
-        }),
-      ).resolves.toBe(true);
-
-      const persisted = loadSessionEntry({ storePath, sessionKey });
+      const fixture = commandFixture(storePath, entry, sessionKey);
+      await expect(fixture.abort({ messageSid: "77", timestamp: 456 })).resolves.toBe(true);
+      const persisted = fixture.read();
       expect(persisted).toMatchObject({
         sessionId: "tombstone-abort-session",
         abortedLastRun: true,
@@ -286,23 +245,15 @@ describe("commands session store persistence", () => {
         updatedAt: 1,
         model: "gpt-5.5",
       };
-      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-
-      await expect(
-        persistAbortTargetEntry({
-          entry,
-          key: sessionKey,
-          sessionStore,
-          storePath,
-          abortCutoff: { messageSid: "42", timestamp: 123 },
-        }),
-      ).resolves.toBe(true);
-
-      const persisted = loadSessionEntry({ storePath, sessionKey });
-      expect(sessionStore[sessionKey]).toBe(entry);
-      expect(entry.abortedLastRun).toBe(true);
-      expect(entry.abortCutoffMessageSid).toBe("42");
-      expect(entry.abortCutoffTimestamp).toBe(123);
+      const fixture = commandFixture(storePath, entry, sessionKey);
+      await expect(fixture.abort({ messageSid: "42", timestamp: 123 })).resolves.toBe(true);
+      const persisted = fixture.read();
+      expect(fixture.sessionStore[sessionKey]).toBe(entry);
+      expect(entry).toMatchObject({
+        abortedLastRun: true,
+        abortCutoffMessageSid: "42",
+        abortCutoffTimestamp: 123,
+      });
       expect(persisted).toMatchObject({
         sessionId: "abort-session",
         model: "gpt-5.5",
@@ -313,12 +264,12 @@ describe("commands session store persistence", () => {
     });
   });
 
-  it.each([false])("only patches a matching persisted abort owner=%s", async (matchesOwner) => {
+  it("does not patch a different persisted abort owner", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "agent:main:abort-target";
       const otherKey = "agent:main:other";
       const entry: SessionEntry = {
-        sessionId: matchesOwner ? "persisted-session" : "memory-session",
+        sessionId: "memory-session",
         updatedAt: 1,
       };
       const persistedEntry: SessionEntry = {
@@ -334,14 +285,7 @@ describe("commands session store persistence", () => {
       await replaceSessionEntry({ storePath, sessionKey }, persistedEntry);
       await replaceSessionEntry({ storePath, sessionKey: otherKey }, otherEntry);
 
-      await expect(
-        persistAbortTargetEntry({
-          entry,
-          key: sessionKey,
-          sessionStore: { [sessionKey]: entry },
-          storePath,
-        }),
-      ).resolves.toBe(matchesOwner);
+      await expect(commandFixture(storePath, entry, sessionKey).abort()).resolves.toBe(false);
 
       const persisted = loadSessionEntry({ storePath, sessionKey });
       const persistedOther = loadSessionEntry({ storePath, sessionKey: otherKey });
@@ -350,7 +294,7 @@ describe("commands session store persistence", () => {
         sessionId: "persisted-session",
         model: "sonnet-4.6",
       });
-      expect(persisted?.abortedLastRun ?? false).toBe(matchesOwner);
+      expect(persisted?.abortedLastRun ?? false).toBe(false);
       expect(persistedOther).toStrictEqual(otherEntry);
     });
   });
