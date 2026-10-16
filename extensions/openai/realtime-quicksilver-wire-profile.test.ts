@@ -8,6 +8,15 @@ describe("GPT-Live session shaping", () => {
     ).toEqual({ output: { voice: "marin" } });
   });
 
+  it("keeps Codex v3 voices on the Codex route only", () => {
+    expect(
+      buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex", voice: "himari" }).audio,
+    ).toEqual({ output: { voice: "himari" } });
+    expect(buildOpenAIQuicksilverSession({ model: "gpt-live-1", voice: "himari" }).audio).toEqual({
+      output: { voice: "marin" },
+    });
+  });
+
   it("bounds initial items to the newest context", () => {
     const session = buildOpenAIQuicksilverSession({
       model: "gpt-live-test-canary",
