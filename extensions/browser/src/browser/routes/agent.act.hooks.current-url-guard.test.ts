@@ -106,11 +106,7 @@ const blockedHookCases = [
 
 describe("agent act hook current URL guard", () => {
   beforeEach(() => {
-    for (const fn of [
-      ...Object.values(mcp),
-      ...Object.values(pathMocks),
-      ...Object.values(pwMocks),
-    ]) {
+    for (const fn of Object.values({ ...mcp, ...pathMocks, ...pwMocks })) {
       fn.mockClear();
     }
   });
@@ -119,9 +115,7 @@ describe("agent act hook current URL guard", () => {
     "blocks $label hooks before page side effects on a disallowed current tab",
     async ({ path, body, sideEffects }) => {
       const profileCtx = createProfileContext();
-
       const response = await callHook({ path, body, profileCtx });
-
       expectResponse(
         response,
         { error: "browser navigation blocked by policy", reason: "navigation_blocked" },
