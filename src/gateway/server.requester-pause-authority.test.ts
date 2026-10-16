@@ -146,6 +146,12 @@ describe("requester pause authority at the Gateway effect", () => {
         "",
       ].join("\n");
       const currentChild = () => expectDefined(runs.get(child.runId), "published requester child");
+      const persistChild = (row: SubagentRunRecord | null) =>
+        mutateSubagentRuns(
+          [child.runId],
+          () => ({ value: undefined, postimages: new Map([[child.runId, row]]) }),
+          { runs, context: captureOpenClawStateWorkerContext() },
+        );
       const mutateChild = (update: (draft: SubagentRunRecord) => void) =>
         mutateSubagentRuns(
           [child.runId],
@@ -158,14 +164,7 @@ describe("requester pause authority at the Gateway effect", () => {
           },
           { runs, context: captureOpenClawStateWorkerContext() },
         );
-      await mutateSubagentRuns(
-        [child.runId],
-        () => ({
-          value: undefined,
-          postimages: new Map([[child.runId, child]]),
-        }),
-        { runs, context: captureOpenClawStateWorkerContext() },
-      );
+      await persistChild(child);
       const received: string[] = [];
       agentCommandMock.mockImplementation(async (input) => {
         const opts = input as AgentCommandGatewayIngressOpts;
@@ -308,6 +307,24 @@ describe("requester pause authority at the Gateway effect", () => {
               ),
           ),
         );
+      const sendHuman = async (
+        sender: ReturnType<typeof createOperatorClient>,
+        runId: string,
+        message: string,
+      ) => {
+        expect(
+          await dispatchGatewayRequestInProcessRaw(
+            "agent",
+            {
+              sessionKey: parent,
+              message,
+              idempotencyKey: runId,
+              deliver: false,
+            },
+            { client: sender, context, expectFinal: true },
+          ),
+        ).toMatchObject({ ok: true });
+      };
       try {
         if (followsUp) {
           originalSource = expectDefined(
@@ -323,18 +340,7 @@ describe("requester pause authority at the Gateway effect", () => {
           );
           client.internal = { ...client.internal, operatorRunAuthority: originalSource.authority };
         }
-        expect(
-          await dispatchGatewayRequestInProcessRaw(
-            "agent",
-            {
-              sessionKey: parent,
-              message: "Spawn work and yield",
-              idempotencyKey: originalRunId,
-              deliver: false,
-            },
-            { client, context, expectFinal: true },
-          ),
-        ).toMatchObject({ ok: true });
+        await sendHuman(client, originalRunId, "Spawn work and yield");
         originalSource?.release();
         await mutateChild((draft) => {
           draft.pauseReason = "sessions_yield";
@@ -352,18 +358,7 @@ describe("requester pause authority at the Gateway effect", () => {
             scopes: ["operator.admin"],
           });
           freshClient.internal = { controlUiAdmin: true };
-          expect(
-            await dispatchGatewayRequestInProcessRaw(
-              "agent",
-              {
-                sessionKey: parent,
-                message: "Same human follow-up",
-                idempotencyKey: followupRunId,
-                deliver: false,
-              },
-              { client: freshClient, context, expectFinal: true },
-            ),
-          ).toMatchObject({ ok: true });
+          await sendHuman(freshClient, followupRunId, "Same human follow-up");
           expect(originalSource?.authority.assertCurrent).not.toThrow();
         }
         const target = outcome === "foreign requester" ? foreign : parent;
@@ -482,17 +477,7 @@ describe("requester pause authority at the Gateway effect", () => {
         revokeRequesterCronAuthority(parent);
         runs.releaseCompletionAuthority(currentChild());
         originalSource?.release();
-        await mutateSubagentRuns(
-          [child.runId],
-          () => ({
-            value: undefined,
-            postimages: new Map([[child.runId, null]]),
-          }),
-          {
-            runs,
-            context: captureOpenClawStateWorkerContext(),
-          },
-        );
+        await persistChild(null);
       }
     },
   );

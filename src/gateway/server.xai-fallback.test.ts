@@ -74,6 +74,31 @@ const model = (id: string) => ({
   maxTokens: 256,
 });
 const encodeEvent = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
+const outputMessage = (id: string, text: string) => ({
+  type: "message",
+  id,
+  role: "assistant",
+  status: "completed",
+  content: [{ type: "output_text", text, annotations: [] }],
+});
+type OutputMessage = ReturnType<typeof outputMessage>;
+const itemEvent = (item: OutputMessage, added = false) =>
+  encodeEvent({
+    type: added ? "response.output_item.added" : "response.output_item.done",
+    output_index: 0,
+    item: added ? { ...item, status: "in_progress", content: [] } : item,
+  });
+const responseEvent = (
+  id: string,
+  status: "failed" | "completed",
+  output: OutputMessage[],
+  usage: { input_tokens: number; output_tokens: number; total_tokens: number },
+  error?: { code: null; message: string },
+) =>
+  encodeEvent({
+    type: `response.${status}`,
+    response: { id, status, output, usage, ...(error ? { error } : {}) },
+  });
 
 function messageText(message: unknown): string {
   if (!isRecord(message) || !Array.isArray(message.content)) {
@@ -163,21 +188,9 @@ it(
         response.writeHead(200, { "content-type": "text/event-stream" });
         const recovered = scenario === "continuation" && requests.length === 2;
         if ((payload.model === primaryModel && !recovered) || scenario === "exhausted") {
-          const item = {
-            type: "message",
-            id: `failed-${requests.length}`,
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: prefix, annotations: [] }],
-          };
+          const item = outputMessage(`failed-${requests.length}`, prefix);
           if (scenario !== "fallback") {
-            response.write(
-              encodeEvent({
-                type: "response.output_item.added",
-                output_index: 0,
-                item: { ...item, status: "in_progress", content: [] },
-              }),
-            );
+            response.write(itemEvent(item, true));
             response.write(
               encodeEvent({
                 type: "response.output_text.delta",
@@ -187,49 +200,28 @@ it(
                 delta: prefix,
               }),
             );
-            response.write(
-              encodeEvent({ type: "response.output_item.done", output_index: 0, item }),
-            );
+            response.write(itemEvent(item));
           }
           response.end(
-            encodeEvent({
-              type: "response.failed",
-              response: {
-                id: `failure-${requests.length}`,
-                status: "failed",
-                error: { code: null, message: tokenGenerationError },
-                output: scenario === "fallback" ? [] : [item],
-                usage: { input_tokens: 21, output_tokens: 4, total_tokens: 25 },
-              },
-            }),
+            responseEvent(
+              `failure-${requests.length}`,
+              "failed",
+              scenario === "fallback" ? [] : [item],
+              { input_tokens: 21, output_tokens: 4, total_tokens: 25 },
+              { code: null, message: tokenGenerationError },
+            ),
           );
           return;
         }
-        const message = {
-          type: "message",
-          id: "fallback",
-          role: "assistant",
-          status: "completed",
-          content: [
-            { type: "output_text", text: recovered ? continuation : marker, annotations: [] },
-          ],
-        };
+        const message = outputMessage("fallback", recovered ? continuation : marker);
         response.end(
           [
-            encodeEvent({
-              type: "response.output_item.added",
-              output_index: 0,
-              item: { ...message, status: "in_progress", content: [] },
-            }),
-            encodeEvent({ type: "response.output_item.done", output_index: 0, item: message }),
-            encodeEvent({
-              type: "response.completed",
-              response: {
-                id: "fallback-response",
-                status: "completed",
-                output: [message],
-                usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-              },
+            itemEvent(message, true),
+            itemEvent(message),
+            responseEvent("fallback-response", "completed", [message], {
+              input_tokens: 10,
+              output_tokens: 5,
+              total_tokens: 15,
             }),
           ].join(""),
         );
@@ -246,6 +238,12 @@ it(
         throw new Error("Missing loopback provider address");
       }
       const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+      const providerConfig = (id: string) => ({
+        baseUrl,
+        apiKey: "test",
+        api: "openai-responses" as const,
+        models: [model(id)],
+      });
       gateway = await startGatewayWithClient({
         cfg: {
           agents: {
@@ -270,18 +268,8 @@ it(
           models: {
             mode: "replace",
             providers: {
-              xai: {
-                baseUrl,
-                apiKey: "test",
-                api: "openai-responses",
-                models: [model(primaryModel)],
-              },
-              openai: {
-                baseUrl,
-                apiKey: "test",
-                api: "openai-responses",
-                models: [model(fallbackModel)],
-              },
+              xai: providerConfig(primaryModel),
+              openai: providerConfig(fallbackModel),
             },
           },
           plugins: {

@@ -51,6 +51,59 @@ const RUNNER_SESSION_KEY = "agent:main:runner-socket-close";
 const RUNNER_ENVIRONMENT_ID = "environment-runner-socket-close";
 const RUNNER_BUNDLE_HASH = "a".repeat(64);
 
+async function pairNode(name: string, commands: string[]) {
+  const paired = await pairDeviceIdentity({
+    name,
+    role: "node",
+    scopes: [],
+    clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+    clientMode: GATEWAY_CLIENT_MODES.NODE,
+  });
+  const pairing = await requestNodePairing({
+    nodeId: paired.identity.deviceId,
+    platform: "linux",
+    deviceFamily: "Linux",
+    commands,
+  });
+  await approveNodePairing(pairing.request.requestId, {
+    callerScopes: ["operator.pairing", "operator.write"],
+  });
+  return paired;
+}
+
+type ClientOptions = Parameters<typeof connectGatewayClient>[0];
+function connectOperator(url: string, options: Partial<ClientOptions> = {}) {
+  return connectGatewayClient({
+    url,
+    token: "secret",
+    role: "operator",
+    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    mode: GATEWAY_CLIENT_MODES.BACKEND,
+    scopes: ["operator.admin", "operator.read", "operator.write"],
+    ...options,
+  });
+}
+function connectNode(url: string, options: Partial<ClientOptions>) {
+  return connectGatewayClient({
+    url,
+    token: "secret",
+    role: "node",
+    clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+    mode: GATEWAY_CLIENT_MODES.NODE,
+    platform: "linux",
+    deviceFamily: "Linux",
+    scopes: [],
+    ...options,
+  });
+}
+
+async function terminateNode(node: Awaited<ReturnType<typeof connectGatewayClient>>) {
+  const socket = Reflect.get(node, "ws") as { terminate?: () => void } | null;
+  const stopped = node.stopAndWait({ timeoutMs: 1_000 });
+  socket?.terminate?.();
+  await stopped;
+}
+
 async function seedActiveDevicePlacement(nodeId: string): Promise<void> {
   const environments = await createWorkerEnvironmentStore();
   const placements = createWorkerSessionPlacementStore();
@@ -112,45 +165,27 @@ async function seedActiveDevicePlacement(nodeId: string): Promise<void> {
     sessionKey: RUNNER_SESSION_KEY,
     agentId: "main",
   });
-  placement = await placements.transition({
-    sessionId: RUNNER_SESSION_ID,
-    from: "requested",
-    to: "provisioning",
-    expectedGeneration: placement.generation,
-    patch: { environmentId: RUNNER_ENVIRONMENT_ID },
-  });
-  placement = await placements.transition({
-    sessionId: RUNNER_SESSION_ID,
-    from: "provisioning",
-    to: "syncing",
-    expectedGeneration: placement.generation,
-    patch: { environmentId: RUNNER_ENVIRONMENT_ID, workerBundleHash: RUNNER_BUNDLE_HASH },
-  });
-  placement = await placements.transition({
-    sessionId: RUNNER_SESSION_ID,
-    from: "syncing",
-    to: "starting",
-    expectedGeneration: placement.generation,
-    patch: {
-      environmentId: RUNNER_ENVIRONMENT_ID,
-      workerBundleHash: RUNNER_BUNDLE_HASH,
-      workspaceBaseManifestRef: "manifest-runner-socket-close",
-      remoteWorkspaceDir: "/workspace/runner-socket-close",
-    },
-  });
-  await placements.transition({
-    sessionId: RUNNER_SESSION_ID,
-    from: "starting",
-    to: "active",
-    expectedGeneration: placement.generation,
-    patch: {
-      environmentId: RUNNER_ENVIRONMENT_ID,
-      activeOwnerEpoch: attached.ownerEpoch,
-      workerBundleHash: RUNNER_BUNDLE_HASH,
-      workspaceBaseManifestRef: "manifest-runner-socket-close",
-      remoteWorkspaceDir: "/workspace/runner-socket-close",
-    },
-  });
+  const environment = { environmentId: RUNNER_ENVIRONMENT_ID };
+  const bundle = { ...environment, workerBundleHash: RUNNER_BUNDLE_HASH };
+  const workspace = {
+    ...bundle,
+    workspaceBaseManifestRef: "manifest-runner-socket-close",
+    remoteWorkspaceDir: "/workspace/runner-socket-close",
+  };
+  for (const [from, to, patch] of [
+    ["requested", "provisioning", environment],
+    ["provisioning", "syncing", bundle],
+    ["syncing", "starting", workspace],
+    ["starting", "active", { ...workspace, activeOwnerEpoch: attached.ownerEpoch }],
+  ] as const) {
+    placement = await placements.transition({
+      sessionId: RUNNER_SESSION_ID,
+      from,
+      to,
+      expectedGeneration: placement.generation,
+      patch,
+    });
+  }
   await writeSessionStore({
     entries: { [RUNNER_SESSION_KEY]: sessionStoreEntry(RUNNER_SESSION_ID) },
   });
@@ -167,22 +202,7 @@ test.each([
   ["a terminal node result admitted before close wins over disconnect cleanup", false],
   ["pairing removal still fences a terminal node result while close drains", true],
 ] as const)("%s", async (_name, removePairingDuringDrain) => {
-  const pairedNode = await pairDeviceIdentity({
-    name: "node-result-before-close",
-    role: "node",
-    scopes: [],
-    clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
-    clientMode: GATEWAY_CLIENT_MODES.NODE,
-  });
-  const pairing = await requestNodePairing({
-    nodeId: pairedNode.identity.deviceId,
-    platform: "linux",
-    deviceFamily: "Linux",
-    commands: ["camera.list"],
-  });
-  await approveNodePairing(pairing.request.requestId, {
-    callerScopes: ["operator.pairing", "operator.write"],
-  });
+  const pairedNode = await pairNode("node-result-before-close", ["camera.list"]);
   await writeConfigFile({
     gateway: { nodes: { commands: { allow: ["camera.list"] } } },
   });
@@ -198,25 +218,11 @@ test.each([
   }>();
 
   try {
-    operator = await connectGatewayClient({
-      url,
-      token: "secret",
-      role: "operator",
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    operator = await connectOperator(url, {
       clientDisplayName: "node result close operator",
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      scopes: ["operator.admin", "operator.read", "operator.write"],
     });
-    node = await connectGatewayClient({
-      url,
-      token: "secret",
-      role: "node",
-      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+    node = await connectNode(url, {
       clientDisplayName: "node result close host",
-      mode: GATEWAY_CLIENT_MODES.NODE,
-      platform: "linux",
-      deviceFamily: "Linux",
-      scopes: [],
       commands: ["camera.list"],
       deviceIdentity: pairedNode.identity,
       onEvent: (event) => {
@@ -285,10 +291,7 @@ test.each([
       )
       .catch((error: unknown) => error);
     await pairingReadStarted;
-    const rawNodeSocket = Reflect.get(node, "ws") as { terminate?: () => void } | null;
-    const stopped = node.stopAndWait({ timeoutMs: 1_000 });
-    rawNodeSocket?.terminate?.();
-    await stopped;
+    await terminateNode(node);
     node = undefined;
     await vi.waitFor(() => expect(drainSpy).toHaveBeenCalledOnce());
     if (removePairingDuringDrain) {
@@ -340,22 +343,7 @@ test("publishes an offline device row on socket close without a session-list rel
     throw new Error("runner availability proof requires the isolated Gateway state directory");
   }
   testState.sessionStorePath = path.join(stateDir, "runner-socket-close-sessions.json");
-  const pairedNode = await pairDeviceIdentity({
-    name: "runner-availability-close",
-    role: "node",
-    scopes: [],
-    clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
-    clientMode: GATEWAY_CLIENT_MODES.NODE,
-  });
-  const pairing = await requestNodePairing({
-    nodeId: pairedNode.identity.deviceId,
-    platform: "linux",
-    deviceFamily: "Linux",
-    commands: [],
-  });
-  await approveNodePairing(pairing.request.requestId, {
-    callerScopes: ["operator.pairing", "operator.write"],
-  });
+  const pairedNode = await pairNode("runner-availability-close", []);
 
   const previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
   let started: Awaited<ReturnType<typeof startServer>>;
@@ -377,17 +365,9 @@ test("publishes an offline device row on socket close without a session-list rel
   let availabilityEvents = 0;
   const { promise: availableRow, resolve: resolveAvailable } = createDeferred<unknown>();
   const { promise: offlineRow, resolve: resolveOffline } = createDeferred<unknown>();
-  const connectNode = () =>
-    connectGatewayClient({
-      url,
-      token: "secret",
-      role: "node",
-      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+  const connectRunner = () =>
+    connectNode(url, {
       clientDisplayName: "runner availability node",
-      mode: GATEWAY_CLIENT_MODES.NODE,
-      platform: "linux",
-      deviceFamily: "Linux",
-      scopes: [],
       commands: [],
       deviceIdentity: pairedNode.identity,
       onEvent: (event) => {
@@ -409,14 +389,8 @@ test("publishes an offline device row on socket close without a session-list rel
     });
 
   try {
-    operator = await connectGatewayClient({
-      url,
-      token: "secret",
-      role: "operator",
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    operator = await connectOperator(url, {
       clientDisplayName: "runner availability browser",
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      scopes: ["operator.admin", "operator.read", "operator.write"],
       onEvent: (event) => {
         const payload = event.payload as
           | {
@@ -437,7 +411,7 @@ test("publishes an offline device row on socket close without a session-list rel
     });
     await seedActiveDevicePlacement(pairedNode.identity.deviceId);
     await operator.request("sessions.subscribe", {});
-    node = await connectNode();
+    node = await connectRunner();
     await node.request(
       "node.runnerInventory.update",
       {
@@ -461,10 +435,7 @@ test("publishes an offline device row on socket close without a session-list rel
     });
 
     armed = true;
-    const rawNodeSocket = Reflect.get(node, "ws") as { terminate?: () => void } | null;
-    const stopped = node.stopAndWait({ timeoutMs: 1_000 });
-    rawNodeSocket?.terminate?.();
-    await stopped;
+    await terminateNode(node);
     node = undefined;
 
     expect(await offlineRow).toMatchObject({
@@ -480,7 +451,7 @@ test("publishes an offline device row on socket close without a session-list rel
       // The offline assertion retains a real worker owner. Reconnect only to acknowledge
       // its physical cleanup; losing transport is not evidence that the worker stopped.
       if (!node) {
-        node = await connectNode();
+        node = await connectRunner();
       }
       await node.request("node.runnerInventory.update", {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],

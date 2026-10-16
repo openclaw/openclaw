@@ -148,9 +148,20 @@ async function createFixture(
   const collaboratorClient = identifiedClient(collaborator.id);
   const adminClient = identifiedClient(admin.id);
   adminClient.connect.scopes = ["operator.admin"];
+  const context = await makeContext();
+  const read = (sessionKey = targetKey) => loadSessionEntry({ sessionKey, storePath });
+  const rpc = (client: GatewayClient, method: string, params = {}) =>
+    request(context, client, method, { key: targetKey, ...params });
+  const describeReopened = async () => {
+    await disposeSessionReadContexts();
+    await releaseGatewaySessionStoreFixture(dir);
+    testState.sessionStorePath = storePath;
+    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
+    return request(await makeContext(), identifiedClient(creator.id), "sessions.describe", {
+      key: targetKey,
+    });
+  };
   return {
-    dir,
-    storePath,
     creator,
     collaborator,
     parentKey,
@@ -158,8 +169,10 @@ async function createFixture(
     creatorClient,
     collaboratorClient,
     adminClient,
-    context: await makeContext(),
-    makeContext,
+    read,
+    rpc,
+    describeReopened,
+    storePath,
   };
 }
 
@@ -189,7 +202,7 @@ async function request(
 test("sessions.create inherits communication for a new explicit child, not an adopted collaborator target", async () => {
   const f = await createFixture("adoption");
   const childKey = "agent:main:dashboard:communication-new-child";
-  const child = await request(f.context, f.collaboratorClient, "sessions.create", {
+  const child = await f.rpc(f.collaboratorClient, "sessions.create", {
     agentId: "main",
     key: childKey,
     parentSessionKey: f.parentKey,
@@ -199,17 +212,14 @@ test("sessions.create inherits communication for a new explicit child, not an ad
     key: childKey,
     entry: { parentSessionKey: f.parentKey, communication: { receive: "always" } },
   });
-  expect(loadSessionEntry({ sessionKey: childKey, storePath: f.storePath })).toMatchObject({
+  expect(f.read(childKey)).toMatchObject({
     parentSessionKey: f.parentKey,
     communication: { receive: "always" },
     createdActor: { type: "human", id: f.collaborator.id },
   });
 
-  const before = expectDefined(
-    loadSessionEntry({ sessionKey: f.targetKey, storePath: f.storePath }),
-    "existing target",
-  );
-  const adopted = await request(f.context, f.collaboratorClient, "sessions.create", {
+  const before = expectDefined(f.read(), "existing target");
+  const adopted = await f.rpc(f.collaboratorClient, "sessions.create", {
     agentId: "main",
     key: f.targetKey,
     parentSessionKey: f.parentKey,
@@ -217,10 +227,7 @@ test("sessions.create inherits communication for a new explicit child, not an ad
   });
   expect(adopted.ok, JSON.stringify(adopted.error)).toBe(true);
   expect(adopted.payload).toMatchObject({ key: f.targetKey, sessionId: before.sessionId });
-  const after = expectDefined(
-    loadSessionEntry({ sessionKey: f.targetKey, storePath: f.storePath }),
-    "adopted target",
-  );
+  const after = expectDefined(f.read(), "adopted target");
   // Parent linkage and the label prove that the existing-row write reached the
   // old inherited spread, rather than being denied or returning a cached ACK.
   expect(after).toMatchObject({
@@ -236,8 +243,7 @@ test("sessions.create inherits communication for a new explicit child, not an ad
 test("communication writes require the creator or admin and existing creates cannot overwrite policy", async () => {
   const f = await createFixture("explicit");
   for (const method of ["sessions.create", "sessions.patch"] as const) {
-    const denied = await request(f.context, f.collaboratorClient, method, {
-      key: f.targetKey,
+    const denied = await f.rpc(f.collaboratorClient, method, {
       communication: { receive: "always" },
     });
     expect(denied).toMatchObject({
@@ -247,14 +253,9 @@ test("communication writes require the creator or admin and existing creates can
         message: "Only the session creator or an admin can change communication settings.",
       },
     });
-    expect(
-      loadSessionEntry({ sessionKey: f.targetKey, storePath: f.storePath })?.communication,
-    ).toEqual({
-      receive: "never",
-    });
+    expect(f.read()?.communication).toEqual({ receive: "never" });
   }
-  const overwrite = await request(f.context, f.creatorClient, "sessions.create", {
-    key: f.targetKey,
+  const overwrite = await f.rpc(f.creatorClient, "sessions.create", {
     communication: { receive: "always" },
   });
   expect(overwrite).toMatchObject({
@@ -266,51 +267,27 @@ test("communication writes require the creator or admin and existing creates can
   });
   for (const client of [f.creatorClient, f.adminClient]) {
     const receive = client === f.creatorClient ? "ask" : "never";
-    const allowed = await request(f.context, client, "sessions.patch", {
-      key: f.targetKey,
+    const allowed = await f.rpc(client, "sessions.patch", {
       communication: { receive },
     });
     expect(allowed.ok, JSON.stringify(allowed.error)).toBe(true);
-    expect(
-      loadSessionEntry({ sessionKey: f.targetKey, storePath: f.storePath })?.communication,
-    ).toEqual({
-      receive,
-    });
+    expect(f.read()?.communication).toEqual({ receive });
   }
 
-  const beforeReset = expectDefined(
-    loadSessionEntry({ sessionKey: f.targetKey, storePath: f.storePath }),
-    "target before reset",
-  );
-  const reset = await request(f.context, f.adminClient, "sessions.reset", { key: f.targetKey });
+  const beforeReset = expectDefined(f.read(), "target before reset");
+  const reset = await f.rpc(f.adminClient, "sessions.reset");
   expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
-  const resetEntry = expectDefined(
-    loadSessionEntry({ sessionKey: f.targetKey, storePath: f.storePath }),
-    "reset target",
-  );
+  const resetEntry = expectDefined(f.read(), "reset target");
   expect(resetEntry.communication).toEqual({ receive: "never" });
   expect(resetEntry.sessionId).toBe(beforeReset.sessionId);
   expect(resetEntry.lifecycleRevision).not.toBe(beforeReset.lifecycleRevision);
 
-  // Retire projection/readers and real SQLite workers through the fixture owner,
-  // then read the same candidate database through fresh RPC state.
-  await disposeSessionReadContexts();
-  await releaseGatewaySessionStoreFixture(f.dir);
-  testState.sessionStorePath = f.storePath;
-  (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
-  const reopened = await f.makeContext();
-  const described = await request(reopened, identifiedClient(f.creator.id), "sessions.describe", {
-    key: f.targetKey,
-  });
+  const described = await f.describeReopened();
   expect(described.ok, JSON.stringify(described.error)).toBe(true);
   expect(described.payload).toMatchObject({
     session: { sessionId: resetEntry.sessionId, communication: { receive: "never" } },
   });
-  expect(
-    loadSessionEntry({ sessionKey: f.targetKey, storePath: f.storePath })?.communication,
-  ).toEqual({
-    receive: "never",
-  });
+  expect(f.read()?.communication).toEqual({ receive: "never" });
 });
 
 test.each([
@@ -338,23 +315,19 @@ test.each([
       { ...metadata, communication: undefined },
       defaults,
     );
-    const scope = { sessionKey: f.targetKey, storePath: f.storePath };
-    const before = expectDefined(loadSessionEntry(scope), "pre-feature stored row");
+    const before = expectDefined(f.read(), "pre-feature stored row");
     expect(before).not.toHaveProperty("communication");
 
-    const described = await request(f.context, f.creatorClient, "sessions.describe", {
-      key: f.targetKey,
-    });
+    const described = await f.rpc(f.creatorClient, "sessions.describe");
     expect(described.ok, JSON.stringify(described.error)).toBe(true);
     expect(described.payload).toMatchObject({
       session: { ...metadata, sessionId: before.sessionId, effectiveCommunication: effective },
     });
     // Describing a sparse row projects defaults without backfilling stored overrides.
-    expect(loadSessionEntry(scope)).toEqual(before);
-    expect(loadSessionEntry(scope)).not.toHaveProperty("communication");
+    expect(f.read()).toEqual(before);
+    expect(f.read()).not.toHaveProperty("communication");
 
-    const patched = await request(f.context, f.creatorClient, "sessions.patch", {
-      key: f.targetKey,
+    const patched = await f.rpc(f.creatorClient, "sessions.patch", {
       expectedSessionId: before.sessionId,
       communication: { send: "ask" },
     });
@@ -365,17 +338,10 @@ test.each([
       createdActor: before.createdActor,
       communication: { send: "ask" },
     };
-    expect(loadSessionEntry(scope)).toMatchObject(expected);
-    expect(loadSessionEntry(scope)?.communication).toEqual({ send: "ask" });
+    expect(f.read()).toMatchObject(expected);
+    expect(f.read()?.communication).toEqual({ send: "ask" });
 
-    await disposeSessionReadContexts();
-    await releaseGatewaySessionStoreFixture(f.dir);
-    testState.sessionStorePath = f.storePath;
-    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
-    const reopened = await f.makeContext();
-    const reloaded = await request(reopened, identifiedClient(f.creator.id), "sessions.describe", {
-      key: f.targetKey,
-    });
+    const reloaded = await f.describeReopened();
     expect(reloaded.ok, JSON.stringify(reloaded.error)).toBe(true);
     expect(reloaded.payload).toMatchObject({
       session: {
@@ -384,8 +350,8 @@ test.each([
         effectiveCommunication: { send: "ask", receive: effective.receive },
       },
     });
-    expect(loadSessionEntry(scope)).toMatchObject(expected);
-    expect(loadSessionEntry(scope)?.communication).toEqual({ send: "ask" });
+    expect(f.read()).toMatchObject(expected);
+    expect(f.read()?.communication).toEqual({ send: "ask" });
   },
 );
 
@@ -414,7 +380,7 @@ test.for(["creator", "admin", "membership"] as const)(
     replacementBoundary.key = childKey;
     replacementBoundary.entered = entered.resolve;
     replacementBoundary.release = release.promise;
-    const creating = request(f.context, client, "sessions.create", {
+    const creating = f.rpc(client, "sessions.create", {
       agentId: "main",
       key: childKey,
       parentSessionKey: f.parentKey,
@@ -468,7 +434,7 @@ test.for(["creator", "admin", "membership"] as const)(
           : { code: "FORBIDDEN", message: "Gateway requester authority changed" },
       );
     }
-    const persisted = loadSessionEntry({ sessionKey: childKey, storePath: f.storePath });
+    const persisted = f.read(childKey);
     if (authority === "creator") {
       expect(persisted?.communication).toEqual({ receive: "never" });
       expect(persisted?.label).toBeUndefined();
