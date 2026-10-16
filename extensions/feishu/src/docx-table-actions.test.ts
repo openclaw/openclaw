@@ -23,45 +23,40 @@ const { registerFeishuDocTools } = await import("./docx.js");
 type Patch = Lark.Client["docx"]["documentBlock"]["patch"];
 type PatchResponse = Awaited<ReturnType<Patch>>;
 const block = { block_id: "table_reply", block_type: 31 };
+function tableCase(
+  action: string,
+  fields: Record<string, number>,
+  patch: Record<string, number>,
+  counts: Record<string, number> = {},
+) {
+  return { action, fields, data: { [action]: patch }, counts };
+}
 const actions = [
-  {
-    action: "insert_table_row",
-    fields: { row_index: 2 },
-    data: { insert_table_row: { row_index: 2 } },
-    counts: {},
-  },
-  {
-    action: "insert_table_column",
-    fields: { column_index: 3 },
-    data: { insert_table_column: { column_index: 3 } },
-    counts: {},
-  },
-  {
-    action: "delete_table_rows",
-    fields: { row_start: 2, row_count: 3 },
-    data: { delete_table_rows: { row_start_index: 2, row_end_index: 5 } },
-    counts: { rows_deleted: 3 },
-  },
-  {
-    action: "delete_table_columns",
-    fields: { column_start: 3, column_count: 2 },
-    data: { delete_table_columns: { column_start_index: 3, column_end_index: 5 } },
-    counts: { columns_deleted: 2 },
-  },
-  {
-    action: "merge_table_cells",
-    fields: { row_start: 1, row_end: 3, column_start: 2, column_end: 5 },
-    data: {
-      merge_table_cells: {
-        row_start_index: 1,
-        row_end_index: 3,
-        column_start_index: 2,
-        column_end_index: 5,
-      },
-    },
-    counts: {},
-  },
+  tableCase("insert_table_row", { row_index: 2 }, { row_index: 2 }),
+  tableCase("insert_table_column", { column_index: 3 }, { column_index: 3 }),
+  tableCase(
+    "delete_table_rows",
+    { row_start: 2, row_count: 3 },
+    { row_start_index: 2, row_end_index: 5 },
+    { rows_deleted: 3 },
+  ),
+  tableCase(
+    "delete_table_columns",
+    { column_start: 3, column_count: 2 },
+    { column_start_index: 3, column_end_index: 5 },
+    { columns_deleted: 2 },
+  ),
+  tableCase(
+    "merge_table_cells",
+    { row_start: 1, row_end: 3, column_start: 2, column_end: 5 },
+    { row_start_index: 1, row_end_index: 3, column_start_index: 2, column_end_index: 5 },
+  ),
 ];
+const patchPath = { document_id: "doc_table", block_id: "table_target" };
+const successfulPatch: PatchResponse = {
+  code: 0,
+  data: { block, client_token: "table-client-token" },
+};
 
 function createClient(httpInstance?: Lark.HttpInstance) {
   return new Lark.Client({
@@ -88,8 +83,8 @@ function resolveTool(client: Lark.Client) {
 function paramsFor(sample: (typeof actions)[number]): Record<string, unknown> {
   return {
     action: sample.action,
-    doc_token: "doc_table",
-    block_id: "table_target",
+    doc_token: patchPath.document_id,
+    block_id: patchPath.block_id,
     ...sample.fields,
   };
 }
@@ -160,11 +155,11 @@ describe("registered feishu_doc table patches", () => {
     const params = paramsFor(sample);
     const pending = resolveTool(client).execute("table-patch", params);
     expect(patch).toHaveBeenCalledExactlyOnceWith({
-      path: { document_id: "doc_table", block_id: "table_target" },
+      path: patchPath,
       data: sample.data,
     });
     params.row_count = 99;
-    response.resolve({ code: 0, data: { block, client_token: "table-client-token" } });
+    response.resolve(successfulPatch);
     expectResult(await pending, { success: true, rows_deleted: 3, block });
   });
 
@@ -174,49 +169,31 @@ describe("registered feishu_doc table patches", () => {
   ])(
     "preserves $label defaults at the registered-tool boundary",
     async ({ fields, index, end, count }) => {
+      const optional = (field: string): Record<string, number> =>
+        Object.hasOwn(fields, "value") ? { [field]: fields.value! } : {};
       const cases = [
-        {
-          action: "insert_table_row",
-          field: "row_index",
-          input: {},
-          data: { insert_table_row: { row_index: index } },
-          counts: {},
-        },
-        {
-          action: "insert_table_column",
-          field: "column_index",
-          input: {},
-          data: { insert_table_column: { column_index: index } },
-          counts: {},
-        },
-        {
-          action: "delete_table_rows",
-          field: "row_count",
-          input: { row_start: 2 },
-          data: { delete_table_rows: { row_start_index: 2, row_end_index: end } },
-          counts: { rows_deleted: count },
-        },
-        {
-          action: "delete_table_columns",
-          field: "column_count",
-          input: { column_start: 2 },
-          data: { delete_table_columns: { column_start_index: 2, column_end_index: end } },
-          counts: { columns_deleted: count },
-        },
+        tableCase("insert_table_row", optional("row_index"), { row_index: index }),
+        tableCase("insert_table_column", optional("column_index"), { column_index: index }),
+        tableCase(
+          "delete_table_rows",
+          { row_start: 2, ...optional("row_count") },
+          { row_start_index: 2, row_end_index: end },
+          { rows_deleted: count },
+        ),
+        tableCase(
+          "delete_table_columns",
+          { column_start: 2, ...optional("column_count") },
+          { column_start_index: 2, column_end_index: end },
+          { columns_deleted: count },
+        ),
       ];
       const client = createClient();
       const patch = vi.spyOn(client.docx.documentBlock, "patch").mockResolvedValue({ code: 0 });
       const tool = resolveTool(client);
       for (const sample of cases) {
-        const result = await tool.execute("default-value", {
-          action: sample.action,
-          doc_token: "doc_table",
-          block_id: "table_target",
-          ...sample.input,
-          ...(Object.hasOwn(fields, "value") ? { [sample.field]: fields.value } : {}),
-        });
+        const result = await tool.execute("default-value", paramsFor(sample));
         expect(patch).toHaveBeenLastCalledWith({
-          path: { document_id: "doc_table", block_id: "table_target" },
+          path: patchPath,
           data: sample.data,
         });
         expectResult(result, { success: true, ...sample.counts, block: undefined });
@@ -257,7 +234,7 @@ describe("registered feishu_doc table patches", () => {
   it("sends all five PATCH variants through the installed SDK to loopback HTTP", async () => {
     const requests: Array<{ method: string | undefined; url: string | undefined; body: string }> =
       [];
-    let reply: PatchResponse = { code: 0, data: { block, client_token: "table-client-token" } };
+    let reply: PatchResponse = successfulPatch;
     const server = createServer((request, response) => {
       void (async () => {
         const chunks: Buffer[] = [];
@@ -295,7 +272,7 @@ describe("registered feishu_doc table patches", () => {
       };
       const tool = resolveTool(createClient(transport));
       for (const sample of actions) {
-        reply = { code: 0, data: { block, client_token: "table-client-token" } };
+        reply = successfulPatch;
         expectResult(await tool.execute("http-patch", paramsFor(sample)), {
           success: true,
           ...sample.counts,

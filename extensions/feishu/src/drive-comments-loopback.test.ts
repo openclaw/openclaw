@@ -21,6 +21,48 @@ type DeliveryContext = { channel?: string; to?: string; threadId?: string | numb
 type WireRequest = { method: string; url: string; body: string };
 type ApiReply = { body: unknown; status?: number; wait?: Promise<void>; received?: () => void };
 
+const rawTarget = { token: " raw/+ ", file: "%20raw%2F%2B%20" };
+const ambientTarget = { token: " ", file: "ambient_file" };
+const explicitTarget = { token: " explicit/+ ", file: "explicit%2F%2B" };
+const thread = (type: string) => `comment:${type}:ambient_file:ambient_comment`;
+function target(
+  action: string,
+  ambient: string | undefined,
+  source: typeof rawTarget,
+  type: string,
+  defaulted: boolean,
+  extra: { channel?: string; explicitType?: string } = {},
+) {
+  return { action, ambient, ...source, type, defaulted, ...extra };
+}
+function get(url: string): WireRequest {
+  return { method: "GET", url, body: "" };
+}
+function post(url: string, body: unknown): WireRequest {
+  return { method: "POST", url, body: JSON.stringify(body) };
+}
+function emptyPage(replies: boolean) {
+  return {
+    has_more: false,
+    page_token: undefined,
+    ...(replies ? { replies: [] } : { comments: [] }),
+  };
+}
+function writeRequest(reply: boolean, file: string, type: string, comment: string, text: string) {
+  return post(
+    `/open-apis/drive/v1/files/${file}/${reply ? `comments/${comment}/replies?file_type=${type}` : "new_comments"}`,
+    reply
+      ? { content: { elements: [{ type: "text_run", text_run: { text } }] } }
+      : { file_type: type, reply_elements: [{ type: "text", text }] },
+  );
+}
+function metadataRequest(file: string, type: string, comment: string) {
+  return post(
+    `/open-apis/drive/v1/files/${file}/comments/batch_query?file_type=${type}&user_id_type=open_id`,
+    { comment_ids: [comment] },
+  );
+}
+
 async function createDriveLoopback(replies: ApiReply[], deliveryContext?: DeliveryContext) {
   const requests: WireRequest[] = [];
   const logs: Array<{ level: string; message: string }> = [];
@@ -148,11 +190,9 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
       const path =
         "/open-apis/drive/v1/files/%20doc%2F%2B%20/comments" +
         (isReplies ? "/%20comment%2F%2B%20/replies" : "");
-      const request = {
-        method: "GET",
-        url: `${path}?file_type=sheet&page_size=100&page_token=cursor+%2B%2F&user_id_type=open_id`,
-        body: "",
-      };
+      const request = get(
+        `${path}?file_type=sheet&page_size=100&page_token=cursor+%2B%2F&user_id_type=open_id`,
+      );
       const items = isReplies
         ? { replies: [normalizedReply] }
         : {
@@ -190,91 +230,22 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
       expectDriveOutcome(
         fixture,
         empty,
-        [
-          request,
-          {
-            method: "GET",
-            url: `${path}?file_type=sheet&page_size=1&user_id_type=open_id`,
-            body: "",
-          },
-        ],
-        {
-          has_more: false,
-          page_token: undefined,
-          ...(isReplies ? { replies: [] } : { comments: [] }),
-        },
+        [request, get(`${path}?file_type=sheet&page_size=1&user_id_type=open_id`)],
+        emptyPage(isReplies),
       );
       expect(fixture.logs).toEqual([]);
     },
   );
 
   it.each([
-    {
-      action: "list_comments",
-      ambient: undefined,
-      token: " raw/+ ",
-      file: "%20raw%2F%2B%20",
-      type: "docx",
-      defaulted: true,
-    },
-    {
-      action: "list_comments",
-      ambient: "comment:sheet:ambient_file:ambient_comment",
-      token: " ",
-      file: "ambient_file",
-      type: "sheet",
-      defaulted: false,
-    },
-    {
-      action: "list_comment_replies",
-      ambient: "comment:file:ambient_file:ambient_comment",
-      token: " ",
-      file: "ambient_file",
-      type: "file",
-      defaulted: false,
-    },
-    {
-      action: "list_comment_replies",
-      ambient: "comment:sheet:ambient_file:ambient_comment",
-      channel: "slack",
-      token: " raw/+ ",
-      file: "%20raw%2F%2B%20",
-      type: "docx",
-      defaulted: true,
-    },
-    {
-      action: "add_comment",
-      ambient: "comment:doc:ambient_file:ambient_comment",
-      token: " ",
-      file: "ambient_file",
-      type: "doc",
-      defaulted: false,
-    },
-    {
-      action: "add_comment",
-      ambient: "comment:slides:ambient_file:ambient_comment",
-      token: " raw/+ ",
-      file: "%20raw%2F%2B%20",
-      type: "docx",
-      defaulted: true,
-    },
-    {
-      action: "reply_comment",
-      ambient: "comment:slides:ambient_file:ambient_comment",
-      token: " ",
-      file: "ambient_file",
-      type: "slides",
-      defaulted: false,
-    },
-    {
-      action: "reply_comment",
-      ambient: "comment:doc:ambient_file:ambient_comment",
-      token: " explicit/+ ",
-      file: "explicit%2F%2B",
-      type: "docx",
-      defaulted: false,
-      explicitType: "docx",
-    },
+    target("list_comments", undefined, rawTarget, "docx", true),
+    target("list_comments", thread("sheet"), ambientTarget, "sheet", false),
+    target("list_comment_replies", thread("file"), ambientTarget, "file", false),
+    target("list_comment_replies", thread("sheet"), rawTarget, "docx", true, { channel: "slack" }),
+    target("add_comment", thread("doc"), ambientTarget, "doc", false),
+    target("add_comment", thread("slides"), rawTarget, "docx", true),
+    target("reply_comment", thread("slides"), ambientTarget, "slides", false),
+    target("reply_comment", thread("doc"), explicitTarget, "docx", false, { explicitType: "docx" }),
   ])("resolves $action targets over HTTP ($type, $file)", async (testCase) => {
     const isReply = testCase.action === "reply_comment";
     const fixture = await createDriveLoopback(
@@ -298,45 +269,22 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
     let requests: WireRequest[];
     let details: Record<string, unknown>;
     if (testCase.action === "add_comment") {
-      requests = [
-        {
-          method: "POST",
-          url: `${filePath}/new_comments`,
-          body: JSON.stringify({
-            file_type: testCase.type,
-            reply_elements: [{ type: "text", text: "Hello + 世界" }],
-          }),
-        },
-      ];
+      requests = [writeRequest(false, testCase.file, testCase.type, commentId, "Hello + 世界")];
       details = { success: true };
     } else if (isReply) {
       requests = [
-        {
-          method: "POST",
-          url: `${filePath}/comments/batch_query?file_type=${testCase.type}&user_id_type=open_id`,
-          body: '{"comment_ids":["ambient_comment"]}',
-        },
-        {
-          method: "POST",
-          url: `${filePath}/comments/${commentId}/replies?file_type=${testCase.type}`,
-          body: '{"content":{"elements":[{"type":"text_run","text_run":{"text":"Hello + 世界"}}]}}',
-        },
+        metadataRequest(testCase.file, testCase.type, "ambient_comment"),
+        writeRequest(true, testCase.file, testCase.type, commentId, "Hello + 世界"),
       ];
       details = { delivery_mode: "reply_comment", success: true };
     } else {
       const replies = testCase.action === "list_comment_replies";
       requests = [
-        {
-          method: "GET",
-          url: `${filePath}/comments${replies ? `/${commentId}/replies` : ""}?file_type=${testCase.type}&user_id_type=open_id`,
-          body: "",
-        },
+        get(
+          `${filePath}/comments${replies ? `/${commentId}/replies` : ""}?file_type=${testCase.type}&user_id_type=open_id`,
+        ),
       ];
-      details = {
-        has_more: false,
-        page_token: undefined,
-        ...(replies ? { replies: [] } : { comments: [] }),
-      };
+      details = emptyPage(replies);
     }
     expectDriveOutcome(fixture, result, requests, details);
     expect(fixture.logs).toEqual(
@@ -359,11 +307,9 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
         { status: 403, body: { code: 9999, msg: "Denied by Drive" } },
       ]);
       const params = { action, file_token: "file", file_type: "docx", comment_id: "comment" };
-      const request = {
-        method: "GET",
-        url: `/open-apis/drive/v1/files/file/comments${action === "list_comment_replies" ? "/comment/replies" : ""}?file_type=docx&user_id_type=open_id`,
-        body: "",
-      };
+      const request = get(
+        `/open-apis/drive/v1/files/file/comments${action === "list_comment_replies" ? "/comment/replies" : ""}?file_type=docx&user_id_type=open_id`,
+      );
       expectDriveOutcome(fixture, await fixture.tool.execute("api-error", params), [request], {
         error: "Denied by Drive",
       });
@@ -424,38 +370,19 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
       try {
         await deletionStarted.promise;
         expect(returned).toBe(true);
-        const reaction = (reactionAction: string) => ({
-          method: "POST",
-          url: "/open-apis/drive/v2/files/file/comments/reaction?file_type=docx",
-          body: JSON.stringify({
+        const reaction = (reactionAction: string) =>
+          post("/open-apis/drive/v2/files/file/comments/reaction?file_type=docx", {
             action: reactionAction,
             reply_id: "typing_reply",
             reaction_type: "Typing",
-          }),
-        });
+          });
         expectDriveOutcome(
           fixture,
           await output,
           [
             reaction("add"),
-            ...(isReply
-              ? [
-                  {
-                    method: "POST",
-                    url: "/open-apis/drive/v1/files/file/comments/batch_query?file_type=docx&user_id_type=open_id",
-                    body: '{"comment_ids":["comment"]}',
-                  },
-                ]
-              : []),
-            {
-              method: "POST",
-              url: isReply
-                ? "/open-apis/drive/v1/files/file/comments/comment/replies?file_type=docx"
-                : "/open-apis/drive/v1/files/file/new_comments",
-              body: isReply
-                ? '{"content":{"elements":[{"type":"text_run","text_run":{"text":"Write text"}}]}}'
-                : '{"file_type":"docx","reply_elements":[{"type":"text","text":"Write text"}]}',
-            },
+            ...(isReply ? [metadataRequest("file", "docx", "comment")] : []),
+            writeRequest(isReply, "file", "docx", "comment", "Write text"),
             reaction("delete"),
           ],
           failure

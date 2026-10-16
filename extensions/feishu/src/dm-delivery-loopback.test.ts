@@ -37,20 +37,17 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
         const rawBody = Buffer.concat(chunks).toString("utf8");
         const isJson = (request.headers["content-type"] ?? "").includes("application/json");
         const body = isJson && rawBody ? (JSON.parse(rawBody) as Record<string, unknown>) : {};
+        const string = (value: unknown) => (typeof value === "string" ? value : undefined);
         const record: RecordedFeishuRequest = {
           method: request.method ?? "",
           path,
-          ...(url.searchParams.get("receive_id_type")
-            ? { receiveIdType: url.searchParams.get("receive_id_type") ?? undefined }
-            : {}),
-          ...(typeof body.receive_id === "string" ? { receiveId: body.receive_id } : {}),
-          ...(typeof body.msg_type === "string" ? { messageType: body.msg_type } : {}),
-          ...(typeof body.app_id === "string" ? { appId: body.app_id } : {}),
-          ...(typeof request.headers.authorization === "string"
-            ? { authorization: request.headers.authorization }
-            : {}),
-          ...(body.reply_in_thread === true ? { replyInThread: true } : {}),
-          ...(typeof body.content === "string" ? { content: body.content } : {}),
+          receiveIdType: url.searchParams.get("receive_id_type") || undefined,
+          receiveId: string(body.receive_id),
+          messageType: string(body.msg_type),
+          appId: string(body.app_id),
+          authorization: string(request.headers.authorization),
+          replyInThread: body.reply_in_thread === true ? true : undefined,
+          content: string(body.content),
         };
         requests.push(record);
 
@@ -58,32 +55,29 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
           response.writeHead(status, { "content-type": "application/json" });
           response.end(JSON.stringify(payload));
         };
+        const success = (data: unknown) => sendJson(200, { code: 0, msg: "success", data });
 
         if (path === "/open-apis/auth/v3/tenant_access_token/internal") {
           if (body.app_id !== "cli_dm_primary" && body.app_id !== "cli_dm_secondary") {
-            sendJson(401, { code: 99991663, msg: "unknown loopback test application" });
-            return;
+            return sendJson(401, { code: 99991663, msg: "unknown loopback test application" });
           }
-          sendJson(200, {
+          return sendJson(200, {
             code: 0,
             msg: "ok",
             tenant_access_token: body.app_id === "cli_dm_primary" ? "tat-primary" : "tat-secondary",
             expire: 7200,
           });
-          return;
         }
 
         if (
           record.authorization !== "Bearer tat-primary" &&
           record.authorization !== "Bearer tat-secondary"
         ) {
-          sendJson(401, { code: 99991663, msg: "missing account-scoped tenant token" });
-          return;
+          return sendJson(401, { code: 99991663, msg: "missing account-scoped tenant token" });
         }
 
         if (path === "/open-apis/im/v1/images") {
-          sendJson(200, { code: 0, msg: "success", data: { image_key: "img_dm_loopback" } });
-          return;
+          return success({ image_key: "img_dm_loopback" });
         }
 
         if (
@@ -93,46 +87,33 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
           record.platformMessageId = path.includes("om_dm_thread_root")
             ? "om_dm_thread_reply"
             : `om_dm_loopback_${requests.length}`;
-          sendJson(200, {
-            code: 0,
-            msg: "success",
-            data: { message_id: record.platformMessageId },
-          });
-          return;
+          return success({ message_id: record.platformMessageId });
         }
 
         if (path !== "/open-apis/im/v1/messages") {
-          sendJson(404, { code: 404, msg: "unexpected loopback request" });
-          return;
+          return sendJson(404, { code: 404, msg: "unexpected loopback request" });
         }
 
         if (body.receive_id === "ou_dm_unavailable") {
-          sendJson(400, {
+          return sendJson(400, {
             code: 230101,
             msg: "Sending messages to users is temporarily unavailable.",
           });
-          return;
         }
 
         if (body.receive_id === "ou_dm_forbidden") {
-          sendJson(400, { code: 230027, msg: "Lack of necessary permissions." });
-          return;
+          return sendJson(400, { code: 230027, msg: "Lack of necessary permissions." });
         }
 
         if (
           body.receive_id === "oc_card_partial" &&
           requests.filter((entry) => entry.receiveId === body.receive_id).length === 3
         ) {
-          sendJson(400, { code: 230027, msg: "Lack of necessary permissions." });
-          return;
+          return sendJson(400, { code: 230027, msg: "Lack of necessary permissions." });
         }
 
         record.platformMessageId = `om_dm_loopback_${requests.length}`;
-        sendJson(200, {
-          code: 0,
-          msg: "success",
-          data: { message_id: record.platformMessageId },
-        });
+        success({ message_id: record.platformMessageId });
       })().catch((error: unknown) => {
         response.writeHead(500, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: String(error) }));
@@ -182,13 +163,19 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
           },
         },
       } as ClawdbotConfig;
+      const sendMessage = (params: Omit<Parameters<typeof sendMessageFeishu>[0], "cfg">) =>
+        sendMessageFeishu({ cfg, ...params });
+      const expectRequest = (record: Partial<RecordedFeishuRequest>) =>
+        expect(requests).toEqual(expect.arrayContaining([expect.objectContaining(record)]));
+      const expectMessage = (receiveId: string, record: Partial<RecordedFeishuRequest> = {}) =>
+        expectRequest({ path: "/open-apis/im/v1/messages", receiveId, ...record });
 
       await expect(
-        sendMessageFeishu({ cfg, to: "user:ou_dm_unavailable", text: "old DM target" }),
+        sendMessage({ to: "user:ou_dm_unavailable", text: "old DM target" }),
       ).rejects.toThrow(/230101|temporarily unavailable/);
 
       await expect(
-        sendMessageFeishu({ cfg, to: "chat:oc_dm_conversation", text: "delivered DM" }),
+        sendMessage({ to: "chat:oc_dm_conversation", text: "delivered DM" }),
       ).resolves.toMatchObject({ chatId: "oc_dm_conversation" });
 
       await expect(
@@ -212,12 +199,11 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
       ).resolves.toMatchObject({ chatId: "oc_dm_conversation" });
 
       await expect(
-        sendMessageFeishu({ cfg, to: "chat:oc_group_conversation", text: "group control" }),
+        sendMessage({ to: "chat:oc_group_conversation", text: "group control" }),
       ).resolves.toMatchObject({ chatId: "oc_group_conversation" });
 
       await expect(
-        sendMessageFeishu({
-          cfg,
+        sendMessage({
           to: "chat:oc_dm_conversation",
           text: "thread control",
           replyToMessageId: "om_dm_thread_root",
@@ -226,8 +212,7 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
       ).resolves.toMatchObject({ messageId: "om_dm_thread_reply" });
 
       await expect(
-        sendMessageFeishu({
-          cfg,
+        sendMessage({
           to: "chat:oc_secondary_conversation",
           text: "secondary account control",
           accountId: "secondary",
@@ -235,81 +220,69 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
       ).resolves.toMatchObject({ chatId: "oc_secondary_conversation" });
 
       await expect(
-        sendMessageFeishu({ cfg, to: "user:ou_dm_allowed", text: "proactive control" }),
+        sendMessage({ to: "user:ou_dm_allowed", text: "proactive control" }),
       ).resolves.toMatchObject({ chatId: "ou_dm_allowed" });
 
       await expect(
-        sendMessageFeishu({ cfg, to: "user:ou_dm_forbidden", text: "permission control" }),
+        sendMessage({ to: "user:ou_dm_forbidden", text: "permission control" }),
       ).rejects.toThrow(/230027|necessary permissions/);
 
-      expect(requests).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            path: "/open-apis/auth/v3/tenant_access_token/internal",
-            appId: "cli_dm_primary",
-          }),
-          expect.objectContaining({
-            path: "/open-apis/auth/v3/tenant_access_token/internal",
-            appId: "cli_dm_secondary",
-          }),
-          expect.objectContaining({
-            path: "/open-apis/im/v1/messages",
-            receiveIdType: "open_id",
-            receiveId: "ou_dm_unavailable",
-            authorization: "Bearer tat-primary",
-          }),
-          expect.objectContaining({
-            path: "/open-apis/im/v1/messages",
-            receiveIdType: "chat_id",
-            receiveId: "oc_dm_conversation",
-            messageType: "post",
-            authorization: "Bearer tat-primary",
-          }),
-          expect.objectContaining({
-            path: "/open-apis/im/v1/messages",
-            receiveIdType: "chat_id",
-            receiveId: "oc_dm_conversation",
-            messageType: "interactive",
-          }),
-          expect.objectContaining({
-            path: "/open-apis/im/v1/images",
-            authorization: "Bearer tat-primary",
-          }),
-          expect.objectContaining({
-            path: "/open-apis/im/v1/messages",
-            receiveIdType: "chat_id",
-            receiveId: "oc_dm_conversation",
-            messageType: "image",
-          }),
-          expect.objectContaining({
-            path: "/open-apis/im/v1/messages",
-            receiveIdType: "chat_id",
-            receiveId: "oc_group_conversation",
-          }),
-          expect.objectContaining({
-            path: "/open-apis/im/v1/messages/om_dm_thread_root/reply",
-            replyInThread: true,
-          }),
-          expect.objectContaining({
-            path: "/open-apis/im/v1/messages",
-            receiveIdType: "chat_id",
-            receiveId: "oc_secondary_conversation",
-            authorization: "Bearer tat-secondary",
-          }),
-          expect.objectContaining({
-            path: "/open-apis/im/v1/messages",
-            receiveIdType: "open_id",
-            receiveId: "ou_dm_allowed",
-          }),
-          expect.objectContaining({
-            path: "/open-apis/im/v1/messages",
-            receiveIdType: "open_id",
-            receiveId: "ou_dm_forbidden",
-          }),
-        ]),
-      );
+      for (const appId of ["cli_dm_primary", "cli_dm_secondary"]) {
+        expectRequest({ path: "/open-apis/auth/v3/tenant_access_token/internal", appId });
+      }
+      expectMessage("ou_dm_unavailable", {
+        receiveIdType: "open_id",
+        authorization: "Bearer tat-primary",
+      });
+      expectMessage("oc_dm_conversation", {
+        receiveIdType: "chat_id",
+        messageType: "post",
+        authorization: "Bearer tat-primary",
+      });
+      for (const messageType of ["interactive", "image"]) {
+        expectMessage("oc_dm_conversation", { receiveIdType: "chat_id", messageType });
+      }
+      expectRequest({ path: "/open-apis/im/v1/images", authorization: "Bearer tat-primary" });
+      expectMessage("oc_group_conversation", { receiveIdType: "chat_id" });
+      expectRequest({
+        path: "/open-apis/im/v1/messages/om_dm_thread_root/reply",
+        replyInThread: true,
+      });
+      expectMessage("oc_secondary_conversation", {
+        receiveIdType: "chat_id",
+        authorization: "Bearer tat-secondary",
+      });
+      for (const receiveId of ["ou_dm_allowed", "ou_dm_forbidden"]) {
+        expectMessage(receiveId, { receiveIdType: "open_id" });
+      }
 
-      const sendText = feishuOutbound.sendText!;
+      type SendTextParams = Parameters<NonNullable<typeof feishuOutbound.sendText>>[0];
+      const sendText = (
+        params: Omit<SendTextParams, "cfg" | "to"> & Partial<Pick<SendTextParams, "cfg" | "to">>,
+      ) => feishuOutbound.sendText!({ cfg, to: "chat:oc_dm_conversation", ...params });
+      const withLimit = (textChunkLimit: number) => ({
+        ...cfg,
+        channels: { feishu: { ...cfg.channels!.feishu, textChunkLimit } },
+      });
+      const sentIds = (start: number) =>
+        requests.slice(start).flatMap((request) => request.platformMessageId ?? []);
+      const expectPartial = async (params: Parameters<typeof sendText>[0]) => {
+        const start = requests.length;
+        let caught: unknown;
+        try {
+          await sendText(params);
+        } catch (error) {
+          caught = error;
+        }
+        const ids = sentIds(start);
+        expect(ids).toHaveLength(2);
+        expect(isChannelPartialDeliveryError(caught)).toBe(true);
+        if (!isChannelPartialDeliveryError(caught)) {
+          throw caught;
+        }
+        expect(caught.deliveryResult.messageIds).toEqual(ids);
+        return caught;
+      };
       for (const fixture of [
         { name: "default limit", body: "漢".repeat(11_000), limit: 4_000, header: "Header" },
         { name: "UTF-8 bytes", body: "漢".repeat(11_000), limit: 25_000, header: "Header" },
@@ -325,11 +298,7 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
           const before = requests.length;
           const deliveries: string[] = [];
           const result = await sendText({
-            cfg: {
-              ...cfg,
-              channels: { feishu: { ...cfg.channels!.feishu, textChunkLimit: fixture.limit } },
-            },
-            to: "chat:oc_dm_conversation",
+            cfg: withLimit(fixture.limit),
             text: `\`\`\`text\n${fixture.body}\n\`\`\``,
             identity: { name: fixture.header },
             ...(thread ? { threadId: "om_card_split_root" } : {}),
@@ -343,13 +312,13 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
             .toBeGreaterThan(1);
           const bodies: string[] = [];
           for (const request of sent) {
-            expect(request.messageType).toBe("interactive");
-            expect(request.path).toBe(
-              thread
+            expect(request).toMatchObject({
+              messageType: "interactive",
+              path: thread
                 ? "/open-apis/im/v1/messages/om_card_split_root/reply"
                 : "/open-apis/im/v1/messages",
-            );
-            expect(request.replyInThread).toBe(thread ? true : undefined);
+              replyInThread: thread ? true : undefined,
+            });
             expect
               .soft(Buffer.byteLength(request.content!, "utf8"), fixture.name)
               .toBeLessThanOrEqual(30 * 1024);
@@ -376,70 +345,31 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
 
       const postStart = requests.length;
       const post = await sendText({
-        cfg,
-        to: "chat:oc_dm_conversation",
         text: "漢".repeat(11_000),
       });
-      const postIds = requests
-        .slice(postStart)
-        .flatMap((request) => request.platformMessageId ?? []);
+      const postIds = sentIds(postStart);
       expect(postIds.length).toBeGreaterThan(1);
       expect
         .soft(post.receipt?.platformMessageIds, "logical post receipt contains every physical send")
         .toEqual(postIds);
 
-      const partialStart = requests.length;
-      let partialError: unknown;
-      try {
-        await sendText({
-          cfg: { ...cfg, channels: { feishu: { ...cfg.channels!.feishu, textChunkLimit: 10 } } },
-          to: "chat:oc_card_partial",
-          text: "abcdefghij".repeat(3),
-        });
-      } catch (error) {
-        partialError = error;
-      }
-      const acceptedIds = requests
-        .slice(partialStart)
-        .flatMap((request) => request.platformMessageId ?? []);
-      expect(acceptedIds).toHaveLength(2);
-      expect
-        .soft(
-          isChannelPartialDeliveryError(partialError),
-          "later rejection preserves accepted chunks",
-        )
-        .toBe(true);
-      if (isChannelPartialDeliveryError(partialError)) {
-        expect(partialError.deliveryResult.visibleReplySent).toBe(true);
-        expect(partialError.deliveryResult.messageIds).toEqual(acceptedIds);
-      }
+      const partialError = await expectPartial({
+        cfg: withLimit(10),
+        to: "chat:oc_card_partial",
+        text: "abcdefghij".repeat(3),
+      });
+      expect(partialError.deliveryResult.visibleReplySent).toBe(true);
 
-      const callbackStart = requests.length;
-      let callbackError: unknown;
       let callbacks = 0;
-      try {
-        await sendText({
-          cfg,
-          to: "chat:oc_dm_conversation",
-          text: "漢".repeat(11_000),
-          onDeliveryResult: () => {
-            if (++callbacks === 2) {
-              throw new Error("recording failed");
-            }
-          },
-        });
-      } catch (error) {
-        callbackError = error;
-      }
-      const callbackIds = requests
-        .slice(callbackStart)
-        .flatMap((request) => request.platformMessageId ?? []);
+      await expectPartial({
+        text: "漢".repeat(11_000),
+        onDeliveryResult: () => {
+          if (++callbacks === 2) {
+            throw new Error("recording failed");
+          }
+        },
+      });
       expect(callbacks).toBe(2);
-      expect(callbackIds).toHaveLength(2);
-      expect(isChannelPartialDeliveryError(callbackError)).toBe(true);
-      if (isChannelPartialDeliveryError(callbackError)) {
-        expect(callbackError.deliveryResult.messageIds).toEqual(callbackIds);
-      }
     } finally {
       Lark.defaultHttpInstance.interceptors.request.eject(loopbackInterceptor);
       await new Promise<void>((resolve, reject) => {
