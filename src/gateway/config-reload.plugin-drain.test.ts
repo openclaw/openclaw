@@ -25,6 +25,35 @@ import {
 } from "./config-reload.test-support.js";
 import { PluginAdmittedWorkTimeoutError } from "./server-plugin-reload-cleanup.js";
 
+const codexConfig = (sandbox: string): OpenClawConfig => ({
+  plugins: { entries: { codex: { enabled: true, config: { sandbox } } } },
+});
+const pluginRuntime = (operationId: string) => ({
+  operationId,
+  generation: getPluginRuntimeGeneration(),
+  pluginIds: ["codex"],
+});
+const drainFailure = (operationId: string, cause?: Error) =>
+  new PluginRuntimeApplicationError(
+    "admitted work did not settle",
+    { ...pluginRuntime(operationId), phase: "drain", committed: false },
+    { cause },
+  );
+type Harness = ReturnType<typeof createReloaderHarness>;
+type PluginChange = Parameters<Harness["reloader"]["applyPluginLifecycleChange"]>[0];
+function applyPluginChange(
+  harness: Harness,
+  config: OpenClawConfig,
+  options: Partial<PluginChange> = {},
+) {
+  return harness.reloader.applyPluginLifecycleChange({
+    config,
+    pluginIds: ["notes"],
+    reason: "reload",
+    ...options,
+  });
+}
+
 vi.mock("../config/io.audit.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/io.audit.js")>()),
   appendConfigAuditRecord: vi.fn(),
@@ -76,14 +105,13 @@ describe("plugin drain recovery", () => {
   });
 
   it("replays a deferred plugin replacement with later edits once its admitted work settles", async () => {
-    const codex = (sandbox: string) => ({ enabled: true, config: { sandbox } });
     const initialConfig: OpenClawConfig = {
-      plugins: { entries: { codex: codex("read-only") } },
+      ...codexConfig("read-only"),
       agents: { entries: { main: {} } },
     };
     let config: OpenClawConfig = {
       ...initialConfig,
-      plugins: { entries: { codex: codex("workspace-write") } },
+      ...codexConfig("workspace-write"),
     };
     const builder = createTestPluginRegistry();
     const record = createPluginRecord({ id: "codex", source: "/synthetic/codex.ts" });
@@ -101,32 +129,19 @@ describe("plugin drain recovery", () => {
       // Stands in for the reload owner's 60s pre-stop drain expiring on the held work.
       onHotReload: async (plan) => {
         if (plan.reloadPlugins && instance.retainedWorkCount > 0) {
-          throw new PluginRuntimeApplicationError(
-            "admitted work did not settle",
-            {
-              operationId: "failed-automatic-drain",
-              generation: getPluginRuntimeGeneration(),
-              pluginIds: ["codex"],
-              phase: "drain",
-              committed: false,
-            },
-            {
-              cause: new PluginAdmittedWorkTimeoutError(
-                new Set(["codex"]),
-                [instance],
-                new PluginHostCleanupTimeoutError("plugin codex admitted work"),
-              ),
-            },
+          throw drainFailure(
+            "failed-automatic-drain",
+            new PluginAdmittedWorkTimeoutError(
+              new Set(["codex"]),
+              [instance],
+              new PluginHostCleanupTimeoutError("plugin codex admitted work"),
+            ),
           );
         }
         return plan.reloadPlugins
           ? {
               status: "applied",
-              runtime: {
-                operationId: "codex-replacement",
-                generation: getPluginRuntimeGeneration(),
-                pluginIds: ["codex"],
-              },
+              runtime: pluginRuntime("codex-replacement"),
             }
           : "applied";
       },
@@ -168,26 +183,10 @@ describe("plugin drain recovery", () => {
   it.each(["explicit wait", "revert", "revert with model edit"] as const)(
     "retains a failed automatic plugin drain until recovery: %s",
     async (recovery) => {
-      const initialConfig: OpenClawConfig = {
-        plugins: { entries: { codex: { enabled: true, config: { sandbox: "read-only" } } } },
-      };
-      let config: OpenClawConfig = {
-        plugins: {
-          entries: { codex: { enabled: true, config: { sandbox: "workspace-write" } } },
-        },
-      };
-      const failure = new PluginRuntimeApplicationError("admitted work did not settle", {
-        operationId: "failed-automatic-drain",
-        generation: getPluginRuntimeGeneration(),
-        pluginIds: ["codex"],
-        phase: "drain",
-        committed: false,
-      });
-      const runtime = {
-        operationId: "explicit-wait-recovery",
-        generation: getPluginRuntimeGeneration(),
-        pluginIds: ["codex"],
-      };
+      const initialConfig = codexConfig("read-only");
+      let config = codexConfig("workspace-write");
+      const failure = drainFailure("failed-automatic-drain");
+      const runtime = pluginRuntime("explicit-wait-recovery");
       const harness = createReloaderHarness(async () => makeSnapshot({ config }), {
         initialConfig,
         onHotReload: async (plan) => {
@@ -223,7 +222,7 @@ describe("plugin drain recovery", () => {
         const attempts = harness.onHotReload.mock.calls.length;
         config = {
           ...config,
-          plugins: { entries: { codex: { enabled: true, config: { sandbox: "new-settings" } } } },
+          ...codexConfig("new-settings"),
         };
         await flushWatcherChange(harness);
         expect(harness.onHotReload).toHaveBeenCalledTimes(attempts + 1);
@@ -233,21 +232,12 @@ describe("plugin drain recovery", () => {
         return;
       }
 
-      await expect(
-        harness.reloader.applyPluginLifecycleChange({
-          config,
-          pluginIds: ["codex"],
-          reason: "reload",
-        }),
-      ).rejects.toBe(failure);
+      await expect(applyPluginChange(harness, config, { pluginIds: ["codex"] })).rejects.toBe(
+        failure,
+      );
       expect(harness.onHotReload).toHaveBeenCalledOnce();
       await expect(
-        harness.reloader.applyPluginLifecycleChange({
-          config,
-          pluginIds: ["codex"],
-          reason: "reload",
-          waitForDrain: true,
-        }),
+        applyPluginChange(harness, config, { pluginIds: ["codex"], waitForDrain: true }),
       ).resolves.toBe(runtime);
       expect(harness.onHotReload).toHaveBeenCalledTimes(2);
       expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
@@ -282,15 +272,7 @@ describe("plugin drain recovery", () => {
         initialConfig,
       });
       await harness.reloader.ready;
-      harness.onHotReload.mockRejectedValueOnce(
-        new PluginRuntimeApplicationError("admitted work did not settle", {
-          operationId: "failed-codex-drain",
-          generation: getPluginRuntimeGeneration(),
-          pluginIds: ["codex"],
-          phase: "drain",
-          committed: false,
-        }),
-      );
+      harness.onHotReload.mockRejectedValueOnce(drainFailure("failed-codex-drain"));
       await flushWatcherChange(harness);
       expect(harness.onHotReload).toHaveBeenCalledOnce();
 
@@ -356,13 +338,7 @@ describe("plugin observations", () => {
       });
       await harness.reloader.ready;
       const reload = (sourceConfig = config) =>
-        withPluginLifecycleLease({}, () =>
-          harness.reloader.applyPluginLifecycleChange({
-            config: sourceConfig,
-            pluginIds: ["notes"],
-            reason: "reload",
-          }),
-        );
+        withPluginLifecycleLease({}, () => applyPluginChange(harness, sourceConfig));
       await expect(reload()).resolves.toEqual(runtime);
       harness.onConfigAccepted.mockClear();
       if (event === "file-before") {
@@ -421,13 +397,7 @@ describe("plugin observations", () => {
       await harness.reloader.ready;
       harness.watcher.emit("ready");
       await expect(
-        withPluginLifecycleLease({}, () =>
-          harness.reloader.applyPluginLifecycleChange({
-            config,
-            pluginIds: ["notes"],
-            reason: "reload",
-          }),
-        ),
+        withPluginLifecycleLease({}, () => applyPluginChange(harness, config)),
       ).rejects.toBe(error);
       if (outcome === "reject") {
         initialRead.reject(new Error("old read failed"));
@@ -443,12 +413,11 @@ describe("plugin observations", () => {
   it("applies transcript changes through the plugin reload transaction without a plugin policy", async () => {
     const registry = createTestRegistry([]);
     setActivePluginRegistry(registry);
-    const config: OpenClawConfig = {
-      transcripts: { autoStart: [{ providerId: "capture", channelId: "old-room" }] },
-    };
-    const nextConfig: OpenClawConfig = {
-      transcripts: { autoStart: [{ providerId: "capture", channelId: "new-room" }] },
-    };
+    const transcriptConfig = (channelId: string): OpenClawConfig => ({
+      transcripts: { autoStart: [{ providerId: "capture", channelId }] },
+    });
+    const config = transcriptConfig("old-room");
+    const nextConfig = transcriptConfig("new-room");
     const drainSignal = new AbortController().signal;
     const appliedRuntime = {
       operationId: "transcript-reload",
@@ -467,26 +436,16 @@ describe("plugin observations", () => {
       },
     );
     await harness.reloader.ready;
-    try {
-      const applied = harness.reloader.applyPluginLifecycleChange({
-        config: nextConfig,
-        pluginIds: ["notes"],
-        reason: "reload",
-        waitForDrain: true,
-        drainSignal,
-      });
-      await expect(applied).resolves.toEqual(appliedRuntime);
-      expect(harness.onHotReload).toHaveBeenCalledOnce();
-      expect(harness.onHotReload.mock.calls[0]?.[0]).toMatchObject({
-        pluginLifecycle: { waitForDrain: true, drainSignal },
-        reloadPlugins: true,
-        restartGateway: false,
-        changedPaths: ["transcripts.autoStart"],
-      });
-      expect(harness.onHotReload.mock.calls[0]?.[1]).toEqual(nextConfig);
-      expect(harness.onRestart).not.toHaveBeenCalled();
-    } finally {
-      await harness.reloader.stop();
-    }
+    const applied = applyPluginChange(harness, nextConfig, { waitForDrain: true, drainSignal });
+    await expect(applied).resolves.toEqual(appliedRuntime);
+    expect(harness.onHotReload).toHaveBeenCalledOnce();
+    expect(harness.onHotReload.mock.calls[0]?.[0]).toMatchObject({
+      pluginLifecycle: { waitForDrain: true, drainSignal },
+      reloadPlugins: true,
+      restartGateway: false,
+      changedPaths: ["transcripts.autoStart"],
+    });
+    expect(harness.onHotReload.mock.calls[0]?.[1]).toEqual(nextConfig);
+    expect(harness.onRestart).not.toHaveBeenCalled();
   });
 });
