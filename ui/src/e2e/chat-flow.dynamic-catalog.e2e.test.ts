@@ -5,6 +5,7 @@ import {
   createChatFlowE2eSuite,
   controlUiSessionUrl,
   installMockGateway,
+  thinkingLevels,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -14,14 +15,13 @@ suite.define(() => {
   it("converges Chat reasoning and context metadata after dynamic catalog discovery", async () => {
     const page = await newChatPage(suite);
     const sessionKey = "agent:main:dynamic-catalog";
-    const preparedLevels = [{ id: "off", label: "off" }];
-    const discoveredLevels = ["off", "low", "medium", "high", "xhigh"].map((id) => ({
-      id,
-      label: id,
-    }));
+    const preparedLevels = thinkingLevels("off");
+    const discoveredLevels = thinkingLevels("off", "low", "medium", "high", "xhigh");
+    const modelId = "deepseekv4flash-equivalent";
+    const modelKey = `omniroute/${modelId}`;
     const preparedModel = {
       available: true,
-      id: "deepseekv4flash-equivalent",
+      id: modelId,
       name: "DeepSeek V4 Flash",
       provider: "omniroute",
       reasoning: true,
@@ -31,48 +31,40 @@ suite.define(() => {
       compat: { supportedReasoningEfforts: discoveredLevels.map((level) => level.id) },
       contextWindow: 262_144,
     };
-    const agentsList = {
-      agents: [
-        {
-          id: "main",
-          model: { primary: "omniroute/deepseekv4flash-equivalent" },
-          name: "Main",
-        },
-      ],
-      defaultId: "main",
-      mainKey: "main",
-      scope: "agent",
-    };
-    const sessionResponse = (levels: typeof preparedLevels, contextTokens: number) => ({
-      count: 1,
-      defaults: {
+    const sessionResponse = (levels: typeof preparedLevels, contextTokens: number) => {
+      const defaults = {
         contextTokens,
-        model: "deepseekv4flash-equivalent",
+        model: modelId,
         modelProvider: "omniroute",
         thinkingDefault: "off",
         thinkingLevels: levels,
-      },
-      path: "",
-      sessions: [
-        {
-          contextTokens,
-          key: sessionKey,
-          sessionId: "control-ui-dynamic-catalog-convergence",
-          kind: "direct",
-          label: "Dynamic catalog",
-          model: "deepseekv4flash-equivalent",
-          modelProvider: "omniroute",
-          thinkingDefault: "off",
-          thinkingLevels: levels,
-          updatedAt: 2,
-        },
-      ],
-      ts: Date.now(),
-    });
+      };
+      return {
+        count: 1,
+        defaults,
+        path: "",
+        sessions: [
+          {
+            ...defaults,
+            key: sessionKey,
+            sessionId: "control-ui-dynamic-catalog-convergence",
+            kind: "direct",
+            label: "Dynamic catalog",
+            updatedAt: 2,
+          },
+        ],
+        ts: Date.now(),
+      };
+    };
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "chat.startup": {
-          agentsList,
+          agentsList: {
+            agents: [{ id: "main", model: { primary: modelKey }, name: "Main" }],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+          },
           messages: [],
           metadata: { models: [preparedModel] },
           sessionId: "control-ui-dynamic-catalog-convergence",
@@ -117,9 +109,7 @@ suite.define(() => {
     expect(refreshedSessionRequest.params).toEqual({ key: sessionKey, agentId: "main" });
     await modelSelect.click();
     expect(await gateway.getRequests("models.list")).toHaveLength(2);
-    const modelOption = main.locator(
-      '[data-chat-model-option="omniroute/deepseekv4flash-equivalent"]',
-    );
+    const modelOption = main.locator(`[data-chat-model-option="${modelKey}"]`);
     await expect.poll(() => modelOption.textContent()).toContain("262.1k");
 
     await page.keyboard.press("Escape");
@@ -140,9 +130,7 @@ suite.define(() => {
     );
     await expect.poll(() => newSessionModelSelect.getAttribute("aria-disabled")).toBe("false");
     await newSessionModelSelect.click();
-    const newSessionModel = newSessionPage.locator(
-      '[data-chat-model-option="omniroute/deepseekv4flash-equivalent"]',
-    );
+    const newSessionModel = newSessionPage.locator(`[data-chat-model-option="${modelKey}"]`);
     await expect.poll(() => newSessionModel.textContent()).toContain("262.1k");
     await revealChatModelOption(newSessionModel);
     await expect.poll(() => newSessionModel.isVisible()).toBe(true);

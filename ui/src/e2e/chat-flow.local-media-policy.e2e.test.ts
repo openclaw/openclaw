@@ -74,23 +74,21 @@ suite.define(() => {
           expect(request.headers().authorization).toBe("Bearer e2e-device-token");
           if (!mediaAllowed) {
             await route.fulfill({
-              contentType: "application/json",
-              body: JSON.stringify({
+              json: {
                 available: false,
                 reason: "Outside allowed folders",
                 retryable: false,
                 canAllow: true,
-              }),
+              },
             });
             return;
           }
           await route.fulfill({
-            contentType: "application/json",
-            body: JSON.stringify({
+            json: {
               available: true,
               mediaTicket: ticket,
               mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-            }),
+            },
           });
           return;
         }
@@ -232,10 +230,7 @@ suite.define(() => {
       expect(url.searchParams.get("source")).toBe(source);
       expect(url.searchParams.get("meta")).toBe("1");
       expect(request.headers().authorization).toBe("Bearer e2e-device-token");
-      await route.fulfill({
-        contentType: "application/json",
-        body: JSON.stringify({ available: false, code, reason }),
-      });
+      await route.fulfill({ json: { available: false, code, reason } });
     });
 
     await installMockGateway(page, {

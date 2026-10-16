@@ -13,6 +13,23 @@ import {
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const defaultSessionKey = "agent:main:main";
+
+async function quotedChat(role: string, quote: string, id: string) {
+  const page = await newChatPage(suite);
+  const gateway = await installMockGateway(page, {
+    sessionKey: defaultSessionKey,
+    historyMessages: [
+      chatMessage(role, quote, {
+        timestamp: 1_800_000_000_000,
+        __openclaw: { id, seq: 1 },
+      }),
+    ],
+  });
+  await page.goto(`${suite.server.baseUrl}chat`);
+  const pane = page.locator(".chat-pane-cache__pane--active");
+  return { page, gateway, pane };
+}
 
 suite.define(() => {
   it("persists the chat send shortcut and keeps multiline and IME input safe", async () => {
@@ -73,8 +90,6 @@ suite.define(() => {
       .getByText("Default shortcut received.")
       .waitFor({ timeout: 10_000 });
 
-    // The send shortcut moved to the Settings appearance page; picking it
-    // there must apply to the chat composer after navigating back.
     await page.goto(`${suite.server.baseUrl}settings/appearance`);
     const shortcutSelect = page.locator("[data-settings-send-shortcut]");
     await shortcutSelect.selectOption("modifier-enter");
@@ -103,21 +118,10 @@ suite.define(() => {
   });
 
   it("restores a quoted draft after reload and keeps cancellation cleared", async () => {
-    const page = await newChatPage(suite);
-    const sessionKey = "agent:main:main";
+    const sessionKey = defaultSessionKey;
     const quote = "Review all 60 checklist items before sending the summary.";
     const draft = "Please explain the quoted checklist.";
-    const gateway = await installMockGateway(page, {
-      sessionKey,
-      historyMessages: [
-        chatMessage("assistant", quote, {
-          timestamp: 1_800_000_000_000,
-          __openclaw: { id: "quoted-checklist", seq: 1 },
-        }),
-      ],
-    });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const pane = page.locator(".chat-pane-cache__pane--active");
+    const { page, gateway, pane } = await quotedChat("assistant", quote, "quoted-checklist");
     const composer = pane.getByRole("textbox", { name: "Chat composer" });
     const group = pane.locator(".chat-group.assistant").filter({ hasText: quote });
     await group.hover();
@@ -126,7 +130,9 @@ suite.define(() => {
     await preview.waitFor({ state: "visible" });
     await composer.fill(draft);
     const scopeKey = `chat:v3:${sessionKey}\u0000agent:main`;
-    await waitForCommittedComposerDraft(page, scopeKey, draft, 0);
+    const settledDraft = (text: string | null, reply?: string | null) =>
+      waitForCommittedComposerDraft(page, scopeKey, text, 0, undefined, reply);
+    await settledDraft(draft);
     await page.reload();
     await expect.poll(() => composer.inputValue()).toBe(draft);
     await group.waitFor({ state: "visible" });
@@ -134,7 +140,7 @@ suite.define(() => {
     await expect.poll(() => preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
     await pane.getByRole("button", { name: "Send message", exact: true }).click();
     const request = await gateway.waitForRequest("chat.send");
-    await waitForCommittedComposerDraft(page, scopeKey, null, 0, undefined, null);
+    await settledDraft(null, null);
     expect(requireRecord(request.params)).toMatchObject({
       sessionKey,
       message: draft,
@@ -151,55 +157,24 @@ suite.define(() => {
     await pane
       .getByRole("button", { name: "Stop generating", exact: true })
       .waitFor({ state: "detached" });
-    await composer.fill("Keep the text without a quote.");
-    await waitForCommittedComposerDraft(
-      page,
-      scopeKey,
-      "Keep the text without a quote.",
-      0,
-      undefined,
-      null,
-    );
+    const unquotedDraft = "Keep the text without a quote.";
+    await composer.fill(unquotedDraft);
+    await settledDraft(unquotedDraft, null);
     await group.hover();
     await group.getByRole("button", { name: "Reply to message", exact: true }).click();
     await preview.waitFor({ state: "visible" });
-    await waitForCommittedComposerDraft(
-      page,
-      scopeKey,
-      "Keep the text without a quote.",
-      0,
-      undefined,
-      "quoted-checklist",
-    );
+    await settledDraft(unquotedDraft, "quoted-checklist");
     await preview.getByRole("button", { name: "Cancel reply", exact: true }).click();
     await preview.waitFor({ state: "hidden" });
-    await waitForCommittedComposerDraft(
-      page,
-      scopeKey,
-      "Keep the text without a quote.",
-      0,
-      undefined,
-      null,
-    );
+    await settledDraft(unquotedDraft, null);
     await page.reload();
-    await expect.poll(() => composer.inputValue()).toBe("Keep the text without a quote.");
+    await expect.poll(() => composer.inputValue()).toBe(unquotedDraft);
     expect(await preview.count()).toBe(0);
   });
 
   it("preserves IME reply before deliberate Escape abort", async () => {
-    const page = await newChatPage(suite);
     const quote = "Keep this persisted message as the reply source.";
-    const gateway = await installMockGateway(page, {
-      sessionKey: "agent:main:main",
-      historyMessages: [
-        chatMessage("user", quote, {
-          timestamp: 1_800_000_000_000,
-          __openclaw: { id: "ime-reply-source", seq: 1 },
-        }),
-      ],
-    });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const pane = page.locator(".chat-pane-cache__pane--active");
+    const { page, gateway, pane } = await quotedChat("user", quote, "ime-reply-source");
     const composer = pane.locator(".agent-chat__composer-combobox textarea");
     const initialText = "Keep this run active while composing a reply.";
     await composer.fill(initialText);
@@ -234,6 +209,12 @@ suite.define(() => {
     await menu.getByRole("menuitem", { name: "Reply to message", exact: true }).click();
     await menu.waitFor({ state: "detached" });
     const preview = pane.locator(".chat-reply-preview");
+    const expectDraft = async (text: string, aborts = 0) => {
+      expect(await composer.inputValue()).toBe(text);
+      expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
+      await expectRequestCountStable(gateway, "chat.send", 1);
+      await expectRequestCountStable(gateway, "chat.abort", aborts);
+    };
     await preview.waitFor({ state: "visible" });
     expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
 
@@ -270,10 +251,7 @@ suite.define(() => {
         defaultPrevented: false,
       });
       expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
-      expect(await composer.inputValue()).toBe(draft);
-      expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
-      await expectRequestCountStable(gateway, "chat.send", 1);
-      await expectRequestCountStable(gateway, "chat.abort", 0);
+      await expectDraft(draft);
     }
 
     await composer.fill("");
@@ -305,20 +283,14 @@ suite.define(() => {
     expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
     await page.keyboard.press("Escape");
     expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
-    expect(await composer.inputValue()).toBe(composingDraft);
-    expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
-    await expectRequestCountStable(gateway, "chat.send", 1);
-    await expectRequestCountStable(gateway, "chat.abort", 0);
+    await expectDraft(composingDraft);
 
     await composer.evaluate((element) => {
       element.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
     });
     await page.keyboard.press("Escape");
     await preview.waitFor({ state: "detached" });
-    expect(await composer.inputValue()).toBe(composingDraft);
-    expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
-    await expectRequestCountStable(gateway, "chat.send", 1);
-    await expectRequestCountStable(gateway, "chat.abort", 0);
+    await expectDraft(composingDraft);
 
     await page.keyboard.press("Escape");
     const abort = await gateway.waitForRequest("chat.abort");
@@ -331,10 +303,7 @@ suite.define(() => {
       .toBe("Interrupted");
     expect(requireRecord(abort.params)).toEqual({ sessionKey, runId });
     await stop.waitFor({ state: "detached" });
-    expect(await composer.inputValue()).toBe(composingDraft);
-    expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
-    await expectRequestCountStable(gateway, "chat.send", 1);
-    await expectRequestCountStable(gateway, "chat.abort", 1);
+    await expectDraft(composingDraft, 1);
   });
 
   it.each(["queue", "steer", "collect", "followup"] as const)(

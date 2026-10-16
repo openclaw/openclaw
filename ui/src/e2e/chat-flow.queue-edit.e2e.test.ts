@@ -151,9 +151,9 @@ suite.define(() => {
         activeRunIds: [activeRunId],
         status: "running",
       };
-      await gateway.setMethodResponse("chat.history", {
+      const history = (sessionInfo: typeof acceptedSession) => ({
         sessionId: acceptedSession.sessionId,
-        sessionInfo: acceptedSession,
+        sessionInfo,
         messages: [
           {
             role: "user",
@@ -162,6 +162,7 @@ suite.define(() => {
           },
         ],
       });
+      await gateway.setMethodResponse("chat.history", history(acceptedSession));
       await gateway.emitGatewayEvent("sessions.changed", acceptedSession);
       await page.locator(".chat-send-status").waitFor({ state: "detached" });
 
@@ -204,19 +205,12 @@ suite.define(() => {
         hasText: "remove me",
       });
 
-      await page.evaluate(() => {
+      const storage = await page.evaluateHandle(() => {
         const descriptor = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem");
         if (!descriptor || typeof descriptor.value !== "function") {
           throw new Error("Storage.setItem is unavailable");
         }
         const original = descriptor.value as (this: Storage, key: string, value: string) => void;
-        Object.defineProperty(window, "restoreQueueStorage", {
-          configurable: true,
-          value: () => {
-            Object.defineProperty(Storage.prototype, "setItem", descriptor);
-            delete (window as Window & { restoreQueueStorage?: () => void }).restoreQueueStorage;
-          },
-        });
         Object.defineProperty(Storage.prototype, "setItem", {
           ...descriptor,
           value(this: Storage, ...args: [string, string]) {
@@ -226,6 +220,7 @@ suite.define(() => {
             return Reflect.apply(original, this, args);
           },
         });
+        return { restore: () => Object.defineProperty(Storage.prototype, "setItem", descriptor) };
       });
       await row.locator(".chat-queue__remove").click();
 
@@ -236,27 +231,25 @@ suite.define(() => {
       await row.waitFor();
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
-      await page.evaluate(() => {
-        (window as Window & { restoreQueueStorage?: () => void }).restoreQueueStorage?.();
+      await storage.evaluate((owner) => {
+        owner.restore();
       });
-      await page.evaluate(() => {
+      await storage.dispose();
+      const clicks = await page.evaluateHandle(() => {
         const trace: Array<{ detail: number; rowText?: string }> = [];
-        Object.defineProperty(window, "queueRemovalEventTrace", {
-          configurable: true,
-          value: trace,
-        });
         document.addEventListener(
           "click",
           (event) => {
             const target = event.target instanceof Element ? event.target : null;
             trace.push({
-              detail: (event as MouseEvent).detail,
+              detail: event.detail,
               rowText: target?.closest(".chat-queue__item")?.querySelector(".chat-queue__text")
                 ?.textContent,
             });
           },
           { capture: true },
         );
+        return trace;
       });
       await row.locator(".chat-queue__remove").click();
       await row.waitFor({ state: "detached", timeout: 10_000 });
@@ -268,19 +261,11 @@ suite.define(() => {
         .hover();
       await page.mouse.down({ clickCount: 2 });
       await page.mouse.up({ clickCount: 2 });
-      expect(
-        await page.evaluate(
-          () =>
-            (
-              window as Window & {
-                queueRemovalEventTrace?: Array<{ detail: number; rowText?: string }>;
-              }
-            ).queueRemovalEventTrace,
-        ),
-      ).toEqual([
+      expect(await clicks.jsonValue()).toEqual([
         { detail: 1, rowText: "remove me" },
         { detail: 2, rowText: "edited before send" },
       ]);
+      await clicks.dispose();
       await page.getByRole("alert").waitFor({ state: "detached", timeout: 10_000 });
       await expect
         .poll(() => page.locator(".chat-queue__item .chat-queue__text").allTextContents())
@@ -339,17 +324,7 @@ suite.define(() => {
         lastRunId: activeRunId,
         status: "done",
       };
-      await gateway.setMethodResponse("chat.history", {
-        sessionId: acceptedSession.sessionId,
-        sessionInfo: terminalSession,
-        messages: [
-          {
-            role: "user",
-            content: "keep the first run active",
-            idempotencyKey: `${activeRunId}:user`,
-          },
-        ],
-      });
+      await gateway.setMethodResponse("chat.history", history(terminalSession));
       await gateway.deferNext("chat.send");
       await gateway.setOnline(true);
       await page

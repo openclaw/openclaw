@@ -1,3 +1,4 @@
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   chatMessage,
@@ -15,44 +16,84 @@ import { closeSidebarMenu, openSidebarMenu } from "./sidebar-session-menu.test-s
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
+const sessionRow = (page: Page, key: string) =>
+  page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+const session = (key: string, label: string, extra: Record<string, unknown> = {}) => ({
+  key,
+  kind: "direct",
+  label,
+  updatedAt: 1,
+  ...extra,
+});
+const previewEnabled = () => {
+  localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+};
+const mask = (label: Locator) => label.evaluate((element) => getComputedStyle(element).maskImage);
+
+function rowLayout(locator: Locator) {
+  return locator.evaluate((row) => {
+    const rect = (element: Element) => {
+      const { left, right, top, bottom, width, height } = element.getBoundingClientRect();
+      return { left, right, top, bottom, width, height };
+    };
+    const get = (selector: string) => rect(row.querySelector(selector)!);
+    const name = row.querySelector(".sidebar-recent-session__name")!;
+    return {
+      row: rect(row),
+      name: rect(name),
+      lead: get(".sidebar-session-indicator"),
+      unread: get(".sidebar-session-indicator .session-unread-dot"),
+      endcap: get(".sidebar-recent-session__details-endcap"),
+      atoms: Array.from(row.querySelectorAll(".sidebar-recent-session__details-endcap svg"), rect),
+      nameOverflowing: name.scrollWidth > name.clientWidth,
+      singleLine: row.classList.contains("sidebar-recent-session--single-line"),
+    };
+  });
+}
+
+function expectUnreadLayout(layout: Awaited<ReturnType<typeof rowLayout>>, nameLeft: number) {
+  const { unread, lead, name } = layout;
+  expect(unread).toMatchObject({ width: 7, height: 7 });
+  for (const [start, end] of [
+    ["left", "right"],
+    ["top", "bottom"],
+  ] as const) {
+    expect((unread[start] + unread[end]) / 2).toBeCloseTo((lead[start] + lead[end]) / 2, 1);
+    expect(unread[start]).toBeGreaterThanOrEqual(lead[start]);
+    expect(unread[end]).toBeLessThanOrEqual(lead[end]);
+  }
+  expect(lead.right).toBeLessThanOrEqual(name.left);
+  expect(name.left).toBeCloseTo(nameLeft, 1);
+}
 
 suite.define(() => {
   it("keeps a running subtitle and row height stable when its session is opened", async () => {
     const page = await newChatPage(suite);
-    await page.addInitScript(() => {
-      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
-    });
+    await page.addInitScript(previewEnabled);
 
     const firstKey = "agent:main:session-a";
     const secondKey = "agent:main:session-b";
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": chatSessionListResponse([
-          {
-            key: firstKey,
-            kind: "direct",
-            label: "First running session",
+          session(firstKey, "First running session", {
             updatedAt: 2,
             activeRunIds: ["run-first"],
             hasActiveRun: true,
             status: "running",
-          },
-          {
-            key: secondKey,
-            kind: "direct",
-            label: "Second running session",
-            updatedAt: 1,
+          }),
+          session(secondKey, "Second running session", {
             activeRunIds: ["run-second"],
             hasActiveRun: true,
             status: "running",
-          },
+          }),
         ]),
       },
       sessionKey: firstKey,
     });
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
-    const secondRow = page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`);
+    const secondRow = sessionRow(page, secondKey);
     await expect
       .poll(async () =>
         (await gateway.getRequests("sessions.messages.subscribe")).some(
@@ -92,11 +133,12 @@ suite.define(() => {
     await narration.waitFor();
     await tool.waitFor();
     expect(
-      await secondRow.locator(".sidebar-recent-session__title-row .sidebar-session-tool").count(),
-    ).toBe(0);
-    expect(
-      await secondRow.locator(".sidebar-recent-session__details .sidebar-session-tool").count(),
-    ).toBe(1);
+      await Promise.all(
+        ["title-row", "details"].map((part) =>
+          secondRow.locator(`.sidebar-recent-session__${part} .sidebar-session-tool`).count(),
+        ),
+      ),
+    ).toEqual([0, 1]);
     const heightBefore = await secondRow.evaluate((row) => row.getBoundingClientRect().height);
 
     await secondRow.locator("a.sidebar-recent-session__link").click();
@@ -105,65 +147,39 @@ suite.define(() => {
     await tool.waitFor();
     const heightAfter = await secondRow.evaluate((row) => row.getBoundingClientRect().height);
 
-    // Sub-pixel tolerance: getBoundingClientRect returns 1/65536 fractions that
-    // drift under CPU contention, so exact equality fails ~1 run in 3 in a loaded
-    // shard. The contract is "the row does not change size", not bit-identical floats.
+    // Sub-pixel tolerance avoids float drift under contention, not visible resize.
     expect(heightAfter).toBeCloseTo(heightBefore, 1);
   });
 
   it("replaces an intermediate running subtitle with the unread final digest", async () => {
     const page = await newChatPage(suite);
-    await page.addInitScript(() => {
-      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
-    });
+    await page.addInitScript(previewEnabled);
     const key = "agent:main:session-a";
     const runId = "run-sidebar-metadata";
-    const running = chatSessionListResponse([
-      {
-        key,
-        kind: "direct",
-        label: "Sidebar metadata repair",
-        updatedAt: Date.now(),
-        activeRunIds: [runId],
-        hasActiveRun: true,
-        status: "running",
-        observerDigest: {
-          agentId: "main",
-          runId,
-          headline: "Implementing the repair",
-          health: "on-track",
-          updatedAt: Date.now(),
-          revision: 1,
-        },
-      },
-    ]);
-    const completed = chatSessionListResponse([
-      {
-        key,
-        kind: "direct",
-        label: "Sidebar metadata repair",
-        updatedAt: Date.now() + 1,
-        activeRunIds: [],
-        hasActiveRun: false,
-        status: "done",
-        lastMessagePreview: "The repaired sidebar now shows the final reply.",
-        observerDigest: {
-          agentId: "main",
-          runId,
-          headline: "Repair landed cleanly",
-          health: "done",
-          updatedAt: Date.now() + 1,
-          revision: 2,
-        },
-      },
-    ]);
+    const roster = (revision: number, headline: string, health: string, extra = {}) => {
+      const updatedAt = Date.now() + revision - 1;
+      return chatSessionListResponse([
+        session(key, "Sidebar metadata repair", {
+          updatedAt,
+          activeRunIds: revision === 1 ? [runId] : [],
+          hasActiveRun: revision === 1,
+          status: revision === 1 ? "running" : "done",
+          observerDigest: { agentId: "main", runId, headline, health, updatedAt, revision },
+          ...extra,
+        }),
+      ]);
+    };
+    const running = roster(1, "Implementing the repair", "on-track");
+    const completed = roster(2, "Repair landed cleanly", "done", {
+      lastMessagePreview: "The repaired sidebar now shows the final reply.",
+    });
     const gateway = await installMockGateway(page, {
       methodResponses: { "sessions.list": running },
       sessionKey: key,
     });
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
-    const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+    const row = sessionRow(page, key);
     await row.getByText("Implementing the repair").waitFor();
 
     await waitForSessionRosterHydration(page);
@@ -232,12 +248,8 @@ suite.define(() => {
           return x === 0 ? 0 : readingDirection === "rtl" ? -x : x;
         }, direction);
       await label.waitFor({ state: "visible", timeout: 10_000 });
-      await expect
-        .poll(() => label.evaluate((element) => getComputedStyle(element).maskImage))
-        .toContain(direction === "rtl" ? "to left" : "to right");
-      expect(await shortLabel.evaluate((element) => getComputedStyle(element).maskImage)).toBe(
-        "none",
-      );
+      await expect.poll(() => mask(label)).toContain(direction === "rtl" ? "to left" : "to right");
+      expect(await mask(shortLabel)).toBe("none");
       const rowWidth = await row.evaluate((element) => element.getBoundingClientRect().width);
 
       await row.hover();
@@ -295,19 +307,13 @@ suite.define(() => {
       await row.hover();
       await page.waitForTimeout(750);
       expect(await offset()).toBe(0);
-      expect(await label.evaluate((element) => getComputedStyle(element).maskImage)).toContain(
-        "linear-gradient",
-      );
-      expect(await shortLabel.evaluate((element) => getComputedStyle(element).maskImage)).toBe(
-        "none",
-      );
+      expect(await mask(label)).toContain("linear-gradient");
+      expect(await mask(shortLabel)).toBe("none");
 
       await row.locator("a.sidebar-recent-session__link").click();
       await expect.poll(() => row.getAttribute("class")).toContain("--active");
       expect(await offset()).toBe(0);
-      expect(await label.evaluate((element) => getComputedStyle(element).maskImage)).toContain(
-        "linear-gradient",
-      );
+      expect(await mask(label)).toContain("linear-gradient");
     },
   );
 
@@ -321,26 +327,17 @@ suite.define(() => {
     await installMockGateway(page, {
       methodResponses: {
         "sessions.list": chatSessionListResponse([
-          {
-            key: unreadKey,
-            kind: "direct",
-            label: "Movies and recommendations for the weekend",
+          session(unreadKey, "Movies and recommendations for the weekend", {
             icon: "🎬",
             updatedAt: 3,
             unread: true,
-          },
-          {
-            key: runningKey,
-            kind: "direct",
-            label: "Running session",
+          }),
+          session(runningKey, "Running session", {
             hasActiveRun: true,
             status: "running",
             updatedAt: 4,
-          },
-          {
-            key: busyKey,
-            kind: "direct",
-            label: "Terminal tab bar redesign proposal",
+          }),
+          session(busyKey, "Terminal tab bar redesign proposal", {
             updatedAt: 2,
             hasActiveRun: false,
             lastMessagePreview:
@@ -350,32 +347,21 @@ suite.define(() => {
             boardFace: "dashboard",
             status: "done",
             unread: true,
-          },
-          {
-            key: plainKey,
-            kind: "direct",
-            label: "A session without secondary metadata",
-            updatedAt: 1,
-          },
-          {
-            key: longKey,
-            kind: "direct",
-            label:
-              "An extremely long single-line session title that keeps going and going far past the sidebar width",
-            incognito: true,
-            updatedAt: 1,
-            hasActiveRun: false,
-            status: "done",
-            unread: true,
-          },
+          }),
+          session(plainKey, "A session without secondary metadata"),
+          session(
+            longKey,
+            "An extremely long single-line session title that keeps going and going far past the sidebar width",
+            { incognito: true, hasActiveRun: false, status: "done", unread: true },
+          ),
         ]),
       },
       sessionKey: plainKey,
     });
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, plainKey));
-    const busyRow = page.locator(`.sidebar-recent-session[data-session-key="${busyKey}"]`);
-    const plainRow = page.locator(`.sidebar-recent-session[data-session-key="${plainKey}"]`);
+    const busyRow = sessionRow(page, busyKey);
+    const plainRow = sessionRow(page, plainKey);
     await busyRow.locator(".session-row-badges").waitFor();
     expect(await busyRow.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
     expect(await busyRow.getAttribute("class")).toContain("sidebar-recent-session--single-line");
@@ -443,135 +429,47 @@ suite.define(() => {
       );
     }
 
-    const layout = await busyRow.evaluate((row) => {
-      const rect = (selector: string) => {
-        const element = row.querySelector<HTMLElement>(selector);
-        if (!element) {
-          throw new Error(`Missing session row fixture ${selector}`);
-        }
-        const box = element.getBoundingClientRect();
-        return {
-          bottom: box.bottom,
-          height: box.height,
-          left: box.left,
-          right: box.right,
-          top: box.top,
-        };
-      };
-      return {
-        atoms: Array.from(
-          row.querySelectorAll(".sidebar-recent-session__details-endcap svg"),
-          (element) => {
-            const box = element.getBoundingClientRect();
-            return { bottom: box.bottom, left: box.left, right: box.right, top: box.top };
-          },
-        ),
-        badges: rect(".session-row-badges"),
-        busyHeight: row.getBoundingClientRect().height,
-        endcap: rect(".sidebar-recent-session__details-endcap"),
-        name: rect(".sidebar-recent-session__name"),
-        unread: rect(".sidebar-session-indicator .session-unread-dot"),
-        lead: rect(".sidebar-session-indicator"),
-        subtitle: rect(".sidebar-recent-session__subtitle"),
-      };
-    });
+    const layout = await rowLayout(busyRow);
+    const badges = await busyRow.locator(".session-row-badges").boundingBox();
+    const subtitle = await busyRow.locator(".sidebar-recent-session__subtitle").boundingBox();
+    const badgeBox = expectDefined(badges, "busy row badges");
+    const subtitleBox = expectDefined(subtitle, "busy row subtitle");
     const plain = await plainRow.evaluate((row) => ({
       height: row.getBoundingClientRect().height,
       singleLine: row.classList.contains("sidebar-recent-session--single-line"),
       nameLeft: row.querySelector(".sidebar-recent-session__name")!.getBoundingClientRect().left,
     }));
 
-    // A row with no secondary metadata no longer reserves the second line: it
-    // collapses so its endcap rides beside the title instead of hanging alone
-    // beneath it. Only rows that actually have a subtitle keep the two-line shape.
+    // Only rows with a subtitle reserve the second line.
     expect(plain.singleLine).toBe(true);
-    expect(plain.height).toBeLessThan(layout.busyHeight);
-    expect(layout.badges.top).toBeGreaterThanOrEqual(layout.name.bottom - 1);
-    expect(layout.name.right).toBeGreaterThan(layout.badges.left);
-    expect((layout.badges.top + layout.badges.bottom) / 2).toBeCloseTo(
-      (layout.subtitle.top + layout.subtitle.bottom) / 2,
-      1,
-    );
-    expect((layout.unread.top + layout.unread.bottom) / 2).toBeCloseTo(
-      (layout.lead.top + layout.lead.bottom) / 2,
-      1,
-    );
-    expect((layout.unread.left + layout.unread.right) / 2).toBeCloseTo(
-      (layout.lead.left + layout.lead.right) / 2,
-      1,
-    );
-    expect(layout.unread.right - layout.unread.left).toBe(7);
-    expect(layout.unread.height).toBe(7);
-    expect(layout.unread.left).toBeGreaterThanOrEqual(layout.lead.left);
-    expect(layout.unread.right).toBeLessThanOrEqual(layout.lead.right);
-    expect(layout.unread.top).toBeGreaterThanOrEqual(layout.lead.top);
-    expect(layout.unread.bottom).toBeLessThanOrEqual(layout.lead.bottom);
-    expect(layout.lead.right).toBeLessThanOrEqual(layout.name.left);
-    expect(layout.name.left).toBeCloseTo(plain.nameLeft, 1);
+    expect(plain.height).toBeLessThan(layout.row.height);
+    expect(badgeBox.y).toBeGreaterThanOrEqual(layout.name.bottom - 1);
+    expect(layout.name.right).toBeGreaterThan(badgeBox.x);
+    expect(badgeBox.y + badgeBox.height / 2).toBeCloseTo(subtitleBox.y + subtitleBox.height / 2, 1);
+    expectUnreadLayout(layout, plain.nameLeft);
     expect(await busyRow.locator(".session-row-state").count()).toBe(0);
     expect(layout.atoms).toHaveLength(1);
     for (const atom of layout.atoms) {
-      expect(atom.left).toBeGreaterThanOrEqual(layout.endcap.left);
-      expect(atom.right).toBeLessThanOrEqual(layout.endcap.right);
-      expect(atom.top).toBeGreaterThanOrEqual(layout.endcap.top);
-      expect(atom.bottom).toBeLessThanOrEqual(layout.endcap.bottom);
+      for (const edge of ["left", "top"] as const) {
+        expect(atom[edge]).toBeGreaterThanOrEqual(layout.endcap[edge]);
+      }
+      for (const edge of ["right", "bottom"] as const) {
+        expect(atom[edge]).toBeLessThanOrEqual(layout.endcap[edge]);
+      }
     }
 
     // Long titles must not crush either the leading unread dot or trailing metadata.
-    const longRow = page.locator(`.sidebar-recent-session[data-session-key="${longKey}"]`);
-    const longLayout = await longRow.evaluate((row) => {
-      const endcap = row.querySelector(".sidebar-recent-session__details-endcap");
-      const name = row.querySelector(".sidebar-recent-session__name");
-      const lead = row.querySelector(".sidebar-session-indicator");
-      const unread = lead?.querySelector(".session-unread-dot");
-      if (!endcap || !name || !lead || !unread) {
-        throw new Error("Missing long-title session row fixture");
-      }
-      const endcapBox = endcap.getBoundingClientRect();
-      const rowBox = row.getBoundingClientRect();
-      const rect = (element: Element) => {
-        const { x, y, left, right, top, bottom, width, height } = element.getBoundingClientRect();
-        return { x, y, left, right, top, bottom, width, height };
-      };
-      return {
-        atoms: Array.from(
-          endcap.querySelectorAll(":scope svg"),
-          (element) => element.getBoundingClientRect().width,
-        ),
-        endcapWidth: endcapBox.width,
-        endcapRight: endcapBox.right,
-        nameOverflowing: name.scrollWidth > name.clientWidth,
-        rowRight: rowBox.right,
-        lead: rect(lead),
-        unread: rect(unread),
-        nameLeft: name.getBoundingClientRect().left,
-        singleLine: row.classList.contains("sidebar-recent-session--single-line"),
-      };
-    });
+    const longRow = sessionRow(page, longKey);
+    const longLayout = await rowLayout(longRow);
     expect(longLayout.singleLine).toBe(true);
     expect(longLayout.nameOverflowing).toBe(true);
-    expect(longLayout.endcapRight).toBeLessThanOrEqual(longLayout.rowRight);
-    const intrinsicAtomWidth = longLayout.atoms.reduce((sum, width) => sum + width, 0);
+    expect(longLayout.endcap.right).toBeLessThanOrEqual(longLayout.row.right);
+    const intrinsicAtomWidth = longLayout.atoms.reduce((sum, atom) => sum + atom.width, 0);
     expect(intrinsicAtomWidth).toBeGreaterThan(0);
-    expect(longLayout.endcapWidth).toBeGreaterThanOrEqual(intrinsicAtomWidth);
-    expect(longLayout.unread.width).toBe(7);
-    expect(longLayout.unread.height).toBe(7);
-    expect(longLayout.unread.x + longLayout.unread.width / 2).toBeCloseTo(
-      longLayout.lead.x + longLayout.lead.width / 2,
-      1,
-    );
-    expect(longLayout.unread.y + longLayout.unread.height / 2).toBeCloseTo(
-      longLayout.lead.y + longLayout.lead.height / 2,
-      1,
-    );
-    expect(longLayout.unread.left).toBeGreaterThanOrEqual(longLayout.lead.left);
-    expect(longLayout.unread.right).toBeLessThanOrEqual(longLayout.lead.right);
-    expect(longLayout.unread.top).toBeGreaterThanOrEqual(longLayout.lead.top);
-    expect(longLayout.unread.bottom).toBeLessThanOrEqual(longLayout.lead.bottom);
-    expect(longLayout.lead.right).toBeLessThanOrEqual(longLayout.nameLeft);
-    expect(longLayout.nameLeft).toBeCloseTo(plain.nameLeft, 1);
+    expect(longLayout.endcap.width).toBeGreaterThanOrEqual(intrinsicAtomWidth);
+    expectUnreadLayout(longLayout, plain.nameLeft);
 
-    const unreadRow = page.locator(`.sidebar-recent-session[data-session-key="${unreadKey}"]`);
+    const unreadRow = sessionRow(page, unreadKey);
     const unreadBadge = unreadRow.locator(
       ".sidebar-session-indicator .session-glyph__badge--unread",
     );
@@ -604,20 +502,16 @@ suite.define(() => {
     await unreadBadge.waitFor({ state: "visible" });
 
     await busyRow.hover();
-    await expect
-      .poll(() =>
-        busyRow
-          .locator(".sidebar-recent-session__details-endcap")
-          .evaluate((element) => getComputedStyle(element).opacity),
-      )
-      .toBe("1");
-    await expect
-      .poll(() =>
-        busyRow
-          .locator("[data-sidebar-session-archive]")
-          .evaluate((element) => getComputedStyle(element).opacity),
-      )
-      .toBe("1");
+    for (const selector of [
+      ".sidebar-recent-session__details-endcap",
+      "[data-sidebar-session-archive]",
+    ]) {
+      await expect
+        .poll(() =>
+          busyRow.locator(selector).evaluate((element) => getComputedStyle(element).opacity),
+        )
+        .toBe("1");
+    }
 
     await plainRow.waitFor();
     for (const size of badgeSizes) {
@@ -663,24 +557,15 @@ suite.define(() => {
     await avatar.waitFor({ state: "visible" });
     await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
 
-    const sessionRow = (sessionKey: string) =>
-      page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
-    const sessionB = sessionRow("agent:main:session-b");
-    await sessionB.locator("a.sidebar-recent-session__link").click();
-    await expect
-      .poll(() => sessionB.getAttribute("class"))
-      .toContain("sidebar-recent-session--active");
-    await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
-    await expect.poll(() => avatar.isVisible()).toBe(true);
-
-    const sessionA = sessionRow("agent:main:session-a");
-    await sessionA.locator("a.sidebar-recent-session__link").click();
-    await expect
-      .poll(() => sessionA.getAttribute("class"))
-      .toContain("sidebar-recent-session--active");
-
-    await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
-    await expect.poll(() => avatar.isVisible()).toBe(true);
+    for (const key of ["agent:main:session-b", "agent:main:session-a"]) {
+      const row = sessionRow(page, key);
+      await row.locator("a.sidebar-recent-session__link").click();
+      await expect
+        .poll(() => row.getAttribute("class"))
+        .toContain("sidebar-recent-session--active");
+      await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
+      await expect.poll(() => avatar.isVisible()).toBe(true);
+    }
     expect(avatarAuthorizations).toEqual(["Bearer e2e-device-token"]);
     expect(
       await page.evaluate(

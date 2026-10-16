@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
@@ -13,17 +14,25 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const pickerFor = (page: Page) =>
+  page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker');
+const selectedModel = (picker: ReturnType<typeof pickerFor>) =>
+  picker.locator('[data-chat-model-select="true"]').getAttribute("data-chat-select-value");
+const modelInfo = (id: string, name: string, provider = "openai") => ({ id, name, provider });
+
+function roster<Row extends object, Defaults extends object>(
+  session: Row,
+  defaults: Defaults,
+  ts = 1,
+) {
+  return { ts, path: "", count: 1, sessions: [session], defaults };
+}
 
 suite.define(() => {
   it("opens the chat picker from a partial snapshot while catalog revalidation is pending", async () => {
     const page = await newChatPage(suite);
     const sessionKey = "agent:main:main";
-    const prepared = {
-      id: "prepared",
-      name: "Prepared model",
-      provider: "fixture",
-      available: true,
-    };
+    const prepared = { ...modelInfo("prepared", "Prepared model", "fixture"), available: true };
     const added = { ...prepared, id: "added", name: "Added model" };
     const gateway = await installMockGateway(page, {
       sessionKey,
@@ -37,9 +46,7 @@ suite.define(() => {
       scope: { agentId: "main", sessionKey },
       catalog: { models: [prepared], refreshFailed: true },
     });
-    const picker = page.locator(
-      'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
-    );
+    const picker = pickerFor(page);
     await picker.locator("[data-chat-model-select]").click();
     const preparedRow = picker.locator('[data-chat-model-option="fixture/prepared"]');
     await revealChatModelOption(preparedRow);
@@ -71,28 +78,20 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       sessionKey: session.key,
       models: [
-        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
-        { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
+        modelInfo("gpt-5.6-sol", "GPT-5.6 Sol"),
+        modelInfo("gpt-5.6-terra", "GPT-5.6 Terra"),
       ],
       methodResponses: {
-        "sessions.list": {
-          ts: 1,
-          path: "",
-          count: 1,
-          sessions: [session],
-          defaults: {
-            contextTokens: null,
-            model: "gpt-5.6-sol",
-            modelProvider: "openai",
-            modelSelectionTarget: "global",
-          },
-        },
+        "sessions.list": roster(session, {
+          contextTokens: null,
+          model: "gpt-5.6-sol",
+          modelProvider: "openai",
+          modelSelectionTarget: "global",
+        }),
       },
     });
     await page.goto(`${suite.server.baseUrl}chat`);
-    let picker = page.locator(
-      'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
-    );
+    const picker = pickerFor(page);
     await picker.locator('[data-chat-model-select="true"]').tap();
     await picker.getByRole("option", { name: "GPT-5.6 Terra", exact: true }).waitFor();
     await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
@@ -103,42 +102,31 @@ suite.define(() => {
       key: "agent:main:main",
       model: "openai/gpt-5.6-terra",
     });
-    await expect
-      .poll(() =>
-        picker.locator('[data-chat-model-select="true"]').getAttribute("data-chat-select-value"),
-      )
-      .toBe("openai/gpt-5.6-terra");
+    await expect.poll(() => selectedModel(picker)).toBe("openai/gpt-5.6-terra");
 
-    await gateway.setSessionsListResponse({
-      ts: 2,
-      path: "",
-      count: 1,
-      sessions: [
+    await gateway.setSessionsListResponse(
+      roster(
         {
           ...session,
           model: "gpt-5.6-terra",
           modelOverrideSource: "user",
           updatedAt: 2,
         },
-      ],
-      defaults: {
-        contextTokens: null,
-        model: "gpt-5.6-terra",
-        modelProvider: "openai",
-        modelSelectionTarget: "global",
-      },
-    });
+        {
+          contextTokens: null,
+          model: "gpt-5.6-terra",
+          modelProvider: "openai",
+          modelSelectionTarget: "global",
+        },
+        2,
+      ),
+    );
 
     await page.reload();
-    picker = page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker');
     await picker.locator('[data-chat-model-select="true"]').tap();
     await picker.locator('[data-chat-model-default="true"]').waitFor();
     await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
-    await expect
-      .poll(() =>
-        picker.locator('[data-chat-model-select="true"]').getAttribute("data-chat-select-value"),
-      )
-      .toBe("openai/gpt-5.6-terra");
+    await expect.poll(() => selectedModel(picker)).toBe("openai/gpt-5.6-terra");
 
     await page.setViewportSize({ height: 900, width: 400 });
     const defaultRow = picker.locator('[data-chat-model-default="true"]');
@@ -198,32 +186,24 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       sessionKey: "agent:main:main",
       sessionInfo: session,
-      models: [{ id: "gpt-5.5", name: "Proof Model", provider: "openai" }],
+      models: [modelInfo("gpt-5.5", "Proof Model")],
       methodResponses: {
-        "sessions.list": {
-          ts: 1,
-          path: "",
-          count: 1,
-          sessions: [session],
-          defaults: { model: "gpt-5.5", modelProvider: "openai", contextTokens: null },
-        },
+        "sessions.list": roster(session, {
+          model: "gpt-5.5",
+          modelProvider: "openai",
+          contextTokens: null,
+        }),
       },
     });
     await page.goto(`${suite.server.baseUrl}chat`);
-    const picker = page.locator(
-      'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
-    );
+    const picker = pickerFor(page);
     await picker.locator('[data-chat-model-select="true"]').click();
     await revealChatModelOption(picker.locator('[data-chat-model-default="true"]'));
 
     await picker.getByRole("option", { name: "Proof Model", exact: true }).click();
     const request = await gateway.waitForRequest("sessions.patch");
     expect(request.params).toMatchObject({ key: "agent:main:main", model: null });
-    await expect
-      .poll(() =>
-        picker.locator('[data-chat-model-select="true"]').getAttribute("data-chat-select-value"),
-      )
-      .toBe("");
+    await expect.poll(() => selectedModel(picker)).toBe("");
     await picker.locator('[data-chat-model-select="true"]').click();
   });
 
@@ -232,15 +212,13 @@ suite.define(() => {
 
     const gateway = await installMockGateway(page, {
       models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-        { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "anthropic" },
+        modelInfo("gpt-5.5", "GPT-5.5"),
+        modelInfo("claude-haiku-4-5", "Claude Haiku 4.5", "anthropic"),
       ],
       sessionKey: "agent:main:main",
     });
     await page.goto(`${suite.server.baseUrl}chat`);
-    const picker = page.locator(
-      'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
-    );
+    const picker = pickerFor(page);
     const previous = picker.locator('[data-chat-model-option="anthropic/claude-haiku-4-5"]');
     await previous.waitFor({ state: "attached" });
     const discoveryCount = (await gateway.getRequests("models.list")).length;
@@ -259,9 +237,9 @@ suite.define(() => {
     expect(await previous.isDisabled()).toBe(false);
 
     const refreshedModels = [
-      { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-      { id: "gpt-5.4-mini", name: "GPT-5.4 mini", provider: "openai" },
-      { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+      modelInfo("gpt-5.5", "GPT-5.5"),
+      modelInfo("gpt-5.4-mini", "GPT-5.4 mini"),
+      modelInfo("claude-sonnet-4-6", "Claude Sonnet 4.6", "anthropic"),
     ];
     await gateway.resolveDeferred("models.list", { models: refreshedModels });
 
@@ -325,8 +303,8 @@ suite.define(() => {
         "sessions.list": chatSessionListResponse([fableSession]),
       },
       models: [
-        { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
-        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+        modelInfo("claude-fable-5", "Claude Fable 5", "anthropic"),
+        modelInfo("gpt-5.6-sol", "GPT-5.6 Sol"),
       ],
       sessionKey,
     });
@@ -402,17 +380,20 @@ suite.define(() => {
         { id: "low", label: "Low" },
         { id: "high", label: "High" },
       ];
+      const defaults = {
+        model: "example-a",
+        modelProvider: "example",
+        thinkingDefault: "low",
+        thinkingLevels: levels,
+      };
       const row = {
+        ...defaults,
         key,
         sessionId: "live-preferences",
         kind: "direct",
         updatedAt: 1,
-        model: "example-a",
-        modelProvider: "example",
         modelOverrideSource: "user",
         thinkingLevel: "low",
-        thinkingDefault: "low",
-        thinkingLevels: levels,
       };
       const gateway = await installMockGateway(page, {
         sessionKey: key,
@@ -427,18 +408,7 @@ suite.define(() => {
           supportsFastMode: true,
         })),
         methodResponses: {
-          "sessions.list": {
-            ts: 1,
-            path: "",
-            count: 1,
-            defaults: {
-              model: "example-a",
-              modelProvider: "example",
-              thinkingLevels: levels,
-              thinkingDefault: "low",
-            },
-            sessions: [row],
-          },
+          "sessions.list": roster(row, defaults),
         },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));

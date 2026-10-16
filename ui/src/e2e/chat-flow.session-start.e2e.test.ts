@@ -15,6 +15,9 @@ const suite = createChatFlowE2eSuite();
 suite.define(() => {
   it("waits for configured inference before sending the first chat turn", async () => {
     const page = await newChatPage(suite);
+    const models = [
+      { available: true, id: "startup-model", name: "Startup Model", provider: "openai" },
+    ];
     const gateway = await installMockGateway(page, {
       agentModel: "openai/startup-model",
       defaultAgentId: "ops",
@@ -31,14 +34,7 @@ suite.define(() => {
           },
         },
       },
-      models: [
-        {
-          available: true,
-          id: "startup-model",
-          name: "Startup Model",
-          provider: "openai",
-        },
-      ],
+      models,
       sessionKey: "global",
       sessionScope: "global",
     });
@@ -46,8 +42,6 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     await gateway.waitForRequest("chat.startup");
     expect(await gateway.getRequests("agents.list")).toHaveLength(1);
-    // chat.startup owns the initial metadata load; the old parallel
-    // chat.metadata request was only a synchronization point for this test.
     expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
     expect(await gateway.getRequests("commands.list")).toHaveLength(0);
     await gateway.waitForRequest("models.list");
@@ -70,14 +64,7 @@ suite.define(() => {
             source: "native",
           },
         ],
-        models: [
-          {
-            available: true,
-            id: "startup-model",
-            name: "Startup Model",
-            provider: "openai",
-          },
-        ],
+        models,
       },
       sessionId: "session:global",
       thinkingLevel: null,
@@ -99,15 +86,9 @@ suite.define(() => {
     await sendButton.click();
 
     const sendRequest = await gateway.waitForRequest("chat.send");
-    await expect
-      .poll(() => composer.inputValue(), {
-        timeout: 10_000,
-      })
-      .toBe("");
+    await expect.poll(() => composer.inputValue(), { timeout: 10_000 }).toBe("");
     const params = requireRecord(sendRequest.params);
-    expect(params.message).toBe(prompt);
-    expect(params.sessionKey).toBe("global");
-    expect(params.agentId).toBe("ops");
+    expect(params).toMatchObject({ message: prompt, sessionKey: "global", agentId: "ops" });
 
     const runId = requireString(params.idempotencyKey, "chat send idempotency key");
     await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
@@ -122,22 +103,19 @@ suite.define(() => {
       state: "delta",
     });
     const transcript = page.locator(".chat-thread-inner");
-    await transcript.getByText("First token visible.", { exact: true }).waitFor({
-      timeout: 10_000,
-    });
+    await transcript
+      .getByText("First token visible.", { exact: true })
+      .waitFor({ timeout: 10_000 });
     await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
-    await transcript.getByText("First token visible.", { exact: true }).waitFor({
-      timeout: 10_000,
-    });
+    await transcript
+      .getByText("First token visible.", { exact: true })
+      .waitFor({ timeout: 10_000 });
     await expect
       .poll(() => page.locator('[data-chat-model-option="openai/startup-model"]').count())
       .toBe(1);
     await gateway.emitChatFinal({ runId, text: "History race stayed visible." });
-    await page
-      .locator(".chat-thread-inner")
-      .getByText("History race stayed visible.")
-      .waitFor({ timeout: 10_000 });
-    await page.locator(".agent-chat__composer-combobox textarea").fill("/");
+    await transcript.getByText("History race stayed visible.").waitFor({ timeout: 10_000 });
+    await composer.fill("/");
     await page.getByRole("option", { name: /\/startup-ready/ }).waitFor({ timeout: 10_000 });
     // Check after both controls render so no late fallback RPC supplied either catalog.
     expect({
