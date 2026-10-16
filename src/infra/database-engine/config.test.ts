@@ -18,6 +18,42 @@ const sqliteEngines = {
 };
 
 describe("host database engine selection", () => {
+  it.each([undefined, "sqlite"] as const)(
+    "keeps the public resolver on the default engine (%s), regardless of family overrides",
+    async (engine) => {
+      await expect(
+        resolveDatabaseEngineInput({
+          database: {
+            engine,
+            families: { state: { engine: "postgres" } },
+            postgres: { connection: { source: "file", provider: "missing", id: "/dsn" } },
+          },
+        }),
+      ).resolves.toBeUndefined();
+    },
+  );
+
+  it("preserves the public PostgreSQL default even when built-in families override to SQLite", async () => {
+    await expect(
+      resolveDatabaseEngineInput({
+        database: {
+          engine: "postgres",
+          families: {
+            state: { engine: "sqlite" },
+            agent: { engine: "sqlite" },
+            workboard: { engine: "sqlite" },
+            logbook: { engine: "sqlite" },
+            "team-reports": { engine: "sqlite" },
+          },
+          postgres: { connection: "postgresql://localhost/synthetic" },
+        },
+      }),
+    ).resolves.toEqual({
+      connection: "postgresql://localhost/synthetic",
+      schemaPrefix: "openclaw",
+    });
+  });
+
   it("captures a frozen connection from the supplied host environment for an override", async () => {
     const selection = await resolveDatabaseEngineSelection(
       {

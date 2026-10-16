@@ -13,6 +13,7 @@ import {
   getDatabaseEngineSelection,
   installDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
+import { listDatabaseEngineStores } from "../infra/database-engine/registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
@@ -276,6 +277,19 @@ async function loadPluginCliCommandRegistryWithContext(params: {
   if (onlyPluginIds && onlyPluginIds.length === 0) {
     return createEmptyPluginRegistry();
   }
+  // Database families need their boot choice before registration can open a store.
+  // Unrelated CLI commands retain their independent credential requirements.
+  if (
+    !getDatabaseEngineSelection() &&
+    listDatabaseEngineStores().some(
+      ({ id, postgres }) => postgres && (!onlyPluginIds || onlyPluginIds.includes(id)),
+    )
+  ) {
+    const { resolveDatabaseEngineSelection } = await import("../infra/database-engine/config.js");
+    installDatabaseEngineSelection(
+      await resolveDatabaseEngineSelection(context.config, context.env),
+    );
+  }
   const options = buildPluginRuntimeLoadOptions(context, {
     ...params.loaderOptions,
     ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
@@ -320,12 +334,6 @@ export async function loadPluginCliRegistrationEntriesWithDefaults(
   mode: "runtime" | "metadata" = "runtime",
 ): Promise<PluginCliCommandGroupEntry[]> {
   const prepared = resolvePreparedPluginCliLoad(params);
-  if (mode === "runtime" && !getDatabaseEngineSelection()) {
-    const { resolveDatabaseEngineSelection } = await import("../infra/database-engine/config.js");
-    installDatabaseEngineSelection(
-      await resolveDatabaseEngineSelection(prepared.context.config, params.env),
-    );
-  }
   const buildEntries = (registry: PluginRegistry): PluginCliCommandGroupEntry[] => {
     const primary = mode === "metadata" && normalizeLowercaseStringOrEmpty(params.primaryCommand);
     // Metadata discovery can include unrelated legacy roots without manifest ownership.
