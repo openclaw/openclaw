@@ -9,6 +9,18 @@ const meetingUrl = "https://meet.test/meeting";
 const targetId = "participation-target";
 const tabs = { tabs: [{ targetId, url: meetingUrl }] };
 
+function authority(message = "Session ended.") {
+  const state = {
+    current: true,
+    assertCurrent: () => {
+      if (!state.current) {
+        throw new Error(message);
+      }
+    },
+  };
+  return state;
+}
+
 function createAdapter(): MeetingBrowserParticipationAdapter {
   return {
     capabilities: ["test-action"],
@@ -73,15 +85,14 @@ describe("meeting participation browser dispatch", () => {
       };
       expect(build).toHaveBeenCalledExactlyOnceWith(identity);
       expect(parse).toHaveBeenCalledWith(response, identity.action);
-      expect(callBrowser.mock.calls.map(([request]) => [request.method, request.path])).toEqual([
-        ["GET", "/tabs"],
-        ...(prepared ? [["POST", "/act"]] : []),
-        ["POST", "/act"],
-      ]);
-      expect(callBrowser.mock.calls.map(([request]) => request.body)).toEqual([
-        undefined,
-        ...(prepared ? [{ kind: "evaluate", targetId, fn: "() => 'prepared'" }] : []),
-        { kind: "evaluate", targetId, fn: "() => 'test-result'" },
+      expect(
+        callBrowser.mock.calls.map(([{ method, path, body }]) => [method, path, body]),
+      ).toEqual([
+        ["GET", "/tabs", undefined],
+        ...(prepared
+          ? [["POST", "/act", { kind: "evaluate", targetId, fn: "() => 'prepared'" }]]
+          : []),
+        ["POST", "/act", { kind: "evaluate", targetId, fn: "() => 'test-result'" }],
       ]);
       if (prepared) {
         expect(prepare).toHaveBeenCalledWith(identity);
@@ -139,18 +150,12 @@ describe("meeting participation browser dispatch", () => {
       deadline: performance.now() + 10_000,
       operation: async () => await gate,
     });
-    let current = true;
+    const state = authority();
     const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async () => tabs);
-    const result = run(callBrowser, {
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("Session ended.");
-        }
-      },
-    });
+    const result = run(callBrowser, state);
     await Promise.resolve();
     expect(callBrowser).not.toHaveBeenCalled();
-    current = false;
+    state.current = false;
     release?.();
     await blocker;
     await expect(result).resolves.toEqual({ status: "rejected", message: "Session ended." });
@@ -162,31 +167,24 @@ describe("meeting participation browser dispatch", () => {
     { stage: "script preparation", status: "rejected", message: "Session replaced.", calls: 1 },
     { stage: "native dispatch", status: "uncertain", message: "Session ended.", calls: 2 },
   ])("revalidates authority during $stage", async ({ stage, status, message, calls }) => {
-    let current = true;
+    const state = authority(message);
     const adapter = createAdapter();
     const build = adapter.buildActionScript.bind(adapter);
     adapter.buildActionScript = (params) => {
       if (stage === "script preparation") {
-        current = false;
+        state.current = false;
       }
       return build(params);
     };
     const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async (request) => {
       await Promise.resolve();
       if (stage === (request.path === "/tabs" ? "tab check" : "native dispatch")) {
-        current = false;
+        state.current = false;
       }
       return request.path === "/tabs" ? tabs : { result: "test-result" };
     });
     await expect(
-      run(callBrowser, {
-        adapter,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error(message);
-          }
-        },
-      }),
+      run(callBrowser, { adapter, assertCurrent: state.assertCurrent }),
     ).resolves.toEqual({ status, message });
     expect(callBrowser).toHaveBeenCalledTimes(calls);
     expect(callBrowser.mock.calls[0]?.[0].path).toBe("/tabs");
@@ -231,7 +229,7 @@ describe("meeting participation browser dispatch", () => {
   it("rejects a session that leaves during preparation while retaining the browser lock", async () => {
     const { promise: gate, resolve: release } = createDeferredCore();
     const { promise: preparing, resolve: markPreparing } = createDeferredCore();
-    let current = true;
+    const state = authority();
     const adapter = createPreparingAdapter();
     const build = vi.spyOn(adapter, "buildActionScript");
     const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async (request) => {
@@ -242,14 +240,7 @@ describe("meeting participation browser dispatch", () => {
       await gate;
       return { result: "ready" };
     });
-    const result = run(callBrowser, {
-      adapter,
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("Session ended.");
-        }
-      },
-    });
+    const result = run(callBrowser, { adapter, assertCurrent: state.assertCurrent });
     await preparing;
     const concurrentOperation = vi.fn(async () => {});
     const concurrent = runMeetingBrowserAct({
@@ -259,7 +250,7 @@ describe("meeting participation browser dispatch", () => {
     });
     await Promise.resolve();
     expect(concurrentOperation).not.toHaveBeenCalled();
-    current = false;
+    state.current = false;
     release?.();
     await expect(result).resolves.toEqual({ status: "rejected", message: "Session ended." });
     await concurrent;
