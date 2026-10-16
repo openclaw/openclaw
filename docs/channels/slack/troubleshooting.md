@@ -84,6 +84,8 @@ openclaw pairing list slack
 
     Rejected or unsupported `processing` writes do not trigger this diagnostic. An accepted `active` write does not guarantee that Slack Desktop has refreshed its working indicator.
 
+    Verbose logs record each `agents.sessions.setStatus` response as `requested`, `accepted`, and, when Slack returns recognized values, `status` and `agent_status`. For example, `requested=active accepted=true status=processing agent_status=active` shows that Slack accepted the terminal request and reported a different overall session status from the agent status. An absent returned field means Slack omitted it or returned an unrecognized value. These lines contain no request or response identifiers, so use their timing alongside the turn's other evidence; they do not by themselves establish why a Desktop indicator remains visible.
+
   </Accordion>
 
   <Accordion title="Socket mode not connecting">
