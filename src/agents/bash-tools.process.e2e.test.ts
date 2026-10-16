@@ -1,7 +1,16 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Value } from "typebox/value";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  expect,
+  type MockInstance,
+  test,
+  vi,
+} from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -14,6 +23,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   getFinishedSession,
   getSession,
@@ -47,7 +57,7 @@ let config: OpenClawConfig;
 const receipts: sessionEvents.SessionEventReceipt[] = [];
 const completions = new Map<string, sessionEvents.SessionEventReceipt>();
 const enqueue = sessionEvents.enqueueSessionEventForHost;
-let observe: ReturnType<typeof vi.spyOn>;
+let observe: MockInstance<typeof enqueue>;
 
 beforeAll(async () => {
   state = await createOpenClawTestState({
@@ -783,4 +793,87 @@ test.skipIf(process.platform === "win32")(
     }
   },
   20_000,
+);
+
+test.skipIf(process.platform === "win32")(
+  "re-admits a real deferred exec completion under a policy published mid-turn",
+  async ({ signal }) => {
+    const scopeKey = "agent:main:process-config-readmission";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: scopeKey },
+      {
+        sessionId: "process-config-readmission",
+        lifecycleRevision: "original",
+        updatedAt: Date.now(),
+        sessionStartedAt: Date.now(),
+        permissionMode: "full",
+        // A channel route arms the durable exec source claim.
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "-100001", accountId: "readmission" },
+        }),
+      },
+    );
+    const held = createDeferredCore();
+    const firstStarted = createDeferredCore();
+    const turns: Array<{ prompt: string; deny: readonly string[] | undefined }> = [];
+    model.mockImplementation(async (params: RunEmbeddedAgentParams) => {
+      await expectDefined(params.preparedRunAdmission, "real event admission").admit(
+        "gateway",
+        params.runId,
+      );
+      params.onExecutionPhase?.({ phase: "model_call_started" });
+      await params.onExecutionStarted?.();
+      await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+      turns.push({ prompt: params.prompt, deny: params.config?.tools?.deny });
+      if (turns.length === 1) {
+        firstStarted.resolve();
+        await held.promise;
+      }
+      return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+    });
+    const target = await sessionEvents.captureSessionEventTargetForHost("main", scopeKey);
+    sessionEvents.enqueueSessionEventForHost("Hold the active turn", {
+      agentId: "main",
+      sessionKey: scopeKey,
+      source: "task",
+      expectedTarget: target,
+      deliver: false,
+    });
+    try {
+      await withinTest(firstStarted.promise, signal);
+      const run = await runSandboxProcess({
+        command: "config-readmission-proof",
+        containerName: "config-readmission-proof",
+        child: 'setTimeout(() => { process.stdout.write("READMISSION_CHILD_OUTPUT"); }, 100)',
+        async finalizeExec() {},
+        notifyOnExit: true,
+        notifyOnExitEmptySuccess: true,
+        scopeKey,
+        timeoutSec: 10,
+      });
+      markBackgrounded(run.session);
+      await run.promise;
+      const completion = expectDefined(completions.get(scopeKey), "real exec completion");
+      // The active turn accepted the producer's completion as a deferred follow-up.
+      expect(await withinTest(completion.accepted, signal)).toEqual({ ok: true });
+      // The real producer's durable source identity rides along.
+      expect(
+        observe.mock.calls.find(([, options]) => options.source === "exec")?.[1].sourceTurnId,
+      ).toMatch(/^exec:./);
+      setRuntimeConfigSnapshot({ ...config, tools: { deny: ["write"] } });
+      held.resolve();
+      expect(await withinTest(completion.settled, signal)).toMatchObject({
+        status: "completed",
+        executionStarted: true,
+      });
+      expect(turns).toHaveLength(2);
+      expect(turns[1]?.prompt).toContain("READMISSION_CHILD_OUTPUT");
+      // The completion turn binds the published policy, not the enqueue-time snapshot.
+      expect(turns[1]?.deny).toEqual(["write"]);
+      expect(peekSystemEventEntries(scopeKey)).toEqual([]);
+    } finally {
+      held.resolve();
+      setRuntimeConfigSnapshot(config);
+    }
+  },
 );

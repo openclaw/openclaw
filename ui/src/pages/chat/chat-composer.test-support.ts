@@ -76,6 +76,31 @@ export function createComposerProps(overrides: Partial<ComposerProps> = {}): Com
   };
 }
 
+export function createComposerControlsFixture(): NonNullable<ComposerProps["composerControls"]> {
+  return {
+    component: () =>
+      Object.assign(document.createElement("button"), {
+        type: "button",
+        className: "chat-composer-model-control",
+        textContent: "Model",
+      }),
+    model: {
+      activeRunId: null,
+      connected: true,
+      gatewayAvailable: false,
+      loading: false,
+      modelCatalog: [],
+      modelCatalogState: { hasSnapshot: false, status: "idle" },
+      modelSwitching: false,
+      sending: false,
+      sessionKey: "main",
+      selectedSession: undefined,
+      sessionsResult: null,
+      stream: null,
+    },
+  };
+}
+
 export function renderComposerFixture(overrides: Partial<ComposerProps> = {}) {
   const container = createComposerContainer();
   const props = createComposerProps(overrides);

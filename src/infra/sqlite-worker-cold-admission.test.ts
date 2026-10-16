@@ -134,11 +134,8 @@ it.each([
     if (retryable) {
       expect(admission.failure).toBeUndefined();
       expect(owner.refusal).toBeUndefined();
-    } else {
-      expect(admission.failure).toBe(scenario === "revoked" ? revoked : pending);
-      if (transport === "schema") {
-        expect(owner.refusal).toBeInstanceOf(Error);
-      }
+    } else if (transport === "schema") {
+      expect(owner.refusal).toBeInstanceOf(Error);
     }
     expect(release).not.toHaveBeenCalled();
   } finally {

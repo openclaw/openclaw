@@ -772,7 +772,7 @@ function tsdownBuildUsage() {
   ].join("\n");
 }
 
-export function parseTsdownBuildArgs(argv: string[]) {
+function parseTsdownBuildArgs(argv: string[]) {
   if (argv.includes("--help") || argv.includes("-h")) {
     return {
       forwardedArgs: [],

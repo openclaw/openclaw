@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { notifyBrowserAuthRestored } from "../../../app/browser-http.ts";
 import { createChatSubmissions } from "../../../app/chat-submissions.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { releaseChatAttachmentPayloads } from "../attachment-payload-store.ts";
@@ -71,9 +71,9 @@ function mountTranscriptPane(props: ChatThreadProps) {
     flush();
     root ??= mountSolid(
       () => (
-        <SolidContentPresentation value={presented}>
+        <ContentPresentation value={presented}>
           <ChatThread props={current()} transcript={transcript} />
-        </SolidContentPresentation>
+        </ContentPresentation>
       ),
       { container },
     );

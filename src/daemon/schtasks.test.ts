@@ -310,16 +310,19 @@ describe("readScheduledTaskCommand", () => {
     );
   });
 
-  it.each(["node gateway.js & node another.js"])(
-    "rejects an ambiguous effective launcher body: %s",
-    async (body) => {
-      await withScheduledTaskScript({ scriptLines: ["@echo off", body] }, async (env) => {
-        await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
-          "Effective Scheduled Task service command could not be inspected.",
-        );
-      });
-    },
-  );
+  it.each([
+    "node gateway.js & node another.js",
+    'node gateway.js >> "C:\\Logs\\gateway.log"2>&1',
+    '"%NODE_EXE%" gateway.js < NUL',
+    "node gateway.js !WORKSPACE! < NUL",
+    'cd /d "%WORKSPACE%"\r\nnode gateway.js < NUL',
+  ])("rejects an ambiguous effective launcher body: %s", async (body) => {
+    await withScheduledTaskScript({ scriptLines: ["@echo off", body] }, async (env) => {
+      await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
+        "Effective Scheduled Task service command could not be inspected.",
+      );
+    });
+  });
 
   async function withWindowsLauncherFiles(
     run: (env: Record<string, string>, files: Map<string, string | Buffer>) => Promise<void>,
@@ -479,14 +482,15 @@ describe("readScheduledTaskCommand", () => {
     ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
   });
 
-  it.each([['gateway.js>>"C:\\Logs\\out log" 2>&1<NUL', ["gateway.js"]]])(
-    "preserves arguments beside quoted or attached operators: %s",
-    async (line, args) => {
-      await withScheduledTaskScript({ scriptLines: ["@echo off", `node ${line}`] }, async (env) => {
-        expect((await readScheduledTaskCommand(env))?.programArguments).toEqual(["node", ...args]);
-      });
-    },
-  );
+  it.each([
+    'gateway.js>>"C:\\Logs\\out log" 2>&1<NUL',
+    'gateway.js < NUL >> "%USERPROFILE%\\.openclaw\\logs\\gateway-stdout.log" 2>&1',
+  ])("preserves arguments beside quoted or attached operators: %s", async (line) => {
+    await withScheduledTaskScript({ scriptLines: ["@echo off", `node ${line}`] }, async (env) => {
+      const result = await readScheduledTaskCommand(env, { requireEffective: true });
+      expect(result?.programArguments).toEqual(["node", "gateway.js"]);
+    });
+  });
 
   it.each(["%OPENCLAW_TEST_LOG_PATH%"])(
     "preserves unquoted redirect expansion boundaries: %s",

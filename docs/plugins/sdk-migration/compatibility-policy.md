@@ -137,6 +137,20 @@ helper still mounts, but its link never renders. Plugins built against
 2026.10.1 keep loading. Render a custom accessory instead. The
 `plugin-sdk-session-header-link` record allows removal after 2027-01-12.
 
+### Private runtime facade exports
+
+Some `openclaw/plugin-sdk/*` subpaths ship as JavaScript-only runtime facades
+without a `types` export condition. They are not a typed third-party contract,
+but published plugins still import named helpers from them, and a missing name
+fails ESM linking so the whole plugin stops loading. OpenClaw 2026.10.5 betas
+removed some of these names. Exports with published external importers are
+restored and deprecated under the `plugin-sdk-private-runtime-shipped-exports`
+record, which lists each `subpath.name` surface and allows removal after
+2027-01-15. Examples include `readApprovalReactionDeliveryMetadata` from
+`approval-reaction-runtime`, web-search credential setters from
+`provider-web-search`, and `wrapWebContent` from `provider-web-fetch`. Move to
+a typed public subpath that exports the helper, or keep a plugin-local copy.
+
 ### Harness tool construction
 
 Harnesses should await `params.hostCapabilities.createToolSurfaceAsync(options,

@@ -438,6 +438,14 @@ settlement queue for read-your-writes. Synchronous authority acceptance, mutatio
 preparation, cold initialization, retirement comparisons, and accepted-write
 barriers retain their ordered reservations.
 
+Board reads share the agent's existing admission queue with prepared transcript-only
+appends using disjoint conflict keys. SQLite WAL snapshots let the read finish
+while the append holds the native writer. Board mutations, session lifecycle
+changes, unknown write commands, and cold preparation still reserve the whole
+database through settlement, preserving current widget grants at consumption.
+All writers remain mutually exclusive and retain FIFO order. Append commands
+that initialize sessions or run reducers are not eligible for concurrent Board reads.
+
 Session actor mutations borrow the connection opened by their transaction owner;
 they do not request a second handle admission before that transaction. Current
 transaction authority and final commit admission remain unchanged. These changes

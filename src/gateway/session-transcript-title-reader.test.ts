@@ -145,6 +145,34 @@ async function readFullScanTitleFields(scope: SessionTranscriptReadScope) {
 }
 
 describe("session transcript title hydration", () => {
+  test("selects usable tasks without contaminating the list cache with command metadata", async () => {
+    const scope = await writeSqliteMessages("reader-title-command-source", [
+      { role: "user", content: "/status" },
+      {
+        role: "user",
+        content: "[Mon 2026-08-10 12:00 UTC] /topic_proof /api routing needs repair",
+      },
+      { role: "user", content: "[Mon 2026-08-10 12:01 UTC] Later ordinary task" },
+    ]);
+    const skillCommands = [
+      { name: "topic_proof", skillName: "topic-proof", description: "Review a task" },
+    ];
+    expect(readSessionTitleFieldsFromTranscript(scope).firstUserMessage).toBe(
+      "Later ordinary task",
+    );
+    await expect(
+      readSessionTitleFieldsFromTranscriptAsync(scope, { skillCommands }),
+    ).resolves.toMatchObject({
+      firstUserMessage: "/api routing needs repair",
+    });
+    expect(readSessionTitleFieldsFromTranscript(scope, { skillCommands }).firstUserMessage).toBe(
+      "/api routing needs repair",
+    );
+    await expect(readSessionTitleFieldsFromTranscriptAsync(scope)).resolves.toMatchObject({
+      firstUserMessage: "Later ordinary task",
+    });
+  });
+
   test("reads fresh title fields in the worker after in-process appends and rewrites", async () => {
     const scope = await writeSqliteMessages("reader-title-worker", [
       { role: "user", content: "Original question" },

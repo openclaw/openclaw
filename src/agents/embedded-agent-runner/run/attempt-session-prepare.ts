@@ -688,6 +688,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       sessionTarget: attempt.sessionTarget,
       sessionFile: attempt.sessionFile,
       sessionManager,
+      tokenBudget: attempt.contextTokenBudget,
       // The admitted user turn is already persisted above. Fence bootstrap like
       // assemble is fenced; otherwise the engine imports the pending turn from
       // the transcript, the host appends it again, and the next run drops one

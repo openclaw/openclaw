@@ -15,6 +15,7 @@ const {
   darwinCommand,
   rosetta,
   windows,
+  windowsSid,
   fixturePath,
 } = vi.hoisted(() => ({
   census: vi.fn(),
@@ -28,6 +29,7 @@ const {
   darwinCommand: vi.fn(),
   rosetta: vi.fn(),
   windows: vi.fn(),
+  windowsSid: vi.fn(),
   fixturePath: (file: string) => file.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""),
 }));
 vi.mock("node:child_process", () => ({ spawnSync: census }));
@@ -49,7 +51,14 @@ vi.mock("../shared/rosetta-translation.js", () => ({ isRosettaTranslatedProcess:
 vi.mock("../process/supervisor/darwin-process-command.js", () => ({
   readDarwinProcessCommand: darwinCommand,
 }));
-vi.mock("./windows-process-census.js", () => ({ readWindowsProcessCensus: windows }));
+vi.mock("./windows-process-census.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./windows-process-census.js")>()),
+  readWindowsProcessCensus: windows,
+}));
+vi.mock("./windows-user-sid.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./windows-user-sid.js")>()),
+  readWindowsUserSid: windowsSid,
+}));
 import { inspectOtherOpenClawProcesses } from "./openclaw-process-census.js";
 
 const self = process.pid;
@@ -82,6 +91,7 @@ beforeEach(() => {
   darwinCommand.mockReset();
   rosetta.mockReset().mockReturnValue(false);
   windows.mockReset();
+  windowsSid.mockReset();
   realpath.mockReset().mockImplementation((file: string) => file);
   stat.mockReset().mockReturnValue({ isDirectory: () => false });
   readlink.mockReset().mockImplementation((file: string) => {
@@ -775,7 +785,7 @@ it.each([
         peer + 8,
       ],
       unverifiedPids: [peer + 2, peer + 7, peer + 9],
-      error: "Retry update repair as Administrator using the same Windows account.",
+      error: "Please run update repair as the same Windows account that started the update.",
     });
   },
 );
@@ -789,6 +799,144 @@ it.each(["denied", "empty"])("preserves Doctor's refusal for foreign Linux %s ar
   });
   expect(inspectOtherOpenClawProcesses()).toHaveProperty("error");
 });
+
+it.each([
+  {
+    name: "denied unrelated process, same account",
+    sid: "S-1-5-21-100",
+    facts: { accessDenied: true },
+    matching: false,
+    unverified: false,
+  },
+  {
+    name: "denied process, different account",
+    sid: "S-1-5-21-200",
+    facts: { accessDenied: true },
+    matching: false,
+    unverified: true,
+  },
+  {
+    name: "denied process, unknown caller",
+    sid: undefined,
+    facts: { accessDenied: true },
+    matching: false,
+    unverified: true,
+  },
+  {
+    name: "denied process, legacy record",
+    sid: "S-1-5-21-100",
+    legacy: true,
+    facts: { accessDenied: true },
+    matching: false,
+    unverified: true,
+  },
+  {
+    name: "unexplained missing identity",
+    sid: "S-1-5-21-100",
+    facts: {},
+    matching: false,
+    unverified: true,
+  },
+  {
+    name: "protected unrelated process",
+    sid: "S-1-5-21-100",
+    facts: { parentPid: peer + 10, startIdentity: "100" },
+    matching: false,
+    unverified: false,
+  },
+  {
+    name: "pre-handoff process with reused parent PID",
+    sid: "S-1-5-21-100",
+    facts: { parentPid: launcher, startIdentity: "100" },
+    matching: false,
+    unverified: false,
+  },
+  {
+    name: "readable unrelated process from another account",
+    sid: "S-1-5-21-200",
+    facts: { parentPid: peer + 10, startIdentity: "100" },
+    matching: false,
+    unverified: false,
+  },
+  {
+    name: "descendant born in the same millisecond",
+    sid: "S-1-5-21-100",
+    facts: { parentPid: launcher, startIdentity: "200" },
+    matching: true,
+    unverified: false,
+  },
+  {
+    name: "unreadable descendant",
+    sid: "S-1-5-21-100",
+    facts: { parentPid: launcher, startIdentity: "300" },
+    matching: true,
+    unverified: false,
+  },
+  {
+    name: "surviving worker with an exited intermediate parent",
+    sid: "S-1-5-21-100",
+    facts: { parentPid: peer + 10, startIdentity: "300" },
+    matching: false,
+    unverified: true,
+  },
+  {
+    name: "surviving worker whose parent PID now denies access",
+    sid: "S-1-5-21-100",
+    facts: { parentPid: peer + 10, startIdentity: "300" },
+    parents: [{ pid: peer + 10, accessDenied: true }],
+    matching: false,
+    unverified: true,
+  },
+  {
+    name: "readable descendant",
+    sid: "S-1-5-21-100",
+    facts: {
+      parentPid: launcher,
+      startIdentity: "300",
+      commandLine: "node worker.js",
+      cwd: "C:\\app",
+    },
+    matching: true,
+    unverified: false,
+  },
+  {
+    name: "positive artifact evidence on denied row",
+    sid: "S-1-5-21-100",
+    facts: { accessDenied: true, commandLine: "node --id=update-run-123" },
+    matching: true,
+    unverified: false,
+  },
+])(
+  "Windows handoff repair census: $name",
+  ({ sid, facts, matching, unverified, legacy, parents }) => {
+    mockProcessPlatform("win32");
+    windowsSid.mockReturnValue(sid);
+    windows.mockReturnValue([
+      {
+        pid: self,
+        parentPid: 0,
+        startIdentity: "400",
+        commandLine: "openclaw update repair",
+        cwd: "C:\\app",
+      },
+      { pid: peer, ...facts },
+      ...(parents ?? []),
+    ]);
+    expect(
+      inspectOtherOpenClawProcesses({
+        ...references,
+        windowsUserSid: legacy ? undefined : "S-1-5-21-100",
+        drivers: [{ pid: launcher, startIdentity: "200" }],
+      }),
+    ).toEqual({
+      matchingPids: matching ? [peer] : [],
+      unverifiedPids: unverified ? [peer] : [],
+      ...(unverified
+        ? { error: "Please run update repair as the same Windows account that started the update." }
+        : {}),
+    });
+  },
+);
 
 it("retains known matching PIDs when later inspection exhausts the census budget", () => {
   let now = 0;

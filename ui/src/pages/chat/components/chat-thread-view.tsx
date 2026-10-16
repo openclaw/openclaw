@@ -20,7 +20,6 @@ import {
   shouldHandleNavigationClick,
 } from "../../../lib/navigation-click.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
 import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
 import { ChatCommentPins } from "./chat-comment-pins.tsx";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
@@ -96,7 +95,7 @@ export function ChatThread(input: {
   const historyHeader = () =>
     input.props.historyPagination
       ? {
-          template: solidContent(ChatHistoryBoundary, input.props.historyPagination),
+          props: input.props.historyPagination,
           height: CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
         }
       : null;

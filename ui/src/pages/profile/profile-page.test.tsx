@@ -14,7 +14,7 @@ import { i18n, t } from "../../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { waitForSolid as waitForFast, flush } from "../../test-helpers/solid-settle.ts";
 import * as avatarProcessing from "./avatar-processing.ts";
 import {
@@ -67,6 +67,13 @@ function selectProfileAvatar(page: ParentNode) {
 
 async function startProfileSignIn(page: ParentNode) {
   page.querySelector<HTMLButtonElement>(".profile-auth-add-account")!.click();
+  await waitForFast(() =>
+    expect(
+      page.querySelector<HTMLButtonElement>(".profile-auth-provider .picker-select__trigger")
+        ?.disabled,
+    ).toBe(false),
+  );
+  await openPicker(page.querySelector<HTMLElement>(".profile-auth-provider")!);
   await waitForFast(() =>
     expect(page.querySelector('[role="option"][data-value="openai"]')).not.toBeNull(),
   );

@@ -4,7 +4,6 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
 import { disposeQuestionPromptState } from "../../app/question-prompt.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { emptyLegacyContent } from "../../lit/solid-content.tsx";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
@@ -82,7 +81,7 @@ class SuggestionRecoveryPane extends ChatPaneRuntime {
 
   protected override renderChatPaneLayout({ chatProps }: { chatProps: ChatProps }) {
     this.chatProps = chatProps;
-    return emptyLegacyContent;
+    return null;
   }
 }
 
