@@ -61,7 +61,22 @@ export async function listOmlxModels(params: {
               await import("openclaw/plugin-sdk/provider-auth-runtime")
             ).resolveApiKeyForProvider({
               provider: OMLX_PROVIDER_ID,
-              cfg: params.config,
+              // Catalog probes must keep the configured key ahead of ambient credentials.
+              cfg: {
+                ...params.config,
+                models: {
+                  ...params.config.models,
+                  providers: {
+                    ...params.config.models?.providers,
+                    [OMLX_PROVIDER_ID]: {
+                      ...existing,
+                      baseUrl,
+                      auth: "api-key",
+                      models: existing?.models ?? [],
+                    },
+                  },
+                },
+              },
               agentDir: params.agentDir,
               allowAuthProfileFallback: configuredKey === OMLX_API_KEY_ENV_VAR,
             })
