@@ -110,14 +110,18 @@ describe("searchPathKeyword", () => {
             return rows;
           },
         });
-        const iterate = statement.iterate.bind(statement);
-        statement.iterate = function* (...values) {
-          observePlan(values);
-          for (const row of iterate(...values)) {
-            observeRow(row);
-            yield row;
-          }
-        };
+        statement.iterate = new Proxy(statement.iterate.bind(statement), {
+          apply(iterate, _receiver, values: SQLInputValue[]): ReturnType<typeof statement.iterate> {
+            return (function* () {
+              observePlan(values);
+              for (const row of iterate(...values)) {
+                observeRow(row);
+                yield row;
+              }
+              return undefined;
+            })();
+          },
+        });
         return statement;
       });
       const results = await searchPathKeywordFixture(db, query, {

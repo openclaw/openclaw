@@ -82,7 +82,7 @@ export function bindSqliteVectorCapability(
     idSet(index, ids) {
       own(index);
       // Retain the caller's JSON bytes; the string-set encoder normalizes code points.
-      return sql<string>`SELECT value FROM ${sqliteStringSetEntries(JSON.stringify(ids))}`;
+      return /* kysely-allow-raw: Native set projection keeps IDs bound through the string-set helper. */ sql<string>`SELECT value FROM ${sqliteStringSetEntries(JSON.stringify(ids))}`;
     },
     prepareExists(index) {
       own(index);
@@ -98,7 +98,10 @@ export function bindSqliteVectorCapability(
     async nearest<Row>(request: VectorSearch<Row>) {
       own(request.index);
       const candidate = Symbol("vector-candidate-limit");
-      const embedding = sql.raw(`${request.index.alias}.embedding`);
+      const embedding =
+        /* kysely-allow-raw: Alias comes from the admitted vector index declaration. */ sql.raw(
+          `${request.index.alias}.embedding`,
+        );
       // The former JSON request normalized -0 and nonfinite query numbers before encoding.
       const vector = admitted.databasePath
         ? request.vector.map((value) => (Number.isFinite(value) ? value + 0 : 0))
@@ -106,8 +109,8 @@ export function bindSqliteVectorCapability(
       const blob = vectorToBlob(vector);
       const query = compileStatement(
         request.query({
-          match: sql<boolean>`${embedding} MATCH ${blob} AND k = ${candidate}`,
-          distance: sql<number>`vec_distance_cosine(${embedding}, ${blob})`,
+          match: /* kysely-allow-raw: sqlite-vec candidate matching binds both vector and candidate limit. */ sql<boolean>`${embedding} MATCH ${blob} AND k = ${candidate}`,
+          distance: /* kysely-allow-raw: Native cosine distance reranks the admitted vector candidates. */ sql<number>`vec_distance_cosine(${embedding}, ${blob})`,
         }),
       );
       const plan: SqliteVectorPlan = {

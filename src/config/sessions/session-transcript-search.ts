@@ -226,11 +226,10 @@ export function searchSessionTranscriptsReadOnlySync(
             textIndex,
             sessionTranscriptSearchFtsQuery(query, params.match),
           );
-          /* kysely-allow-raw: Shared FTS ordering, including SQLite-only rowid for recent ties. */
           const order =
             params.order === "recent"
               ? sql`session_transcript_fts.timestamp desc, fts_rowid desc`
-              : sql`rank ${sql.raw(ranking.order)}, session_transcript_fts.timestamp desc, session_transcript_fts.message_id asc`;
+              : sql`rank ${/* kysely-allow-raw: Capability order is the closed asc/desc union. */ sql.raw(ranking.order)}, session_transcript_fts.timestamp desc, session_transcript_fts.message_id asc`;
           // session_key lives on the window row so key renames
           // never leave stale keys inside the index. Sessions flagged needs_rebuild
           // are excluded: their rows may still hold rewound-away branch text that
