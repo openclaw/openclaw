@@ -1,4 +1,3 @@
-// Doctor completion tests cover final doctor status summaries and completion messaging.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +9,7 @@ import {
   resolveCompletionCachePath,
 } from "../cli/completion-runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { makePrompter } from "./doctor-auth-flat-profiles.test-support.js";
 import {
   checkShellCompletionStatus,
   doctorShellCompletion,
@@ -128,23 +128,8 @@ vi.mock("../cli/completion-runtime.js", async (importOriginal) => {
   };
 });
 
-function mockPrompter(confirmValue = true) {
-  return {
-    confirm: vi.fn(async () => confirmValue),
-    confirmAutoFix: vi.fn(async () => confirmValue),
-    confirmAggressiveAutoFix: vi.fn(async () => confirmValue),
-    confirmRuntimeRepair: vi.fn(async () => confirmValue),
-    select: vi.fn(async (_params, fallback) => fallback),
-    shouldRepair: true,
-    shouldForce: false,
-    repairMode: {
-      shouldRepair: true,
-      shouldForce: false,
-      nonInteractive: false,
-      canPrompt: true,
-      updateInProgress: false,
-    },
-  } as never;
+function expectCompletionNote(text: string) {
+  expect(noteModule.note).toHaveBeenCalledWith(expect.stringContaining(text), "Shell completion");
 }
 
 async function setupDoctorCompletionTest(usesSlowPattern: boolean) {
@@ -180,20 +165,16 @@ describe("doctorShellCompletion", () => {
   beforeEach(() => {
     installCompletionMock.mockReset();
     spawnSyncMock.mockClear();
+    vi.spyOn(noteModule, "note");
   });
 
   it("shows the Bash login profile after installing completion without .bashrc", async () => {
     await setupDoctorCompletionTest(false);
     installCompletionMock.mockResolvedValue(undefined);
-    const noteSpy = vi.spyOn(noteModule, "note");
-
-    await doctorShellCompletion(mockPrompter());
+    await doctorShellCompletion(makePrompter(true));
 
     expect(installCompletionMock).toHaveBeenCalledWith("bash", true, "openclaw");
-    expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringContaining("source ~/.bash_profile"),
-      "Shell completion",
-    );
+    expectCompletionNote("source ~/.bash_profile");
   });
 
   it.each([
@@ -236,26 +217,21 @@ describe("doctorShellCompletion", () => {
     const profilePath = await setupDoctorCompletionTest(false);
     const failedPath = path.dirname(profilePath);
     installCompletionMock.mockRejectedValue(wrappedFsError("EPERM", failedPath));
-    const noteSpy = vi.spyOn(noteModule, "note");
-
-    await expect(doctorShellCompletion(mockPrompter())).resolves.not.toThrow();
+    await expect(doctorShellCompletion(makePrompter(true))).resolves.not.toThrow();
 
     const command = formatCompletionReloadCommand(
       "bash",
       resolveCompletionCachePath("bash", "openclaw"),
     );
-    expect(noteSpy).toHaveBeenCalledWith(expect.stringContaining(command), "Shell completion");
-    expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringContaining("session only"),
-      "Shell completion",
-    );
-    expect(noteSpy).toHaveBeenCalledWith(expect.stringContaining(failedPath), "Shell completion");
+    expectCompletionNote(command);
+    expectCompletionNote("session only");
+    expectCompletionNote(failedPath);
   });
 
   it("re-throws non-permission errors from installCompletion", async () => {
     const profilePath = await setupDoctorCompletionTest(true);
     installCompletionMock.mockRejectedValue(wrappedFsError("ENOSPC", profilePath));
 
-    await expect(doctorShellCompletion(mockPrompter())).rejects.toThrow("ENOSPC");
+    await expect(doctorShellCompletion(makePrompter(true))).rejects.toThrow("ENOSPC");
   });
 });

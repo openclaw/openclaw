@@ -1,4 +1,3 @@
-// Doctor Claude CLI tests cover CLI discovery, version checks, and repair guidance.
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -7,6 +6,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { noteClaudeCliHealth } from "./doctor-claude-cli.js";
@@ -63,34 +63,40 @@ async function withTempHome<T>(
   }
 }
 
-function mockClaudeAuthentication(loggedIn: boolean) {
+function authResult(loggedIn: boolean) {
   const stdout = JSON.stringify({ loggedIn });
-  const spawn = vi.spyOn(childProcess, "spawnSync").mockReturnValue({
+  return {
     pid: 1,
     status: 0,
     signal: null,
     stdout,
     stderr: "",
     output: [null, stdout, ""],
-  });
+  };
+}
+
+function mockClaudeAuthentication(loggedIn: boolean) {
+  const spawn = vi.spyOn(childProcess, "spawnSync").mockReturnValue(authResult(loggedIn));
   syncBuiltinESMExports();
   return spawn;
 }
 
-function noteBody(noteFn: ReturnType<typeof vi.fn>): string {
-  const value = expectDefined<unknown[]>(noteFn.mock.calls[0], "note call").at(0);
+function noteText(noteFn: ReturnType<typeof vi.fn>, index = 0): string {
+  const value = expectDefined<unknown[]>(noteFn.mock.calls[0], "note call").at(index);
   if (typeof value !== "string") {
-    throw new Error("Expected note body");
+    throw new Error("Expected note text");
   }
   return value;
 }
 
-function noteTitle(noteFn: ReturnType<typeof vi.fn>): string {
-  const value = expectDefined<unknown[]>(noteFn.mock.calls[0], "note call").at(1);
-  if (typeof value !== "string") {
-    throw new Error("Expected note title");
-  }
-  return value;
+function checkHealth(workspaceDir: string, cfg: OpenClawConfig = defaultClaudeConfig) {
+  const noteFn = vi.fn();
+  noteClaudeCliHealth(cfg, { workspaceDir, noteFn });
+  return noteText(noteFn);
+}
+
+function runtimeAgent(workspace: string, model: string) {
+  return { workspace, model, models: { [model]: { agentRuntime: { id: "claude-cli" } } } };
 }
 
 describe("noteClaudeCliHealth", () => {
@@ -107,12 +113,7 @@ describe("noteClaudeCliHealth", () => {
 
   it("stays quiet when Claude CLI is not configured or detected", () => {
     const noteFn = vi.fn();
-    noteClaudeCliHealth(
-      {},
-      {
-        noteFn,
-      },
-    );
+    noteClaudeCliHealth({}, { noteFn });
     expect(noteFn).not.toHaveBeenCalled();
   });
 
@@ -134,14 +135,11 @@ describe("noteClaudeCliHealth", () => {
       noteClaudeCliHealth(
         {
           agents: {
+            ...defaultClaudeConfig.agents,
             defaults: { model: "claude-cli/claude-sonnet-4-6" },
-            entries: { main: {} },
           },
         },
-        {
-          workspaceDir,
-          noteFn: vi.fn(),
-        },
+        { workspaceDir, noteFn: vi.fn() },
       );
 
       expect(spawn).toHaveBeenCalledWith(
@@ -162,14 +160,8 @@ describe("noteClaudeCliHealth", () => {
 
   it("reports when Claude CLI owns no active login", async () => {
     await withTempHome(({ workspaceDir }) => {
-      const noteFn = vi.fn();
       mockClaudeAuthentication(false);
-      noteClaudeCliHealth(defaultClaudeConfig, {
-        workspaceDir,
-        noteFn,
-      });
-
-      const body = noteBody(noteFn);
+      const body = checkHealth(workspaceDir);
       expect(body).toContain("Claude auth: not logged in.");
       expect(body).toContain("claude auth login");
       expect(body).not.toContain("openclaw models auth login");
@@ -179,13 +171,7 @@ describe("noteClaudeCliHealth", () => {
   it("warns when the Claude binary is missing", async () => {
     await withTempHome(({ workspaceDir, commandPath }) => {
       fs.rmSync(commandPath);
-      const noteFn = vi.fn();
-      noteClaudeCliHealth(defaultClaudeConfig, {
-        workspaceDir,
-        noteFn,
-      });
-
-      const body = noteBody(noteFn);
+      const body = checkHealth(workspaceDir);
       expect(body).toContain('Binary: command "claude" was not found on PATH.');
       expect(body).toContain("install Claude CLI on PATH for the gateway user");
       expect(body).not.toContain("claude auth login");
@@ -212,26 +198,16 @@ describe("noteClaudeCliHealth", () => {
           agents: {
             defaults: { model: { primary: runtimeModel } },
             entries: {
-              zeta: {
-                workspace: zetaWorkspace,
-                model: runtimeModel,
-                models: { [runtimeModel]: { agentRuntime: { id: "claude-cli" } } },
-              },
-              alpha: {
-                workspace: alphaWorkspace,
-                model: runtimeModel,
-                models: { [runtimeModel]: { agentRuntime: { id: "claude-cli" } } },
-              },
+              zeta: runtimeAgent(zetaWorkspace, runtimeModel),
+              alpha: runtimeAgent(alphaWorkspace, runtimeModel),
             },
           },
         },
-        {
-          noteFn,
-        },
+        { noteFn },
       );
 
-      expect(noteTitle(noteFn)).toBe("Claude CLI");
-      const body = noteBody(noteFn);
+      expect(noteText(noteFn, 1)).toBe("Claude CLI");
+      const body = noteText(noteFn);
       expect(body).toContain(
         `Agent alpha workspace: ${alphaWorkspace} exists but is not a directory.`,
       );
@@ -293,14 +269,7 @@ describe("noteClaudeCliHealth", () => {
             args[1]?.[1] === "status" &&
             args[1]?.[2] === "--json"
           ) {
-            return {
-              pid: 1,
-              status: 0,
-              signal: null,
-              stdout: '{"loggedIn":true}',
-              stderr: "",
-              output: [null, '{"loggedIn":true}', ""],
-            };
+            return authResult(true);
           }
           return spawnSync(...args);
         });

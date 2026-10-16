@@ -56,12 +56,25 @@ function sourceValue(sourceName: (typeof sourceNames)[number], key: string, last
     : { version: 1, profiles: { [profileId]: credential } };
 }
 
-function writeSource(agentDir: string, sourceName: string, value: unknown) {
+function writeSource(
+  agentDir: string,
+  sourceName: (typeof sourceNames)[number],
+  key = `fake-${randomUUID()}`,
+  lastUsed = 20,
+) {
   fs.mkdirSync(agentDir, { recursive: true });
   const sourcePath = path.join(agentDir, sourceName);
-  const bytes = `${JSON.stringify(value)}\n`;
+  const bytes = `${JSON.stringify(sourceValue(sourceName, key, lastUsed))}\n`;
   fs.writeFileSync(sourcePath, bytes);
   return { sourcePath, bytes };
+}
+
+function migrate(state: OpenClawTestState, approved = true, cfg: OpenClawConfig = {}) {
+  return maybeMigrateAuthProfileJsonStoresToSqlite({
+    cfg,
+    env: state.env,
+    prompter: { confirmAutoFix: async () => approved },
+  });
 }
 
 function archivesFor(sourcePath: string) {
@@ -97,11 +110,7 @@ describe("Doctor auth migration source ownership", () => {
     "missing-journal",
   ])("preserves credentials with unknown SQLite history: %s", async (kind) => {
     const { selected } = await createOwners();
-    const source = writeSource(
-      selected.agentDir(),
-      "auth-profiles.json",
-      sourceValue("auth-profiles.json", `fake-held-${randomUUID()}`, 20),
-    );
+    const source = writeSource(selected.agentDir(), "auth-profiles.json");
     const cfg: OpenClawConfig = {};
     const sharedPath = resolveOpenClawStateSqlitePath(selected.env);
     const sharedDatabase =
@@ -143,14 +152,9 @@ describe("Doctor auth migration source ownership", () => {
       fs.writeFileSync(artifact, artifactBytes);
     }
 
-    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
-      cfg,
-      env: selected.env,
-      prompter: { confirmAutoFix: async () => true },
-    });
+    const result = await migrate(selected, true, cfg);
 
-    expect(result.detected).toEqual([]);
-    expect(result.changes).toEqual([]);
+    expect(result).toMatchObject({ detected: [], changes: [] });
     expect(fs.readFileSync(source.sourcePath, "utf8")).toBe(source.bytes);
     expect(archivesFor(source.sourcePath)).toEqual([]);
     expect(fs.existsSync(path.join(selected.agentDir(), "openclaw-agent.sqlite"))).toBe(false);
@@ -173,18 +177,12 @@ describe("Doctor auth migration source ownership", () => {
 
   it("detects all three legacy siblings only in the explicitly selected state root", async () => {
     const { selected, ambient } = await createOwners();
-    const selectedSources = sourceNames.map((name) =>
-      writeSource(selected.agentDir(), name, sourceValue(name, `fake-${randomUUID()}`, 20)),
-    );
+    const selectedSources = sourceNames.map((name) => writeSource(selected.agentDir(), name));
     const ambientSources = sourceNames.map((name) =>
-      writeSource(ambient.agentDir(), name, sourceValue(name, `fake-${randomUUID()}`, 10)),
+      writeSource(ambient.agentDir(), name, undefined, 10),
     );
 
-    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
-      cfg: {},
-      env: selected.env,
-      prompter: { confirmAutoFix: async () => false },
-    });
+    const result = await migrate(selected, false);
 
     expect.soft(result).toEqual({
       detected: selectedSources.map(({ sourcePath }) => sourcePath),
@@ -204,22 +202,10 @@ describe("Doctor auth migration source ownership", () => {
   it.each(sourceNames)("imports and archives only the selected %s source", async (sourceName) => {
     const { selected, ambient } = await createOwners();
     const selectedKey = `fake-selected-${randomUUID()}`;
-    const selectedSource = writeSource(
-      selected.agentDir(),
-      sourceName,
-      sourceValue(sourceName, selectedKey, 20),
-    );
-    const ambientSource = writeSource(
-      ambient.agentDir(),
-      sourceName,
-      sourceValue(sourceName, `fake-ambient-${randomUUID()}`, 10),
-    );
+    const selectedSource = writeSource(selected.agentDir(), sourceName, selectedKey);
+    const ambientSource = writeSource(ambient.agentDir(), sourceName, undefined, 10);
 
-    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
-      cfg: {},
-      env: selected.env,
-      prompter: { confirmAutoFix: async () => true },
-    });
+    const result = await migrate(selected);
 
     expect
       .soft(loadPersistedAuthProfileStore(selected.agentDir()))
@@ -228,8 +214,7 @@ describe("Doctor auth migration source ownership", () => {
           ? { usageStats: { [profileId]: { lastUsed: 20 } } }
           : { profiles: { [profileId]: { key: selectedKey } } },
       );
-    expect.soft(result.detected).toEqual([selectedSource.sourcePath]);
-    expect.soft(result.warnings).toEqual([]);
+    expect.soft(result).toMatchObject({ detected: [selectedSource.sourcePath], warnings: [] });
     expect.soft(fs.existsSync(ambientSource.sourcePath)).toBe(true);
     if (fs.existsSync(ambientSource.sourcePath)) {
       expect.soft(fs.readFileSync(ambientSource.sourcePath, "utf8")).toBe(ambientSource.bytes);
@@ -260,28 +245,15 @@ describe("Doctor auth migration source ownership", () => {
       const selectedDir = path.join(selected.home, "relocated-auth");
       const ambientDir = path.join(ambient.home, "relocated-auth");
       const selectedKey = `fake-selected-${randomUUID()}`;
-      const selectedSource = writeSource(
-        selectedDir,
-        "auth-profiles.json",
-        sourceValue("auth-profiles.json", selectedKey, 20),
-      );
-      const ambientSource = writeSource(
-        ambientDir,
-        "auth-profiles.json",
-        sourceValue("auth-profiles.json", `fake-ambient-${randomUUID()}`, 10),
-      );
+      const selectedSource = writeSource(selectedDir, "auth-profiles.json", selectedKey);
+      const ambientSource = writeSource(ambientDir, "auth-profiles.json", undefined, 10);
 
-      const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
-        cfg: {},
-        env: selected.env,
-        prompter: { confirmAutoFix: async () => true },
-      });
+      const result = await migrate(selected);
 
       expect.soft(loadPersistedAuthProfileStore(selectedDir)?.profiles[profileId]).toMatchObject({
         key: selectedKey,
       });
-      expect.soft(result.detected).toEqual([selectedSource.sourcePath]);
-      expect.soft(result.warnings).toEqual([]);
+      expect.soft(result).toMatchObject({ detected: [selectedSource.sourcePath], warnings: [] });
       expect.soft(fs.existsSync(selectedSource.sourcePath)).toBe(false);
       expect.soft(fs.existsSync(ambientSource.sourcePath)).toBe(true);
       expect.soft(archivesFor(ambientSource.sourcePath)).toEqual([]);
