@@ -1,6 +1,13 @@
 import type { ProgressCard, ProgressCardStep, SessionRunStatus } from "@openclaw/gateway-protocol";
-import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, For, Show, useContext } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  createUniqueId,
+  For,
+  Show,
+  useContext,
+} from "solid-js";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
@@ -18,6 +25,7 @@ import {
   type ComposerProgressDisclosureContext,
 } from "./session-progress-disclosure-binding.ts";
 import { Icon } from "./solid/icon.tsx";
+import { Menu, type MenuEntry, type MenuHandle, type MenuProps } from "./solid/menu.tsx";
 import { useScrollState } from "./solid/scroll-state.ts";
 
 export type SessionProgressCardProps = {
@@ -32,7 +40,8 @@ export type SessionProgressCardProps = {
   composerDisclosureContext?: ComposerProgressDisclosureContext;
   refreshAction?: SessionProgressCardRefreshAction;
   onClearSaved?: (card: ProgressCard) => void;
-  headingMenu?: JSX.Element;
+  menuOptions?: Pick<MenuProps, "items" | "onSelect" | "disabled" | "class">;
+  menuRef?: (menu: MenuHandle) => void;
 };
 
 type CardProps = SessionProgressCardProps & { card: ProgressCard };
@@ -40,13 +49,12 @@ type CardProps = SessionProgressCardProps & { card: ProgressCard };
 function CardActivity(props: { view: ReturnType<typeof cardPresentation>; composer?: boolean }) {
   const presented = useContext(ContentPresentation);
   const [revision, setRevision] = createSignal(0);
-  createEffect(createMemo(presented), (active) => {
-    if (!active) {
-      return undefined;
+  createEffect(createMemo(presented), (active): void | (() => void) => {
+    if (active) {
+      setRevision((value) => value + 1);
+      const timer = setInterval(() => setRevision((value) => value + 1), 30_000);
+      return () => clearInterval(timer);
     }
-    setRevision((value) => value + 1);
-    const timer = setInterval(() => setRevision((value) => value + 1), 30_000);
-    return () => clearInterval(timer);
   });
   const timestamp = () => props.view().activityTimestamp;
   const label = createMemo(() => {
@@ -55,22 +63,22 @@ function CardActivity(props: { view: ReturnType<typeof cardPresentation>; compos
   });
   const count = createMemo(() => {
     const { counts, currentPosition } = props.view();
-    if (!counts) {
-      return "";
-    }
-    return props.composer
-      ? ` · ${t("sessionProgressCard.shortCount", {
-          completed: String(currentPosition),
-          total: String(counts.total),
-        })}`
-      : ` · ${counts.completed}/${counts.total}`;
+    return counts
+      ? props.composer
+        ? `${t("sessionProgressCard.stepCount", {
+            current: String(currentPosition),
+            total: String(counts.total),
+          })} · `
+        : ` · ${counts.completed}/${counts.total}`
+      : "";
   });
   return (
     <span>
+      {props.composer && count()}
       <time datetime={new Date(timestamp()).toISOString()} aria-label={label()} title={label()}>
         {label()}
       </time>
-      {count()}
+      {!props.composer && count()}
     </span>
   );
 }
@@ -160,19 +168,12 @@ function Step(props: {
   );
 }
 
-function CardAction(props: {
-  card: ProgressCard;
-  action: "dismiss" | "clear-saved";
-  onAction?: (card: ProgressCard) => void;
-}) {
-  const label = () =>
-    t(
-      props.action === "dismiss" ? "sessionProgressCard.dismiss" : "sessionProgressCard.clearSaved",
-    );
+function CardAction(props: { card: ProgressCard; onAction?: (card: ProgressCard) => void }) {
+  const label = () => t("sessionProgressCard.dismiss");
   return (
     <Show when={props.onAction}>
       <button
-        class={["rail-header__action", `session-progress-card__${props.action}`]}
+        class="rail-header__action session-progress-card__dismiss"
         type="button"
         aria-label={label()}
         title={label()}
@@ -182,15 +183,18 @@ function CardAction(props: {
           props.onAction?.(props.card);
         }}
       >
-        <Icon name={props.action === "dismiss" ? "x" : "trash"} />
+        <Icon name="x" />
       </button>
     </Show>
   );
 }
 
-function Refresh(props: { card: ProgressCard; action?: SessionProgressCardRefreshAction }) {
-  const pending = () => props.action?.state === "pending";
-  const retry = () => props.action?.state === "failed" || props.action?.state === "timeout";
+function CardMenu(props: CardProps) {
+  const id = createUniqueId();
+  let menu: MenuHandle | undefined;
+  const pending = () => props.refreshAction?.state === "pending";
+  const retry = () =>
+    props.refreshAction?.state === "failed" || props.refreshAction?.state === "timeout";
   const label = () =>
     t(
       pending()
@@ -199,32 +203,101 @@ function Refresh(props: { card: ProgressCard; action?: SessionProgressCardRefres
           ? "sessionProgressCard.refresh.retry"
           : "sessionProgressCard.refresh.label",
     );
+  const items = (): MenuEntry[] => [
+    ...(props.refreshAction
+      ? [
+          {
+            id: "refresh",
+            label: label(),
+            disabled: pending(),
+            class: "session-progress-card__refresh",
+            icon: (
+              <Icon
+                name={
+                  pending()
+                    ? "loader"
+                    : props.refreshAction?.state === "updated"
+                      ? "check"
+                      : "refresh"
+                }
+              />
+            ),
+            attributes: {
+              "data-state": props.refreshAction?.state ?? "idle",
+              "aria-busy": pending() ? ("true" as const) : ("false" as const),
+            },
+          },
+        ]
+      : []),
+    ...(props.onDismiss ? [{ id: "dismiss", label: t("sessionProgressCard.hide") }] : []),
+    ...(props.onClearSaved ? [{ id: "clear", label: t("sessionProgressCard.clearSaved") }] : []),
+    ...(props.menuOptions?.items ?? []),
+  ];
+  createEffect(
+    () => props.menuOptions?.disabled,
+    (disabled) => {
+      if (disabled) {
+        menu?.close();
+      }
+    },
+  );
   return (
-    <Show when={props.action}>
-      <button
-        class="session-progress-card__refresh"
-        type="button"
-        data-state={props.action?.state ?? "idle"}
-        aria-label={label()}
-        title={
-          retry() && props.action?.state
-            ? t(REFRESH_STATUS_LABEL_KEYS[props.action.state])
-            : label()
-        }
-        aria-busy={pending() ? "true" : "false"}
-        disabled={pending()}
+    <Show when={items().length > 0}>
+      <div
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          if (!pending()) {
-            props.action?.onRefresh(props.card);
-          }
         }}
       >
-        <Icon
-          name={pending() ? "loader" : props.action?.state === "updated" ? "check" : "refresh"}
+        <Menu
+          id={id}
+          class={props.menuOptions?.class}
+          triggerClass="session-progress-card__options"
+          label={t("chat.sessionDetails.progressOptions")}
+          placement="bottom-end"
+          trigger={
+            <Icon
+              name={
+                pending()
+                  ? "loader"
+                  : props.refreshAction?.state === "updated"
+                    ? "check"
+                    : "moreHorizontal"
+              }
+            />
+          }
+          triggerAttributes={{
+            "data-state": props.refreshAction?.state ?? "idle",
+            "aria-busy": pending() ? "true" : "false",
+          }}
+          items={items()}
+          disabled={props.menuOptions?.disabled}
+          ref={(value) => {
+            menu = value;
+            props.menuRef?.(value);
+          }}
+          onSelect={(item, event) => {
+            if (props.menuOptions?.disabled) {
+              return;
+            }
+            switch (item.id) {
+              case "refresh":
+                if (!pending()) {
+                  props.refreshAction?.onRefresh(props.card);
+                }
+                break;
+              case "dismiss":
+                props.onDismiss?.(props.card);
+                break;
+              case "clear":
+                props.onClearSaved?.(props.card);
+                break;
+              default:
+                props.menuOptions?.onSelect?.(item, event);
+            }
+          }}
         />
-      </button>
+      </div>
     </Show>
   );
 }
@@ -303,10 +376,7 @@ function ComposerCard(props: CardProps) {
           </span>
         </span>
         <span class="session-progress-card__summary-controls">
-          <Refresh card={props.card} action={props.refreshAction} />
-          {props.headingMenu}
-          <CardAction card={props.card} action="clear-saved" onAction={props.onClearSaved} />
-          <CardAction card={props.card} action="dismiss" onAction={props.onDismiss} />
+          <CardMenu {...props} />
           <span
             class="session-progress-card__summary-chevron session-progress-card__chevron"
             aria-hidden="true"
@@ -351,7 +421,7 @@ function BoardCard(props: CardProps) {
         <span>{t("sessionProgressCard.title")}</span>
         <span class="session-progress-card__heading-actions">
           <CardActivity view={view} />
-          <CardAction card={props.card} action="dismiss" onAction={props.onDismiss} />
+          <CardAction card={props.card} onAction={props.onDismiss} />
         </span>
       </div>
       <div class="session-progress-card__body">

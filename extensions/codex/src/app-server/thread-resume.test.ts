@@ -160,6 +160,49 @@ describe("resumeCodexAppServerThread", () => {
     },
   );
 
+  it.each([
+    { method: "thread/resume", code: -32_600, threadId: "thread-1", suffix: "", closing: true },
+    { method: "thread/read", code: -32_600, threadId: "thread-1", suffix: "", closing: false },
+    { method: "thread/resume", code: -32_603, threadId: "thread-1", suffix: "", closing: false },
+    { method: "thread/resume", code: -32_600, threadId: "thread-2", suffix: "", closing: false },
+    {
+      method: "thread/resume",
+      code: -32_600,
+      threadId: "thread-1",
+      suffix: " extra",
+      closing: false,
+    },
+  ])(
+    "preserves only the exact closing rejection ($method/$code/$threadId/$suffix)",
+    async ({ method, code, threadId, suffix, closing }) => {
+      const rejection = new CodexAppServerRpcError(
+        {
+          code,
+          message: `thread ${threadId} is closing; retry thread/resume after the thread is closed${suffix}`,
+        },
+        method,
+      );
+      const { client, request } = createClient((requestMethod) => {
+        if (requestMethod === "thread/resume") {
+          throw rejection;
+        }
+        return { status: "unsubscribed" };
+      });
+      const abandonClient = vi.fn(async () => undefined);
+      await expect(
+        resumeCodexAppServerThread({
+          client,
+          abandonClient,
+          request: { threadId: "thread-1" },
+        }),
+      ).rejects.toBe(rejection);
+      expect(request.mock.calls.map(([requestMethod]) => requestMethod)).toEqual(
+        closing ? ["thread/resume"] : ["thread/resume", "thread/unsubscribe"],
+      );
+      expect(abandonClient).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([new Error("host authority ended")])(
     "preserves a physical pre-write ownership rejection without cleanup or retirement: %s",
     async (rejection) => {

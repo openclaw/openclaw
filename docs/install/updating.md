@@ -70,12 +70,19 @@ changing images or restoring an older OpenClaw version.
 
 ## Upgrading very old versions
 
+Current Doctor can migrate pre-July cron jobs, Voice Wake settings, conversation
+bindings, and OAuth credentials directly. It archives obsolete delivery queues,
+plugin indexes, sandbox registries, and runtime notifications, preserving original
+bytes and reporting recovery instructions. Run `openclaw doctor --fix`; these JSON
+formats do not require an intermediate release. See [Doctor state migrations](/cli/doctor/state-migrations).
+
+The following bridge instructions apply to other retired formats and config keys.
+
 For installations older than July 2026, upgrade to **`2026.9.5` first**, run its
 Doctor migrations, and then upgrade to `latest`. The bridge release still
 imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
-`plugin-state/state.sqlite` databases, imports the JSON plugin install index,
-pre-June plugin JSON state, and
-`credentials/oauth.json`, repairs retired agent and channel config keys, and
+`plugin-state/state.sqlite` databases and pre-June plugin JSON state, repairs retired agent and channel
+config keys, and
 includes the old runtime aliases. The retired plugin imports cover Telegram,
 iMessage, Active Memory, Nostr, and Microsoft Teams; see
 [legacy state migration](/cli/doctor/state-migrations). Current releases leave

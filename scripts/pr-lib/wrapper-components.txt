@@ -764,6 +764,7 @@ src/config/zod-schema.agent-defaults.ts
 src/config/zod-schema.agent-entry-base.ts
 src/config/zod-schema.agent-model.ts
 src/config/zod-schema.agent-runtime.ts
+src/config/zod-schema.github-identity.ts
 src/config/zod-schema.agents.ts
 src/config/zod-schema.allowdeny.ts
 src/config/zod-schema.approvals.ts

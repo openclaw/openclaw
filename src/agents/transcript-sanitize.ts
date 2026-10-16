@@ -19,11 +19,7 @@ type TranscriptValueLocation =
   | "assistant-content-block"
   | "nested";
 
-type TranscriptAssistantRoute = {
-  api?: string;
-  model?: string;
-  provider?: string;
-};
+type TranscriptAssistantRoute = NonNullable<Parameters<typeof sanitizeCompactionReplayState>[1]>;
 
 const GOOGLE_REASONING_APIS = new Set([
   "google-generative-ai",
