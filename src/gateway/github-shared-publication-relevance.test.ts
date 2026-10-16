@@ -4,7 +4,10 @@ import {
   createGitHubPublicationExecutionStoreFixture,
   insertRepositoryGitHubPublicationFixture,
 } from "./github-publication-store.test-support.js";
-import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
+import {
+  OLD_HEAD,
+  installGitHubPublicationTestHarness,
+} from "./github-publication.test-support.js";
 import {
   insertSharedWorktreeReceipt,
   sharedRepositoryWorkspace,
@@ -50,6 +53,16 @@ it("stops discovering a superseded failure without rewriting its receipt or exac
 });
 
 it("retires covered repository-only failures with the same read-only contract", async () => {
+  const previous = insertSharedWorktreeReceipt("previous-worktree");
+  const claimed = claimGitHubPublicationExecutionFixture(previous.request_id, "fixture-instance");
+  createGitHubPublicationExecutionStoreFixture("fixture-instance").complete(claimed, {
+    requestId: previous.request_id,
+    status: "published",
+    url: "https://github.com/owner/repository/pull/1",
+    repository: "owner/repository",
+    branch: previous.branch,
+    headCommit: OLD_HEAD,
+  });
   const workspace = await sharedRepositoryWorkspace();
   const row = insertRepositoryGitHubPublicationFixture(
     repositoryReceipt(workspace, {

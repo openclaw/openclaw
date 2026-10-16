@@ -110,7 +110,6 @@ export async function withSessionTranscriptReadSource<T>(
           const preparedReads =
             execution && claim && expectedIdentity
               ? createPreparedSessionTranscriptReads({
-                  execution,
                   claim,
                   expectedIdentity,
                   assertCurrent,
@@ -181,14 +180,6 @@ export async function withSessionTranscriptReadSource<T>(
             context.maintenanceScope?.assertAdmission();
             context.admission.assertCurrent();
             discovery.assertCurrent();
-            assertSessionStoreReadCandidate(databasePath, candidates);
-            const current = readDatabasePathIdentitySync(databasePath);
-            if (
-              current.key !== selectedIdentity.key ||
-              current.birthtime !== selectedIdentity.birthtime
-            ) {
-              throw new Error("Transcript read changed its captured database owner");
-            }
           };
           assertSource();
           const result = await readResolved(

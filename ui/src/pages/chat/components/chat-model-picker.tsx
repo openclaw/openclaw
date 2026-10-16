@@ -10,11 +10,10 @@ import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
 import {
+  ChatContextWindowControl,
   type ChatContextWindowControlParams,
-  renderContextWindowControl,
-} from "./chat-context-window-control.ts";
+} from "./chat-context-window-control.tsx";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import { ChatModelAccountSectionView } from "./chat-model-account-control.tsx";
 import { ChatModelCatalogRefresh, ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
@@ -37,7 +36,7 @@ import {
   toggleModelProviderGroup,
   updateModelSearch,
 } from "./chat-model-picker-search.ts";
-import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
+import { createChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 registerEnglishCatalog(registerModelControlsEnglish);
 
@@ -195,11 +194,8 @@ function ModelList(props: { label: string; more?: boolean; children: JSX.Element
 }
 
 export function ChatModelPicker(params: ChatModelPickerParams) {
+  const pickerOverlay = createChatPickerOverlay();
   const state = createMemo(() => prepareChatModelPicker(params));
-  const contextWindowContent = createMemo(() => {
-    const control = params.contextWindow;
-    return control ? renderContextWindowControl(control, params.sessionKey) : undefined;
-  });
   let details: HTMLDetailsElement | undefined;
   createEffect(
     () => [
@@ -380,6 +376,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     <details
       ref={(element) => {
         details = element;
+        pickerOverlay(element);
       }}
       class="chat-controls__inline-select chat-controls__model-picker"
       data-chat-autotype-shortcuts
@@ -389,8 +386,6 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
         // SAFETY: This toggle handler belongs to the surrounding native details.
         const target = event.currentTarget as HTMLDetailsElement;
         params.onOpenChange?.(target.open);
-        handleChatComposerDetailsToggle(event);
-        syncChatPickerOverlay(target);
         if (!target.open) {
           params.accountSection?.onClose();
           resetModelSearch(target);
@@ -469,7 +464,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
           <Icon name="chevronUp" />
         </span>
       </summary>
-      <wa-popup data-anchored-overlay>
+      <div class="oc-overlay chat-picker-overlay" data-anchored-overlay popover="manual">
         <div
           class="chat-controls__inline-select-menu chat-controls__model-menu"
           aria-label={t("chat.selectors.model")}
@@ -607,7 +602,12 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
                   >
                     {t("chat.modelControls.noMatchingModels")}
                   </div>
-                  <LitContent value={contextWindowContent()} />
+                  {params.contextWindow ? (
+                    <ChatContextWindowControl
+                      contextWindow={params.contextWindow}
+                      sessionKey={params.sessionKey}
+                    />
+                  ) : undefined}
                 </>
               ) : undefined}
             </>
@@ -623,7 +623,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
             </div>
           ) : undefined}
         </div>
-      </wa-popup>
+      </div>
     </details>
   );
 }

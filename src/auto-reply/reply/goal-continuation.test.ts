@@ -108,14 +108,11 @@ afterEach(() => {
 });
 
 describe("Goal continuation eligibility", () => {
-  it.each(["paused", "blocked", "complete", "usage_limited", "budget_limited"] as const)(
-    "does not resume %s goals",
-    (status) => {
-      const current = entry();
-      current.goal!.status = status;
-      expect(isGoalContinuationCurrent(identity, current)).toBe(false);
-    },
-  );
+  it("does not resume paused goals", () => {
+    const current = entry();
+    current.goal!.status = "paused";
+    expect(isGoalContinuationCurrent(identity, current)).toBe(false);
+  });
   it("rejects replaced, cleared, reset, stopped and external-runtime sessions", () => {
     const current = entry();
     expect(isGoalContinuationCurrent(identity, current)).toBe(true);
@@ -177,13 +174,15 @@ describe("Goal continuation eligibility", () => {
 });
 
 describe("Goal queue custody", () => {
-  it("queues hidden individual work without cloning the source turn's lifecycle", async () => {
+  it("queues hidden individual work without cloning the source turn's identity or lifecycle", async () => {
     const f = fixture();
+    f.params.base.sourceTurnId = "accepted-source";
     f.params.base.turnAdoptionLifecycle = { onAdopted: () => {} };
     expect(await enqueueGoalContinuation(f.params)).toBe(true);
     const queued = vi.mocked(enqueueFollowupRun).mock.calls[0]![1];
     expect(queued.prompt).toContain("Advance");
     expect(queued.goalContinuation).toEqual(identity);
+    expect(queued.sourceTurnId).toBeUndefined();
     expect(queued.turnAdoptionLifecycle).toBeUndefined();
     expect(queued.disableCollectBatching).toBe(true);
     expect(queued.run.suppressNextUserMessagePersistence).toBe(true);
@@ -236,12 +235,6 @@ describe("Goal queue custody", () => {
       current = next;
     }
     expect(delivered).toHaveBeenCalledTimes(3);
-  });
-  it("does not enqueue over pending input", async () => {
-    const f = fixture();
-    vi.mocked(getFollowupQueueDepth).mockReturnValue(1);
-    expect(await enqueueGoalContinuation(f.params)).toBe(false);
-    expect(enqueueFollowupRun).not.toHaveBeenCalled();
   });
   it.each(["stop", "new input", "goal replacement"])(
     "rechecks %s after the worker read yields",

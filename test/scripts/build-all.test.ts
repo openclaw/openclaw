@@ -14,6 +14,7 @@ import {
   runBuildAllSteps,
 } from "../../scripts/build-all.mts";
 import {
+  hashInputFiles,
   resolveBuildStepCacheState,
   writeBuildStepCacheStamp,
   resolveBuildStepCacheStampState,
@@ -655,6 +656,54 @@ describe("resolveBuildAllSteps", () => {
       ]);
     },
   );
+  it("waits for copied assets and emitted runtime metadata before UI, then joins independent checks", async () => {
+    const copied = Promise.withResolvers<{ status: number }>();
+    const metadata = Promise.withResolvers<{ status: number }>();
+    const copyStarted = Promise.withResolvers<void>();
+    const metadataStarted = Promise.withResolvers<void>();
+    const checkStarted = Promise.withResolvers<void>();
+    const check = Promise.withResolvers<{ status: number }>();
+    const calls: string[] = [];
+    const build = runBuildAllSteps("full", {
+      ...buildRunner(),
+      steps: [
+        "tsdown",
+        "plugins:assets:copy",
+        "runtime-postbuild",
+        "check-plugin-sdk-exports",
+        "ui:build",
+        "write-build-info",
+      ].map((label) => ({ label, args: [label] })),
+      runStep({ args: [label] }) {
+        calls.push(label!);
+        if (label === "plugins:assets:copy") {
+          copyStarted.resolve();
+          return copied.promise;
+        }
+        if (label === "runtime-postbuild") {
+          metadataStarted.resolve();
+          return metadata.promise;
+        }
+        if (label === "check-plugin-sdk-exports") {
+          checkStarted.resolve();
+          return check.promise;
+        }
+        return { status: 0 };
+      },
+    });
+    await copyStarted.promise;
+    expect(calls).not.toContain("ui:build");
+    copied.resolve({ status: 0 });
+    await metadataStarted.promise;
+    expect(calls).not.toContain("ui:build");
+    metadata.resolve({ status: 0 });
+    await checkStarted.promise;
+    await Promise.resolve();
+    expect(calls).toContain("ui:build");
+    expect(calls).not.toContain("write-build-info");
+    check.resolve({ status: 0 });
+    expect((await build).exitCode).toBe(0);
+  });
   it.each([undefined, "0"])(
     "preserves source-run declaration choice %s through the canonical runtime build",
     async (skipDts) => {
@@ -806,6 +855,52 @@ describe("build-all timing output", () => {
 });
 
 describe("resolveBuildStepCacheState", () => {
+  it("hashes static inputs once on warm lookup and invalidates changed or removed compiler inputs", () => {
+    const f = buildCacheFixture();
+    const consumed = writeFixture(f.rootDir, "shared/consumed.ts", "consumed");
+    const params = {
+      ...f.params,
+      inputSignature: (inputs: string[]) =>
+        hashInputFiles(
+          f.rootDir,
+          [f.inputPath, ...inputs.map((file) => path.join(f.rootDir, file))],
+          fs,
+        ),
+    };
+    const lookup = () => resolveBuildStepCacheState(f.step, params);
+    expect(lookup().fresh).toBe(false);
+    const inputs = ["shared/consumed.ts"];
+    writeBuildStepCacheStamp(
+      f.step,
+      {
+        ...lookup(),
+        signature: params.inputSignature(inputs),
+        consumedInputs: inputs,
+      },
+      params,
+    );
+    let staticBytesRead = 0;
+    const readFile = fs.readFileSync.bind(fs);
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      const bytes = readFile(file, options);
+      if (file === f.inputPath) {
+        staticBytesRead += Buffer.byteLength(bytes);
+      }
+      return bytes;
+    });
+    try {
+      expect(lookup()).toMatchObject({ fresh: true, consumedInputs: inputs });
+      expect(staticBytesRead).toBe(Buffer.byteLength("input"));
+    } finally {
+      read.mockRestore();
+    }
+    fs.writeFileSync(consumed, "changed");
+    expect(lookup().fresh).toBe(false);
+    fs.rmSync(consumed);
+    expect(lookup()).toMatchObject({ fresh: false, signature: params.inputSignature([]) });
+    expect(lookup().consumedInputs).toBeUndefined();
+  });
+
   it("lists large nested inventories without an argument-count limit", () => {
     const { rootDir } = buildCacheFixture();
     // Builds run on the main Node thread; Vitest workers have a different stack budget.

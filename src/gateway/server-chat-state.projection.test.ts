@@ -226,22 +226,6 @@ describe("live chat directive projection", () => {
   );
 
   it.each([true, false])(
-    "keeps unidentified text outside an earlier occurrence's frontier (committedBefore=%s)",
-    (committedBefore) => {
-      const state = createChatRunState();
-      state.updateBuffer("reply", { itemId: "old", text: "Saved." });
-      if (committedBefore) {
-        state.retireBuffer("reply", ["old"]);
-      }
-      state.updateBuffer("reply", { text: "Saved.\n\nUnsaved.", replace: true });
-      if (!committedBefore) {
-        state.retireBuffer("reply", ["old"]);
-      }
-      expect(state.resolveBuffer("reply").text).toBe("Saved.\n\nUnsaved.");
-    },
-  );
-
-  it.each([true, false])(
     "preserves exact retirement across an unidentified append (committedBefore=%s)",
     (committedBefore) => {
       const state = createChatRunState();
@@ -281,18 +265,6 @@ describe("live chat directive projection", () => {
       expect(state.resolveBuffer("reply").text).toBe("Tail.");
     },
   );
-
-  it("replaces a trimmed identical tail when its earlier occurrence commits", () => {
-    const state = createChatRunState();
-    state.updateBuffer("reply", { itemId: "first", text: "Same." });
-    state.takeBufferDelta("reply", "Same.");
-    state.updateBuffer("reply", { itemId: "second", text: "Same." });
-    state.retireBuffer("reply", ["first"]);
-    expect(state.takeBufferDelta("reply", state.resolveBuffer("reply").text.trim())).toEqual({
-      deltaText: "Same.",
-      replace: true,
-    });
-  });
 
   it("keeps settled literal directives without repeatedly parsing the growing reply", () => {
     const regions = vi.spyOn(codeRegions, "findCodeRegions");

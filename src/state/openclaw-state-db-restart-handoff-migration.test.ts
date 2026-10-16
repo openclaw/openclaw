@@ -91,6 +91,8 @@ describe("gateway restart handoff state migration", () => {
       { kind: "creator-namespace-v14", path: databasePath },
       { kind: "predicate-columns-v21", path: databasePath },
       { kind: "portable-identity-columns-v22", path: databasePath },
+      { kind: "meeting-transcript-start-time", path: databasePath },
+      { kind: "task-run-indexes-v24", path: databasePath },
       { kind: "strict-tables-v3", path: databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: databasePath },
     ]);
@@ -99,6 +101,7 @@ describe("gateway restart handoff state migration", () => {
         "Migrated cloud worker placements to execution modes",
         "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
         "Qualified historical cron creator attribution as unknown (v14)",
+        "Replaced retained task indexes with ordered cron history indexes (v24)",
         "Migrated shared state tables to SQLite STRICT typing (1)",
       ],
       warnings: [],

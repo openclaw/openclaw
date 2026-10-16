@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { posix } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { probeSqliteNativeClose } from "./bun-sqlite-close-probe.js";
@@ -11,7 +12,7 @@ import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 export type SqliteLibrarySelection =
   | { source: "runtime"; ignoredOverride?: string }
   | {
-      source: "env" | "discovered";
+      source: "env" | "bundled" | "discovered";
       path: string;
       version: string;
       extensionLoadingSupported: true;
@@ -177,12 +178,22 @@ function createSelector() {
         : { source: "runtime" };
       return selection;
     }
+    const standaloneRootUrl =
+      // SAFETY: Only the standalone bootstrap publishes this optional runtime-root URL.
+      (globalThis as typeof globalThis & { __openclawStandaloneRootUrl?: string })[
+        "__openclawStandaloneRootUrl"
+      ];
+    const bundled =
+      override === undefined && standaloneRootUrl !== undefined
+        ? fileURLToPath(new URL("lib/libsqlite3.dylib", standaloneRootUrl))
+        : undefined;
     const prefix = process.env.HOMEBREW_PREFIX?.trim();
     const candidates =
       override !== undefined
         ? [override]
         : [
             ...new Set([
+              ...(bundled ? [bundled] : []),
               ...(prefix ? [posix.join(prefix, "opt/sqlite/lib/libsqlite3.dylib")] : []),
               "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib",
               "/usr/local/opt/sqlite/lib/libsqlite3.dylib",
@@ -191,6 +202,7 @@ function createSelector() {
           ];
     const unusable: string[] = [];
     for (const path of candidates) {
+      const source = override !== undefined ? "env" : path === bundled ? "bundled" : "discovered";
       let probe: LibraryProbe;
       let present = true;
       try {
@@ -211,12 +223,12 @@ function createSelector() {
       } catch (error) {
         if (override === undefined) {
           // Absent candidates are ordinary; present ones explain the refusal below.
-          if (present) {
+          if (present || path === bundled) {
             unusable.push(`${path} (${error instanceof Error ? error.message : String(error)})`);
           }
           continue;
         }
-        failure = selectionError(path, error);
+        failure = selectionError(path, error, source === "bundled");
         throw failure;
       }
       try {
@@ -225,11 +237,11 @@ function createSelector() {
         // an override is operator-specified code, like memory.search.store.vector.extensionPath.
         selectLibrary(path);
       } catch (error) {
-        failure = selectionError(path, error);
+        failure = selectionError(path, error, source === "bundled");
         throw failure;
       }
       selection = {
-        source: override === undefined ? "discovered" : "env",
+        source,
         path,
         version: probe.version,
         extensionLoadingSupported: true,
@@ -242,16 +254,21 @@ function createSelector() {
       `No supported SQLite library for Bun on macOS (${process.arch})` +
         (unusable.length > 0 ? `; unusable: ${unusable.join(", ")}` : "") +
         ". Apple's system SQLite fails OpenClaw's read-only database connections. " +
+        (bundled
+          ? "Rebuild or replace the complete standalone artifact to restore its bundled SQLite library. "
+          : "") +
         `Install one with brew install sqlite, or set OPENCLAW_SQLITE_LIBRARY to a libsqlite3.dylib built for ${process.arch}.`,
     );
     throw failure;
   };
 }
 
-function selectionError(path: string, error: unknown): Error {
+function selectionError(path: string, error: unknown, bundled = false): Error {
+  const guidance = bundled
+    ? "Rebuild or replace the complete standalone artifact (openclaw and runtime/), or set OPENCLAW_SQLITE_LIBRARY to a supported library."
+    : "Fix or unset OPENCLAW_SQLITE_LIBRARY; install a supported library with brew install sqlite.";
   return new Error(
-    `Cannot use SQLite library ${path}: ${error instanceof Error ? error.message : String(error)}. ` +
-      "Fix or unset OPENCLAW_SQLITE_LIBRARY; install a supported library with brew install sqlite.",
+    `Cannot use ${bundled ? "bundled " : ""}SQLite library ${path}: ${error instanceof Error ? error.message : String(error)}. ${guidance}`,
     { cause: error },
   );
 }
@@ -271,7 +288,7 @@ function inheritedSelection(): SqliteLibrarySelection | undefined {
     const extensionLoadingSupported =
       "extensionLoadingSupported" in value ? value.extensionLoadingSupported : undefined;
     if (
-      (source === "env" || source === "discovered") &&
+      (source === "env" || source === "bundled" || source === "discovered") &&
       typeof path === "string" &&
       typeof version === "string" &&
       extensionLoadingSupported === true
@@ -329,9 +346,9 @@ export function captureSqliteWorkerClosePolicy(): boolean {
 }
 
 /** Retained supervisors forward the caller's current facts when creating each descendant. */
-export function captureSqliteWorkerEnvironmentData(): ReadonlyArray<
-  readonly [string, Parameters<typeof setEnvironmentData>[1]]
-> {
+export function captureSqliteWorkerEnvironmentData(
+  databaseAdmissions = getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY),
+): ReadonlyArray<readonly [string, Parameters<typeof setEnvironmentData>[1]]> {
   return [
     [WORKER_SELECTION_KEY, ensureSqliteLibrarySelected()],
     [WORKER_CAPABILITIES_KEY, getSqliteRuntimeCapabilities()],
@@ -341,7 +358,7 @@ export function captureSqliteWorkerEnvironmentData(): ReadonlyArray<
       SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY,
       getEnvironmentData(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY),
     ],
-    [SQLITE_DATABASE_ADMISSIONS_KEY, getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY)],
+    [SQLITE_DATABASE_ADMISSIONS_KEY, databaseAdmissions],
   ];
 }
 

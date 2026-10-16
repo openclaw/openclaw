@@ -9,9 +9,11 @@ import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/ta
 import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { JSX } from "@solidjs/web";
-import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
+import type { NodePermissionRequest } from "../../../packages/gateway-protocol/src/node-permissions.js";
+import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiSurfaceProps } from "../../../src/plugin-sdk/control-ui.js";
 import type { ClawHubRecommendation } from "../../../src/shared/clawhub-recommendations.js";
+import type { ApplicationGateway } from "../app/gateway.ts";
 import type { LobsterPetProps } from "../components/lobster-pet-contract.ts";
 import type { MascotMood } from "../components/mascot-pose.ts";
 import type { MessageActionDetails } from "../pages/chat/components/chat-message-markdown.types.ts";
@@ -19,9 +21,18 @@ export type { JSX } from "@solidjs/web";
 
 // Keep ambient tag contracts independent of renderer modules: SDK declarations include this file.
 type LegacyAttributes<T extends HTMLElement> = JSX.HTMLAttributes<T> & JSX.Properties<T>;
+type DockElementAttributes = JSX.HTMLAttributes<HTMLElement> & {
+  [key: `prop:${string}`]: unknown;
+};
 type Tooltip = HTMLElementTagNameMap["openclaw-tooltip"];
 
-type ElementProperties<T> = { [Key in keyof T as `prop:${string & Key}`]?: T[Key] };
+export type ElementProperties<T> = { [Key in keyof T as `prop:${string & Key}`]?: T[Key] };
+type ChatCiProperties = {
+  gateway?: ApplicationGateway;
+  pullRequest?: ControlUiSessionPullRequest;
+  sessionKey: string;
+  presented: boolean;
+};
 type PluginViewProperties = {
   [Surface in keyof ControlUiSurfaceProps]: {
     "prop:surface": Surface;
@@ -40,7 +51,47 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "openclaw-chat-ci-details": HTMLAttributes<HTMLElement> & ElementProperties<ChatCiProperties>;
+      "openclaw-chat-ci-automation": HTMLAttributes<HTMLElement> &
+        ElementProperties<ChatCiProperties & { sessionId: string }>;
+      "openclaw-terminal-panel": DockElementAttributes & { fullscreen?: boolean };
+      "openclaw-browser-panel": DockElementAttributes;
+      "openclaw-link-reader-panel": DockElementAttributes;
+      "openclaw-appearance-background": HTMLAttributes<HTMLElement>;
+      "openclaw-config-page": HTMLAttributes<HTMLElement>;
+      "openclaw-meeting-capture-settings": HTMLAttributes<HTMLElement>;
+      "openclaw-session-storage-settings": HTMLAttributes<HTMLElement>;
+      "openclaw-talk-settings": HTMLAttributes<HTMLElement>;
+      "openclaw-memory-settings": HTMLAttributes<HTMLElement>;
+      "openclaw-memory-memories": HTMLAttributes<HTMLElement>;
+      "openclaw-modal-actions": HTMLAttributes<HTMLElement>;
+      "openclaw-claws-explore": HTMLAttributes<HTMLElement> & {
+        "prop:onSelect"?: (
+          entry: import("../pages/agents-home/claws-catalog-client.ts").ClawCatalogEntry,
+        ) => void;
+      };
+      "openclaw-claws-catalog-dialog": HTMLAttributes<HTMLElement> & {
+        "prop:initialPackageName"?: string;
+        "prop:pageMode"?: boolean;
+        "prop:onClose"?: () => void;
+        "prop:onAdded"?: () => void;
+        "prop:onSelectEntry"?: (
+          entry: import("../pages/agents-home/claws-catalog-client.ts").ClawCatalogEntry,
+        ) => void;
+      };
       "openclaw-github-identity": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-permission-card": HTMLAttributes<HTMLElement> & {
+        "prop:request"?: NodePermissionRequest | null;
+        "prop:onRetry"?: (message: string) => void;
+      };
+      "openclaw-chat-run-failure-notice": LegacyAttributes<
+        HTMLElementTagNameMap["openclaw-chat-run-failure-notice"]
+      > &
+        ElementProperties<
+          Pick<HTMLElementTagNameMap["openclaw-chat-run-failure-notice"], "onRetry">
+        >;
+      "openclaw-mcp-servers-card": HTMLAttributes<HTMLElement>;
+      "openclaw-update-run-view": HTMLAttributes<HTMLElement>;
       "openclaw-plugins-page": HTMLAttributes<HTMLElement>;
       "openclaw-dashboards-page": HTMLAttributes<HTMLElement>;
       "openclaw-lobster-pet": HTMLAttributes<HTMLElement> & ElementProperties<LobsterPetProps>;
@@ -53,10 +104,6 @@ declare module "@solidjs/web" {
       // Each caller validates the picker option/callback pairing before the DOM boundary.
       "openclaw-select-picker": HTMLAttributes<HTMLElementTagNameMap["openclaw-select-picker"]> & {
         "prop:params": unknown;
-      };
-      "openclaw-update-run-view": HTMLAttributes<HTMLElement> & {
-        "prop:run": UpdateRunRecord | null;
-        "prop:connected": boolean;
       };
       "openclaw-plugin-view": HTMLAttributes<HTMLElement> &
         PluginViewProperties & {
@@ -119,6 +166,7 @@ declare module "@solidjs/web" {
         "prop:content"?: Tooltip["content"];
         "prop:contentTemplate"?: Tooltip["contentTemplate"];
         "prop:describe"?: Tooltip["describe"];
+        "prop:pointerThrough"?: Tooltip["pointerThrough"];
         "prop:openOnClick"?: Tooltip["openOnClick"];
         "prop:disabled"?: Tooltip["disabled"];
         "prop:anchor"?: Tooltip["anchor"];
@@ -192,10 +240,7 @@ declare module "@solidjs/web" {
       "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
         "prop:agentId"?: string;
       };
-      "openclaw-systems-page": HTMLAttributes<HTMLElementTagNameMap["openclaw-systems-page"]> &
-        ElementProperties<
-          Pick<HTMLElementTagNameMap["openclaw-systems-page"], "routeData" | "presented">
-        >;
+      "openclaw-systems-page": HTMLAttributes<HTMLElement>;
       "openclaw-systems-sidebar": HTMLAttributes<
         HTMLElementTagNameMap["openclaw-systems-sidebar"]
       > &

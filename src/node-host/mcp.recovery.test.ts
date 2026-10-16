@@ -630,8 +630,17 @@ describe("node host MCP live lifecycle", () => {
     expect(attempts).toBe(attemptsAtClose);
   });
 
-  it("bounds reconnect fan-out and retires admission-queued attempts on close", async () => {
+  it("bounds reconnect fan-out and retires admission-queued attempts on close", async ({
+    onTestFinished,
+  }) => {
     vi.useFakeTimers();
+    // Native AbortSignal deadlines otherwise advance independently of the retry clock.
+    const deadline = vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), timeoutMs);
+      return controller.signal;
+    });
+    onTestFinished(() => deadline.mockRestore());
     let active = 0;
     let maxActive = 0;
     const attemptsByServer = new Map<string, number>();

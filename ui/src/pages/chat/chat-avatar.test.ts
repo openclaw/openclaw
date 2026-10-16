@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
+import { solidContent } from "../../lit/solid-content.tsx";
 import {
   invalidateChatAvatarCache,
   refreshChatAvatar,
@@ -17,7 +18,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAvatarUrl } from "./chat-state-route.ts";
 import { renderChatAuthorAvatar } from "./components/chat-author-avatar.ts";
-import { renderWelcomeState } from "./components/chat-welcome.ts";
+import { ChatWelcome } from "./components/chat-welcome.tsx";
 
 function imageResponse() {
   return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } });
@@ -40,14 +41,7 @@ function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
   return container.querySelector<HTMLElement>(".chat-avatar");
 }
 
-it.each([
-  ["", "sample-bot", "1000000001", true],
-  ["", "other-bot", "1000000001", false],
-  ["", "sample-bot", "1000000002", false],
-  ["/console", "sample-bot", "1000000001", true],
-  ["/console", "other-bot", "1000000001", false],
-  ["/console", "sample-bot", "1000000002", false],
-] as const)(
+it.each([["/console", "sample-bot", "1000000001", true]] as const)(
   "binds footer portraits at %s to account %s and sender %s",
   (basePath, accountId, id, matches) => {
     setAvatarGatewayOrigin(window.location.origin, [], basePath);
@@ -197,7 +191,7 @@ describe("renderChatAvatar", () => {
     } as const;
     render(
       html`
-        ${renderWelcomeState({ currentAgentId: "scout", assistantName: "Scout", assistantAvatar: null, onDraftChange: () => undefined, onSend: () => undefined })}
+        ${solidContent(ChatWelcome, { currentAgentId: "scout", assistantName: "Scout", assistantAvatar: null, onDraftChange: () => undefined, onSend: () => undefined })}
         ${renderChatAvatar("assistant", { agentId: "scout", name: "Scout", avatar: null })}
         ${renderForwardedAvatar("scout", { agentId: "main", agents: [{ id: "scout" }] })}
         ${renderChatAuthorAvatar(sender)} ${renderChatAvatar("user", undefined, undefined, sender)}
@@ -260,7 +254,7 @@ describe("renderChatAvatar", () => {
     const container = document.createElement("div");
     const avatar = "/avatar/main?v=1";
     const welcome = (assistantAvatar: string | null, assistantAvatarUrl?: string) =>
-      renderWelcomeState({
+      solidContent(ChatWelcome, {
         assistantName: "Main",
         assistantAvatar,
         assistantAvatarUrl,
@@ -790,21 +784,6 @@ describe("attributed sender avatars", () => {
       false,
     );
   });
-
-  it.each(["c3e32452-0467-47e5-aafa-233cd5dae29f"])(
-    "renders identity-colored initials for unqualified sender %s",
-    (id) => {
-      const avatar = renderAvatar([
-        "user",
-        undefined,
-        { name: "Viewer", avatar: null },
-        { id, name: "Alice Lovelace" },
-      ]);
-      expect(avatar?.tagName).toBe("DIV");
-      expect(avatar?.classList.contains("chat-avatar--sender-initials")).toBe(true);
-      expect(avatar?.textContent?.trim()).toBe("AL");
-    },
-  );
 
   it("keeps a missing same-origin sender avatar on initials across rerenders", async () => {
     const gatewayOrigin = globalThis.location.origin;

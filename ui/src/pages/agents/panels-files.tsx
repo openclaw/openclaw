@@ -1,7 +1,7 @@
 import { createMemo, For, Show } from "solid-js";
 import type { AgentFileEntry } from "../../api/types.ts";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
 import type { OpenClawModalDialog } from "../../components/modal-dialog.ts";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import "../../components/modal-dialog.ts";
@@ -11,7 +11,6 @@ import { formatBytes } from "../../lib/agents/display.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { resetAgentFilePreview, setPreviewExpandButtonState } from "./agent-file-preview-state.ts";
 import { AgentFilePreview } from "./agent-file-preview.tsx";
 import { AgentFileError } from "./file-conflict-callout.tsx";
@@ -165,28 +164,26 @@ export function AgentFiles(
         ) : (
           <div class="agents-panel-body">
             <div class="agent-file-tabs">
-              <LitContent
-                render={() =>
-                  renderHubTabs({
-                    id: "agent-files",
-                    active: active(),
-                    tabs: tabFiles().map((file) => ({
-                      value: file.name,
-                      label: file.name.replace(/\.md$/i, ""),
-                      badge:
-                        file.missing && file.expectedAbsent !== true && file.name !== conflictName()
-                          ? t("agents.files.missing")
-                          : undefined,
-                      // File reads are serialized; changing the active tab mid-read would
-                      // expose an editor whose content request was never accepted.
-                      disabled: params.agentFilesLoading,
-                    })),
-                    ariaLabel: t("agents.files.coreFilesTitle"),
-                    panelId: "agent-file-panel",
-                    variant: "sub",
-                    onSelect: params.onSelectFile,
-                  })
-                }
+              <HubTabs
+                {...{
+                  id: "agent-files",
+                  active: active(),
+                  tabs: tabFiles().map((file) => ({
+                    value: file.name,
+                    label: file.name.replace(/\.md$/i, ""),
+                    badge:
+                      file.missing && file.expectedAbsent !== true && file.name !== conflictName()
+                        ? t("agents.files.missing")
+                        : undefined,
+                    // File reads are serialized; changing the active tab mid-read would
+                    // expose an editor whose content request was never accepted.
+                    disabled: params.agentFilesLoading,
+                  })),
+                  ariaLabel: t("agents.files.coreFilesTitle"),
+                  panelId: "agent-file-panel",
+                  variant: "sub",
+                  onSelect: params.onSelectFile,
+                }}
               />
               {creatableFiles().length === 0 ? undefined : (
                 <select
@@ -407,31 +404,18 @@ export function AgentFiles(
                                     </span>
                                   </button>
                                 </openclaw-tooltip>
-                                <For
-                                  each={
-                                    [
-                                      ["editFile", "edit", true],
-                                      ["closePreview", "x", false],
-                                    ] as const
-                                  }
-                                >
-                                  {([label, icon, focusEditor]) => (
-                                    <openclaw-tooltip prop:content={t(`agents.files.${label}`)}>
-                                      <button
-                                        type="button"
-                                        class="btn btn--sm md-preview-icon-btn"
-                                        aria-label={t(`agents.files.${label}`)}
-                                        onClick={(event: Event) =>
-                                          closeAgentFilePreview(event, focusEditor)
-                                        }
-                                      >
-                                        <span aria-hidden="true">
-                                          <Icon name={icon} />
-                                        </span>
-                                      </button>
-                                    </openclaw-tooltip>
-                                  )}
-                                </For>
+                                <openclaw-tooltip prop:content={t("agents.files.closePreview")}>
+                                  <button
+                                    type="button"
+                                    class="btn btn--sm md-preview-icon-btn"
+                                    aria-label={t("agents.files.closePreview")}
+                                    onClick={(event: Event) => closeAgentFilePreview(event)}
+                                  >
+                                    <span aria-hidden="true">
+                                      <Icon name="x" />
+                                    </span>
+                                  </button>
+                                </openclaw-tooltip>
                               </div>
                             </div>
                             <div class="md-preview-dialog__meta">
@@ -465,6 +449,16 @@ export function AgentFiles(
                                 options={{ codeBlockChrome: "none", mode: "document" }}
                               />
                             </div>
+                            <openclaw-modal-actions class="md-preview-dialog__footer">
+                              <button
+                                type="button"
+                                class="btn btn--sm"
+                                aria-label={t("agents.files.editFile")}
+                                onClick={(event: Event) => closeAgentFilePreview(event, true)}
+                              >
+                                <Icon name="edit" /> {t("agents.files.editFile")}
+                              </button>
+                            </openclaw-modal-actions>
                           </div>
                         )}
                       </AgentFilePreview>

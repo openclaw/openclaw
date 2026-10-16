@@ -1,4 +1,4 @@
-import type { DatabaseSync, StatementSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { vectorToBlob } from "./vector-blob.js";
 
 export function writeMemoryVectors(
@@ -10,13 +10,10 @@ export function writeMemoryVectors(
   }
   // A repeated id within one publication has the same last-write-wins behavior.
   const unique = [...new Map(rows.map((row) => [row.id, row])).values()];
-  let deletion: StatementSync | undefined;
+  // sqlite-vec only uses its primary-key lookup for scalar equality.
+  const deletion = db.prepare("DELETE FROM memory_index_chunks_vec WHERE id = ?");
   for (const row of unique) {
-    try {
-      // sqlite-vec only uses its primary-key lookup for scalar equality.
-      deletion ??= db.prepare("DELETE FROM memory_index_chunks_vec WHERE id = ?");
-      deletion.run(row.id);
-    } catch {}
+    deletion.run(row.id);
   }
   db.prepare(
     `INSERT INTO memory_index_chunks_vec (id, embedding) VALUES ${unique.map(() => "(?, ?)").join(",")}`,

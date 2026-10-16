@@ -13,10 +13,7 @@ import { createDurableSessionActorFactory } from "./session-actor-durable.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
 import { withActor } from "./session-actor-transport.test-support.js";
-import {
-  seedSessionActorOutcomeTransferTranscript,
-  SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT,
-} from "./session-actor-worker.test-support.js";
+import { seedSessionActorOutcomeTransferEntry } from "./session-actor-worker.test-support.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { acquireSessionInputActor } from "./session-input-actor.js";
 
@@ -137,7 +134,7 @@ it.each([false, true])(
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const fixture = createSessionCompoundWorkerFixture();
       if (oversized) {
-        seedSessionActorOutcomeTransferTranscript(fixture);
+        seedSessionActorOutcomeTransferEntry(fixture);
       }
       const identity = readOpenClawAgentDatabaseIdentity(fixture.database);
       if (typeof identity.identity !== "string") {
@@ -221,12 +218,8 @@ it.each([false, true])(
         if (result.kind !== "committed") {
           throw new Error("Expected the durable executor to reconstruct its transferred outcome");
         }
-        expect(result.receipt.postimage.transcript.idempotency).toHaveLength(
-          oversized ? SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT : 0,
-        );
-        expect(result.receipt.postimage.transcript.anchors).toHaveLength(
-          oversized ? SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT : 0,
-        );
+        expect(result.receipt.postimage.transcript.idempotency).toEqual([]);
+        expect(result.receipt.postimage.transcript.anchors).toEqual([]);
         expect(actor.snapshot(authority)?.entry?.sessionId).toBe(fixture.scope.sessionId);
         expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(543);
         expect(fixture.read()?.updatedAt).toBe(543);
@@ -262,8 +255,8 @@ it.each([false, true])(
 );
 
 it("recovers a transferred native commit after ordinary reply loss without replay", async () => {
-  await withActor(async ({ actor, commands, fault, seedTransferTranscript, readEntry }) => {
-    seedTransferTranscript();
+  await withActor(async ({ actor, commands, fault, seedTransferEntry, readEntry }) => {
+    seedTransferEntry();
     fault.reply = "lost";
     const result = await actor.patch(
       {
@@ -280,8 +273,8 @@ it("recovers a transferred native commit after ordinary reply loss without repla
     if (result.kind !== "committed") {
       throw new Error("Expected native transfer evidence to recover the committed outcome");
     }
-    expect(result.receipt.postimage.transcript.idempotency).toHaveLength(
-      SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT,
+    expect(result.receipt.postimage.entry?.skillsSnapshot?.prompt.length).toBeGreaterThan(
+      1024 * 1024,
     );
     expect(commands).toEqual(["session.actor.patch"]);
     expect(readEntry()?.updatedAt).toBe(600);
@@ -304,8 +297,8 @@ it("recovers a transferred native commit after ordinary reply loss without repla
 });
 
 it("does not publish a candidate when its outcome transfer is incomplete", async () => {
-  await withActor(async ({ actor, commands, fault, seedTransferTranscript, readEntry }) => {
-    seedTransferTranscript();
+  await withActor(async ({ actor, commands, fault, seedTransferEntry, readEntry }) => {
+    seedTransferEntry();
     const before = readEntry();
     fault.incompleteOutcomeTransfer = true;
     const observer = { committed: vi.fn() };
@@ -671,7 +664,9 @@ it("admits tool appends once per transaction boundary without transferring trans
       ).toBe(false);
     }
     const committed = actor.snapshot(authority)!;
-    expect(committed.transcript.anchors.length).toBeGreaterThan(initial.transcript.anchors.length);
+    expect(committed.transcript.version.rawSeq).toBeGreaterThan(
+      initial.transcript.version.rawSeq ?? -1,
+    );
     const refused = await actor.appendToolResult(
       {
         commandId: "refused-tool",
@@ -748,7 +743,9 @@ it.each([false, true])(
       fault.disclosureRevoked = false;
       const current = actor.snapshot(authority)!;
       expect(current.version.sequence).toBe(initial.version.sequence + 1);
-      expect(current.transcript.anchors).toHaveLength(initial.transcript.anchors.length + 1);
+      expect(current.transcript.version.rawSeq).toBeGreaterThan(
+        initial.transcript.version.rawSeq ?? -1,
+      );
     });
   },
 );

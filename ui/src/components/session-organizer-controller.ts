@@ -110,13 +110,11 @@ export class SessionOrganizerController {
 
   archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
     return this.runOperation((operations, scope) =>
-      operations.archiveSessionWithUndo(this.host, session, scope),
-    );
-  }
-
-  archiveSessionTreeWithUndo(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.archiveSessionTreeWithUndo(this.host, session, scope),
+      operations.archiveSessionWithUndo(
+        this.host,
+        { ...session, hasArchiveDescendants: session.childSessionKeys.length > 0 },
+        scope,
+      ),
     );
   }
 
@@ -545,7 +543,7 @@ export class SessionOrganizerController {
     if (!scope) {
       return;
     }
-    const dialog = await this.loadDialog(import("./session-group-defaults-dialog.ts"));
+    const dialog = await this.loadDialog(import("./session-group-defaults-dialog.tsx"));
     if (!dialog || !this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }

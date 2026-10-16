@@ -244,9 +244,9 @@ describe("handleInlineActions", () => {
 
     expect(result).toMatchObject({
       kind: "continue",
-      cleanedBody: "use the monochrome version",
       queueModeOverride: "steer",
     });
+    expect(ctx.agentText).toBe("use the monochrome version");
   });
 
   it("prefers the target session entry when routing inline status through the shared status builder", async () => {
@@ -293,42 +293,6 @@ describe("handleInlineActions", () => {
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 
-  it("does not continue into the agent after a mention-wrapped inline status-only turn", async () => {
-    const typing = createTypingController();
-    const ctx = buildTestCtx({
-      Body: "<@123> /status",
-      CommandBody: "<@123> /status",
-      Provider: "discord",
-      Surface: "discord",
-      ChatType: "channel",
-      WasMentioned: true,
-    });
-
-    const result = await runTestInlineActions({
-      ctx,
-      typing,
-      cleanedBody: "<@123>",
-      command: {
-        surface: "discord",
-        channel: "discord",
-        channelId: "discord",
-        isAuthorizedSender: true,
-        rawBodyNormalized: "<@123> /status",
-        commandBodyNormalized: "<@123> /status",
-      },
-      overrides: {
-        allowTextCommands: true,
-        inlineStatusRequested: true,
-        isGroup: true,
-      },
-    });
-
-    expect(result).toEqual({ kind: "reply", reply: undefined });
-    expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
-    expect(handleCommandsMock).not.toHaveBeenCalled();
-    expect(typing.cleanup).toHaveBeenCalledTimes(1);
-  });
-
   it("continues into the agent when mention-wrapped inline status leaves real text", async () => {
     const typing = createTypingController();
     const ctx = buildTestCtx({
@@ -363,7 +327,6 @@ describe("handleInlineActions", () => {
       kind: "continue",
       directives: clearInlineDirectives("<@123> what's next?"),
       abortedLastRun: false,
-      cleanedBody: "<@123> what's next?",
     });
     expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
     expect(handleCommandsMock).toHaveBeenCalledTimes(1);
@@ -465,7 +428,6 @@ describe("handleInlineActions", () => {
       kind: "continue",
       directives: clearInlineDirectives("new message"),
       abortedLastRun: false,
-      cleanedBody: "new message",
     });
     expect(sessionStore["s:main"]?.abortCutoffMessageSid).toBeUndefined();
     expect(sessionStore["s:main"]?.abortCutoffTimestamp).toBeUndefined();
@@ -529,7 +491,7 @@ describe("handleInlineActions", () => {
       }),
     );
 
-    expect(result).toMatchObject({ kind: "continue", cleanedBody: body });
+    expect(result.kind).toBe("continue");
     expect(ctx.Body).toBe(body);
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
@@ -558,7 +520,7 @@ describe("handleInlineActions", () => {
       overrides: { cfg, allowTextCommands: true },
     });
 
-    expect(result).toMatchObject({ kind: "continue", cleanedBody: body });
+    expect(result.kind).toBe("continue");
     expect(ctx.agentText).toBe(body);
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
@@ -1146,7 +1108,8 @@ describe("handleInlineActions", () => {
         opts: { onBlockReply },
       },
     });
-    expect(result).toMatchObject({ kind: "continue", cleanedBody: expected });
+    expect(result.kind).toBe("continue");
+    expect(routing.cleanedBody).toBe(expected);
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
@@ -1159,14 +1122,7 @@ describe("handleInlineActions", () => {
       commandText: "Please /help continue",
       expected: "<@BOT> (Bek (Ops)) Please continue",
     },
-    {
-      name: "direct mention",
-      chatType: "direct" as const,
-      rawText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandSourceText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandText: "Please /help continue",
-      expected: "<@BOT> (Bek (Ops)) Please continue",
-    },
+
     {
       name: "multiline sender before attachment context",
       chatType: "channel" as const,
@@ -1182,7 +1138,7 @@ describe("handleInlineActions", () => {
       Surface: "slack",
       ChatType: chatType,
       From: "slack:U1",
-      To: chatType === "direct" ? "slack:U1" : "slack:C1",
+      To: "slack:C1",
       CommandBody: commandText,
       RawBody: rawText,
       BodyForAgent: rawText,
@@ -1202,8 +1158,8 @@ describe("handleInlineActions", () => {
       modelAliases: [],
       canInterpretTextDirectives: true,
       isAuthorizedSender: true,
-      isGroup: chatType !== "direct",
-      wasMentioned: chatType !== "direct",
+      isGroup: true,
+      wasMentioned: true,
       ctx,
       cfg: { commands: { text: true } },
       agentId: "main",
@@ -1227,10 +1183,8 @@ describe("handleInlineActions", () => {
       },
     });
     expect(routing.inlineCommand).toBe("/help");
-    expect(result).toMatchObject({
-      kind: "continue",
-      cleanedBody: expected,
-    });
+    expect(result.kind).toBe("continue");
+    expect(routing.cleanedBody).toBe(expected);
     expect(onBlockReply).toHaveBeenCalledExactlyOnceWith({
       text: "Sender help output",
       isStatusNotice: true,
@@ -1266,7 +1220,7 @@ describe("handleInlineActions", () => {
       },
     });
     const expected = "Act as an engineering advisor.\n\nFocus on:\ncompare /help and /commands";
-    expect(result).toMatchObject({ kind: "continue", cleanedBody: expected });
+    expect(result.kind).toBe("continue");
     expect(ctx.Body).toBe(expected);
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(
@@ -1425,7 +1379,7 @@ describe("sender command dispatch ownership", () => {
 
       if (shape === "skill") {
         const expected = expandedOfficeHoursRequest(commandText);
-        expect(result).toMatchObject({ kind: "continue", cleanedBody: expected });
+        expect(result.kind).toBe("continue");
         expect(sessionCtx.agentText).toBe(expected);
         expect(dispatched).toEqual([]);
         expect(onBlockReply).not.toHaveBeenCalled();
@@ -1439,7 +1393,8 @@ describe("sender command dispatch ownership", () => {
           text: commandReply,
           isStatusNotice: true,
         });
-        expect(result).toMatchObject({ kind: "continue", cleanedBody: expectedPrompt + suffix });
+        expect(result.kind).toBe("continue");
+        expect(sessionCtx.agentText).toBe(expectedPrompt + suffix);
       }
     },
   );

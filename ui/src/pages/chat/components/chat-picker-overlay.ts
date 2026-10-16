@@ -1,67 +1,74 @@
-import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
+import { createEffect, createSignal } from "solid-js";
+import { createOverlayAnchor } from "../../../components/overlay-anchor.ts";
+import { createOverlay, findOverlayParent } from "../../../components/overlay-lifecycle.ts";
+import { registryFor } from "../../../components/overlay-registry.ts";
+import "../../../components/solid/overlay.css";
 import { consumeTooltipEscape } from "../../../components/tooltip.ts";
+import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
 import { clearChatModelSearchOnEscape } from "./chat-model-picker-search.ts";
 
 const MOBILE_COMPOSER_OVERLAY_QUERY =
   "(max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
 
-const pointerOpenedDropdowns = new WeakSet<HTMLElement>();
 const composerPickerDismissals = new WeakMap<
   Document,
   { owners: Set<symbol>; dispose: () => void }
 >();
-const POINTER_RESTORED_FOCUS_ATTRIBUTE = "data-chat-pointer-restored-focus";
-const POINTER_OPENED_PICKER_ATTRIBUTE = "data-chat-pointer-opened-picker";
 const CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT = "openclaw-composer-dismiss-invocations";
+const INVOCATION_MENUS = ".agent-chat__input > :is(.slash-menu, .skill-menu)";
+let nextPickerId = 0;
 
-function composerPickerIsOpen(picker: HTMLElement): boolean {
-  if (picker instanceof HTMLDetailsElement) {
-    return picker.open;
-  }
-  return ("open" in picker && picker.open === true) || picker.hasAttribute("open");
-}
-
-function openChatComposerPickers(root: ParentNode): HTMLElement[] {
-  return Array.from(
-    root.querySelectorAll<HTMLElement>(
-      ".agent-chat__input details, .agent-chat__input wa-dropdown",
-    ),
-  ).filter(composerPickerIsOpen);
-}
-
-function closeComposerPicker(picker: HTMLElement): void {
-  pointerOpenedDropdowns.delete(picker);
-  picker.removeAttribute(POINTER_OPENED_PICKER_ATTRIBUTE);
-  if (picker instanceof HTMLDetailsElement) {
-    picker.open = false;
-  } else {
-    if ("open" in picker) {
-      picker.open = false;
-    }
-    picker.removeAttribute("open");
-  }
-}
-
-function pickerTrigger(picker: HTMLElement): HTMLElement | null {
-  return picker instanceof HTMLDetailsElement
-    ? picker.querySelector<HTMLElement>("summary")
-    : picker.querySelector<HTMLElement>("[slot=trigger]");
-}
-
-function dropdownFromEvent(event: Event): HTMLElement | undefined {
-  return event
-    .composedPath()
-    .find(
-      (node): node is HTMLElement =>
-        node instanceof HTMLElement && node.localName === "wa-dropdown",
+/** Keep native details selectors while the shared overlay owns visibility and dismissal. */
+function bindChatPickerOverlay(details: HTMLDetailsElement): () => void {
+  const trigger = details.querySelector<HTMLElement>(":scope > summary")!;
+  const surface = details.querySelector<HTMLElement>(":scope > [data-anchored-overlay]")!;
+  const overlay = createOverlay(`chat-picker-${++nextPickerId}`, findOverlayParent(trigger), {
+    exclusiveGroup: "menu",
+    interactionElements: () => [details],
+    acquireOcclusion: acquireNativeOverlaySurface,
+    onEscape: clearChatModelSearchOnEscape,
+  });
+  trigger.id = `${overlay.id}-trigger`;
+  trigger.setAttribute("aria-haspopup", "dialog");
+  trigger.setAttribute("aria-controls", overlay.id);
+  surface.id = overlay.id;
+  surface.setAttribute("role", "dialog");
+  surface.setAttribute("aria-labelledby", trigger.id);
+  overlay.bindSurface(surface);
+  overlay.bindTrigger(trigger);
+  const anchor = createOverlayAnchor(surface);
+  const sync = () => {
+    const mobile = details.ownerDocument.defaultView?.matchMedia?.(
+      MOBILE_COMPOSER_OVERLAY_QUERY,
+    ).matches;
+    anchor.update(
+      mobile ? (details.closest<HTMLElement>(".agent-chat__input") ?? trigger) : trigger,
+      "top-end",
     );
+    if (!overlay.request(details.open)) {
+      details.open = overlay.open;
+    }
+  };
+  details.setAttribute("data-chat-native-picker", "");
+  const stop = overlay.subscribe((open) => {
+    details.open = open;
+  });
+  details.addEventListener("toggle", sync);
+  sync();
+  return () => {
+    details.removeEventListener("toggle", sync);
+    stop();
+    details.removeAttribute("data-chat-native-picker");
+    overlay.dispose();
+    anchor.dispose();
+  };
 }
 
-function clearPointerFocus(this: HTMLElement): void {
-  // Blur and keyboard takeover complete the same pointer-focus lifetime.
-  this.removeEventListener("blur", clearPointerFocus);
-  this.removeEventListener("keydown", clearPointerFocus);
-  this.removeAttribute(POINTER_RESTORED_FOCUS_ATTRIBUTE);
+/** The ref only publishes the node; the component owner binds and releases its surface. */
+export function createChatPickerOverlay(): (details: HTMLDetailsElement) => void {
+  const [element, setElement] = createSignal<HTMLDetailsElement>();
+  createEffect(element, (details) => (details ? bindChatPickerOverlay(details) : undefined));
+  return (details) => setElement(details);
 }
 
 // Split panes and Home can overlap New Session. Keep one document listener set
@@ -89,14 +96,7 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
 
   function dismissChatComposerPickersOutside(event: PointerEvent): void {
     const path = event.composedPath();
-    for (const picker of openChatComposerPickers(ownerDocument)) {
-      if (!path.includes(picker)) {
-        closeComposerPicker(picker);
-      }
-    }
-    for (const menu of ownerDocument.querySelectorAll<HTMLElement>(
-      ".agent-chat__input > :is(.slash-menu, .skill-menu, .emoji-menu-popup)",
-    )) {
+    for (const menu of ownerDocument.querySelectorAll<HTMLElement>(INVOCATION_MENUS)) {
       if (!path.includes(menu)) {
         menu
           .closest(".agent-chat__input")
@@ -116,123 +116,30 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
     ) {
       return;
     }
-    if (clearChatModelSearchOnEscape(event)) {
+    if (registryFor(ownerDocument).stack.at(-1)?.open) {
       return;
     }
-    const pickers = openChatComposerPickers(ownerDocument);
     const invocationComposer = ownerDocument
-      .querySelector<HTMLElement>(
-        ".agent-chat__input > :is(.slash-menu, .skill-menu, .emoji-menu-popup)",
-      )
+      .querySelector<HTMLElement>(INVOCATION_MENUS)
       ?.closest<HTMLElement>(".agent-chat__input");
-    if (pickers.length === 0 && !invocationComposer) {
+    if (!invocationComposer) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    // A nested menu restores focus inside its still-open parent picker.
-    const deepestPickers = pickers.filter(
-      (picker) => !pickers.some((other) => other !== picker && picker.contains(other)),
-    );
-    const lastPicker = deepestPickers.at(-1);
-    deepestPickers.forEach(closeComposerPicker);
-    invocationComposer?.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
+    invocationComposer.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
     invocationComposer
-      ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
+      .querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
       ?.focus({ preventScroll: true });
-    if (lastPicker) {
-      pickerTrigger(lastPicker)?.focus({ preventScroll: true });
-    }
   }
 
   ownerDocument.addEventListener("pointerdown", dismissChatComposerPickersOutside, options);
-  // Window capture observes the open picker before component Escape handlers
-  // mutate details.open and erase the return-focus owner.
+  // Native surfaces consume Escape before invocation menus beneath them.
   ownerDocument.defaultView?.addEventListener(
     "keydown",
     dismissChatComposerPickersOnEscape,
     options,
   );
-  ownerDocument.addEventListener(
-    "keydown",
-    (event) => {
-      const dropdown = dropdownFromEvent(event);
-      if (dropdown) {
-        pointerOpenedDropdowns.delete(dropdown);
-        dropdown.removeAttribute(POINTER_OPENED_PICKER_ATTRIBUTE);
-      }
-    },
-    options,
-  );
 
   return () => controller.abort();
-}
-
-function closeOtherChatComposerPickers(source: HTMLElement): void {
-  const composer = source.closest(".agent-chat__input");
-  if (!composer) {
-    return;
-  }
-  for (const picker of openChatComposerPickers(composer)) {
-    if (picker !== source && !picker.contains(source)) {
-      closeComposerPicker(picker);
-    }
-  }
-}
-
-export function handleChatComposerDetailsToggle(event: Event): void {
-  const details = event.currentTarget;
-  if (details instanceof HTMLDetailsElement && details.open) {
-    closeOtherChatComposerPickers(details);
-  }
-}
-
-export function handleChatComposerDropdownShow(event: Event): void {
-  const dropdown = event.target;
-  if (dropdown instanceof HTMLElement && dropdown.localName === "wa-dropdown") {
-    if (!pointerOpenedDropdowns.has(dropdown)) {
-      dropdown.removeAttribute(POINTER_OPENED_PICKER_ATTRIBUTE);
-    }
-    closeOtherChatComposerPickers(dropdown);
-  }
-}
-
-export function markPointerOpenedChatComposerDropdown(event: PointerEvent): void {
-  const dropdown = dropdownFromEvent(event);
-  if (dropdown) {
-    pointerOpenedDropdowns.add(dropdown);
-    dropdown.setAttribute(POINTER_OPENED_PICKER_ATTRIBUTE, "");
-  }
-}
-
-export function restorePointerOpenedChatComposerTrigger(event: Event): void {
-  const dropdown =
-    event.target instanceof HTMLElement && event.target.localName === "wa-dropdown"
-      ? event.target
-      : event.currentTarget;
-  if (
-    dropdown instanceof HTMLElement &&
-    dropdown.localName === "wa-dropdown" &&
-    pointerOpenedDropdowns.delete(dropdown)
-  ) {
-    const trigger = pickerTrigger(dropdown);
-    if (!trigger) {
-      return;
-    }
-    trigger.setAttribute(POINTER_RESTORED_FOCUS_ATTRIBUTE, "");
-    trigger.addEventListener("blur", clearPointerFocus, { once: true });
-    trigger.addEventListener("keydown", clearPointerFocus, { once: true });
-    trigger.focus({ preventScroll: true });
-  }
-}
-
-export function syncChatPickerOverlay(details: HTMLDetailsElement): void {
-  // Mobile panels span the composer, so anchor to that stable box; desktop
-  // panels stay attached to the individual trigger.
-  const composerAnchor =
-    typeof window.matchMedia === "function" &&
-    window.matchMedia(MOBILE_COMPOSER_OVERLAY_QUERY).matches
-      ? (details.closest(".agent-chat__input") ?? undefined)
-      : undefined;
-  syncAnchoredOverlay(details, "top", { alignment: "end", anchor: composerAnchor });
 }

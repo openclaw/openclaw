@@ -669,6 +669,22 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Original host-admitted operator basis, owned by the exact restart source claim. */
   restartRecoveryOperatorSource?: import("../../gateway/operator-run-recovery-source.js").RestartRecoveryOperatorSource;
+  /** Unhanded exec completion obligations; no command arguments or output. */
+  pendingExecNotifications?: Record<
+    string,
+    {
+      processSessionId: string;
+      sessionId: string;
+      lifecycleRevision?: string;
+      incarnation: string;
+      startedAt: number;
+      label: string;
+      policy: Pick<
+        import("../../auto-reply/reply/session-event-contract.js").SessionEventTarget,
+        "settings" | "deliver" | "deliveryContext" | "chatType"
+      > & { toolsAllow?: readonly string[][] };
+    }
+  >;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 

@@ -8,6 +8,7 @@ import {
 import type { EmbeddingProviderCallOptions, EmbeddingUsage } from "./embeddings.types.js";
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 import { postJson } from "./post-json.js";
+import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
 
 export function extractEmbeddingUsage(payload: unknown): EmbeddingUsage | undefined {
   const usage = asOptionalRecord(asOptionalRecord(payload)?.usage);
@@ -33,6 +34,7 @@ export async function fetchRemoteEmbeddingVectors(params: {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
+  resolveRequestHeaders?: RemoteEmbeddingRequestAuth;
   signal?: AbortSignal;
   onUsage?: EmbeddingProviderCallOptions["onUsage"];
   body: unknown;

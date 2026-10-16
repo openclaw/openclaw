@@ -1,10 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn, type ChildProcess, type SendHandle, type SpawnOptions } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { Socket } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -22,6 +19,7 @@ import { waitForBrokerChildCompletion } from "./child-completion.js";
 import { BrokerChild } from "./child.js";
 import { terminateBrokerProcessGroup, terminateLostBrokerChild } from "./cleanup.js";
 import type { BrokerExecaOptions, BrokerExecaResult } from "./execa-protocol.js";
+import { BrokerFileReads } from "./file-reads.js";
 import { createBrokerReceiver, createBrokerSender } from "./ipc.js";
 import { holdPipe, restoreStdinPipe } from "./pipe.js";
 import {
@@ -32,6 +30,7 @@ import {
 } from "./protocol.js";
 import {
   BrokerResourceClaims,
+  createNativeResourceAuthority,
   type BrokerNativeResourceCallbacks,
   type BrokerNativeResourceInput,
   type BrokerNativeResourceLease,
@@ -48,21 +47,7 @@ export type { BrokerNativeResourceLease } from "./resource-host.js";
 
 const MAX_REQUESTS = 256;
 const RESTART_DELAYS = [100, 250, 500, 1000, 2000];
-const UNIX_SOCKET_PATH_BYTES = 103;
 const MAX_BOOTSTRAP_BYTES = 1024;
-
-function createNativeResourceDirectory(): string {
-  const directory = mkdtempSync(join(tmpdir(), "oc-br-"));
-  if (
-    process.platform === "win32" ||
-    Buffer.byteLength(join(directory, "resource.sock")) <= UNIX_SOCKET_PATH_BYTES
-  ) {
-    return directory;
-  }
-  // A configured temp root can exceed Darwin's sockaddr_un even for a short private socket.
-  rmSync(directory, { recursive: true, force: true });
-  return mkdtempSync("/tmp/oc-br-");
-}
 
 type Request = {
   child: BrokerChild;
@@ -124,6 +109,14 @@ export class SpawnBrokerHost {
   private consecutiveFailures = 0;
   private sequence = 0;
   private requests = new Map<number, Request>();
+  private readonly fileReads = new BrokerFileReads({
+    ready: () => this.ready(),
+    send: (message) => this.transmit(message),
+    canAdmit: () =>
+      !this.resourceClaims &&
+      !this.closing &&
+      this.requests.size + this.fileReads.size < MAX_REQUESTS,
+  });
   private readonly cleanups = new Set<ReturnType<typeof terminateLostBrokerChild>>();
   private readonly cleanupErrors: Error[] = [];
   private readonly resourceClaims: BrokerResourceClaims | undefined;
@@ -153,16 +146,9 @@ export class SpawnBrokerHost {
       options.workerUrl ?? resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.spawnBroker);
     this.entryPath = fileURLToPath(this.workerUrl);
     if (options.nativeResources) {
-      this.resourceDirectory = createNativeResourceDirectory();
-      chmodSync(this.resourceDirectory, 0o700);
-      const secret = randomBytes(32).toString("hex");
-      this.resourceAuthority = {
-        secret,
-        endpoint:
-          process.platform === "win32"
-            ? `\\\\.\\pipe\\oc-br-${secret}`
-            : join(this.resourceDirectory, "resource.sock"),
-      };
+      const { directory, ...authority } = createNativeResourceAuthority();
+      this.resourceDirectory = directory;
+      this.resourceAuthority = authority;
       this.resourceClaims = new BrokerResourceClaims({
         transmit: async (request) => {
           if (!this.available) {
@@ -198,6 +184,10 @@ export class SpawnBrokerHost {
     return this.closing
       ? Promise.reject(new SpawnBrokerError("Spawn broker is closing"))
       : this.readiness.promise;
+  }
+
+  readFile(filePath: string, signal?: AbortSignal): Promise<Buffer> {
+    return this.fileReads.read(filePath, signal);
   }
 
   captureNativeResource(
@@ -321,7 +311,7 @@ export class SpawnBrokerHost {
     if (
       !this.available ||
       this.closing ||
-      this.requests.size + (this.resourceClaims?.size ?? 0) >= MAX_REQUESTS
+      this.requests.size + this.fileReads.size + (this.resourceClaims?.size ?? 0) >= MAX_REQUESTS
     ) {
       child.markNotStarted();
       queueMicrotask(() => fail(new SpawnBrokerError("Spawn broker is unavailable")));
@@ -456,6 +446,7 @@ export class SpawnBrokerHost {
       this.readiness = createDeferredCore();
       void this.readiness.promise.catch(() => {});
       previousReadiness.reject(error);
+      this.fileReads.fail(error);
       for (const request of this.requests.values()) {
         if (request.pid && !request.childClosed) {
           const pid = request.pid;
@@ -571,6 +562,9 @@ export class SpawnBrokerHost {
         } catch (error) {
           fail(toErrorObject(error, "Spawn broker native resource receive failed"));
         }
+        return;
+      }
+      if (this.fileReads.receive(message)) {
         return;
       }
       const request = this.requests.get(message.id);
@@ -708,6 +702,7 @@ export class SpawnBrokerHost {
     this.closing = true;
     this.refreshNativeReference();
     this.readiness.reject(new SpawnBrokerError("Spawn broker is closing"));
+    this.fileReads.fail(new SpawnBrokerError("Spawn broker is closing"));
     clearTimeout(this.restartTimer);
     try {
       const child = this.process;

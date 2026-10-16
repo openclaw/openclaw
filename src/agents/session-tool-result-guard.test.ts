@@ -236,39 +236,26 @@ describe("installSessionToolResultGuard", () => {
     });
   });
 
-  it.each([
-    ["source.ts", "API_TOKEN = computeToken()\n"],
-    [
-      ".env.production",
-      "API_TOKEN=fixture-token-1234567890\nOPENAI_API_KEY=sk-proj-fixture1234567890\n",
-    ],
-  ])("preserves %s read bytes in model context and transcript", async (fileName, text) => {
-    const workspace = tempDirs.make("tool-result-fidelity-");
-    await fs.writeFile(path.join(workspace, fileName), text);
-    const read = createOpenClawReadTool(createReadTool(workspace));
-    const output = await read.execute("call_1", { path: fileName });
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      config: { logging: { redactPatterns: ["fixture-token-[a-z0-9]+"] } },
-    });
-    sm.appendMessage(call());
-    sm.appendMessage({ ...result(""), content: output.content, details: output.details });
-    expect(output.content).toEqual([{ type: "text", text }]);
-    expect(resultText(sm)).toBe(text);
-    const modelResult = sm
-      .buildSessionContext()
-      .messages.find((message) => message.role === "toolResult");
-    expect(modelResult?.content).toEqual([{ type: "text", text }]);
-  });
-
-  it("applies before_message_write to synthetic tool-result flushes", () => {
-    const { sm, guard } = setup({
-      beforeMessageWriteHook: ({ message }) =>
-        message.role === "toolResult" ? { block: true } : undefined,
-    });
-    sm.appendMessage(call());
-    guard.flushPendingToolResults();
-    roles(sm, ["assistant"]);
-  });
+  it.each([["source.ts", "API_TOKEN = computeToken()\n"]])(
+    "preserves %s read bytes in model context and transcript",
+    async (fileName, text) => {
+      const workspace = tempDirs.make("tool-result-fidelity-");
+      await fs.writeFile(path.join(workspace, fileName), text);
+      const read = createOpenClawReadTool(createReadTool(workspace));
+      const output = await read.execute("call_1", { path: fileName });
+      const sm = guardSessionManager(SessionManager.inMemory(), {
+        config: { logging: { redactPatterns: ["fixture-token-[a-z0-9]+"] } },
+      });
+      sm.appendMessage(call());
+      sm.appendMessage({ ...result(""), content: output.content, details: output.details });
+      expect(output.content).toEqual([{ type: "text", text }]);
+      expect(resultText(sm)).toBe(text);
+      const modelResult = sm
+        .buildSessionContext()
+        .messages.find((message) => message.role === "toolResult");
+      expect(modelResult?.content).toEqual([{ type: "text", text }]);
+    },
+  );
 
   it("suppresses only the next persisted user message when requested", () => {
     const { sm } = setup({ suppressNextUserMessagePersistence: true });

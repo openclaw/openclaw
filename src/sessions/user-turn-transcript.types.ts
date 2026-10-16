@@ -209,7 +209,7 @@ type UserTurnPersistenceOptions = {
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
-  /** Committed input, accepted pending custody, and blocked notices are exempt. */
+  /** Committed or delivered input, accepted pending custody, and blocked notices are exempt. */
   assertOriginalInputCommit?: SessionSourceAssertion;
   /** Durable input custody leaves the active transcript unchanged until execution owns it. */
   stageApproved?: (options: {
@@ -265,6 +265,7 @@ export type UserTurnTranscriptRecorder = {
       expectedSessionId?: string;
       expectedSessionState?: SessionTranscriptTurnExpectedState;
       sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+      beforeFreshMessageCommit?: SessionSourceAssertion;
       /** Allow a later explicit persistence attempt when this attempt appends nothing. */
       retryIfUnpersisted?: boolean;
     },

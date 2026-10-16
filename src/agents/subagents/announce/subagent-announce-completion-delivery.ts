@@ -18,6 +18,7 @@ import { splitMediaFromOutput } from "../../../media/parse.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
+import { SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { sanitizeAgentRunTerminalReplyText } from "../../agent-run-terminal-reply.js";
@@ -31,6 +32,7 @@ import {
 import { hasVisibleAgentPayload } from "../../embedded-agent-runner/message-visibility.js";
 import { hasVisibleCompletionResult } from "../../internal-event-contract.js";
 import { collectAgentInternalEventMedia, type AgentInternalEvent } from "../../internal-events.js";
+import type { ReplyExpectation } from "../../reply-completion.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import {
   hasAnnounceSendEvidence,
@@ -52,6 +54,7 @@ import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 export async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
   privateCompletion?: true;
+  replyExpectation?: ReplyExpectation;
   typing?: Omit<GatewayRecoveryTypingParams, "isCurrent">;
   settleWakeSourceSessionKeys?: readonly string[];
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
@@ -93,6 +96,7 @@ export async function runAnnounceAgentCall(params: {
     const dispatch = dispatchGatewayMethodInProcess("agent", params.agentParams, {
       cancelOnDeadline: true,
       privateCompletion: params.privateCompletion,
+      replyExpectation: params.replyExpectation,
       settleWakeReplay: params.settleWakeSourceSessionKeys
         ? {
             sourceSessionKeys: params.settleWakeSourceSessionKeys,
@@ -373,6 +377,7 @@ function collectDirectCompletionContent(params: {
 export async function deliverCompletionDirect(params: {
   cfg: OpenClawConfig;
   requesterSessionKey: string;
+  requesterSessionId?: string;
   requesterAgentId?: string;
   directIdempotencyKey: string;
   deliveryTarget: {
@@ -462,10 +467,14 @@ export async function deliverCompletionDirect(params: {
           // Bookkeeping failure cannot make a fully sent result retryable.
         });
       },
+      // The requester lane may already belong to its next turn.
       mirror: {
         sessionKey: params.requesterSessionKey,
         agentId,
         idempotencyKey,
+        expectedSessionId: params.requesterSessionId,
+        deliveryMirror: { kind: SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND },
+        deferToSessionLane: true,
       },
     });
     if (committedDelivery) {

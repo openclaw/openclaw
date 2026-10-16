@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { normalizeMimeType, sliceMimeSniffBuffer } from "@openclaw/media-core/mime";
+import { pipeline } from "node:stream/promises";
+import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
-import { isAnimatedWebpBuffer, isStillPngBuffer } from "../media/image-ops.js";
+import { normalizeChatImageRenditionWidth } from "../shared/chat-image-renditions.js";
 import {
   assertArtifactDownloadGrantCurrent,
   getArtifactDownloadGrant,
+  retainArtifactDownloadStream,
 } from "./artifact-download-grants.js";
 import type { ArtifactDownloadResponse } from "./artifact-download-projection.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
@@ -50,6 +52,8 @@ export async function handleArtifactDownloadHttpRequest(
     respondNotFound(res);
     return true;
   }
+  let assertGrantCurrent = () =>
+    assertArtifactDownloadGrantCurrent(opts.clients, client, ticket, grant);
   const assertCurrent = () => {
     const ingress = getRemoteControlUiIngressContext(req);
     assertRemoteControlUiIngressCurrent(ingress);
@@ -60,7 +64,7 @@ export async function handleArtifactDownloadHttpRequest(
     ) {
       throw new Error("Artifact download belongs to another ingress grant");
     }
-    assertArtifactDownloadGrantCurrent(opts.clients, client, ticket, grant);
+    assertGrantCurrent();
   };
   let prepared: ArtifactDownloadResponse | undefined;
   const thumbnail = grant.image && url.searchParams.get("variant") === "thumbnail";
@@ -78,28 +82,24 @@ export async function handleArtifactDownloadHttpRequest(
           },
     });
     assertCurrent();
-    if (thumbnail && prepared?.body) {
-      let bytes = prepared.body;
-      const source = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      const sourceType = await import("file-type")
-        .then(({ fileTypeFromBuffer }) => fileTypeFromBuffer(sliceMimeSniffBuffer(source)))
-        .catch(() => undefined);
-      // Rastermill has no frame count, and bounded MIME sniffing can miss APNG.
-      // Preserve containers whose still-image status we cannot establish.
-      const still =
-        (sourceType?.mime === "image/png" && isStillPngBuffer(source)) ||
-        sourceType?.mime === "image/jpeg" ||
-        (sourceType?.mime === "image/webp" && !isAnimatedWebpBuffer(source));
-      const cacheKey = createHash("sha256").update(bytes).digest("hex");
-      const encoded = still
-        ? await resolveManagedImageThumbnail(cacheKey, () => encodeImageThumbnail(bytes)).catch(
-            () => undefined,
-          )
-        : undefined;
-      if (encoded && encoded.byteLength < bytes.byteLength) {
-        bytes = new Uint8Array(encoded);
-        prepared.artifact = { ...prepared.artifact, mimeType: "image/png" };
+    if (thumbnail) {
+      // Lazy streams own their resources when opened. A preview must never open
+      // one as an implicit original-image fallback or buffer it without a bound.
+      if (!prepared?.body || prepared.stream) {
+        throw new Error("Artifact image preview bytes are unavailable");
       }
+      const source = prepared.body;
+      const width = normalizeChatImageRenditionWidth(url.searchParams.get("width"));
+      const cacheKey = `${createHash("sha256").update(source).digest("hex")}\0${width}`;
+      // Preview failures are unavailable, never an implicit full-image download.
+      const bytes = new Uint8Array(
+        await resolveManagedImageThumbnail(cacheKey, () => encodeImageThumbnail(source, width)),
+      );
+      prepared.artifact = {
+        ...prepared.artifact,
+        mimeType: "image/webp",
+        title: `${prepared.artifact.title}-preview.webp`,
+      };
       const response = resolveByteResponse({
         file: { size: bytes.byteLength },
         method: req.method,
@@ -137,6 +137,34 @@ export async function handleArtifactDownloadHttpRequest(
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("cache-control", "private, no-store");
   writeByteHeaders(res, response);
-  res.end(body);
+  if (prepared.stream) {
+    const stream = prepared.stream;
+    let retained: ReturnType<typeof retainArtifactDownloadStream> | undefined;
+    try {
+      retained = retainArtifactDownloadStream(opts.clients, client, ticket, grant);
+      assertGrantCurrent = retained.assertCurrent;
+      await pipeline(
+        async function* (options) {
+          // pipeline supplies its cancellation signal to function sources.
+          const signal = options!.signal!;
+          for await (const chunk of stream(signal)) {
+            signal.throwIfAborted();
+            assertCurrent();
+            yield chunk;
+          }
+        },
+        res,
+        { signal: client.connectionSignal },
+      );
+    } catch {
+      // Headers may already be delivered. A truncated transfer must fail, not
+      // acquire a successful end marker or a second HTTP response.
+      res.destroy();
+    } finally {
+      retained?.release();
+    }
+  } else {
+    res.end(body);
+  }
   return true;
 }

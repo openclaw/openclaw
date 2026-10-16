@@ -40,6 +40,7 @@ export function buildStalledTurnRecoveryRun(base: FollowupRun, guidance?: string
     // transcript; this internal system turn persists no user message of its own.
     transcriptPrompt: undefined,
     userTurnTranscriptRecorder: undefined,
+    sourceTurnId: undefined,
     currentInboundContext: undefined,
     images: undefined,
     imageOrder: undefined,
@@ -61,6 +62,7 @@ export function buildStalledTurnRecoveryRun(base: FollowupRun, guidance?: string
     // wider workspace tool, while every other tool stays available.
     run: {
       ...base.run,
+      inputProvenance: { kind: "internal_system", sourceTool: "stalled-turn-recovery" },
       suppressNextUserMessagePersistence: true,
       skillLibraryAuthoring: base.run.skillLibraryAuthoring && {
         target: "personal",

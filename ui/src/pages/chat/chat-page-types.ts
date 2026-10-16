@@ -1,6 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
+import type { ControllerHost } from "../../lib/subscriptions-controller.ts";
 import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
-import type { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 
 export type ChatPageProps = {

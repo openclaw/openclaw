@@ -7,7 +7,7 @@ import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { ownsGrant, type RelayCaller } from "./caller.js";
 import { RelayConsent } from "./consent.js";
 import type { GatewayRequest } from "./gateway-request.js";
-import { GrantBindings, isRetiredBindingError, principalFactory } from "./grant-bindings.js";
+import { GrantBindings, isRetiredBindingError } from "./grant-bindings.js";
 import {
   capResult,
   codeHash,
@@ -71,7 +71,13 @@ export class RelayService {
 
   constructor(options: ServiceOptions) {
     this.#options = options;
-    this.#ingress = principalFactory(options.controlUiIngress);
+    if (!options.controlUiIngress) {
+      throw new RelayError(
+        "unavailable",
+        "Update OpenClaw to enable principal-bound MCP and Control UI access.",
+      );
+    }
+    this.#ingress = options.controlUiIngress;
     this.consent = new RelayConsent({
       relayUrl: options.relayUrl,
       request: (operation, params) => this.#request(operation, params),

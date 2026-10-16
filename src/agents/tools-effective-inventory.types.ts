@@ -43,6 +43,7 @@ export type ResolveEffectiveToolInventoryParams = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   replyToMode?: "off" | "first" | "all" | "batched";
+  webSearchEnabled?: boolean;
   modelHasVision?: boolean;
   requireExplicitMessageTarget?: boolean;
   disableMessageTool?: boolean;

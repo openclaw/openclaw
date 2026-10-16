@@ -1,11 +1,17 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as diagnostics from "../logging/code-mode-diagnostic.js";
+import { createApplyPatchTool } from "./apply-patch.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { execSchema } from "./bash-tools.schemas.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
+  fakeTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
@@ -15,6 +21,7 @@ import { jsonResult, ToolInputError } from "./tools/common.js";
 
 afterEach(resetCodeModeTestState);
 afterEach(() => vi.restoreAllMocks());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (executor) => {
   it.each([
@@ -168,6 +175,79 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
 });
 
 describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures", (executor) => {
+  it.each([false, true])(
+    "records a new settlement failure without replay (parked: %s)",
+    async (parked) => {
+      const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
+      const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor } });
+      const target = fakeTool("exec", "Settlement fixture");
+      target.parameters = execSchema;
+      target.execute = vi.fn(async () => jsonResult({ ok: true }));
+      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
+      let details = resultDetails(
+        await expectDefined(tools[0], "exec").execute("settlement-failure", {
+          awaitResults: !parked,
+          code: `${parked ? "await yield_control();" : ""}
+          await exec({ command: "fixture", awaitResults: true }); await yield_control();`,
+        }),
+      );
+      if (parked) {
+        expect(details).toMatchObject({ status: "waiting" });
+        details = resultDetails(
+          await expectDefined(tools[1], "wait").execute("settlement-failure-wait", {
+            runId: details.runId,
+          }),
+        );
+      }
+      expect(details).toMatchObject({
+        status: "failed",
+        code: "invalid_input",
+        failurePhase: "input",
+        replaySafe: false,
+      });
+      expect(target.execute).toHaveBeenCalledOnce();
+      expect(log).toHaveBeenCalledExactlyOnceWith(
+        expect.any(ToolInputError),
+        expect.objectContaining({ failurePhase: "input", bridgeDispatchStarted: true }),
+      );
+    },
+  );
+
+  it("returns a bad patch anchor as invalid_input without replaying or changing the file", async () => {
+    const cwd = await fs.realpath(tempDirs.make("code-mode-patch-failure-"));
+    const file = path.join(cwd, "source.txt");
+    await fs.writeFile(file, "original\n");
+    const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
+    const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor } });
+    const patch = createApplyPatchTool({ cwd });
+    const execute = vi.spyOn(patch, "execute");
+    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, patch] });
+    const input =
+      "*** Begin Patch\n*** Update File: source.txt\n@@\n-missing\n+replacement\n*** End Patch";
+    const details = resultDetails(
+      await expectDefined(tools[0], "exec").execute("bad-anchor", {
+        code: `await apply_patch(${JSON.stringify({ input })});`,
+      }),
+    );
+    expect(details).toMatchObject({
+      status: "failed",
+      code: "invalid_input",
+      failurePhase: "bridge",
+      replaySafe: false,
+    });
+    expect(details.error).toContain("Failed to find expected lines");
+    expect(execute).toHaveBeenCalledOnce();
+    expect(await fs.readFile(file, "utf8")).toBe("original\n");
+    expect(log).toHaveBeenCalledExactlyOnceWith(
+      expect.any(Error),
+      expect.objectContaining({
+        failurePhase: "bridge",
+        failureCode: "invalid_input",
+        bridgeMethod: "callValue",
+      }),
+    );
+  });
+
   it("rejects NUL shell commands as actionable input errors through the real exec tool", async () => {
     const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor } });
     const shell = createExecTool({ host: "gateway", security: "full", ask: "off" });
@@ -186,7 +266,7 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
     expect(details.error).toContain("NUL bytes. Remove them and retry.");
   });
 
-  it("logs the original bridge cause even when the guest catches it", async () => {
+  it.each([false, true])("logs the original bridge cause once (caught: %s)", async (caught) => {
     const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
     const failure = new TypeError("synthetic failure ".repeat(200));
     const { ctx, config, tools } = createCodeModeHarness({
@@ -200,10 +280,16 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
     expect(
       resultDetails(
         await exec.execute("logged-failure", {
-          code: "try { await failure_fixture({}); } catch {} return true;",
+          code: caught
+            ? "try { await failure_fixture({}); } catch {} return true;"
+            : "await failure_fixture({});",
         }),
       ),
-    ).toMatchObject({ status: "completed", value: true });
+    ).toMatchObject(
+      caught ? { status: "completed", value: true } : { status: "failed", replaySafe: false },
+    );
+    expect(target.execute).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenCalledOnce();
     expect(log).toHaveBeenCalledWith(
       failure,
       expect.objectContaining({

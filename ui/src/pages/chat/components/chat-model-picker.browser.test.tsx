@@ -1,4 +1,3 @@
-import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
@@ -67,14 +66,13 @@ function mountPicker() {
   const trigger = picker.querySelector("summary")!;
   const search = picker.querySelector<HTMLInputElement>("[data-chat-model-search]")!;
   const composer = container.querySelector("textarea")!;
-  const popup = picker.querySelector<WaPopup>("wa-popup")!;
   const toggle = async (activate: () => Promise<void>) => {
     const toggled = new Promise<void>((resolve) => {
       picker.addEventListener("toggle", () => resolve(), { once: true });
     });
     await activate();
     await toggled;
-    await popup.updateComplete;
+    flush();
     await new Promise(requestAnimationFrame);
   };
   return { params, update, picker, trigger, search, composer, toggle };
@@ -108,6 +106,30 @@ it("keeps typing in the filter and preserves focus and query across catalog rere
   trigger.focus();
   await userEvent.keyboard("1");
   expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
+});
+
+it("leaves digit shortcuts to a nested native menu", async () => {
+  const { picker, toggle, params, trigger } = mountPicker();
+  await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
+  const menu = document.createElement("div");
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("popover", "manual");
+  const item = document.createElement("button");
+  item.setAttribute("role", "menuitem");
+  item.dataset.shortcut = "1";
+  item.textContent = "Nested choice";
+  menu.append(item);
+  picker.querySelector(".chat-controls__model-menu")!.append(menu);
+  menu.showPopover();
+  item.focus();
+  await userEvent.keyboard("1");
+  expect(params.onModelSelect).not.toHaveBeenCalled();
+  expect(picker.open).toBe(true);
+  menu.hidePopover();
+  menu.remove();
+  trigger.focus();
+  await userEvent.keyboard("1");
+  expect(params.onModelSelect).toHaveBeenCalledWith("example/alpha", "main", undefined);
 });
 
 it("focuses the filter on keyboard open and reopen, and returns Escape to the trigger", async () => {

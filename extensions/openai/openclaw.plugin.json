@@ -22,6 +22,8 @@
       "name": "GPT-6 Luna",
       "capabilities": {
         "questionTypes": ["boolean", "choice", "score"],
+        "maxQuestions": 200,
+        "maxChoiceAlternatives": 255,
         "confidence": "provider-specific"
       }
     }
@@ -487,7 +489,7 @@
         "type": "string",
         "enum": ["friendly", "on", "off"],
         "default": "friendly",
-        "description": "Controls the canonical OpenAI-family GPT-5 friendly interaction style. Defaults to `friendly`; `on` aliases `friendly`; `off` removes only the style layer while shared stable behavior remains."
+        "description": "Controls the shared OpenAI-family GPT-5 friendly interaction style. Defaults to `friendly`; `on` aliases `friendly`; `off` removes only the style layer while shared stable behavior remains."
       }
     }
   }

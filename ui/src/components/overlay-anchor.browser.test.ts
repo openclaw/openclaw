@@ -1,6 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { createOverlayAnchor, type OverlayAnchorBinding } from "./overlay-anchor.ts";
+import {
+  createOverlayAnchor,
+  hideOverlayAnchor,
+  showOverlayAnchor,
+  type OverlayAnchorBinding,
+} from "./overlay-anchor.ts";
 import { createOverlay, type Overlay } from "./overlay-lifecycle.ts";
 
 const owners: Overlay[] = [];
@@ -89,6 +94,32 @@ function spatialSource(surface: HTMLElement) {
 }
 
 describe("native cross-root anchor geometry", () => {
+  it("samples frames only while the active binding crosses roots", () => {
+    const local = anchor(document.body);
+    const remote = anchor(shadow("closed"));
+    const current = popup(document.body);
+    current.binding.update(local);
+    const requestFrame = vi.spyOn(window, "requestAnimationFrame");
+    const cancelFrame = vi.spyOn(window, "cancelAnimationFrame");
+    try {
+      showOverlayAnchor(current.surface);
+      expect(requestFrame).not.toHaveBeenCalled();
+      current.binding.update(remote);
+      expect(requestFrame).toHaveBeenCalledTimes(1);
+      const temporary = createOverlayAnchor(current.surface);
+      bindings.push(temporary);
+      temporary.update(local);
+      expect(cancelFrame).toHaveBeenCalledTimes(1);
+      temporary.dispose();
+      expect(requestFrame).toHaveBeenCalledTimes(2);
+      hideOverlayAnchor(current.surface);
+      expect(cancelFrame).toHaveBeenCalledTimes(2);
+    } finally {
+      requestFrame.mockRestore();
+      cancelFrame.mockRestore();
+    }
+  });
+
   it("opens an anchor bound in an inert template after document adoption", async () => {
     const template = document.createElement("template");
     template.innerHTML =

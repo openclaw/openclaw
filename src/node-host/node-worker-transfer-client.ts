@@ -369,6 +369,7 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
     params.setStage("materialize");
     const blobApplyStartedAt = performance.now();
     const stagingHashMemo: WorkspaceHashMemo = new Map();
+    const downloadedBlobs = new Map<string, string>();
     for (const directory of checkpointBase ? [] : (manifest.directories ?? [])) {
       await stagingRoot.mkdir(`./${directory}`);
     }
@@ -412,6 +413,17 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
           });
           continue;
         }
+        const blobKey = `${entry.sha256}:${entry.size}`;
+        const downloaded = downloadedBlobs.get(blobKey);
+        if (downloaded) {
+          // Reuse validated bytes within this private staging tree, with independent file modes.
+          await stagingRoot.copyIn(
+            `./${entry.path}`,
+            { root: stagingRoot, relativePath: `./${downloaded}` },
+            { overwrite: false, mode: entry.mode, maxBytes: entry.size, signal: params.signal },
+          );
+          continue;
+        }
         await downloadFile({
           request: {
             ...params.request,
@@ -424,6 +436,7 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
           expectedSha256: entry.sha256,
           mode: entry.mode,
         });
+        downloadedBlobs.set(blobKey, entry.path);
       }
     });
     const blobApplyMs = performance.now() - blobApplyStartedAt;

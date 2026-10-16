@@ -19,6 +19,7 @@ import {
   successfulSessionPatch,
 } from "../app-sidebar.ts";
 import { settleLitElement } from "../lit-settle.ts";
+import { menuItem } from "../session-menu.ts";
 import { waitForFast } from "../wait-for.ts";
 import {
   click,
@@ -47,9 +48,9 @@ describe("AppSidebar multi-select", () => {
     await sidebar.updateComplete;
 
     const menu = await sessionMenu(sidebar);
-    const item = menu.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])");
-    item?.focus();
-    item?.dispatchEvent(
+    const item = menuItem(menu, "Pin session");
+    item.focus();
+    item.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
     );
 

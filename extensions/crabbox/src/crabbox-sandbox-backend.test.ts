@@ -16,6 +16,7 @@ import {
   createSandboxTestContext,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CRABBOX_MIN_VERSION, resolveManagedCrabboxBinaryPath } from "./crabbox-managed-binary.js";
 import {
   createCrabboxSandboxBackendFactory,
   createCrabboxSandboxBackendManager,
@@ -96,7 +97,9 @@ function params(
 function setup(handler: (argv: string[]) => SpawnResult | Promise<SpawnResult> = respond) {
   const runCommand = vi
     .mocked(runCommandWithTimeout)
-    .mockImplementation(async (argv) => await handler(argv));
+    .mockImplementation(async (argv) =>
+      argv[1] === "--version" ? result(CRABBOX_MIN_VERSION) : await handler(argv),
+    );
   const dependencies = {
     openclawRoot: temporaryRoot,
     pluginConfig: {
@@ -147,7 +150,26 @@ describe("Crabbox sandbox provider lifecycle", () => {
       result(JSON.stringify({ execution: true, currentRepoStop: false })),
     );
     await expect(factory(params())).rejects.toThrow("repository-scoped cleanup");
-    expect(runCommand.mock.calls.map(([argv]) => argv[1])).toEqual(["exec"]);
+    expect(runCommand.mock.calls.map(([argv]) => argv[1])).toEqual(["--version", "exec"]);
+  });
+
+  it("uses a supported managed binary for an outdated sandbox executable", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(temporaryRoot, "managed-state"));
+    const binary = resolveManagedCrabboxBinaryPath();
+    await fs.mkdir(path.dirname(binary), { recursive: true });
+    await fs.writeFile(binary, CRABBOX_MIN_VERSION);
+    const { factory, runCommand } = setup();
+    runCommand.mockImplementation(async (argv) =>
+      argv[1] === "--version"
+        ? result(argv[0] === "/fixture/crabbox" ? "0.76.0" : CRABBOX_MIN_VERSION)
+        : respond(argv),
+    );
+    const handle = await factory(params());
+    await handle.runShellCommand({ script: "printf upgraded" });
+    expect(
+      runCommand.mock.calls.filter(([argv]) => argv[1] !== "--version").map(([argv]) => argv[0]),
+    ).toEqual([binary, binary, binary]);
+    expect(remote.commands[0]?.argv[0]).toBe(binary);
   });
 
   it.each(["released"])("retires only a matching released inspection (%s)", async (state) => {
@@ -229,6 +251,7 @@ it("keeps management routed by the stored claim and original workspace", async (
   };
   await manager.removeRuntime({ entry, config: {} });
   expect(runCommand.mock.calls.map(([argv]) => argv[1])).toEqual([
+    "--version",
     "stop",
     "exec",
     "warmup",

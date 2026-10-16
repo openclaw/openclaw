@@ -158,16 +158,6 @@ describe("tool-policy-pipeline", () => {
     ]);
   });
 
-  test("classifies pdf as an unavailable gated core tool, not a missing plugin", () => {
-    const warnings = runAllowlistWarningStep({
-      allow: ["pdf"],
-      label: "tools.allow",
-    });
-    expect(warnings).toEqual([
-      "tools: tools.allow allowlist contains unknown entries (pdf). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
-    ]);
-  });
-
   test("includes the active reason for unavailable core tool warnings", () => {
     const warnings = runAllowlistWarningStep({
       allow: ["apply_patch", "reason_case_unknown"],
@@ -484,25 +474,6 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
-    expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
-  });
-
-  test("does not audit policy steps that leave the tool surface unchanged", () => {
-    const tools = [{ name: "exec" }];
-
-    applyToolPolicyPipeline({
-      tools,
-      toolMeta: () => undefined,
-      warn: () => {},
-      steps: [
-        {
-          policy: { allow: ["exec"] },
-          label: "tools.allow",
-        },
-      ],
-    });
-
-    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
     expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 

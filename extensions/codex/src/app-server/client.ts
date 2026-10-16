@@ -7,7 +7,10 @@ import {
   closeCodexCatalogClientSource,
   codexCatalogSourceForClient,
 } from "../session-catalog-source.js";
-import type { CodexClientRequestAttempt } from "./client-catalog-response.js";
+import type {
+  CodexCatalogDecodeResult,
+  CodexClientRequestAttempt,
+} from "./client-catalog-response.js";
 import { CodexCatalogWorker, codexCatalogRequestId } from "./client-catalog-worker.js";
 import {
   appendBoundedTail,
@@ -22,7 +25,7 @@ import {
   createCodexInitializeDiagnostics,
 } from "./client-initialize.js";
 import { redactCodexAppServerLinePreview } from "./client-line-preview.js";
-import { CodexAppServerMessageDecoder } from "./client-message-decoder.js";
+import { parseCodexAppServerMessage } from "./client-message-decoder.js";
 import {
   listenCodexAppServerLines,
   createCodexAppServerMessageWriter,
@@ -154,7 +157,6 @@ export class CodexAppServerClient {
   private readonly instanceId = randomUUID();
   private readonly child: CodexAppServerTransport;
   private readonly closeMessageReader: () => void;
-  private readonly decoder = new CodexAppServerMessageDecoder(logCodexAppServerParseFailure);
   private readonly catalogWorker = new CodexCatalogWorker();
   private catalogWorkerClosed: Promise<void> | undefined;
   private serverRequestsClosed: Promise<void> | undefined;
@@ -183,13 +185,13 @@ export class CodexAppServerClient {
     this.closeMessageReader = listenCodexAppServerLines(
       child.stdout,
       (line) => {
-        const route =
-          this.catalogWorker.continuation ??
-          (this.decoder.hasPending ? undefined : readCodexCatalogDecodeRoute(line));
+        const route = readCodexCatalogDecodeRoute(line);
         if (route) {
           return this.decodeCatalogLine(line, route);
         }
-        return this.handleParsedMessage(this.decoder.parse(line.toString("utf8")));
+        return this.handleParsedMessage(
+          parseCodexAppServerMessage(line.toString("utf8"), logCodexAppServerParseFailure),
+        );
       },
       (error) => this.closeWithError(toStringifiedError(error)),
     );
@@ -600,7 +602,10 @@ export class CodexAppServerClient {
     return held ? text.slice(0, -held) : text;
   }
 
-  private handleParsedMessage(parsed: unknown, previewStates?: (boolean | undefined)[]): void {
+  private handleParsedMessage(
+    parsed: unknown,
+    preview?: CodexCatalogDecodeResult["preview"],
+  ): void {
     if (this.closed || !parsed || typeof parsed !== "object") {
       return;
     }
@@ -611,7 +616,7 @@ export class CodexAppServerClient {
           message,
           this.pending,
           codexCatalogSourceForClient(this),
-          previewStates,
+          preview,
         ) || this.nativeExecutionObserved;
       return;
     }
@@ -643,7 +648,7 @@ export class CodexAppServerClient {
     if (decoded.projectionError) {
       this.pending.get(decoded.projectionError.id)?.reject(decoded.projectionError.error, false);
     } else if (decoded.message) {
-      this.handleParsedMessage(decoded.message, decoded.previewStates);
+      this.handleParsedMessage(decoded.message, decoded.preview);
     }
   }
 
@@ -688,7 +693,6 @@ export class CodexAppServerClient {
     closeCodexCatalogClientSource(this);
     this.closeError = error;
     this.closeMessageReader();
-    this.decoder.clear();
     this.catalogWorkerClosed = this.catalogWorker.close(error);
     void this.catalogWorkerClosed?.catch((closeError: unknown) => {
       embeddedAgentLog.warn("codex catalog worker shutdown failed", { error: closeError });

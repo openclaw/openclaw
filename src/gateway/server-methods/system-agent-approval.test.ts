@@ -600,6 +600,31 @@ describe("Full Access delegated chat", () => {
                   ? "failed"
                   : "cancelled";
         expect.soft(result.payload).toMatchObject({ reply: expect.stringContaining(expected) });
+        if (outcome === "expired") {
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("expired without a decision"),
+          });
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("approve it in the Control UI or OpenClaw apps"),
+          });
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("Retrying alone does not approve the change"),
+          });
+        } else if (outcome === "apply-failed" || outcome === "afterDecision-failed") {
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("application status is unconfirmed"),
+          });
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("before retrying"),
+          });
+        } else if (outcome !== "allow" && outcome !== "deny") {
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("approval request is no longer active"),
+          });
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("No change was made"),
+          });
+        }
         expect.soft(result.payload).not.toHaveProperty("needsApproval");
         expect.soft(result.payload).not.toHaveProperty("proposalId");
         await vi.waitFor(() => expect(engine.getPendingOperatorProposal()).toBeNull());

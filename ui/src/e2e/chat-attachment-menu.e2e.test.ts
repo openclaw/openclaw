@@ -14,7 +14,7 @@ const suite = createControlUiE2eSuite({
 
 async function choose(page: Page, kind: string) {
   await page.getByRole("button", { name: "Add attachment", exact: true }).press("Enter");
-  const item = page.locator(`.agent-chat__attach-menu-option[value="${kind}"]`);
+  const item = page.locator(`.agent-chat__attach-menu-option[data-value="${kind}"]`);
   await item.waitFor({ state: "visible" });
   const pending = page.waitForEvent("filechooser");
   await item.press("Enter");
@@ -22,6 +22,67 @@ async function choose(page: Page, kind: string) {
 }
 
 suite.define(() => {
+  it.each(["chat", "new"])("positions the upload input at the plus button in %s", async (route) => {
+    const fixture = attachmentBrowserFixtures.find(
+      (candidate) => candidate.name === "iPhone Safari",
+    )!;
+    await suite.withPage(
+      { userAgent: fixture.userAgent, hasTouch: true, viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        await installAttachmentBrowserIdentity(page, fixture);
+        await page.addInitScript(() => {
+          document.addEventListener(
+            "click",
+            (event) => {
+              const input = event.target;
+              if (!(input instanceof HTMLInputElement) || input.type !== "file") {
+                return;
+              }
+              const trigger = input
+                .closest(".agent-chat__composer-shell")!
+                .querySelector(".agent-chat__input-btn--attach")!;
+              input.dataset.pickerGeometry = JSON.stringify({
+                input: input.getBoundingClientRect().toJSON(),
+                trigger: trigger.getBoundingClientRect().toJSON(),
+              });
+            },
+            true,
+          );
+        });
+        await installMockGateway(page, { historyMessages: [] });
+        await page.goto(suite.server.baseUrl + route);
+        for (const viewport of [
+          { width: 390, height: 844 },
+          { width: 320, height: 568 },
+        ]) {
+          await page.setViewportSize(viewport);
+          const trigger = page.getByRole("button", { name: "Add attachment", exact: true });
+          await trigger.click();
+          const pending = page.waitForEvent("filechooser");
+          await page.locator('.agent-chat__attach-menu-option[data-value="file"]').click();
+          const chooser = await pending;
+          const geometry = await chooser.element().evaluate((input) => {
+            if (!(input instanceof HTMLInputElement)) {
+              throw new Error("Expected the file chooser to belong to an HTML input");
+            }
+            // SAFETY: The capture listener above writes both DOMRect snapshots before click activation.
+            return JSON.parse(input.dataset.pickerGeometry!) as {
+              input: { left: number; top: number; width: number; height: number };
+              trigger: { left: number; top: number; width: number; height: number };
+            };
+          });
+          expect(geometry.trigger.width).toBeGreaterThan(0);
+          expect(geometry.trigger.height).toBeGreaterThan(0);
+          for (const axis of ["left", "top", "width", "height"] as const) {
+            expect(geometry.input[axis]).toBeCloseTo(geometry.trigger[axis], 1);
+          }
+          expect(await chooser.element().getAttribute("tabindex")).toBe("-1");
+          await chooser.setFiles([]);
+        }
+      },
+    );
+  });
+
   it.each([
     { route: "chat", availability: "insecure" },
     { route: "new", availability: "unsupported" },
@@ -171,17 +232,19 @@ suite.define(() => {
           await page.setViewportSize({ width, height });
           await trigger.press("Enter");
           await page
-            .locator('.agent-chat__attach-menu-option[value="file"]')
+            .locator('.agent-chat__attach-menu-option[data-value="file"]')
             .waitFor({ state: "visible" });
           expect((await items.allTextContents()).map((text) => text.trim())).toEqual(
             fixture.single ? ["Attach…"] : ["Take photo", "Photo", "File"],
           );
           for (const value of ["open-skills", "open-connectors", "manage-plugins"]) {
-            expect(await page.locator(`wa-dropdown-item[value="${value}"]`).isVisible()).toBe(true);
+            expect(await page.locator(`.oc-menu-item[data-value="${value}"]`).isVisible()).toBe(
+              true,
+            );
           }
           await page.keyboard.press("Escape");
           await page
-            .locator('.agent-chat__attach-menu-option[value="file"]')
+            .locator('.agent-chat__attach-menu-option[data-value="file"]')
             .waitFor({ state: "hidden" });
         }
         for (const kind of fixture.single ? ["file"] : ["file", "photo"]) {

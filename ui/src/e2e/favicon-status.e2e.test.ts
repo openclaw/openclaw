@@ -78,6 +78,12 @@ suite.define(() => {
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const send = await gateway.waitForRequest("chat.send");
         const runId = requireString(requireRecord(send.params).idempotencyKey, "chat run id");
+        await expectStatusColor(page, "--info");
+        await page.screenshot({ path: `${suite.artifactDir}/working.png` });
+        await page.evaluate(() => {
+          document.documentElement.style.setProperty("--info", "rgb(10, 100, 200)");
+        });
+        await expectStatusColor(page, "--info");
         await gateway.emitGatewayEvent("chat", {
           state: "delta",
           runId,
@@ -87,8 +93,7 @@ suite.define(() => {
             content: [{ type: "text", text: "Preparing the draft report." }],
           },
         });
-        await expectStatusColor(page, "--info");
-        await page.screenshot({ path: `${suite.artifactDir}/working.png` });
+        await expect.poll(() => faviconLinks(page)).toEqual(original);
         const activity = await page.evaluateHandle((eventName) => {
           const observation = { changes: 0 };
           document.addEventListener(eventName, () => observation.changes++);
@@ -107,10 +112,7 @@ suite.define(() => {
           .getByText("Preparing the draft report. Checking the details.", { exact: true })
           .waitFor();
         expect(await activity.evaluate((observation) => observation.changes)).toBe(0);
-        await page.evaluate(() => {
-          document.documentElement.style.setProperty("--info", "rgb(10, 100, 200)");
-        });
-        await expectStatusColor(page, "--info");
+        await expect.poll(() => faviconLinks(page)).toEqual(original);
         await gateway.emitGatewayEvent("exec.approval.requested", {
           id: "favicon-approval",
           createdAtMs: Date.now(),
@@ -122,7 +124,8 @@ suite.define(() => {
           id: "favicon-approval",
           decision: "deny",
         });
-        await expectStatusColor(page, "--info");
+        await expect.poll(() => faviconLinks(page)).toEqual(original);
+        await page.getByRole("button", { name: "Stop generating" }).waitFor();
         await setVisibility(page, "hidden");
         await gateway.emitChatFinal({ runId, sessionKey, text: "Draft report complete." });
         await expectStatusColor(page, "--ok");

@@ -4,7 +4,6 @@ import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { patchSettings } from "../app/settings.ts";
-import { isUpdateActionable } from "../app/update-schedule-projection.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
@@ -36,13 +35,8 @@ import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import { SessionMenu, type SessionMenuAction } from "./session-menu.ts";
 import { moveSessionFromMenu, sessionPlacementAction } from "./session-placement-action.ts";
-import {
-  isSidebarAttentionDismissed,
-  isUpdateAttentionForced,
-  loadDismissals,
-  resolveSidebarAttentionKey,
-  resolveUpdateAttentionDismissal,
-} from "./sidebar-attention-dismissals.ts";
+import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
+import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 
 export {
@@ -138,10 +132,11 @@ export function renderSidebarAgentMenuForController(
         query: controller.agentMenuQuery,
         onQueryChange: (query) => controller.setAgentMenuQuery(query),
         rosterMode: host.sidebarAgentsMode === "roster",
-        onToggleRoster: () => {
-          patchSettings({
-            sidebarAgentsMode: host.sidebarAgentsMode === "roster" ? "chip" : "roster",
-          });
+        onShowAllAgents: () => {
+          host.navigationView = "sessions";
+          host.sessionDataContext?.navigation.update({ navCollapsed: false });
+          patchSettings({ sidebarAgentsMode: "roster" });
+          host.requestUpdate();
           void host.updateComplete.then(() => {
             host
               .querySelector<HTMLElement>(
@@ -196,31 +191,16 @@ export function renderSidebarIdentityMenuForController(
     const user = selfUser();
     return user ? { ...user, watchedSessions: [] } : undefined;
   });
-  const updateAttentionDismissal = createMemo(() =>
-    resolveUpdateAttentionDismissal({
-      gatewayBootId: context()?.gateway.snapshot.hello?.server?.bootId,
-      updateAvailable: overlaySnapshot()?.updateAvailable,
-      updateSchedule: overlaySnapshot()?.updateSchedule,
-    }),
-  );
-  const updateAttentionDismissed = createMemo(() =>
-    Boolean(
-      context() &&
-      updateAttentionDismissal() &&
-      isUpdateActionable(
+  const updateAvailable = createMemo(
+    () =>
+      isReleaseUpdateAvailable(
         overlaySnapshot()?.updateAvailable,
         overlaySnapshot()?.updateSchedule,
-        Boolean(overlaySnapshot()?.updateRunning || overlaySnapshot()?.updateReconciliationPending),
       ) &&
       !overlaySnapshot()?.updateRunning &&
       !overlaySnapshot()?.updateReconciliationPending &&
       overlaySnapshot()?.updateSchedule?.campaign?.state !== "applying" &&
-      !isUpdateAttentionForced(overlaySnapshot()?.updateStatusBanner?.tone) &&
-      isSidebarAttentionDismissed(
-        loadDismissals(resolveSidebarAttentionKey(context()!.gateway)),
-        updateAttentionDismissal()!,
-      ),
-    ),
+      !isUpdateAttentionForced(overlaySnapshot()?.updateStatusBanner?.tone),
   );
   return (
     <SidebarIdentityMenu
@@ -230,7 +210,7 @@ export function renderSidebarIdentityMenuForController(
         canPairDevice: host.canPairDevice,
         basePath: host.basePath,
         gatewayVersion: host.gatewayVersion,
-        updateAttentionDismissed: updateAttentionDismissed(),
+        updateAvailable: updateAvailable(),
         profileViewer: profileViewer(),
         canRetryConnection: canRetryGatewayStatus(host.connectionStatus),
         themeMode: host.themeMode,
@@ -353,7 +333,6 @@ export function renderSidebarSessionMenuForController(
             target: { key: session().key, agentId: session().agentId },
             sessionId: session().sessionId ?? null,
             isChild: session().isChild,
-            hasChildren: session().childSessionKeys.length > 0,
             pinned: host.sessionOrganizer.isPersonalSessionPin(session().key),
             pinnable: session().pinnable,
             unread: allUnread(),
@@ -519,9 +498,6 @@ export function renderSidebarSessionMenuForController(
                 break;
               case "move-to-top-level":
                 void host.sessionOrganizer.promoteSession(session());
-                break;
-              case "archive-tree":
-                void host.sessionOrganizer.archiveSessionTreeWithUndo(session());
                 break;
               case "move-to-group":
                 if (action.category === null || session().category !== action.category) {

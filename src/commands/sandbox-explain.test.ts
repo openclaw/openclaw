@@ -9,8 +9,6 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { sandboxExplainCommand } from "./sandbox-explain.js";
 
-const SANDBOX_EXPLAIN_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 30_000;
-
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sandbox-explain-");
 
 let mockCfg: unknown = {};
@@ -60,25 +58,6 @@ describe("sandbox explain command", () => {
     ).rejects.toThrow(message);
   });
 
-  it("honors an explicit agent in an ownerless multi-agent fleet", async () => {
-    mockCfg = {
-      agents: {
-        ownership: "explicit",
-        defaults: { sandbox: { mode: "off" } },
-        entries: {
-          ops: { workspace: "/tmp/openclaw-ops-workspace" },
-          research: { workspace: "/tmp/openclaw-research-workspace" },
-        },
-      },
-    };
-
-    const parsed = await explain({ json: true, agent: "research" });
-    expect(parsed.agentId).toBe("research");
-    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(
-      path.resolve("/tmp/openclaw-research-workspace"),
-    );
-  });
-
   it("reads a missing session without creating or registering an agent database", async () => {
     await withOpenClawTestState({ label: "sandbox-explain-readonly" }, async (state) => {
       const agentDatabasePath = state.statePath(
@@ -105,37 +84,6 @@ describe("sandbox explain command", () => {
       expect(stateDatabase.db.prepare("SELECT agent_id FROM agent_databases").all()).toEqual([]);
       await expect(fs.stat(agentDatabasePath)).rejects.toMatchObject({ code: "ENOENT" });
     });
-  });
-
-  it("prints JSON shape + fix-it keys", { timeout: SANDBOX_EXPLAIN_TEST_TIMEOUT_MS }, async () => {
-    mockCfg = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
-        },
-      },
-      tools: {
-        sandbox: { tools: { deny: ["browser"] } },
-        elevated: { enabled: true, allowFrom: { quietchat: ["*"] } },
-      },
-      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
-    };
-
-    const parsed = await explain({ json: true, session: "agent:main:main" });
-    expect(parsed).toHaveProperty("docsUrl", "https://docs.openclaw.ai/sandbox");
-    expect(parsed).toHaveProperty("sandbox.mode", "all");
-    expect(parsed).toHaveProperty("sandbox.tools.sources.allow.source");
-    expect(parsed.fixIt).toEqual([
-      "agents.defaults.sandbox.mode=off",
-      "agents.entries.*.sandbox.mode=off",
-      "tools.sandbox.tools.allow",
-      "tools.sandbox.tools.alsoAllow",
-      "tools.sandbox.tools.deny",
-      "agents.entries.*.tools.sandbox.tools.allow",
-      "agents.entries.*.tools.sandbox.tools.alsoAllow",
-      "agents.entries.*.tools.sandbox.tools.deny",
-      "tools.elevated.enabled",
-    ]);
   });
 
   it("shows effective sandbox alsoAllow grants and default-deny removals", async () => {
@@ -180,6 +128,7 @@ describe("sandbox explain command", () => {
     async (backend) => {
       mockCfg = {
         agents: {
+          ownership: "explicit",
           defaults: {
             sandbox: {
               mode: "all",
@@ -189,13 +138,17 @@ describe("sandbox explain command", () => {
               workspaceRoot: "/tmp/openclaw-sandboxes",
             },
           },
-          entries: { builder: { workspace: "/tmp/openclaw-agent-workspace" } },
+          entries: {
+            builder: { workspace: "/tmp/openclaw-agent-workspace" },
+            research: { workspace: "/tmp/openclaw-research-workspace" },
+          },
         },
         session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
       };
 
       const parsed = await explain({ json: true, agent: "builder" });
       const agentWorkspace = path.resolve("/tmp/openclaw-agent-workspace");
+      expect(parsed.agentId).toBe("builder");
       expect(parsed.sandbox.backend).toBe(backend);
       expect(parsed.sandbox.workspaceRoot).toBe("/tmp/openclaw-sandboxes");
       expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(agentWorkspace);

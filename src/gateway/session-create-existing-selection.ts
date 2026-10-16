@@ -1,6 +1,7 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir } from "../agents/agent-scope.js";
+import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -120,13 +121,19 @@ export async function existingSessionSelectionWouldChange(params: {
   }
   const existingProfile = normalizeOptionalString(params.existingEntry.authProfileOverride);
   const requestedProfile = normalizeOptionalString(resolved.profile);
+  const agentDir = resolveAgentDir(params.cfg, params.agentId);
+  const recordedProvider =
+    requestedProfile === undefined && existingProfile
+      ? await prepareAuthProfileProvider({ agentDir, profileId: existingProfile })
+      : undefined;
   const profileWouldChange =
     requestedProfile !== undefined
       ? requestedProfile !== existingProfile
       : existingProfile !== undefined &&
         !shouldPreserveSessionAuthProfileOverride({
           cfg: params.cfg,
-          agentDir: resolveAgentDir(params.cfg, params.agentId),
+          agentDir,
+          recordedProvider,
           currentProvider:
             params.existingEntry.providerOverride ??
             params.existingEntry.modelProvider ??

@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as sqliteSnapshots from "../infra/sqlite-snapshot-source.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readLaunchAgentProgramArguments } from "./launchd.js";
 import { resolveNodeService } from "./node-service.js";
-import { readDaemonRuntimePin } from "./runtime-pin-state.js";
+import { commitDaemonRuntimePin, readDaemonRuntimePin } from "./runtime-pin-state.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import type {
   GatewayServiceCommandConfig,
@@ -77,6 +79,45 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("native service runtime pin persistence", () => {
+  it.each(["before-native-write", "before-persistence"] as const)(
+    "rejects a pin changed %s without overwriting the newer intent",
+    async (phase) => {
+      await withOpenClawTestState({ label: "pin-native-late-change" }, async (state) => {
+        const scope = { kind: "gateway" as const, env: state.env };
+        const service = resolveGatewayService();
+        const pin = { runtime: "node" as const, path: "/runtime/node" };
+        const command = { programArguments: [pin.path, "/app/openclaw.mjs", "gateway"] };
+        commitDaemonRuntimePin(
+          scope,
+          { expected: readDaemonRuntimePin(scope, null), pin },
+          command,
+        );
+        native.command = command;
+        const expected = readDaemonRuntimePin(scope, command);
+        const newerPin = { runtime: "bun" as const, path: "/operator/bun" };
+        const changePin = async () => {
+          commitDaemonRuntimePin(scope, { expected, pin: newerPin }, command);
+          return native.command;
+        };
+        const read = vi.mocked(readLaunchAgentProgramArguments);
+        if (phase === "before-persistence") {
+          read.mockImplementationOnce(async () => native.command);
+        }
+        read.mockImplementationOnce(changePin);
+        await expect(
+          service.install({
+            env: state.env,
+            stdout: process.stdout,
+            ...command,
+            runtimePinUpdate: { expected, pin },
+          }),
+        ).rejects.toThrow(/Runtime pin changed/);
+        expect(native.install).toHaveBeenCalledTimes(phase === "before-native-write" ? 0 : 1);
+        expect(readDaemonRuntimePin(scope, command).pin).toEqual(newerPin);
+      });
+    },
+  );
+
   it("keeps pin-unaware default writes read-only for runtime metadata", async () => {
     await withOpenClawTestState({ label: "pin-native-default" }, async (state) => {
       const service = resolveGatewayService();
@@ -115,8 +156,15 @@ describe("native service runtime pin persistence", () => {
           stdout: process.stdout,
           programArguments: [pin.path, "/updated/openclaw.mjs", kind],
         };
-        await expect(service.install(replacement)).rejects.toThrow(/explicit runtime intent/);
-        await expect(service.stage(replacement)).rejects.toThrow(/explicit runtime intent/);
+        await closeStateDatabaseForTest();
+        const snapshots = vi.spyOn(sqliteSnapshots, "prepareSqliteReadOnlyLocationSync");
+        try {
+          await expect(service.install(replacement)).rejects.toThrow(/explicit runtime intent/);
+          await expect(service.stage(replacement)).rejects.toThrow(/explicit runtime intent/);
+          expect(snapshots).not.toHaveBeenCalled();
+        } finally {
+          snapshots.mockRestore();
+        }
         expect(native.install).not.toHaveBeenCalled();
         expect(native.stage).toHaveBeenCalledOnce();
         expect(native.command).toBe(previous);
@@ -128,7 +176,14 @@ describe("native service runtime pin persistence", () => {
           runtimePinUpdate: { expected, pin },
         });
         expect(readDaemonRuntimePin(scope, native.command).pin).toEqual(pin);
-        await service.uninstall({ env: state.env, stdout: process.stdout });
+        await closeStateDatabaseForTest();
+        const uninstallSnapshots = vi.spyOn(sqliteSnapshots, "prepareSqliteReadOnlyLocationSync");
+        try {
+          await service.uninstall({ env: state.env, stdout: process.stdout });
+          expect(uninstallSnapshots).not.toHaveBeenCalled();
+        } finally {
+          uninstallSnapshots.mockRestore();
+        }
         expect(readDaemonRuntimePin(scope, null).stored).toBe(false);
       });
     },

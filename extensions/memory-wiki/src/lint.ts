@@ -15,6 +15,7 @@ import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
+  decodeWikiPageUtf8,
   isUnmanagedRawSourceSummary,
   parseWikiMarkdown,
   renderWikiMarkdown,
@@ -230,7 +231,7 @@ function collectPageIssues(
       );
     }
 
-    if (typeof page.confidence === "number" && page.confidence < 0.5) {
+    if (page.confidence !== undefined && page.confidence < 0.5) {
       addIssue(
         "low-confidence",
         page.relativePath,
@@ -261,7 +262,7 @@ function collectPageIssues(
         `${label} is missing structured evidence.`,
       );
     }
-    if (typeof claim.confidence === "number" && claim.confidence < 0.5) {
+    if (claim.confidence !== undefined && claim.confidence < 0.5) {
       addIssue(
         "claim-low-confidence",
         claim.pagePath,
@@ -354,17 +355,19 @@ async function writeLintReport(rootDir: string, issues: MemoryWikiLintIssue[]): 
   const directoryPath = path.dirname(reportPath);
   await fs.mkdir(directoryPath, { recursive: true });
   const dirMode = (await fs.stat(directoryPath)).mode & 0o7777;
-  const original = await fs.readFile(reportPath, "utf8").catch(() =>
-    renderWikiMarkdown({
-      frontmatter: {
-        pageType: "report",
-        id: "report.lint",
-        title: "Lint Report",
-        status: "active",
-      },
-      body: "# Lint Report\n",
-    }),
-  );
+  const originalBytes = await fs.readFile(reportPath).catch(() => null);
+  const original =
+    originalBytes === null
+      ? renderWikiMarkdown({
+          frontmatter: {
+            pageType: "report",
+            id: "report.lint",
+            title: "Lint Report",
+            status: "active",
+          },
+          body: "# Lint Report\n",
+        })
+      : decodeWikiPageUtf8(originalBytes, reportPath);
   // The lint report is itself a wiki page. Keep its metadata fail-closed before
   // replacing the managed body so malformed frontmatter is never rewritten.
   parseWikiMarkdown(original);

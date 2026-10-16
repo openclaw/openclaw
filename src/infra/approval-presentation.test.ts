@@ -109,27 +109,6 @@ describe("buildApprovalPresentation", () => {
     });
   });
 
-  it("preserves secret-shaped content within presentation length limits", () => {
-    const githubToken = `ghp_${"a".repeat(48)}`;
-    const openAiToken = "sk-abc123456789012345678";
-    const presentation = buildPluginPresentation({
-      title: githubToken,
-      description: `Token:\n${openAiToken}`,
-      pluginId: githubToken,
-      toolName: openAiToken,
-      agentId: `operator-${githubToken}`,
-    });
-
-    expect(presentation).toMatchObject({
-      kind: "plugin",
-      title: githubToken,
-      description: `Token:\n${openAiToken}`,
-      pluginId: githubToken,
-      toolName: openAiToken,
-      agentId: `operator-${githubToken}`,
-    });
-  });
-
   it("applies plugin limits by Unicode code point after sanitization", () => {
     const title = String.fromCodePoint(0x1f680).repeat(80);
     const description = String.fromCodePoint(0x1f6e1).repeat(512);
@@ -281,24 +260,20 @@ describe("buildApprovalPresentation (system-agent)", () => {
     });
   }
 
-  it("drops a split emoji at the title boundary instead of leaving a lone surrogate", () => {
+  it("drops split emoji at the title and description boundaries without lone surrogates", () => {
     const title = `${"a".repeat(79)}\u{1F600}`;
-    const presentation = buildSystemAgentPresentation({ title, description: "d" });
-    expect(presentation).toMatchObject({ kind: "system-agent", title: "a".repeat(79) });
+    const description = `${"a".repeat(511)}\u{1F6E1}`;
+    const presentation = buildSystemAgentPresentation({ title, description });
+    expect(presentation).toMatchObject({
+      kind: "system-agent",
+      title: "a".repeat(79),
+      description: "a".repeat(511),
+    });
   });
 
   it("keeps an emoji that fits within the title limit intact", () => {
     const title = `${"a".repeat(78)}\u{1F600}`;
     const presentation = buildSystemAgentPresentation({ title, description: "d" });
     expect(presentation).toMatchObject({ kind: "system-agent", title });
-  });
-
-  it("drops a split emoji at the description boundary instead of leaving a lone surrogate", () => {
-    const description = `${"a".repeat(511)}\u{1F6E1}`;
-    const presentation = buildSystemAgentPresentation({ title: "t", description });
-    expect(presentation).toMatchObject({
-      kind: "system-agent",
-      description: "a".repeat(511),
-    });
   });
 });

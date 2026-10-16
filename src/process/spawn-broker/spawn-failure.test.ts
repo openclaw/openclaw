@@ -114,7 +114,12 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
           const closed = child.waitForClose();
           await expect(child.ready()).rejects.toMatchObject({ code: "EMFILE" });
           if (run) {
-            await expect(run.result).rejects.toMatchObject({ code: "EMFILE" });
+            // Execa reports early spawn failures as results when reject:false.
+            await expect(run.result).resolves.toMatchObject({
+              failed: true,
+              code: "EMFILE",
+              error: { code: "EMFILE" },
+            });
           }
           await closed;
           expect(child.pid).toBeUndefined();

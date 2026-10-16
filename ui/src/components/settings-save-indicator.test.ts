@@ -63,7 +63,9 @@ describe("settings save indicator", () => {
     await update(props({ status: "saving" }));
 
     expect(indicator.textContent?.trim()).toBe("Saving…");
-    expect(indicator.querySelector(".settings-save-indicator__claw--saving svg")).not.toBeNull();
+    expect(
+      indicator.querySelector(".settings-save-indicator__claw--saving svg .claw-icon__jaw"),
+    ).not.toBeNull();
     expect(
       indicator.querySelector(".settings-save-indicator__claw")?.getAttribute("aria-hidden"),
     ).toBe("true");

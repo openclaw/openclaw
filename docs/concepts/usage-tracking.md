@@ -45,6 +45,8 @@ Disconnecting still cancels the request without publishing a response.
 Session reports preserve agent attribution when agents share a session store. A
 background usage refresh does not invalidate a selected report when its session
 store is unchanged.
+Retained SQLite transcripts with legacy colon-containing IDs remain included in
+usage totals and do not interrupt background refresh.
 
 Usage opens with the last 30 calendar days selected. **Today**, **7d**, **30d**,
 **90d**, **1y**, **All**, or the date inputs change the reporting range. Historical

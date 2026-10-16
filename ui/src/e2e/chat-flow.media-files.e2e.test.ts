@@ -404,23 +404,40 @@ suite.define(() => {
   it.each([
     {
       name: "canonical inbound",
+      boundedPreview: true,
+      previewFails: false,
       source: "media://inbound/telegram-photo.png",
       workspaceDir: undefined,
       screenshotName: "canonical-inbound-image",
     },
     {
       name: "sandbox-staged inbound",
+      boundedPreview: false,
+      previewFails: false,
       source: "/workspace/media/inbound/fabricated-sandbox.png",
       workspaceDir: "/workspace",
       screenshotName: "sandbox-inbound-image",
     },
+    {
+      name: "unavailable inbound preview",
+      boundedPreview: true,
+      source: "media://inbound/animated.png",
+      workspaceDir: undefined,
+      screenshotName: "inbound-preview-unavailable",
+      previewFails: true,
+    },
   ] as const)(
     "renders a $name image through the ticketed media route",
-    async ({ source, workspaceDir, screenshotName }) => {
+    async ({ source, workspaceDir, screenshotName, previewFails, boundedPreview }) => {
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
         ? suite.artifactDir
         : undefined;
-      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+      const context = await suite.newBrowserContext({
+        ...createControlUiE2eContextOptions(),
+        ...(previewFails
+          ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }
+          : {}),
+      });
       const page = await context.newPage();
       const requestedMediaUrls: URL[] = [];
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
@@ -442,6 +459,10 @@ suite.define(() => {
         }
         expect(url.searchParams.get("mediaTicket")).toBe("ticket-inbound");
         expect(request.headers().authorization).toBeUndefined();
+        if (previewFails && url.searchParams.get("variant") === "thumbnail") {
+          await route.fulfill({ status: 404, body: "Not Found" });
+          return;
+        }
         await route.fulfill({
           contentType: "image/png",
           body: Buffer.from(
@@ -451,6 +472,8 @@ suite.define(() => {
         });
       });
       await installMockGateway(page, {
+        agentModel: "demo/model",
+        models: [{ id: "model", name: "Demo", provider: "demo" }],
         historyMessages: [
           {
             id: "user-inbound-media-ref",
@@ -461,6 +484,7 @@ suite.define(() => {
                 {
                   path: source,
                   contentType: "image/png",
+                  ...(previewFails ? { fileName: "Attached image.png" } : {}),
                   ...(workspaceDir ? { workspaceDir } : {}),
                 },
               ],
@@ -473,6 +497,50 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
         await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
+        if (previewFails) {
+          const retry = page.getByRole("button", { name: "Retry", exact: true });
+          await retry.waitFor();
+          expect(
+            await page.getByRole("button", { name: "Open original", exact: true }).count(),
+          ).toBe(0);
+          expect(
+            requestedMediaUrls
+              .filter((url) => url.searchParams.get("meta") !== "1")
+              .map((url) => url.searchParams.get("variant")),
+          ).toEqual(["thumbnail"]);
+          if (artifactDir) {
+            await page.screenshot({
+              path: `${artifactDir}/inbound-preview-unavailable.png`,
+              animations: "disabled",
+            });
+          }
+          await retry.click();
+          await expect
+            .poll(
+              () =>
+                requestedMediaUrls.filter((url) => url.searchParams.get("variant") === "thumbnail")
+                  .length,
+            )
+            .toBe(2);
+          await retry.waitFor();
+          expect(
+            requestedMediaUrls.filter(
+              (url) => !url.searchParams.has("variant") && !url.searchParams.has("meta"),
+            ),
+          ).toHaveLength(0);
+          await page.getByRole("button", { name: "Image actions", exact: true }).click();
+          await page.getByRole("menuitem", { name: "Copy image", exact: true }).waitFor();
+          const download = page.waitForEvent("download");
+          await page.getByRole("menuitem", { name: "Download image", exact: true }).click();
+          expect((await download).suggestedFilename()).toBe("Attached image.png");
+          expect(
+            requestedMediaUrls.filter(
+              (url) => !url.searchParams.has("variant") && !url.searchParams.has("meta"),
+            ),
+          ).toHaveLength(1);
+          expect(await page.locator("openclaw-image-lightbox").count()).toBe(0);
+          return;
+        }
         const image = page.locator("img.chat-message-image");
         await image.waitFor({ state: "visible", timeout: 10_000 });
         await expect
@@ -482,6 +550,34 @@ suite.define(() => {
             ),
           )
           .toBe(1);
+        const previewRequest = requestedMediaUrls.find(
+          (url) => url.searchParams.get("meta") !== "1",
+        );
+        expect(previewRequest?.searchParams.get("variant")).toBe(
+          boundedPreview ? "thumbnail" : null,
+        );
+        const inlineSource = await image.getAttribute("src");
+        await page.getByRole("button", { name: /Open image/ }).click();
+        const display = page.locator("openclaw-image-lightbox img").first();
+        await display.waitFor({ state: "visible" });
+        if (boundedPreview) {
+          await expect.poll(() => display.getAttribute("src")).toContain("width=1920");
+          expect(
+            requestedMediaUrls.every(
+              (url) =>
+                url.searchParams.get("meta") === "1" ||
+                url.searchParams.get("variant") === "thumbnail",
+            ),
+          ).toBe(true);
+        } else {
+          // Legacy local sources retain original bytes, without a second upgrade read.
+          expect(await display.getAttribute("src")).toBe(
+            new URL(inlineSource!, suite.server.baseUrl).href,
+          );
+          expect(requestedMediaUrls).toHaveLength(2);
+          expect(requestedMediaUrls.every((url) => !url.searchParams.has("variant"))).toBe(true);
+          expect(requestedMediaUrls.every((url) => !url.searchParams.has("width"))).toBe(true);
+        }
         if (artifactDir) {
           await page.screenshot({
             fullPage: true,

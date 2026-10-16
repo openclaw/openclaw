@@ -1,12 +1,17 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { markRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
+import { recoverStore } from "../agents/main-session-recovery/main-session-restart-recovery-store.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { appendTranscriptMessage, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { createAgentTurnService } from "./agent-turn/agent-turn-service.js";
@@ -50,6 +55,130 @@ afterEach(() => {
 });
 
 describe("typed restart recovery operator admission", () => {
+  it.each([false, true])(
+    "retains an internal operator source across repeated restarts (revoked=%s)",
+    async (revoked) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
+        const profile = ensureProfileForEmail("repeat-recovery@example.test");
+        const fixture = await createOperatorRecoveryFixture({
+          stateDir: state.stateDir,
+          context: createDirectChatContext({ trackExecution: trackAsyncWork }),
+          profileId: profile.id,
+          config: {},
+          sessionKey: "agent:main:dashboard:repeat-recovery",
+          sourceIngress: "internal",
+        });
+        const source = fixture.entry.restartRecoveryOperatorSource;
+        let runId = fixture.target.recoveryRunId;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const context = createDirectChatContext({ trackExecution: trackAsyncWork });
+          context.getRuntimeConfig = () => ({});
+          const generation = getAgentEventLifecycleGeneration();
+          await appendTranscriptMessage(fixture.target, {
+            message: {
+              role: "user",
+              content: "A reviewer has additional findings for the original task.",
+              provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+            },
+          });
+          await appendTranscriptMessage(fixture.target, {
+            message: {
+              role: "assistant",
+              stopReason: "toolUse",
+              content: [{ type: "toolCall", id: "inspect-" + attempt, name: "read" }],
+            },
+          });
+          await markRestartAbortedMainSessions({
+            resolveGatewayContext: () => context,
+            stateDir: state.stateDir,
+            activeRuns: [
+              {
+                sessionKey: fixture.target.sessionKey,
+                sessionId: fixture.target.sessionId,
+                runId,
+                lifecycleGeneration: generation,
+              },
+            ],
+            isActiveRun: () => true,
+          });
+          rotateAgentEventLifecycleGeneration();
+          if (revoked && attempt === 1) {
+            setUserProfileRole(profile.id, "changed-role");
+          }
+          const runtime = createGatewayInstanceRuntime({
+            getContext: () => context,
+            getMethodRegistry: () => createGatewayMethodRegistry([]),
+            isDispatchAvailable: () => true,
+          });
+          const finish = createDeferred();
+          let registration: ReturnType<typeof registerChatAbortController> | undefined;
+          let execution: Promise<void> | undefined;
+          startTurn.mockImplementation(({ preflight, principal, io }) => {
+            execution = (async () => {
+              runId = expectDefined(preflight.request.idempotencyKey, "recovery run");
+              const authority = expectDefined(
+                principal?.internal?.operatorRunAuthority,
+                "restored source authority",
+              );
+              expect(authority.profileId).toBe(profile.id);
+              expect(authority.assertCurrent).not.toThrow();
+              registration = registerChatAbortController({
+                chatAbortControllers: context.chatAbortControllers,
+                runId,
+                agentId: "main",
+                sessionKey: fixture.target.sessionKey,
+                sessionId: fixture.target.sessionId,
+                lifecycleGeneration: getAgentEventLifecycleGeneration(),
+                timeoutMs: 60_000,
+                kind: "agent",
+              });
+              if (!registration.registered) {
+                throw new Error("Expected a fresh recovery controller");
+              }
+              io.emitStartOwner?.(runId, registration.entry);
+              registration.markExecutionStarted();
+              io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
+              io.emitExecutionStarted?.();
+              await finish.promise;
+              io.emitFinal([true, { runId, status: "ok" }, undefined]);
+            })();
+            return execution;
+          });
+          try {
+            const denied = revoked && attempt === 1;
+            const skipped: string[] = [];
+            const outcome = await recoverStore({
+              onSkipped: (reason) => skipped.push(reason),
+              cfg: {},
+              storePath: fixture.target.storePath,
+              stateDir: state.stateDir,
+              handledSessionKeys: new Set(),
+              expectedTarget: fixture.target,
+              gatewayRuntime: runtime.recovery,
+            });
+            expect(skipped).toEqual([]);
+            expect(outcome).toEqual({
+              started: denied ? 0 : 1,
+              settled: 0,
+              failed: denied ? 1 : 0,
+              skipped: 0,
+            });
+            expect(startTurn).toHaveBeenCalledTimes(denied ? 1 : attempt + 1);
+            const retained = loadSessionEntry(fixture.target);
+            expect(retained?.restartRecoveryOperatorSource).toEqual(source);
+            expect(retained?.restartRecoveryDeliverySourceRunId).toBe(fixture.target.sourceRunId);
+            expect(retained?.mainRestartRecovery?.tombstone).toBeUndefined();
+          } finally {
+            runtime.close();
+            finish.resolve();
+            await execution;
+            registration?.cleanup();
+          }
+        }
+      });
+    },
+  );
   it.each(["agentId", "sessionKey", "expectedExistingSessionId", "idempotencyKey"] as const)(
     "rejects dispatch before authority restoration when %s differs from the original claim",
     async (field) => {

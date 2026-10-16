@@ -5,7 +5,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntry,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import { CODEX_APP_SERVER_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { readLocalWorkspaceProjection } from "../../../gateway/worker-environments/local-workspace-store.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
@@ -13,6 +16,7 @@ import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import { buildSkillSnapshot } from "../../../skills/loading/workspace-skill-prompt.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "../../../trajectory/runtime-store.sqlite.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -156,9 +160,17 @@ type DispatchCase = {
   retirePlacement?: boolean;
   configuredContextEngine?: boolean;
   diffBaseline?: "settled" | "failed" | "revoked";
+  cancelTrajectory?: boolean;
 };
 
 const dispatchCases: DispatchCase[] = [
+  {
+    agentId: "main",
+    sandboxSessionKey: undefined,
+    remoteSkills: false,
+    skillCatalog: "none",
+    cancelTrajectory: true,
+  },
   ...(["settled", "failed", "revoked"] as const).map((diffBaseline) => ({
     agentId: "work",
     sandboxSessionKey: "global",
@@ -226,7 +238,7 @@ const dispatchCases: DispatchCase[] = [
 ];
 
 it.each(dispatchCases)(
-  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline",
+  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory",
   async ({
     agentId,
     sandboxSessionKey,
@@ -239,6 +251,7 @@ it.each(dispatchCases)(
     retirePlacement,
     configuredContextEngine,
     diffBaseline,
+    cancelTrajectory,
   }) => {
     const gitCoauthorPrompt =
       "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
@@ -366,6 +379,16 @@ it.each(dispatchCases)(
         localBackend,
       );
       const runId = `dispatch-${agentId}`;
+      const harnessId = cancelTrajectory ? "codex" : "owner-fixture";
+      const cancellation = new AbortController();
+      const cancellationError = new Error("session aborted");
+      const storePath = state.path("agents", agentId, "sessions", "sessions.json");
+      if (cancelTrajectory) {
+        await replaceSessionEntry(
+          { sessionKey: "global", storePath },
+          { sessionId: `${agentId}-global`, updatedAt: 1 },
+        );
+      }
       const admission = prepareAgentRunAdmission({
         cfg: config,
         facts: {
@@ -392,8 +415,23 @@ it.each(dispatchCases)(
         replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
         itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
       }));
+      if (cancelTrajectory) {
+        runAttempt.mockImplementation(async (attempt) => {
+          const host = attempt.hostCapabilities;
+          if (!host?.trajectory) {
+            throw new Error("Expected the dispatch-owned trajectory recorder");
+          }
+          host.trajectory.recordEvent("plugin.accepted");
+          cancellation.abort(cancellationError);
+          admission.close();
+          expect(() => host.assertActive()).toThrow();
+          expect(() => host.trajectory?.recordEvent("plugin.late")).toThrow();
+          await expect(host.trajectory.flush()).rejects.toThrow();
+          throw cancellationError;
+        });
+      }
       registerAgentHarness({
-        id: "owner-fixture",
+        id: harnessId,
         label: "Owner fixture",
         supports: () => ({ supported: true }),
         conversationToolPolicySupport: "exact",
@@ -419,6 +457,7 @@ it.each(dispatchCases)(
             }
           : undefined,
         admittedRunContext,
+        ...(cancelTrajectory ? { abortSignal: cancellation.signal } : {}),
         agentId,
         config,
         runId,
@@ -505,7 +544,7 @@ it.each(dispatchCases)(
           attemptAuthProfileStore: authProfileStore,
           resolveRunAttemptAuthProfileStore: () => authProfileStore,
           snapshot: () => ({
-            agentHarness: { id: "owner-fixture" },
+            agentHarness: { id: harnessId },
             pluginHarnessOwnsTransport: true,
             effectiveModel: {
               id: "fixture-model",
@@ -526,7 +565,12 @@ it.each(dispatchCases)(
         sessionPromptState: {
           sessionId: `${agentId}-global`,
           sessionFile: "global",
-          sessionTarget: { agentId, sessionId: `${agentId}-global`, sessionKey: "global" },
+          sessionTarget: {
+            agentId,
+            sessionId: `${agentId}-global`,
+            sessionKey: "global",
+            ...(cancelTrajectory ? { storePath } : {}),
+          },
           activePrompt: { persisted: false, internal: false },
           onUserMessagePersisted: vi.fn(),
           settleOwnedTranscriptProjection: vi.fn(),
@@ -627,6 +671,17 @@ it.each(dispatchCases)(
       const pending = prepareAndDispatchEmbeddedRunAttempt(input);
       void pending.catch(() => {});
       try {
+        if (cancelTrajectory) {
+          await expect(pending).rejects.toBe(cancellationError);
+          expect(runAttempt).toHaveBeenCalledOnce();
+          expect(
+            await loadSqliteTrajectoryRuntimeEvents({
+              sessionId: `${agentId}-global`,
+              storePath,
+            }),
+          ).toEqual([expect.objectContaining({ type: "plugin.accepted", source: "runtime" })]);
+          return;
+        }
         if (diffBaseline) {
           await awaitGateBeforeSettlement(
             baselineEntered.promise,

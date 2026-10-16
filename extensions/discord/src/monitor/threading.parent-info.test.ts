@@ -1,7 +1,6 @@
 // Discord tests cover threading.parent info plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Client } from "../internal/discord.js";
-import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 import { clearDiscordChannelInfoCacheForTest } from "./message-channel-info.test-support.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
@@ -37,31 +36,6 @@ describe("resolveDiscordThreadParentInfo", () => {
         id: "thread-1",
         parentId: undefined,
       },
-      channelInfo: null,
-    });
-
-    expect(fetchChannel).toHaveBeenCalledWith("thread-1");
-    expect(fetchChannel).toHaveBeenCalledWith("parent-1");
-    expect(result).toEqual({
-      id: "parent-1",
-      name: "parent-name",
-      type: ChannelType.GuildText,
-    });
-  });
-
-  it("falls back to fetched thread parentId when partial channel getters throw", async () => {
-    const { client, fetchChannel } = createClient();
-    const threadChannel = createPartialDiscordChannelWithThrowingGetters(
-      {
-        id: "thread-1",
-        parent: { id: "stale-parent", name: "stale-parent-name" },
-      },
-      ["parentId", "parent"],
-    );
-
-    const result = await resolveDiscordThreadParentInfo({
-      client,
-      threadChannel,
       channelInfo: null,
     });
 

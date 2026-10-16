@@ -43,10 +43,7 @@ import {
   finalizeResumedAnnounceGiveUp,
   finalizeSubagentCleanup,
 } from "./subagent-registry-lifecycle-finalize-cleanup.js";
-import {
-  buildSafeLifecycleErrorMeta,
-  maskLifecycleIdentifier,
-} from "./subagent-registry-lifecycle-log.js";
+import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
@@ -291,8 +288,8 @@ export const startSubagentAnnounceCleanupFlow = (
             onError: (error) =>
               params.warn("sessions.delete failed during subagent cleanup", {
                 error: buildSafeLifecycleErrorMeta(error),
-                runId: maskLifecycleIdentifier(runId, "run"),
-                childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
+                runId,
+                childSessionKey: entry.childSessionKey,
               }),
           });
           if (sessionCleanup === "failed") {

@@ -1,5 +1,4 @@
 import { html, render } from "lit";
-import { flush } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
@@ -24,6 +23,8 @@ import {
   chatPaneHeaderSessionRow as row,
   mountChatPaneHeader,
   mockWorkspaceIconFetch,
+  openNativeMenu,
+  selectNativeMenu,
   type ChatPaneHeaderProps,
 } from "./chat-pane-header.test-support.ts";
 import {
@@ -131,14 +132,15 @@ describe("chat pane header", () => {
     });
     const actions = container.querySelector(".chat-pane__actions")!;
     expect(
-      [...actions.querySelectorAll("button")].map((button) => button.textContent?.trim()),
+      [...actions.querySelectorAll("button:not([role^=menuitem])")].map((button) =>
+        button.textContent?.trim(),
+      ),
     ).toEqual(["Share", "Layout", "…"]);
     const menu = actions.querySelector(".chat-pane__layout-menu")!;
-    expect(menu.querySelector("wa-dropdown-item")).toBeNull();
-    menu.dispatchEvent(new Event("wa-show"));
-    flush();
+    expect(menu.querySelector("[role^=menuitem]")).toBeNull();
+    await openNativeMenu(menu);
     expect(
-      [...menu.querySelectorAll("wa-dropdown-item")].map((item) => item.textContent?.trim()),
+      [...menu.querySelectorAll("[role^=menuitem]")].map((item) => item.textContent?.trim()),
     ).toEqual(["Open split view", "Split down", "Split right", "Close pane"]);
     for (const [value, callback, args] of [
       ["open-split-view", onOpenSplitView, []],
@@ -146,21 +148,14 @@ describe("chat pane header", () => {
       ["split-right", onSplitRight, ["pane-1"]],
       ["close-pane", onClosePane, ["pane-1"]],
     ] as const) {
-      menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
-      expect(callback).not.toHaveBeenCalled();
-      menu
-        .querySelector("wa-dropdown-item")!
-        .dispatchEvent(new Event("wa-after-hide", { bubbles: true }));
-      expect(callback).not.toHaveBeenCalled();
-      menu.dispatchEvent(new Event("wa-after-hide"));
-      menu.dispatchEvent(new Event("wa-after-hide"));
+      await selectNativeMenu(menu, value);
       expect(callback).toHaveBeenCalledExactlyOnceWith(...args);
     }
     update({ onClosePane: undefined });
     expect(container.querySelector(".chat-pane__close-pane")).toBeNull();
   });
 
-  it("keeps available panels in the narrow Layout menu while omitting split actions", () => {
+  it("keeps available panels in the narrow Layout menu while omitting split actions", async () => {
     const onTerminal = vi.fn();
     const { container } = mountHeader({
       narrow: true,
@@ -173,16 +168,15 @@ describe("chat pane header", () => {
       onSplitDown: vi.fn(),
       onSplitRight: vi.fn(),
     });
-    container.querySelector(".chat-pane__layout-menu")!.dispatchEvent(new Event("wa-show"));
-    flush();
-    expect(container.querySelector('.chat-pane__layout-menu [value="terminal"]')).not.toBeNull();
+    const menu = container.querySelector(".chat-pane__layout-menu")!;
+    await openNativeMenu(menu);
+    expect(
+      container.querySelector('.chat-pane__layout-menu [data-value="terminal"]'),
+    ).not.toBeNull();
     expect(container.querySelector(".chat-pane__split-down")).toBeNull();
     expect(container.querySelector(".chat-pane__split-right")).toBeNull();
     expect(container.querySelector(".chat-pane__nav-toggle")).not.toBeNull();
-    const menu = container.querySelector(".chat-pane__layout-menu")!;
-    menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "terminal" } } }));
-    expect(onTerminal).not.toHaveBeenCalled();
-    menu.dispatchEvent(new Event("wa-after-hide"));
+    await selectNativeMenu(menu, "terminal");
     expect(onTerminal).toHaveBeenCalledOnce();
   });
 
@@ -195,7 +189,7 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__subagents-running")).toBeNull();
   });
 
-  it("renders a quiet cloud placement chip with move and stop actions", () => {
+  it("renders a quiet cloud placement chip with move and stop actions", async () => {
     const onPlacementMove = vi.fn();
     const onPlacementReclaim = vi.fn();
     const { container } = mountHeader({
@@ -211,17 +205,19 @@ describe("chat pane header", () => {
     );
     expect(container.querySelector(".chat-pane__placement-state")).toBeNull();
     expect(container.querySelector(".chat-pane__placement-note")).toBeNull();
-    const actions = container.querySelectorAll(".chat-pane__placement-menu wa-dropdown-item");
+    const menu = container.querySelector(".chat-pane__placement-menu")!;
+    await openNativeMenu(menu);
+    const actions = container.querySelectorAll(".chat-pane__placement-menu [role^=menuitem]");
     expect(actions).toHaveLength(2);
     expect(actions[0]?.textContent?.trim()).toBe("Move session…");
     expect(actions[0]?.classList.contains("session-menu__item--destructive")).toBe(false);
-    actions[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await selectNativeMenu(menu, "move");
     expect(onPlacementMove).toHaveBeenCalledOnce();
     expect(actions[1]?.textContent?.trim()).toBe("Stop cloud worker…");
     expect(actions[1]?.classList.contains("session-menu__item--destructive")).toBe(true);
-    expect(actions[1]?.getAttribute("variant")).toBe("danger");
+    expect(actions[1]?.getAttribute("data-variant")).toBe("danger");
     expect(actions[1]?.querySelector(".session-menu__icon")).not.toBeNull();
-    actions[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await selectNativeMenu(menu, "reclaim");
     expect(onPlacementReclaim).toHaveBeenCalledOnce();
   });
 
@@ -331,6 +327,7 @@ describe("chat pane header", () => {
       HTMLElement & { updateComplete?: Promise<unknown> }
     >("openclaw-viewer-facepile.chat-pane__participants");
     await facepile?.updateComplete;
+    await vi.dynamicImportSettled();
 
     await vi.waitFor(() =>
       expect(facepile?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
@@ -591,7 +588,7 @@ describe("chat pane header", () => {
     },
   );
 
-  it("keeps catalog sessions static and without a workspace chip", () => {
+  it("keeps catalog sessions static and without a workspace chip", async () => {
     const { container } = mountHeader({
       catalog: true,
       session: undefined,
@@ -602,9 +599,10 @@ describe("chat pane header", () => {
       "Session title",
     );
     expect(container.querySelector(".chat-pane__workspace-chip")).toBeNull();
-    container.querySelector(".chat-pane__layout-menu")!.dispatchEvent(new Event("wa-show"));
-    flush();
-    expect(container.querySelector('.chat-pane__layout-menu [value="terminal"]')).not.toBeNull();
+    await openNativeMenu(container.querySelector(".chat-pane__layout-menu")!);
+    expect(
+      container.querySelector('.chat-pane__layout-menu [data-value="terminal"]'),
+    ).not.toBeNull();
   });
 
   it("keeps read-only gateway session titles static", () => {
@@ -620,24 +618,20 @@ describe("chat pane header", () => {
     );
   });
 
-  it("defers panel docking choices until opening and applies the selected dock", () => {
+  it("opens panel docking choices and applies the selected dock", async () => {
     const onLayoutChange = vi.fn();
     const { container } = mountHeader({
       sidebarLayout: openSlot({ columns: [] }, "detail"),
       onLayoutChange,
     });
     const menu = container.querySelector(".chat-panel-layout-menu")!;
-    expect(menu.querySelector("wa-dropdown-item")).toBeNull();
-    menu.dispatchEvent(new Event("wa-show"));
-    flush();
+    await openNativeMenu(menu);
     expect(
-      Array.from(menu.querySelectorAll("wa-dropdown-item"), (item) => item.getAttribute("value")),
+      Array.from(menu.querySelectorAll("[role^=menuitem]"), (item) =>
+        item.getAttribute("data-value"),
+      ),
     ).toContain("dock-bottom");
-    menu.dispatchEvent(
-      new CustomEvent("wa-select", { detail: { item: { value: "dock-bottom" } } }),
-    );
-    expect(onLayoutChange).not.toHaveBeenCalled();
-    menu.dispatchEvent(new Event("wa-after-hide"));
+    await selectNativeMenu(menu, "dock-bottom");
     expect(onLayoutChange).toHaveBeenCalledWith(expect.objectContaining({ dock: "bottom" }), {
       geometryOnly: true,
     });
@@ -648,7 +642,7 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__workspace-chip")?.textContent).toContain("Copied");
   });
 
-  it("shows cloud placement and hides reveal when disabled", () => {
+  it("shows cloud placement and hides reveal when disabled", async () => {
     const session = row({ placement: { state: "active" } as GatewaySessionRow["placement"] });
     const { container } = mountHeader({
       session,
@@ -657,11 +651,9 @@ describe("chat pane header", () => {
     });
     expect(container.querySelector(".chat-pane__placement-chip")).not.toBeNull();
     const menu = container.querySelector(".chat-pane__workspace-menu")!;
-    expect(menu.querySelector("wa-dropdown-item")).toBeNull();
-    menu.dispatchEvent(new Event("wa-show"));
-    flush();
-    expect(container.querySelector('wa-dropdown-item[value="reveal"]')).toBeNull();
-    expect(container.querySelector('wa-dropdown-item[value="copy-path"]')).not.toBeNull();
+    await openNativeMenu(menu);
+    expect(container.querySelector('[data-value="reveal"]')).toBeNull();
+    expect(container.querySelector('[data-value="copy-path"]')).not.toBeNull();
   });
 
   it("visibly names incognito threads and reveals their lifetime on focus or activation", async () => {

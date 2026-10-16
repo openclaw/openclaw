@@ -47,7 +47,7 @@ it("reports context queue overload without losing context and completes every ad
       // Hold this caller's first preparation while real pool admission fills the queue.
       return this.run(async () => {
         await release.promise;
-        return input;
+        return typeof input === "function" ? await input() : input;
       }, options);
     });
     const accepted = Array.from({ length: 128 }, (_, index) =>

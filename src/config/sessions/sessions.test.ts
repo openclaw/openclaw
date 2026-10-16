@@ -4,7 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { normalizePersistedSessionEntryShape } from "../../commands/doctor/shared/session-entry-shape.js";
 import { withTempDirSync } from "../../test-helpers/temp-dir.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import type { SessionConfig } from "../types.base.js";
+import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveSessionWorkStartError } from "./lifecycle.js";
 import {
   resolveSessionFilePathCore,
@@ -14,6 +16,26 @@ import {
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
+
+it.each([
+  ["linux", "legacy:session", "/state/agents/main/agent/openclaw-agent.sqlite"],
+  ["linux", "legacy:x", "/state/openclaw-agent.sqlite"],
+  ["win32", "legacy:x", "C:\\state\\openclaw-agent.sqlite"],
+  ["win32", "legacy:x", "C:/state/openclaw-agent.sqlite"],
+  ["win32", "legacy:x", "\\\\server\\state\\openclaw-agent.sqlite"],
+  ["linux", "session", "/state/archive:part/openclaw-agent.sqlite"],
+  ["linux", "session", "relative/sessions.json"],
+  ["win32", "session", "relative\\sessions.json"],
+] as const)(
+  "preserves the %s transcript ID %s and store path %s in legacy markers",
+  (platform, sessionId, storePath) => {
+    expect(
+      withMockedPlatform(platform, () =>
+        parseSqliteSessionFileMarker(`sqlite:main:${sessionId}:${storePath}`),
+      ),
+    ).toEqual({ agentId: "main", sessionId, storePath });
+  },
+);
 
 it("merges bounded restart tombstones without evicting fresh-only ids", () => {
   const existing = Array.from({ length: 64 }, (_, index) => `run-${index}`);

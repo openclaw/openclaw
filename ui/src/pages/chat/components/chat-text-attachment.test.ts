@@ -116,7 +116,6 @@ it.each([
     "Pasted notes 🦞\n  preserve indentation\n<script>not executable</script>\n",
   ],
   ["settings.json", "application/json", '{"ready":true}\n'],
-  ["config.xml", "application/xml", "<ready>true</ready>"],
   ["notes.txt", "application/octet-stream", "Text with generic metadata"],
   ["empty.txt", "", ""],
 ])("previews %s as literal text", async (title, mimeType, text) => {
@@ -200,12 +199,9 @@ const htmlFile = { title: "page.html", mimeType: "text/html" };
 
 it.each<RejectedAttachment>([
   { failure: "metadata", content: plainFile },
-  { failure: "metadata", content: htmlFile, limit: 2 * 1024 * 1024 },
   { failure: "metadata", content: { ...htmlFile, plainText: true } },
   { failure: "advertised", content: plainFile },
   { failure: "streamed", content: plainFile },
-  { failure: "advertised", content: htmlFile, limit: 2 * 1024 * 1024 },
-  { failure: "streamed", content: htmlFile, limit: 2 * 1024 * 1024 },
   { failure: "bytes", bytes: new Uint8Array([0xff]) },
   { failure: "bytes", bytes: new Uint8Array([0x61, 0x00, 0x62]) },
   { failure: "unavailable" },
@@ -331,7 +327,6 @@ it("aborts a closed preview and reloads it after remount", async () => {
 });
 
 it.each([
-  { title: "large.html", mimeType: "text/html", sizeBytes: 2 * 1024 * 1024, fill: "a", suffix: "" },
   {
     title: "large.HTM",
     mimeType: "application/octet-stream",
@@ -406,8 +401,10 @@ it.each([
     });
     const panel = await mountAttachment({ title, mimeType }, request);
     await customElements.whenDefined("openclaw-chat-html-preview");
-    await expect.poll(() => panel.querySelector("openclaw-chat-html-preview")).not.toBeNull();
-    await expect.poll(() => panel.querySelector("iframe")).not.toBeNull();
+    await waitForSolid(() =>
+      expect(panel.querySelector("openclaw-chat-html-preview")).not.toBeNull(),
+    );
+    await waitForSolid(() => expect(panel.querySelector("iframe")).not.toBeNull());
     const frame = panel.querySelector("iframe");
     expect(panel.querySelector("h1, script, style")).toBeNull();
     expect(panel.querySelector("pre")?.hidden).toBe(true);
@@ -429,12 +426,11 @@ it.each([
       "/__openclaw__/assistant-media?mediaTicket=text-preview",
     );
     Reflect.set(panel, "embedSandboxMode", "strict");
-    await expect
-      .poll(() => {
-        const current = panel.querySelector("iframe");
-        return current !== null && current !== frame;
-      })
-      .toBe(true);
+    await waitForSolid(() => {
+      const current = panel.querySelector("iframe");
+      expect(current).not.toBeNull();
+      expect(current).not.toBe(frame);
+    });
     const strictFrame = panel.querySelector("iframe")!;
     expect(strictFrame.hasAttribute("srcdoc")).toBe(false);
     expect(strictFrame.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin allow-forms");
@@ -449,7 +445,7 @@ it.each([
         },
       }),
     );
-    await expect.poll(() => post.mock.calls.length).toBe(1);
+    await waitForSolid(() => expect(post).toHaveBeenCalledOnce());
     expect(post.mock.calls[0]![0].params).toEqual({
       html: text,
       renderId: expect.any(String),

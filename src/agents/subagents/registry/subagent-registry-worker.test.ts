@@ -710,7 +710,7 @@ it.each(["before ACK", "inside failing callback"] as const)(
   },
 );
 
-it("retains prepared announcement authority across bookkeeping and revokes it for a new terminal result", async () => {
+it("retains prepared announcement authority across bookkeeping and revokes it for a changed terminal outcome", async () => {
   const child = entry("announcement");
   child.execution = {
     status: "terminal",
@@ -744,7 +744,7 @@ it("retains prepared announcement authority across bookkeeping and revokes it fo
   expect(prepared.text).toBe("child result");
   expect(prepared.isCurrent()).toBe(true);
   await change(child.runId, (row) => {
-    row.completion!.terminalReply = { disposition: "silent" };
+    row.execution.outcome = { status: "error" };
   });
   expect(prepared.isCurrent()).toBe(false);
 });

@@ -500,8 +500,10 @@ Fresh and upgraded installations do not populate identity contexts until an
 operator enables collection.
 First-use schema creation, HMAC-key access, canonical context construction, and
 SQLite persistence happen in the process-owned audit queue drain, never in
-agent admission. Lock attempts fail fast and retry asynchronously with bounded
-backoff so SQLite contention does not synchronously wait on the Gateway thread.
+agent admission. Audit writes use the shared worker's SQLite busy timeout. A
+competing writer can delay that worker until the timeout, while the Gateway
+thread remains nonblocking. Failed lock attempts retain FIFO retries with
+bounded asynchronous backoff.
 Contexts are retained for 30 days and capped at 100,000 rows. Exact-execution
 inspection and run discovery never return a context, candidate, or admission
 decision after that context is older than 30 days, even if physical cleanup

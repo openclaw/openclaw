@@ -32,9 +32,10 @@ const state = vi.hoisted(() => ({
   placements: vi.fn(),
   placementsAsync: vi.fn(),
 }));
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadGatewaySessionEntryReadOnlyAsync: async (...args: unknown[]) => state.loaded(...args),
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string }) =>
+    state.loaded(params.key),
 }));
 vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-entry-read-facts.js")>()),

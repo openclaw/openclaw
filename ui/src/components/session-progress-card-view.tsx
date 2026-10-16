@@ -1,9 +1,11 @@
 import { createEffect, createMemo, onCleanup, Show } from "solid-js";
 import { MarkdownDomReconciler } from "../lib/markdown-dom-reconciler.ts";
+import { i18nRevision } from "../lib/reactive/i18n.ts";
 import { promoteFirstProgressBar, sanitizedProgressMarkdown } from "./session-progress-card.ts";
 
 export function ProgressCardMarkdown(props: { markdown?: string; promoteProgress?: boolean }) {
   const sanitized = createMemo(() => {
+    i18nRevision();
     const html = props.markdown ? sanitizedProgressMarkdown(props.markdown) : "";
     return props.promoteProgress ? promoteFirstProgressBar(html) : html;
   });

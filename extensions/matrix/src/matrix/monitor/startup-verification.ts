@@ -1,6 +1,6 @@
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import { resolveDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
 import { recordCurrentStorageMetaDeviceId, resolveMatrixStoragePaths } from "../client/storage.js";
@@ -40,27 +40,12 @@ export type MatrixStartupVerificationOutcome =
       verification?: undefined;
     };
 
-function normalizeCooldownHours(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return DEFAULT_STARTUP_VERIFICATION_COOLDOWN_HOURS;
-  }
-  return Math.max(0, value);
-}
-
 function createStartupVerificationStore(params: { env?: NodeJS.ProcessEnv; stateDir?: string }) {
   return getMatrixRuntime().state.openKeyedStoreV2<MatrixStartupVerificationState>({
     namespace: STARTUP_VERIFICATION_NAMESPACE,
     maxEntries: STARTUP_VERIFICATION_MAX_ENTRIES,
     env: resolveMatrixSqliteStateEnv(params),
   });
-}
-
-function resolveStartupVerificationTimestamp(nowMs: unknown): string {
-  return (
-    timestampMsToIsoString(nowMs) ??
-    timestampMsToIsoString(Date.now()) ??
-    "1970-01-01T00:00:00.000Z"
-  );
 }
 
 function resolveStartupVerificationRetryAfterMs(params: {
@@ -144,12 +129,14 @@ export async function ensureMatrixStartupVerification(params: {
     };
   }
 
-  const cooldownHours = normalizeCooldownHours(
-    params.accountConfig.startupVerificationCooldownHours,
+  const cooldownHours = Math.max(
+    0,
+    params.accountConfig.startupVerificationCooldownHours ??
+      DEFAULT_STARTUP_VERIFICATION_COOLDOWN_HOURS,
   );
   const cooldownMs = cooldownHours * 60 * 60 * 1000;
-  const nowMs = params.nowMs ?? Date.now();
-  const attemptedAt = resolveStartupVerificationTimestamp(nowMs);
+  const nowMs = resolveDateTimestampMs(params.nowMs);
+  const attemptedAt = new Date(nowMs).toISOString();
   const value = await createStartupVerificationStore(stateLocation).lookup(stateKey);
   const state = value && typeof value === "object" ? value : null;
   const stateCooldownMs =

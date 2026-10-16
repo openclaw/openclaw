@@ -12,6 +12,7 @@ import {
   type SessionScope,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
@@ -138,7 +139,6 @@ const RealtimeToolSchema = z
     }),
   })
   .strict();
-type RealtimeToolConfig = z.infer<typeof RealtimeToolSchema>;
 
 const VoiceCallProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
@@ -249,7 +249,7 @@ const VoiceCallStreamingConfigSchema = z
   })
   .strict();
 
-export const VoiceCallConfigSchema = z
+const VoiceCallConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
 
@@ -357,10 +357,7 @@ type DeepPartial<T> = T extends SecretInput
     : T extends object
       ? { [K in keyof T]?: DeepPartial<T[K]> }
       : T;
-type VoiceCallConfigInput = DeepPartial<VoiceCallConfig>;
 const TWILIO_AUTH_TOKEN_PATH = "plugins.entries.voice-call.config.twilio.authToken";
-
-const DEFAULT_VOICE_CALL_CONFIG = VoiceCallConfigSchema.parse({});
 
 function defaultRealtimeStreamPathForServePath(servePath: string): string {
   const normalized = normalizeWebhookPath(servePath);
@@ -482,24 +479,11 @@ export function resolveVoiceCallEffectiveConfig(
   };
 }
 
-function sanitizeVoiceCallProviderConfigs(
-  value: Record<string, Record<string, unknown> | undefined> | undefined,
-): Record<string, Record<string, unknown>> {
-  return Object.fromEntries(
-    Object.entries(value ?? {}).filter(
-      (entry): entry is [string, Record<string, unknown>] => entry[1] !== undefined,
-    ),
-  );
-}
-
-function sanitizeVoiceCallNumberRoutes(
-  value: Record<string, unknown> | undefined,
-): VoiceCallConfig["numbers"] {
-  return Object.fromEntries(
-    Object.entries(value ?? {})
-      .filter(([, route]) => route !== undefined)
-      .map(([key, route]) => [key, VoiceCallNumberRouteConfigSchema.parse(route)]),
-  );
+function definedConfigEntries(value: unknown): unknown {
+  const entries = asOptionalRecord(value);
+  return entries
+    ? Object.fromEntries(Object.entries(entries).filter(([, entry]) => entry !== undefined))
+    : value;
 }
 
 export function resolveTwilioAuthToken(
@@ -511,72 +495,33 @@ export function resolveTwilioAuthToken(
   });
 }
 
-export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
-  const defaults = structuredClone(DEFAULT_VOICE_CALL_CONFIG);
-  const serve = { ...defaults.serve, ...config.serve };
-  const streamingProvider = config.streaming?.provider;
-  const streamingProviders = sanitizeVoiceCallProviderConfigs(
-    config.streaming?.providers ?? defaults.streaming.providers,
-  );
-  const realtimeProvider = config.realtime?.provider ?? defaults.realtime.provider;
-  const realtimeProviders = sanitizeVoiceCallProviderConfigs(
-    config.realtime?.providers ?? defaults.realtime.providers,
-  );
-  const realtimeFastContext = {
-    ...defaults.realtime.fastContext,
-    ...config.realtime?.fastContext,
-    sources: config.realtime?.fastContext?.sources ?? defaults.realtime.fastContext.sources,
-  };
-  const realtimeAgentContext = {
-    ...defaults.realtime.agentContext,
-    ...config.realtime?.agentContext,
-    files: config.realtime?.agentContext?.files ?? defaults.realtime.agentContext.files,
-  };
-  return {
-    ...defaults,
+export function normalizeVoiceCallConfig(value: unknown): VoiceCallConfig {
+  const config = asOptionalRecord(value);
+  if (!config) {
+    return VoiceCallConfigSchema.parse(value);
+  }
+  const streaming = asOptionalRecord(config.streaming);
+  const realtime = asOptionalRecord(config.realtime);
+  const normalized = VoiceCallConfigSchema.parse({
     ...config,
-    allowFrom: config.allowFrom ?? defaults.allowFrom,
-    numbers: sanitizeVoiceCallNumberRoutes(config.numbers ?? defaults.numbers),
-    outbound: { ...defaults.outbound, ...config.outbound },
-    reports: CallReportsConfigSchema.parse(config.reports),
-    live: CallLiveConfigSchema.parse(config.live),
-    callbacks: CallCallbacksConfigSchema.parse(config.callbacks),
-    voicemail: CallVoicemailConfigSchema.parse(config.voicemail),
-    serve,
-    tailscale: { ...defaults.tailscale, ...config.tailscale },
-    tunnel: { ...defaults.tunnel, ...config.tunnel },
-    webhookSecurity: {
-      ...defaults.webhookSecurity,
-      ...config.webhookSecurity,
-      allowedHosts: config.webhookSecurity?.allowedHosts ?? defaults.webhookSecurity.allowedHosts,
-      trustedProxyIPs:
-        config.webhookSecurity?.trustedProxyIPs ?? defaults.webhookSecurity.trustedProxyIPs,
-    },
-    streaming: {
-      ...defaults.streaming,
-      ...config.streaming,
-      provider: streamingProvider,
-      providers: streamingProviders,
-    },
-    realtime: {
-      ...defaults.realtime,
-      ...config.realtime,
-      provider: realtimeProvider,
-      streamPath:
-        config.realtime?.streamPath ??
-        defaultRealtimeStreamPathForServePath(serve.path ?? defaults.serve.path),
-      tools:
-        (config.realtime?.tools as RealtimeToolConfig[] | undefined) ?? defaults.realtime.tools,
-      consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional().parse(
-        config.realtime?.consultThinkingLevel ?? defaults.realtime.consultThinkingLevel,
-      ),
-      consultFastMode: config.realtime?.consultFastMode ?? defaults.realtime.consultFastMode,
-      fastContext: realtimeFastContext,
-      agentContext: realtimeAgentContext,
-      providers: realtimeProviders,
-    },
-    tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
-  };
+    numbers: definedConfigEntries(config.numbers),
+    webhookSecurity: config.webhookSecurity === undefined ? {} : config.webhookSecurity,
+    streaming:
+      config.streaming === undefined || streaming
+        ? { ...streaming, providers: definedConfigEntries(streaming?.providers) }
+        : config.streaming,
+    realtime:
+      config.realtime === undefined || realtime
+        ? {
+            ...realtime,
+            fastContext: realtime?.fastContext === undefined ? {} : realtime.fastContext,
+            agentContext: realtime?.agentContext === undefined ? {} : realtime.agentContext,
+            providers: definedConfigEntries(realtime?.providers),
+          }
+        : config.realtime,
+  });
+  normalized.realtime.streamPath ??= defaultRealtimeStreamPathForServePath(normalized.serve.path);
+  return normalized;
 }
 
 export type VoiceCallCoreSessionConfig = { mainKey?: string; scope?: SessionScope };
@@ -647,8 +592,16 @@ function resolveVoiceCallAgentSessionKey(params: {
   });
 }
 
-export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
-  const resolved = normalizeVoiceCallConfig(config);
+export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig {
+  const resolved = {
+    ...config,
+    tunnel: { ...config.tunnel },
+    realtime: {
+      ...config.realtime,
+      streamPath:
+        config.realtime.streamPath ?? defaultRealtimeStreamPathForServePath(config.serve.path),
+    },
+  };
 
   if (resolved.provider === "telnyx") {
     resolved.telnyx = resolved.telnyx ?? {};
@@ -678,15 +631,10 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
       resolved.plivo.authToken ?? resolveSpeechProviderApiKey(process.env.PLIVO_AUTH_TOKEN);
   }
 
-  resolved.tunnel.allowNgrokFreeTierLoopbackBypass =
-    resolved.tunnel.allowNgrokFreeTierLoopbackBypass ?? false;
   resolved.tunnel.ngrokAuthToken =
     resolved.tunnel.ngrokAuthToken ?? resolveSpeechProviderApiKey(process.env.NGROK_AUTHTOKEN);
   resolved.tunnel.ngrokDomain =
     resolved.tunnel.ngrokDomain ?? resolveSpeechProviderApiKey(process.env.NGROK_DOMAIN);
-
-  resolved.webhookSecurity.trustForwardingHeaders =
-    resolved.webhookSecurity.trustForwardingHeaders ?? false;
 
   return resolved;
 }

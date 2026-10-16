@@ -18,7 +18,7 @@ import { collectPluginProviderRequestOwners } from "./plugin-provider-request-po
 import { listSetupProviderIds } from "./setup-descriptors.js";
 
 const PROVIDER_ENDPOINT_CLASSES = new Set(
-  "anthropic-public cerebras-native chutes-native deepseek-native github-copilot-native groq-native meta-native mistral-public minimax-native moonshot-native modelstudio-native nvidia-native openai-public openai opencode-native opencode-go-native azure-openai openrouter vercel-ai-gateway xai-native xiaomi-native zai-native google-generative-ai google-vertex".split(
+  "anthropic-public cerebras-native chutes-native deepseek-native github-copilot-native groq-native meta-native mistral-public minimax-native moonshot-native modelstudio-native novita-native nvidia-native openai-public openai opencode-native opencode-go-native azure-openai openrouter vercel-ai-gateway xai-native xiaomi-native zai-native google-generative-ai google-vertex".split(
     " ",
   ),
 );
@@ -149,7 +149,10 @@ export function buildPluginMetadataProviderAuthAliases(plugins: readonly PluginM
   return aliases;
 }
 
-export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifestRecord[]) {
+export function buildPluginMetadataProviderFacts(
+  plugins: readonly PluginManifestRecord[],
+  enabledPluginIds?: ReadonlySet<string>,
+) {
   const providerEndpoints = plugins.flatMap((plugin) =>
     prepareProviderEndpoints(plugin.providerEndpoints),
   );
@@ -160,7 +163,21 @@ export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifes
     ]),
   );
   const providerAuthContributions: PluginProviderAuthContribution[] = [];
+  const providersManagingOwnAvailability = new Set<string>();
+  const selectedProviders = new Set<string>();
   for (const plugin of plugins) {
+    if (enabledPluginIds?.has(plugin.id)) {
+      for (const rawProvider of plugin.providers) {
+        const provider = normalizeProviderId(rawProvider);
+        if (!provider || selectedProviders.has(provider)) {
+          continue;
+        }
+        selectedProviders.add(provider);
+        if (plugin.managesOwnAvailability === true) {
+          providersManagingOwnAvailability.add(provider);
+        }
+      }
+    }
     // Package declarations are stable; readers still decide eligibility against current config.
     const envProviders = (plugin.setup?.providers ?? []).filter(
       (provider) => provider.envVars?.length,
@@ -188,6 +205,7 @@ export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifes
     providerEndpoints,
     providerRequests,
     providerAuthContributions,
+    providersManagingOwnAvailability,
     modelIdNormalizationPolicies: collectManifestModelIdNormalizationPolicies(plugins),
     providerAuthAliases: buildPluginMetadataProviderAuthAliases(plugins),
   };

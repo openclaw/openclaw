@@ -478,7 +478,7 @@
   }
 
   /* These two add a fixed cosmetic offset on top of the --radius-xl step in
-     their home rule (components.css); only the --radius-xl portion scales,
+     their home rule (agents.css); only the --radius-xl portion scales,
      matching that intent. */
   .md-preview-dialog__panel.md-preview-dialog__panel {
     border-radius: calc(20px * var(--openclaw-corner-radius-scale) + 6px);
@@ -1189,8 +1189,7 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
     --hide-duration: 0ms;
   }
 
-  .skeleton::after,
-  .chat-controls__inline-select[open] > wa-popup::part(popup) {
+  .skeleton::after {
     animation: none !important;
   }
 

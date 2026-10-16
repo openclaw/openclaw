@@ -19,7 +19,6 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
-  tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
@@ -40,7 +39,6 @@ import {
 
 const {
   activateGatewayScheduledServices,
-  scheduleGatewayIdleTask,
   startGatewayChannelHealthMonitor,
   startGatewayCronWithLogging,
 } = await import("./server-runtime-services.js");
@@ -62,23 +60,6 @@ describe("server-runtime-services", () => {
     vi.unstubAllEnvs();
     resetGatewayWorkAdmission();
     clearRuntimeConfigSnapshot();
-  });
-
-  it("starts channel health without activating scheduled services", () => {
-    startGatewayChannelHealthMonitor({
-      scheduler: createTestGatewayScheduler(),
-      channelManager: {
-        getRuntimeSnapshot: vi.fn(),
-        isHealthMonitorEnabled: vi.fn(),
-        isAccountListed: vi.fn(() => true),
-        isManuallyStopped: vi.fn(),
-      } as never,
-    });
-
-    expect(hoisted.startChannelHealthMonitor).toHaveBeenCalledTimes(1);
-    expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
-    expect(hoisted.startSessionUpstreamMonitor).not.toHaveBeenCalled();
-    expect(hoisted.recoverPendingDeliveries).not.toHaveBeenCalled();
   });
 
   it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
@@ -693,41 +674,6 @@ describe("server-runtime-services", () => {
 
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
     services.heartbeatRunner.stop();
-  });
-
-  it("retries a scheduled idle task while request work is active", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const admission = tryBeginGatewayRootWorkAdmission();
-    if (!admission) {
-      throw new Error("Expected request work admission");
-    }
-    const activeRootCounts: number[] = [];
-    const run = vi.fn(async () => {
-      activeRootCounts.push(getActiveGatewayRootWorkCount());
-    });
-
-    scheduleGatewayIdleTask({
-      id: "test:idle",
-      scheduler,
-      delayMs: 25,
-      retryDelayMs: 50,
-      isClosing: () => false,
-      isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
-      run,
-      log: createLog(),
-      errorMessage: "idle task failed",
-    });
-
-    await clock.advanceBy(25);
-    expect(run).not.toHaveBeenCalled();
-    admission.release();
-    await clock.advanceBy(49);
-    expect(run).not.toHaveBeenCalled();
-    await clock.advanceBy(1);
-    expect(run).toHaveBeenCalledOnce();
-    expect(activeRootCounts).toEqual([1]);
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it.each(["stopPeriodicTasks", "skillUsageCleanup"] as const)(

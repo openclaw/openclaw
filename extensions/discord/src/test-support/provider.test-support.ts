@@ -1,4 +1,5 @@
 // Discord provider module implements model/runtime integration.
+import { EventEmitter } from "node:events";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Mock } from "vitest";
@@ -292,6 +293,7 @@ vi.mock("../internal/discord.js", async () => {
   class Client {
     listeners: unknown[];
     rest: {
+      options: { timeout: number };
       get: ReturnType<typeof vi.fn>;
       post: ReturnType<typeof vi.fn>;
       put: ReturnType<typeof vi.fn>;
@@ -303,6 +305,7 @@ vi.mock("../internal/discord.js", async () => {
       this.options = options;
       this.listeners = handlers.listeners ?? [];
       this.rest = {
+        options: { timeout: 15_000 },
         get: vi.fn(async () => undefined),
         post: vi.fn(async () => undefined),
         put: vi.fn(async () => undefined),
@@ -328,8 +331,12 @@ vi.mock("../internal/gateway.js", () => ({
   GatewayCloseCodes: { DisallowedIntents: 4014 },
 }));
 
-vi.mock("../internal/voice.js", () => ({
-  VoicePlugin: function VoicePlugin() {},
+vi.mock("../internal/voice.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../internal/voice.js")>()),
+  VoicePlugin: class {
+    id = "voice";
+    registerClient() {}
+  },
 }));
 
 vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
@@ -485,7 +492,13 @@ vi.mock(buildDiscordSourceModuleId("monitor/exec-approvals.js"), () => ({
 }));
 
 vi.mock(buildDiscordSourceModuleId("monitor/gateway-plugin.js"), () => ({
-  createDiscordGatewayPlugin: () => ({ id: "gateway-plugin" }),
+  createDiscordGatewayPlugin: () =>
+    clientGetPluginMock("gateway") ?? {
+      id: "gateway",
+      emitter: new EventEmitter(),
+      isConnected: false,
+      disconnect: vi.fn(),
+    },
   waitForDiscordGatewayPluginRegistration: () => undefined,
 }));
 

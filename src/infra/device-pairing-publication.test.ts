@@ -39,7 +39,6 @@ import {
   updatePairedDeviceMetadata,
   updatePairedDevicePresence,
 } from "./device-pairing.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 let baseDir: string;
@@ -168,7 +167,9 @@ test.each([
       .spyOn(stateReads, "executeExistingOpenClawStateRead")
       .mockRejectedValueOnce(new Error("pairing read unavailable"));
     try {
-      await expect(getPairedDevice("node", baseDir)).rejects.toThrow("pairing read unavailable");
+      await expect(getPendingDevicePairing("unavailable", baseDir)).rejects.toThrow(
+        "pairing read unavailable",
+      );
     } finally {
       read.mockRestore();
     }
@@ -504,11 +505,17 @@ test("retains pairing admission through final publication preparation and synchr
   expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
 });
 
-test.each(["worker commit", "sibling owner commit"] as const)(
+test.each(["worker commit", "native owner commit"] as const)(
   "does not restore revoked node authority from a read delayed past a newer %s",
   async (commit) => {
     await listDevicePairing(baseDir);
     expect(getPublishedPairedDeviceBinding("node", baseDir)).not.toBeNull();
+    // A native owner's commit retires the resident rows, forcing this read through the worker.
+    const state = {
+      pendingById: {},
+      pairedByDeviceId: { node: (await getPairedDevice("node", baseDir))! },
+    };
+    persistDevicePairingStoreState(state, baseDir, "paired");
     const releaseRead = createDeferredCore();
     const releaseMutation = createDeferredCore();
     const mutationQueued = createDeferredCore();
@@ -555,12 +562,11 @@ test.each(["worker commit", "sibling owner commit"] as const)(
             releaseMutation.resolve();
             await mutation;
           } else {
-            const other = openNodeSqliteDatabase(database.path);
-            try {
-              other.prepare("DELETE FROM device_pairing_paired WHERE device_id = ?").run("node");
-            } finally {
-              other.close();
-            }
+            persistDevicePairingStoreState(
+              { pendingById: {}, pairedByDeviceId: {} },
+              baseDir,
+              "paired",
+            );
             expect(await getPairedDevice("node", baseDir)).toBeNull();
           }
           expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();

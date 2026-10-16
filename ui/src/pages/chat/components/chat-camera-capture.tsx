@@ -387,7 +387,7 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
               </select>
             </label>
           </Show>
-          <footer>
+          <openclaw-modal-actions class="camera__actions">
             <button type="button" class="upload" onClick={() => openFileInput("photo")}>
               <Icon name="image" />
               {t("chat.camera.upload")}
@@ -398,47 +398,46 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
                 {t("chat.camera.useNativeCamera")}
               </button>
             </Show>
-            <div class="actions">
-              <button
-                type="button"
-                autofocus
-                onClick={() => (reviewing() ? void startCamera() : close())}
-              >
-                {reviewing() ? t("chat.camera.retake") : t("common.cancel")}
-              </button>
-              <button
-                type="button"
-                class="primary"
-                disabled={
-                  !reviewing() && !failed() && (view().stage !== "live" || !view().videoReady)
-                }
-                onClick={() =>
-                  reviewing()
-                    ? usePhoto()
-                    : nativeFallback()
-                      ? openFileInput("camera")
-                      : failed()
-                        ? void startCamera()
-                        : void capture()
-                }
-              >
-                {reviewing()
-                  ? t("chat.camera.usePhoto")
+
+            <button
+              type="button"
+              autofocus
+              onClick={() => (reviewing() ? void startCamera() : close())}
+            >
+              {reviewing() ? t("chat.camera.retake") : t("common.cancel")}
+            </button>
+            <button
+              type="button"
+              class="primary"
+              disabled={
+                !reviewing() && !failed() && (view().stage !== "live" || !view().videoReady)
+              }
+              onClick={() =>
+                reviewing()
+                  ? usePhoto()
                   : nativeFallback()
-                    ? t("chat.camera.useNativeCamera")
+                    ? openFileInput("camera")
                     : failed()
-                      ? t("chat.camera.retry")
-                      : t("chat.camera.capture")}
-              </button>
-            </div>
-          </footer>
+                      ? void startCamera()
+                      : void capture()
+              }
+            >
+              {reviewing()
+                ? t("chat.camera.usePhoto")
+                : nativeFallback()
+                  ? t("chat.camera.useNativeCamera")
+                  : failed()
+                    ? t("chat.camera.retry")
+                    : t("chat.camera.capture")}
+            </button>
+          </openclaw-modal-actions>
         </section>
       </openclaw-modal-dialog>
     </Show>
   );
 }
 
-defineSolidBridge<CameraProps, { show(): void }>(
+export const ChatCameraCapture = defineSolidBridge<CameraProps, { show(): void }>(
   "openclaw-chat-camera-capture",
   CameraCaptureContent,
   {

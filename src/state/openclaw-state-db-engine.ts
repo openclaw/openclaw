@@ -1,4 +1,6 @@
 import { getEnvironmentData } from "node:worker_threads";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import type { PostgresSchemaFragment } from "../infra/database-engine/contract.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import {
   admitPostgresPhysicalFacts,
@@ -35,6 +37,10 @@ const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
 
 export function stateEngineInput() {
+  const selected = getDatabaseEngineSelection()?.input;
+  if (selected) {
+    return selected;
+  }
   const connection: unknown =
     process.env.NODE_ENV === "test"
       ? getEnvironmentData("openclaw.test.state.connection")
@@ -121,12 +127,20 @@ export const stateEngineSchema = {
   id: "state",
   version: OPENCLAW_STATE_SCHEMA_VERSION,
   sqlite: "",
-  postgres: [
-    runtime.eagerSql,
-    ...runtime.fragments
-      .filter((fragment) => fragment.activation === "version-additive")
-      .map((fragment) => fragment.sql),
-  ].join("\n"),
+  postgres: runtime.eagerSql,
+  postgresFragments: runtime.fragments.map((fragment): PostgresSchemaFragment => {
+    const { activation } = fragment;
+    if (activation !== "first-use" && activation !== "version-additive") {
+      throw new Error(`Unknown PostgreSQL state fragment activation: ${activation}`);
+    }
+    return {
+      id: fragment.id,
+      tables: fragment.tables,
+      sql: fragment.sql,
+      dependencies: fragment.dependencies,
+      activation,
+    };
+  }),
 };
 
 export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: string): void {
@@ -136,6 +150,12 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
   }
   const fragment = runtime.fragments.find((item) => item.tables.includes(table));
   if (!fragment) {
+    const eager = runtime.expectedCatalog.some(
+      (fact) => fact.kind === "table" && fact.table === table,
+    );
+    if (eager && facts.catalog.some((fact) => fact.kind === "table" && fact.table === table)) {
+      return;
+    }
     throw new Error(`No PostgreSQL state fragment owns ${table}`);
   }
   if (
@@ -171,6 +191,8 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     storeId: facts.storeId,
     store: facts.store,
     version: facts.version,
+    schema: stateEngineSchema,
+    recordSchema: true,
   });
   admitStatePostgres(db, false);
 }

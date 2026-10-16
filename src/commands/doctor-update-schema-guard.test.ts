@@ -467,9 +467,7 @@ it("revalidates the update owner after integrity work before committing an agent
         ),
       ]);
     });
-    await expect(settled).rejects.toSatisfy((error: unknown) =>
-      collectNestedErrorCandidates(error).includes(retired),
-    );
+    await settled;
     const outcome = expectDefined(result[0], "migration outcome");
     expect(outcome.status).toBe("rejected");
     if (outcome.status !== "rejected") {

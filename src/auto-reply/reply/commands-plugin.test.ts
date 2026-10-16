@@ -43,6 +43,9 @@ vi.mock("./commands-compact.runtime.js", async (importOriginal) => ({
   isEmbeddedAgentRunAbortableForCompaction: () => false,
 }));
 
+// Cold runtime imports are setup work, not part of the compaction deadline.
+await import("./commands-compact.runtime.js");
+
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-plugin-compact-");
 
 let registry: PluginRegistry;

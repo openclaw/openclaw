@@ -47,7 +47,7 @@ import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
-import { emitSessionsChanged } from "./session-change-event.js";
+import { emitSessionsChanged, emitSessionTitleChanged } from "./session-change-event.js";
 import { registerCommittedSessionCategory } from "./session-create-category.js";
 import { idempotentSessionCreate } from "./session-create-idempotency.js";
 import {
@@ -87,6 +87,8 @@ import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { prepareSessionModelAccountAccess } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
+
+const loadChatSendInternalEntry = createLazyRuntimeModule(() => import("./chat-send-handler.js"));
 
 const loadChatSendExternalEntry = createLazyRuntimeModule(
   () => import("./chat-send-external-entry.js"),
@@ -151,6 +153,27 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       context.getRuntimeConfig,
       { ...creation, ...(p.surface ? { surface: p.surface } : {}) },
     );
+    const toolRequester = client?.internal?.agentToolCaller;
+    const agentCreated =
+      sessionCreation.via === "operator" && sessionCreation.requesterSessionKey !== undefined;
+    if (
+      agentCreated &&
+      (!toolRequester?.assertCurrent ||
+        toolRequester.sessionKey !== sessionCreation.requesterSessionKey ||
+        sessionCreation.actor?.type !== "human" ||
+        sessionCreation.actor.source !== "profile" ||
+        sessionCreation.actor.id !== client?.internal?.operatorRunAuthority?.profileId)
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.FORBIDDEN,
+          "Session creation requires a matching live operator tool caller",
+        ),
+      );
+      return;
+    }
     const spawnRequesterSessionKey =
       sessionCreation.via === "spawn"
         ? normalizeOptionalString(sessionCreation.requesterSessionKey)
@@ -189,6 +212,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const deviceFolderAuthority: { assertCurrent?: () => void } = {};
     const commitGuard = () => {
       assertSessionCreateCurrent();
+      if (agentCreated) {
+        toolRequester?.assertCurrent?.();
+      }
       personalModelSelection?.assertCurrent();
       personalAccountDefaults?.assertCurrent();
       deviceFolderAuthority.assertCurrent?.();
@@ -472,11 +498,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           commitGuard,
           onTitleError: (error) =>
             sessionLog.warn(`worktree title failed: ${formatErrorMessage(error)}`),
-          onTitlePersisted: () =>
-            emitSessionsChanged(context, {
+          onTitleStateChanged: () =>
+            emitSessionTitleChanged(context, {
               sessionKey: lifecycleTarget.key,
+              sessionId: lifecycleTarget.entry?.sessionId,
               agentId: lifecycleTarget.agentId,
-              reason: "chat.title",
             }),
         });
         if (prepared.ok) {
@@ -495,6 +521,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       clientScopes,
     ).allowed;
     const catalogWait = createSessionModelCatalogWait([signal, client?.connectionSignal]);
+    const waitForModelCatalog = async <T>(operation: () => Promise<T>) =>
+      catalogWait.run(operation, (await operatorCapture.preparation)?.authority.signal);
     const createParams: Parameters<typeof createGatewaySession>[0] = {
       cfg,
       getCurrentConfig,
@@ -559,13 +587,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       childSessionPublication: sessionCreation.childSessionPublication,
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       armSessionDiffBaselineCapture: !repository && !deviceFolder,
-      loadGatewayModelCatalogSnapshot: async () => {
-        const captured = await operatorCapture.preparation;
-        return catalogWait.run(
-          () => context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
-          captured?.authority.signal,
-        );
-      },
+      waitForModelCatalog,
+      loadGatewayModelCatalogSnapshot: () =>
+        waitForModelCatalog(() =>
+          context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
+        ),
       commitGuard,
       bindSharingCreation: (operation) =>
         sessionMutationAuthorization?.bindCreation?.(p, operation),
@@ -609,17 +635,35 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           scheduleCreatedDashboardSessionTitle(session, cfg, context, p.titleSource);
           return;
         }
-        const { handleDirectExternalChatSend } = await loadChatSendExternalEntry();
+        const sendClient =
+          sessionSourceAccepted || agentCreated ? captureAgentTurnPrincipal(client) : client;
+        if (agentCreated && sendClient && toolRequester) {
+          // Creator/access identity stays with the person; their agent wrote the opening message.
+          sendClient.internal = {
+            ...sendClient.internal,
+            senderAttribution: { id: "agent:" + toolRequester.agentId },
+          };
+        }
         const sendOptions = bindGatewayRequestHandlerMutationAuthority(
           options,
           {
             ...options,
-            client: sessionSourceAccepted ? captureAgentTurnPrincipal(client) : client,
+            client: sendClient,
             params: {
               sessionKey: session.key,
               agentId: session.agentId,
               message: message ?? "",
               idempotencyKey: initialRunId,
+              ...(agentCreated
+                ? {
+                    systemInputProvenance: {
+                      kind: "inter_session",
+                      sourceSessionKey: sessionCreation.requesterSessionKey,
+                      sourceTool: "sessions_create",
+                    },
+                    suppressCommandInterpretation: true,
+                  }
+                : {}),
               ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
               ...(p.mentions ? { mentions: p.mentions } : {}),
               ...(attachments ? { attachments } : {}),
@@ -636,10 +680,18 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           undefined,
         );
         assertSessionCreateCurrent();
-        // The initial child turn must acquire its own writer, not the spawning parent's.
-        await runWithoutOwnedSessionTranscriptWrites(() =>
-          handleDirectExternalChatSend(sendOptions),
-        );
+        // The initial turn must acquire its own writer, not the requesting session's.
+        await runWithoutOwnedSessionTranscriptWrites(async () => {
+          if (agentCreated) {
+            const { handleTrustedInternalChatSend } = await loadChatSendInternalEntry();
+            await handleTrustedInternalChatSend(sendOptions, undefined, {
+              stageCreatedInput: true,
+            });
+          } else {
+            const { handleDirectExternalChatSend } = await loadChatSendExternalEntry();
+            await handleDirectExternalChatSend(sendOptions);
+          }
+        });
       },
     };
     const created = await createGatewaySession(createParams).catch((error: unknown) => {

@@ -7,7 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildBackupArchivePath } from "../../commands/backup-shared.js";
@@ -18,6 +18,7 @@ import { createPackageSwapFixture } from "../../infra/package-update-swap.test-s
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as schemas from "../../infra/update-candidate-state.js";
+import * as stateMetadata from "../../infra/update-candidate-state.sizes.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import {
   createUpdateRun,
@@ -129,6 +130,12 @@ const sourceLoader = gatewayLockUrl.pathname.endsWith(".ts")
   ? `process.env.TSX_TSCONFIG_PATH=${JSON.stringify(fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)))};
      await import(${JSON.stringify(new URL("../../../scripts/tsx.mjs", import.meta.url).href)});`
   : "";
+
+beforeEach(() => {
+  vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
+    stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
+  );
+});
 
 afterEach(async () => {
   if (service) {
@@ -334,8 +341,8 @@ it.each([
     } else {
       const {version}=manifest;
       assert(version==='1.0.0'||${preservesMigrated},'only the compatible candidate may serve preserved writes');
-      assert.deepEqual(files.map(file=>read(file).version),version==='1.0.0'?[15,21]:${JSON.stringify(migratedVersions)},'runtime must match the retained state');
       const custody=await acquireCustody('gateway',Number(process.argv[3]));
+      assert.deepEqual(files.map(file=>read(file).version),version==='1.0.0'?[15,21]:${JSON.stringify(migratedVersions)},'runtime must match the retained state');
       const server=http.createServer((request,response)=>{
         if(request.url==='/commit') for(const file of files) {const db=new DatabaseSync(file);db.exec("INSERT INTO payload(rowid,value) VALUES(99,'after-capture')");db.close();}
         response.setHeader('content-type','application/json');response.end(JSON.stringify({version,databases:files.map(read)}));

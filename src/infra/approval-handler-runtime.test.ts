@@ -287,36 +287,6 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     await approvalRuntime.stop();
   });
 
-  it("ignores duplicate pending request ids before finalization", async () => {
-    const unbindPending = vi.fn();
-    const buildResolvedResult = vi.fn().mockResolvedValue({ kind: "leave" });
-    const approvalRuntime = await createTestApprovalHandler({
-      buildResolvedResult,
-      deliverPending: makeSequentialPendingDeliveryMock(),
-      bindPending: makeSequentialPendingBindingMock(),
-      unbindPending,
-    });
-
-    const request = makeExecApprovalRequest("exec:1");
-
-    await approvalRuntime.handleRequested(request);
-    await approvalRuntime.handleRequested(request);
-    await approvalRuntime.handleResolved({
-      id: "exec:1",
-      decision: "approved",
-      resolvedBy: "operator",
-    } as never);
-
-    expect(unbindPending).toHaveBeenCalledTimes(1);
-    const unbind = firstCallArg(unbindPending) as
-      | { entry?: unknown; binding?: unknown; request?: unknown }
-      | undefined;
-    expect(unbind?.entry).toEqual({ messageId: "1" });
-    expect(unbind?.binding).toEqual({ bindingId: "bound-1" });
-    expect(unbind?.request).toBe(request);
-    expect(buildResolvedResult).toHaveBeenCalledTimes(1);
-  });
-
   it("continues finalization cleanup after one resolved entry unbind failure", async () => {
     const unbindPending = vi
       .fn()

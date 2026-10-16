@@ -283,8 +283,7 @@ export async function finalizeCronRun(params: {
     });
   };
   const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
-  const heartbeatOnlyResponse =
-    prepared.deliveryRequested && !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
+  const heartbeatOnlyResponse = !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
   const heartbeatControlOnlyResponse =
     heartbeatOnlyResponse &&
     (deliveryDisposition.kind === "empty" ||
@@ -301,7 +300,8 @@ export async function finalizeCronRun(params: {
     summary = undefined;
     outputText = undefined;
   }
-  const skipHeartbeatDelivery = heartbeatOnlyResponse && !spawnOnlyHandoff;
+  const skipHeartbeatDelivery =
+    prepared.deliveryRequested && heartbeatOnlyResponse && !spawnOnlyHandoff;
   const sourceDeliveryOutcome = resolveSourceDeliveryOutcome(prepared.sourceDelivery, {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,

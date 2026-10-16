@@ -101,6 +101,34 @@ describe("gateway control-plane write rate limit", () => {
     ];
   }
 
+  it.each(["config.patch", "cron.add"])(
+    "bounds the control-plane write budget for %s",
+    async (method) => {
+      const handlerCalls = vi.fn();
+      const handler: GatewayRequestHandler = (opts) => {
+        handlerCalls(opts);
+        opts.respond(true, undefined, undefined);
+      };
+      const logWarn = vi.fn();
+      const context = buildContext(logWarn);
+      const client = buildClient();
+
+      for (let attempt = 0; attempt < CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS; attempt += 1) {
+        await runRequest({ method, context, client, handler });
+      }
+      const blocked = await runRequest({ method, context, client, handler });
+
+      expect(handlerCalls).toHaveBeenCalledTimes(CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS);
+      const blockedCall = respondCall(blocked);
+      const error = blockedCall[2];
+      expect(blockedCall[0]).toBe(false);
+      expect(blockedCall[1]).toBeUndefined();
+      expect(error?.code).toBe("UNAVAILABLE");
+      expect(error?.retryable).toBe(true);
+      expect(logWarn).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("allows the OpenClaw inference ladder to probe more than 3 candidates", async () => {
     const handlerCalls = vi.fn();
     const handler: GatewayRequestHandler = (opts) => {

@@ -161,7 +161,7 @@ export function createWorkerWorkspaceActions(
       throw new Error("Repository workspace inspection requires a managed node runtime");
     }
     const timeoutMs = command.timeoutMs ?? WORKSPACE_TIMEOUT_MS;
-    const deadlineMs = Date.now() + timeoutMs;
+    const deadlineMs = performance.now() + timeoutMs;
     const signal = command.signal
       ? AbortSignal.any([options.ownerSignal, command.signal])
       : options.ownerSignal;
@@ -174,7 +174,7 @@ export function createWorkerWorkspaceActions(
     );
     signal.throwIfAborted();
     command.assertCurrent?.();
-    const remainingCommandTimeoutMs = () => Math.max(0, deadlineMs - Date.now());
+    const remainingCommandTimeoutMs = () => Math.max(0, deadlineMs - performance.now());
     const commandOptions = (remainingTimeoutMs: number): CommandOptions => {
       const base = workerSshCommandOptions({
         input: command.input,
@@ -378,10 +378,10 @@ export function createWorkerWorkspaceActions(
             prepared,
             WORKSPACE_TIMEOUT_MS,
             async (port, remainingTimeoutMs) => {
-              const deadlineMs = Date.now() + remainingTimeoutMs;
+              const deadlineMs = performance.now() + remainingTimeoutMs;
               const commandOptions = () =>
                 workerSshCommandOptions({
-                  timeoutMs: Math.max(0, deadlineMs - Date.now()),
+                  timeoutMs: Math.max(0, deadlineMs - performance.now()),
                   signal: options.ownerSignal,
                 });
               if (retryingGitTransfer) {

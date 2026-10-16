@@ -80,6 +80,7 @@ import {
   saveTestAuthProfiles,
 } from "./attempt-execution.cli.test-support.js";
 import { runAgentAttempt as runAgentAttemptImpl } from "./attempt-execution.js";
+import { registerCommandReplyPolicyTests } from "./attempt-execution.reply-policy.test-support.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import { resolveEmbeddedModelSelection } from "./model-selection.js";
 import { persistAcpTurnTranscript, persistCliTurnTranscript } from "./transcript-persistence.js";
@@ -101,9 +102,15 @@ const runAgentAttempt = (params: RunAgentAttemptOverrides) => {
 
 const runCliAgentMock = vi.hoisted(() => vi.fn());
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
+const executePreparedCliRunMock = vi.hoisted(() => vi.fn());
 const hasClaudeSessionMock = vi.hoisted(() => vi.fn(() => false));
 vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
+}));
+
+vi.mock("../cli-runner/execute.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli-runner/execute.runtime.js")>()),
+  executePreparedCliRun: executePreparedCliRunMock,
 }));
 
 vi.mock("../cli-runner/cli-live-session-registry.js", () => ({
@@ -291,6 +298,7 @@ describe("CLI attempt execution", () => {
     tmpDir = await fixtureRoot.make();
     runCliAgentMock.mockReset();
     runEmbeddedAgentMock.mockReset();
+    executePreparedCliRunMock.mockReset();
     resetGeneratedMediaTaskActivityForTests();
     hasClaudeSessionMock.mockReset();
     hasClaudeSessionMock.mockReturnValue(false);
@@ -2131,54 +2139,14 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runCliAgentMock, { abortSignal: controller.signal });
   });
 
-  it.each(["openai", "claude-cli"])(
-    "applies %s inter-session reply policy to internal, direct, and group sessions",
-    async (providerOverride) => {
-      const selectedRunner = providerOverride === "openai" ? runEmbeddedAgentMock : runCliAgentMock;
-      for (const [
-        sessionKey,
-        messageChannel,
-        privateCompletion,
-        allowSilence,
-        sourceTool = "subagent_settle",
-      ] of [
-        ["agent:main:subagent:reply-required", "discord"],
-        ["agent:main:direct:reply-required", "webchat"],
-        ["agent:main:direct:private-reply-required", "telegram", true],
-        ["agent:main:telegram:direct:reply-required", "telegram"],
-        ["agent:main:telegram:group:optional", "telegram", undefined, true],
-        ["agent:main:telegram:direct:delegated", "telegram", undefined, false, "sessions_send"],
-        ["agent:main:telegram:group:delegated", "telegram", undefined, true, "sessions_send"],
-      ] as const) {
-        const sessionEntry = makeSessionEntry(`session-${messageChannel}`);
-        const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
-        selectedRunner.mockResolvedValueOnce({ meta: { durationMs: 1 } });
-
-        await runStoredAttempt({
-          providerOverride,
-          modelOverride: providerOverride === "openai" ? "gpt-5.4" : "opus",
-          sessionEntry,
-          sessionKey,
-          sessionStore,
-          messageChannel,
-          cfg: { surfaces: { telegram: { silentReply: { group: "allow" } } } },
-          opts: {
-            privateCompletion,
-            inputProvenance: { kind: "inter_session", sourceTool },
-          },
-        });
-
-        expectMockArgFields(
-          selectedRunner,
-          {
-            terminalReplyExpectation: allowSilence ? "optional" : "required",
-            silentReplyPromptMode: allowSilence ? undefined : "none",
-          },
-          selectedRunner.mock.calls.length - 1,
-        );
-      }
-    },
-  );
+  registerCommandReplyPolicyTests({
+    runStoredAttempt,
+    seedSessionStore,
+    runEmbeddedAgentMock,
+    runCliAgentMock,
+    executePreparedCliRunMock,
+    expectMockArgFields,
+  });
 
   it("suppresses live stream output for hidden internal runs", async () => {
     const embeddedArg = await runOpenClawEmbeddedAttemptForTest({

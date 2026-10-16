@@ -5,6 +5,7 @@ import { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 export type ShellRouteState = {
   routeId?: RouteId;
   routeFailed?: boolean;
+  sessionRouteNotice?: boolean;
   location?: RouteLocation;
   committedRouteId?: RouteId;
   committedLocation?: RouteLocation;
@@ -30,12 +31,18 @@ export function selectShellRouteState(routerState: RouterState<RouteId>): ShellR
   const committedSessionKey = committedMatch
     ? sessionKeyFromRouteData(committedMatch.routeId, committedMatch.data)
     : undefined;
+  const renderedSessionKey =
+    match === committedMatch
+      ? committedSessionKey
+      : match && sessionKeyFromRouteData(match.routeId, match.data);
   return {
     routeId: match?.routeId,
     location: match?.location,
     routeFailed: match
       ? match.status === "error" || match.status === "notFound"
       : routerState.status === "notFound" || undefined,
+    sessionRouteNotice:
+      isSessionRouteId(match?.routeId) && match?.data !== undefined && !renderedSessionKey,
     committedRouteId: committedMatch?.routeId,
     committedLocation: committedMatch?.location,
     committedSessionKey,
@@ -46,6 +53,7 @@ export function equalShellRouteState(previous: ShellRouteState, next: ShellRoute
   return (
     previous.routeId === next.routeId &&
     previous.routeFailed === next.routeFailed &&
+    previous.sessionRouteNotice === next.sessionRouteNotice &&
     sameRouteLocation(previous.location, next.location) &&
     previous.committedRouteId === next.committedRouteId &&
     sameRouteLocation(previous.committedLocation, next.committedLocation) &&

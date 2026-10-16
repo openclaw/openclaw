@@ -16,6 +16,7 @@ import type {
   ChannelIngressReadCommand,
   ChannelIngressReadReply,
 } from "../channels/message/ingress-queue-read-contract.js";
+import type { ClawInventory } from "../claws/inventory-read.kernel.js";
 import type { PersistedClawPackageRef } from "../claws/package-extension-provenance.js";
 import type { ClawOrphanWorkspace, PersistedClawInstall } from "../claws/provenance-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,7 +24,6 @@ import type { CronScratchReadCommand, CronScratchSnapshot } from "../cron/scratc
 import type {
   CronRunReceiptCurrentFacts,
   CronRunReceiptCurrentReadCommand,
-  CronRunReceiptOwnerObservation,
 } from "../cron/store/run-receipt.types.js";
 import type { CronQuarantinedJob } from "../cron/types-shared.js";
 import type {
@@ -124,6 +124,7 @@ import type {
   UserBackgroundReadCommand,
   UserBackgroundReadReply,
 } from "./user-background.types.js";
+import type { CanonicalUserPreferences } from "./user-preferences.types.js";
 import type { UserProfileAvatarReadCommand } from "./user-profiles-avatar.types.js";
 import type {
   UserChannelIdentitySelector,
@@ -156,6 +157,7 @@ export type OpenClawStateReadCommand =
   | { type: "capture.readOnlyBlob"; blobId: string }
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
+  | { type: "claws.inventory" }
   | { type: "claws.packageOwnership"; agentId?: string; includeInstalls: boolean }
   | { type: "gatewayOwnerLease.read"; schemaMaintenance: boolean }
   | AcpSessionReadCommand
@@ -172,7 +174,12 @@ export type OpenClawStateReadCommand =
         typeof import("../gateway/operator-approval-store.kernel.worker.js").readPendingOperatorApprovalsInDatabase
       >[0];
     }
-  | { type: "operatorApprovals.hasDue"; nowMs: number }
+  | {
+      type: "operatorApprovals.prepareReplay";
+      input: Parameters<
+        typeof import("../gateway/operator-approval-store.kernel.worker.js").readOperatorApprovalReplayInDatabase
+      >[0];
+    }
   | { type: "operatorApprovals.listCronGrants"; input: { limit?: number } }
   | { type: "operatorApprovals.validateCronGrant"; input: CronStandingGrantLookupInput }
   | { type: "operatorApprovals.placementGrant"; input: PlacementGrantReadInput }
@@ -196,7 +203,6 @@ export type OpenClawStateReadCommand =
     }
   | CronRunReceiptCurrentReadCommand
   | CronScratchReadCommand
-  | { type: "cron.activeReceiptOwners"; agentId: string }
   | { type: "cron.jobNames"; jobIds: string[]; storePath?: string }
   | { type: "cron.quarantine"; storeKey: string }
   | { type: "exec-approvals.read" }
@@ -224,6 +230,7 @@ export type OpenClawStateReadCommand =
       type: "userProfiles.catalogIdentity";
       input: import("./user-profile-catalog-identity.read.js").UserProfileCatalogIdentityInput;
     }
+  | { type: "userModelAccounts.authorization"; authProfileId: string }
   | { type: "userModelAccounts.links"; profileId: string }
   | { type: "userModelAccounts.summary"; profileId: string; authProfileId: string }
   | { type: "userModelAccounts.selection"; profileId?: string; authProfileId: string }
@@ -232,6 +239,7 @@ export type OpenClawStateReadCommand =
       selection: import("./user-model-accounts.js").PersonalCatalogSelection;
     }
   | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }
+  | { type: "userPreferences.read"; profileId: string; keys?: readonly string[] }
   | {
       type: "githubPublication.lifecycle";
       publicationKind: "shared" | "personal";
@@ -330,6 +338,7 @@ export type OpenClawStateReadResult =
       type: "deliveryQueue.outbound";
       entries: OutboundDeliveryStorageEntry[];
     }
+  | { type: "claws.inventory"; inventory: ClawInventory }
   | AcpSessionReadResult
   | {
       type: "conversationBindings.inspect";
@@ -346,7 +355,12 @@ export type OpenClawStateReadResult =
         typeof import("../gateway/operator-approval-store.kernel.worker.js").readPendingOperatorApprovalsInDatabase
       >;
     }
-  | { type: "operatorApprovals.hasDue"; hasDue: boolean }
+  | {
+      type: "operatorApprovals.prepareReplay";
+      replay: ReturnType<
+        typeof import("../gateway/operator-approval-store.kernel.worker.js").readOperatorApprovalReplayInDatabase
+      >;
+    }
   | { type: "operatorApprovals.listCronGrants"; grants: CronStandingGrantListing[] }
   | { type: "operatorApprovals.validateCronGrant"; result: ConsumeCronStandingGrantResult }
   | { type: "operatorApprovals.placementGrant"; rows: PlacementGrantRows }
@@ -394,10 +408,6 @@ export type OpenClawStateReadResult =
       names: Map<string, string | undefined>;
     }
   | {
-      type: "cron.activeReceiptOwners";
-      owners: CronRunReceiptOwnerObservation[];
-    }
-  | {
       type: "subagents.sessionList";
       runs: Map<string, SubagentRunReadRecord>;
     }
@@ -429,6 +439,7 @@ export type OpenClawStateReadResult =
       type: "userPreferences.values";
       values: Map<string, unknown>;
     }
+  | { type: "userPreferences.read"; preferences: CanonicalUserPreferences | undefined }
   | UserBackgroundReadReply
   | {
       type: "exec-approvals.read";

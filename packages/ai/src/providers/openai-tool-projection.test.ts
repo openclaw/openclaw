@@ -5,6 +5,7 @@ import {
   reconcileOpenAICompletionsToolChoice,
   reconcileOpenAIResponsesToolChoice,
 } from "./openai-tool-projection.js";
+import { findOpenAIStrictToolProjectionDiagnostics } from "./openai-tool-schema.js";
 
 describe("OpenAI tool projection", () => {
   it("keeps healthy tools when sibling descriptors or schemas are unreadable", () => {
@@ -29,7 +30,7 @@ describe("OpenAI tool projection", () => {
         get description(): never {
           throw new Error("description exploded");
         },
-        parameters: { type: "object", properties: {} },
+        parameters: undefined,
       },
     ]);
 
@@ -37,10 +38,18 @@ describe("OpenAI tool projection", () => {
       {
         toolIndex: 2,
         name: "lookup",
-        parameters: { type: "object", properties: {} },
+        parameters: {},
       },
     ]);
     expect(projection.diagnostics).toHaveLength(2);
+    expect(findOpenAIStrictToolProjectionDiagnostics(projection)).toEqual([
+      { toolIndex: 0, violations: ["tool[0].name is unreadable"] },
+      {
+        toolIndex: 1,
+        toolName: "bad_schema",
+        violations: ["bad_schema.parameters is not JSON-serializable"],
+      },
+    ]);
   });
 
   it("materializes pinned function choices after one name read", () => {
@@ -76,16 +85,6 @@ describe("OpenAI tool projection", () => {
     expect(completionsNameReads).toBe(1);
   });
 
-  it("normalizes omitted parameters to an empty schema", () => {
-    expect(projectOpenAITools([{ name: "lookup", parameters: undefined }]).tools).toEqual([
-      {
-        toolIndex: 0,
-        name: "lookup",
-        parameters: {},
-      },
-    ]);
-  });
-
   it("keeps literal reference examples while quarantining dynamic schema references", () => {
     const parameters = Type.Object(
       { document: Type.Record(Type.String(), Type.Unknown()) },
@@ -115,23 +114,6 @@ describe("OpenAI tool projection", () => {
     expect(
       reconcileOpenAIResponsesToolChoice({ type: "function", name: "store_schema" }, projection),
     ).toEqual({ type: "function", name: "store_schema" });
-  });
-
-  it("quarantines an inventory with an unreadable length", () => {
-    const tools = new Proxy([], {
-      get(target, property, receiver) {
-        if (property === "length") {
-          throw new Error("length exploded");
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    });
-
-    expect(projectOpenAITools(tools)).toEqual({
-      inputToolCount: 0,
-      tools: [],
-      diagnostics: [{ toolIndex: 0, violations: ["tool[0] is unreadable"] }],
-    });
   });
 
   it("classifies sparse descriptors as unreadable tools", () => {

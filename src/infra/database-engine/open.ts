@@ -3,14 +3,18 @@ import type { DatabaseSync } from "node:sqlite";
 import type { PostgresSqlConnection } from "../sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
+  invalidateLocalSqliteSchemaAdmissions,
   publishSqliteDatabaseAdmission,
+  publishSqliteDatabaseSchemaChange,
   type SqliteDatabaseAdmissionKey,
 } from "../sqlite-database-admission.js";
+import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { databaseEngineAdapters } from "./adapters.js";
 import type { AdmittedStore, EngineConnection, StoreSchema } from "./contract.js";
 import { observeConnection } from "./observation.js";
 import { admitPostgresPhysicalFacts } from "./physical-facts.js";
+import { admitPostgresCapabilities, postgresSchemaMetadataSql } from "./postgres-schema.js";
 import type { DatabaseEngineInput } from "./types.js";
 
 type EngineAdmission =
@@ -107,7 +111,7 @@ export function openEngineStore(ref: {
   }
   if (known?.engine === "sqlite") {
     throw new Error(
-      `Existing SQLite ${schema.id} data cannot switch engines; wait for the database port tool.`,
+      `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing database.engine.`,
     );
   }
   ref.prepareAnchor();
@@ -118,7 +122,7 @@ export function openEngineStore(ref: {
           const inspection = ref.inspectSqlite();
           if (inspection.hasExistingData) {
             throw new Error(
-              `Existing SQLite ${schema.id} data cannot switch engines; wait for the database port tool.`,
+              `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing database.engine.`,
             );
           }
           if (!inspection.hasEngineAnchor && ref.existingOnly) {
@@ -168,11 +172,14 @@ export function openEngineStore(ref: {
       storeId: identity.storeId,
       store: schema.id,
       version: schema.version,
+      schema,
+      recordSchema: fresh,
     });
     ref.admitPostgres?.(db, fresh);
   };
   try {
-    if (!known) {
+    if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
+      admitPostgresCapabilities(db);
       // Bootstrap borrows opening custody; ordinary writes still require domain admission.
       db.runTransaction(() => {
         const fresh = !db
@@ -180,9 +187,7 @@ export function openEngineStore(ref: {
           .get(identity.namespace);
         if (fresh && !ref.existingOnly) {
           db.exec(`CREATE SCHEMA IF NOT EXISTS "${identity.namespace.replaceAll('"', '""')}"`);
-          db.exec(
-            "CREATE TABLE IF NOT EXISTS openclaw_schema_meta (store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL)",
-          );
+          db.exec(postgresSchemaMetadataSql);
         }
         let meta;
         try {
@@ -209,18 +214,22 @@ export function openEngineStore(ref: {
             );
           }
           if (meta.version !== schema.version) {
-            adapter.schema.migrate(store, Number(meta.version));
+            invalidateLocalSqliteSchemaAdmissions(db);
+            stageSqliteTransactionState(db, {
+              stage: () => {},
+              rollback: () => {},
+              commit: () => publishSqliteDatabaseSchemaChange(db),
+              invalidate: () => publishSqliteDatabaseSchemaChange(db),
+            });
+            adapter.schema.migrate(store, Number(meta.version), db);
           }
         }
         admit(!meta);
       });
-    } else if (known.engine === "postgres" && known.version !== schema.version) {
-      adapter.schema.migrate(store, known.version);
-    }
-    if (known) {
+    } else {
       admit(false);
     }
-    if (!known) {
+    if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
       publishSqliteDatabaseAdmission(anchor, admissionKey, {
         engine: "postgres",
         ...identity,

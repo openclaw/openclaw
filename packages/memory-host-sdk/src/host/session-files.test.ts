@@ -295,16 +295,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
 });
 
 describe("memory session sync targets", () => {
-  it("parses deprecated canonical OpenClaw transcript paths into sync identity", () => {
-    const sessionFile = path.join(tmpDir, "agents", "main", "sessions", "active.jsonl");
-    fsSync.mkdirSync(path.dirname(sessionFile), { recursive: true });
-
-    expect(parseCanonicalSessionSyncTargetFromPath(sessionFile)).toEqual({
-      agentId: "main",
-      sessionId: "active",
-    });
-  });
-
   it("rejects arbitrary deprecated transcript path hints", () => {
     expect(parseCanonicalSessionSyncTargetFromPath(path.join(tmpDir, "active.jsonl"))).toBeNull();
     expect(
@@ -338,30 +328,6 @@ describe("buildSessionEntry", () => {
     );
     expect(entry.lineMap).toEqual([1, 1, 2, 2, 3, 3, 4, 4]);
     expect(entry.hash).toBe("c0c681f57b6caea32f1a6baee132322c0dbc6f93e75656725fe3ef7158f195ae");
-  });
-
-  it("returns lineMap tracking original JSONL line numbers", async () => {
-    const jsonlLines = [
-      JSON.stringify({ type: "custom", customType: "model-snapshot", data: {} }),
-      JSON.stringify({ type: "custom", customType: "openclaw.cache-ttl", data: {} }),
-      JSON.stringify({ type: "session-meta", agentId: "test" }),
-      JSON.stringify({ type: "message", message: { role: "user", content: "Hello world" } }),
-      JSON.stringify({ type: "custom", customType: "tool-result", data: {} }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "Hi there, how can I help?" },
-      }),
-      JSON.stringify({ type: "message", message: { role: "user", content: "Tell me a joke" } }),
-    ];
-    const filePath = path.join(tmpDir, "session.jsonl");
-    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
-
-    const entry = requireSessionEntry(await buildSessionEntry(filePath));
-    expect(entry.content).toBe(
-      "User: Hello world\nAssistant: Hi there, how can I help?\nUser: Tell me a joke",
-    );
-
-    expect(entry.lineMap).toStrictEqual([4, 6, 7]);
   });
 
   it("indexes usage-counted reset/deleted archives but still skips bak and checkpoint artifacts", async () => {

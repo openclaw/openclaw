@@ -148,6 +148,16 @@ export async function resolveDescendantSubagentFollowup(params: {
   initialSynthesizedText: string;
   abortSignal?: AbortSignal;
 }): Promise<DescendantSubagentFollowup> {
+  if (params.spawnOnlyHandoff) {
+    const child = await (
+      await subagentFollowupRuntimeLoader.load()
+    ).waitForDescendantSubagentResult(params);
+    return {
+      finalReply: child?.reply,
+      hasUnsettledDescendants: child === undefined,
+      hadDescendants: true,
+    };
+  }
   const expectedFollowup = expectsSubagentFollowup(params.initialSynthesizedText);
   const subagentRegistryRuntime = await deliverySubagentRegistryRuntimeLoader.load();
   let hasUnsettledDescendants = await subagentRegistryRuntime.hasUnsettledCronDescendants(
@@ -156,7 +166,7 @@ export async function resolveDescendantSubagentFollowup(params: {
   const shouldCheckCompletedDescendants =
     !params.abortSignal?.aborted &&
     !hasUnsettledDescendants &&
-    (params.spawnOnlyHandoff || isLikelyInterimCronMessage(params.initialSynthesizedText));
+    isLikelyInterimCronMessage(params.initialSynthesizedText);
   const needsFollowupRuntime =
     shouldCheckCompletedDescendants || hasUnsettledDescendants || expectedFollowup;
   const followupRuntime = needsFollowupRuntime
@@ -171,10 +181,7 @@ export async function resolveDescendantSubagentFollowup(params: {
       })
     : undefined;
   const hadDescendants = hasUnsettledDescendants || Boolean(completedDescendantReply);
-  if (
-    (!params.deliveryBestEffort || params.spawnOnlyHandoff) &&
-    (hasUnsettledDescendants || expectedFollowup)
-  ) {
+  if (!params.deliveryBestEffort && (hasUnsettledDescendants || expectedFollowup)) {
     let finalReply = await followupRuntime?.waitForDescendantSubagentSummary({
       sessionKey: params.sessionKey,
       initialReply: params.initialSynthesizedText,

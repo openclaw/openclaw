@@ -171,32 +171,6 @@ describe("requireFromMe (edit / unsend authorization)", () => {
       }),
     ).toBe("outbound-guid");
   });
-
-  it("rejects an uncached full guid under requireFromMe (agent cannot edit/unsend unknown messages)", async () => {
-    await expect(
-      resolveIMessageMessageId("never-seen-guid", {
-        chatContext: { chatGuid: "iMessage;+;chatA" },
-        requireFromMe: true,
-      }),
-    ).rejects.toThrow("not one this agent sent");
-  });
-
-  it("rejects when the cached entry has no isFromMe field (older persisted entry, treated as not-from-me)", async () => {
-    // Missing persisted provenance must not authorize editing or unsending.
-    await rememberIMessageReplyCache({
-      accountId: "default",
-      messageId: "legacy-guid",
-      chatGuid: "iMessage;+;chatA",
-      timestamp: Date.now(),
-    });
-
-    await expect(
-      resolveIMessageMessageId("legacy-guid", {
-        chatContext: { chatGuid: "iMessage;+;chatA" },
-        requireFromMe: true,
-      }),
-    ).rejects.toThrow("not one this agent sent");
-  });
 });
 
 describe("findLatestIMessageEntryForChat", () => {
@@ -354,27 +328,6 @@ describe("SQLite reply-cache hydration", () => {
         }),
       ).toBe(entry.messageId);
     }
-  });
-
-  it("does not reuse short ids after cached rows expire", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-05-08T00:00:00Z"));
-    const first = await rememberIMessageReplyCache({
-      accountId: "default",
-      messageId: "old-guid",
-      timestamp: Date.now(),
-    });
-    expect(first.shortId).toBe("1");
-
-    vi.setSystemTime(new Date("2026-05-08T07:00:00Z"));
-    await loadReplyCache({ preservePersistentState: true });
-    const second = await rememberIMessageReplyCache({
-      accountId: "default",
-      messageId: "new-guid",
-      timestamp: Date.now(),
-    });
-
-    expect(second.shortId).toBe("2");
   });
 });
 

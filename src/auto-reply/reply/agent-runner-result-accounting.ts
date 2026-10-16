@@ -296,14 +296,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
         toModel: fallbackTransition.selectedModelRef,
         assertCurrent() {
           operation?.abortSignal.throwIfAborted();
-          const current = completion.assertCurrent();
-          if (
-            !current ||
-            !selectionUnchanged(current) ||
-            current.fallbackNotice?.activeModel !== fromModel
-          ) {
-            throw new Error("Model restoration source changed before commit");
-          }
+          completion.assertCurrent();
         },
       });
       if (!recorded) {
@@ -391,7 +384,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
   } satisfies Parameters<typeof prepareSessionUsageUpdate>[0];
   if (completion) {
-    const updatedAt = Date.now();
     completion.patch((entry) => {
       try {
         const prepared = prepareSessionUsageUpdate(usageParams);
@@ -399,7 +391,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
           ? {
               kind: "usage",
               update: { ...prepared.update, estimatedCostUsd: prepared.estimateCost(entry) },
-              updatedAt,
+              updatedAt: entry.updatedAt,
             }
           : undefined;
       } catch (error) {

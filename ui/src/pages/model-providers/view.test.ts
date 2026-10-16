@@ -499,6 +499,11 @@ describe("renderModelProviders", () => {
 
     button(readiness!, "Connect provider")?.click();
     expect(onConnectProvider).toHaveBeenCalledOnce();
+
+    mount(props(), container);
+    expect(container.querySelector('[data-model-readiness="ready"]')).toBe(readiness);
+    expect(text(readiness)).toContain("AI models available");
+    expect(text(readiness)).not.toContain("Model required");
   });
 
   it.each([true])(

@@ -282,7 +282,6 @@ describe("cron runtime row publication", () => {
       claimCronRunReceiptInDatabaseForTest({
         database: db,
         prepared,
-        resolveAgentId: (current) => current.agentId ?? "main",
       }),
     );
     try {

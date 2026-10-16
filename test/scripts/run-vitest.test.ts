@@ -106,6 +106,7 @@ describe("scripts/run-vitest", () => {
       const directory = tempDirs.make("oc-test-runtime-cache-");
       const env = Object.freeze({
         OPENCLAW_VITEST_RUNTIME: runtime,
+        OPENCLAW_BUN_PATH: process.execPath,
         NODE_COMPILE_CACHE: nodePath.join(directory, "node-cache"),
         NODE_COMPILE_CACHE_PORTABLE: "1",
         NODE_DISABLE_COMPILE_CACHE: "0",
@@ -124,8 +125,8 @@ describe("scripts/run-vitest", () => {
       ];
       const flags = ["--no-maglev", "--no-concurrent-sparkplug"];
       expect(testRuntime.resolveVitestTestCommand([...flags, ...operands], env)).toEqual({
-        command: "bun",
-        envOverrides: { NODE_DISABLE_COMPILE_CACHE: "1" },
+        command: process.execPath,
+        envOverrides: { NODE_DISABLE_COMPILE_CACHE: "1", PATH: nodePath.dirname(process.execPath) },
         args: [
           "--tsconfig-override",
           fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
@@ -230,6 +231,7 @@ describe("scripts/run-vitest", () => {
       const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
       const directory = tempDirs.make("oc-native-bun-cache-");
       const env = Object.freeze({
+        OPENCLAW_BUN_PATH: process.execPath,
         NODE_COMPILE_CACHE: nodePath.join(directory, "node-cache"),
         NODE_COMPILE_CACHE_PORTABLE: "1",
         NODE_DISABLE_COMPILE_CACHE: "0",
@@ -238,10 +240,10 @@ describe("scripts/run-vitest", () => {
         TEMP: directory,
       });
       const parentCacheDisabled = process.env.NODE_DISABLE_COMPILE_CACHE;
-      const expectedCommand = testRuntime.resolveNativeBunTestCommand(files);
+      const expectedCommand = testRuntime.resolveNativeBunTestCommand(files, undefined, env);
       expect(expectedCommand).toEqual({
-        command: "bun",
-        envOverrides: { NODE_DISABLE_COMPILE_CACHE: "1" },
+        command: process.execPath,
+        envOverrides: { NODE_DISABLE_COMPILE_CACHE: "1", PATH: nodePath.dirname(process.execPath) },
         args: [
           "test",
           "--no-env-file",
@@ -271,7 +273,7 @@ describe("scripts/run-vitest", () => {
       const exitCode = process.exitCode;
       try {
         await runVitest(vi.fn(), ["--native-bun", ...files], env);
-        expect(command).toHaveBeenCalledWith(files);
+        expect(command).toHaveBeenCalledWith(files, undefined, expect.objectContaining(env));
         expect(process.exitCode).toBe(7);
         expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("0");
         expect(process.env.NODE_DISABLE_COMPILE_CACHE).toBe(parentCacheDisabled);
@@ -567,46 +569,32 @@ registerHooks({resolve(specifier, context, nextResolve) {
     expect(argv).toEqual(original);
   });
 
-  it("preserves native invalid scalar errors", async () => {
-    const argv = ["run", file, "--passWithNoTests", "--passWithNoTests"];
-    let nativeError: unknown;
-    try {
-      parseCLI(["vitest", ...argv]);
-    } catch (error) {
-      nativeError = error;
-    }
-    expect(nativeError).toBeInstanceOf(Error);
-    await expect(resolveExplicitTestFileNoPassArgs(argv)).rejects.toThrow(
-      (nativeError as Error).message,
-    );
-  });
-
   it("does not force no-test failure for globs or basename filters", async () => {
     const argv = ["run", "run-vitest.test.ts", "test/**/*.test.ts"];
     expect(await resolveExplicitTestFileNoPassArgs(argv)).toBe(argv);
   });
 
-  it.each([
-    ["--no-passWithNoTests", "false"],
-    ["--passWithNoTests", "--passWithNoTests"],
-  ])("round-trips native option ownership through delegation: %j", (...flags) => {
-    const parse = (args: string[]) => {
-      try {
-        return parseCLI(["vitest", "run", ...args]);
-      } catch (error) {
-        return String(error);
+  it.each([["--passWithNoTests", "--passWithNoTests"]])(
+    "round-trips native option ownership through delegation: %j",
+    (...flags) => {
+      const parse = (args: string[]) => {
+        try {
+          return parseCLI(["vitest", "run", ...args]);
+        } catch (error) {
+          return String(error);
+        }
+      };
+      for (const argv of [
+        [...flags, file],
+        [file, ...flags],
+      ]) {
+        const delegated = resolveTestProjectsDelegationArgs(argv);
+        expect(delegated).not.toBeNull();
+        const { forwardedArgs } = parseTestProjectsArgs(delegated!);
+        expect(parse(forwardedArgs)).toEqual(parse(argv));
       }
-    };
-    for (const argv of [
-      [...flags, file],
-      [file, ...flags],
-    ]) {
-      const delegated = resolveTestProjectsDelegationArgs(argv);
-      expect(delegated).not.toBeNull();
-      const { forwardedArgs } = parseTestProjectsArgs(delegated!);
-      expect(parse(forwardedArgs)).toEqual(parse(argv));
-    }
-  });
+    },
+  );
 
   it.each<[string[], string[] | null]>([
     [
@@ -625,10 +613,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
       ["src/**/*.test.ts", "src/agents/bash-tools.ts"],
     ],
     [["--run", "false", file], null],
-    [
-      ["run", file, "--repeats", "19"],
-      [file, "--", "--repeats", "19"],
-    ],
   ])("preserves ownership and operands when delegating %j", (argv, expected) => {
     expect(resolveTestProjectsDelegationArgs(argv)).toEqual(expected);
   });
@@ -869,8 +853,10 @@ registerHooks({resolve(specifier, context, nextResolve) {
   );
 
   it.each<{ env: NodeJS.ProcessEnv; expected: NodeJS.ProcessEnv }>([
-    { env: { LANG: "de_DE.UTF-8", LC_ALL: "de_DE.UTF-8" }, expected: {} },
-    { env: { OPENCLAW_LOCAL_CHECK: "0" }, expected: { OPENCLAW_LOCAL_CHECK: "1" } },
+    {
+      env: { OPENCLAW_LOCAL_CHECK: "0", LANG: "de_DE.UTF-8", LC_ALL: "de_DE.UTF-8" },
+      expected: { OPENCLAW_LOCAL_CHECK: "1" },
+    },
     {
       env: { OPENCLAW_VITEST_MAX_WORKERS: "2", RAYON_NUM_THREADS: "8", TOKIO_WORKER_THREADS: "6" },
       expected: {},

@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 
@@ -13,6 +13,11 @@ const { observeOwnedDirectory } = await runInDetachedAsyncContext(() =>
 );
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// These cases drive in-process watchers; directory-watch-host.test.ts covers the macOS host.
+const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+beforeEach(() => {
+  Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+});
 const subscriptions: Array<{ close(): void }> = [];
 afterEach(() => {
   for (const subscription of subscriptions.splice(0)) {
@@ -20,9 +25,37 @@ afterEach(() => {
   }
   vi.restoreAllMocks();
   vi.useRealTimers();
+  Object.defineProperty(process, "platform", platform);
 });
 
 describe("process-owned directory observation", () => {
+  it("bounds scheduling work while 810 directories subscribe and close", () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(0);
+    const root = tempDirs.make("owned-directory-fleet-");
+    const timeout = vi.spyOn(globalThis, "setTimeout");
+    const clock = vi.spyOn(Date, "now");
+    const listener = vi.fn();
+    for (let index = 0; index < 810; index++) {
+      const directory = path.join(root, `agent-${index}`);
+      fs.mkdirSync(directory);
+      clock.mockClear();
+      subscriptions.push(observeOwnedDirectory(directory, listener));
+      expect(clock.mock.calls.length).toBeLessThanOrEqual(4);
+    }
+    expect(timeout).toHaveBeenCalledOnce();
+    clock.mockClear();
+    for (let index = 0; index < 809; index++) {
+      subscriptions.pop()!.close();
+    }
+    expect(clock).not.toHaveBeenCalled();
+    expect(timeout).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(300_000);
+    expect(listener).toHaveBeenCalledOnce();
+    subscriptions.pop()!.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("recovers healthy watches every five minutes while authority subscribers keep 30 seconds", () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(0);
@@ -117,6 +150,53 @@ describe("process-owned directory observation", () => {
     result.value.emit("change", "rename", "profiles");
     expect(listener).toHaveBeenCalledWith("profiles");
     expect(watch).toHaveBeenCalledTimes(1);
+  });
+
+  it("watches the long form of a Windows 8.3 short path", () => {
+    // libuv aborts when a directory watch opened through a short path reports a child event.
+    const root = tempDirs.make("owned-directory-short-");
+    const shortPath = path.join(root, "RUNNER~1");
+    const longPath = path.join(root, "runneradmin");
+    fs.mkdirSync(shortPath);
+    fs.mkdirSync(longPath);
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(fs.realpathSync, "native").mockImplementation(((target: fs.PathLike) =>
+      target === shortPath ? longPath : String(target)) as typeof fs.realpathSync.native);
+    const watch = vi.spyOn(fs, "watch");
+    const listener = vi.fn();
+    subscriptions.push(observeOwnedDirectory(shortPath, listener));
+    expect(watch).toHaveBeenCalledOnce();
+    expect(watch.mock.calls[0]![0]).toBe(longPath);
+    const result = watch.mock.results[0];
+    if (result?.type !== "return") {
+      throw new Error("Missing native directory watcher");
+    }
+    result.value.emit("change", "change", "auth.json");
+    expect(listener).toHaveBeenCalledWith("auth.json");
+  });
+
+  it("keeps an absent directory's ancestor watch across unrelated child renames", () => {
+    const root = tempDirs.make("owned-directory-ancestor-");
+    const agents = path.join(root, "agents");
+    const watch = vi.spyOn(fs, "watch");
+    const opened = () =>
+      watch.mock.results.flatMap((result, index) =>
+        result.type === "return"
+          ? [{ path: watch.mock.calls[index]?.[0], watcher: result.value }]
+          : [],
+      );
+    subscriptions.push(observeOwnedDirectory(path.join(agents, "work"), () => {}));
+    const [ancestor] = opened();
+    expect(ancestor?.path).toBe(root);
+    const close = vi.spyOn(ancestor!.watcher, "close");
+    // SQLite sidecars beside a state database appear and vanish on every write.
+    ancestor!.watcher.emit("change", "rename", "state.sqlite-journal");
+    expect(close).not.toHaveBeenCalled();
+    expect(opened()).toHaveLength(1);
+    fs.mkdirSync(agents);
+    ancestor!.watcher.emit("change", "rename", "agents");
+    expect(close).toHaveBeenCalledOnce();
+    expect(opened().map((entry) => entry.path)).toEqual([root, agents]);
   });
 
   it("re-admits an absent directory and invalidates after missed notifications", () => {

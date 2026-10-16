@@ -142,6 +142,8 @@ async function listCodexAppServerRolloutFilesForThread(
 type CodexAppServerRolloutTokenSnapshot = {
   totalTokens?: number;
   modelContextWindow?: number;
+  // A turn started after the latest window was reported and never reported its own.
+  windowSupersededByNewerTurn?: boolean;
 };
 
 async function readCodexAppServerRolloutTokenSnapshot(
@@ -164,6 +166,10 @@ async function readCodexAppServerRolloutTokenSnapshot(
         return false;
       }
       snapshot ??= {};
+      // A newer turn without a window must not borrow an earlier model's observation.
+      if (snapshot.modelContextWindow === undefined && lineSnapshot.windowSupersededByNewerTurn) {
+        snapshot.windowSupersededByNewerTurn = true;
+      }
       snapshot.totalTokens ??= lineSnapshot.totalTokens;
       snapshot.modelContextWindow ??= lineSnapshot.modelContextWindow;
       return snapshot.totalTokens !== undefined && snapshot.modelContextWindow !== undefined;
@@ -219,6 +225,9 @@ function readCodexAppServerRolloutTokenSnapshotLine(
   }
   try {
     const parsed = JSON.parse(line) as JsonValue;
+    if (isJsonObject(parsed) && parsed.type === "turn_context") {
+      return { windowSupersededByNewerTurn: true };
+    }
     const payload = isJsonObject(parsed) ? parsed.payload : undefined;
     const info =
       isJsonObject(payload) && payload.type === "token_count" && isJsonObject(payload.info)
@@ -252,12 +261,7 @@ function resolveCodexAppServerNativeThreadTokenFuse(params: {
   reserveTokens: number;
   projectedTurnTokens?: number;
 }): number {
-  const projectedTurnTokens =
-    typeof params.projectedTurnTokens === "number" &&
-    Number.isFinite(params.projectedTurnTokens) &&
-    params.projectedTurnTokens > 0
-      ? Math.floor(params.projectedTurnTokens)
-      : 0;
+  const projectedTurnTokens = params.projectedTurnTokens ?? 0;
   const contextWindow =
     params.modelContextWindow ?? CODEX_APP_SERVER_NATIVE_THREAD_FALLBACK_MAX_TOKENS;
   const promptBudget = resolveProjectionPromptBudgetTokens({
@@ -395,6 +399,9 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   }
   return {
     binding,
-    ...(nativeModelContextWindow ? { startupContextTokens: nativeModelContextWindow } : {}),
+    ...(nativeModelContextWindow &&
+    !nativeTokenSnapshots.some((snapshot) => snapshot?.windowSupersededByNewerTurn)
+      ? { startupContextTokens: nativeModelContextWindow }
+      : {}),
   };
 }

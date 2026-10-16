@@ -35,7 +35,6 @@ import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import type { AgentHarnessCompactionSourceAuthority } from "../harness/host-source-authority.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import type { CompactionRequestConstraints } from "../sessions/compaction/request-budget.js";
-import { SessionManager } from "../sessions/index.js";
 import { buildCompactionFailureResult } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
@@ -499,12 +498,6 @@ export async function executeQueuedContextEngineCompaction(input: {
             expected,
             params.abortSignal,
           );
-          const sessionManager = await SessionManager.openAsync(
-            postCompactionSessionTarget,
-            resolvedWorkspaceDir,
-            undefined,
-            params.abortSignal,
-          );
           const maintenance = runContextEngineMaintenance({
             contextEngine,
             sessionId: postCompactionSessionId,
@@ -517,12 +510,10 @@ export async function executeQueuedContextEngineCompaction(input: {
             }),
             sessionFile: postCompactionSessionFile,
             reason: "compaction",
-            sessionManager,
             withSessionManagerRewriteLock: async (operation) =>
               await withOwnedSessionTranscriptWrites(rewriteContext, async () => {
                 await assertActive(postCompactionSessionTarget, expected);
-                await sessionManager.reloadPersistedTranscriptAsync(params.abortSignal);
-                await assertActive(postCompactionSessionTarget, expected);
+                // The rewrite owner hydrates only when maintenance requests a rewrite.
                 return await operation();
               }),
             runtimeContext,

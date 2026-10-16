@@ -455,6 +455,41 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     });
   });
 
+  it("covers every published Swedish navigation label with a matching English anchor", () => {
+    type NavGroup = { group: string; pages: Array<string | NavGroup> };
+    type NavTab = { tab: string; groups: NavGroup[] };
+    const source = JSON.parse(fs.readFileSync("docs/docs.json", "utf8")) as {
+      navigation: { languages: Array<{ language: string; tabs: NavTab[] }> };
+    };
+    const englishTabs = source.navigation.languages
+      .find((entry) => entry.language === "en")!
+      .tabs.filter((tab) => tab.tab !== "ClawHub");
+    const glossary = new Map<string, string>(
+      JSON.parse(fs.readFileSync("docs/.i18n/glossary.sv.json", "utf8")).map(
+        (entry: { source: string; target: string }) => [entry.source, entry.target],
+      ),
+    );
+    const label = (value: string) => {
+      expect(glossary.has(value), value).toBe(true);
+      return glossary.get(value)!;
+    };
+    const group = (entry: NavGroup): NavGroup => ({
+      group: label(entry.group),
+      pages: [
+        ...entry.pages
+          .filter((page): page is string => typeof page === "string")
+          .slice(0, 1)
+          .map((page) => `sv/${page}`),
+        ...entry.pages.filter((page): page is NavGroup => typeof page !== "string").map(group),
+      ],
+    });
+    const overlay = JSON.parse(fs.readFileSync("docs/.i18n/sv-navigation.json", "utf8"));
+    expect(overlay).toEqual({
+      language: "sv",
+      tabs: englishTabs.map((tab) => ({ tab: label(tab.tab), groups: tab.groups.map(group) })),
+    });
+  });
+
   it("keeps generated locale navigation aligned with English routes", () => {
     const config = composeDocsConfig() as {
       navigation: {
@@ -478,6 +513,8 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     expect(german).toBeDefined();
     const turkish = config.navigation.languages.find((entry) => entry.language === "tr");
     expect(turkish).toBeDefined();
+    const swedish = config.navigation.languages.find((entry) => entry.language === "sv");
+    expect(swedish).toBeDefined();
     const sourceConfig = JSON.parse(
       fs.readFileSync(path.join("docs", "docs.json"), "utf8"),
     ) as typeof config;
@@ -516,6 +553,8 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
         .find((tab) => tab.tab === "贡献")
         ?.groups?.map((group) => group.group),
     ).toEqual(["成熟度", "测试与 CI"]);
+    expect(swedish!.tabs[0]?.tab).toBe("Kom igång");
+    expect(swedish!.tabs[0]?.groups?.[0]?.group).toBe("Översikt");
     expect(german!.tabs[0]?.tab).toBe("Loslegen");
     expect(german!.tabs[0]?.groups?.[0]?.group).toBe("Überblick");
 

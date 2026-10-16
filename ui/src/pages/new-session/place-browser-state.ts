@@ -20,7 +20,6 @@ export class PlaceBrowserState {
   error: string | null = null;
   activeIndex = -1;
   private token = 0;
-  private listingGenerationValue = 0;
   private timer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   constructor(
@@ -28,10 +27,6 @@ export class PlaceBrowserState {
     private readonly requestUpdate: () => void,
     private readonly onListing?: (listing: FsListDirResult) => void,
   ) {}
-
-  get listingGeneration(): number {
-    return this.listingGenerationValue;
-  }
 
   navigate(path: string | undefined, mode: "initial" | "navigation" = "navigation"): Promise<void> {
     this.cancelPending();
@@ -118,7 +113,6 @@ export class PlaceBrowserState {
   reset() {
     this.cancelPending();
     this.listing = null;
-    this.listingGenerationValue += 1;
     this.draft = "";
     this.loading = false;
     this.error = null;
@@ -149,7 +143,6 @@ export class PlaceBrowserState {
         return;
       }
       this.listing = listing;
-      this.listingGenerationValue += 1;
       if (mode !== "typing" && this.draft === draftAtRequest) {
         this.draft = listing.path;
       }

@@ -250,7 +250,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const schedulePreparedRefill = (environmentId?: string) =>
     void trackOperation(preparedPool.maintain(environmentId));
 
-  const turnRpc = createWorkerTurnRpc({
+  const { clear: clearTurnRpc, ...turnRpc } = createWorkerTurnRpc({
     ...options,
     store,
     prepareInstallation,
@@ -494,7 +494,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       inferenceCancellations.clear();
       credentialBroker.clear();
-      turnRpc.clear();
+      clearTurnRpc();
       options.liveEvents?.clear();
       try {
         await options.closeNodeBootstrapArtifacts?.();
@@ -690,24 +690,15 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     observeDesktop: environmentAccess.observeDesktop,
     launchDesktopApp: environmentAccess.launchDesktopApp,
     reconcileDesktopPolicy: environmentAccess.reconcileDesktopPolicy,
-    admitWorker: turnRpc.admitWorker,
+    ...turnRpc,
     fenceWorkerTurnForRecovery: (claim: WorkerSessionTurnClaim) => {
       if (!options.placementStore) {
         throw serviceError("invalid_state", "Worker recovery requires its placement gate");
       }
       options.placementStore.fenceWorkerTurnForRecovery(claim);
     },
-    validateWorkerConnection: turnRpc.validateWorkerConnection,
-    commitTranscript: turnRpc.commitTranscript,
-    pushLiveEvent: turnRpc.pushLiveEvent,
-    getToolSurface: turnRpc.getToolSurface,
-    invokeGatewayTool: turnRpc.invokeGatewayTool,
-    cancelGatewayTool: turnRpc.cancelGatewayTool,
     createGatewayTools: options.createGatewayTools,
-    executeComputer: turnRpc.executeComputer,
     prepareComputer: options.prepareComputer,
-    startInference: turnRpc.startInference,
-    cancelInference: turnRpc.cancelInference,
     resolveSshIdentity: environmentAccess.resolveSshIdentity,
     attachSession: credentialBroker.attachSession,
     takeMintedCredential: credentialBroker.takeMintedCredential,

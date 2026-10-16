@@ -1,6 +1,112 @@
 import Foundation
 
 extension CLIInstaller {
+    private struct BundledDoctorResult: Decodable {
+        enum Status: String, Decodable {
+            case ok, error, advisory
+        }
+
+        struct Advisory: Decodable {
+            let kind: String
+            let reason: String
+            let message: String
+            let details: [String]
+        }
+
+        struct MaintenanceRefusal: Decodable {
+            let kind: String
+            let reason: String
+        }
+
+        struct ConfigWriteRefusal: Decodable {
+            let reason: String
+            let message: String
+            let keys: [String]
+        }
+
+        struct FailureFact: Decodable {
+            let code: String
+            let message: String
+        }
+
+        let status: Status
+        let failureFacts: [FailureFact]?
+        let warnings: [String]?
+        let advisory: Advisory?
+        let maintenanceRefusal: MaintenanceRefusal?
+        let configWriteRefusal: ConfigWriteRefusal?
+    }
+
+    static func repairBundledGateway(
+        runtime: BundledRuntime,
+        environment: [String: String],
+        expectedServiceAuthority: GatewayLaunchAgentManager.ServiceAuthority,
+        checkCurrent: @escaping @MainActor @Sendable () async throws -> Void,
+        statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async throws -> String
+    {
+        await statusHandler(String(localized: "Repairing the OpenClaw Gateway update…"))
+        try await checkCurrent()
+        // The app has drained its producer. Doctor owns core and plugin repairs,
+        // while native custody continues to own service publication and activation.
+        let response = await ShellExecutor.runDetailed(
+            command: runtime.cliCommand + ["doctor", "--fix", "--non-interactive"],
+            cwd: runtime.packageRoot.path,
+            env: environment.merging([
+                "OPENCLAW_SERVICE_REPAIR_POLICY": "external",
+                "OPENCLAW_UPDATE_IN_PROGRESS": "1",
+                "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE": "1",
+                "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE": "1",
+                "OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART": "1",
+                "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR": "0",
+                "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION": "0",
+                "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH": "-",
+            ]) { _, policy in policy },
+            timeout: self.managedUpdateTimeout,
+            beforeSpawn: { expectedServiceAuthority.currentError() })
+        try await checkCurrent()
+        return try self.bundledDoctorDiagnostics(response)
+    }
+
+    struct DoctorProcessesUnsettled: LocalizedError {
+        let message: String
+        var errorDescription: String? {
+            self.message
+        }
+    }
+
+    static func bundledDoctorDiagnostics(_ response: ShellExecutor.ShellResult) throws -> String {
+        let details = [response.preflightError, response.stderr, response.stdout, response.errorMessage]
+            .compactMap { $0?.nonEmpty }.first ?? "Doctor did not complete. Retry recovery."
+        let failure = String(localized: "Gateway recovery failed.") + " " + details.suffix(4000)
+        if let preflight = response.preflightError {
+            throw GatewayHostingError(message: preflight)
+        }
+        guard !response.timedOut, response.exitCode != nil,
+              let finalLine = response.stdout.split(separator: "\n").last(where: {
+                  $0.hasPrefix("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH=")
+              }),
+              let result = try? JSONDecoder().decode(
+                  BundledDoctorResult.self,
+                  from: Data(finalLine.dropFirst("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH=".count).utf8))
+        else {
+            throw DoctorProcessesUnsettled(message: failure +
+                " Keep the Gateway stopped; Doctor cleanup is unverified.")
+        }
+        if let unsettled = result.failureFacts?.first(where: { $0.code == "doctor-processes-unsettled" }) {
+            throw DoctorProcessesUnsettled(message: unsettled.message)
+        }
+        guard (result.status == .ok && response.exitCode == 0) ||
+            (result.status == .advisory && response.exitCode == 86 &&
+                result.advisory?.kind == "package-post-install-doctor" &&
+                result.advisory?.reason == "deferred-configured-plugin-repair"),
+            result.maintenanceRefusal == nil, result.configWriteRefusal == nil,
+            (result.failureFacts ?? []).isEmpty
+        else { throw GatewayHostingError(message: failure) }
+        return ((result.warnings ?? []) + [result.advisory?.message].compactMap(\.self) +
+            (result.advisory?.details ?? []))
+            .joined(separator: "\n")
+    }
+
     static func prepareBundledGateway(
         targetVersion: String? = GatewayEnvironment.appVersionString(),
         restartGateway: Bool = !AppStateStore.shared.isPaused,

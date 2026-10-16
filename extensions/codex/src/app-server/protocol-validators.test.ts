@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   assertCodexModelListResponse,
   assertCodexPassiveTurnItems,
-  readCodexTurnCompletedNotification,
+  prepareCodexServerNotification,
   assertCodexThreadStartResponse,
   assertCodexThreadResumeResponse,
 } from "./protocol-validators.js";
-import { assertCodexThreadForkParams, type CodexThreadItem } from "./protocol.js";
+import type { CodexThreadItem } from "./protocol.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function makeMinimalThread(overrides: Record<string, unknown> = {}) {
@@ -136,24 +136,6 @@ describe("Codex thread response validators", () => {
   });
 });
 
-describe("assertCodexThreadForkParams", () => {
-  it("accepts the experimental beforeTurnId boundary", () => {
-    expect(
-      assertCodexThreadForkParams({
-        threadId: "thread-1",
-        beforeTurnId: "turn-2",
-        excludeTurns: true,
-      }),
-    ).toMatchObject({ beforeTurnId: "turn-2" });
-  });
-
-  it("rejects a non-string beforeTurnId", () => {
-    expect(() => assertCodexThreadForkParams({ threadId: "thread-1", beforeTurnId: 2 })).toThrow(
-      "Invalid Codex app-server thread/fork params",
-    );
-  });
-});
-
 describe("assertCodexModelListResponse", () => {
   it.each([{ label: "null response", value: null }])("rejects $label", ({ value }) => {
     expect(() => assertCodexModelListResponse(value)).toThrow(
@@ -162,16 +144,19 @@ describe("assertCodexModelListResponse", () => {
   });
 });
 
-describe("readCodexTurnCompletedNotification", () => {
+describe("prepareCodexServerNotification", () => {
   it("does not merge defaults from unrelated thread item union branches", () => {
-    const turn = readCodexTurnCompletedNotification({
-      threadId: "thread-1",
-      turn: {
-        id: "turn-1",
-        status: "completed",
-        items: [{ id: "item-1", type: "plan", text: "ship it" }],
+    const turn = prepareCodexServerNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [{ id: "item-1", type: "plan", text: "ship it" }],
+        },
       },
-    })?.turn;
+    }).completedTurn;
 
     expect(turn?.items[0]).toEqual({ id: "item-1", type: "plan", text: "ship it" });
   });
