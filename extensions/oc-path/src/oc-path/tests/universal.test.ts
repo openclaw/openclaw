@@ -196,15 +196,14 @@ describe("setOcPath — md insertion", () => {
     (value) => {
       const ast = parseMd("## Tools\n## Other\n- keep: stable\n").ast;
       const inserted = setOcPath(ast, parseOcPath("oc://X.md/tools/+"), value);
-      if (!inserted.ok) {
-        throw new Error("expected successful insertion");
-      }
-      const before = structuredClone(inserted.ast);
+      const before = structuredClone(inserted);
       const field = parseOcPath("oc://X.md/tools/description/description");
-      expect(resolveOcPath(inserted.ast, field)).toBeNull();
-      expect(setOcPath(inserted.ast, field, "updated").ok).toBe(false);
-      expect(inserted.ast).toEqual(before);
-      expect(inserted.ast.raw).toContain("## Other\n- keep: stable\n");
+      expect(resolveOcPath(inserted, field)).toBeNull();
+      expect(() => setOcPath(inserted, field, "updated")).toThrow(
+        expect.objectContaining({ reason: "no-item-kv" }),
+      );
+      expect(inserted).toEqual(before);
+      expect(inserted.raw).toContain("## Other\n- keep: stable\n");
     },
   );
 
@@ -216,25 +215,19 @@ describe("setOcPath — md insertion", () => {
       parseOcPath("oc://X.md/tools/+"),
       "description: first line\n  second line",
     );
-    if (!inserted.ok) {
-      throw new Error("expected successful insertion");
-    }
     const field = parseOcPath("oc://X.md/tools/description/description");
-    expectLeaf(resolveOcPath(inserted.ast, field), {
+    expectLeaf(resolveOcPath(inserted, field), {
       leafType: "string",
       valueText: "first line\n  second line",
     });
-    const edited = setOcPath(inserted.ast, field, "updated");
-    if (!edited.ok) {
-      throw new Error("expected successful chained edit");
-    }
-    expect(edited.ast.raw).toBe(
+    const edited = setOcPath(inserted, field, "updated");
+    expect(edited.raw).toBe(
       "## Tools\n- keep: stable\n- description: updated\n## Other\n- sibling: unchanged\n".replaceAll(
         "\n",
         eol,
       ),
     );
-    expectLeaf(resolveOcPath(parseMd(edited.ast.raw).ast, field), {
+    expectLeaf(resolveOcPath(parseMd(edited.raw).ast, field), {
       leafType: "string",
       valueText: "updated",
     });
