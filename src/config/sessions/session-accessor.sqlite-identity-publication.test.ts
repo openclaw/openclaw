@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import {
   emitSessionIdentityMutation,
@@ -10,6 +12,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -25,8 +28,114 @@ import {
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
+import {
+  bindRuntimeAuthProfileExecution,
+  prepareRuntimeAuthProfileExecution,
+} from "./session-entry-current-runtime.js";
 import type { InternalSessionEntry } from "./types.js";
+
+it.each(["user", "user-link"] as const)(
+  "reads the original memory owner's current %s account intent without SQLite",
+  async (source) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "main";
+      const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env });
+      const options = { agentId, path: storePath };
+      const sessionKey = "agent:main:dashboard:incognito-account";
+      const scope = { agentId, storePath, sessionKey, env: state.env };
+      const original = {
+        sessionId: "memory-account-session",
+        lifecycleRevision: "11111111-1111-4111-8111-111111111111",
+        incognito: true,
+        updatedAt: 1,
+      } satisfies InternalSessionEntry;
+      const owner = memorySessionActorOwners.get(options);
+      const authority = { assertCurrent() {}, authorize() {} };
+      const actor = await owner.acquire(
+        { database: owner.identity, sessionKey },
+        { assertCurrent() {}, assertReadable() {} },
+      );
+      const storage = actor.storage;
+      if (!storage) {
+        throw new Error("Expected the memory actor storage owner");
+      }
+      try {
+        expect(
+          (
+            await storage.mutate(
+              { type: "session.entry.create", input: { entry: original } },
+              authority,
+            )
+          ).kind,
+        ).toBe("committed");
+        const target = { ...scope, sessionId: original.sessionId };
+        const execution = bindRuntimeAuthProfileExecution(
+          { sessionId: original.sessionId },
+          target,
+          original,
+        );
+        const sql = observeHostDataSql();
+        try {
+          await prepareRuntimeAuthProfileExecution(execution, () => {});
+          const pinned = {
+            ...original,
+            authProfileOverride: "anthropic:memory-account",
+            authProfileOverrideSource: source,
+          };
+          expect(
+            (
+              await storage.mutate(
+                {
+                  type: "session.entry.patch",
+                  input: { operation: { kind: "fields", patch: pinned } },
+                },
+                authority,
+              )
+            ).kind,
+          ).toBe("committed");
+          const refusal = await prepareRuntimeAuthProfileExecution(execution, () => {}).then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+          expect(refusal).toMatchObject({ message: expect.stringMatching(/account pin/) });
+          expect(isRecordedModelFallbackStop(refusal)).toBe(true);
+          const selected = bindRuntimeAuthProfileExecution(
+            { sessionId: original.sessionId, authProfileId: pinned.authProfileOverride },
+            target,
+            pinned,
+            pinned.authProfileOverride,
+          );
+          await prepareRuntimeAuthProfileExecution(selected, () => {});
+          memorySessionActorOwners.closeDatabase(options);
+          const replacement = memorySessionActorOwners.get(options);
+          const replacementActor = await replacement.acquire(
+            { database: replacement.identity, sessionKey },
+            { assertCurrent() {}, assertReadable() {} },
+          );
+          try {
+            await replacementActor.storage!.mutate(
+              { type: "session.entry.create", input: { entry: pinned } },
+              authority,
+            );
+            await expect(prepareRuntimeAuthProfileExecution(selected, () => {})).rejects.toThrow(
+              "Incognito session actor owner is closed",
+            );
+          } finally {
+            await replacementActor.release();
+          }
+          expect(sql.queries).toEqual([]);
+        } finally {
+          sql.restore();
+        }
+      } finally {
+        await actor.release();
+        memorySessionActorOwners.closeDatabase(options);
+      }
+    });
+  },
+);
 
 it("fences a delivery generation during native writes and restores it only on rollback", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

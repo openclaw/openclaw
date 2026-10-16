@@ -1,3 +1,7 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import type { CliBackendExecuteContextV2 } from "openclaw/plugin-sdk/cli-backend";
+import { withinTest, type FixtureReceiptChannel } from "openclaw/plugin-sdk/test-fixtures";
 import { expect } from "vitest";
 
 export function resultDetail(records: Record<string, unknown>[]): Record<string, unknown> {
@@ -6,6 +10,28 @@ export function resultDetail(records: Record<string, unknown>[]): Record<string,
     expect.objectContaining({ subtype: "success", result: expect.any(String) }),
   );
   return JSON.parse(String(result?.result)) as Record<string, unknown>;
+}
+
+export async function fixtureReadyBeforeSettlement(
+  receipts: FixtureReceiptChannel,
+  context: CliBackendExecuteContextV2,
+  fileName: string,
+  operation: PromiseLike<unknown>,
+  signal: AbortSignal,
+): Promise<void> {
+  const readyPath = path.join(context.cwd, fileName);
+  const recorded = async () => {
+    expect(await readFile(readyPath, "utf8")).toBe("ready");
+  };
+  // The fixture writes this record before replying; receipt and protocol pipes are unordered.
+  const settled = Promise.resolve(operation).then(recorded, async (error: unknown) => {
+    try {
+      await recorded();
+    } catch {
+      throw error;
+    }
+  });
+  await withinTest(Promise.race([receipts.waitFor(readyPath, "ready"), settled]), signal);
 }
 
 export const CLAUDE_PROTOCOL_FIXTURE = String.raw`

@@ -3,6 +3,7 @@ import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal, raceWithTimeout } from "@openclaw/retry";
+import { prepareRuntimeAuthProfileExecution } from "../../config/sessions/session-entry-current-runtime.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { mergePathPrepend } from "../../infra/path-prepend.js";
@@ -11,7 +12,7 @@ import {
   resolveWindowsSpawnProgramCandidate,
 } from "../../plugin-sdk/windows-spawn.js";
 import type {
-  CliBackendExecute,
+  CliBackendExecuteV2,
   CliBackendMessageInjection,
   CliBackendToolPermissionRequest,
   CliBackendToolPermissionResult,
@@ -409,7 +410,7 @@ async function closePluginIterator(
 /** Runs a prepared plugin transport while keeping cancellation and approvals host-owned. */
 export async function executePluginOwnedProcess(params: {
   context: PreparedCliRunContext;
-  execute: CliBackendExecute;
+  execute: CliBackendExecuteV2;
   executionCommand: string;
   executionArgv0?: string;
   executionArgs: readonly string[];
@@ -591,10 +592,14 @@ export async function executePluginOwnedProcess(params: {
     } else {
       params.mcpCapture?.beginCapture(params.mcpCapture.captureKey, assertCaptureCurrent);
     }
-    await params.context.cliHistoryWriter?.assertReadable();
-    assertCurrent();
-    const started = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+    const prepareExecutionAdmission = async () => {
       assertCurrent();
+      await params.context.cliHistoryWriter?.assertReadable();
+      await prepareRuntimeAuthProfileExecution(run, assertCurrent);
+      assertCurrent();
+    };
+    const started = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+      await prepareExecutionAdmission();
       const execution = params.execute({
         command,
         argv0: params.executionArgv0,
@@ -609,6 +614,7 @@ export async function executePluginOwnedProcess(params: {
         useResume: params.useResume,
         abortSignal: signal,
         assertCurrent,
+        prepareExecutionAdmission,
         timeoutMs: run.timeoutMs,
         ...(run.executionMode ? { executionMode: run.executionMode } : {}),
         ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),

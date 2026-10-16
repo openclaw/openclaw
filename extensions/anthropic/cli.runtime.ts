@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import type {
-  CliBackendExecuteContext,
+  CliBackendExecuteContextV2,
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
@@ -52,7 +52,7 @@ function readReplayedTaskId(
 }
 
 type ClaudeCliTurn = {
-  context: CliBackendExecuteContext;
+  context: CliBackendExecuteContextV2;
   controller: AbortController;
   userInput: ReturnType<typeof createClaudeCliUserInputAuthorizer>;
   events: PassThrough;
@@ -107,7 +107,7 @@ function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
     return undefined;
   }
   try {
-    turn.context.assertCurrent?.();
+    turn.context.assertCurrent();
     return turn;
   } catch {
     return undefined;
@@ -236,7 +236,7 @@ async function handleRequest(
   throw new Error("Unknown Claude CLI hook callback.");
 }
 
-function createUserInput(context: CliBackendExecuteContext, text: string, uuid: string) {
+function createUserInput(context: CliBackendExecuteContextV2, text: string, uuid: string) {
   return {
     type: "user",
     message: { role: "user", content: text },
@@ -263,6 +263,8 @@ async function injectInput(
   // Closing can reject the receipt while the write is still pending.
   void started.promise.catch(() => {});
   let written: Promise<void> | undefined;
+  await turn.context.prepareExecutionAdmission();
+  turn.context.assertCurrent();
   await withCurrent(() => {
     // Native lifecycle is the receipt; recheck availability after host preparation.
     if (
@@ -542,10 +544,10 @@ function createSession(capability?: CliBackendLiveSessionCapability): ClaudeCliS
 }
 
 export async function* executeClaudeCli(
-  context: CliBackendExecuteContext,
+  context: CliBackendExecuteContextV2,
   secretInput?: ClaudeCliSecretInput,
 ): AsyncIterable<Record<string, unknown>> {
-  context.assertCurrent?.();
+  context.assertCurrent();
   context.abortSignal?.throwIfAborted();
   const capability = context.liveSession;
   const existing = capability?.current();
@@ -556,7 +558,7 @@ export async function* executeClaudeCli(
   if (!reusable && capability) {
     await capability.restart();
   }
-  context.assertCurrent?.();
+  context.assertCurrent();
   const session = reusable ?? createSession(capability);
   session.capability = capability;
   if (session.closed || session.currentTurn) {
@@ -595,6 +597,11 @@ export async function* executeClaudeCli(
       let transport = session.transport;
       if (!transport) {
         const { args, excludeDynamicSections } = prepareClaudeCliTransportArgs(context);
+        await context.prepareExecutionAdmission();
+        context.assertCurrent();
+        if (session.closed || session.currentTurn !== turn) {
+          throw turn.error ?? new Error("Claude CLI closed during startup.");
+        }
         session.transportStartup = createClaudeCliTransport({
           context,
           args,
@@ -652,7 +659,8 @@ export async function* executeClaudeCli(
         }
         await transport.initialize();
       }
-      context.assertCurrent?.();
+      await context.prepareExecutionAdmission();
+      context.assertCurrent();
       if (session.closed || session.currentTurn !== turn) {
         throw turn.error ?? new Error("Claude CLI closed before its prompt was accepted.");
       }

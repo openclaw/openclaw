@@ -18,6 +18,8 @@ import {
 } from "../../agents/media-generation-activity.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { readConfiguredModelAuthProfileProvider } from "../../config/sessions/auth-profile-override-provenance.js";
+import { bindRuntimeAuthProfileExecution } from "../../config/sessions/session-entry-current-runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -47,6 +49,10 @@ export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
     cliExecutionProvider: string;
     lifecycleGeneration: string;
+    providerScopedAuthProfile: Pick<
+      AgentFallbackCandidateCommonParams["candidateRun"],
+      "authProfileId" | "authProfileIdSource"
+    >;
     onSessionWriter: (writer: CompactionAccountingTarget) => void;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
@@ -203,12 +209,20 @@ export async function runCliFallbackCandidate(
               authProfileProvider: params.provider,
               config: params.runtimeConfig,
               agentDir: params.candidateRun.agentDir,
-              selected: params.candidateRun,
+              selected: readConfiguredModelAuthProfileProvider(params.candidateRun, sessionEntry)
+                ? params.providerScopedAuthProfile
+                : params.candidateRun,
               sessionBinding: cliSessionBinding,
             })
           : resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
               config: params.runtimeConfig,
             }).authProfileId;
+        const executionAuth = bindRuntimeAuthProfileExecution(
+          { authProfileId },
+          sessionTarget,
+          initialSessionEntry,
+          authProfileId,
+        );
         const diagnosticOwner = params.deferredLifecycle.handoffToCli();
         // A forked child carries the parent's binding with a one-shot fork marker;
         // honor it here or the child resumes inside the parent's native thread.
@@ -351,6 +365,7 @@ export async function runCliFallbackCandidate(
           runParams: {
             ...buildFallbackCandidateTurnParams(params),
             ...buildReplyRunStateParams(turn.followupRun.run),
+            ...executionAuth,
             diagnosticOwner,
             sessionId: turn.followupRun.run.sessionId,
             sessionKey,

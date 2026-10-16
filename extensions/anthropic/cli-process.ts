@@ -1,4 +1,4 @@
-import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import type { CliBackendExecuteContextV2 } from "openclaw/plugin-sdk/cli-backend";
 import { attachErrorDiagnostic } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveFieldValue, redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -9,14 +9,14 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 type ClaudeCliSpawnOptions = Pick<
-  CliBackendExecuteContext,
+  CliBackendExecuteContextV2,
   "command" | "argv0" | "args" | "cwd" | "env"
 > & {
   signal?: AbortSignal;
 };
 
 export type ClaudeCliProcessContext = Pick<
-  CliBackendExecuteContext,
+  CliBackendExecuteContextV2,
   "command" | "argv0" | "args" | "cwd" | "env" | "abortSignal" | "assertCurrent"
 >;
 
@@ -36,7 +36,7 @@ export function createClaudeCliProcessOwner(
     if (!context) {
       throw new Error("Claude CLI run is no longer active.");
     }
-    context.assertCurrent?.();
+    context.assertCurrent();
   };
   assertCurrent();
   // Prepared credentials are destroyed after each turn; a warm child outlives that preparation.

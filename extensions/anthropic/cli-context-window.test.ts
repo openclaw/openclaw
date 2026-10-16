@@ -7,7 +7,7 @@ describe("Claude CLI context-window selection", () => {
     (modelId) => {
       const backend = buildAnthropicCliBackend();
       const resolveModelId = backend.resolveModelId;
-      const prepareExecution = backend.prepareExecution;
+      const prepareExecution = backend.prepareExecutionV2;
 
       // Omitted selection must stay on the bare id: the CLI already defaults
       // Claude 5 to 1M, and suffixed argv would regress CLIs without [1m] support.

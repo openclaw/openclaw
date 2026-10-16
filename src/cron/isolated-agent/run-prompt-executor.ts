@@ -1,10 +1,6 @@
 /** Executes one isolated cron prompt with model fallback candidates. */
 import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
-import {
-  cliBackendAcceptsAuthProfileForwarding,
-  resolveCliExecutionAuthProfileId,
-} from "../../agents/cli-execution-auth.js";
 import { resolveCliRuntimeToolsAllow } from "../../agents/cli-runner/tool-policy.js";
 import { settleCliSessionResult } from "../../agents/cli-session-store.js";
 import {
@@ -51,7 +47,11 @@ import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { isCommandStyleCronMessage } from "./command-style-prompt.js";
 import { resolveIsolatedCronPromptCacheKey } from "./prompt-cache-key.js";
 import { assertCronRuntimeAuthorityCandidate } from "./run-admission.js";
-import { createCronCandidateExecutionResolver } from "./run-candidate-runtime.js";
+import {
+  createCronCandidateExecutionResolver,
+  prepareCronCandidateAuthSelection,
+  prepareCronCliCandidateAuth,
+} from "./run-candidate-runtime.js";
 import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
 import {
   getCliSessionBinding,
@@ -333,6 +333,10 @@ export function createCronPromptExecutor(
           modelOverride,
           runOptions.agentHarnessRuntimeOverride,
         );
+        const readCandidateAuthProfile =
+          !params.job.runtimeAuthority && !binding
+            ? prepareCronCandidateAuthSelection(params, providerOverride)
+            : undefined;
         const candidateConfiguredThinkLevel =
           params.immutableThinkLevel ??
           resolveConfiguredThinkingDefault({
@@ -462,11 +466,6 @@ export function createCronPromptExecutor(
               userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked(),
           }) satisfies Partial<Parameters<CronEmbeddedRuntime["runEmbeddedAgent"]>[0]>;
         if (cliExecution) {
-          const allowCliAuthProfileForwarding = cliBackendAcceptsAuthProfileForwarding({
-            provider: executionProvider,
-            config: params.cfgWithAgentDefaults,
-            agentId: params.agentId,
-          });
           // Keep CLI work visible to recovery until execution and settlement finish.
           const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
             runId,
@@ -490,22 +489,15 @@ export function createCronPromptExecutor(
                 const cliSessionBinding = params.cronSession.isNewSession
                   ? undefined
                   : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
-                const authProfileId = allowCliAuthProfileForwarding
-                  ? await resolveCliExecutionAuthProfileId({
-                      cliExecutionProvider: executionProvider,
-                      authProfileProvider: providerOverride,
-                      config: params.cfgWithAgentDefaults,
-                      agentDir: params.agentDir,
-                      sessionBinding: cliSessionBinding,
-                      selected: params.liveSelection.authProfileId
-                        ? {
-                            authProfileId: params.liveSelection.authProfileId,
-                            authProfileIdSource:
-                              params.liveSelection.authProfileIdSource === "user" ? "user" : "auto",
-                          }
-                        : undefined,
-                    })
-                  : undefined;
+                const candidateAuth = await prepareCronCliCandidateAuth({
+                  params,
+                  sessionTarget,
+                  executionProvider,
+                  provider: providerOverride,
+                  binding: cliSessionBinding,
+                  selected: readCandidateAuthProfile?.().cli,
+                });
+                const { authProfileId } = candidateAuth;
                 if (trigger === "cron" && !binding && authProfileId) {
                   const refusal = new Error(
                     "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
@@ -519,6 +511,7 @@ export function createCronPromptExecutor(
                     ? cliSessionBinding
                     : undefined;
                 const candidateResult = await runCliAgent({
+                  ...candidateAuth,
                   ...buildCommonRunParams(),
                   diagnosticOwner,
                   sessionEntry: params.cronSession.sessionEntry,
@@ -534,7 +527,6 @@ export function createCronPromptExecutor(
                     "image",
                   ),
                   provider: executionProvider,
-                  authProfileId,
                   nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
@@ -601,6 +593,7 @@ export function createCronPromptExecutor(
         });
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.
+        const candidateAuthProfile = readCandidateAuthProfile?.().embedded;
         const result = await runEmbeddedAgent({
           ...buildCommonRunParams(),
           promptCacheKey,
@@ -621,7 +614,7 @@ export function createCronPromptExecutor(
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: runOptions.modelFallbacksOverride,
           resolvedModelSelection: runOptions.resolvedModelSelection,
-          authProfileId: binding?.profileId ?? params.liveSelection.authProfileId,
+          authProfileId: binding?.profileId ?? candidateAuthProfile?.authProfileId,
           ...(binding && inferenceAuthorization
             ? {
                 authProfileBinding: {
@@ -638,11 +631,7 @@ export function createCronPromptExecutor(
                 },
               }
             : {}),
-          authProfileIdSource:
-            binding?.source ??
-            (params.liveSelection.authProfileId
-              ? params.liveSelection.authProfileIdSource
-              : undefined),
+          authProfileIdSource: binding?.source ?? candidateAuthProfile?.authProfileIdSource,
           // Cron keeps overload failures local while sharing real credential failures.
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy ?? "local_transient",
           verboseLevel: params.resolvedVerboseLevel,

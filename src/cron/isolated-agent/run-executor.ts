@@ -4,6 +4,7 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
+import { replaceRuntimeAuthProfileSelection } from "../../config/sessions/auth-profile-override-provenance.js";
 import {
   LiveSessionModelSwitchError,
   logWarn,
@@ -64,10 +65,7 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
       params.liveSelection.provider = err.provider;
       params.liveSelection.model = err.model;
       params.liveSelection.agentRuntimeOverride = err.agentRuntimeOverride;
-      params.liveSelection.authProfileId = err.authProfileId;
-      params.liveSelection.authProfileIdSource = err.authProfileId
-        ? err.authProfileIdSource
-        : undefined;
+      replaceRuntimeAuthProfileSelection(params.liveSelection, err);
       syncCronSessionLiveSelection({
         entry: params.cronSession.sessionEntry,
         liveSelection: params.liveSelection,

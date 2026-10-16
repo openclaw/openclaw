@@ -20,6 +20,7 @@ import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-mod
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { replaceRuntimeAuthProfileSelection } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
@@ -146,8 +147,7 @@ async function executeAgentTurnInternalLoop(
   ): void => {
     run.provider = err.provider;
     run.model = err.model;
-    run.authProfileId = err.authProfileId;
-    run.authProfileIdSource = err.authProfileId ? err.authProfileIdSource : undefined;
+    replaceRuntimeAuthProfileSelection(run, err);
     run.autoFallbackPrimaryProbe = undefined;
     // Keep runtime paired with the error's model/auth winner even if the
     // active in-memory session snapshot lags the persisted directive write.

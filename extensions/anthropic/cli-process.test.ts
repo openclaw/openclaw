@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import type {
-  CliBackendExecuteContext,
+  CliBackendExecuteContextV2,
   CliBackendLiveSessionHandle,
-  CliBackendPreparedExecution,
+  CliBackendPreparedExecutionV2,
 } from "openclaw/plugin-sdk/cli-backend";
 import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -62,6 +62,7 @@ const PROTOCOL_CHILD = `
 const STARTUP_HOOK_CHILD = String.raw`
   import { createInterface } from "node:readline";
   import { writeFileSync } from "node:fs";
+  writeFileSync("fixture.pid", String(process.pid));
   const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
   let turn = 0;
   for await (const line of createInterface({ input: process.stdin })) {
@@ -92,12 +93,19 @@ afterEach(async () => {
 async function contextForChild(
   source: string,
   signal?: AbortSignal,
-): Promise<CliBackendExecuteContext> {
+): Promise<CliBackendExecuteContextV2> {
   const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-claude-stderr-"));
   roots.push(root);
   const command = path.join(root, "claude.mjs");
   await writeFile(command, source);
-  return {
+  const context: CliBackendExecuteContextV2 = {
+    assertCurrent() {
+      this.abortSignal?.throwIfAborted();
+    },
+    async prepareExecutionAdmission() {
+      this.assertCurrent();
+      this.abortSignal?.throwIfAborted();
+    },
     command: process.execPath,
     args: [command],
     cwd: root,
@@ -111,10 +119,11 @@ async function contextForChild(
     requestToolPermission: async () => ({ behavior: "deny", message: "No tools in this probe." }),
     requestUserInput: async () => ({ status: "cancelled", message: "No input in this probe." }),
   };
+  return context;
 }
 
 async function collect(
-  context: CliBackendExecuteContext,
+  context: CliBackendExecuteContextV2,
   secretInput?: Parameters<typeof executeClaudeCli>[1],
   execute = executeClaudeCli,
 ) {
@@ -144,7 +153,7 @@ function observeChild(
   });
 }
 
-function attachLiveSession(context: CliBackendExecuteContext) {
+function attachLiveSession(context: CliBackendExecuteContextV2) {
   let current: CliBackendLiveSessionHandle | undefined;
   context.liveSession = {
     fingerprint: "synthetic-process-policy",
@@ -187,6 +196,65 @@ async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<
 }
 
 describe("Claude subprocess diagnostics through the direct CLI transport", () => {
+  it.for(["cold startup", "warm prompt"] as const)(
+    "rejects denied host admission before %s reaches the native child",
+    async (boundary, { signal }) => {
+      const context = await contextForChild(STARTUP_HOOK_CHILD, signal);
+      const current = attachLiveSession(context);
+      let pid: number | undefined;
+      if (boundary === "warm prompt") {
+        const first = await collect(context);
+        pid = Number(JSON.parse(String(first.at(-1)?.result)).pid);
+        expect(pid).toBeGreaterThan(0);
+        expect(current()?.isIdle()).toBe(true);
+        expect(await readFile(path.join(context.cwd, "user.received"), "utf8")).toBe(
+          context.prompt,
+        );
+      }
+      const entered = createDeferred<void>();
+      const releaseAdmission = createDeferred<void>();
+      const reason = new Error("Synthetic host refused execution admission.");
+      const running = collect({
+        ...context,
+        prompt: "Input denied by the host.",
+        prepareExecutionAdmission: async () => {
+          entered.resolve();
+          await releaseAdmission.promise;
+          throw reason;
+        },
+      });
+      const outcome = running.catch((error: unknown) => error);
+      try {
+        await withinTest(
+          Promise.race([
+            entered.promise,
+            running.then(() => {
+              throw new Error("Native input completed without host admission.");
+            }),
+          ]),
+          signal,
+        );
+        expect(context.abortSignal?.aborted).toBe(false);
+        releaseAdmission.resolve();
+        expect(await withinTest(outcome, signal)).toBe(reason);
+        expect(current()).toBeUndefined();
+        if (pid !== undefined) {
+          expect(await readFile(path.join(context.cwd, "fixture.pid"), "utf8")).toBe(String(pid));
+          expect(await readFile(path.join(context.cwd, "user.received"), "utf8")).toBe(
+            context.prompt,
+          );
+          expect(() => process.kill(pid, 0)).toThrow();
+        } else {
+          await expect(access(path.join(context.cwd, "fixture.pid"))).rejects.toThrow();
+          await expect(access(path.join(context.cwd, "user.received"))).rejects.toThrow();
+        }
+      } finally {
+        releaseAdmission.resolve();
+        await outcome;
+      }
+    },
+  );
+
   it("delivers startup hook bursts in order and completes the first and warm turns", async ({
     signal,
   }) => {
@@ -677,14 +745,14 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       const backend = buildAnthropicCliBackend();
       const prepare = async () => {
         // The descriptor is a provider-private field, outside the public SDK result type.
-        const prepared = (await backend.prepareExecution?.({
+        const prepared = (await backend.prepareExecutionV2?.({
           workspaceDir: context.cwd,
           provider: "claude-cli",
           modelId: context.modelId,
           executionMode: "agent",
           authCredential: { type: "token", token: credential },
-        } as Parameters<NonNullable<typeof backend.prepareExecution>>[0])) as
-          | (CliBackendPreparedExecution & { secretInput?: ClaudeCliSecretInput })
+        } as Parameters<NonNullable<typeof backend.prepareExecutionV2>>[0])) as
+          | (CliBackendPreparedExecutionV2 & { secretInput?: ClaudeCliSecretInput })
           | undefined;
         if (!prepared?.execute || !prepared.secretInput || !prepared.cleanup) {
           throw new Error("Expected a managed Claude CLI execution.");

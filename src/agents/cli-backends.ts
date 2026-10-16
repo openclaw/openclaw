@@ -25,6 +25,7 @@ export type ResolvedCliBackend = Pick<
   | "ownsNativeCompaction"
   | "manualCompaction"
   | "prepareExecution"
+  | "prepareExecutionV2"
   | "resolveExecutionArgs"
   | "resolveModelId"
   | "parseJsonlEvent"
@@ -253,6 +254,7 @@ export function resolveCliBackendConfig(
     ownsNativeCompaction: backend.ownsNativeCompaction,
     manualCompaction: backend.manualCompaction,
     prepareExecution: backend.prepareExecution,
+    prepareExecutionV2: backend.prepareExecutionV2,
     resolveExecutionArgs: backend.resolveExecutionArgs,
     resolveModelId: backend.resolveModelId,
     parseJsonlEvent: backend.parseJsonlEvent,

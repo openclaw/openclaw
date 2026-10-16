@@ -1,5 +1,7 @@
+import { recordModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveCollapsedSessionAuthPinSource } from "./auth-profile-override-provenance.js";
 import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
@@ -11,6 +13,7 @@ import type { SessionEntryReadWorkerOwner } from "./session-entry-read-runtime.j
 import { isSessionStoreReadCandidateCurrent } from "./session-store-read-candidates.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
+import type { SessionEntry } from "./types.js";
 
 /** Read live effect facts from the memory owner selected at acquisition. */
 export function captureNativeSessionEntryCurrentRead(
@@ -97,4 +100,119 @@ export function captureSessionEntryCurrentRead(
       return entry;
     },
   };
+}
+
+const runtimeAuthProfileExecution = Symbol("runtimeAuthProfileExecution");
+
+type RuntimeAuthProfileExecution = {
+  sessionId?: string;
+  authProfileId?: string;
+  [runtimeAuthProfileExecution]?: {
+    target: SessionEntryReadScope & { sessionId: string };
+    memoryRead?: ReturnType<typeof captureMemoryExactSessionReader>;
+    lifecycleRevision: SessionEntry["lifecycleRevision"];
+    pin: string | undefined;
+    selectedProfileId: string | undefined;
+    readMode: "read-only" | "writable";
+  };
+};
+
+function sessionAccountPin(
+  entry:
+    | Pick<
+        SessionEntry,
+        "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
+      >
+    | undefined,
+): string | undefined {
+  return resolveCollapsedSessionAuthPinSource(entry) === "user"
+    ? entry?.authProfileOverride?.trim() || undefined
+    : undefined;
+}
+
+/** Retain the admitted account intent through runtime-only parameter spreads. */
+export function bindRuntimeAuthProfileExecution<T extends RuntimeAuthProfileExecution>(
+  params: T,
+  target: (SessionEntryReadScope & { sessionId: string }) | undefined,
+  entry:
+    | (Pick<
+        SessionEntry,
+        "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
+      > &
+        Pick<SessionEntry, "lifecycleRevision">)
+    | undefined,
+  selectedProfileId?: string,
+  readMode: "read-only" | "writable" = "read-only",
+): T {
+  delete params[runtimeAuthProfileExecution];
+  if (!target) {
+    return params;
+  }
+  const memoryRead = captureMemoryExactSessionReader(target);
+  return Object.assign(params, {
+    [runtimeAuthProfileExecution]: {
+      target: { ...target },
+      memoryRead,
+      lifecycleRevision: entry?.lifecycleRevision,
+      pin: sessionAccountPin(entry),
+      selectedProfileId: selectedProfileId?.trim(),
+      readMode,
+    },
+  });
+}
+
+/** Credential use and dispatch consume the current row after their own preparation waits. */
+export async function prepareRuntimeAuthProfileExecution(
+  params: RuntimeAuthProfileExecution,
+  assertCurrent: () => void,
+): Promise<void> {
+  const binding = params[runtimeAuthProfileExecution];
+  if (!binding) {
+    return;
+  }
+  assertCurrent();
+  let entry: SessionEntry | undefined;
+  if (binding.memoryRead) {
+    binding.memoryRead.assertCurrent();
+    entry = binding.memoryRead.read(binding.target.sessionKey, "list");
+  } else {
+    const { readSessionEntryInWorker, withSessionEntryReadOnlyInWorker } =
+      await import("./session-entry-read-runtime.js");
+    assertCurrent();
+    const target = {
+      ...binding.target,
+      readConsistency: "latest" as const,
+      hydrateSkillPromptRefs: false,
+    };
+    entry =
+      binding.readMode === "read-only"
+        ? await withSessionEntryReadOnlyInWorker(target, assertCurrent, async (read) => {
+            if (!read.ok) {
+              throw read.error;
+            }
+            return read.value;
+          })
+        : await readSessionEntryInWorker(target, assertCurrent);
+  }
+  assertCurrent();
+  const pin = sessionAccountPin(entry);
+  if (
+    !entry ||
+    entry.sessionId !== binding.target.sessionId ||
+    entry.lifecycleRevision !== binding.lifecycleRevision
+  ) {
+    const { createAgentRunSupersededAbortError } = await import("../../agents/run-termination.js");
+    assertCurrent();
+    throw createAgentRunSupersededAbortError();
+  }
+  if (
+    pin !== binding.pin &&
+    (!pin || (pin !== params.authProfileId?.trim() && pin !== binding.selectedProfileId))
+  ) {
+    const refusal = new Error(
+      "Session account pin changed during preparation; retry with the current account.",
+    );
+    recordModelFallbackStop(refusal);
+    throw refusal;
+  }
 }

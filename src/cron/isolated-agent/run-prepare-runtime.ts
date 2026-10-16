@@ -77,6 +77,7 @@ export async function resolveCronAuthSelection(params: {
   provider: string;
   modelId: string;
   configuredProfileId?: string;
+  configuredProfileIsDefault?: boolean;
   harnessRuntime: Parameters<
     CronAuthProfileRuntime["resolveSessionAuthSelection"]
   >[0]["harnessRuntime"];
@@ -100,6 +101,7 @@ export async function resolveCronAuthSelection(params: {
     provider: params.provider,
     modelId: params.modelId,
     ...(params.configuredProfileId ? { configuredProfileId: params.configuredProfileId } : {}),
+    configuredProfileIsDefault: params.configuredProfileIsDefault,
     harnessRuntime: params.harnessRuntime,
     agentDir: params.agentDir,
     sessionEntry: params.cronSession.sessionEntry,
