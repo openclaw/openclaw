@@ -63,6 +63,55 @@ const enAgentsHome = {
     reviewRequired: "Security review needed",
     details: "View security report",
   },
+  clawsDraft: {
+    title: "Create a Claw",
+    subtitle: "Turn useful agent behavior into a reusable Claw. You review what becomes public.",
+    generateTitle: "Start with a private draft",
+    fromAgent:
+      "Ask {agent} to identify a useful job from its setup and relevant conversations, then write a focused Claw.",
+    fromSession:
+      "Ask {agent} to turn the useful behavior from this conversation into a focused Claw.",
+    privateNotice:
+      "The agent drafts instructions and supporting files privately. Nothing is uploaded to ClawHub until you inspect the package and choose Publish.",
+    generate: "Generate private draft",
+    generating: "Starting generation…",
+    openDraft: "Open private draft",
+    startFailed:
+      "The draft is saved, but generation could not start. Check your sessions before trying again.",
+    reviewTitle: "Review Claw draft",
+    unavailable:
+      "Connect as an administrator and enable Claws in Labs to create or review a draft.",
+    editTitle: "Private draft",
+    editDescription:
+      "Inspect and edit the generated scope, instructions, and files. Save changes before reviewing the package.",
+    document: "Draft document (JSON)",
+    reload: "Reload draft",
+    discardBeforeReload: "Discard your unsaved changes and load the latest draft?",
+    loading: "Loading draft…",
+    loadFailed: "Reload to read this draft.",
+    save: "Save draft",
+    saving: "Saving…",
+    review: "Review package",
+    preparing: "Preparing review…",
+    unsaved: "Save your changes before reviewing.",
+    changed:
+      "The agent changed this draft. Reload it and review the new version before publishing.",
+    packageTitle: "What will be published",
+    packageDescription:
+      "These are the exact files in the package. Open each file to inspect its contents.",
+    publisher: "Personal publisher: @{publisher}",
+    scope: { input: "Input", job: "Job", output: "Output", authority: "Authority" },
+    publishNotice:
+      "Publishing uploads these files to ClawHub under your personal account. Any further edit requires a new review.",
+    publish: "Publish to ClawHub",
+    publishing: "Submitting package to ClawHub…",
+    published: "Claw published",
+    publishedDescription: "ClawHub confirmed publication of this package.",
+    scanning: "Submitted for security scanning",
+    scanningDescription:
+      "ClawHub accepted the package. It will become public after its security checks pass.",
+    viewPublication: "View on ClawHub",
+  },
 } satisfies TranslationMap;
 
 export const registerAgentsHomeEnglish = Object.assign(

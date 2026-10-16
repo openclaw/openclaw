@@ -1,13 +1,18 @@
-import { Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { clawCatalogPackageNameFromPath, pathForRoute } from "../../app-route-paths.ts";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { AgentsHomePage } from "../agents-home/agents-home-page.tsx";
 import { ClawsCatalogDialog } from "../agents-home/claws-catalog-dialog.tsx";
+import { clawDraftTargetFromSearch } from "./draft-navigation.ts";
+import { ClawDraftPage } from "./draft-page.tsx";
 import type { ClawsRouteData } from "./route.ts";
 
 export function ClawsPage(props: { routeData: ClawsRouteData | undefined }) {
   const context = useApplication();
+  // Shell layout reports refresh route snapshots; only a changed query owns a new draft page.
+  const draftSearch = createMemo(() => props.routeData?.location.search ?? "");
+  const draftTarget = createMemo(() => clawDraftTargetFromSearch(draftSearch()));
   const packageName = () =>
     props.routeData
       ? clawCatalogPackageNameFromPath(props.routeData.location.pathname, props.routeData.basePath)
@@ -31,20 +36,28 @@ export function ClawsPage(props: { routeData: ClawsRouteData | undefined }) {
         </SettingsPage>
       }
     >
-      {packageName() ? (
-        <ClawsCatalogDialog
-          initialPackageName={packageName()!}
-          pageMode
-          onClose={() =>
-            context.navigate("agents-home", {
-              pathname: pathForRoute("agents-home", context.basePath),
-            })
-          }
-          onAdded={() => void context.agents.refreshList()}
-        />
-      ) : (
-        <AgentsHomePage />
-      )}
+      <Show
+        when={draftTarget()}
+        keyed
+        fallback={
+          packageName() ? (
+            <ClawsCatalogDialog
+              initialPackageName={packageName()!}
+              pageMode
+              onClose={() =>
+                context.navigate("agents-home", {
+                  pathname: pathForRoute("agents-home", context.basePath),
+                })
+              }
+              onAdded={() => void context.agents.refreshList()}
+            />
+          ) : (
+            <AgentsHomePage />
+          )
+        }
+      >
+        {(target) => <ClawDraftPage target={target} />}
+      </Show>
     </Show>
   );
 }

@@ -84,6 +84,7 @@ export type AgentsProps = {
   onTogglePinnedAgent: (agentId: string) => void;
   onRefresh: () => void;
   onCreateAgent: () => void;
+  onCreateClaw?: (agentId: string) => void;
   onSelectPanel: (panel: AgentsPanel) => void;
   onConfigReload: () => void;
   onConfigSave: () => void;
@@ -163,6 +164,15 @@ export function Agents(props: AgentsProps) {
             <Show when={selectedAgent()}>
               {(agent) => (
                 <>
+                  <Show when={props.onCreateClaw}>
+                    <button
+                      type="button"
+                      class="btn btn--sm btn--ghost"
+                      onClick={() => props.onCreateClaw?.(agent().id)}
+                    >
+                      {t("clawsDraft.title")}
+                    </button>
+                  </Show>
                   <Show when={agent().id} keyed>
                     {(id) => (
                       <button

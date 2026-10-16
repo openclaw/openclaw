@@ -12,8 +12,10 @@ export type ClawsRouteData = { location: RouteLocation; basePath: string };
 
 export const page = definePage({
   ...routePageSpec("claws"),
-  loaderDeps: (_context: ApplicationContext, location) =>
-    restoreBridgedRouteLocation(location, INTERNAL_CLAWS_PATH_PARAM).pathname,
+  loaderDeps: (_context: ApplicationContext, location) => {
+    const restored = restoreBridgedRouteLocation(location, INTERNAL_CLAWS_PATH_PARAM);
+    return `${restored.pathname}${restored.search}`;
+  },
   loader: (context: ApplicationContext, options): ClawsRouteData => ({
     location: restoreBridgedRouteLocation(options.location, INTERNAL_CLAWS_PATH_PARAM),
     basePath: context.basePath,

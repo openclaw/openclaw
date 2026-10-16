@@ -2,6 +2,7 @@ import { createEffect, createMemo, onCleanup, untrack } from "solid-js";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
+import { canCreateClawDraft, navigateToClawDraft } from "../claws/draft-navigation.ts";
 import { AgentsPageState } from "./agents-page-state.ts";
 import type { AgentsRouteData } from "./route.ts";
 import { Agents, AgentsPageHeader } from "./view.tsx";
@@ -29,7 +30,15 @@ export function AgentsPage(props: { routeData?: AgentsRouteData }) {
     subscribe: (owner, notify) => owner.subscribe(notify),
     equality: "revision",
   });
-  const viewProps = createMemo(() => projection.read().viewProps);
+  const viewProps = createMemo(() => {
+    const owner = projection.read();
+    return {
+      ...owner.viewProps,
+      onCreateClaw: canCreateClawDraft(owner.context)
+        ? (agentId: string) => navigateToClawDraft(owner.context, { agentId })
+        : undefined,
+    };
+  });
   return (
     <openclaw-agents-page>
       <AgentsPageHeader />

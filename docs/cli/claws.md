@@ -26,7 +26,28 @@ Authoring and inspecting local Claw packages do not require the Labs toggle.
 
 The CLI accepts a local package directory, `CLAW.md`, or grouped JSON manifest.
 Publishing and searching Claws through ClawHub use the separate registry
-surface. The Control UI can browse official Claws from **Agents**.
+surface. The Control UI can browse official and community Claws from **Agents**,
+with each Claw attributed to its publisher.
+
+## Create with an agent
+
+With Claws enabled in Labs, choose **Create a Claw** from an agent's settings or
+a chat's session menu. **Generate private draft** starts an ordinary agent session
+to propose one portable workflow with an input, job, output, and authority boundary.
+The agent writes a private proposal in its workspace and links back to its review page.
+This flow currently requires a workspace on the Gateway host.
+
+Inspect and edit the proposal, save changes, then choose **Review package** to see
+the exact files that will be uploaded. The package includes only authored proposal
+contents; it does not copy the source workspace, memories, or raw conversations.
+Known private paths and credential-like text are rejected. Review the remaining text
+for personal facts and private context before publication.
+
+Sign in with `clawhub login` on the Gateway host. Review shows the personal publisher
+and scoped package name. **Publish** uploads that exact reviewed artifact; editing
+the draft or changing publishers requires another review. An agent turn cannot
+authorize this step. A publication awaiting security scanning is shown as pending.
+After ClawHub makes it public, others can discover it and Add it as an ordinary agent.
 
 ## Author locally
 

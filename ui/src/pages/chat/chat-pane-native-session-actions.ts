@@ -4,7 +4,9 @@ import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop
 import { icons } from "../../components/icons.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { pluginSessionMenuActions } from "../../plugins/control-ui-actions.ts";
+import { canCreateClawDraft, navigateToClawDraft } from "../claws/draft-navigation.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import type {
   HeaderMenuAction,
@@ -21,6 +23,11 @@ export class ChatPaneNativeSessionActions {
     onAction: (action: HeaderMenuAction) => void,
   ): HeaderMenuSessionAction[] {
     const enabled = context.nativeConversation?.supportsSessionActions;
+    const agentId =
+      row?.agentId ??
+      parseAgentSessionKey(row?.key)?.agentId ??
+      context.agentSelection.state.selectedId;
+    const canCreateClaw = Boolean(row && agentId && canCreateClawDraft(context));
     const pluginActions = enabled && row ? pluginSessionMenuActions(context.plugins, row) : [];
     const canStop = Boolean(
       enabled &&
@@ -31,11 +38,26 @@ export class ChatPaneNativeSessionActions {
       [
         ...pluginActions.flatMap(({ id, label, disabled }) => [id, label, disabled]),
         canStop,
+        canCreateClaw,
+        agentId,
+        row?.key,
+        context,
         stopDisabledReason,
         i18n.getLocale(),
         onAction,
       ],
       () => [
+        ...(canCreateClaw && row && agentId
+          ? [
+              {
+                id: "create-claw",
+                label: t("clawsDraft.title"),
+                icon: icons.bot,
+                onActivate: () =>
+                  navigateToClawDraft(context, { agentId, sourceSessionKey: row.key }),
+              },
+            ]
+          : []),
         ...pluginActions.map((action) => ({
           label: action.label,
           disabled: action.disabled,
