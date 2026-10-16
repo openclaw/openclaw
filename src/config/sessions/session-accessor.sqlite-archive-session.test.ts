@@ -728,38 +728,63 @@ function observeArchiveMetadata(afterExecute: (type: string, result: unknown) =>
   const withWorker = sessionWorker.withSessionEntryWorker;
   return vi
     .spyOn(sessionWorker, "withSessionEntryWorker")
-    .mockImplementation((databaseOptions, identity, assertCurrent, withExecution, ...rest) =>
-      withWorker(
+    .mockImplementation(
+      (
         databaseOptions,
         identity,
         assertCurrent,
-        (execution, owner, context) =>
-          withExecution(
-            {
-              ...execution,
-              get fileIdentity() {
-                return execution.fileIdentity;
+        withExecution,
+        onCommit,
+        retainedExecution,
+        signal,
+        prepare,
+        onTransaction,
+        onAdmission,
+        releaseSource,
+        operationMode,
+        expectedCreationIdentity,
+        concurrentBoardReads,
+      ) =>
+        withWorker(
+          databaseOptions,
+          identity,
+          assertCurrent,
+          (execution, owner, context) =>
+            withExecution(
+              {
+                ...execution,
+                get fileIdentity() {
+                  return execution.fileIdentity;
+                },
+                runExisting(readSource, read, readOptions) {
+                  return execution.runExisting(
+                    readSource,
+                    (worker) =>
+                      read({
+                        execute: async (command, requestOptions) => {
+                          const result = await worker.execute(command, requestOptions);
+                          await afterExecute(command.type, result);
+                          return result;
+                        },
+                      }),
+                    readOptions,
+                  );
+                },
               },
-              runExisting(readSource, read, readOptions) {
-                return execution.runExisting(
-                  readSource,
-                  (worker) =>
-                    read({
-                      execute: async (command, requestOptions) => {
-                        const result = await worker.execute(command, requestOptions);
-                        await afterExecute(command.type, result);
-                        return result;
-                      },
-                    }),
-                  readOptions,
-                );
-              },
-            },
-            owner,
-            context,
-          ),
-        ...rest,
-      ),
+              owner,
+              context,
+            ),
+          onCommit,
+          retainedExecution,
+          signal,
+          prepare,
+          onTransaction,
+          onAdmission,
+          releaseSource,
+          operationMode,
+          expectedCreationIdentity,
+          concurrentBoardReads,
+        ),
     );
 }
 
