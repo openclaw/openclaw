@@ -146,7 +146,7 @@ export function createNewSessionComposerTextarea() {
       );
     },
     disconnect() {
-      control.emojiMenu.close();
+      control.emojiMenu.dispose();
       control.composing = false;
       control.mentionMenu.dispose();
       skillCommandClient = null;

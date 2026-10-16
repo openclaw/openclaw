@@ -42,18 +42,34 @@ export function createComposerEmojiMenu() {
   let inserting = false;
   let acceptedEnter = false;
   let popup: Overlay | null = null;
+  let unsubscribePopup: (() => void) | undefined;
   let textarea: HTMLTextAreaElement | null = null;
   const anchor = new TextareaTokenAnchor(() => dismiss(textarea));
 
-  function syncAnchor(start: number | null) {
-    if (popup && textarea && start !== null) {
-      anchor.updateNative(popup, textarea, start);
+  function updatePresentation(target: HTMLTextAreaElement, start: number | null) {
+    textarea = target;
+    if (popup && start !== null) {
+      anchor.updateNative(popup, target, start);
     } else {
       anchor.close();
     }
   }
 
+  function popupRef(overlay?: Overlay) {
+    unsubscribePopup?.();
+    popup = overlay ?? null;
+    unsubscribePopup = popup?.subscribe((open) => {
+      if (!open && state.items.length) {
+        dismiss(textarea);
+      }
+    });
+    if (!popup) {
+      anchor.close();
+    }
+  }
+
   function reset(draft: EmojiMenuState) {
+    acceptedEnter = false;
     draft.items.length = 0;
     draft.target = null;
     draft.index = 0;
@@ -65,7 +81,6 @@ export function createComposerEmojiMenu() {
   }
 
   function close() {
-    acceptedEnter = false;
     setState(reset);
   }
 
@@ -100,7 +115,7 @@ export function createComposerEmojiMenu() {
         next?.end === draft.target?.end
       ) {
         if (next) {
-          syncAnchor(next.start);
+          updatePresentation(target, next.start);
         }
         return;
       }
@@ -214,7 +229,6 @@ export function createComposerEmojiMenu() {
         close: () => {
           reset(draft);
           draft.dismissed = { value: target.value, caret: target.selectionStart };
-          acceptedEnter = false;
         },
         move: (index) => {
           draft.index = index;
@@ -253,19 +267,12 @@ export function createComposerEmojiMenu() {
     activeId(paneId: string) {
       return state.items.length ? paneDomId(paneId, `emoji-option-${state.index}`) : null;
     },
-    activeLabel() {
-      return state.items.length ? `:${state.items[state.index]}:` : "";
+    activeLabel: () => (state.items.length ? `:${state.items[state.index]}:` : ""),
+    popupRef,
+    dispose() {
+      popupRef();
     },
-    popupRef(overlay?: Overlay) {
-      popup = overlay ?? null;
-      if (!popup) {
-        anchor.close();
-      }
-    },
-    updatePresentation(target: HTMLTextAreaElement, start: number | null) {
-      textarea = target;
-      syncAnchor(start);
-    },
+    updatePresentation,
     renderOptions(paneId: string, target: HTMLTextAreaElement) {
       return (
         <For each={state.items} keyed={(name) => name}>
@@ -327,15 +334,9 @@ function EmojiPopup(props: {
     const [target, start] = untrack(placement);
     overlay.bindSurface(surface);
     overlay.setParent(findOverlayParent(target));
-    const unsubscribe = overlay.subscribe((open) => {
-      if (!open && menu.open) {
-        menu.dismiss(placement()[0]);
-      }
-    });
     menu.popupRef(overlay);
     menu.updatePresentation(target, start);
     return () => {
-      unsubscribe();
       menu.popupRef();
       overlay.dispose();
     };

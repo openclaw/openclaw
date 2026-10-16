@@ -168,7 +168,7 @@ export function suppressStaleSubmittedDraftReplay(
 }
 
 function disposeChatComposerState(state: ChatComposerState) {
-  state.emojiMenu.close();
+  state.emojiMenu.dispose();
   state.mentionMenu.dispose();
   state.composerDraftScope = null;
   state.dictation?.dispose();
