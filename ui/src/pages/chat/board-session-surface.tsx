@@ -4,11 +4,8 @@ import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skele
 import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
+import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../lib/presentation.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import {
-  PRESENTATION_CHANGED_EVENT,
-  type PresentationValue,
-} from "../../lit/presentation-binding.ts";
 
 export type BoardSessionSurfaceProps = {
   active: PresentationValue;
