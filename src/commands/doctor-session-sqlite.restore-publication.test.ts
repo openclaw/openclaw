@@ -22,6 +22,37 @@ vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
 const { createHistoricalRestoreStore, createVerifiedRecoveryStore } =
   useDoctorSessionSqliteTestFixture();
 
+type PublicResult = Awaited<ReturnType<typeof runPublicSessionSqlite>>;
+function conflicts(result: PublicResult) {
+  return result.report.targets[0]?.restore?.conflicts;
+}
+function contains(actual: unknown, ...items: unknown[]) {
+  expect(actual).toEqual(expect.arrayContaining(items));
+}
+function expectMissing(...files: string[]) {
+  for (const file of files) {
+    expect(fs.existsSync(file)).toBe(false);
+  }
+}
+function expectOriginal(file: string, bytes: Buffer, ino: bigint) {
+  expect(fs.readFileSync(file)).toEqual(bytes);
+  expect(fs.statSync(file, { bigint: true }).ino).toBe(ino);
+}
+function originalMoves(target: SessionSqliteMigrationManifest["targets"][number]) {
+  return target.plannedMoves.map((move) => ({
+    ...move,
+    bytes: fs.readFileSync(move.archivePath),
+    identity: fs.statSync(move.archivePath, { bigint: true }),
+  }));
+}
+function expectRestored(originals: ReturnType<typeof originalMoves>, sqlitePath: string) {
+  for (const original of originals) {
+    expectOriginal(original.sourcePath, original.bytes, original.identity.ino);
+    expectMissing(original.archivePath);
+  }
+  expectMissing(...resolveSqliteDatabaseFilePaths(sqlitePath));
+}
+
 describe("runDoctorSessionSqlite", () => {
   it.each([
     { interrupted: false, changed: false },
@@ -45,7 +76,7 @@ describe("runDoctorSessionSqlite", () => {
         });
         try {
           const first = await runPublicSessionSqlite(store, "restore");
-          expect(first.report.targets[0]?.restore?.conflicts).toEqual([
+          expect(conflicts(first)).toEqual([
             expect.objectContaining({ archivePath, reason: "injected restore interruption" }),
           ]);
           expect(fs.statSync(archivePath).nlink).toBe(2);
@@ -77,7 +108,7 @@ describe("runDoctorSessionSqlite", () => {
         await expect(runPublicSessionSqlite(store, "restore")).rejects.toThrow(/changed/);
       } else {
         const result = await runPublicSessionSqlite(store, "restore");
-        expect(result.report.targets[0]?.restore?.conflicts).toEqual(
+        expect(conflicts(result)).toEqual(
           changed
             ? [expect.objectContaining({ archivePath, reason: expect.stringContaining("changed") })]
             : [],
@@ -92,9 +123,8 @@ describe("runDoctorSessionSqlite", () => {
       } else {
         expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(original);
         const restored = fs.statSync(store.transcriptPath, { bigint: true });
-        expect(restored.ino).toBe(originalIdentity.ino);
-        expect(restored.nlink).toBe(1n);
-        expect(fs.existsSync(archivePath)).toBe(false);
+        expect(restored).toMatchObject({ ino: originalIdentity.ino, nlink: 1n });
+        expectMissing(archivePath);
         expect(recorded.restore?.consumedArchives).toContain(archivePath);
       }
     },
@@ -138,7 +168,7 @@ describe("runDoctorSessionSqlite", () => {
           insertCompetitor(options.sourcePath, options.targetPath);
           return publish(options);
         });
-      let result: Awaited<ReturnType<typeof runPublicSessionSqlite>>;
+      let result: PublicResult;
       try {
         result = await runPublicSessionSqlite(store, "restore");
       } finally {
@@ -146,26 +176,21 @@ describe("runDoctorSessionSqlite", () => {
       }
       const created = expectDefined(competitorIdentity, "separate writer ran at publication");
       const retained = fs.lstatSync(sourcePath, { bigint: true });
-      expect(retained.ino).toBe(created.ino);
-      expect(retained.dev).toBe(created.dev);
+      expect(retained).toMatchObject({ ino: created.ino, dev: created.dev });
       if (destination === "file") {
         expect(fs.readFileSync(sourcePath, "utf8")).toBe(competitorContent);
       } else {
         expect(retained.isSymbolicLink()).toBe(true);
         expect(fs.readlinkSync(sourcePath)).toBe(competitorPath);
-        expect(fs.existsSync(competitorPath)).toBe(false);
+        expectMissing(competitorPath);
       }
       expect(fs.readFileSync(archivePath)).toEqual(original);
       expect(result.exitCode).toBe(1);
       const restored = readMigrationManifest(manifestPath).restore;
-      expect(restored?.conflicts).toEqual(
-        expect.arrayContaining([expect.objectContaining({ archivePath, sourcePath })]),
-      );
+      contains(restored?.conflicts, expect.objectContaining({ archivePath, sourcePath }));
       expect(restored?.consumedArchives ?? []).not.toContain(archivePath);
       expect(restored?.restoredFiles ?? []).not.toContain(sourcePath);
-      for (const target of manifest.targets) {
-        expect(fs.existsSync(target.sqlitePath)).toBe(false);
-      }
+      expectMissing(...manifest.targets.map((target) => target.sqlitePath));
     },
   );
 
@@ -198,7 +223,7 @@ describe("runDoctorSessionSqlite", () => {
         fs.writeFileSync(move.archivePath, changed);
       }
     });
-    let result: Awaited<ReturnType<typeof runPublicSessionSqlite>>;
+    let result: PublicResult;
     try {
       result = await runPublicSessionSqlite(store, "restore");
     } finally {
@@ -206,14 +231,14 @@ describe("runDoctorSessionSqlite", () => {
     }
     expect(injected).toBe(true);
     expect(result.exitCode).toBe(1);
-    expect(result.report.targets[0]?.restore?.conflicts).toEqual([
+    expect(conflicts(result)).toEqual([
       {
         archivePath: move.archivePath,
         sourcePath: move.sourcePath,
         reason: "archive changed after restore planning; refusing restore",
       },
     ]);
-    expect(fs.existsSync(move.sourcePath)).toBe(false);
+    expectMissing(move.sourcePath);
     expect(fs.readFileSync(move.archivePath, "utf8")).toBe(changed);
     expect(fs.statSync(move.archivePath, { bigint: true }).ino).toBe(identity.ino);
     expect(fs.readFileSync(duplicate.archivePath, "utf8")).toBe(original);
@@ -228,17 +253,13 @@ describe("runDoctorSessionSqlite", () => {
       );
       expect(recordedMove.artifact).toBeUndefined();
     }
-    expect(fs.existsSync(target.sqlitePath)).toBe(false);
+    expectMissing(target.sqlitePath);
   });
 
   it("retries historical v2 restored-directory edge sync through recover", async () => {
     const { store, manifestPath, manifest } = createHistoricalRestoreStore(2);
     const target = expectDefined(manifest.targets[0], "historical restore target");
-    const originals = target.plannedMoves.map((move) => ({
-      ...move,
-      bytes: fs.readFileSync(move.archivePath),
-      identity: fs.statSync(move.archivePath, { bigint: true }),
-    }));
+    const originals = originalMoves(target);
     manifest.failedAt = manifest.startedAt;
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
     fs.rmdirSync(store.sessionDir);
@@ -246,18 +267,12 @@ describe("runDoctorSessionSqlite", () => {
     const assertOriginalsRetained = () => {
       expect(readMigrationManifest(manifestPath).restore?.consumedArchives ?? []).toEqual([]);
       for (const original of originals) {
-        expect(fs.readFileSync(original.archivePath)).toEqual(original.bytes);
-        expect(fs.statSync(original.archivePath, { bigint: true }).ino).toBe(original.identity.ino);
+        expectOriginal(original.archivePath, original.bytes, original.identity.ino);
         if (fs.existsSync(original.sourcePath)) {
-          expect(fs.readFileSync(original.sourcePath)).toEqual(original.bytes);
-          expect(fs.statSync(original.sourcePath, { bigint: true }).ino).toBe(
-            original.identity.ino,
-          );
+          expectOriginal(original.sourcePath, original.bytes, original.identity.ino);
         }
       }
-      for (const file of resolveSqliteDatabaseFilePaths(target.sqlitePath)) {
-        expect(fs.existsSync(file)).toBe(false);
-      }
+      expectMissing(...resolveSqliteDatabaseFilePaths(target.sqlitePath));
     };
     const fsync = fs.fsyncSync;
     let edgeSyncAttempted = false;
@@ -272,11 +287,10 @@ describe("runDoctorSessionSqlite", () => {
       const first = await runPublicSessionSqlite(store, "restore");
       expect(edgeSyncAttempted).toBe(true);
       expect(first.exitCode).toBe(1);
-      expect(first.report.targets[0]?.restore?.conflicts).toEqual(
-        expect.arrayContaining(
-          originals.map(({ archivePath, sourcePath }) =>
-            expect.objectContaining({ archivePath, sourcePath }),
-          ),
+      contains(
+        conflicts(first),
+        ...originals.map(({ archivePath, sourcePath }) =>
+          expect.objectContaining({ archivePath, sourcePath }),
         ),
       );
       expect(fs.statSync(store.sessionDir).isDirectory()).toBe(true);
@@ -292,18 +306,11 @@ describe("runDoctorSessionSqlite", () => {
       syncSpy.mockRestore();
     }
     const resumed = await runPublicSessionSqlite(store, "recover");
-    expect(resumed.report.targets[0]?.restore?.conflicts).toEqual([]);
+    expect(conflicts(resumed)).toEqual([]);
     const consumed = readMigrationManifest(manifestPath).restore?.consumedArchives;
     expect(consumed).toHaveLength(originals.length);
-    expect(consumed).toEqual(expect.arrayContaining(originals.map((move) => move.archivePath)));
-    for (const original of originals) {
-      expect(fs.readFileSync(original.sourcePath)).toEqual(original.bytes);
-      expect(fs.statSync(original.sourcePath, { bigint: true }).ino).toBe(original.identity.ino);
-      expect(fs.existsSync(original.archivePath)).toBe(false);
-    }
-    for (const file of resolveSqliteDatabaseFilePaths(target.sqlitePath)) {
-      expect(fs.existsSync(file)).toBe(false);
-    }
+    contains(consumed, ...originals.map((move) => move.archivePath));
+    expectRestored(originals, target.sqlitePath);
   });
 
   it.each([
@@ -322,11 +329,7 @@ describe("runDoctorSessionSqlite", () => {
         target.plannedMoves.find((move) => move.kind === "legacy-store"),
         "historical index original",
       );
-      const originals = target.plannedMoves.map((move) => ({
-        ...move,
-        bytes: fs.readFileSync(move.archivePath),
-        identity: fs.statSync(move.archivePath, { bigint: true }),
-      }));
+      const originals = originalMoves(target);
       const indexOriginal = expectDefined(
         originals.find((item) => item.kind === "legacy-store"),
         "historical index bytes",
@@ -436,13 +439,11 @@ describe("runDoctorSessionSqlite", () => {
         const failed = await runPublicSessionSqlite(store, "restore");
         expect(injected).toBe(true);
         expect(failed.exitCode).toBe(1);
-        expect(failed.report.targets[0]?.restore?.conflicts).toEqual(
-          expect.arrayContaining([expect.objectContaining({ archivePath: index.archivePath })]),
-        );
+        contains(conflicts(failed), expect.objectContaining({ archivePath: index.archivePath }));
         const interrupted = readMigrationManifest(manifestPath);
         const consumedBeforeRetry = interrupted.restore?.consumedArchives ?? [];
         if (phase === "metadata-write" || phase === "metadata-sync") {
-          expect(fs.existsSync(index.sourcePath)).toBe(false);
+          expectMissing(index.sourcePath);
         } else {
           expect(fs.readFileSync(index.sourcePath)).toEqual(indexOriginal.bytes);
         }
@@ -464,7 +465,7 @@ describe("runDoctorSessionSqlite", () => {
           failReplaySync = false;
         }
         const resumed = await runPublicSessionSqlite(store, retryMode);
-        expect(resumed.report.targets[0]?.restore?.conflicts).toEqual([]);
+        expect(conflicts(resumed)).toEqual([]);
         if (replay) {
           expect(replaySynced).toBe(true);
           expect(replayUnlinked).toBe(true);
@@ -472,30 +473,16 @@ describe("runDoctorSessionSqlite", () => {
         replay = false;
         const settled = readMigrationManifest(manifestPath);
         expect(settled.manifestVersion).toBe(version);
-        expect(settled.restore?.consumedArchives).toEqual(
-          expect.arrayContaining(consumedBeforeRetry),
-        );
-        expect(settled.restore?.consumedArchives).toEqual(
-          expect.arrayContaining(originals.map((item) => item.archivePath)),
-        );
-        for (const original of originals) {
-          expect(fs.readFileSync(original.sourcePath)).toEqual(original.bytes);
-          expect(fs.statSync(original.sourcePath, { bigint: true }).ino).toBe(
-            original.identity.ino,
-          );
-          expect(fs.existsSync(original.archivePath)).toBe(false);
-        }
-        for (const file of resolveSqliteDatabaseFilePaths(target.sqlitePath)) {
-          expect(fs.existsSync(file)).toBe(false);
-        }
+        contains(settled.restore?.consumedArchives, ...consumedBeforeRetry);
+        contains(settled.restore?.consumedArchives, ...originals.map((item) => item.archivePath));
+        expectRestored(originals, target.sqlitePath);
         expect(copySpy).not.toHaveBeenCalled();
         expect(asyncCopySpy).not.toHaveBeenCalled();
         expect((await runPublicSessionSqlite(store, "import")).report.totals.issues).toBe(0);
-        expect(
-          (await runPublicSessionSqlite(store, "restore")).report.targets[0]?.restore?.conflicts,
-        ).toEqual([]);
-        expect(readMigrationManifest(manifestPath).restore?.consumedArchives).toEqual(
-          expect.arrayContaining(originals.map((item) => item.archivePath)),
+        expect(conflicts(await runPublicSessionSqlite(store, "restore"))).toEqual([]);
+        contains(
+          readMigrationManifest(manifestPath).restore?.consumedArchives,
+          ...originals.map((item) => item.archivePath),
         );
       } finally {
         writeSpy.mockRestore();

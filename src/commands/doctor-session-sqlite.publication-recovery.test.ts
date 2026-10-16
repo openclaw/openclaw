@@ -22,6 +22,7 @@ import {
   readMigrationManifest,
   requireMigrationManifestPath,
   canonicalTestPath,
+  type TestStore,
 } from "./doctor-session-sqlite.test-support.js";
 
 const {
@@ -30,6 +31,32 @@ const {
   createHistoricalRestoreStore,
   createVerifiedRecoveryStore,
 } = useDoctorSessionSqliteTestFixture();
+
+function contains(actual: unknown, ...items: unknown[]) {
+  expect(actual).toEqual(expect.arrayContaining(items));
+}
+
+function expectFiles(bytes: Buffer, ...files: string[]) {
+  for (const file of files) {
+    expect(fs.readFileSync(file)).toEqual(bytes);
+  }
+}
+
+function expectMissing(...files: string[]) {
+  for (const file of files) {
+    expect(fs.existsSync(file)).toBe(false);
+  }
+}
+
+async function cleanupRecovery(store: TestStore, cfg = {}) {
+  closeOpenClawAgentDatabasesForTest();
+  return retireSessionSqliteRecovery({
+    env: store.env,
+    preview: inspectSessionSqliteRecovery({ cfg, env: store.env }),
+    readConfig: async () => cfg,
+    confirm: async () => true,
+  });
+}
 
 describe("runDoctorSessionSqlite", () => {
   it("preserves shared database bytes without creating a WAL when custom restore refuses disposed sources", async () => {
@@ -46,15 +73,10 @@ describe("runDoctorSessionSqlite", () => {
     const imported = await runPublicSessionSqlite(store, "import");
     expect(imported.exitCode).toBe(0);
     expect(imported.report.totals.importedEntries).toBe(1);
-    closeOpenClawAgentDatabasesForTest();
-    const cleanup = await retireSessionSqliteRecovery({
-      env: store.env,
-      preview: inspectSessionSqliteRecovery({ cfg, env: store.env }),
-      readConfig: async () => cfg,
-      confirm: async () => true,
+    expect(await cleanupRecovery(store, cfg)).toMatchObject({
+      status: "complete",
+      totals: { removedFiles: 2 },
     });
-    expect(cleanup.status).toBe("complete");
-    expect(cleanup.totals.removedFiles).toBe(2);
     closeOpenClawStateDatabaseForTest();
     // A new CLI process has neither a live connection nor a warm registry memo.
     invalidateRegisteredAgentDatabasesMemo({ env: store.env });
@@ -68,15 +90,13 @@ describe("runDoctorSessionSqlite", () => {
     expect(before[1]).toBeUndefined();
     const restored = await runPublicSessionSqlite(store, "restore");
     expect(restored.exitCode).toBe(1);
-    expect(restored.report.targets[0]?.restore?.restoredFiles).toEqual([]);
-    expect(restored.report.targets[0]?.restore?.conflicts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ reason: expect.stringContaining("intentionally disposed") }),
-      ]),
+    expect(restored.report.targets[0]?.restore).toMatchObject({ restoredFiles: [] });
+    contains(
+      restored.report.targets[0]?.restore?.conflicts,
+      expect.objectContaining({ reason: expect.stringContaining("intentionally disposed") }),
     );
     expect(readArtifacts()).toEqual(before);
-    expect(fs.existsSync(store.storePath)).toBe(false);
-    expect(fs.existsSync(store.transcriptPath)).toBe(false);
+    expectMissing(store.storePath, store.transcriptPath);
   });
 
   it("explains hard-linked index refusal without changing either link", async () => {
@@ -85,33 +105,27 @@ describe("runDoctorSessionSqlite", () => {
     const snapshotPath = path.join(store.tempDir, "snapshot");
     const originalBytes = fs.readFileSync(sourcePath);
     fs.linkSync(sourcePath, snapshotPath);
-    const diagnostics = [
+    const refused = importLegacyStore(store);
+    for (const message of [
       sourcePath,
       "nlink=2",
       "another hard link references this inode",
       "backup",
       "#hard-linked-legacy-artifacts",
-    ];
-    {
-      const refused = importLegacyStore(store);
-      for (const message of diagnostics) {
-        await expect(refused).rejects.toThrow(message);
-      }
+    ]) {
+      await expect(refused).rejects.toThrow(message);
     }
     expect(fs.lstatSync(sourcePath).nlink).toBe(2);
-    expect(fs.readFileSync(sourcePath)).toEqual(originalBytes);
-    expect(fs.readFileSync(snapshotPath)).toEqual(originalBytes);
+    expectFiles(originalBytes, sourcePath, snapshotPath);
     expect(fs.existsSync(store.storePath)).toBe(true);
     expect(fs.existsSync(store.transcriptPath)).toBe(true);
-    {
-      const copyPath = path.join(store.sessionDir, "sessions-copy.tmp");
-      fs.copyFileSync(store.storePath, copyPath, fs.constants.COPYFILE_EXCL);
-      expect(fs.readFileSync(copyPath)).toEqual(originalBytes);
-      fs.renameSync(copyPath, store.storePath);
-      expect(fs.lstatSync(store.storePath).nlink).toBe(1);
-      expect((await importLegacyStore(store)).totals.issues).toBe(0);
-      expect(fs.readFileSync(snapshotPath)).toEqual(originalBytes);
-    }
+    const copyPath = path.join(store.sessionDir, "sessions-copy.tmp");
+    fs.copyFileSync(store.storePath, copyPath, fs.constants.COPYFILE_EXCL);
+    expectFiles(originalBytes, copyPath);
+    fs.renameSync(copyPath, store.storePath);
+    expect(fs.lstatSync(store.storePath).nlink).toBe(1);
+    expect((await importLegacyStore(store)).totals.issues).toBe(0);
+    expectFiles(originalBytes, snapshotPath);
   });
 
   it.skipIf(process.platform === "win32").each(["archive", "database"] as const)(
@@ -144,10 +158,8 @@ describe("runDoctorSessionSqlite", () => {
       expect(fs.existsSync(realPath)).toBe(true);
       if (kind !== "database") {
         expect(fs.existsSync(store.transcriptPath)).toBe(true);
-        if (kind === "archive") {
-          expect(fs.existsSync(store.storePath)).toBe(true);
-          expect(fs.readdirSync(realPath)).toEqual([]);
-        }
+        expect(fs.existsSync(store.storePath)).toBe(true);
+        expect(fs.readdirSync(realPath)).toEqual([]);
       }
     },
   );
@@ -194,13 +206,12 @@ describe("runDoctorSessionSqlite", () => {
         spy.mockRestore();
       }
       if (failed) {
-        expect(report.targets[0]?.issues).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              code: "sqlite_entry_missing",
-              sessionKey: "agent:main:alias",
-            }),
-          ]),
+        contains(
+          report.targets[0]?.issues,
+          expect.objectContaining({
+            code: "sqlite_entry_missing",
+            sessionKey: "agent:main:alias",
+          }),
         );
         expect(fs.readFileSync(store.transcriptPath)).toEqual(original);
       } else {
@@ -214,27 +225,13 @@ describe("runDoctorSessionSqlite", () => {
         sqliteEntries: 2,
       });
       expect(fs.existsSync(store.transcriptPath)).toBe(failed);
-      expect(
-        loadExactSessionEntry({
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          storePath: store.storePath,
-        })?.entry.sessionId,
-      ).toBe("session-1");
-      expect(
-        loadExactSessionEntry({
-          agentId: "main",
-          sessionKey: "agent:main:alias",
-          storePath: store.storePath,
-        })?.entry.sessionId,
-      ).toBe("session-1");
-      closeOpenClawAgentDatabasesForTest();
-      const cleanup = await retireSessionSqliteRecovery({
-        env: store.env,
-        preview: inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
-        readConfig: async () => ({}),
-        confirm: async () => true,
-      });
+      for (const sessionKey of ["agent:main:main", "agent:main:alias"]) {
+        expect(
+          loadExactSessionEntry({ agentId: "main", sessionKey, storePath: store.storePath })?.entry
+            .sessionId,
+        ).toBe("session-1");
+      }
+      const cleanup = await cleanupRecovery(store);
       expect(cleanup.totals.removedFiles).toBe(failed ? 0 : 2);
       if (failed) {
         expect(fs.readFileSync(store.transcriptPath)).toEqual(original);
@@ -250,20 +247,14 @@ describe("runDoctorSessionSqlite", () => {
 
     const report = await importLegacyStore(store);
 
-    expect(report.targets[0]?.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: expect.stringMatching(/archive_failed$/),
-        }),
-      ]),
+    contains(
+      report.targets[0]?.issues,
+      expect.objectContaining({ code: expect.stringMatching(/archive_failed$/) }),
     );
     expect(report.targets[0]?.archivedTranscriptFiles).toEqual([]);
     expect(fs.existsSync(outsideTranscriptPath)).toBe(true);
     expect(fs.lstatSync(store.transcriptPath).isSymbolicLink()).toBe(true);
   });
-});
-
-describe("runDoctorSessionSqlite", () => {
   it.each([
     { kind: "transcript", mode: "import" },
     { kind: "legacy-store", mode: "restore" },
@@ -318,15 +309,10 @@ describe("runDoctorSessionSqlite", () => {
         const reimport = await importLegacyStore(store);
         expect(reimport.targets[0]?.issues).toEqual([]);
       }
-      closeOpenClawAgentDatabasesForTest();
-      const cleanup = await retireSessionSqliteRecovery({
-        env: store.env,
-        preview: inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
-        readConfig: async () => ({}),
-        confirm: async () => true,
+      expect(await cleanupRecovery(store)).toMatchObject({
+        status: "complete",
+        totals: { removedFiles: 2 },
       });
-      expect(cleanup.status).toBe("complete");
-      expect(cleanup.totals.removedFiles).toBe(2);
     },
   );
 
@@ -348,8 +334,7 @@ describe("runDoctorSessionSqlite", () => {
         await expect(runPublicSessionSqlite(store, mode)).rejects.toThrow(
           /hard-linked|archive identity or contents changed/,
         );
-        expect(fs.readFileSync(move.sourcePath)).toEqual(before);
-        expect(fs.readFileSync(move.archivePath)).toEqual(before);
+        expectFiles(before, move.sourcePath, move.archivePath);
         expect(fs.statSync(move.sourcePath).nlink).toBe(fault === "third-link" ? 3 : 2);
       }
     },
@@ -382,8 +367,9 @@ describe("runDoctorSessionSqlite", () => {
       try {
         const failed = await runPublicSessionSqlite(store, "restore");
         expect(failed.exitCode).toBe(1);
-        expect(failed.report.targets[0]?.restore?.conflicts).toEqual(
-          expect.arrayContaining([expect.objectContaining({ archivePath: index.archivePath })]),
+        contains(
+          failed.report.targets[0]?.restore?.conflicts,
+          expect.objectContaining({ archivePath: index.archivePath }),
         );
         expect(publicationSpy).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -432,8 +418,7 @@ describe("runDoctorSessionSqlite", () => {
       expect(fs.readFileSync(index.archivePath)).toEqual(indexBytes);
       expect(fs.readFileSync(archivePath)).toEqual(transcriptBytes);
       expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe("new source history\n");
-      expect(fs.existsSync(index.sourcePath)).toBe(false);
-      expect(fs.existsSync(target.sqlitePath)).toBe(false);
+      expectMissing(index.sourcePath, target.sqlitePath);
     },
   );
 });
