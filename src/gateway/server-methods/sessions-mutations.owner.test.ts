@@ -52,8 +52,26 @@ import type {
   SessionMutationAuthorization,
 } from "./types.js";
 
-function expectSuccess(respond: ReturnType<typeof vi.fn>, result: unknown) {
+function expectSuccess(respond: RespondFn, result: unknown) {
   expect(respond).toHaveBeenCalledWith(true, result, undefined);
+}
+
+async function mutate(
+  method: string,
+  params: Record<string, unknown>,
+  options: Partial<GatewayRequestHandlerOptions> = {},
+) {
+  const respond = options.respond ?? vi.fn();
+  await sessionMutationHandlers[method]!({
+    req: { type: "req", id: method, method, params },
+    client: options.client ?? client(),
+    context: options.context ?? context({}),
+    isWebchatConnect: () => true,
+    params,
+    ...options,
+    respond,
+  });
+  return respond;
 }
 
 function readEntry(env: NodeJS.ProcessEnv, sessionKey: string) {
@@ -82,15 +100,27 @@ type CatalogSnapshot = Awaited<
   ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>
 >;
 
-function catalogSnapshot(state: MutationState, config: OpenClawConfig): CatalogSnapshot {
-  return {
+function pauseCatalog(state: MutationState, requestContext: GatewayRequestContext) {
+  const snapshot: CatalogSnapshot = {
     agentId: "main",
     agentDir: state.agentDir("main"),
     workspaceDir: state.workspaceDir,
-    config,
+    config: requestContext.getRuntimeConfig(),
     catalogComplete: true,
     entries: [],
     routeVariants: [],
+  };
+  const entered = createDeferredCore();
+  const release = createDeferredCore<CatalogSnapshot>();
+  const load = vi.fn(async () => {
+    entered.resolve();
+    return release.promise;
+  });
+  requestContext.loadGatewayModelCatalogSnapshot = load;
+  return {
+    entered: entered.promise,
+    load,
+    release: () => release.resolve(snapshot),
   };
 }
 
@@ -130,13 +160,12 @@ async function invoke(
   using _ = { [Symbol.dispose]: () => authorization.authorization?.release?.() };
   const responses: Parameters<RespondFn>[] = [];
   if (!authorization.error) {
-    await sessionMutationHandlers["sessions.assignOwner"]?.({
-      params: request,
+    await mutate("sessions.assignOwner", request, {
       client: requestClient,
       context: requestContext,
       sessionMutationAuthorization: authorizationOverride ?? authorization.authorization,
       respond: (...response: Parameters<RespondFn>) => responses.push(response),
-    } as never);
+    });
   }
   return { authorization, requestContext, responses };
 }
@@ -260,17 +289,11 @@ describe("sessions.patch", () => {
           source: "agent-patch",
         },
       });
-      const respond = vi.fn();
-      await sessionMutationHandlers["sessions.patch"]!({
-        params: {
-          key: sessionKey,
-          thinkingLevel: null,
-          contextWindow: null,
-        },
-        client: client(),
-        context: context({}),
-        respond,
-      } as never);
+      const respond = await mutate("sessions.patch", {
+        key: sessionKey,
+        thinkingLevel: null,
+        contextWindow: null,
+      });
       expectSuccess(respond, expect.any(Object));
       const entry = loadSessionEntry(scope);
       expect(entry?.thinkingLevel).toBeUndefined();
@@ -310,18 +333,12 @@ describe("sessions.patch", () => {
           registerInternalHook("session:patch", patched);
         }
         setActiveEmbeddedRun(sessionId, handle, sessionKey);
-        const respond = vi.fn();
         try {
-          await sessionMutationHandlers["sessions.patch"]!({
-            params: {
-              key: sessionKey,
-              permissionMode: "read-only",
-              ...(failed ? { label: "Updated session" } : {}),
-            },
-            client: client(),
-            context: context({}),
-            respond,
-          } as never);
+          const respond = await mutate("sessions.patch", {
+            key: sessionKey,
+            permissionMode: "read-only",
+            ...(failed ? { label: "Updated session" } : {}),
+          });
           expect(respond).toHaveBeenCalledWith(
             false,
             undefined,
@@ -367,16 +384,7 @@ describe("sessions.patch", () => {
         await seedEntry(state.env, sessionKey, { sessionId, permissionMode: "guarded" });
         const entered = createDeferredCore();
         const release = createDeferredCore();
-        const catalogEntered = createDeferredCore();
-        const catalogRelease = createDeferredCore<CatalogSnapshot>();
-        const snapshot = catalogSnapshot(state, cfg);
-        const loadGatewayModelCatalogSnapshot = vi.fn<
-          GatewayRequestContext["loadGatewayModelCatalogSnapshot"]
-        >(async () => {
-          catalogEntered.resolve();
-          return catalogRelease.promise;
-        });
-        requestContext.loadGatewayModelCatalogSnapshot = loadGatewayModelCatalogSnapshot;
+        const catalog = pauseCatalog(state, requestContext);
         const applyPermissionMode = vi.fn(async (_mode: string | null, revoke: () => void) => {
           revoke();
           entered.resolve();
@@ -389,29 +397,28 @@ describe("sessions.patch", () => {
         setActiveEmbeddedRun(sessionId, handle, sessionKey);
         const responses = [vi.fn(), vi.fn()];
         const patch = (permissionMode: "full" | "read-only", index: number) =>
-          sessionMutationHandlers["sessions.patch"]!({
-            params: {
+          mutate(
+            "sessions.patch",
+            {
               key: sessionKey,
               permissionMode,
               ...(prepareCatalog && index === 0 ? { thinkingLevel: "low" } : {}),
             },
-            client: requestClient,
-            context: requestContext,
-            respond: responses[index]!,
-          } as never);
+            { client: requestClient, context: requestContext, respond: responses[index]! },
+          );
         const first = patch("full", 0);
         let second: ReturnType<typeof patch> | undefined;
         try {
           if (prepareCatalog) {
-            await Promise.race([catalogEntered.promise, first]);
-            expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
+            await Promise.race([catalog.entered, first]);
+            expect(catalog.load).toHaveBeenCalledOnce();
             expect(applyPermissionMode).not.toHaveBeenCalled();
             expect(patched).not.toHaveBeenCalled();
             expect(isSessionPermissionChangePending(sessionId)).toBe(false);
             expect(responses[0]).not.toHaveBeenCalled();
             expect(readEntry(state.env, sessionKey)?.permissionMode).toBe("guarded");
           }
-          catalogRelease.resolve(snapshot);
+          catalog.release();
           await Promise.race([entered.promise, first]);
           expect(applyPermissionMode).toHaveBeenCalledTimes(1);
           expect(responses[0]).not.toHaveBeenCalled();
@@ -429,14 +436,14 @@ describe("sessions.patch", () => {
           expectSuccess(responses[0], expect.any(Object));
           expectSuccess(responses[1], expect.any(Object));
           expect(patched).toHaveBeenCalledTimes(2);
-          expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(prepareCatalog ? 1 : 0);
+          expect(catalog.load).toHaveBeenCalledTimes(prepareCatalog ? 1 : 0);
           expect(isSessionPermissionChangePending(sessionId)).toBe(false);
           expect(readEntry(state.env, sessionKey)?.permissionMode).toBe("read-only");
           if (prepareCatalog) {
             expect(readEntry(state.env, sessionKey)?.thinkingLevel).toBe("low");
           }
         } finally {
-          catalogRelease.resolve(snapshot);
+          catalog.release();
           release.resolve();
           await Promise.allSettled([first, second]);
           unregisterInternalHook("session:patch", patched);
@@ -466,13 +473,7 @@ describe("sessions.patch", () => {
         }
         const cfg: OpenClawConfig = {};
         const requestContext = context(cfg);
-        const catalogEntered = createDeferredCore();
-        const catalogRelease = createDeferredCore();
-        requestContext.loadGatewayModelCatalogSnapshot = vi.fn(async () => {
-          catalogEntered.resolve();
-          await catalogRelease.promise;
-          return catalogSnapshot(state, cfg);
-        });
+        const catalog = pauseCatalog(state, requestContext);
         const handles = keys.map(() => ({
           ...createEmbeddedRunHandle(),
           applyPermissionMode: vi.fn(async (_mode: string | null, revoke: () => void) => {
@@ -485,7 +486,7 @@ describe("sessions.patch", () => {
         const respond = vi.fn();
         // This continuation belongs to an independent lifecycle writer, outside
         // the handler's reentrant writer context.
-        const lifecycleWrite = catalogEntered.promise.then(async () => {
+        const lifecycleWrite = catalog.entered.then(async () => {
           await patchSessionEntryCore(scope(keys[1]!), () => ({
             startedAt: 2,
             lifecycleRunId: "batch-catalog-run",
@@ -500,17 +501,8 @@ describe("sessions.patch", () => {
             ...(restore ? { archived: false } : {}),
           },
         } satisfies SessionsPatchManyParams;
-        const request: GatewayRequestHandlerOptions = {
-          req: {
-            type: "req",
-            id: "batch-permission-catalog",
-            method: "sessions.patchMany",
-            params,
-          },
-          params,
-          client: client(),
+        const pending = mutate("sessions.patchMany", params, {
           context: requestContext,
-          isWebchatConnect: () => true,
           sessionMutationAuthorization: {
             assertCurrent: () => {},
             assertTargetCurrent: ({ sessionKey }) => {
@@ -520,11 +512,10 @@ describe("sessions.patch", () => {
             },
           },
           respond,
-        };
-        const pending = sessionMutationHandlers["sessions.patchMany"]!(request);
+        });
         try {
-          await Promise.race([catalogEntered.promise, pending]);
-          expect(requestContext.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
+          await Promise.race([catalog.entered, pending]);
+          expect(catalog.load).toHaveBeenCalledOnce();
           for (const key of keys) {
             expect(isSessionPermissionChangePending(key)).toBe(false);
             expect(loadSessionEntry(scope(key))?.permissionMode).toBe("guarded");
@@ -534,7 +525,7 @@ describe("sessions.patch", () => {
             startedAt: 2,
             lifecycleRunId: "batch-catalog-run",
           });
-          catalogRelease.resolve();
+          catalog.release();
           await pending;
           expectSuccess(respond, {
             outcomes: [
@@ -561,7 +552,7 @@ describe("sessions.patch", () => {
             lifecycleRunId: "batch-catalog-run",
           });
         } finally {
-          catalogRelease.resolve();
+          catalog.release();
           await Promise.allSettled([pending, lifecycleWrite]);
           keys.forEach((key, index) => clearActiveEmbeddedRun(key, handles[index]!, key));
         }
@@ -574,43 +565,33 @@ describe("sessions.patch", () => {
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const sessionKey = "agent:main:patch-created";
       const requestClient = client(profileId);
+      const member = {
+        sessions: { others: "none" as const },
+        agents: "*" as const,
+        scopes: ["operator.write"],
+      };
       const cfg: OpenClawConfig = {
-        gateway: {
-          roles: {
-            default: "member",
-            definitions: {
-              member: {
-                sessions: { others: "none" },
-                agents: "*",
-                scopes: ["operator.write"],
-              },
-            },
-          },
-        },
+        gateway: { roles: { default: "member", definitions: { member } } },
       };
       const requestContext = context(cfg);
       const patch = async (pinned: boolean) => {
         const request = { key: sessionKey, pinned };
-        const authorization = await resolveSessionMutationAuthorizationAsync({
+        const resolved = await resolveSessionMutationAuthorizationAsync({
           client: requestClient,
           method: "sessions.patch",
           requestParams: request,
           context: requestContext,
         });
-        try {
-          expect(authorization.error).toBeNull();
-          const respond = vi.fn();
-          await sessionMutationHandlers["sessions.patch"]?.({
-            params: request,
-            client: requestClient,
-            context: requestContext,
-            sessionMutationAuthorization: authorization.authorization,
-            respond,
-          } as never);
-          expectSuccess(respond, expect.any(Object));
-        } finally {
-          authorization.authorization?.release?.();
-        }
+        using authorization = Object.assign(resolved, {
+          [Symbol.dispose]: () => resolved.authorization?.release?.(),
+        });
+        expect(authorization.error).toBeNull();
+        const respond = await mutate("sessions.patch", request, {
+          client: requestClient,
+          context: requestContext,
+          sessionMutationAuthorization: authorization.authorization,
+        });
+        expectSuccess(respond, expect.any(Object));
       };
 
       await patch(true);
@@ -711,6 +692,7 @@ describe("sessions.assignOwner", () => {
     withSessionMutationState(async (state) => {
       const sessionKey = "agent:main:handoff";
       const ownerProfile = ensureProfileForEmail("requester@example.test");
+      const nextOwner = () => ({ type: "human", id: ownerProfile.id }) as const;
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog({ env: state.env })).release };
       await seedEntry(state.env, sessionKey, {
         sessionId: "session-handoff",
@@ -725,7 +707,7 @@ describe("sessions.assignOwner", () => {
       await expect(
         dispatchGatewayMethodInProcess(
           "sessions.assignOwner",
-          { key: sessionKey, owner: { type: "human", id: ownerProfile.id } },
+          { key: sessionKey, owner: nextOwner() },
           {
             forceSyntheticClient: true,
             agentToolCaller: toolCaller,
@@ -736,14 +718,11 @@ describe("sessions.assignOwner", () => {
       ).resolves.toMatchObject({
         ok: true,
         key: sessionKey,
-        owner: {
-          actor: { type: "human", id: ownerProfile.id },
-          assignedBy: mainAgent(),
-        },
+        owner: { actor: nextOwner(), assignedBy: mainAgent() },
       });
 
       expect(readEntry(state.env, sessionKey)).toMatchObject({
-        owner: { actor: { type: "human", id: ownerProfile.id }, assignedBy: mainAgent() },
+        owner: { actor: nextOwner(), assignedBy: mainAgent() },
         createdVia: "spawn",
         createdActor: mainAgent(),
         createdAt: 1,
@@ -768,36 +747,28 @@ describe("sessions.assignOwner", () => {
         const result = await invoke({ key: sessionKey, owner: researchAgent() });
 
         expect(result.authorization.error).toBeNull();
-        expectOwnerResponse(
-          result.responses,
-          {
-            actor: { ...researchAgent(), label: "Research" },
-            assignedBy: viewer,
-            assignedAt: 4242,
-          },
-          { ok: true, key: sessionKey },
-        );
-        expect(readEntry(state.env, sessionKey)?.owner).toEqual({
+        const assignedOwner = {
           actor: researchAgent(),
           assignedBy: viewer,
           assignedAt: 4242,
-        });
+        };
+        expectOwnerResponse(
+          result.responses,
+          {
+            ...assignedOwner,
+            actor: { ...researchAgent(), label: "Research" },
+          },
+          { ok: true, key: sessionKey },
+        );
+        expect(readEntry(state.env, sessionKey)?.owner).toEqual(assignedOwner);
         const durableOwner = ensureProfileForEmail(`next-owner-${caseNumber}@example.test`);
         using _ = {
           [Symbol.dispose]: (await prepareUserProfileCatalog({ env: state.env })).release,
         };
-        const reassigned = await invoke({
-          key: sessionKey,
-          owner: { type: "human", id: durableOwner.id },
-        });
-        expectOwnerResponse(reassigned.responses, {
-          actor: { type: "human", id: durableOwner.id },
-          assignedBy: viewer,
-        });
-        expect(readEntry(state.env, sessionKey)?.owner?.actor).toEqual({
-          type: "human",
-          id: durableOwner.id,
-        });
+        const nextOwner = () => ({ type: "human", id: durableOwner.id }) as const;
+        const reassigned = await invoke({ key: sessionKey, owner: nextOwner() });
+        expectOwnerResponse(reassigned.responses, { actor: nextOwner(), assignedBy: viewer });
+        expect(readEntry(state.env, sessionKey)?.owner?.actor).toEqual(nextOwner());
 
         const target = await resolveSessionSharingTargetAsync({ cfg, sessionKey, agentId: "main" });
         if (!target) {
@@ -806,15 +777,15 @@ describe("sessions.assignOwner", () => {
         expect(resolveSessionSharingRole({ client: client("profile-creator"), target })).toBe(
           "owner",
         );
-        expect(
-          resolveSessionSharingRole({
-            client: client("research"),
-            target,
-            isMember: (
-              await readSessionMembersInWorker({ agentId: "main", env: state.env, sessionKey })
-            ).members.some((member) => member.identityId === "research"),
-          }),
-        ).toBe("viewer");
+        const { members } = await readSessionMembersInWorker({
+          agentId: "main",
+          env: state.env,
+          sessionKey,
+        });
+        const isMember = members.some((member) => member.identityId === "research");
+        expect(resolveSessionSharingRole({ client: client("research"), target, isMember })).toBe(
+          "viewer",
+        );
       }),
   );
 
@@ -826,46 +797,39 @@ describe("sessions.assignOwner", () => {
         createdActor: creator,
       };
       await seedEntry(state.env, sessionKey, { ...entry, visibility: "draft" });
-      const cfg = {
-        agents: { entries: { main: {}, research: {} } },
-      } as OpenClawConfig;
+      const cfg: OpenClawConfig = { agents: { entries: { main: {}, research: {} } } };
       const request = { key: sessionKey, owner: researchAgent() };
       const humanRequest = { ...request, owner: { type: "human", id: "profile-next" } };
-      for (const [requestClient, params, code, message] of [
-        [
-          client("profile-viewer"),
-          request,
-          "FORBIDDEN",
-          "session is not visible to this connection",
-        ],
-        [client(), humanRequest, "FORBIDDEN", "sessions.assignOwner requires an identified caller"],
-        [
-          { ...client(), internal: { agentToolCaller: toolCaller } },
-          request,
-          "FORBIDDEN",
-          "sessions.assignOwner requires an identified caller",
-        ],
-        [
-          client(),
-          { ...humanRequest, agentToolCaller: toolCaller },
-          "INVALID_REQUEST",
-          expect.stringContaining("unexpected property 'agentToolCaller'"),
-        ],
-      ] as const) {
+      const reject = async (
+        requestClient: GatewayClient,
+        params: Record<string, unknown>,
+        message: unknown = "sessions.assignOwner requires an identified caller",
+        code = "FORBIDDEN",
+      ) => {
         const result = await invoke(params, requestClient, cfg);
         expect(result.responses[0]?.[2]).toMatchObject({ code, message });
-      }
+      };
+      await reject(client("profile-viewer"), request, "session is not visible to this connection");
+      await reject(client(), humanRequest);
+      await reject({ ...client(), internal: { agentToolCaller: toolCaller } }, request);
+      await reject(
+        client(),
+        { ...humanRequest, agentToolCaller: toolCaller },
+        expect.stringContaining("unexpected property 'agentToolCaller'"),
+        "INVALID_REQUEST",
+      );
       await seedEntry(state.env, sessionKey, { ...entry, updatedAt: 2, visibility: "shared" });
       for (const owner of [
         { type: "human" as const, id: "unknown-profile" },
         { type: "human" as const, id: "discord:channel:123" },
         { type: "agent" as const, id: "missing" },
       ]) {
-        const unknown = await invoke({ key: sessionKey, owner }, client("profile-viewer"), cfg);
-        expect(unknown.responses[0]?.[2]).toMatchObject({
-          code: "INVALID_REQUEST",
-          message: `unknown session owner "${owner.id}"`,
-        });
+        await reject(
+          client("profile-viewer"),
+          { key: sessionKey, owner },
+          `unknown session owner "${owner.id}"`,
+          "INVALID_REQUEST",
+        );
       }
       expect(readEntry(state.env, sessionKey)?.owner).toBeUndefined();
     }));

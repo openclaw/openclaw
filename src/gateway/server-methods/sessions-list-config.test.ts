@@ -42,16 +42,15 @@ function config(defaults: NonNullable<OpenClawConfig["agents"]>["defaults"]): Op
   return cfg;
 }
 
-function seed(
-  scope: Parameters<typeof replaceSessionEntrySync>[0],
-  patch: Partial<Parameters<typeof replaceSessionEntrySync>[1]>,
-) {
+function seed(name: string, patch: Partial<Parameters<typeof replaceSessionEntrySync>[1]>) {
+  const scope = { agentId: "main", sessionKey: `agent:main:${name}` };
   replaceSessionEntrySync(scope, {
     sessionId: scope.sessionKey,
     updatedAt: 1,
     visibility: "shared",
     ...patch,
   });
+  return scope;
 }
 
 function withScopes(cfg: OpenClawConfig, scopes: OperatorScope[]): OpenClawConfig {
@@ -87,15 +86,25 @@ function observeRowFacts(reads: string[], pause?: () => Promise<void>) {
   );
 }
 
+function pauseRowFacts(reads: string[]) {
+  const captured = createDeferredCore();
+  const resume = createDeferredCore();
+  let first = true;
+  observeRowFacts(reads, async () => {
+    if (first) {
+      first = false;
+      captured.resolve();
+      await resume.promise;
+    }
+  });
+  return { captured: captured.promise, resume: () => resume.resolve() };
+}
+
 it("reuses committed row facts when a changed model catalog updates session lists", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = config({ utilityModel: "unit-test/small" });
-    const scopes = ["first", "second"].map((name) => ({
-      agentId: "main",
-      sessionKey: `agent:main:catalog-${name}`,
-    }));
-    for (const scope of scopes) {
-      seed(scope, {
+    const scopes = ["first", "second"].map((name) =>
+      seed(`catalog-${name}`, {
         providerOverride: "unit-test",
         modelOverride: "fixture",
         activitySummary: {
@@ -103,7 +112,7 @@ it("reuses committed row facts when a changed model catalog updates session list
           formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
           text: "Ready",
           updatedAt: 1,
-          sessionId: scope.sessionKey,
+          sessionId: `agent:main:catalog-${name}`,
           generation: null,
           maxSeq: null,
           leafEntryId: null,
@@ -111,22 +120,13 @@ it("reuses committed row facts when a changed model catalog updates session list
           totalMessages: 0,
           omittedContent: false,
         },
-      });
-    }
+      }),
+    );
     let catalog = [{ id: "fixture", name: "Fixture", provider: "unit-test", contextTokens: 8192 }];
     const release = projectionWork.retainSessionListForegroundWork();
-    const firstRead = createDeferredCore();
-    const resumeFirstRead = createDeferredCore();
     const backgroundRefresh = createDeferredCore();
     const startupReads: string[] = [];
-    let pauseFirstRead = true;
-    observeRowFacts(startupReads, async () => {
-      if (pauseFirstRead) {
-        pauseFirstRead = false;
-        firstRead.resolve();
-        await resumeFirstRead.promise;
-      }
-    });
+    const firstRead = pauseRowFacts(startupReads);
     const createDrain = projectionWork.createSessionProjectionDrain;
     vi.spyOn(projectionWork, "createSessionProjectionDrain").mockImplementation((options) =>
       createDrain({
@@ -143,11 +143,11 @@ it("reuses committed row facts when a changed model catalog updates session list
       getModelCatalog: async () => catalog,
     });
     try {
-      await firstRead.promise;
+      await firstRead.captured;
       await backgroundRefresh.promise;
       await projectionWork.yieldSessionListWork();
     } finally {
-      resumeFirstRead.resolve();
+      firstRead.resume();
     }
     const projection = await creating;
     await projection.ensureMaterialized();
@@ -178,13 +178,8 @@ it("reuses committed row facts when a changed model catalog updates session list
       }
 
       // A catalog publication cannot turn an in-flight stored update into stale presentation.
-      const captured = createDeferredCore();
-      const resume = createDeferredCore();
       const first = scopes[0]!;
-      observeRowFacts(reads, async () => {
-        captured.resolve();
-        await resume.promise;
-      });
+      const renewalRead = pauseRowFacts(reads);
       replaceSessionEntrySync(first, {
         ...loadSessionEntry(first)!,
         label: "Committed during renewal",
@@ -192,11 +187,11 @@ it("reuses committed row facts when a changed model catalog updates session list
       sessionChanges.emit({ ...first, factsInvalidated: true });
       const listing = list();
       try {
-        await captured.promise;
+        await renewalRead.captured;
         catalog = [{ ...catalog[0]!, contextTokens: 32768 }];
         notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
       } finally {
-        resume.resolve();
+        renewalRead.resume();
         await listing;
       }
       expect(reads).toEqual([first.sessionKey]);
@@ -220,13 +215,7 @@ it("retains session facts on identity-scope changes and refreshes changes that a
     let cfg = config({ model: "unit-test/original" });
     const scope = { agentId: "main", sessionKey: "agent:main:live" };
     for (const name of ["live", "archived"]) {
-      seed(
-        { agentId: "main", sessionKey: `agent:main:${name}` },
-        {
-          sessionId: name,
-          ...(name === "archived" ? { archivedAt: 1 } : {}),
-        },
-      );
+      seed(name, { sessionId: name, ...(name === "archived" ? { archivedAt: 1 } : {}) });
     }
     const context = requestContext(cfg);
     context.getRuntimeConfig = () => getRuntimeConfigSnapshot()!;
@@ -255,13 +244,9 @@ it("retains session facts on identity-scope changes and refreshes changes that a
         expect(result.sessions.map((row) => row.key)).toEqual(
           original.sessions.map((row) => row.key),
         );
-        if (refresh) {
-          expect(reads.length).toBeGreaterThan(0);
-          expect(projection.materializedCount).toBeGreaterThan(materialized);
-        } else {
-          expect(reads).toEqual([]);
-          expect(projection.materializedCount).toBe(materialized);
-        }
+        const comparison = refresh ? "toBeGreaterThan" : "toBe";
+        expect(reads.length)[comparison](0);
+        expect(projection.materializedCount)[comparison](materialized);
         return result;
       };
       for (const scopes of [["operator.read"], ["operator.admin"]] satisfies OperatorScope[][]) {
@@ -272,7 +257,7 @@ it("retains session facts on identity-scope changes and refreshes changes that a
 
       // A policy publication must retain work already queued by a committed session write.
       reads.length = 0;
-      seed(scope, {
+      seed("live", {
         sessionId: "live",
         label: "Changed during reload",
       });

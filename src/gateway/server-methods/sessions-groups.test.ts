@@ -229,14 +229,12 @@ describe("sessions.groups.update", () => {
   });
 });
 
-describe("sessions.groups.rename", () => {
-  it("rejects an unknown source group", async () => {
-    groupMocks.rename.mockRejectedValue(new groupMocks.NotFound("unknown session group: Missing"));
-    const h = groupRequest("sessions.groups.rename", { name: "Missing", to: "Other" });
-    await h.invoke();
-    expectFailure(h.respond, {
-      code: "INVALID_REQUEST",
-      message: "unknown session group: Missing",
-    });
+it("sessions.groups.rename rejects an unknown source group", async () => {
+  groupMocks.rename.mockRejectedValue(new groupMocks.NotFound("unknown session group: Missing"));
+  const h = groupRequest("sessions.groups.rename", { name: "Missing", to: "Other" });
+  await h.invoke();
+  expectFailure(h.respond, {
+    code: "INVALID_REQUEST",
+    message: "unknown session group: Missing",
   });
 });

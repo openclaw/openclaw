@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { sessionGoalHandlers } from "./sessions-goal.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -100,10 +100,6 @@ const result = () => ({ operationId: "operation-id", status: "updated" });
 
 function invoke() {
   const respond = vi.fn();
-  const context = {
-    getRuntimeConfig: () => ({}),
-    logGateway: { warn: vi.fn() },
-  } as unknown as GatewayRequestContext;
   const pending = sessionGoalHandlers["sessions.goal.update"]!({
     req: { type: "req", id: "goal-request", method: "sessions.goal.update" },
     params: {
@@ -115,7 +111,10 @@ function invoke() {
       issuedAtMs: 1,
     },
     respond,
-    context,
+    context: {
+      getRuntimeConfig: () => ({}),
+      logGateway: { warn: vi.fn() },
+    } as unknown as GatewayRequestContext,
     client: null,
     isWebchatConnect: () => false,
   });
@@ -126,50 +125,46 @@ beforeEach(() => vi.clearAllMocks());
 
 afterEach(() => expect(edge.forbidden).not.toHaveBeenCalled());
 
-describe("Goal RPC event custody", () => {
-  it.each([false, true])(
-    "publishes the committed projection immediately and joins event custody when broadcast fails=%s",
-    async (broadcastFails) => {
-      const committed = createDeferred();
-      const event = createDeferred();
-      const emitted = createDeferred();
-      const order: string[] = [];
-      edge.mutate.mockImplementation(async () => {
-        await committed.promise;
-        order.push("commit");
-        return { replayed: false, sessionEntry: edge.target.entry, result: result() };
-      });
-      edge.record.mockImplementation(() => {
-        order.push("event-start");
-        return event.promise;
-      });
-      edge.emit.mockImplementation(() => {
-        order.push("projection");
-        emitted.resolve();
-        if (broadcastFails) {
-          throw new Error("Synthetic broadcaster failure");
-        }
-      });
-      const { pending, respond } = invoke();
-      expect(edge.record).not.toHaveBeenCalled();
-      expect(edge.emit).not.toHaveBeenCalled();
-      committed.resolve();
-      await emitted.promise;
-      expect(order).toEqual(["commit", "event-start", "projection"]);
-      expect(respond).not.toHaveBeenCalled();
-      event.resolve();
-      await pending;
-      expect(respond).toHaveBeenCalledExactlyOnceWith(true, result(), undefined);
-      expect(edge.record).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("replies to a durable replay without issuing another event or projection change", async () => {
-    edge.mutate.mockResolvedValue({ replayed: true, result: result() });
+it.each([false, true])(
+  "publishes the committed projection immediately and joins event custody when broadcast fails=%s",
+  async (broadcastFails) => {
+    const committed = createDeferred();
+    const event = createDeferred();
+    const emitted = createDeferred();
+    const order: string[] = [];
+    edge.mutate.mockImplementation(async () => {
+      await committed.promise;
+      order.push("commit");
+      return { replayed: false, sessionEntry: edge.target.entry, result: result() };
+    });
+    edge.record.mockImplementation(() => {
+      order.push("event-start");
+      return event.promise;
+    });
+    edge.emit.mockImplementation(() => {
+      order.push("projection");
+      emitted.resolve();
+      if (broadcastFails) {
+        throw new Error("Synthetic broadcaster failure");
+      }
+    });
     const { pending, respond } = invoke();
+    expect([edge.record, edge.emit].map((mock) => mock.mock.calls)).toEqual([[], []]);
+    committed.resolve();
+    await emitted.promise;
+    expect(order).toEqual(["commit", "event-start", "projection"]);
+    expect(respond).not.toHaveBeenCalled();
+    event.resolve();
     await pending;
-    expect(respond).toHaveBeenCalledWith(true, { ...result(), replayed: true }, undefined);
-    expect(edge.record).not.toHaveBeenCalled();
-    expect(edge.emit).not.toHaveBeenCalled();
-  });
+    expect(respond).toHaveBeenCalledExactlyOnceWith(true, result(), undefined);
+    expect(edge.record).toHaveBeenCalledOnce();
+  },
+);
+
+it("replies to a durable replay without issuing another event or projection change", async () => {
+  edge.mutate.mockResolvedValue({ replayed: true, result: result() });
+  const { pending, respond } = invoke();
+  await pending;
+  expect(respond).toHaveBeenCalledWith(true, { ...result(), replayed: true }, undefined);
+  expect([edge.record, edge.emit].map((mock) => mock.mock.calls)).toEqual([[], []]);
 });

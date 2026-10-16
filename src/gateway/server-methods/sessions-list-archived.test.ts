@@ -28,7 +28,16 @@ function seed(name: string, patch: Partial<SessionEntry> = {}, agentId = "main")
   replaceSessionEntrySync(scope, { sessionId: name, updatedAt: 1, ...patch });
 }
 
-async function archiveProjection(cfg: OpenClawConfig) {
+function archiveConfig(
+  agents: OpenClawConfig["agents"] = { entries: { main: {} } },
+  gateway?: OpenClawConfig["gateway"],
+) {
+  const cfg = { agents, ...(gateway ? { gateway } : {}) };
+  setRuntimeConfigSnapshot(cfg);
+  return cfg;
+}
+
+async function archiveProjection(cfg: OpenClawConfig, viewer = "archive-viewer") {
   const release = retainSessionListForegroundWork();
   const context = requestContext(cfg);
   await initializeSessionReadContext(context);
@@ -36,6 +45,11 @@ async function archiveProjection(cfg: OpenClawConfig) {
   return {
     context,
     projection,
+    get list() {
+      const client = identifiedClient(viewer);
+      return (request: Parameters<typeof listSessions>[0]["request"]) =>
+        listSessions({ context, client, request });
+    },
     [Symbol.dispose]() {
       projection.dispose();
       release();
@@ -52,21 +66,15 @@ const readerRoles: NonNullable<OpenClawConfig["gateway"]>["roles"] = {
 
 it("pages and searches archived sessions without materializing excluded candidates", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = {
-      agents: {
-        defaults: { model: { primary: "anthropic/claude-sonnet-4-5" } },
-        entries: { main: {} },
-      },
-    };
-    setRuntimeConfigSnapshot(cfg);
+    const cfg = archiveConfig({
+      defaults: { model: { primary: "anthropic/claude-sonnet-4-5" } },
+      entries: { main: {} },
+    });
     for (let index = 0; index < 7; index++) {
       seed(`row-${index}`, { updatedAt: index + 1, ...(index % 2 === 0 ? { archivedAt: 1 } : {}) });
     }
-    const client = identifiedClient("archive-viewer");
     using fixture = await archiveProjection(cfg);
-    const { context, projection } = fixture;
-    const list = (request: Parameters<typeof listSessions>[0]["request"]) =>
-      listSessions({ context, client, request });
+    const { list, projection } = fixture;
     await projection.ensureMaterialized();
     expect(projection.materializedCount).toBe(3);
     for (const [request, count, totalCount, nextOffset, ids, materializedCount] of [
@@ -87,8 +95,7 @@ it("pages and searches archived sessions without materializing excluded candidat
 
 it("resolves a cold archived key through the registered handler", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
+    const cfg = archiveConfig();
     const key = "agent:main:archived-exact";
     seed("archived-exact", { archivedAt: 1, label: "Archived exact" });
     using fixture = await archiveProjection(cfg);
@@ -109,11 +116,7 @@ it("resolves a cold archived key through the registered handler", () =>
 
 it("keeps archived visibility and membership current without warming hidden rows", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {} } },
-      gateway: { roles: readerRoles },
-    };
-    setRuntimeConfigSnapshot(cfg);
+    const cfg = archiveConfig(undefined, { roles: readerRoles });
     const viewer = ensureProfileForEmail("archive-viewer@example.test").id;
     const owner = ensureProfileForEmail("archive-owner@example.test").id;
     for (const [name, visibility] of [
@@ -128,21 +131,18 @@ it("keeps archived visibility and membership current without warming hidden rows
     }
     const target = { agentId: "main", sessionKey: "agent:main:visible" };
     addSessionMember(target, { identityId: viewer, addedBy: owner });
-    const client = identifiedClient(viewer);
-    using fixture = await archiveProjection(cfg);
-    const { context, projection } = fixture;
-    const first = await listSessions({ context, client, request: { archived: true } });
-    expect(first).toMatchObject({
-      totalCount: 1,
-      sessions: [{ key: target.sessionKey, sharingRole: "member" }],
-    });
+    using fixture = await archiveProjection(cfg, viewer);
+    const { list, projection } = fixture;
+    const expectRole = async (sharingRole: "member" | "viewer") => {
+      expect(await list({ archived: true })).toMatchObject({
+        totalCount: 1,
+        sessions: [{ key: target.sessionKey, sharingRole }],
+      });
+    };
+    await expectRole("member");
     expect(projection.materializedCount).toBe(1);
     removeSessionMember(target, viewer);
-    const second = await listSessions({ context, client, request: { archived: true } });
-    expect(second).toMatchObject({
-      totalCount: 1,
-      sessions: [{ key: target.sessionKey, sharingRole: "viewer" }],
-    });
+    await expectRole("viewer");
     expect(
       projection.capture({ agentId: "main", key: "agent:main:hidden" })?.materialized,
     ).toBeUndefined();
@@ -152,15 +152,14 @@ it("hides cold archived cross-agent swarm children from a global parent", () =>
   withOpenClawTestState(
     { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
     async () => {
-      const cfg: OpenClawConfig = {
-        agents: {
+      const cfg = archiveConfig(
+        {
           ownership: "explicit",
           defaults: { systemAgent: { agentId: "main" } },
           entries: { main: {}, work: {} },
         },
-        gateway: { roles: readerRoles },
-      };
-      setRuntimeConfigSnapshot(cfg);
+        { roles: readerRoles },
+      );
       const viewer = ensureProfileForEmail("swarm-viewer@example.test").id;
       const owner = ensureProfileForEmail("swarm-owner@example.test").id;
       const child = "agent:work:subagent:archived-hidden";
@@ -196,16 +195,12 @@ it("hides cold archived cross-agent swarm children from a global parent", () =>
       });
       subagentRuns.set(run.runId, run);
       try {
-        using fixture = await archiveProjection(cfg);
-        const { context, projection } = fixture;
+        using fixture = await archiveProjection(cfg, viewer);
+        const { list, projection } = fixture;
         expect(
           projection.snapshot({ agentId: "main", key: "global" }).row?.swarm?.groups[0]?.children,
         ).toEqual([{ sessionKey: child, status: "running" }]);
-        const result = await listSessions({
-          context,
-          client: identifiedClient(viewer),
-          request: { agentId: "main", includeGlobal: true },
-        });
+        const result = await list({ agentId: "main", includeGlobal: true });
         expect(result.sessions[0]?.swarm?.groups).toMatchObject([
           { groupId: "archived-group", children: [] },
         ]);
