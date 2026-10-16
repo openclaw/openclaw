@@ -11,8 +11,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
+import { NodeRegistry } from "../node-registry.js";
 import { createGatewayPortalService } from "../portals/portal-service.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { environmentsHandlers } from "../server-methods/environments.js";
 import {
   environmentsSessionHandlers,
   resolveSessionEnvironmentCaller,
@@ -558,6 +560,89 @@ describe("conversation-owned temporary environments", () => {
       authorize,
     );
     expect(next.attachment.generation).toBe(created.attachment.generation + 1);
+  });
+
+  it("acknowledges stop before teardown and reports stopping until provider cleanup settles", async () => {
+    const started = createDeferredCore();
+    const finish = createDeferredCore();
+    let allocations = 0;
+    const service = support.createService(
+      support.createProvider({
+        provision: async () => ({ leaseId: `lease-${++allocations}`, ssh: support.SSH_ENDPOINT }),
+        destroy: async () => {
+          started.resolve();
+          await finish.promise;
+        },
+      }),
+    );
+    const created = await service.createSessionAttachment(request, authorize);
+    const { options } = createSessionRpc(service, undefined, { nodeRegistry: new NodeRegistry() });
+    const acknowledged = Promise.withResolvers<unknown>();
+    const respond = vi.fn((ok: boolean, result: unknown) => acknowledged.resolve({ ok, result }));
+    let stop: Promise<void> | undefined;
+    try {
+      await withGatewayToolCallerIdentity(
+        {
+          ...identity,
+          operationalRunInstance: { instanceId: "stop-instance", runId: "stop-run" },
+          receiptAuthority: () => true,
+        },
+        async () => {
+          stop = Promise.resolve(
+            environmentsSessionHandlers["environments.session.destroy"]!({
+              ...options,
+              params: {},
+              respond,
+            }),
+          );
+          expect(await Promise.race([acknowledged.promise, started.promise])).toMatchObject({
+            ok: true,
+            result: {
+              stopped: false,
+              stopping: true,
+              environment: { status: "stopping", worker: { state: "destroying" } },
+            },
+          });
+          await started.promise;
+          expect(service.findSessionAttachment(identity)).toBeUndefined();
+          for (const method of ["environments.session.status", "environments.status"] as const) {
+            const status = vi.fn();
+            await environmentsHandlers[method]!({
+              ...options,
+              params:
+                method === "environments.status"
+                  ? { environmentId: created.attachment.environmentId }
+                  : {},
+              respond: status,
+            });
+            expect(status.mock.calls[0]?.[0], JSON.stringify(status.mock.calls[0]?.[2])).toBe(true);
+            const result = status.mock.calls[0]?.[1];
+            expect(method === "environments.status" ? result : result.environment).toMatchObject({
+              status: "stopping",
+              worker: { state: "destroying" },
+            });
+          }
+          const repeated = vi.fn();
+          await environmentsSessionHandlers["environments.session.destroy"]!({
+            ...options,
+            params: {},
+            respond: repeated,
+          });
+          expect(repeated.mock.calls[0]?.[1]).toMatchObject({ stopped: false, stopping: true });
+          await expect(
+            service.createSessionAttachment(
+              { ...request, idempotencyKey: "replacement-during-teardown" },
+              authorize,
+            ),
+          ).rejects.toThrow("Conversation already owns a worker environment");
+        },
+      );
+    } finally {
+      finish.resolve();
+      await stop;
+      await service.stop();
+    }
+    expect(service.get(created.attachment.environmentId)?.state).toBe("destroyed");
   });
 
   it("reports bounded current cleanup failures without losing the original failure or lease", async () => {

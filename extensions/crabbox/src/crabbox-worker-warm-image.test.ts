@@ -8,7 +8,7 @@ import {
   createNodeBootstrapFixture,
   createWorkerArchiveFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
-import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
   captureWarmImage,
@@ -101,7 +101,7 @@ it("scrubs every worker identity and workspace before capturing an enrolled leas
   const lease = await provisionWarmProfile(provider);
   calls.length = 0;
 
-  await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
+  await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
 
   const captureCalls = calls.filter(
     ({ argv }) => argv[1] === "run" || argv[1] === "checkpoint" || argv[1] === "stop",
@@ -313,7 +313,7 @@ it("recovers enrolled class after restart", async () => {
 
   const restarted = createWarmProvider(undefined, initial.stateDir);
   await restarted.provider.inspect({ leaseId: lease.leaseId, profile: PROFILE });
-  await destroyAndWait(restarted.provider, { leaseId: lease.leaseId, profile: PROFILE });
+  await restarted.provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
 
   expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
 
@@ -343,7 +343,7 @@ it("never snapshots an inspection-only lease with a configured class", async () 
   const lease = { leaseId: LEASE_ID, profile: PROFILE };
 
   await provider.inspect(lease);
-  await destroyAndWait(provider, lease);
+  await provider.destroy(lease);
 
   expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
   expect(calls.at(-1)?.argv[1]).toBe("stop");
@@ -412,6 +412,6 @@ it("verifies an unverified pending image before falling back to cold", async () 
   const lease = await provisionWarmProfile(provider);
 
   expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
-  await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
+  await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
   expect(calls.some(({ argv }) => argv[2] === "create")).toBe(false);
 });

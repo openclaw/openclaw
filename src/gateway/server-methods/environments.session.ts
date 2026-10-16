@@ -19,6 +19,7 @@ import {
 } from "../session-sharing-read.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
+import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentSessionIdentity } from "../worker-environments/session-attachment.js";
 import { captureSessionEnvironmentToolPolicy } from "./environments.session-tool-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -267,13 +268,30 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
         if (!service) {
           throw new Error("Cloud worker environments are not configured");
         }
-        const result = await service.destroySessionAttachment(
-          { sessionId: caller.identity.sessionId, environmentId: params.environmentId },
-          caller.assertCurrent,
-        );
+        const requested = Promise.withResolvers<WorkerEnvironmentServiceRecord | undefined>();
+        // The service tracks completion and records failures after this request is acknowledged.
+        void service
+          .destroySessionAttachment(
+            { sessionId: caller.identity.sessionId, environmentId: params.environmentId },
+            caller.assertCurrent,
+            requested.resolve,
+          )
+          .then(requested.resolve, requested.reject);
+        const result = await requested.promise;
         caller.assertCurrent();
+        const stopped =
+          !result ||
+          result.state === "destroyed" ||
+          (result.state === "failed" && result.leaseId === null);
         respond(true, {
-          stopped: true,
+          stopped,
+          ...(!stopped
+            ? {
+                stopping: true,
+                message:
+                  "Teardown is in progress and may include warm-image capture. Use status to follow completion.",
+              }
+            : {}),
           ...(result ? { environment: summarizeWorkerEnvironment(result) } : {}),
         });
       } finally {

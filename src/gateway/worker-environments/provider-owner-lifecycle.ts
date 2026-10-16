@@ -336,6 +336,7 @@ export function createWorkerProviderOwnerLifecycle(
       abandonment?: WorkerEnvironmentAbandonment;
       forceAbandon?: () => Promise<void>;
       retryRequested?: boolean;
+      onRequested?: (record: WorkerEnvironmentRecord) => void;
     } = {},
   ) => {
     if (options.isStopping()) {
@@ -417,6 +418,7 @@ export function createWorkerProviderOwnerLifecycle(
       }
       // Persist the operator's discard decision before placement draining can survive a crash.
       await destroyOptions.forceAbandon?.();
+      destroyOptions.onRequested?.(record);
       try {
         const destroyed = await finishDestroy(record);
         abandonment?.authorize?.();

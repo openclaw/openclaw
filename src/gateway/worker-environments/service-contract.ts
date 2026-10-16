@@ -137,6 +137,7 @@ export type WorkerEnvironmentServiceContract = {
   destroySessionAttachment(
     request: { sessionId: string; environmentId?: string },
     authorize: () => void,
+    onRequested?: (record: WorkerEnvironmentServiceRecord) => void,
   ): Promise<WorkerEnvironmentServiceRecord | undefined>;
   prepareAttachedComputer?: (
     authority: import("./computer-transport.js").WorkerEnvironmentComputerAuthority,

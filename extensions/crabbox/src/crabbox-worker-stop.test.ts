@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { openWarmImageStore } from "./crabbox-state.test-support.js";
-import { waitForTeardown, commandResult } from "./crabbox-worker-provider.test-support.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import {
   createWarmProvider,
   LEASE_ID,
@@ -59,31 +59,58 @@ describe("Crabbox worker stop confirmation", () => {
     );
   });
 
-  it("returns before a slow capture finishes and stops the lease after capture", async () => {
-    const captureStarted = Promise.withResolvers<void>();
-    const finishCapture = Promise.withResolvers<void>();
-    const { provider, calls } = createWarmProvider(async ({ argv }) => {
-      if (argv[1] === "checkpoint" && argv[2] === "create") {
-        captureStarted.resolve();
-        await finishCapture.promise;
+  it.each([0, 5])(
+    "waits for capture and reports the confirmed lease stop outcome (exit %s)",
+    async (code) => {
+      const captureStarted = Promise.withResolvers<void>();
+      const finishCapture = Promise.withResolvers<void>();
+      const stopStarted = Promise.withResolvers<void>();
+      const finishStop = Promise.withResolvers<void>();
+      const { provider, calls } = createWarmProvider(async ({ argv }) => {
+        if (argv[1] === "checkpoint" && argv[2] === "create") {
+          captureStarted.resolve();
+          await finishCapture.promise;
+        }
+        if (argv[1] === "stop") {
+          stopStarted.resolve();
+          await finishStop.promise;
+          return commandResult({ code, stderr: code ? "cleanup failed" : "" });
+        }
+        return undefined;
+      });
+      const provisioned = await provisionWarmProfile(provider);
+      vi.useFakeTimers();
+      const returned = vi.fn();
+      const destroy = provider.destroy({ ...provisioned, profile: PROFILE }).then(
+        () => returned(),
+        (error: unknown) => {
+          returned();
+          return error;
+        },
+      );
+      try {
+        await captureStarted.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(returned).not.toHaveBeenCalled();
+        expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+        finishCapture.resolve();
+        await stopStarted.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(returned).not.toHaveBeenCalled();
+        finishStop.resolve();
+        if (code) {
+          expect(await destroy).toMatchObject({
+            message: expect.stringContaining("stop failed with exit code 5"),
+          });
+        } else {
+          expect(await destroy).toBeUndefined();
+        }
+      } finally {
+        finishCapture.resolve();
+        finishStop.resolve();
+        await destroy;
+        vi.useRealTimers();
       }
-      return undefined;
-    });
-    const provisioned = await provisionWarmProfile(provider);
-    vi.useFakeTimers();
-    const returned = vi.fn();
-    const destroy = provider.destroy({ ...provisioned, profile: PROFILE }).then(returned);
-    try {
-      await captureStarted.promise;
-      await vi.advanceTimersByTimeAsync(0);
-      expect(returned).toHaveBeenCalledOnce();
-      expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
-    } finally {
-      finishCapture.resolve();
-      await destroy;
-      await waitForTeardown(provider, LEASE_ID);
-      vi.useRealTimers();
-    }
-    expect(calls.at(-1)?.argv).toEqual(["crabbox", "stop", "--provider", "aws", "--id", LEASE_ID]);
-  });
+    },
+  );
 });
