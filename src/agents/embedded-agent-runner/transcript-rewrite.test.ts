@@ -347,11 +347,8 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
         branch.find((entry) => entry.type === "compaction"),
         "compaction entry",
       );
-      expect(compaction).toMatchObject({
-        firstKeptEntryId: keptAssistant.id,
-        tokensBefore: 123,
-        tokensAfter,
-      });
+      expect(compaction).toMatchObject({ firstKeptEntryId: keptAssistant.id, tokensBefore: 123 });
+      expect(compaction.tokensAfter).toBe(tokensAfter);
       expect(compaction.firstKeptEntryId).not.toBe(keptAssistantEntryId);
       expect(compaction.id).not.toBe(originalCompactionId);
       const { __openclaw: rewrittenIdentity } = compaction;
