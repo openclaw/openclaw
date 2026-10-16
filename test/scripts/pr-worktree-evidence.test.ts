@@ -306,19 +306,11 @@ process.stdout.write(JSON.stringify({
         await f.add(910001);
         const tree = await f.git(["rev-parse", "HEAD^{tree}"]);
         const prepared = await f.git(["commit-tree", tree, "-p", f.head], "Reviewed source\n");
-        const localHead = receipt.startsWith("local")
-          ? await f.git(["commit-tree", tree, "-p", f.head], "Local prepared source\n")
-          : undefined;
-        if (receipt !== "none") {
-          await f.record(910001, receipt === "intent" ? "intent" : "complete", prepared, localHead);
-        }
+        await f.record(910001, receipt === "intent" ? "intent" : "complete", prepared);
         const tip =
-          receipt === "advanced" || receipt === "configured" || receipt === "local-advanced"
-            ? await f.git(
-                ["commit-tree", tree, "-p", localHead ?? prepared],
-                "Unpublished follow-up\n",
-              )
-            : (localHead ?? prepared);
+          receipt === "advanced" || receipt === "configured"
+            ? await f.git(["commit-tree", tree, "-p", prepared], "Unpublished follow-up\n")
+            : prepared;
         await f.git(["update-ref", "refs/heads/pr-910001-prep", tip]);
         if (receipt === "configured") {
           await f.git(["update-ref", "refs/heads/published", tip]);
@@ -330,13 +322,8 @@ process.stdout.write(JSON.stringify({
         const result = await f.run(["gc_pr_worktrees false"], "MERGED");
         expect(result.status, result.output).toBe(0);
         expect(await f.outcomes()).toBe(outcomes);
-        if (receipt === "complete" || receipt === "local") {
-          expect(await f.branches()).not.toContain("refs/heads/pr-910001-prep");
-          expect(result.output).toContain("removed .worktrees/pr-910001");
-        } else {
-          expect(await f.branches(), result.output).toContain(`refs/heads/pr-910001-prep ${tip}`);
-          expect(result.output).toContain("cleanup incomplete");
-        }
+        expect(await f.branches(), result.output).toContain(`refs/heads/pr-910001-prep ${tip}`);
+        expect(result.output).toContain("cleanup incomplete");
       });
     },
   );

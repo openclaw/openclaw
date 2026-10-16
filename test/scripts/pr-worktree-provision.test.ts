@@ -64,6 +64,13 @@ function nextPr(f: ReturnType<typeof coldFixture>, pr: number) {
   return { worktree: join(f.canonical, ".worktrees", `pr-${pr}`), stderr: result.stderr };
 }
 
+function installCheckoutHook(f: ReturnType<typeof coldFixture>, body: string) {
+  f.git(f.canonical, "config", "--unset", "core.hooksPath");
+  const hook = join(f.canonical, ".git", "hooks", "post-checkout");
+  writeFileSync(hook, `#!/bin/sh\n${body}\n`);
+  chmodSync(hook, 0o755);
+}
+
 describePosix("native PR source provisioning", () => {
   it("keeps disabled-acceleration seed, private checkpoint, and cleanup custody", () => {
     const f = coldFixture(false);
@@ -271,13 +278,7 @@ printf '${edit}\\n' > src/subject.ts
 
   it("preserves the caller branch and initialized checkout after a nonzero hook exit", () => {
     const f = coldFixture(false);
-    f.git(f.canonical, "config", "--unset", "core.hooksPath");
-    const hook = join(f.canonical, ".git", "hooks", "post-checkout");
-    writeFileSync(
-      hook,
-      "#!/bin/sh\nprintf 'retained hook evidence\\n' > hook-evidence.txt\nexit 31\n",
-    );
-    chmodSync(hook, 0o755);
+    installCheckoutHook(f, "printf 'retained hook evidence\\n' > hook-evidence.txt\nexit 31");
     const result = f.run("review-init");
     expect(result.status).not.toBe(0);
     expectSeed(f);
@@ -290,10 +291,7 @@ printf '${edit}\\n' > src/subject.ts
 
   it("does not repair a caller seed moved by a checkout hook", () => {
     const f = coldFixture(false);
-    f.git(f.canonical, "config", "--unset", "core.hooksPath");
-    const hook = join(f.canonical, ".git", "hooks", "post-checkout");
-    writeFileSync(hook, `#!/bin/sh\ngit update-ref refs/heads/temp/pr-42 ${f.head} ${f.main}\n`);
-    chmodSync(hook, 0o755);
+    installCheckoutHook(f, `git update-ref refs/heads/temp/pr-42 ${f.head} ${f.main}`);
     const result = f.run("review-init");
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/identity changed|seed branch moved/);
@@ -308,10 +306,8 @@ printf '${edit}\\n' > src/subject.ts
     "retains native checkout evidence when a hook leaves the PR lock %s",
     (change) => {
       const f = coldFixture(false);
-      f.git(f.canonical, "config", "--unset", "core.hooksPath");
       const lockRef = "refs/openclaw/pr-operation-locks/42";
       const receipt = join(f.root, "hook-lock-change.txt");
-      const hook = join(f.canonical, ".git", "hooks", "post-checkout");
       const changeLock =
         change === "replaced"
           ? `replacement=$(printf 'successor-owned lock evidence\\n' | git hash-object -w --stdin) || exit 32
@@ -319,15 +315,12 @@ git update-ref --no-deref "${lockRef}" "$replacement" "$previous" || exit 33
 printf '%s\\n' "$replacement" > "${receipt}"`
           : `git update-ref --no-deref -d "${lockRef}" "$previous" || exit 34
 printf 'deleted\\n' > "${receipt}"`;
-      writeFileSync(
-        hook,
-        `#!/bin/sh
-previous=$(git rev-parse --verify "${lockRef}") || exit 31
+      installCheckoutHook(
+        f,
+        `previous=$(git rev-parse --verify "${lockRef}") || exit 31
 printf 'hook-owned state after lock loss\\n' > src/subject.ts
-${changeLock}
-`,
+${changeLock}`,
       );
-      chmodSync(hook, 0o755);
 
       const result = f.run("review-init");
       expect(result.status).not.toBe(0);
