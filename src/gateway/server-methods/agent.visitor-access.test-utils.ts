@@ -453,39 +453,6 @@ describe("visitor access admitted caller", () => {
       });
       try {
         const grants = createVisitorGrantStore(state.env);
-        // Startup admits live grants before its provider cleanup finishes asynchronously.
-        await expect
-          .poll(
-            async () => ({
-              emails: provider.emails(),
-              expiredGrant: await grants.lookup(expired.email),
-            }),
-            { timeout: 2_000 },
-          )
-          .toEqual({
-            emails: [active.email, retainedGuest.email, unmanaged],
-            expiredGrant: undefined,
-          });
-        expect(provider.emails()).toEqual([active.email, retainedGuest.email, unmanaged]);
-        expect(provider.writes).toEqual(["PUT"]);
-        const qualified = expectDefined(
-          await grants.lookup(active.email),
-          "qualified grant missing",
-        );
-        const grantId = z.uuid().parse(qualified.grantId);
-        const qualifiedGuest = expectDefined(
-          await grants.lookup(retainedGuest.email),
-          "retained guest grant missing",
-        );
-        const guestGrantId = z.uuid().parse(qualifiedGuest.grantId);
-        const reopenedGrants = await grants.entries();
-        expect(reopenedGrants.map(({ key, value }) => ({ key, value }))).toEqual(
-          expect.arrayContaining([
-            { key: active.email, value: { ...active, grantId } },
-            { key: retainedGuest.email, value: { ...retainedGuest, grantId: guestGrantId } },
-          ]),
-        );
-        expect(reopenedGrants).toHaveLength(2);
         expect(() =>
           resolveGatewayOperatorAccessAuthority(unassigned.id, restrictedConfig),
         ).toThrow(GatewayOperatorAccessDeniedError);
@@ -545,7 +512,28 @@ describe("visitor access admitted caller", () => {
             }
             return { text: block.text, details: isRecord(output) ? output.details : undefined };
           };
+          // Listing joins the service queue after the background startup sweep.
           const { text: listing, details: listedDetails } = await invoke("visitor_list");
+          expect(provider.emails()).toEqual([active.email, retainedGuest.email, unmanaged]);
+          expect(provider.writes).toEqual(["PUT"]);
+          const qualified = expectDefined(
+            await grants.lookup(active.email),
+            "qualified grant missing",
+          );
+          const grantId = z.uuid().parse(qualified.grantId);
+          const qualifiedGuest = expectDefined(
+            await grants.lookup(retainedGuest.email),
+            "retained guest grant missing",
+          );
+          const guestGrantId = z.uuid().parse(qualifiedGuest.grantId);
+          const reopenedGrants = await grants.entries();
+          expect(reopenedGrants.map(({ key, value }) => ({ key, value }))).toEqual(
+            expect.arrayContaining([
+              { key: active.email, value: { ...active, grantId } },
+              { key: retainedGuest.email, value: { ...retainedGuest, grantId: guestGrantId } },
+            ]),
+          );
+          expect(reopenedGrants).toHaveLength(2);
           const listedGrants = z
             .object({
               grants: z.array(

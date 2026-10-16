@@ -172,7 +172,7 @@ describe("broadcast transport retirement", () => {
   });
 
   it("shares encoded presence only after current recipient projection", () => {
-    const peers = ["first", "same", "same-again", "ahead", "other", "revoked"].map(controlledPeer);
+    const peers = ["first", "ahead", "other", "same", "same-again", "revoked"].map(controlledPeer);
     for (const peer of peers) {
       peer.client.preparedRecipientProfileId = peer.client.connId === "other" ? "other" : "reader";
     }
@@ -194,16 +194,16 @@ describe("broadcast transport retirement", () => {
 
     const frames = peers.map((peer) => peer.socket.send.mock.lastCall![0]);
     expect(Buffer.isBuffer(frames[0])).toBe(true);
-    expect(frames[1]).toBe(frames[0]);
-    expect(frames[2]).toBe(frames[1]);
+    expect(frames[3]).toBe(frames[0]);
+    expect(frames[4]).toBe(frames[0]);
     expect(project).toHaveBeenCalledTimes(6);
     for (const [index, frame] of frames.entries()) {
       expect(JSON.parse(String(frame))).toEqual({
         type: "event",
         event: "presence",
         payload: { presence: index === 5 ? hidden : visible },
-        seq: index === 3 ? 2 : 1,
-        recipientProfileId: index === 4 ? "other" : "reader",
+        seq: index === 1 ? 2 : 1,
+        recipientProfileId: index === 2 ? "other" : "reader",
       });
     }
     visible[0]!.ts = 2;

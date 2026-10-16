@@ -3604,7 +3604,6 @@ describe("gateway server chat", () => {
         {
           error: expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
           ok: false,
-          payload: undefined,
         },
       ]);
       expect(restartRecoveryMocks.retryRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
@@ -3613,6 +3612,7 @@ describe("gateway server chat", () => {
         expectedRecoveryRunId: "recovery-run",
         expectedRecoverySourceRunId: idempotencyKey,
         expectedSessionId: "sess-main",
+        lane: "main",
         sessionKey: "agent:main:main",
         storePath,
         gatewayRuntime: expect.any(Object),
