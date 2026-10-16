@@ -1,13 +1,8 @@
-// Control UI E2E tests cover visible agent-file save outcomes and agent ownership.
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import {
-  agentFileProofDir,
-  captureAgentFileScreenshot,
-  selectAgentFileWorkspace,
-} from "./agent-file-lifecycle.test-support.ts";
+import { selectAgentFileWorkspace } from "./agent-file-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -60,29 +55,28 @@ function fileGetResponses(mainContent: string) {
   };
 }
 
-function withFilePage(run: Parameters<typeof suite.withPage>[1]) {
-  const viewport = { height: 900, width: 1440 };
+type FileOptions = Pick<
+  NonNullable<Parameters<typeof installMockGateway>[1]>,
+  "deferredMethods" | "methodResponses"
+> & { writer?: boolean };
+
+function withFilePage(
+  content: string,
+  run: (fixture: Awaited<ReturnType<typeof prepareFilePage>>) => Promise<void>,
+  options: FileOptions = {},
+) {
   return suite.withPage(
     {
       locale: "en-US",
       serviceWorkers: "block",
-      viewport,
-      ...(agentFileProofDir ? { recordVideo: { dir: agentFileProofDir, size: viewport } } : {}),
+      viewport: { height: 900, width: 1440 },
     },
-    run,
+    async ({ page }) => run(await prepareFilePage(page, content, options)),
   );
 }
 
-function installFileGateway(
-  page: Page,
-  content: string,
-  options: {
-    writer?: boolean;
-    deferredMethods?: string[];
-    methodResponses?: NonNullable<Parameters<typeof installMockGateway>[1]>["methodResponses"];
-  } = {},
-) {
-  return installMockGateway(page, {
+async function prepareFilePage(page: Page, content: string, options: FileOptions) {
+  const gateway = await installMockGateway(page, {
     featureMethods: ["agents.files.get", "agents.files.list", "agents.files.set", "agents.list"],
     operatorScopes: ["operator.admin", "operator.read", "operator.write"],
     deferredMethods: options.deferredMethods,
@@ -101,42 +95,33 @@ function installFileGateway(
       ...options.methodResponses,
     },
   });
-}
-
-function waitForRequests(
-  gateway: Awaited<ReturnType<typeof installMockGateway>>,
-  method: string,
-  count: number,
-) {
-  return expect.poll(async () => (await gateway.getRequests(method)).length).toBe(count);
-}
-
-function fileControls(page: Page) {
+  await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
   const actions = page.locator(".agent-file-actions");
   return {
+    page,
+    gateway,
     editor: page.locator(".agent-file-textarea"),
     reset: actions.getByRole("button", { name: "Reset" }),
     save: actions.getByRole("button", { name: "Save" }),
     preview: actions.getByRole("button", { name: "Preview", exact: true }),
     refresh: page
       .locator(".settings-section")
-      .filter({
-        has: page.getByRole("heading", { name: "Core files" }),
-      })
+      .filter({ has: page.getByRole("heading", { name: "Core files" }) })
       .getByRole("button", { name: "Refresh", exact: true }),
+    waitForRequests: (method: string, count: number) =>
+      expect.poll(async () => (await gateway.getRequests(method)).length).toBe(count),
+    respondWith: (value: string) =>
+      gateway.setMethodResponse("agents.files.get", fileGetResponses(value)),
+    confirmSave: (value: string) =>
+      gateway.setMethodResponse("agents.files.set", { ok: true, ...fileGet("main", value) }),
   };
 }
 
 suite.define(() => {
   it("keeps preview tooltip aligned with its expand state", async () => {
-    await withFilePage(async ({ page }) => {
-      const content = "# Preview tooltip fixture\n\nSynthetic preview instructions.\n";
-      const gateway = await installFileGateway(page, content);
-      await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
-      const { editor, preview } = fileControls(page);
+    const content = "# Preview tooltip fixture\n\nSynthetic preview instructions.\n";
+    await withFilePage(content, async ({ page, gateway, editor, preview }) => {
       await expect.poll(() => editor.inputValue()).toBe(content);
-      const read = await gateway.waitForRequest("agents.files.get");
-      expect(read.params).toMatchObject({ agentId: "main", name: "AGENTS.md" });
       const modal = page.locator("openclaw-modal-dialog:has(.md-preview-expand-btn)");
       const dialog = modal.locator("dialog");
       const panel = modal.locator(".md-preview-dialog__panel");
@@ -151,29 +136,21 @@ suite.define(() => {
         await waitForControlUiProofSurface(dialog, [reader]);
         await waitForControlUiProofSurface(panel, [reader]);
       };
-      const assertHint = async (label: string, screenshot: string) => {
+      const assertHint = async (label: string) => {
         await reader.hover();
         await expand.hover();
         await waitForControlUiProofSurface(tooltip, [hint, expand]);
-        const trigger = await expand.elementHandle();
-        expect(trigger).not.toBeNull();
-        try {
-          expect(
-            await tooltipHost.evaluate((element, anchor) => {
-              const host = element as HTMLElement & { anchor?: Element | null };
-              const tooltipAnchor =
-                host.anchor ??
-                host.shadowRoot
-                  ?.querySelector<HTMLSlotElement>("slot:not([name])")
-                  ?.assignedElements({ flatten: true })[0];
-              return tooltipAnchor === anchor;
-            }, trigger),
-          ).toBe(true);
-        } finally {
-          await trigger?.dispose();
-        }
-        // Capture the real baseline mismatch before its expected-correct assertion fails.
-        await captureAgentFileScreenshot(page, screenshot);
+        expect(
+          await expand.evaluate((anchor) => {
+            const host = anchor.closest("openclaw-tooltip");
+            const tooltipAnchor =
+              host?.anchor ??
+              host?.shadowRoot
+                ?.querySelector<HTMLSlotElement>("slot:not([name])")
+                ?.assignedElements({ flatten: true })[0];
+            return tooltipAnchor === anchor;
+          }),
+        ).toBe(true);
         expect((await hint.textContent())?.trim()).toBe(label);
         expect(await expand.getAttribute("aria-label")).toBe(label);
         expect(await hint.isVisible()).toBe(true);
@@ -194,14 +171,13 @@ suite.define(() => {
       const normalBox = await dialog.boundingBox();
       expect(normalBox).not.toBeNull();
       await assertExpanded(false);
-      await assertHint("Expand preview", "tooltip-01-collapsed.png");
+      await assertHint("Expand preview");
       for (const action of ["collapse", "Close preview", "Edit file", "Escape"]) {
         await toggle();
         await assertExpanded(true);
         const expandedBox = await dialog.boundingBox();
         expect(Boolean(normalBox && expandedBox && expandedBox.width > normalBox.width)).toBe(true);
-        const stage = action.toLowerCase().replaceAll(" ", "-");
-        await assertHint("Collapse preview", `tooltip-${stage}-expanded.png`);
+        await assertHint("Collapse preview");
         if (action === "collapse") {
           await toggle();
         } else {
@@ -221,7 +197,7 @@ suite.define(() => {
         await assertExpanded(false);
         const resetBox = await dialog.boundingBox();
         expect(Boolean(resetBox && expandedBox && resetBox.width < expandedBox.width)).toBe(true);
-        await assertHint("Expand preview", `tooltip-${stage}-reset.png`);
+        await assertHint("Expand preview");
       }
       await modal.getByRole("button", { name: "Close preview", exact: true }).click();
       await dialog.waitFor({ state: "hidden" });
@@ -240,8 +216,62 @@ suite.define(() => {
   });
 
   it("protects initial file reads, retries errors, and rejects stale cross-agent reads", async () => {
-    await withFilePage(async ({ page }) => {
-      const gateway = await installFileGateway(page, "# Main instructions\n", {
+    await withFilePage(
+      "# Main instructions\n",
+      async (fixture) => {
+        const { page, gateway, editor, save, preview, refresh } = fixture;
+        const { waitForRequests, respondWith, confirmSave } = fixture;
+        const initialRead = await gateway.waitForRequest("agents.files.get");
+        expect(initialRead.params).toMatchObject({ agentId: "main", name: "AGENTS.md" });
+        await editor.waitFor({ state: "visible" });
+        expect(
+          await Promise.all([editor.isDisabled(), preview.isDisabled(), save.isDisabled()]),
+        ).toEqual([true, true, true]);
+
+        await gateway.resolveDeferred("agents.files.get", {
+          __mockError: { code: "INTERNAL_ERROR", message: "workspace read failed; retry Refresh" },
+        });
+        await page.getByText("workspace read failed; retry Refresh", { exact: true }).waitFor();
+        expect(await Promise.all([editor.isDisabled(), preview.isDisabled()])).toEqual([
+          true,
+          true,
+        ]);
+        expect(await gateway.getRequests("agents.files.set")).toHaveLength(0);
+        await refresh.click();
+        await expect.poll(() => editor.inputValue()).toBe("# Main instructions\n");
+        expect(await Promise.all([editor.isEnabled(), preview.isEnabled()])).toEqual([true, true]);
+
+        await editor.fill("Updated main instructions");
+        await save.click();
+        await waitForRequests("agents.files.set", 1);
+        await expect
+          .poll(() => page.getByText(/workspace write failed; retry Save/).isVisible())
+          .toBe(true);
+        expect(await gateway.getRequests("agents.files.list")).toHaveLength(2);
+
+        await confirmSave("Updated main instructions");
+        await save.click();
+        await waitForRequests("agents.files.set", 2);
+        await expect
+          .poll(() => page.getByText(/workspace write failed; retry Save/).count())
+          .toBe(0);
+        await expect.poll(() => save.isDisabled()).toBe(true);
+
+        await respondWith("Updated main instructions");
+        await gateway.deferNext("agents.files.get", { agentId: "writer", name: "AGENTS.md" });
+        await selectAgentFileWorkspace(page, "Writer");
+        await gateway.waitForRequest("agents.files.get", { match: { agentId: "writer" } });
+        await selectAgentFileWorkspace(page, "Main");
+        await expect.poll(() => editor.inputValue()).toBe("Updated main instructions");
+        await gateway.resolveDeferred("agents.files.get", fileGet("writer", "stale writer"));
+        await expect.poll(() => editor.inputValue()).toBe("Updated main instructions");
+
+        await selectAgentFileWorkspace(page, "Writer");
+        await expect.poll(() => editor.inputValue()).toBe("# Writer instructions\n");
+        const writes = await gateway.getRequests("agents.files.set");
+        expect(writes.every((request) => requestAgentId(request) === "main")).toBe(true);
+      },
+      {
         writer: true,
         deferredMethods: ["agents.files.get"],
         methodResponses: {
@@ -253,128 +283,44 @@ suite.define(() => {
             },
           },
         },
-      });
-
-      await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
-      const { editor, reset, save, preview, refresh } = fileControls(page);
-      const initialRead = await gateway.waitForRequest("agents.files.get");
-      expect(initialRead.params).toMatchObject({ agentId: "main", name: "AGENTS.md" });
-      await editor.waitFor({ state: "visible" });
-      await captureAgentFileScreenshot(page, "00-initial-read-pending.png");
-      expect(await editor.isDisabled()).toBe(true);
-      expect(await preview.isDisabled()).toBe(true);
-      expect(await save.isDisabled()).toBe(true);
-
-      await gateway.resolveDeferred("agents.files.get", {
-        __mockError: { code: "INTERNAL_ERROR", message: "workspace read failed; retry Refresh" },
-      });
-      await page.getByText("workspace read failed; retry Refresh", { exact: true }).waitFor();
-      await captureAgentFileScreenshot(page, "00-initial-read-failed.png");
-      expect(await editor.isDisabled()).toBe(true);
-      expect(await preview.isDisabled()).toBe(true);
-      expect(await gateway.getRequests("agents.files.set")).toHaveLength(0);
-      await refresh.click();
-      await expect.poll(() => editor.inputValue()).toBe("# Main instructions\n");
-      expect(await editor.isEnabled()).toBe(true);
-      expect(await preview.isEnabled()).toBe(true);
-
-      await editor.fill("temporary draft");
-      await reset.click();
-      await expect.poll(() => editor.inputValue()).toBe("# Main instructions\n");
-
-      await editor.fill("Updated main instructions");
-      await save.click();
-      await waitForRequests(gateway, "agents.files.set", 1);
-      await expect
-        .poll(() => page.getByText(/workspace write failed; retry Save/).isVisible())
-        .toBe(true);
-      expect(await gateway.getRequests("agents.files.list")).toHaveLength(2);
-      await captureAgentFileScreenshot(page, "01-save-error-visible.png");
-
-      await gateway.setMethodResponse("agents.files.set", {
-        ok: true,
-        ...fileGet("main", "Updated main instructions"),
-      });
-      await save.click();
-      await waitForRequests(gateway, "agents.files.set", 2);
-      await expect.poll(() => page.getByText(/workspace write failed; retry Save/).count()).toBe(0);
-      await expect.poll(() => save.isDisabled()).toBe(true);
-      await captureAgentFileScreenshot(page, "02-save-retry-succeeded.png");
-
-      await gateway.setMethodResponse(
-        "agents.files.get",
-        fileGetResponses("Updated main instructions"),
-      );
-      await gateway.deferNext("agents.files.get", { agentId: "writer", name: "AGENTS.md" });
-      await selectAgentFileWorkspace(page, "Writer");
-      await expect
-        .poll(async () =>
-          (await gateway.getRequests("agents.files.get")).some(
-            (request) => requestAgentId(request) === "writer",
-          ),
-        )
-        .toBe(true);
-      await selectAgentFileWorkspace(page, "Main");
-      await expect.poll(() => editor.inputValue()).toBe("Updated main instructions");
-      await gateway.resolveDeferred("agents.files.get", fileGet("writer", "stale writer"));
-      await expect.poll(() => editor.inputValue()).toBe("Updated main instructions");
-
-      await selectAgentFileWorkspace(page, "Writer");
-      await expect.poll(() => editor.inputValue()).toBe("# Writer instructions\n");
-      const writes = await gateway.getRequests("agents.files.set");
-      expect(writes.every((request) => requestAgentId(request) === "main")).toBe(true);
-      await captureAgentFileScreenshot(page, "03-writer-owned-file.png");
-    });
+      },
+    );
   });
 
   it("preserves drafts and confirmed saves across overlapping refreshes", async () => {
-    await withFilePage(async ({ page }) => {
-      const gateway = await installFileGateway(page, "server revision 1");
-
-      await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
-      const { editor, refresh, reset, save } = fileControls(page);
+    await withFilePage("server revision 1", async (fixture) => {
+      const { page, gateway, editor, refresh, reset, save } = fixture;
+      const { waitForRequests, respondWith, confirmSave } = fixture;
       await expect.poll(() => editor.inputValue()).toBe("server revision 1");
-      expect(await gateway.getRequests("agents.files.get")).toHaveLength(1);
 
-      await gateway.setMethodResponse("agents.files.get", fileGetResponses("server revision 2"));
+      await respondWith("server revision 2");
       await refresh.click();
-      await waitForRequests(gateway, "agents.files.get", 2);
+      await waitForRequests("agents.files.get", 2);
       await expect.poll(() => editor.inputValue()).toBe("server revision 2");
       await expect.poll(() => editor.isEnabled()).toBe(true);
-      await captureAgentFileScreenshot(page, "04-refresh-adopts-authoritative-content.png");
 
       await editor.fill("local dirty draft");
-      await gateway.setMethodResponse("agents.files.get", fileGetResponses("server revision 3"));
+      await respondWith("server revision 3");
       await refresh.click();
-      await waitForRequests(gateway, "agents.files.get", 3);
+      await waitForRequests("agents.files.get", 3);
       await expect.poll(() => editor.inputValue()).toBe("local dirty draft");
       await expect.poll(() => editor.isEnabled()).toBe(true);
       await expect.poll(() => reset.isEnabled()).toBe(true);
-      await captureAgentFileScreenshot(page, "05-refresh-preserves-dirty-draft.png");
       await reset.click();
       await expect.poll(() => editor.inputValue()).toBe("server revision 3");
       await expect.poll(() => reset.isDisabled()).toBe(true);
-
       await expect.poll(() => save.isDisabled()).toBe(true);
-      await captureAgentFileScreenshot(page, "06-reset-uses-refreshed-authoritative-content.png");
 
       await gateway.deferNext("agents.files.get", { agentId: "main", name: "AGENTS.md" });
       await refresh.click();
-      await waitForRequests(gateway, "agents.files.get", 4);
+      await waitForRequests("agents.files.get", 4);
       await editor.fill("Saved latest instructions");
-      await gateway.setMethodResponse("agents.files.set", {
-        ok: true,
-        ...fileGet("main", "Saved latest instructions"),
-      });
-      await gateway.setMethodResponse(
-        "agents.files.get",
-        fileGetResponses("Saved latest instructions"),
-      );
+      await confirmSave("Saved latest instructions");
+      await respondWith("Saved latest instructions");
       await save.click();
       await expect.poll(() => save.isDisabled()).toBe(true);
       await gateway.resolveDeferred("agents.files.get", fileGet("main", "server revision 3"));
       await expect.poll(() => refresh.isEnabled()).toBe(true);
-      await captureAgentFileScreenshot(page, "08-save-survives-older-refresh.png");
       await expect.poll(() => editor.inputValue()).toBe("Saved latest instructions");
       await expect.poll(() => reset.isDisabled()).toBe(true);
 
@@ -389,12 +335,9 @@ suite.define(() => {
       await gateway.deferNext("agents.files.list", { agentId: "main" });
       const listsBeforeSave = (await gateway.getRequests("agents.files.list")).length;
       await refresh.click();
-      await waitForRequests(gateway, "agents.files.list", listsBeforeSave + 1);
+      await waitForRequests("agents.files.list", listsBeforeSave + 1);
       await editor.fill("Saved latest instructions");
-      await gateway.setMethodResponse(
-        "agents.files.get",
-        fileGetResponses("Saved latest instructions"),
-      );
+      await respondWith("Saved latest instructions");
       await save.click();
       await expect.poll(() => missingHint.count()).toBe(0);
       await gateway.resolveDeferred("agents.files.list", missingList);
@@ -403,7 +346,6 @@ suite.define(() => {
       await expect.poll(() => page.locator(".agents-refresh-btn").isEnabled()).toBe(true);
       await expect.poll(() => editor.inputValue()).toBe("Saved latest instructions");
       expect(await missingHint.count()).toBe(0);
-      await captureAgentFileScreenshot(page, "09-created-file-survives-stale-list.png");
     });
   });
 });

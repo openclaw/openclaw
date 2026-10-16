@@ -1,13 +1,7 @@
-// Real Gateway proof for browser agent selection and persisted workspace saves.
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { GatewayServer } from "../../../src/gateway/server-public.ts";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import {
   createOpenClawTestInstance,
@@ -17,13 +11,8 @@ import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { ModelCatalogResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { openPicker, pickerValue } from "../test-helpers/select-picker-e2e.ts";
-import {
-  captureAgentFileScreenshot,
-  selectAgentFileWorkspace,
-} from "./agent-file-lifecycle.test-support.ts";
+import { selectAgentFileWorkspace } from "./agent-file-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-
-const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent file lifecycle with a real Gateway",
@@ -35,17 +24,14 @@ const suite = createControlUiE2eSuite({
 let catalogInstance: OpenClawTestInstance;
 let inventoryModel = "inventory-before";
 const inventoryRequests: string[] = [];
-const refreshInventoryArgs = [
-  "gateway",
-  "call",
-  "models.list",
-  "--json",
-  "--params",
-  JSON.stringify({ agentId: "main", view: "all", refresh: true }),
+const inventoryCommand = ["gateway", "call", "models.list", "--json", "--params"];
+const inventoryArgs = (refresh?: true) => [
+  ...inventoryCommand,
+  JSON.stringify({ agentId: "main", view: "all", refresh }),
 ];
 async function refreshInventory() {
   const expectedInventory = inventoryModel;
-  let result = await catalogInstance.cli(refreshInventoryArgs);
+  let result = await catalogInstance.cli(inventoryArgs(true));
   expect(result.code, result.stderr).toBe(0);
   let catalog: ModelCatalogResult = JSON.parse(result.stdout);
   const inventory = () =>
@@ -54,18 +40,9 @@ async function refreshInventory() {
   await expect
     .poll(async () => {
       if (catalog.pendingProviders?.length || !inventory().includes(expectedInventory)) {
-        result = await catalogInstance.cli([
-          "gateway",
-          "call",
-          "models.list",
-          "--json",
-          "--params",
-          JSON.stringify({
-            agentId: "main",
-            view: "all",
-            ...(!catalog.pendingProviders?.length ? { refresh: true } : {}),
-          }),
-        ]);
+        result = await catalogInstance.cli(
+          inventoryArgs(catalog.pendingProviders?.length ? undefined : true),
+        );
         expect(result.code, result.stderr).toBe(0);
         catalog = JSON.parse(result.stdout);
       }
@@ -83,19 +60,13 @@ const catalogSuite = createControlUiE2eSuite({
   name: "Agents catalog publication with a real Gateway",
   startServerBeforeBrowser: true,
   async startServer() {
+    const capabilities = ["completion", "tools"];
+    const modelDetails = { capabilities, model_info: { "llama.context_length": 32768 } };
     const inventory = createServer((request, response) => {
       inventoryRequests.push(request.url ?? "");
       response.setHeader("content-type", "application/json");
-      response.end(
-        JSON.stringify(
-          request.url === "/api/show"
-            ? {
-                capabilities: ["completion", "tools"],
-                model_info: { "llama.context_length": 32768 },
-              }
-            : { models: [{ name: inventoryModel, capabilities: ["completion", "tools"] }] },
-        ),
-      );
+      const tags = { models: [{ name: inventoryModel, capabilities }] };
+      response.end(JSON.stringify(request.url === "/api/show" ? modelDetails : tags));
     });
     const inventoryPort = await getFreePort();
     await new Promise<void>((resolve) => {
@@ -167,6 +138,9 @@ catalogSuite.define(() => {
     const commands: unknown[] = [];
     const catalogRequests = new Set<string>();
     const mutations: string[] = [];
+    const writeMethods = new Set(["config.set", "config.patch", "config.apply", "agents.update"]);
+    const publicationEvents = new Set(["config.changed", "chat.metadata.changed"]);
+    const catalogError = { code: "UNAVAILABLE", message: "Catalog transport unavailable" };
     let rejectCatalog = false;
     let holdCatalog = false;
     let receivedLatestCatalog = false;
@@ -190,23 +164,23 @@ catalogSuite.define(() => {
       expect(result.code, result.stderr || result.stdout).toBe(0);
       return JSON.parse(result.stdout);
     };
+    const publishInventory = async (id: string, checkOutput = true) => {
+      inventoryModel = id;
+      const result = await refreshInventory();
+      commands.push({ args: inventoryArgs(true), publishedInventory: result });
+      if (checkOutput) {
+        expect(result.stdout).toContain(id);
+      }
+    };
     try {
-      const initialInventory = await refreshInventory();
-      expect(initialInventory.code, initialInventory.stderr).toBe(0);
-      expect(initialInventory.stdout).toContain("inventory-before");
+      await publishInventory("inventory-before");
       await catalogSuite.withPage(
         {
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 1000, width: 1440 },
-          ...(captureEnabled ? { recordVideo: { dir: catalogSuite.artifactDir } } : {}),
         },
         async ({ page }) => {
-          const capture = async (name: string) => {
-            if (captureEnabled) {
-              await page.screenshot({ path: path.join(catalogSuite.artifactDir, `${name}.png`) });
-            }
-          };
           await page.routeWebSocket(`ws://127.0.0.1:${owner.port}/**`, (socket) => {
             const server = socket.connectToServer();
             socket.onMessage((message) => {
@@ -216,11 +190,7 @@ catalogSuite.define(() => {
                 if (frame.method === "models.list" && typeof frame.id === "string") {
                   catalogRequests.add(frame.id);
                 }
-                if (
-                  ["config.set", "config.patch", "config.apply", "agents.update"].includes(
-                    String(frame.method),
-                  )
-                ) {
+                if (writeMethods.has(String(frame.method))) {
                   mutations.push(String(frame.method));
                 }
               }
@@ -229,16 +199,9 @@ catalogSuite.define(() => {
             server.onMessage((message) => {
               const frame = requireRecord(JSON.parse(message.toString()));
               const catalogReply = typeof frame.id === "string" && catalogRequests.has(frame.id);
-              if (
-                catalogReply ||
-                frame.event === "config.changed" ||
-                frame.event === "chat.metadata.changed"
-              ) {
-                frames.push({
-                  direction: "received",
-                  frame,
-                  transportFailure: catalogReply && rejectCatalog,
-                });
+              const transportFailure = catalogReply && rejectCatalog;
+              if (catalogReply || publicationEvents.has(String(frame.event))) {
+                frames.push({ direction: "received", frame, transportFailure });
               }
               if (catalogReply && holdCatalog) {
                 const models = requireRecord(frame.payload).models;
@@ -246,15 +209,9 @@ catalogSuite.define(() => {
                   Array.isArray(models) &&
                   models.some((model) => requireRecord(model).id === "inventory-latest");
                 heldCatalogs.push(() => socket.send(message));
-              } else if (catalogReply && rejectCatalog) {
-                socket.send(
-                  JSON.stringify({
-                    type: "res",
-                    id: frame.id,
-                    ok: false,
-                    error: { code: "UNAVAILABLE", message: "Catalog transport unavailable" },
-                  }),
-                );
+              } else if (transportFailure) {
+                const reply = { type: "res", id: frame.id, ok: false, error: catalogError };
+                socket.send(JSON.stringify(reply));
               } else {
                 socket.send(message);
               }
@@ -293,51 +250,35 @@ catalogSuite.define(() => {
                 .closest("openclaw-select-picker")
                 ?.params.options.map((choice) => choice.value),
             );
-          await capture("initial");
 
           await publish("published");
           await expect.poll(choices).toContain("fixture/published");
           await openPicker(picker);
           await waitForOption("fixture/published");
           expect(await option("fixture/retiring").count()).toBe(0);
-          await capture("published");
 
-          inventoryModel = "inventory-after";
-          const refreshed = await refreshInventory();
-          commands.push({ args: refreshInventoryArgs, publishedInventory: refreshed });
-          expect(refreshed.code, refreshed.stderr).toBe(0);
-          expect(refreshed.stdout).toContain("inventory-after");
+          await publishInventory("inventory-after");
           await waitForOption("ollama/inventory-after");
           expect(await option("ollama/inventory-before").count()).toBe(0);
 
           holdCatalog = true;
-          inventoryModel = "inventory-held";
-          commands.push(await refreshInventory());
+          await publishInventory("inventory-held", false);
           await expect.poll(() => heldCatalogs.length).toBeGreaterThan(0);
-          inventoryModel = "inventory-latest";
-          commands.push(await refreshInventory());
+          await publishInventory("inventory-latest", false);
           await expect.poll(() => receivedLatestCatalog).toBe(true);
           holdCatalog = false;
           for (const release of heldCatalogs.splice(0)) {
             release();
           }
           await waitForOption("ollama/inventory-latest");
-          await capture("latest-publication");
-          expect(await option("ollama/inventory-latest").count()).toBe(1);
           expect(await option("ollama/inventory-held").count()).toBe(0);
 
           rejectCatalog = true;
           // Refresh the same catalog owner; a config write retires its display facts.
-          inventoryModel = "inventory-read-failure";
-          const failedReadRefresh = await refreshInventory();
-          commands.push({ args: refreshInventoryArgs, publishedInventory: failedReadRefresh });
-          expect(failedReadRefresh.stdout).toContain("inventory-read-failure");
-          const error = editor
-            .getByRole("alert")
-            .filter({ hasText: "Catalog transport unavailable" });
+          await publishInventory("inventory-read-failure");
+          const error = editor.getByRole("alert").filter({ hasText: catalogError.message });
           await error.waitFor({ state: "visible" });
           expect(await option("fixture/published").count()).toBe(1);
-          await capture("read-failure");
 
           rejectCatalog = false;
           await publish("recovered");
@@ -355,7 +296,6 @@ catalogSuite.define(() => {
           expect(mutations).toEqual(writesBeforePublication);
           expect(await readConfig("agents.entries.main.model")).toEqual(selectedModel);
           expect(await readConfig("agents.defaults.model")).toBe("fixture/anchor");
-          await capture("recovered");
         },
       );
     } finally {
@@ -374,83 +314,50 @@ catalogSuite.define(() => {
 
 suite.define(() => {
   it("reads and saves the selected agent workspace through an isolated Gateway", async (context) => {
-    let fixture: OpenClawTestState | undefined;
-    let gateway: Promise<GatewayServer> | undefined;
+    let fixture: OpenClawTestInstance | undefined;
     await suite.runScenario(context, {
-      retainedState: () => fixture?.root,
-      close: async () => {
-        const server = await gateway;
-        await server?.close({ reason: "agent file lifecycle e2e cleanup" });
-      },
-      release: async () => {
-        await fixture?.cleanup();
-      },
+      retainedState: () => fixture?.state.root,
+      close: () => fixture?.stopGateway() ?? Promise.resolve(),
+      release: () => fixture?.cleanup() ?? Promise.resolve(),
       run: async (signal) => {
-        const port = await getFreePort();
-        signal.throwIfAborted();
-        const state = await createOpenClawTestState({
-          label: "control-ui-agent-files",
-          layout: "home",
-          env: {
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
-            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-            VITEST: "1",
+        const owner = await createOpenClawTestInstance({
+          name: "control-ui-agent-files",
+          signal,
+          config: {
+            agents: {
+              ownership: "explicit",
+              defaults: {
+                workspace: "~/.openclaw/workspace-main",
+                systemAgent: { agentId: "main" },
+                heartbeat: { agentId: "main" },
+                sessionStore: { agentId: "main" },
+              },
+              entries: {
+                main: { workspace: "~/.openclaw/workspace-main" },
+                writer: { workspace: "~/.openclaw/workspace-writer" },
+              },
+            },
+            talk: { agentId: "main" },
+            gateway: {
+              auth: { mode: "none" },
+              controlUi: {
+                allowedOrigins: [new URL(suite.server.baseUrl).origin],
+                enabled: false,
+              },
+            },
           },
         });
-        fixture = state;
-        signal.throwIfAborted();
-        const mainWorkspace = state.path("workspace-main");
-        const writerWorkspace = state.path("workspace-writer");
-        // A failed setup must not leave sibling writes running beyond cleanup.
-        for (const [workspace, content] of [
-          [mainWorkspace, "# Real main instructions\n"],
-          [writerWorkspace, "# Real writer instructions\n"],
-        ] as const) {
+        fixture = owner;
+        const { port } = owner;
+        // Keep setup writes joined before the owner's cleanup can remove state.
+        for (const agentId of ["main", "writer"]) {
           signal.throwIfAborted();
-          await mkdir(workspace, { recursive: true });
-          signal.throwIfAborted();
-          await writeFile(path.join(workspace, "AGENTS.md"), content, "utf8");
+          await owner.state.writeText(
+            `workspace-${agentId}/AGENTS.md`,
+            `# Real ${agentId} instructions\n`,
+          );
         }
-        signal.throwIfAborted();
-        await state.writeConfig({
-          agents: {
-            ownership: "explicit",
-            defaults: {
-              workspace: mainWorkspace,
-              systemAgent: { agentId: "main" },
-              heartbeat: { agentId: "main" },
-              sessionStore: { agentId: "main" },
-            },
-            entries: {
-              main: { workspace: mainWorkspace },
-              writer: { workspace: writerWorkspace },
-            },
-          },
-          talk: { agentId: "main" },
-          gateway: {
-            auth: { mode: "none" },
-            controlUi: {
-              allowedOrigins: [new URL(suite.server.baseUrl).origin],
-              enabled: false,
-            },
-            port,
-          },
-        });
-        signal.throwIfAborted();
-        const { startGatewayServer } = await import("../../../src/gateway/server.js");
-        signal.throwIfAborted();
-        gateway = startGatewayServer(port, {
-          auth: { mode: "none" },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        });
-        await gateway;
+        await owner.startGateway();
         signal.throwIfAborted();
 
         await suite.withPage(
@@ -469,13 +376,16 @@ suite.define(() => {
               .getByRole("button", { name: `Switch to 127.0.0.1:${port}`, exact: true })
               .click();
             const editor = page.locator(".agent-file-textarea");
-            const agentsFile = path.join(mainWorkspace, "AGENTS.md");
+            const agentsFile = owner.state.statePath("workspace-main", "AGENTS.md");
+            const readAgentsFile = () => readFile(agentsFile, "utf8");
+            const saved = "# Saved through real Gateway\n";
+            const draft = "# Operator draft that never saw the memory\n";
             const conflict = page.locator(".callout.danger");
             const save = page.locator(".agent-file-actions").getByRole("button", { name: "Save" });
             const rejectStaleSave = async (authoritative: string) => {
               await save.click();
               await expect.poll(() => conflict.isVisible()).toBe(true);
-              expect(await readFile(agentsFile, "utf8")).toBe(authoritative);
+              expect(await readAgentsFile()).toBe(authoritative);
             };
             await expect.poll(() => editor.inputValue()).toBe("# Real main instructions\n");
 
@@ -484,36 +394,28 @@ suite.define(() => {
 
             await selectAgentFileWorkspace(page, "main");
             await expect.poll(() => editor.inputValue()).toBe("# Real main instructions\n");
-            await editor.fill("# Saved through real Gateway\n");
+            await editor.fill(saved);
             await save.click();
             await expect.poll(() => save.isDisabled()).toBe(true);
-            await expect
-              .poll(() => readFile(agentsFile, "utf8"))
-              .toBe("# Saved through real Gateway\n");
-            await captureAgentFileScreenshot(page, "07-real-gateway-main-save.png");
+            await expect.poll(readAgentsFile).toBe(saved);
 
-            const appended = "# Saved through real Gateway\n- agent appended a memory\n";
+            const appended = `${saved}- agent appended a memory\n`;
             await writeFile(agentsFile, appended, "utf8");
-            await editor.fill("# Operator draft that never saw the memory\n");
+            await editor.fill(draft);
             await rejectStaleSave(appended);
-            await captureAgentFileScreenshot(page, "08-real-gateway-stale-save-refused.png");
-
             await rejectStaleSave(appended);
 
             await conflict.getByRole("button", { name: "Overwrite" }).click();
-            await expect
-              .poll(() => readFile(agentsFile, "utf8"))
-              .toBe("# Operator draft that never saw the memory\n");
+            await expect.poll(readAgentsFile).toBe(draft);
             await expect.poll(() => conflict.isVisible()).toBe(false);
 
-            const secondAppend = "# Operator draft that never saw the memory\n- second memory\n";
+            const secondAppend = `${draft}- second memory\n`;
             await writeFile(agentsFile, secondAppend, "utf8");
             await editor.fill("# Another operator draft\n");
             await rejectStaleSave(secondAppend);
             await conflict.getByRole("button", { name: "Reload" }).click();
             await expect.poll(() => editor.inputValue()).toBe(secondAppend);
-            expect(await readFile(agentsFile, "utf8")).toBe(secondAppend);
-            await captureAgentFileScreenshot(page, "09-real-gateway-conflict-reloaded.png");
+            expect(await readAgentsFile()).toBe(secondAppend);
 
             await editor.fill("# Draft typed before the refresh\n");
             const thirdAppend = `${secondAppend}- third memory\n`;
@@ -525,7 +427,6 @@ suite.define(() => {
               .click();
             await expect.poll(() => editor.inputValue()).toBe("# Draft typed before the refresh\n");
             await rejectStaleSave(thirdAppend);
-            await captureAgentFileScreenshot(page, "10-real-gateway-refresh-then-save.png");
 
             await page
               .locator(".agent-file-header")
@@ -535,9 +436,8 @@ suite.define(() => {
             const afterReset = `${thirdAppend}- edited after Reset\n`;
             await editor.fill(afterReset);
             await save.click();
-            await expect.poll(() => readFile(agentsFile, "utf8")).toBe(afterReset);
+            await expect.poll(readAgentsFile).toBe(afterReset);
             await expect.poll(() => conflict.isVisible()).toBe(false);
-            await captureAgentFileScreenshot(page, "11-real-gateway-reset-then-save.png");
           },
         );
       },

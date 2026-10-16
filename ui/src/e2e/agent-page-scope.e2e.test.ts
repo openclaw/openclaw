@@ -1,8 +1,8 @@
-// Control UI E2E tests cover chip-selected page scope and the all-agents escape.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -10,48 +10,48 @@ import {
   waitForControlUiRoute,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
-
 const suite = createControlUiE2eSuite({
   name: "Control UI agent page scope",
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not available at ${executablePath}`,
 });
-
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const pageOptions = {
+const pageOptions = (recordVideo = false) => ({
   locale: "en-US",
-  serviceWorkers: "block",
+  serviceWorkers: "block" as const,
   viewport: { height: 900, width: 1440 },
-} as const;
+  ...(recordVideo && captureUiProof
+    ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1440 } } }
+    : {}),
+});
 let proofDir: string;
 beforeEach(() => {
   if (captureUiProof) {
     proofDir = createControlUiE2eArtifactDir("agent-page-scope");
   }
 });
-
 function requestParams(request: { params?: unknown }): Record<string, unknown> {
   return request.params && typeof request.params === "object"
     ? (request.params as Record<string, unknown>)
     : {};
 }
-
 async function waitForRequest(
   gateway: MockGatewayControls,
   method: string,
   predicate: (params: Record<string, unknown>) => boolean,
+  after = 0,
 ) {
   await expect
     .poll(async () =>
-      (await gateway.getRequests(method)).some((request) => predicate(requestParams(request))),
+      (await gateway.getRequests(method))
+        .slice(after)
+        .some((request) => predicate(requestParams(request))),
     )
     .toBe(true);
 }
-
 async function screenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
@@ -62,7 +62,6 @@ async function screenshot(page: Page, name: string) {
     path: path.join(proofDir, name),
   });
 }
-
 const emptyUsage = {
   updatedAt: Date.now(),
   sessions: [],
@@ -77,12 +76,11 @@ const emptyUsage = {
     daily: [],
   },
 };
-
-const multiAgentRoster = [
-  { id: "main", identity: { name: "Main" }, name: "Main" },
-  { id: "reviewer", identity: { name: "Reviewer" }, name: "Reviewer" },
-  { id: "writer", identity: { name: "Writer" }, name: "Writer" },
-];
+const multiAgentRoster = ["Main", "Reviewer", "Writer"].map((name) => ({
+  id: name.toLowerCase(),
+  identity: { name },
+  name,
+}));
 const roster = (
   agents: Array<{ id: string; name: string; identity?: { name: string } }> = multiAgentRoster,
   defaultId = "main",
@@ -113,10 +111,9 @@ const expectAgentName = (sidebar: Locator, name: string) =>
   expect
     .poll(async () => (await sidebar.locator(".sidebar-agent-card__name").textContent())?.trim())
     .toBe(name);
-
 suite.define(() => {
   it("follows the visible catalog groups when selecting an agent with the keyboard", async () => {
-    await suite.withPage(pageOptions, async ({ page }) => {
+    await suite.withPage(pageOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["cron.list"],
         methodResponses: {
@@ -125,19 +122,21 @@ suite.define(() => {
             { id: "alpha", name: "Needle Alpha" },
             { id: "charlie", name: "Needle Charlie" },
           ]),
-          "cron.list": cronListResponseFixture({
+          "cron.list": {
             jobs: [
               {
                 id: "bravo",
                 name: "Needle Bravo",
                 enabled: true,
-                createdAtMs: 0,
                 updatedAtMs: 0,
+                scheduleKind: "every",
                 schedule: { kind: "every", everyMs: 60_000 },
-                sessionTarget: "main",
-                wakeMode: "next-heartbeat",
-                payload: { kind: "systemEvent", text: "Prepare the sample report." },
-                state: {},
+                nextRunAt: null,
+                nextRunAtMs: null,
+                lastRunAt: null,
+                lastRunAtMs: null,
+                lastRunStatus: null,
+                lastRunError: null,
               },
             ],
             snapshotRevision: "palette-group-order",
@@ -146,7 +145,7 @@ suite.define(() => {
             limit: 50,
             hasMore: false,
             nextOffset: null,
-          }),
+          },
           "sessions.list": { ts: 1, path: "", count: 0, defaults: {}, sessions: [] },
           "sessions.usage": emptyUsage,
         },
@@ -170,11 +169,10 @@ suite.define(() => {
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/charlie");
     });
   });
-
   it.each(["ordinary reload", "route before hello"])(
     "opens a named agent from the palette without changing the chat agent (%s)",
     async (ordering) => {
-      await suite.withPage(pageOptions, async ({ page }) => {
+      await suite.withPage(pageOptions(), async ({ page }) => {
         const gateway = await installMockGateway(page, {
           deferredMethods: ordering === "route before hello" ? ["connect"] : [],
           methodResponses: {
@@ -204,8 +202,6 @@ suite.define(() => {
         await page.reload();
         if (ordering === "route before hello") {
           await gateway.waitForRequest("connect");
-          // The route can settle before hello; its explicit target must survive
-          // until the canonical roster arrives from the new connection.
           await waitForControlUiRoute(page, {
             pathname: "/settings/agents/reviewer",
             routeId: "agents",
@@ -225,91 +221,60 @@ suite.define(() => {
       });
     },
   );
-
-  it("preserves an in-flight canonical roster refresh while chat startup is delayed", async () => {
-    await suite.withPage(pageOptions, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        defaultAgentId: "main",
-        deferredMethods: ["chat.startup"],
-      });
-
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      await gateway.waitForRequest("agents.list");
-      await gateway.deferNext("agents.list");
-      await gateway.emitGatewayEvent("config.changed", { path: "agents.entries" });
-      await gateway.waitForRequest("agents.list", { after: 1 });
-      await gateway.resolveDeferred("chat.startup", emptyStartup);
-      await gateway.resolveDeferred(
-        "agents.list",
-        roster([{ id: "research", name: "Research" }], "research"),
-      );
-
-      const sidebar = page.locator("openclaw-app-sidebar");
-      await expectAgentName(sidebar, "Research");
-    });
-  });
-
-  it("keeps a refreshed canonical roster while chat startup remains delayed", async () => {
-    await suite.withPage(
-      {
-        ...pageOptions,
-        ...(captureUiProof
-          ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1440 } } }
-          : {}),
-      },
-      async ({ page }) => {
+  it.each([false, true])(
+    "keeps the canonical roster across delayed startup (refresh settled first: %s)",
+    async (settled) => {
+      await suite.withPage(pageOptions(settled), async ({ page }) => {
         const gateway = await installMockGateway(page, {
           defaultAgentId: "main",
           deferredMethods: ["chat.startup"],
-          methodResponses: {
-            "agents.list": roster(
-              [
-                { id: "research", name: "Research" },
-                { id: "writer", name: "Writer" },
-              ],
-              "research",
-            ),
-          },
+          methodResponses: settled
+            ? {
+                "agents.list": roster(
+                  [
+                    { id: "research", name: "Research" },
+                    { id: "writer", name: "Writer" },
+                  ],
+                  "research",
+                ),
+              }
+            : {},
         });
-
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
         await gateway.waitForRequest("agents.list");
+        if (!settled) {
+          await gateway.deferNext("agents.list");
+        }
         await gateway.emitGatewayEvent("config.changed", { path: "agents.entries" });
         await gateway.waitForRequest("agents.list", { after: 1 });
-
         const sidebar = page.locator("openclaw-app-sidebar");
-        const agentName = sidebar.locator(".sidebar-agent-card__name");
-        await expect.poll(async () => (await agentName.textContent())?.trim()).toBe("Research");
-
+        if (settled) {
+          await expectAgentName(sidebar, "Research");
+        }
         await gateway.resolveDeferred("chat.startup", emptyStartup);
-
-        await expect.poll(async () => (await agentName.textContent())?.trim()).toBe("Research");
+        if (!settled) {
+          await gateway.resolveDeferred(
+            "agents.list",
+            roster([{ id: "research", name: "Research" }], "research"),
+          );
+        }
+        await expectAgentName(sidebar, "Research");
+        if (!settled) {
+          return;
+        }
         await expect
           .poll(() =>
             page.locator("openclaw-chat-pane").evaluate((pane) => {
-              const state = (
-                pane as HTMLElement & {
-                  state?: {
-                    agentsList?: { agents?: Array<{ id?: string }>; defaultId?: string };
-                    agentsSelectedId?: string;
-                  };
-                }
-              ).state;
+              const state = (pane as HTMLElement & { state?: ChatPageHost }).state;
               return {
-                defaultId: state?.agentsList?.defaultId,
+                default: state?.agentsList?.defaultId,
                 ids: state?.agentsList?.agents?.map((agent) => agent.id),
-                selectedId: state?.agentsSelectedId,
+                selected: state?.agentsSelectedId,
               };
             }),
           )
-          .toEqual({
-            defaultId: "research",
-            ids: ["research", "writer"],
-            selectedId: "research",
-          });
-
+          .toEqual({ default: "research", ids: ["research", "writer"], selected: "research" });
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         const agentMenu = sidebar.locator(".sidebar-agent-menu");
         await agentMenu.getByText("Research", { exact: true }).waitFor();
@@ -324,12 +289,11 @@ suite.define(() => {
             ]),
           );
         }
-      },
-    );
-  });
-
+      });
+    },
+  );
   it("scopes pages from the chip and keeps Agents settings independent", async () => {
-    await suite.withPage(pageOptions, async ({ page }) => {
+    await suite.withPage(pageOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "agents.list": roster(),
@@ -341,14 +305,11 @@ suite.define(() => {
           "sessions.usage": emptyUsage,
         },
       });
-
       await page.goto(`${suite.server.baseUrl}usage`);
       await gateway.waitForRequest("agents.list");
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       const agentMenu = sidebar.locator(".sidebar-agent-menu");
-      // The compact avatar stays visible above its menu. Viewport padding may
-      // shift the menu's left edge inside the rail without detaching it.
       await expect
         .poll(async () => {
           const [card, menu] = await Promise.all([
@@ -368,7 +329,6 @@ suite.define(() => {
       await agentMenu.locator('[data-value="agent:writer"]').click();
       await waitForRequest(gateway, "sessions.list", (params) => params.agentId === "writer");
       await expectAgentName(sidebar, "Writer");
-
       await openHomeFullPage(page, "writer");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/writer");
       await sidebar.locator(".sidebar-identity-card").click();
@@ -378,7 +338,6 @@ suite.define(() => {
       const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
       await expectAgent(pageScope, "writer");
       await screenshot(page, "01-writer-usage.png");
-
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
         .locator(".sidebar-agent-menu")
@@ -389,48 +348,41 @@ suite.define(() => {
       await screenshot(page, "03-writer-settings.png");
     });
   });
-
   it("updates the compact session scope label and exposes All agents", async () => {
-    await suite.withPage(pageOptions, async ({ page }) => {
+    await suite.withPage(pageOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "agents.list": roster(),
           "sessions.list": emptySessions,
         },
       });
-
       await page.goto(`${suite.server.baseUrl}sessions`);
       await gateway.waitForRequest("agents.list");
       const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
       await expectAgent(pageScope, "main");
-
       await pageScope.locator(".agent-select__trigger").click();
       await pageScope
         .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: "Writer" })
         .click();
-
       await waitForRequest(gateway, "sessions.list", (params) => params.agentId === "writer");
       await expectAgent(pageScope, "writer");
       await expect
         .poll(async () => (await pageScope.locator(".agent-select__label").textContent())?.trim())
         .toBe("Writer");
       await screenshot(page, "05-first-session-scope-switch.png");
-
       const sessionRequestsBeforeAll = (await gateway.getRequests("sessions.list")).length;
       await pageScope.locator(".agent-select__trigger").click();
       await pageScope
         .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: "All agents" })
         .evaluate((item) => (item as HTMLElement).click());
-      await expect
-        .poll(async () => {
-          const requests = await gateway.getRequests("sessions.list");
-          return requests
-            .slice(sessionRequestsBeforeAll)
-            .some((request) => !Object.hasOwn(requestParams(request), "agentId"));
-        })
-        .toBe(true);
+      await waitForRequest(
+        gateway,
+        "sessions.list",
+        (params) => !Object.hasOwn(params, "agentId"),
+        sessionRequestsBeforeAll,
+      );
       await expectAgent(pageScope, "");
       await expect
         .poll(async () => (await pageScope.locator(".agent-select__label").textContent())?.trim())
