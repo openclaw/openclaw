@@ -179,6 +179,62 @@ export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFile
   }
 }
 
+const BARE_FILE_NAME = /^[^\\/]+$/u;
+const PARENT_PATH_SEGMENT = /(?:^|[\\/])\.\.(?:[\\/]|$)/u;
+
+function isMissingSessionFile(error: unknown): boolean {
+  return (
+    error instanceof GatewayRequestError &&
+    typeof error.details === "object" &&
+    error.details !== null &&
+    (error.details as { type?: unknown }).type === "session_file_not_found"
+  );
+}
+
+function isResolvableReferencePath(path: string): boolean {
+  return (
+    path.length > 0 &&
+    !/^[\\/]/u.test(path) &&
+    !/^[a-zA-Z]:/u.test(path) &&
+    !PARENT_PATH_SEGMENT.test(path)
+  );
+}
+
+/**
+ * Chat refers to files by the name in the message, so a nested file reads as
+ * missing at the workspace root. Only an unambiguous exact name match may
+ * retry: a truncated listing, several matches, or a path-bearing reference
+ * keeps the original failure instead of opening an arbitrary file.
+ */
+async function readSessionFileReference(
+  state: SessionWorkspaceHost,
+  sessionKey: string,
+  agentId: string | undefined,
+  path: string,
+): Promise<SessionWorkspaceGetResult | null> {
+  try {
+    return await state.sessions.getFile(sessionKey, path, { agentId });
+  } catch (error) {
+    if (!isMissingSessionFile(error) || !BARE_FILE_NAME.test(path)) {
+      throw error;
+    }
+    const listing = await state.sessions.listFiles(sessionKey, { agentId, path: "", search: path });
+    const browser = listing?.browser;
+    if (!listing?.root || !browser || browser.truncated) {
+      throw error;
+    }
+    const matches = browser.entries.filter(
+      (entry) =>
+        entry.kind === "file" && entry.name === path && isResolvableReferencePath(entry.path),
+    );
+    const [match] = matches;
+    if (matches.length !== 1 || !match) {
+      throw error;
+    }
+    return await state.sessions.getFile(sessionKey, match.path, { agentId });
+  }
+}
+
 function openFile(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
@@ -200,7 +256,7 @@ function openFile(
     viewingSession ? `file:${requestPath}` : JSON.stringify(["file", sessionKey, requestPath]),
     async () => {
       try {
-        return await state.sessions.getFile(sessionKey, requestPath, { agentId });
+        return await readSessionFileReference(state, sessionKey, agentId, requestPath);
       } catch (error) {
         const details = error instanceof GatewayRequestError ? error.details : null;
         if (
