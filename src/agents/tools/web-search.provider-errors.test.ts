@@ -126,10 +126,11 @@ it.each([
       kind: "error",
       provider: "perplexity",
       message: expect.stringContaining(
-        `Search failed: this search provider's xai sign-in ${state}. To fix it, send \`/login xai\` from a private chat or Control UI session, or run \`openclaw models auth login --provider xai\` on the Gateway.`,
+        `Search failed: this search provider's xai sign-in ${state}. The Gateway owner can fix it by sending \`/login xai\` in a private chat or Control UI session, or by running \`openclaw models auth login --provider xai\`. Other routes, such as web_fetch, may still work.`,
       ),
     });
     expect(JSON.stringify(result)).not.toContain("configuration and connection");
+    expect(JSON.stringify(result)).not.toContain("tell the user");
     expect(JSON.stringify(result)).not.toContain("owner@example.test");
     expect(JSON.stringify(result)).not.toContain(BODY);
   },
