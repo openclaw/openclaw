@@ -219,11 +219,12 @@ export function captureSidebarSnapshotModel(
     peoplePresenceFilter: host.people.presenceFilter,
     offlineUsers: (host.peopleView?.directory()?.result?.profiles ?? [])
       .filter((profile) => !profile.mergedInto)
-      .map((profile) => ({
-        ...displayUser(profilePresenceViewer(profile)),
-        watchedSessions: [],
-        entries: [],
-      })),
+      .map((profile) =>
+        Object.assign(displayUser(profilePresenceViewer(profile)), {
+          watchedSessions: [],
+          entries: [],
+        }),
+      ),
     ownerId: host.sessionOwnerFilterId,
     involvingMe: host.sessionInvolvingMeFilterActive,
     footer: context.gateway.snapshot.selfUser
