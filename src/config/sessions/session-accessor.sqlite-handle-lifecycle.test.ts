@@ -13,7 +13,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
 import {
@@ -307,9 +306,24 @@ describe("SQLite session handle lifecycle", () => {
     );
   });
 
-  it("does not run automatic maintenance on a replacement database handle", async () => {
-    const staleDashboardScope = {
+  it("retires automatic maintenance with its database owner before reopening", async () => {
+    const canonicalScope = {
       ...scope,
+      storePath: path.join(
+        tempDirs.make("openclaw-maintenance-retirement-"),
+        "agents",
+        "main",
+        "sessions",
+        "sessions.json",
+      ),
+    };
+    await replaceSessionEntry(canonicalScope, {
+      sessionId: canonicalScope.sessionId,
+      updatedAt: 1,
+    });
+    const retiredPath = resolveSqliteTargetFromSessionStorePath(canonicalScope.storePath).path;
+    const staleDashboardScope = {
+      ...canonicalScope,
       sessionId: "stale-dashboard",
       sessionKey: "agent:main:dashboard:stale",
     };
@@ -317,11 +331,11 @@ describe("SQLite session handle lifecycle", () => {
       sessionId: staleDashboardScope.sessionId,
       updatedAt: 1,
     });
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: retiredPath });
     const writerStarted = createDeferred();
     const writerRelease = createDeferred();
     const blockedWrite = patchSessionEntryCore(
-      scope,
+      canonicalScope,
       async () => {
         writerStarted.resolve();
         await writerRelease.promise;
@@ -329,24 +343,29 @@ describe("SQLite session handle lifecycle", () => {
       },
       { skipMaintenance: true },
     );
-    await writerStarted.promise;
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    const drains = [...SQLITE_SESSION_WRITER_QUEUES.values()].flatMap((queue) =>
-      queue.drainPromise ? [queue.drainPromise] : [],
-    );
-    expect(drains).not.toHaveLength(0);
+    try {
+      await writerStarted.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(loadSessionEntry(staleDashboardScope)?.archivedAt).toBeUndefined();
 
-    closeCachedOpenClawAgentDatabase(database);
-    expect(database.db.isOpen).toBe(false);
-    const replacement = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-    writerRelease.resolve();
-    await Promise.all([blockedWrite, ...drains]);
+      expect(closeOpenClawAgentDatabaseByPath(retiredPath)).toBe(true);
+      expect(database.db.isOpen).toBe(false);
+      writerRelease.resolve();
+      await expect(blockedWrite).rejects.toThrow("Agent database execution admission is closed");
+      await closeOpenClawAgentDatabaseByPathAsync(retiredPath);
 
-    expect(replacement.db.isOpen).toBe(true);
-    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId });
-    expect(loadSessionEntry(staleDashboardScope)?.archivedAt).toBeUndefined();
+      const replacement = openOpenClawAgentDatabase({ agentId: "main", path: retiredPath });
+      expect(replacement.db.isOpen).toBe(true);
+      expect(loadSessionEntry(canonicalScope)).toMatchObject({
+        sessionId: canonicalScope.sessionId,
+      });
+      expect(loadSessionEntry(staleDashboardScope)?.archivedAt).toBeUndefined();
+    } finally {
+      writerRelease.resolve();
+      await blockedWrite.catch(() => undefined);
+    }
   });
 
   it.each(["cache eviction", "database retirement"] as const)(

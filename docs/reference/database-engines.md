@@ -13,11 +13,23 @@ Gateway keep supported stores in PostgreSQL while other stores stay on SQLite.
 The adapter owns connection setup, schema admission, transaction behavior, and
 commit notifications; stores keep their existing data and operation contracts.
 
+For provisioning, first boot, migration, and recovery procedures, see the
+[PostgreSQL operator guide](/gateway/postgresql). It also describes the current
+archive restore and mixed-engine lifecycle limits.
+
 Daemon runtime pins stay local on every engine, in
 `<state-root>/control/services.sqlite`. The daemon owner supplies typed runtime
 intent to the macOS app without requiring a running Gateway or PostgreSQL
 connection. Shared-state engine selection does not move this store.
 No release stored runtime pins in PostgreSQL shared state, so PostgreSQL installs have no legacy pin source to migrate.
+
+Managed-update notifications use the selected shared-state engine. PostgreSQL
+handoffs report through the running Gateway, or through an admitted offline owner
+while it is stopped; the anchor never stores restart notifications. The local
+handoff lease still owns service recovery when PostgreSQL is unavailable. A missed
+notification is reported in the handoff log without suppressing recovery.
+SQLite handoffs retain their direct-file notification path, including recovery
+through an older installed runtime.
 
 ## Configure PostgreSQL
 
@@ -100,7 +112,8 @@ The supported PostgreSQL families are:
   tombstones remain intact. Duplicate-key voice JSON refuses the port with a hashed
   row locator. Cold archive references are retained; user backups embed their blobs.
   PostgreSQL agent schemas support current-version
-  bootstrap only and reject schema drift before exposing the store.
+  bootstrap and the schema 27 to 28 forward migration, and reject schema drift
+  before exposing the store.
 - **Workboard:** runtime storage, bidirectional database ports, and matched backups.
 - **Logbook:** runtime frames, batches, observations, cards, and standups;
   bidirectional database ports; and matched backups. Frame images remain local
@@ -205,11 +218,25 @@ PostgreSQL:
 
 Only the five listed families accept overrides. Unknown keys, fixed-local
 families, missing `engine`, and per-family connection/prefix options are rejected.
-`agent: { engine: "sqlite" }` is valid in mixed installations. PostgreSQL agents
-require every configurable family to select PostgreSQL, whether by default or
-override. A PostgreSQL agent combined with any SQLite family refuses with
-`DATABASE_AGENT_MIXED_POSTGRES_UNSUPPORTED` until mixed-pair conformance lands
-in PR3. The PostgreSQL default includes agent databases.
+Both SQLite and PostgreSQL agents are supported with either shared-state engine.
+The PostgreSQL default includes agent databases. For example, keep agents local
+while shared state uses PostgreSQL:
+
+```json5
+{
+  database: {
+    engine: "postgres",
+    families: { agent: { engine: "sqlite" } },
+    postgres: {
+      connection: { source: "env", provider: "default", id: "OPENCLAW_DATABASE_DSN" },
+    },
+  },
+}
+```
+
+To use PostgreSQL agents with SQLite shared state, select `database.engine: "sqlite"`
+and `database.families.agent.engine: "postgres"`, with the same PostgreSQL connection
+configuration. Plugin families inherit the default unless explicitly overridden.
 Quarantine, managed-update, and package-activation safety journals stay local
 SQLite. Daemon runtime pins do not acquire engine overrides;
 incognito remains memory-only.
@@ -219,18 +246,19 @@ all agent databases together, or the named plugin store. Admission and anchors
 remain per physical store. Existing SQLite content refuses a PostgreSQL choice,
 and a PostgreSQL anchor refuses SQLite; never remove an anchor to switch engines.
 Changing a family's engine requires a port (not yet supported for mixed installs)
-and a Gateway restart. The current port command has no per-family scope, and
-agent port providers are not available yet. Keep existing data on its current engine.
+and a Gateway restart. The current port command has no per-family scope.
+Keep existing data on its current engine.
 
-| Configuration                                                          | Runtime support                                                                  |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| All SQLite, including no database config                               | Supported default; existing lifecycle behavior is unchanged.                     |
-| PostgreSQL default for every configurable family                       | Experimental runtime support, including agents; safety stores stay local SQLite. |
-| Fresh PostgreSQL state with SQLite agents/plugins                      | Allowed with the shared PostgreSQL configuration.                                |
-| Fresh SQLite state with PostgreSQL Workboard, Logbook, or Team Reports | Allowed with the shared PostgreSQL configuration.                                |
-| A mixture of state/plugin families with SQLite agents                  | Allowed for runtime; lifecycle commands below refuse it.                         |
-| `agent=postgres` with any configurable SQLite family                   | Refused until PR3 mixed-pair conformance; `agent=sqlite` is valid.               |
-| `agent=postgres` with every configurable family on PostgreSQL          | Allowed, including when all families explicitly override a SQLite default.       |
+| Shared state | Agent databases | Runtime support                                                                                         |
+| ------------ | --------------- | ------------------------------------------------------------------------------------------------------- |
+| SQLite       | SQLite          | Supported default; existing lifecycle behavior is unchanged.                                            |
+| PostgreSQL   | PostgreSQL      | Experimental.                                                                                           |
+| PostgreSQL   | SQLite          | Experimental; agent leases, registration, and commit participants still access PostgreSQL shared state. |
+| SQLite       | PostgreSQL      | Experimental; agent operations retain SQLite shared-state authority and commit participants.            |
+
+Workboard, Logbook, and Team Reports may independently select either supported
+engine with the same PostgreSQL connection configuration. Fixed-local safety
+stores do not acquire a PostgreSQL option.
 
 Until family-scoped recovery support lands, OpenClaw refuses database ports,
 database snapshot backup/restore, and updates for mixed-engine installations.
@@ -250,13 +278,21 @@ port stored data.
 
 Mixed storage still requires one Gateway per store. It does not add Team
 multi-node ownership, routing, or failover. Cross-family operations retain their
-existing separate commits, compensation, and lock ordering.
+existing separate commit receipts, live authority checks, compensation, and
+agent → shared lock ordering. Commit uncertainty does not authorize replay or
+compensation without a confirmed agent rollback. This adds no distributed
+transaction protocol.
+
+Local agents may avoid their own PostgreSQL round trips, but still depend on
+shared-state registration, leases, and commit participants. Lower latency is a
+hypothesis to measure for your workload, not a promise of a network-free agent
+critical path.
 
 ## Search on PostgreSQL
 
-The experimental engine search contract supports native PostgreSQL full text,
-literal trigram contains, and exact cosine search. Agent transcript text search
-and memory search use this contract.
+The engine search contract supports native PostgreSQL full text, literal trigram
+contains, and exact cosine search. Memory body and path retrieval, agent
+transcript text search, and standing-intent matching use this contract.
 It does not enable PostgreSQL for an unported store.
 
 Owning components can register additional search definitions with
@@ -290,6 +326,17 @@ administrator. The runtime role needs `CREATE` in the store schema, or database
 `CREATE` privilege when bootstrapping a new schema, plus ownership/access to its
 tables, indexes, functions, and text-search configuration.
 
+| Search mode                                                     | PostgreSQL implementation                                           | Required extensions                                                         |
+| --------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Memory body keywords, transcript text, standing-intent keywords | Full text with literal terms, phrases, and supported prefix queries | `unaccent`                                                                  |
+| Memory trigram tokenizer                                        | Literal contains matching with native similarity ranking            | `unaccent`, `pg_trgm`                                                       |
+| Memory semantic or hybrid retrieval                             | Exact cosine over the admitted embedding model and eligible sources | `unaccent`, `vector`; also `pg_trgm` when the trigram tokenizer is selected |
+
+Missing `pg_trgm` refuses a declared trigram index; it does not silently change
+the tokenizer. Missing `unaccent` refuses full-text admission. In either case,
+run the extension SQL reported by the error in the selected database and reopen
+the store.
+
 The existing explicit keyword-only memory setting is `memory.search.provider: "none"`
 (or the corresponding agent-specific override). The engine's keyword-only schema
 requires no pgvector extension and exposes no vector capability. Memory status
@@ -308,8 +355,9 @@ per-request schema probes. PostgreSQL storage diagnostics report memory relation
 sizes; WAL and reusable-file bytes are zero because those are server-owned,
 not local SQLite files.
 
-The public memory search path uses the admitted PostgreSQL projections. Vector queries filter model aliases, sources, and any
-candidate IDs before exact cosine ordering and the result limit. Keyword queries
+The public memory search path uses the admitted PostgreSQL projections. Vector
+queries filter model aliases, sources, and any candidate IDs before exact cosine
+ordering and the result limit. Keyword queries
 use native full-text ranking, or literal contains predicates for the configured
 trigram tokenizer. Only bounded result payloads cross into JavaScript. Hybrid
 merging keeps the existing default weights of 0.7 vector and 0.3 text; PostgreSQL
@@ -340,6 +388,30 @@ triggers maintain the derived float32 projection. Exact vectors support up to
 index rebuild. There is no ANN, HNSW, IVFFlat, half-precision storage, or transfer
 of the PostgreSQL corpus into JavaScript for per-query scoring.
 
+Search sees committed index inserts, updates, and deletes immediately. Memory
+files must first pass through normal indexing; changing a file alone does not
+write its search projection. Rebuilding derives the same eligible result set
+from the canonical rows. Transcript search applies session, agent, role, and
+active-branch scope before its result limit; memory search applies its selected
+agent and source scope before ranking candidates, plus model scope for vectors.
+Memory transcript recall retains the cross-engine 200-candidate window followed
+by session visibility checks; this is separate from transcript search's SQL filters.
+
+PostgreSQL memory queries accept at most 4,096 UTF-16 code units and 128 terms, return
+at most 200 hits, and bound snippets to 700 characters. Larger queries fail before
+retrieval with a message naming the limit.
+
+Transcript queries must contain text and cannot exceed 4,096 UTF-16 code units.
+Each search returns at most 25 transcript hits, with excerpts bounded to 500
+characters. Literal operator characters are treated as input text rather than
+SQL or PostgreSQL query syntax. Prefix matching is an explicit transcript search
+mode, not an interpretation of a trailing operator in user text.
+
+Standing-intent matching preserves its channel, sender, agent, expiry, and firing
+limits. It examines at most 256 eligible keyword candidates and injects at most
+three matching intents within a 1,200-character context budget. Long prompts
+use bound literal terms without expanding the SQL expression tree.
+
 Generated columns, GIN indexes, vector projection tables, trigger functions, and
 the named text-search mappings participate in the store's exact schema-drift
 fingerprint. Rebuilds run under the owning writer transaction. PostgreSQL search
@@ -368,20 +440,19 @@ openclaw database port --to postgres
 
 Port, backup, restore, and fingerprint operations share one database-family
 provider registry. Each provider resolves its stores and supplies the generated
-schema descriptor and expected PostgreSQL catalog. **Shared state, Workboard,
-Logbook, and Team Reports are registered families.** Matrix account roots are
-state-family resources. Agent support is not enabled by this registry yet. An unrecognized PostgreSQL anchor
+schema descriptor and expected PostgreSQL catalog. **Shared state, agent,
+Workboard, Logbook, and Team Reports are registered families.** Matrix account roots are
+state-family resources. An unrecognized PostgreSQL anchor
 refuses the operation and names the supported families.
 For separately installed plugins such as Team Reports, operations load the
 selected installed plugin's schema and admission API. Keep the matching plugin
 installed for port, backup, and restore. Preflight does not require absent
 optional plugins.
 
-The command inventories existing shared state, Workboard, Logbook, and Team Reports stores,
+The command inventories existing shared state, agent, Workboard, Logbook, and Team Reports stores,
 including disabled plugin stores. A real SQLite-to-PostgreSQL port initializes
 missing shared state before capture so the config writer uses the same selected
-store after the switch. It does not create missing plugin stores or port agent
-databases. A dry run checks read-only
+store after the switch. It does not create missing plugin stores. A dry run checks read-only
 prerequisites and reports checks that still require private migration, copying,
 or a PostgreSQL privilege probe. It creates no manifest, migrated copy, or target
 namespace. Add `--json` for machine-readable results without connection strings

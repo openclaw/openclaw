@@ -212,6 +212,7 @@ export async function writeRootBoundJsonFile(params: {
   assertOwnerForRollback: () => void;
   preCommitRuntimePreflight?: () => Promise<unknown>;
   beforeCommit?: () => void | Promise<void>;
+  assertBeforePublish?: () => void;
   skipOutputLogs?: boolean;
 }): Promise<IncludePublicationProof> {
   params.assertConfigPathForWrite();
@@ -308,6 +309,7 @@ export async function writeRootBoundJsonFile(params: {
         expectedPending: params.deferredPluginMigrations,
       },
       () => {
+        params.assertBeforePublish?.();
         preparedFile.publish();
         publication.phase = "published";
         recordUpdateDoctorConfigFileWrite(

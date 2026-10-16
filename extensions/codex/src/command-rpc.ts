@@ -58,13 +58,6 @@ import type { CodexCatalogPreviewCache } from "./session-catalog-native-projecti
 
 export type SafeValue<T> = { ok: true; value: T } | { ok: false; error: string };
 
-export type SafeCodexControlRequestFn = (
-  pluginConfig: CodexPluginConfig | undefined,
-  method: CodexControlMethod,
-  requestParams: JsonValue | undefined,
-  options?: CodexControlRequestOptions,
-) => Promise<SafeValue<JsonValue | undefined>>;
-
 type AuthProfileOrderConfig = Parameters<
   typeof resolveCodexAppServerAuthProfileIdForAgent
 >[0]["config"];

@@ -294,7 +294,16 @@ export function assistantVisibleTextFilters(
     preserve ? leadingEmptyLinesTextFilter : trimTextFilter(trim, { preserveCodeIndentation }),
     {
       transform: stripInvisibleAssistantText,
-      create: () => createConditionalTextProjector(stripInvisibleAssistantText, () => true),
+      create: () => {
+        let visible = false;
+        return createConditionalTextProjector(
+          () => "",
+          (input) => {
+            visible ||= Boolean(stripInvisibleAssistantText(input.delta ?? input.text));
+            return !visible;
+          },
+        );
+      },
     },
   );
   profileFilters.set(key, filters);

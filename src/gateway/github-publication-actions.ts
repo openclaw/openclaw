@@ -23,13 +23,13 @@ import { prepareGitHubPublicationRequesterV2 } from "./github-publication-reques
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 type Options = Omit<GatewayRequestHandlerOptions, "params"> & {
-  params: SessionGitHubActionParams;
+  params: Exclude<SessionGitHubActionParams, { action: "refresh_base" }>;
 };
 type SessionRead = Awaited<ReturnType<typeof prepareGitHubPublicationSession>>;
 
 /** Keep every selected parent alive; a reparented child cannot redirect a retained action. */
 async function preparePublishingSession(
-  params: SessionGitHubActionParams,
+  params: Exclude<SessionGitHubActionParams, { action: "refresh_base" }>,
   assertCurrent: () => void,
   resources: DisposableStack,
 ) {

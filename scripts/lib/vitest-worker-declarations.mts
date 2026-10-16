@@ -2,8 +2,13 @@
 export const nativeSchtasksIntegrationEnabled =
   process.platform === "win32" && process.env.CI_WINDOWS_SCHTASKS_INTEGRATION === "1";
 
-// The CLI loads this package-root supervisor by URL instead of bundling it.
-export const vitestWorkerRuntimeAssets = ["cli-invocation.mjs", "node-host-launcher.mjs"];
+// Package-root modules loaded outside the compiled graph retain their bootstrap dependencies.
+export const vitestWorkerRuntimeAssets = [
+  "cli-invocation.mjs",
+  "cli-parent-lifetime.mjs",
+  "gateway-shutdown-budget.mjs",
+  "node-host-launcher.mjs",
+];
 
 export const runtimeProcessDeclarationEntries = {
   "extensions/memory-core/manager-cpu-entrypoints":

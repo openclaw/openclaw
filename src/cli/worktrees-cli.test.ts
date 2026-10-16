@@ -168,6 +168,37 @@ describe("worktrees cli", () => {
     });
   });
 
+  it("rejects an invalid --removed-at before retiring a snapshot", async () => {
+    setRuntimeConfigSnapshot({}, {});
+    const retire = vi
+      .spyOn(owner, "retireSnapshot")
+      .mockRejectedValue(new Error("Unexpected snapshot retirement"));
+    await expect(
+      run([
+        "retire-snapshot",
+        "worktree-id",
+        "--expected-ref",
+        "refs/openclaw/snapshots/worktree-id",
+        "--expected-oid",
+        "a".repeat(40),
+        "--removed-at",
+        "1700000000100ms",
+        "--retained-ref",
+        "refs/heads/main",
+        "--retained-oid",
+        "b".repeat(40),
+      ]),
+    ).rejects.toThrow("--removed-at must be a non-negative integer (epoch milliseconds).");
+    expect(retire).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty cleanup job selector before cleanup", async () => {
+    setRuntimeConfigSnapshot({}, {});
+    const gc = vi.spyOn(owner, "gc").mockRejectedValue(new Error("Unexpected cleanup execution"));
+    await expect(run(["gc", "--job", "", "--json"])).rejects.toThrow("--job must not be empty");
+    expect(gc).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])("reports cleanup and signals partial failure: %s", async (partial) => {
     setRuntimeConfigSnapshot({}, {});
     const result = {

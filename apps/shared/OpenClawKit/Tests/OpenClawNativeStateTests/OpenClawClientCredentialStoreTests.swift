@@ -214,7 +214,10 @@ struct OpenClawClientCredentialStoreTests {
             .appendingPathComponent("openclaw-client-credentials-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        try body(root)
+        // Darwin's /var temporary path is an alias; SQLite's no-follow open needs the resolved root.
+        let resolved = try #require(realpath(root.path, nil))
+        defer { free(resolved) }
+        try body(URL(fileURLWithPath: String(cString: resolved), isDirectory: true))
     }
 
     private func sql(_ url: URL, _ sql: String) throws -> String {

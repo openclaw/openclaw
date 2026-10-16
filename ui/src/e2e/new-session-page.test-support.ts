@@ -440,14 +440,6 @@ export async function replaceGatewayClient(page: Page) {
   await evaluateControlUiContext(page, (context) => context.gateway.connect());
 }
 
-export async function openNewSessionPlusMenu(page: Page) {
-  const composer = page.locator(".new-session-page__composer");
-  const menu = composer.locator(".agent-chat__capability-menu");
-  await composer.getByRole("button", { name: "Add attachment" }).click();
-  await expect.poll(() => menu.getAttribute("data-view")).toBe("root");
-  return menu;
-}
-
 export async function navigateInApp(
   page: Page,
   routeId: Parameters<ApplicationContext["navigate"]>[0],

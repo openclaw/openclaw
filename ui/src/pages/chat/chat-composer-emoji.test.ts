@@ -1,7 +1,7 @@
 import MarkdownIt from "markdown-it";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { Overlay } from "../../components/overlay-lifecycle.ts";
-import { TextareaTokenAnchor } from "../../components/textarea-token-anchor.ts";
+import * as textareaAnchor from "../../components/textarea-token-anchor.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
@@ -37,7 +37,10 @@ afterEach(async () => {
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
   // jsdom has no layout/ResizeObserver; real-browser tests cover placement and cleanup.
-  vi.spyOn(TextareaTokenAnchor.prototype, "updateNative").mockImplementation(() => {});
+  vi.spyOn(textareaAnchor, "createTextareaTokenAnchor").mockReturnValue({
+    updateNative() {},
+    close() {},
+  });
   // jsdom has no editing engine. Exercise the browser command's input contract;
   // native undo itself is covered by the real-browser composer suite.
   Object.defineProperty(document, "execCommand", {
@@ -198,10 +201,14 @@ describe("chat emoji acceptance", () => {
 describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
   it("accepts before synchronous overlay retirement can dismiss the menu again", () => {
     let overlay: Overlay | undefined;
-    vi.spyOn(TextareaTokenAnchor.prototype, "updateNative").mockImplementation((next) => {
-      overlay = next;
+    vi.mocked(textareaAnchor.createTextareaTokenAnchor).mockReturnValue({
+      updateNative(next) {
+        overlay = next;
+      },
+      close() {
+        overlay?.retire();
+      },
     });
-    vi.spyOn(TextareaTokenAnchor.prototype, "close").mockImplementation(() => overlay?.retire());
     const f = fixture(kind);
     f.input("Nice :smi");
     expect(overlay).toBeDefined();

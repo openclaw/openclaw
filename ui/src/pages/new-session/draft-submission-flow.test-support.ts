@@ -60,9 +60,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
   // The roster carries the placement policy; a scripted policy arrives with a roster refresh.
   const agents = {
     subscribe: () => () => undefined,
-    state: {
-      agentsList: options.placementPolicy ? roster : { ...roster, sessionPlacement: {} },
-    },
+    state: { agentsList: options.placementPolicy ? roster : { ...roster, sessionPlacement: {} } },
     refreshList: async () => {
       // A failed refresh publishes no policy, like the roster owner.
       const policy = await options.placementPolicy?.().catch(() => undefined);
@@ -111,10 +109,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
         return describeOptions.client.request("sessions.describe", params);
       }) satisfies ApplicationContext["sessions"]["describe"],
     },
-    placementStartup: {
-      get: vi.fn(() => undefined),
-      hasPendingTurn: vi.fn(() => false),
-    },
+    placementStartup: { get: vi.fn(() => undefined), hasPendingTurn: vi.fn(() => false) },
     chatSubmissions: createChatSubmissions(),
     agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
     config: {
@@ -166,10 +161,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
   );
   const browser = new DraftPlaceBrowser(
     gateway,
-    () => ({
-      context,
-      isAdmin: place?.isAdmin() ?? false,
-    }),
+    () => ({ context, isAdmin: place?.isAdmin() ?? false }),
     {
       changed: vi.fn(),
       updateComplete: () => Promise.resolve(),

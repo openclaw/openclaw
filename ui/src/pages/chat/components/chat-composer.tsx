@@ -1,6 +1,12 @@
 import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import { listen } from "../../../lib/reactive/listener.ts";
-import { createChatComposerContext } from "./chat-composer-frame.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { ComposerDictationOwner } from "../composer-dictation.ts";
+import { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
+import {
+  createChatComposerContext,
+  createComposerDictationOptions,
+} from "./chat-composer-frame.ts";
 import { createComposerPrediction } from "./chat-composer-prediction.ts";
 import { createComposerQuestionPanel } from "./chat-composer-question.tsx";
 import { getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
@@ -47,6 +53,21 @@ export function ChatComposer(props: ChatComposerInput) {
   const currentProps = new Proxy(props, {
     get: (target, key) => (key === "onRequestUpdate" ? requestUpdate : Reflect.get(target, key)),
   });
+  const microphonePicker = (state.microphonePicker ??= new ComposerMicrophoneOwner());
+  state.dictation ??= new ComposerDictationOwner(
+    untrack(() => createComposerDictationOptions(currentProps, state, microphonePicker)),
+  );
+  const voice = { dictation: state.dictation, picker: microphonePicker };
+  onCleanup(
+    voice.dictation.subscribe(() => {
+      if (voice.dictation.locksComposer) {
+        state.editRevision += 1;
+        currentProps.onDismissRealtimeTalkError?.();
+      }
+    }),
+  );
+  const dictation = projectOwner(voice.dictation, (owner) => owner);
+  const microphone = projectOwner(voice.picker, (owner) => owner);
   const prediction = createComposerPrediction(() => {
     const options = currentProps.composerPredictions;
     const client = currentProps.gatewayClient;
@@ -80,12 +101,14 @@ export function ChatComposer(props: ChatComposerInput) {
   });
   const questionPanel = createComposerQuestionPanel(() => currentProps, state);
   const context = createMemo(() => {
+    dictation.read();
+    microphone.read();
     revision();
     // Lit owners can change local state without changing a prop's identity.
     void props.renderRevision;
     computingFrame = true;
     try {
-      return createChatComposerContext(currentProps, prediction, questionPanel());
+      return createChatComposerContext(currentProps, voice, prediction, questionPanel());
     } finally {
       computingFrame = false;
     }
@@ -100,11 +123,12 @@ export function ChatComposer(props: ChatComposerInput) {
     },
   );
   createEffect(
-    () => {
-      context();
-      return currentProps.composerPredictions;
+    () => [context().dictationOptions, currentProps.composerPredictions] as const,
+    ([options]) => {
+      voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
+      voice.dictation.update(options);
+      untrack(() => prediction.sync());
     },
-    () => untrack(() => prediction.sync()),
   );
   onSettled(() => listen(document, "visibilitychange", () => prediction.sync()));
   onCleanup(() => {

@@ -57,7 +57,7 @@ export function renderSidebarPeopleFilterMenuForController(
                   ]}
                   onChange={(value) => {
                     if (value === "all" || value === "running") {
-                      commit(() => people().setStatusFilter(value));
+                      commit(() => people().set("statusFilter", value));
                     }
                   }}
                 />
@@ -75,7 +75,7 @@ export function renderSidebarPeopleFilterMenuForController(
                   onChange={(value) => {
                     const option = SORT_OPTIONS.find((entry) => entry.value === value);
                     if (option) {
-                      commit(() => people().setSortMode(option.value));
+                      commit(() => people().set("sortMode", option.value));
                     }
                   }}
                 />

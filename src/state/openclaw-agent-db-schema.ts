@@ -52,6 +52,7 @@ import {
   AGENT_STORAGE_SCHEMA_VERSION,
   AGENT_JSON_PREDICATE_SCHEMA_VERSION,
   AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION,
+  AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
   CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
   CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -62,6 +63,7 @@ import {
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import * as maintenanceAuthority from "./openclaw-agent-db-lease.js";
 import { migrateOpenClawAgentSchema } from "./openclaw-agent-db-legacy-schema.js";
+import { assertAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
 import { persistAgentSchemaMetadata } from "./openclaw-agent-db-metadata-write.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
@@ -114,6 +116,7 @@ import {
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
 import { migrateDeployedTranscriptFtsRowsInTransaction } from "./openclaw-agent-transcript-fts-schema.js";
 import { migrateTranscriptPayloadStorageInTransaction } from "./openclaw-agent-transcript-payload-migration.js";
+import { migrateAgentWriteLayoutInTransaction } from "./openclaw-agent-write-layout-migration.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -317,7 +320,7 @@ function ensureAgentSchema(
           return;
         }
         if (identityMigration) {
-          maintenanceAuthority.assertAgentDatabaseMaintenanceAuthority();
+          assertAgentDatabaseMaintenanceAuthority();
         }
         getOpenClawDatabaseMaintenanceScope()?.assertAgentSchemaMigration({
           agentId,
@@ -382,6 +385,13 @@ function ensureAgentSchema(
               elapsedMs,
             });
           }
+        }
+        if (
+          !isEmptyDatabase &&
+          previousVersion < AGENT_WRITE_LAYOUT_SCHEMA_VERSION &&
+          targetVersion >= AGENT_WRITE_LAYOUT_SCHEMA_VERSION
+        ) {
+          migrateAgentWriteLayoutInTransaction(db);
         }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.

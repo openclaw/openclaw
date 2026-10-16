@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  memoryStandingIntentSearchSchema,
   memoryTextSearchSchema,
   memoryVectorSearchSchema,
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
@@ -20,6 +21,7 @@ import {
 import { ensureOpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
+import { withLegacyAgentPostgresWriteLayout } from "../../state/openclaw-agent-write-layout-migration.js";
 import metadata from "../../state/postgres-schema.generated/agent-port.json" with { type: "json" };
 import { agentPostgresRuntime } from "../../state/postgres-schema.generated/agent-runtime.js";
 import { agentSearchPostgresRuntime } from "../../state/postgres-schema.generated/agent-search-runtime.js";
@@ -65,6 +67,8 @@ const agentSourceSearchPostData: NonNullable<PortDescriptor["postgresSourcePostD
       const body = asOptionalRecord(asOptionalRecord(value?.text)?.body);
       const mode = asOptionalRecord(body?.postgres)?.mode;
       expected = memoryTextSearchSchema(mode === "trigram" ? "trigram" : "unicode61");
+    } else if (name === "memory.standing-intents") {
+      expected = memoryStandingIntentSearchSchema;
     } else if (name === "memory.vector") {
       const chunks = asOptionalRecord(asOptionalRecord(value?.vector)?.chunks);
       const dimensions = asOptionalRecord(chunks?.postgres)?.dimensions;
@@ -106,12 +110,16 @@ export async function loadAgentPortDescriptor(
     const backup = agentEngineSchema.postgresMigrations?.find(
       (step) => step.version === sourceVersion + 1,
     )?.backup;
-    if (!backup || backup.version !== sourceVersion || backup.id !== "agent") {
+    if (backup?.version === sourceVersion && backup.id === "agent") {
+      return backup;
+    }
+    // v27→28 changes only these indexes in PostgreSQL. Pin the shared table
+    // catalog to v28 so later DDL needs its own predecessor descriptor.
+    if (backup || OPENCLAW_AGENT_SCHEMA_VERSION !== 28 || sourceVersion !== 27) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
       );
     }
-    return backup;
   }
   const catalog = agentPostgresRuntime.expectedCatalog;
   const columns = catalog.filter(
@@ -120,7 +128,7 @@ export async function loadAgentPortDescriptor(
   const keys = catalog.filter(
     (fact): fact is typeof fact & { value: string[] } => fact.kind === "primaryKey",
   );
-  return {
+  const descriptor: PortDescriptor = {
     id: "agent",
     version: OPENCLAW_AGENT_SCHEMA_VERSION,
     minimumPostgresVersion: manifest.minimumPostgresVersion,
@@ -284,4 +292,23 @@ export async function loadAgentPortDescriptor(
       );
     },
   };
+  return sourceVersion === agentEngineSchema.version
+    ? descriptor
+    : {
+        ...descriptor,
+        version: sourceVersion,
+        sqlite: getOpenClawAgentMigrationSchema(sourceVersion).replace(
+          /^INSERT OR IGNORE INTO[^;]+;/gm,
+          "",
+        ),
+        postData: withLegacyAgentPostgresWriteLayout(descriptor.postData),
+        expectedCatalog: catalog.map((fact) =>
+          fact.table === "transcript_event_identities" && fact.kind === "indexes"
+            ? { table: fact.table, kind: fact.kind, value: 5 }
+            : fact,
+        ),
+        inspectSqliteSource: undefined,
+        migrateSqliteSource: undefined,
+        admit: undefined,
+      };
 }

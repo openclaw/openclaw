@@ -12,7 +12,12 @@ import {
 import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
-import type { CodexComputerUseSetupParams } from "./app-server/computer-use.js";
+import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import {
+  installCodexComputerUse,
+  readCodexComputerUseStatus,
+  type CodexComputerUseSetupParams,
+} from "./app-server/computer-use.js";
 import type { CodexPluginConfig } from "./app-server/config-contracts.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import {
@@ -39,13 +44,21 @@ import {
   parseResumeArgs,
 } from "./command-handler-args.js";
 import { isCurrentSessionModelSelectionLocked } from "./command-handler-bindings.js";
-import { CODEX_CONTROL_METHODS, type CodexCommandDeps } from "./command-handler-deps.js";
+import type { CodexCommandDeps } from "./command-handler-deps.js";
 import {
   resolveCodexConversationControlScope,
   resolvePreparedCodexCommandAuthority,
 } from "./command-handler-scope.js";
-import type { CodexControlRequestOptions } from "./command-rpc.js";
-import { parseCodexFastModeArg, parseCodexPermissionsModeArg } from "./conversation-control.js";
+import { codexControlRequest, type CodexControlRequestOptions } from "./command-rpc.js";
+import {
+  parseCodexFastModeArg,
+  parseCodexPermissionsModeArg,
+  setCodexConversationFastMode,
+  setCodexConversationModel,
+  setCodexConversationPermissions,
+  steerCodexConversationTurn,
+  stopCodexConversationTurn,
+} from "./conversation-control.js";
 
 const CODEX_NATIVE_EXECUTION_SUBCOMMANDS = new Set([
   "bind",
@@ -198,7 +211,6 @@ function returnsBeforeNativeCodexResume(args: readonly string[]): boolean {
 }
 
 export async function handleComputerUseCommand(
-  deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: CodexPluginConfig | undefined,
   args: string[],
@@ -226,13 +238,13 @@ export async function handleComputerUseCommand(
   };
   if (parsed.action === "install") {
     return formatComputerUseStatus(
-      await deps.installCodexComputerUse({
+      await installCodexComputerUse({
         ...params,
         assertCurrent: () => assertCodexHostOwnerCurrent(ctx),
       }),
     );
   }
-  return formatComputerUseStatus(await deps.readCodexComputerUseStatus(params));
+  return formatComputerUseStatus(await readCodexComputerUseStatus(params));
 }
 
 export async function handleNativeGoal(
@@ -277,19 +289,23 @@ export async function handleNativeGoal(
     if (args.length > 1) {
       return clear ? "Usage: /codex goal clear" : "Usage: /codex goal [status]";
     }
-    const response = await deps.codexControlRequest(
-      pluginConfig,
-      clear ? CODEX_CONTROL_METHODS.clearThreadGoal : CODEX_CONTROL_METHODS.getThreadGoal,
-      { threadId: binding.threadId },
-      clear
-        ? { ...goalRequestOptions, assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx) }
-        : goalRequestOptions,
-    );
     if (clear) {
-      return isJsonObject(response) && response.cleared === true
+      const response = await codexControlRequest(
+        pluginConfig,
+        CODEX_CONTROL_METHODS.clearThreadGoal,
+        { threadId: binding.threadId },
+        { ...goalRequestOptions, assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx) },
+      );
+      return isJsonObject(response) && response.cleared
         ? "Cleared the Codex goal."
         : "No Codex goal was active.";
     }
+    const response = await codexControlRequest(
+      pluginConfig,
+      CODEX_CONTROL_METHODS.getThreadGoal,
+      { threadId: binding.threadId },
+      goalRequestOptions,
+    );
     return formatNativeGoal(response);
   }
   const requestedStatus =
@@ -310,7 +326,7 @@ export async function handleNativeGoal(
     return `Usage: /codex goal ${action}`;
   }
   const response = await deps.bindingStore.withLease(target.identity, () =>
-    deps.codexControlRequest(
+    codexControlRequest(
       pluginConfig,
       CODEX_CONTROL_METHODS.setThreadGoal,
       {
@@ -369,8 +385,8 @@ export async function controlConversationTurn(
   };
   const result =
     command === "stop"
-      ? await deps.stopCodexConversationTurn(params)
-      : await deps.steerCodexConversationTurn({ ...params, message });
+      ? await stopCodexConversationTurn(params)
+      : await steerCodexConversationTurn({ ...params, message });
   return result.message;
 }
 
@@ -416,7 +432,7 @@ export async function setConversationModel(
       ? `Codex model: ${formatCodexDisplayText(activeModel)}`
       : "Usage: /codex model <model>";
   }
-  return await deps.setCodexConversationModel({
+  return await setCodexConversationModel({
     identity: target.identity,
     bindingStore: deps.bindingStore,
     model: normalized,
@@ -455,7 +471,7 @@ export async function setConversationPreference(
     if (value && parsed == null && value.trim().toLowerCase() !== "status") {
       return usage;
     }
-    return await deps.setCodexConversationFastMode({
+    return await setCodexConversationFastMode({
       identity: target.identity,
       bindingStore: deps.bindingStore,
       binding,
@@ -482,7 +498,7 @@ export async function setConversationPreference(
   if (parsed === "yolo" && !hasCodexAdminScope(ctx)) {
     return CODEX_FULL_PERMISSIONS_AUTH_ERROR;
   }
-  return await deps.setCodexConversationPermissions({
+  return await setCodexConversationPermissions({
     mode: parsed,
     config: ctx.config,
     storePath: authority.storePath,
@@ -569,7 +585,7 @@ export async function startThreadAction(
     assertCurrentAsync: authority.assertCurrentAsync,
   });
   await deps.bindingStore.withLease(target.identity, () =>
-    deps.codexControlRequest(
+    codexControlRequest(
       pluginConfig,
       CODEX_CONTROL_METHODS.review,
       { threadId: binding.threadId, target: { type: "uncommittedChanges" } },

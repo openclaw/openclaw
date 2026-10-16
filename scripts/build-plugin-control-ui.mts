@@ -12,7 +12,7 @@ import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
-export async function buildBundledPluginControlUi(
+async function buildBundledPluginControlUi(
   packageDir: string,
   options: { copy?: boolean; repoRoot?: string } = {},
 ): Promise<void> {
@@ -54,7 +54,7 @@ export async function buildBundledPluginControlUi(
 }
 
 /** UI-only commands need static Settings presenters even without a runtime build. */
-export async function prepareBundledSettingsControlUi(repoRoot: string): Promise<void> {
+async function prepareBundledSettingsControlUi(repoRoot: string): Promise<void> {
   const selected: string[] = [];
   for (const entry of collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot })) {
     if (entry.isolated || !isRecord(entry.packageJson) || !controlUiSource(entry.packageJson)) {

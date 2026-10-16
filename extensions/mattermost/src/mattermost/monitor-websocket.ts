@@ -77,30 +77,6 @@ export function parseMattermostPost(value: unknown): MattermostPost | null {
   return safeParseWithSchema(MattermostPostSchema, value);
 }
 
-class WebSocketClosedBeforeOpenError extends Error {
-  constructor(
-    public readonly code: number,
-    public readonly reason?: string,
-  ) {
-    super(`websocket closed before open (code ${code})`);
-    this.name = "WebSocketClosedBeforeOpenError";
-  }
-}
-
-class WebSocketClosedBeforeAuthenticationError extends Error {
-  constructor(
-    public readonly code: number,
-    public readonly reason?: string,
-  ) {
-    // A rejected token and a transient drop (server restart, proxy reset) close
-    // with the same pre-auth shape; the message must not assert a single cause.
-    super(
-      `websocket closed before authentication completed (code ${code}) — either the bot token was rejected or the connection dropped (server restart, proxy reset); check the Mattermost bot token if this repeats`,
-    );
-    this.name = "WebSocketClosedBeforeAuthenticationError";
-  }
-}
-
 type CreateMattermostConnectOnceOpts = {
   wsUrl: string;
   botToken: string;
@@ -372,15 +348,22 @@ export function createMattermostConnectOnce(
             resolve();
             return;
           }
-          if (opened) {
-            // Mattermost answers a failed authentication_challenge by closing the
-            // socket with no challenge reply (server platform/websocket_router.go),
-            // so an unauthenticated close is a failed attempt: rejecting routes it
-            // through reconnect backoff and the visible connection-failed error.
-            reject(new WebSocketClosedBeforeAuthenticationError(code, message || undefined));
-            return;
-          }
-          reject(new WebSocketClosedBeforeOpenError(code, message || undefined));
+          // A rejected token and a transient drop share the pre-auth close shape.
+          // Reject either phase so reconnect backoff and visible failure reporting apply.
+          const error = new Error(
+            opened
+              ? `websocket closed before authentication completed (code ${code}) — either the bot token was rejected or the connection dropped (server restart, proxy reset); check the Mattermost bot token if this repeats`
+              : `websocket closed before open (code ${code})`,
+          );
+          reject(
+            Object.assign(error, {
+              code,
+              reason: message || undefined,
+              name: opened
+                ? "WebSocketClosedBeforeAuthenticationError"
+                : "WebSocketClosedBeforeOpenError",
+            }),
+          );
         });
 
         ws.on("error", (err) => {

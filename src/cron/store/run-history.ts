@@ -38,7 +38,6 @@ export async function recordCronRun(
   source?: CronRunHistorySource,
 ): Promise<void> {
   const context = source?.context ?? captureOpenClawStateWorkerContext();
-  const captured = structuredClone(input);
   const assertCurrent = () => {
     context.admission.assertCurrent();
   };
@@ -47,7 +46,7 @@ export async function recordCronRun(
     (scope) => {
       // Caller retirement after dispatch may race history; committed outcomes remain useful.
       assertCurrent();
-      return scope.execute({ type: "cron.recordRun", input: captured });
+      return scope.execute({ type: "cron.recordRun", input });
     },
     { assertCurrent },
   );

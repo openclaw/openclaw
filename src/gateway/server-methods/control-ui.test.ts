@@ -67,7 +67,7 @@ describe("controlUi.githubPreview", () => {
       expect(respond).toHaveBeenCalledWith(false, undefined, {
         code: "UNAVAILABLE",
         message: "GitHub request is no longer active. Try again.",
-        retryable: true,
+        retryable: false,
       });
     },
   );
@@ -382,7 +382,7 @@ describe("controlUi.githubPreview", () => {
       expect(respond).toHaveBeenCalledWith(false, undefined, {
         code: "UNAVAILABLE",
         message: new githubIdentity.GitHubIdentityError("changed").message,
-        retryable: true,
+        retryable: false,
       });
     },
   );
@@ -411,7 +411,13 @@ describe("controlUi.githubPreview", () => {
       "preview handler",
     )(requestOptions({ ...target, ...(refresh !== undefined ? { refresh } : {}) }, respond));
     if (valid) {
-      expect(loadPreview).toHaveBeenCalledExactlyOnceWith(target, undefined, undefined, true);
+      expect(loadPreview).toHaveBeenCalledExactlyOnceWith(
+        target,
+        undefined,
+        undefined,
+        true,
+        undefined,
+      );
       expect(respond).toHaveBeenCalledWith(true, preview, undefined);
     } else {
       expect(loadPreview).not.toHaveBeenCalled();
@@ -431,6 +437,13 @@ describe("controlUi.githubPreview", () => {
         "The selected GitHub credential is unavailable; reconnect the agent's GitHub identity in Settings.",
       retryable: false,
     },
+    ...(["unverified", "rate_limited"] as const).map((reason) => ({
+      failure: "managed identity " + reason,
+      managed: true,
+      error: new githubIdentity.GitHubIdentityError(reason),
+      message: new githubIdentity.GitHubIdentityError(reason).message,
+      retryable: false,
+    })),
     {
       failure: "GitHub quota",
       managed: false,

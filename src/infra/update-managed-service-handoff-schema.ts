@@ -7,7 +7,7 @@ const nativeProcessIdentityShape = {
   pid: z.number().int().positive(),
   startIdentity: text.max(128),
 };
-const processIdentitySchema = z
+export const processIdentitySchema = z
   .strictObject({
     ...nativeProcessIdentityShape,
     // Older strict readers must not mistake an argv digest for a dead process.
