@@ -29,17 +29,15 @@ import { useSessionStoreFixture } from "./session-utils.test-support.js";
 const rowReader = createResidentSessionRowReader();
 async function withRegistry<T>(fn: () => Promise<T>, resetRuntimeConfig = false) {
   return withRawStateDirEnv("openclaw-session-subagent-", () =>
-    withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
-      try {
-        return await fn();
-      } finally {
+    withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, () =>
+      fn().finally(async () => {
         await rowReader.dispose();
         if (resetRuntimeConfig) {
           resetConfigRuntimeState();
         }
         await closeOpenClawStateDatabaseAsync();
-      }
-    }),
+      }),
+    ),
   );
 }
 
@@ -56,7 +54,6 @@ function childEntry(
 function runFixture(
   runId: string,
   childSessionKey: string,
-  requesterSessionKey: string,
   createdAt: number,
   startedAt: number,
   overrides: Partial<SubagentRunFixture> = {},
@@ -64,7 +61,7 @@ function runFixture(
   return {
     runId,
     childSessionKey,
-    requesterSessionKey,
+    requesterSessionKey: "agent:main:main",
     createdAt,
     startedAt,
     requesterDisplayKey: "tree",
@@ -72,6 +69,12 @@ function runFixture(
     cleanup: "keep",
     ...overrides,
   };
+}
+function registerRun(...args: Parameters<typeof runFixture>) {
+  return addSubagentRunForTests({
+    controllerSessionKey: "agent:main:main",
+    ...runFixture(...args),
+  });
 }
 
 describe("session list subagent metadata", () => {
@@ -87,10 +90,7 @@ describe("session list subagent metadata", () => {
     setRuntimeConfigSnapshot(cfg, cfg);
   });
 
-  const cfg = {
-    session: { mainKey: "main" },
-    agents: { entries: { main: {} } },
-  } satisfies OpenClawConfig;
+  const cfg: OpenClawConfig = { session: { mainKey: "main" }, agents: { entries: { main: {} } } };
 
   function listSubagentSessions(
     store: Record<string, SessionEntry>,
@@ -99,8 +99,8 @@ describe("session list subagent metadata", () => {
     return listSessionFixture({ cfg, storePath: fixtureStorePath(), store, opts });
   }
 
-  test("keeps exact rows equivalent through descendant retention, moves, generations, and deletion", async () => {
-    await withRegistry(async () => {
+  test("keeps exact rows equivalent through descendant retention, moves, generations, and deletion", () =>
+    withRegistry(async () => {
       const now = Date.now();
       setRuntimeConfigSnapshot(cfg, cfg);
       const key = (name: string) => `agent:main:subagent:${name}`;
@@ -111,23 +111,19 @@ describe("session list subagent metadata", () => {
       const grandchild = key("grandchild");
       const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
       for (const sessionKey of [root, movedRoot, navigation, child, grandchild]) {
+        const links = sessionKey === child ? { spawnedBy: root, parentSessionKey: navigation } : {};
         await replaceSessionEntry(
           { storePath, sessionKey },
-          {
-            sessionId: sessionKey.split(":").at(-1)!,
-            updatedAt: now,
-            ...(sessionKey === child ? { spawnedBy: root, parentSessionKey: navigation } : {}),
-          },
+          { sessionId: sessionKey.split(":").at(-1)!, updatedAt: now, ...links },
         );
       }
       const makeRun = (runId: string, childSessionKey: string, requesterSessionKey: string) =>
-        runFixture(runId, childSessionKey, requesterSessionKey, now - 10_000, now - 9_000);
+        runFixture(runId, childSessionKey, now - 10_000, now - 9_000, { requesterSessionKey });
       const records: SubagentRunFixture[] = [
         {
           ...makeRun("child", child, key("other")),
           controllerSessionKey: root,
           endedAt: now - 3 * 60 * 60_000,
-          outcome: { status: "ok" },
         },
         { ...makeRun("grandchild", grandchild, child), generation: 1 },
         makeRun("collision", key("old-collision"), root),
@@ -155,10 +151,8 @@ describe("session list subagent metadata", () => {
       expect((await read(child)).hasActiveSubagentRun).toBe(true);
       expect((await read(root)).swarm?.groups).toMatchObject([{ groupId: "group", done: 1 }]);
 
-      const moved = {
-        ...expectDefined(runs.get("child"), "child run"),
-        controllerSessionKey: movedRoot,
-      };
+      const childRun = expectDefined(runs.get("child"), "child run");
+      const moved = { ...childRun, controllerSessionKey: movedRoot };
       subagentRuns.set(moved.runId, moved);
       subagentRuns.commitOwnership(moved);
       expect((await read(root)).childSessions).toBeUndefined();
@@ -176,10 +170,7 @@ describe("session list subagent metadata", () => {
       expect((await read(movedRoot)).childSessions).toBeUndefined();
       expect((await read(navigation)).childSessions).toBeUndefined();
 
-      const recent = {
-        ...moved,
-        execution: { ...moved.execution, endedAt: now - 29 * 60_000 },
-      };
+      const recent = { ...moved, execution: { ...moved.execution, endedAt: now - 29 * 60_000 } };
       subagentRuns.set(recent.runId, recent);
       subagentRuns.commitOwnership(recent);
       expect((await read(movedRoot)).childSessions).toEqual([child]);
@@ -192,8 +183,7 @@ describe("session list subagent metadata", () => {
       });
       expect((await read(movedRoot)).childSessions).toBeUndefined();
       expect((await read(navigation)).childSessions).toBeUndefined();
-    }, true);
-  });
+    }, true));
 
   registerSubagentSessionStatusTests(listSubagentSessions);
 
@@ -202,23 +192,10 @@ describe("session list subagent metadata", () => {
     const childSessionKey = "agent:main:subagent:stale-current";
     const store = { [childSessionKey]: childEntry("sess-stale-current", now) };
 
-    await addSubagentRunForTests({
-      runId: "run-stale-active",
-      childSessionKey,
-      controllerSessionKey: "agent:main:main",
-      createdAt: now - 5_000,
-      startedAt: now - 4_500,
-      model: "openai/gpt-5.4",
-    });
-    await addSubagentRunForTests({
-      runId: "run-current-ended",
-      childSessionKey,
-      controllerSessionKey: "agent:main:main",
-      createdAt: now - 1_000,
-      startedAt: now - 900,
+    await registerRun("run-stale-active", childSessionKey, now - 5_000, now - 4_500);
+    await registerRun("run-current-ended", childSessionKey, now - 1_000, now - 900, {
       endedAt: now - 200,
       outcome: { status: "ok" },
-      model: "openai/gpt-5.4",
     });
 
     const result = await listSubagentSessions(store);
@@ -235,12 +212,7 @@ describe("session list subagent metadata", () => {
   test("keeps follow-up turn timing instead of the finished spawn run", async () => {
     const now = Date.now();
     const childSessionKey = "agent:main:subagent:follow-up";
-    await addSubagentRunForTests({
-      runId: "run-spawn",
-      childSessionKey,
-      controllerSessionKey: "agent:main:main",
-      createdAt: now - 60_000,
-      startedAt: now - 59_000,
+    await registerRun("run-spawn", childSessionKey, now - 60_000, now - 59_000, {
       endedAt: now - 55_787,
       outcome: { status: "ok" },
     });
@@ -249,21 +221,17 @@ describe("session list subagent metadata", () => {
         [childSessionKey]: childEntry("sess-follow-up", now, entry),
       }).then((result) => result.sessions.find((session) => session.key === childSessionKey));
 
-    // Lifecycle start cleared endedAt/runtimeMs for the follow-up turn.
-    const running = await list({ startedAt: now - 30_000 });
-    expect([running?.startedAt, running?.endedAt, running?.runtimeMs]).toEqual([
-      now - 30_000,
-      undefined,
-      undefined,
-    ]);
-
-    const finished = await list({
-      startedAt: now - 30_000,
-      endedAt: now - 1_000,
-      runtimeMs: 29_000,
-      status: "done",
-    });
-    expect(finished).toMatchObject({ endedAt: now - 1_000, runtimeMs: 29_000 });
+    for (const fields of [
+      { endedAt: undefined, runtimeMs: undefined },
+      { endedAt: now - 1_000, runtimeMs: 29_000, status: "done" as const },
+    ]) {
+      const row = await list({ startedAt: now - 30_000, ...fields });
+      expect([row?.startedAt, row?.endedAt, row?.runtimeMs]).toEqual([
+        now - 30_000,
+        fields.endedAt,
+        fields.runtimeMs,
+      ]);
+    }
   });
 
   test("prefers persisted terminal session state when only stale active subagent snapshots remain", async () => {
@@ -271,11 +239,11 @@ describe("session list subagent metadata", () => {
       const now = Date.now();
       const childSessionKey = "agent:main:subagent:disk-live";
       const records = [
-        runFixture("run-complete", childSessionKey, "agent:main:main", now - 2_000, now - 1_900, {
+        runFixture("run-complete", childSessionKey, now - 2_000, now - 1_900, {
           endedAt: now - 1_800,
           outcome: { status: "ok" },
         }),
-        runFixture("run-live", childSessionKey, "agent:main:main", now - 10_000, now - 9_000),
+        runFixture("run-live", childSessionKey, now - 10_000, now - 9_000),
       ];
       saveSubagentRegistryToSqlite(
         canonicalSubagentRunFixtures(new Map(records.map((run) => [run.runId, run]))),
@@ -299,14 +267,10 @@ describe("session list subagent metadata", () => {
   });
 
   test("does not reattach stale terminal store-only child links", async () => {
-    await resetSubagentRegistryForTests({ persist: false });
     const now = Date.now();
     const staleAt = now - 2 * 60 * 60_000;
     const store: Record<string, SessionEntry> = {
-      "agent:main:main": {
-        sessionId: "sess-main",
-        updatedAt: now,
-      },
+      "agent:main:main": { sessionId: "sess-main", updatedAt: now },
       "agent:claude:acp:done-child": childEntry("sess-done-child", staleAt, {
         status: "done",
         endedAt: staleAt,
@@ -317,9 +281,7 @@ describe("session list subagent metadata", () => {
     const main = all.sessions.find((session) => session.key === "agent:main:main");
     expect(main?.childSessions).toBeUndefined();
 
-    const filtered = await listSubagentSessions(store, {
-      spawnedBy: "agent:main:main",
-    });
+    const filtered = await listSubagentSessions(store, { spawnedBy: "agent:main:main" });
     expect(filtered.sessions.map((session) => session.key)).toStrictEqual([]);
   });
 
@@ -331,19 +293,16 @@ describe("session list subagent metadata", () => {
       [parentKey]: { sessionId: "parent", updatedAt: now },
       [childKey]: { sessionId: "child", updatedAt: now - 1 },
     };
-    await addSubagentRunForTests({
-      runId: "retained-child",
-      childSessionKey: childKey,
-      requesterSessionKey: parentKey,
-      requesterDisplayKey: "parent",
-      cleanup: "delete",
-      collect: true,
-      createdAt: now - 5_000,
-      startedAt: now - 4_000,
-      endedAt: now - 1_000,
-      outcome: { status: "ok" },
-      cleanupCompletedAt: now - 500,
-    });
+    await addSubagentRunForTests(
+      runFixture("retained-child", childKey, now - 5_000, now - 4_000, {
+        requesterSessionKey: parentKey,
+        cleanup: "delete",
+        collect: true,
+        endedAt: now - 1_000,
+        outcome: { status: "ok" },
+        cleanupCompletedAt: now - 500,
+      }),
+    );
     const list = (spawnedBy?: string) => listSubagentSessions(store, { spawnedBy });
     const before = await list();
     expect(before.sessions.find((row) => row.key === parentKey)?.childSessions).toEqual([childKey]);

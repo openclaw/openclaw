@@ -1,23 +1,11 @@
 import { afterEach, expect, test, vi, type MockInstance } from "vitest";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import {
-  addSubagentRunForTests,
-  resetSubagentRegistryForTests,
-} from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import {
-  getRuntimeConfig,
-  resetConfigRuntimeState,
-  setRuntimeConfigSnapshot,
-} from "../config/config.js";
+import * as registry from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import * as config from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
-import {
-  deleteSessionEntryLifecycle,
-  loadExactSessionEntryReadOnly,
-  replaceSessionEntry,
-  updateSessionEntry,
-} from "../config/sessions/session-accessor.js";
+import * as sessions from "../config/sessions/session-accessor.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { loadSessionEntryAsync as loadEntry } from "./session-entry-load.test-support.js";
@@ -26,50 +14,39 @@ import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-w
 import { loadGatewaySessionEntryReadOnlyAsync as loadGatewayEntry } from "./session-utils.js";
 
 const MAIN_AGENT_ID = "main";
-const TEST_MODEL = "openai/gpt-5.4";
 const rowReader = createResidentSessionRowReader();
+const modelAgent = (primary = "openai/gpt-5.4") => ({ model: { primary } });
 
 function withStore(
   run: (context: { now: number; storePath: string }) => Promise<void>,
   cfg: OpenClawConfig = {
     agents: {
       entries: { [MAIN_AGENT_ID]: { workspace: "/tmp/openclaw-single-row" } },
-      defaults: { model: { primary: TEST_MODEL } },
+      defaults: modelAgent(),
     },
   },
 ) {
   return () =>
     withStateDirEnv("openclaw-single-row-", async () => {
-      setRuntimeConfigSnapshot(cfg, cfg);
-      try {
-        await run({
-          now: Math.floor(Date.now() / 1_000) * 1_000 + 100,
-          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: MAIN_AGENT_ID }),
-        });
-      } finally {
-        await rowReader.dispose();
-      }
+      config.setRuntimeConfigSnapshot(cfg, cfg);
+      await run({
+        now: Math.floor(Date.now() / 1_000) * 1_000 + 100,
+        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: MAIN_AGENT_ID }),
+      }).finally(() => rowReader.dispose());
     });
 }
 
-function retainedDetails(
-  now: number,
-  prompt: string,
-  reportName?: string,
-): Pick<SessionEntry, "skillsSnapshot" | "systemPromptReport"> {
+function retainedDetails(now: number, prompt: string, reportName?: string) {
+  const entries = reportName ? [{ name: reportName, summaryChars: 0, schemaChars: 1 }] : [];
   return {
     skillsSnapshot: { prompt, skills: [] },
     systemPromptReport: {
-      source: "run",
+      source: "run" as const,
       generatedAt: now,
       systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
       injectedWorkspaceFiles: [],
       skills: { promptChars: prompt.length, entries: [] },
-      tools: {
-        listChars: 0,
-        schemaChars: reportName ? 1 : 0,
-        entries: reportName ? [{ name: reportName, summaryChars: 0, schemaChars: 1 }] : [],
-      },
+      tools: { listChars: 0, schemaChars: entries.length, entries },
     },
   };
 }
@@ -82,7 +59,7 @@ const children = async (key: string, now: number) =>
   (await rowReader.row(key, { now }))?.childSessions;
 const loadChildren = (key: string, projection?: "list") =>
   loadGatewaySessionEntryReadOnlyInWorker({
-    cfg: getRuntimeConfig(),
+    cfg: config.getRuntimeConfig(),
     key,
     includeStoreChildEntries: true,
     projection,
@@ -95,34 +72,26 @@ function expectUnparsed(parse: MockInstance<typeof JSON.parse>, ...fragments: st
 }
 
 function expectCompact(entry: SessionEntry | undefined) {
-  expect(entry?.skillsSnapshot).toBeUndefined();
-  expect(entry?.systemPromptReport).toBeUndefined();
+  expect([entry?.skillsSnapshot, entry?.systemPromptReport]).toEqual([undefined, undefined]);
 }
 
 async function withParseSpy(run: (parse: MockInstance<typeof JSON.parse>) => Promise<void>) {
   const parse = vi.spyOn(JSON, "parse");
-  try {
-    await run(parse);
-  } finally {
-    parse.mockRestore();
-  }
+  await run(parse).finally(() => parse.mockRestore());
 }
 
 async function seed(storePath: string, store: Record<string, SessionEntry>) {
   for (const [sessionKey, entry] of Object.entries(store)) {
-    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    await sessions.replaceSessionEntry({ sessionKey, storePath }, entry);
   }
 }
 
 async function control(childSessionKey: string, controllerSessionKey: string, createdAt: number) {
-  await addSubagentRunForTests({
+  await registry.addSubagentRunForTests({
     runId: childSessionKey,
     childSessionKey,
     controllerSessionKey,
     requesterSessionKey: controllerSessionKey,
-    requesterDisplayKey: controllerSessionKey,
-    task: "Synthetic child",
-    cleanup: "keep",
     createdAt,
     startedAt: createdAt,
   });
@@ -130,9 +99,9 @@ async function control(childSessionKey: string, controllerSessionKey: string, cr
 }
 
 afterEach(async () => {
-  resetConfigRuntimeState();
+  config.resetConfigRuntimeState();
   resetPluginRuntimeStateForTest();
-  await resetSubagentRegistryForTests({ persist: false });
+  await registry.resetSubagentRegistryForTests({ persist: false });
   vi.clearAllMocks();
 });
 
@@ -140,7 +109,7 @@ test(
   "retains global alias ownership",
   withStore(
     async () => {
-      await replaceSessionEntry(
+      await sessions.replaceSessionEntry(
         { agentId: "research", sessionKey: "global" },
         { sessionId: "research-main", updatedAt: 42 },
       );
@@ -159,12 +128,7 @@ test(
     },
     {
       session: { scope: "global" },
-      agents: {
-        entries: {
-          main: { model: { primary: TEST_MODEL } },
-          research: { model: { primary: "openai/gpt-5.5" } },
-        },
-      },
+      agents: { entries: { main: modelAgent(), research: modelAgent("openai/gpt-5.5") } },
     },
   ),
 );
@@ -172,7 +136,8 @@ test(
 test(
   "loads selected rows without hidden effects or eager parsing",
   withStore(async ({ now, storePath }) => {
-    const clone = false;
+    const load = (key: string, projection?: "list", agentId?: string) =>
+      loadEntry(key, { agentId, clone: false, projection });
     const hidden = resolveInternalSessionEffectsIdentity({
       agentId: MAIN_AGENT_ID,
       runId: "suppressed-effects",
@@ -193,15 +158,11 @@ test(
       ),
     });
 
-    expect(loadExactSessionEntryReadOnly({ sessionKey, storePath })?.entry.sessionId).toBe(
+    expect(sessions.loadExactSessionEntryReadOnly({ sessionKey, storePath })?.entry.sessionId).toBe(
       visible.sessionId,
     );
     await withParseSpy(async (parse) => {
-      const metadata = await loadEntry("main", {
-        agentId: MAIN_AGENT_ID,
-        clone,
-        projection: "list",
-      });
+      const metadata = await load("main", "list", MAIN_AGENT_ID);
       const identity = { agentId: MAIN_AGENT_ID, canonicalKey: sessionKey, storePath };
       expect(metadata).toMatchObject({
         ...identity,
@@ -209,19 +170,17 @@ test(
       });
       expectCompact(metadata.entry);
       expectUnparsed(parse, "saved skill prompt");
-      expect(await loadEntry("main", { agentId: MAIN_AGENT_ID, clone })).toMatchObject({
+      expect(await load("main", undefined, MAIN_AGENT_ID)).toMatchObject({
         ...identity,
         entry: visible,
       });
 
-      expect((await loadEntry(hidden.sessionKey, { clone })).entry).toBeUndefined();
-      expect(
-        (await loadEntry(hidden.sessionKey, { clone, projection: "list" })).entry,
-      ).toBeUndefined();
+      expect((await load(hidden.sessionKey)).entry).toBeUndefined();
+      expect((await load(hidden.sessionKey, "list")).entry).toBeUndefined();
       expect((await loadGatewayEntry(hidden.sessionKey)).entry?.sessionId).toBe(hidden.sessionId);
-      expect(loadExactSessionEntryReadOnly({ ...hidden, storePath })?.entry.sessionId).toBe(
-        hidden.sessionId,
-      );
+      expect(
+        sessions.loadExactSessionEntryReadOnly({ ...hidden, storePath })?.entry.sessionId,
+      ).toBe(hidden.sessionId);
       expectUnparsed(parse, "unrelated-session-");
     });
   }),
@@ -234,10 +193,11 @@ test(
     const parentB = "agent:main:subagent:parent-b";
     const childA = "agent:main:subagent:child-a";
     const childB = "agent:main:subagent:child-b";
+    const prompt = "parent saved skill prompt";
     const store: Record<string, SessionEntry> = {
       [parentA]: {
         ...session("parent-a", now),
-        ...retainedDetails(now, "parent saved skill prompt"),
+        ...retainedDetails(now, prompt),
         toolOverrides: { mcpToolsDeny: { synthetic: ["blocked"] } },
       },
       [childA]: {
@@ -260,10 +220,7 @@ test(
       await withParseSpy(async (parse) => {
         const loaded = await loadChildren(parentA, projection);
         if (projection === undefined) {
-          expect(loaded.entry?.skillsSnapshot).toEqual({
-            prompt: "parent saved skill prompt",
-            skills: [],
-          });
+          expect(loaded.entry?.skillsSnapshot).toEqual({ prompt, skills: [] });
           expect(loaded.entry?.systemPromptReport).toMatchObject({
             source: "run",
             generatedAt: now,
@@ -289,11 +246,11 @@ test(
         expect((await rowReader.snapshot(parentA, { now })).row).toEqual(row);
       });
     }
-    await updateSessionEntry({ sessionKey: parentA, storePath }, () => ({
+    await sessions.updateSessionEntry({ sessionKey: parentA, storePath }, () => ({
       label: "fresh lifecycle label",
       updatedAt: now + 1,
     }));
-    await updateSessionEntry({ sessionKey: childA, storePath }, () => ({
+    await sessions.updateSessionEntry({ sessionKey: childA, storePath }, () => ({
       parentSessionKey: parentB,
       updatedAt: now + 1,
     }));
@@ -336,7 +293,7 @@ test(
     const childStorePath = resolveSessionStorePathCore(undefined, { agentId });
     const childPrompt = "unused registry child prompt ".repeat(2048);
     await seed(storePath, { [parentKey]: session("parent", now) });
-    await replaceSessionEntry(
+    await sessions.replaceSessionEntry(
       { agentId, storePath: childStorePath, sessionKey: childKey },
       {
         ...session("child", now),
@@ -352,7 +309,7 @@ test(
     });
     expect(await children(parentKey, now)).toEqual([childKey]);
 
-    await deleteSessionEntryLifecycle({
+    await sessions.deleteSessionEntryLifecycle({
       agentId,
       storePath: childStorePath,
       archiveTranscript: false,

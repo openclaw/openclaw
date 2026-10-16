@@ -4,6 +4,7 @@ import { describe, test, expect, vi } from "vitest";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import * as modelCatalogLookup from "../agents/model-catalog-lookup.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -14,7 +15,7 @@ import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
-import type { GatewayClient } from "./server-methods/types.js";
+import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import * as projectionWork from "./session-projection-work.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
@@ -32,15 +33,21 @@ function prepareRuntime(cfg: OpenClawConfig) {
   return registry;
 }
 
-function makeStore(count: number, entry: (index: number) => [string, SessionEntry]) {
-  return Object.fromEntries(Array.from({ length: count }, (_, index) => entry(index)));
-}
-
-function budgetStore(count: number) {
-  return makeStore(count, (index) => [
-    `agent:main:budget-${index}`,
-    { sessionId: `budget-${index}`, updatedAt: index + 1 },
-  ]);
+function makeStore(
+  count: number,
+  prefix: string,
+  fields: (index: number) => Partial<SessionEntry> = () => ({}),
+  key: (sessionId: string, index: number) => string = (id) => `agent:main:${id}`,
+) {
+  return Object.fromEntries(
+    Array.from({ length: count }, (_, index) => {
+      const sessionId = `${prefix}-${index}`;
+      return [
+        key(sessionId, index),
+        { sessionId, updatedAt: index + 1, ...fields(index) },
+      ] as const;
+    }),
+  );
 }
 
 function atImmediate(callback: () => void) {
@@ -54,6 +61,31 @@ function atImmediate(callback: () => void) {
 
 function ownedProjection<T extends { dispose(): void }>(projection: T) {
   return Object.assign(projection, { [Symbol.dispose]: () => projection.dispose() });
+}
+
+function measureRows(onRow: (count: number) => void = () => {}, chargeBeforeRead = false) {
+  const work = { milliseconds: 0, count: 0 };
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => work.milliseconds);
+  const read = rowProjection.readSessionRowInputs;
+  const rows = vi.spyOn(rowProjection, "readSessionRowInputs").mockImplementation((params) => {
+    if (chargeBeforeRead) {
+      work.milliseconds += 20;
+    }
+    const result = read(params);
+    if (!chargeBeforeRead) {
+      work.milliseconds += 20;
+    }
+    onRow(++work.count);
+    return result;
+  });
+  return {
+    work,
+    rows,
+    restore() {
+      rows.mockRestore();
+      clock.mockRestore();
+    },
+  };
 }
 
 // Resolver call counts protect O(unique model tuples), without CI wall-clock noise.
@@ -91,14 +123,12 @@ describe("session list resolver cache", () => {
         },
       };
       prepareRuntime(cfg);
-      const store = makeStore(rowCount, (index) => [
-        `agent:${ownerId}:dashboard:${index}`,
-        {
-          sessionId: `row-chunk-${index}`,
-          updatedAt: index + 1,
-          createdActor: { type: "agent" as const, id: ownerId },
-        },
-      ]);
+      const store = makeStore(
+        rowCount,
+        "row-chunk",
+        () => ({ createdActor: { type: "agent", id: ownerId } }),
+        (_id, index) => `agent:${ownerId}:dashboard:${index}`,
+      );
       writeResidentEntries(store);
       let projection: SessionRowProjection | undefined;
       let refreshBatch = 0;
@@ -148,8 +178,7 @@ describe("session list resolver cache", () => {
           writeResidentEntries(store, 1);
           await projection.ensureMaterialized();
           const result = await listProjectedSessions({ projection, opts: { limit: rowCount } });
-          expect(result.count).toBe(rowCount);
-          expect(result.totalCount).toBe(rowCount);
+          expect(result).toMatchObject({ count: rowCount, totalCount: rowCount });
           expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
           expect(rowsBeforePause).toBeGreaterThan(0);
           expect(rowsBeforePause).toBeLessThan(rowCount);
@@ -183,32 +212,21 @@ describe("session list resolver cache", () => {
         };
         prepareRuntime(cfg);
         const rowCount = 96;
-        const store = budgetStore(rowCount);
+        const store = makeStore(rowCount, "budget");
         writeResidentEntries(store);
         let projection: SessionRowProjection | undefined;
         if (phase === "dirty refresh") {
           projection = await createSessionRowProjection({ cfg });
         }
-        let workMs = 0;
-        let projectedRows = 0;
         let rowsAtControl = 0;
         let control: Promise<void> | undefined;
-        const clock = vi.spyOn(performance, "now");
-        clock.mockImplementation(() => workMs);
-        const readInputs = rowProjection.readSessionRowInputs;
-        const rows = vi
-          .spyOn(rowProjection, "readSessionRowInputs")
-          .mockImplementation((params) => {
-            const result = readInputs(params);
-            workMs += 20;
-            projectedRows++;
-            if (projectedRows === 1) {
-              control = atImmediate(() => {
-                rowsAtControl = projectedRows;
-              });
-            }
-            return result;
-          });
+        const measured = measureRows((count) => {
+          if (count === 1) {
+            control = atImmediate(() => {
+              rowsAtControl = measured.work.count;
+            });
+          }
+        });
         try {
           if (projection) {
             writeResidentEntries(store, 1);
@@ -220,14 +238,13 @@ describe("session list resolver cache", () => {
           await projection.ensureMaterialized();
           expect(rowsAtControl).toBeGreaterThan(0);
           expect(rowsAtControl).toBeLessThan(rowCount);
-          expect(projectedRows).toBe(rowCount);
-          rows.mockClear();
+          expect(measured.work.count).toBe(rowCount);
+          measured.rows.mockClear();
           const result = await listProjectedSessions({ projection, opts: { limit: rowCount } });
           expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
-          expect(rows).not.toHaveBeenCalled();
+          expect(measured.rows).not.toHaveBeenCalled();
         } finally {
-          rows.mockRestore();
-          clock.mockRestore();
+          measured.restore();
           await control;
           projection?.dispose();
         }
@@ -245,37 +262,30 @@ describe("session list resolver cache", () => {
       };
       const pluginRegistry = prepareRuntime(cfg);
       const modelCatalog = new Map(
-        ["main", "research"].map((agentId, index) => [
+        ["main", "research"].map((agentId) => [
           agentId,
           {
-            entries: ["model-hit", "Model-Hit"].map((id, modelIndex) => {
-              const contextTokens = (index + 1) * (modelIndex + 1) * 10_000;
-              return {
-                provider: "example",
-                id,
-                name: "Example model",
-                contextTokens,
-                contextWindows: [{ id: "full", label: "Full", contextWindow: contextTokens }],
-                contextWindowDefault: "full",
-              };
-            }),
+            entries: ["model-hit", "Model-Hit"].map((id): ModelCatalogEntry => ({
+              provider: "example",
+              id,
+              name: "Example model",
+              contextWindowDefault: "full",
+            })),
             pluginRegistry,
           },
         ]),
       );
-      const store = makeStore(80, (index) => {
-        const agentId = index % 2 ? "research" : "main";
-        return [
-          `agent:${agentId}:dashboard:catalog-${index}`,
-          {
-            sessionId: `catalog-${index}`,
-            updatedAt: index,
-            providerOverride: "example",
-            modelOverride:
-              index % 8 < 2 ? "model-hit" : index % 8 < 4 ? "Model-Hit" : "model-missing",
-          },
-        ];
-      });
+      const store = makeStore(
+        80,
+        "catalog",
+        (index) => ({
+          updatedAt: index,
+          providerOverride: "example",
+          modelOverride:
+            index % 8 < 2 ? "model-hit" : index % 8 < 4 ? "Model-Hit" : "model-missing",
+        }),
+        (id, index) => `agent:${index % 2 ? "research" : "main"}:dashboard:${id}`,
+      );
       writeResidentEntries(store);
       const acpSessionKeys = new Set<string>();
       for (const [index, [sessionKey, entry]] of Object.entries(store).entries()) {
@@ -393,7 +403,7 @@ describe("session list resolver cache", () => {
         const cfg: OpenClawConfig = {};
         prepareRuntime(cfg);
         const entryCount = limit === 300 ? 2051 : 32;
-        const store = budgetStore(entryCount);
+        const store = makeStore(entryCount, "budget");
         const projection = createSessionRowProjectionFixture({
           cfg,
           store,
@@ -403,17 +413,8 @@ describe("session list resolver cache", () => {
         const identityRuntime = await import("../agents/identity-file-runtime.js");
         const identityReads = vi.spyOn(identityRuntime, "prepareIdentityFile");
         identityReads.mockResolvedValue({ kind: "missing" });
-        let workMs = 0;
-        const clock = vi.spyOn(performance, "now");
-        clock.mockImplementation(() => workMs);
-        const readInputs = rowProjection.readSessionRowInputs;
-        const rows = vi
-          .spyOn(rowProjection, "readSessionRowInputs")
-          .mockImplementation((params) => {
-            // The former acquisition charges must never be incurred by a clean request.
-            workMs += 20;
-            return readInputs(params);
-          });
+        // Charge former acquisition work before each read, even if it throws.
+        const measured = measureRows(undefined, true);
         let controlRan = false;
         const control = atImmediate(() => {
           controlRan = true;
@@ -428,13 +429,12 @@ describe("session list resolver cache", () => {
               !search ? Object.keys(store).toReversed().slice(0, limit) : [],
             );
             expect(controlRan).toBe(false);
-            expect(rows).not.toHaveBeenCalled();
-            expect(workMs).toBe(0);
+            expect(measured.rows).not.toHaveBeenCalled();
+            expect(measured.work.milliseconds).toBe(0);
           }
         } finally {
           identityReads.mockRestore();
-          rows.mockRestore();
-          clock.mockRestore();
+          measured.restore();
           projection.dispose();
           await control;
         }
@@ -454,19 +454,15 @@ describe("session list resolver cache", () => {
         [Symbol.dispose]: (await prepareUserProfileCatalog()).release,
       };
       // Half the roster belongs to this owner, behind newer shared sessions.
-      const store = makeStore(480, (index) => [
-        `agent:main:title-batch-${index}`,
-        {
-          sessionId: `title-batch-${index}`,
-          updatedAt: 1_000 - index,
-          ...(index >= 240
-            ? {
-                createdVia: "operator",
-                createdActor: { type: "human", source: "profile", id: ownerId },
-              }
-            : {}),
-        },
-      ]);
+      const store = makeStore(480, "title-batch", (index) => ({
+        updatedAt: 1_000 - index,
+        ...(index >= 240
+          ? {
+              createdVia: "operator",
+              createdActor: { type: "human", source: "profile", id: ownerId },
+            }
+          : {}),
+      }));
 
       const titleFieldsBySessionKey = new Map(
         Object.keys(store).map(
@@ -477,26 +473,7 @@ describe("session list resolver cache", () => {
             ] as const,
         ),
       );
-      const client: GatewayClient = {
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: {
-            id: "openclaw-control-ui",
-            version: "test",
-            platform: "test",
-            mode: "webchat",
-          },
-          role: "operator",
-          scopes: ["operator.admin"],
-        },
-        authenticatedUserProfile: {
-          profileId: ownerId,
-          displayName: ownerId,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-      };
+      const client = createOperatorClient({ profileId: ownerId, scopes: ["operator.admin"] });
       prepareGatewayRecipientProfile(client);
       using projection = ownedProjection(
         createSessionRowProjectionFixture({

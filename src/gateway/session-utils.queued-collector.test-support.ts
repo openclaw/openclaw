@@ -2,10 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import {
-  registerSubagentRun,
-  resetSubagentRegistryForTests,
-} from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import * as registry from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SpawnSubagentContext } from "../agents/subagents/spawn/subagent-spawn-contract.js";
 import { createInitialSubagentSession } from "../agents/subagents/spawn/subagent-spawn-session-patch.js";
 import { spawnSubagentDirect } from "../agents/subagents/spawn/subagent-spawn.js";
@@ -19,10 +16,7 @@ import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.j
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { buildAgentSessionPatch } from "./server-methods/agent-session-patch.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
@@ -30,7 +24,7 @@ import { createChatAbortContext } from "./server-methods/chat.abort.test-helpers
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { sessionReadHandlers } from "./server-methods/sessions-read.js";
 import type {
-  GatewayRequestContext,
+  GatewayRequestContext as Context,
   GatewayRequestHandlerOptions,
 } from "./server-methods/types.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
@@ -39,8 +33,11 @@ import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 
-vi.mock("./server-recovery-runtime-context.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./server-recovery-runtime-context.js")>()),
+type Client = GatewayRequestHandlerOptions["client"];
+type RpcParams = Record<string, unknown>;
+
+vi.mock(import("./server-recovery-runtime-context.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   bindGatewayLifecycleRequest: () => async () => await new Promise<never>(() => {}),
 }));
 vi.mock("../browser-lifecycle-cleanup.js", () => ({
@@ -51,18 +48,16 @@ vi.mock("../agents/runtime-plugins.js", async () => {
   return { loadAgentRuntimePluginRegistryHandle: createEmptyPluginRegistry };
 });
 vi.mock(
-  "../agents/subagents/registry/subagent-registry-persistence.js",
+  import("../agents/subagents/registry/subagent-registry-persistence.js"),
   async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("../agents/subagents/registry/subagent-registry-persistence.js")
-    >()),
+    ...(await importOriginal()),
     restoreSubagentRunsFromDisk: async () => 0,
   }),
 );
 
 export function useQueuedCollectorFixture() {
   const parentKey = "agent:main:dashboard:queued-projection";
-  let state: OpenClawTestState;
+  let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   let projection: SessionRowProjection;
   const launchedRunIds: string[] = [];
   const launchSignals = new Map<string, ReturnType<typeof createDeferred<void>>>();
@@ -79,26 +74,18 @@ export function useQueuedCollectorFixture() {
   beforeEach(async () => {
     resetGatewayWorkAdmission();
     schedulerTesting.reset();
-    await resetSubagentRegistryForTests({ persist: false });
+    await registry.resetSubagentRegistryForTests({ persist: false });
     resetAgentEventsForTest({ preserveListeners: true });
     state = await createOpenClawTestState({ label: "queued-collector-projection" });
-    state.applyEnv();
     await state.writeConfig({
-      session: { mainKey: "main", scope: "per-sender" },
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
-      agents: {
-        defaults: { workspace: state.workspaceDir },
-        entries: { main: { workspace: state.workspaceDir } },
-      },
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
     });
     await captureRuntimeConfigAsyncReader()();
     await loadOrCreateProcessDeviceIdentityAsync();
     spawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
-      dispatchGatewayMethodInProcess: async <T>(
-        method: string,
-        params: Record<string, unknown>,
-      ) => {
+      dispatchGatewayMethodInProcess: async <T>(method: string, params: RpcParams) => {
         expect(method).toBe("agent");
         const runId = String(params.idempotencyKey);
         const sessionKey = String(params.sessionKey);
@@ -147,7 +134,7 @@ export function useQueuedCollectorFixture() {
     schedulerTesting.reset();
     launchedRunIds.splice(0).forEach((runId) => clearAgentRunContext(runId));
     launchSignals.clear();
-    await resetSubagentRegistryForTests({ persist: false });
+    await registry.resetSubagentRegistryForTests({ persist: false });
     spawnTesting.setDepsForTest();
     resetAgentEventsForTest({ preserveListeners: true });
     resetGatewayWorkAdmission();
@@ -164,7 +151,7 @@ export function useQueuedCollectorFixture() {
       logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       getSessionEventSubscriberConnIds: () => new Set(["observer"]),
       broadcastToConnIds: vi.fn(),
-    }) as unknown as GatewayRequestContext;
+    }) as unknown as Context;
     registerChatAbortController({
       chatAbortControllers: context.chatAbortControllers,
       runId: "parent-turn",
@@ -177,21 +164,14 @@ export function useQueuedCollectorFixture() {
     return context;
   }
 
-  function operatorClient(
-    connId = "parent-requester",
-    admin = false,
-  ): GatewayRequestHandlerOptions["client"] {
+  function operatorClient(connId = "parent-requester", admin = false): Client {
     return {
       connId,
       connect: { role: "operator", scopes: [admin ? "operator.admin" : "operator.write"] },
-    } as GatewayRequestHandlerOptions["client"];
+    } as Client;
   }
 
-  function requestOptions(
-    context: GatewayRequestContext,
-    method: string,
-    params: Record<string, unknown>,
-  ) {
+  function requestOptions(context: Context, method: string, params: RpcParams) {
     return {
       req: { type: "req" as const, id: method, method },
       params,
@@ -202,13 +182,10 @@ export function useQueuedCollectorFixture() {
     };
   }
 
-  async function listChildren(context: GatewayRequestContext): Promise<SessionsListResult> {
+  async function listChildren(context: Context): Promise<SessionsListResult> {
     const options = requestOptions(context, "sessions.list", {
       agentId: "main",
       spawnedBy: parentKey,
-      limit: 10,
-      includeDerivedTitles: false,
-      includeLastMessage: false,
     });
     options.client = null;
     await sessionReadHandlers["sessions.list"]!(options);
@@ -268,7 +245,6 @@ export function useQueuedCollectorFixture() {
       requesterAgentId: "main",
       targetAgentId: "main",
       childSessionKey,
-      label: "Reserved collector",
       incognito: false,
       requesterInternalKey: parentKey,
       parentTarget: await resolveGatewaySessionStoreTargetInWorker({
@@ -300,7 +276,7 @@ export function useQueuedCollectorFixture() {
       queued: true,
       groupId,
     };
-    await registerSubagentRun(registration);
+    await registry.registerSubagentRun(registration);
     return {
       registration,
       entry: expectDefined(subagentRuns.get(runId), "registered reservation"),
@@ -308,7 +284,7 @@ export function useQueuedCollectorFixture() {
   }
 
   async function expectUnstartedChildHistory(
-    context: GatewayRequestContext,
+    context: Context,
     sessionKey: string,
     activeRunIds: string[],
   ) {
@@ -316,7 +292,6 @@ export function useQueuedCollectorFixture() {
       sessionKey,
       agentId: "main",
       offset: 0,
-      limit: 20,
     });
     await chatHistoryHandlers["chat.history"]!(options);
     const { respond } = options;

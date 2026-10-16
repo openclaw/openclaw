@@ -10,7 +10,6 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import type { PluginRegistry } from "../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -40,28 +39,15 @@ function createRowThinkingFixture(runtimeRoute = false) {
     ],
     defaultLevel: "low",
   }));
-  const pluginRegistry: PluginRegistry = {
-    ...createEmptyPluginRegistry(),
-    providers: [
-      {
-        pluginId: provider,
-        source: "test",
-        provider: { id: provider, label: provider, auth: [], resolveThinkingProfile: policy },
-      },
-    ],
-  };
+  const pluginRegistry = createEmptyPluginRegistry();
+  pluginRegistry.providers.push({
+    pluginId: provider,
+    source: "test",
+    provider: { id: provider, label: provider, auth: [], resolveThinkingProfile: policy },
+  });
   const catalog: ModelCatalogSnapshot = {
     entries: [{ ...model, reasoning: true }],
-    routeVariants: runtimeRoute
-      ? [
-          {
-            ...model,
-            name: "Runtime reasoner",
-            reasoning: true,
-            nativeRuntime: "openclaw",
-          },
-        ]
-      : [],
+    routeVariants: runtimeRoute ? [{ ...model, reasoning: true, nativeRuntime: "openclaw" }] : [],
   };
   const wrap = (snapshot: Parameters<typeof createPreparedGatewayModelCatalog>[0]) =>
     new Map([["main", createPreparedGatewayModelCatalog({ ...snapshot, pluginRegistry })]]);
@@ -75,10 +61,7 @@ function createRowThinkingFixture(runtimeRoute = false) {
   };
   const modelCatalog = prepare(catalog);
   const rowContext = buildSessionListRowMetadataContext({ now: 1 });
-  const entry = (
-    sessionId: string,
-    thinkingLevel: SessionEntry["thinkingLevel"],
-  ): SessionEntry => ({
+  const entry = (sessionId: string, thinkingLevel: SessionEntry["thinkingLevel"]) => ({
     sessionId,
     updatedAt: 1,
     modelProvider: provider,
@@ -230,16 +213,12 @@ test.each([
           },
         ],
       });
-      const modelCatalog = new Map([
-        [
-          "main",
-          createPreparedGatewayModelCatalog({
-            entries: [{ provider: "example", id: "list-model", name: "Synthetic model" }],
-            pluginRegistry,
-            metadataSnapshot,
-          }),
-        ],
-      ]);
+      const catalog = createPreparedGatewayModelCatalog({
+        entries: [{ provider: "example", id: "list-model", name: "Synthetic model" }],
+        pluginRegistry,
+        metadataSnapshot,
+      });
+      const modelCatalog = new Map([["main", catalog]]);
       const metadata = await import("../plugins/current-plugin-metadata-snapshot.js");
       using lookup = vi.spyOn(metadata, "getCurrentPluginMetadataSnapshot");
       const project = async (count: number) => {
