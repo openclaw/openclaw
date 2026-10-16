@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
 
+// mock-isolation: Importing the real facade would defeat the narrow model-owner boundary check.
 vi.mock("../../agents/model-selection.js", () => {
   throw new Error("Catalog targets must not load unrelated model-selection owners.");
 });
