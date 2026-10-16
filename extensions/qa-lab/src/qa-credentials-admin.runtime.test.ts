@@ -1,4 +1,3 @@
-// Qa Lab tests cover qa credentials admin plugin behavior.
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
@@ -33,37 +32,27 @@ function mockFetch(response: unknown, status = 200) {
 function jsonResponse(response: unknown, status = 200) {
   return new Response(JSON.stringify(response), {
     status,
-    headers: {
-      "content-type": "application/json",
-    },
+    headers: { "content-type": "application/json" },
   });
 }
 
-function requireFirstFetchCall(fetchImpl: ReturnType<typeof mockFetch>) {
+function fetchCall(fetchImpl: ReturnType<typeof mockFetch>) {
   const [call] = fetchImpl.mock.calls;
-  if (!call) {
-    throw new Error("expected fetch call");
+  if (!call?.[1]) {
+    throw new Error("expected fetch call and init");
   }
-  return call;
-}
-
-function requireFirstFetchInit(fetchImpl: ReturnType<typeof mockFetch>): RequestInit {
-  const init = requireFirstFetchCall(fetchImpl)[1];
-  if (!init) {
-    throw new Error("expected fetch init");
-  }
-  return init;
+  return { input: call[0], init: call[1] };
 }
 
 async function expectQaCredentialAdminError(promise: Promise<unknown>, code: string) {
-  const error = await promise.then(
-    () => undefined,
-    (err: unknown) => err,
-  );
-  expect(error).toBeInstanceOf(QaCredentialAdminError);
-  const adminError = error as QaCredentialAdminError;
-  expect(adminError.name).toBe("QaCredentialAdminError");
-  expect(adminError.code).toBe(code);
+  await expect(promise).rejects.toBeInstanceOf(QaCredentialAdminError);
+  await expect(promise).rejects.toMatchObject({ name: "QaCredentialAdminError", code });
+}
+
+function requestBody(fetchImpl: ReturnType<typeof mockFetch>) {
+  const body = fetchCall(fetchImpl).init.body;
+  expect(typeof body).toBe("string");
+  return JSON.parse(body as string) as Record<string, unknown>;
 }
 
 describe("qa credential admin runtime", () => {
@@ -86,51 +75,36 @@ describe("qa credential admin runtime", () => {
       fetchImpl,
     });
 
-    expect(result.credential.credentialId).toBe("cred-1");
-    expect(result.credential.credentialFingerprint).toMatch(/^sha256:[0-9a-f]{16}$/);
-    expect(requireFirstFetchCall(fetchImpl)[0]).toBe(
+    expect(result.credential).toMatchObject({
+      credentialId: "cred-1",
+      credentialFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{16}$/),
+    });
+    expect(fetchCall(fetchImpl).input).toBe(
       "https://first-schnauzer-821.convex.site/qa-credentials/v1/admin/add",
     );
-    const init = requireFirstFetchInit(fetchImpl);
+    const { init } = fetchCall(fetchImpl);
     const headers = init?.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer maint-secret");
-    const bodyText = init?.body;
-    expect(typeof bodyText).toBe("string");
-    const body = JSON.parse(bodyText as string) as Record<string, unknown>;
+    const body = requestBody(fetchImpl);
     expect(body).toMatchObject({ kind: "telegram", actorId: "maintainer-local" });
     expect(body.payload).toEqual(payload);
   });
 
-  it("rejects admin commands when maintainer secret is missing", async () => {
+  it.each([
+    { options: { env: {} }, code: "MISSING_MAINTAINER_SECRET" },
+    { options: { siteUrl: "http://qa-cred.example.convex.site" }, code: "INVALID_SITE_URL" },
+    { options: { endpointPrefix: "//evil.example" }, code: "INVALID_ARGUMENT" },
+  ])("rejects invalid admin requests: $code", async ({ options, code }) => {
     await expectQaCredentialAdminError(
-      listQaCredentialSets({
-        siteUrl: adminOptions.siteUrl,
-        env: {},
-        fetchImpl: vi.fn(),
-      }),
-      "MISSING_MAINTAINER_SECRET",
-    );
-  });
-
-  it("rejects non-https admin site URLs unless local insecure opt-in is enabled", async () => {
-    await expectQaCredentialAdminError(
-      listQaCredentialSets({
-        ...adminOptions,
-        siteUrl: "http://qa-cred.example.convex.site",
-        fetchImpl: vi.fn(),
-      }),
-      "INVALID_SITE_URL",
+      listQaCredentialSets({ ...adminOptions, ...options, fetchImpl: vi.fn() }),
+      code,
     );
   });
 
   it("caps oversized admin HTTP timeouts before creating abort signals", async () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
-    const fetchImpl = mockFetch({
-      status: "ok",
-      count: 0,
-      credentials: [],
-    });
+    const fetchImpl = mockFetch({ status: "ok", count: 0, credentials: [] });
 
     await listQaCredentialSets({
       siteUrl: adminOptions.siteUrl,
@@ -142,18 +116,7 @@ describe("qa credential admin runtime", () => {
     });
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
-    expect(requireFirstFetchInit(fetchImpl).signal).toBe(timeoutController.signal);
-  });
-
-  it("rejects unsafe endpoint-prefix overrides", async () => {
-    await expectQaCredentialAdminError(
-      listQaCredentialSets({
-        ...adminOptions,
-        endpointPrefix: "//evil.example",
-        fetchImpl: vi.fn(),
-      }),
-      "INVALID_ARGUMENT",
-    );
+    expect(fetchCall(fetchImpl).init.signal).toBe(timeoutController.signal);
   });
 
   it("surfaces broker error codes for remove", async () => {
@@ -167,11 +130,7 @@ describe("qa credential admin runtime", () => {
     );
 
     await expectQaCredentialAdminError(
-      removeQaCredentialSet({
-        credentialId: "cred-1",
-        ...adminOptions,
-        fetchImpl,
-      }),
+      removeQaCredentialSet({ credentialId: "cred-1", ...adminOptions, fetchImpl }),
       "LEASE_ACTIVE",
     );
   });
@@ -194,10 +153,7 @@ describe("qa credential admin runtime", () => {
 
     expect(result.credentials).toHaveLength(1);
     expect(result.credentials[0]?.credentialFingerprint).toMatch(/^sha256:[0-9a-f]{16}$/);
-    const bodyText = requireFirstFetchInit(fetchImpl).body;
-    expect(typeof bodyText).toBe("string");
-    const body = JSON.parse(bodyText as string) as Record<string, unknown>;
-    expect(body).toEqual({
+    expect(requestBody(fetchImpl)).toEqual({
       kind: "telegram",
       status: "active",
       includePayload: true,
@@ -270,11 +226,7 @@ describe("qa credential admin runtime", () => {
   });
 
   it("doctors credential broker env without exposing secret values", async () => {
-    const fetchImpl = mockFetch({
-      status: "ok",
-      count: 1,
-      credentials: [credential],
-    });
+    const fetchImpl = mockFetch({ status: "ok", count: 1, credentials: [credential] });
 
     const result = await diagnoseQaCredentialBroker({
       siteUrl: adminOptions.siteUrl,

@@ -1,4 +1,3 @@
-// Qa Lab tests cover shared transport behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
@@ -20,7 +19,7 @@ function edit(state: State, messageId: string, text: string) {
 }
 
 function createAdapter(
-  state: ReturnType<typeof createQaBusState>,
+  state: State,
   overrides: Partial<Parameters<typeof createQaStateBackedTransportAdapter>[1]> = {},
 ) {
   return createQaStateBackedTransportAdapter(state, {
@@ -45,7 +44,7 @@ function createAdapter(
 }
 
 function waitForSequence(
-  state: ReturnType<typeof createQaBusState>,
+  state: State,
   input: Partial<Parameters<typeof waitForQaTransportOutboundSequence>[0]["input"]> = {},
 ) {
   return waitForQaTransportOutboundSequence({
@@ -98,9 +97,8 @@ describe("createQaStateBackedTransportAdapter", () => {
     const resetTransport = vi.fn(() => {
       expect(state.getSnapshot().messages).toHaveLength(1);
     });
-    const captureArtifacts = vi.fn(async () => ({
-      artifacts: [{ kind: "channel-driver-smoke" as const, path: "readiness.json" }],
-    }));
+    const artifacts = [{ kind: "channel-driver-smoke" as const, path: "readiness.json" }];
+    const captureArtifacts = vi.fn(async () => ({ artifacts }));
     const createRuntimePreloads = vi.fn(() => ["file:///qa-preload.mjs"]);
     const adapter = createAdapter(state, {
       prepareFlow: vi.fn(),
@@ -114,7 +112,7 @@ describe("createQaStateBackedTransportAdapter", () => {
     expect(resetTransport).toHaveBeenCalledOnce();
     expect(adapter.prepareFlow).toBeTypeOf("function");
     await expect(adapter.captureArtifacts?.({ outputDir: "/qa-output" })).resolves.toEqual({
-      artifacts: [{ kind: "channel-driver-smoke", path: "readiness.json" }],
+      artifacts,
     });
     expect(captureArtifacts).toHaveBeenCalledWith({ outputDir: "/qa-output" });
     expect(adapter.createRuntimePreloads?.()).toEqual(["file:///qa-preload.mjs"]);
@@ -139,10 +137,7 @@ describe("createQaStateBackedTransportAdapter", () => {
     });
 
     const error = await adapter
-      .waitForOutboundSequence?.({
-        finalTextIncludes: "missing final",
-        timeoutMs: 5,
-      })
+      .waitForOutboundSequence?.({ finalTextIncludes: "missing final", timeoutMs: 5 })
       .catch((caught: unknown) => caught);
     const message = String(error);
 
@@ -159,11 +154,7 @@ describe("createQaStateBackedTransportAdapter", () => {
 describe("waitForQaTransportOutboundSequence", () => {
   it("returns preview and final edit events for one threaded message", async () => {
     const state = createQaBusState();
-    state.createThread({
-      conversationId: "qa-room",
-      createdBy: "alice",
-      title: "QA thread",
-    });
+    state.createThread({ conversationId: "qa-room", createdBy: "alice", title: "QA thread" });
     const preview = outbound(state, "preview", {
       senderId: "openclaw",
       threadId: "42",
@@ -172,11 +163,7 @@ describe("waitForQaTransportOutboundSequence", () => {
     edit(state, preview.id, "final marker");
 
     await expect(
-      waitForSequence(state, {
-        conversationId: "qa-room",
-        threadId: "42",
-        timeoutMs: 100,
-      }),
+      waitForSequence(state, { conversationId: "qa-room", threadId: "42", timeoutMs: 100 }),
     ).resolves.toMatchObject({
       events: [{ kind: "sent" }, { kind: "edited" }],
       final: { text: "final marker", threadId: "42" },
@@ -267,11 +254,7 @@ describe("waitForQaTransportOutboundSequence", () => {
       to: "dm:alice",
       text: "foreign preview",
     });
-    state.editMessage({
-      accountId: "other",
-      messageId: foreign.id,
-      text: "final marker",
-    });
+    state.editMessage({ accountId: "other", messageId: foreign.id, text: "final marker" });
 
     const inbound = state.addInboundMessage({
       accountId: "default",
