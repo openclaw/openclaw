@@ -60,6 +60,7 @@ const CLAUDE_NATIVE_TOOL_CAPABILITIES: Readonly<Record<string, string>> = {
   bash: "exec",
   webfetch: "web_fetch",
   websearch: "web_search",
+  askuserquestion: "ask_user",
 };
 
 function projectClaudeNativeToolAuthority(nativeTools: readonly string[]): readonly string[] {
