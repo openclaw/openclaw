@@ -57,7 +57,7 @@ export function normalizeConfiguredSpeechProviderId(
 }
 
 export function normalizeTtsPersonaId(personaId: string | null | undefined): string | undefined {
-  return normalizeOptionalLowercaseString(personaId ?? undefined);
+  return normalizeOptionalLowercaseString(personaId);
 }
 
 export function resolveModelOverridePolicy(
@@ -106,14 +106,12 @@ function normalizeProviderConfigMap(
 }
 
 function collectTtsPersonas(raw: TtsConfig): Record<string, ResolvedTtsPersona> {
-  const rawPersonas = asNonArrayRecord(raw.personas);
   const personas: Record<string, ResolvedTtsPersona> = {};
-  for (const [id, value] of Object.entries(rawPersonas)) {
+  for (const [id, persona] of Object.entries(raw.personas ?? {})) {
     const normalizedId = normalizeTtsPersonaId(id);
-    if (!normalizedId || !isRecord(value)) {
+    if (!normalizedId) {
       continue;
     }
-    const persona = value as Omit<ResolvedTtsPersona, "id">;
     personas[normalizedId] = {
       ...persona,
       id: normalizedId,

@@ -132,17 +132,19 @@ export function createAgentSchemaInspectionWorker() {
               () => undefined,
             )?.agentId;
           if (!agentId) {
-            const { resolveSessionSqliteTargetInWorker } =
-              await import("../config/sessions/session-transcript-read-worker-runtime.js");
-            const target = await resolveSessionSqliteTargetInWorker(
-              {
-                storePath: input.pathname,
-                env: input.env ?? process.env,
-                registeredDatabases: [],
-              },
+            const { prepareSqliteTargetFromSessionStorePath } =
+              await import("../config/sessions/session-sqlite-target.js");
+            const target = await prepareSqliteTargetFromSessionStorePath(
+              input.pathname,
+              { env: input.env ?? process.env },
               signal,
             );
-            if (target.ownerSource !== "database-path" || !target.agentId) {
+            if (
+              !target.agentId ||
+              (target.ownerSource !== undefined &&
+                target.ownerSource !== "database-path" &&
+                target.ownerSource !== "database-registry")
+            ) {
               throw new Error(
                 "PostgreSQL schema inspection could not establish the custom store owner.",
               );

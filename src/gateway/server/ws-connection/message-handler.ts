@@ -110,17 +110,16 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     logWsControl,
   } = params;
 
-  const sendFrame = async (obj: unknown): Promise<number> =>
+  const sendFrame = async (obj: unknown, uncompressed = false): Promise<number> =>
     await new Promise<number>((resolve, reject) => {
       const encoded = JSON.stringify(obj);
       assertRemoteControlUiIngressCurrent(remoteIngress);
-      socket.send(encoded, (err) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve(Buffer.byteLength(encoded));
-      });
+      const sent = (err?: Error) => (err ? reject(err) : resolve(Buffer.byteLength(encoded)));
+      if (uncompressed && socket.sendUncompressed) {
+        socket.sendUncompressed(encoded, sent);
+      } else {
+        socket.send(encoded, sent);
+      }
     });
 
   const configSnapshot = getRuntimeConfig();
@@ -365,7 +364,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           const sendStartedAt = performance.now();
           let bytes: number;
           try {
-            bytes = await sendFrame(response);
+            // Hello carries device tokens; compressed length must not leak them.
+            bytes = await sendFrame(response, true);
           } catch (error) {
             diagnostics?.response("unavailable");
             throw error;

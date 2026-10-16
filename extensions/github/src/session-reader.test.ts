@@ -52,6 +52,15 @@ it("renders Enterprise documents and isolates same-token cache entries by curren
     authorUrl: `https://${host}/reader`,
   });
   expect((await loadSessionGitHubPreview(target, first, fetcher)).title).toBe("Private issue");
+  const overview = await loadSessionGitHubDetail(target, first, fetcher, false, "overview");
+  expect(overview).toMatchObject({
+    title: "Private issue",
+    revision: time,
+    deferredSections: ["discussion"],
+  });
+  expect(overview.comments).toBeUndefined();
+  const discussion = await loadSessionGitHubDetail(target, first, fetcher, false, "discussion");
+  expect(discussion).toMatchObject({ revision: time, comments: [], commentsTotal: 0 });
   const requests = fetcher.mock.calls.length;
   await loadSessionGitHubDetail(target, identity("principal-b/session-a"), fetcher);
   expect(fetcher.mock.calls.length).toBeGreaterThan(requests);

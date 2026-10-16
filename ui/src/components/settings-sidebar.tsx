@@ -174,15 +174,6 @@ function filterSettingsNavigationGroups(
   ].filter((group) => group.items.length > 0);
 }
 
-function syncSettingsSearchScrollShadow(nav: HTMLElement) {
-  // The nav's top padding scrolls away with its rows. Keep the fixed search
-  // region visually separated once content reaches that boundary.
-  nav
-    .closest(".settings-sidebar")
-    ?.querySelector(".settings-sidebar__search")
-    ?.classList.toggle("settings-sidebar__search--scrolled", nav.scrollTop > 0);
-}
-
 function buildAgentRosterTree(agents: AgentRosterRow[]) {
   const agentById = new Map(agents.map((agent) => [agent.id, agent]));
   const childrenById = new Map<string, AgentRosterRow[]>();
@@ -405,68 +396,72 @@ function EmbeddedSettingsHeader(props: SettingsSidebarProps) {
   );
 }
 
-function SettingsNavigation(props: SettingsSidebarProps) {
-  const branding = projectSource(null, {
-    read: currentThemeBranding,
-    subscribe: (_source, notify) => subscribeThemeBranding(notify),
-    equality: Object.is,
-  });
-  const groups = createMemo(() => {
-    i18nRevision();
-    branding.read();
-    return filterSettingsNavigationGroups(
-      props.searchQuery,
-      props.searchBlockMatches ??
-        (props.searchParams ? findSettingsSearchBlocks(props.searchParams) : []),
-      props.canAdmin !== false,
-      props.nativeDeviceSettings ?? null,
-    );
-  });
-  return (
-    <nav
-      class="settings-sidebar__nav"
-      aria-label={t("common.settingsSections")}
-      onScroll={(event) => syncSettingsSearchScrollShadow(event.currentTarget)}
-    >
-      <Show
-        when={groups().length > 0}
-        fallback={
-          <p class="settings-sidebar__empty" role="status">
-            {t("nav.settingsSearchNoResults")}
-          </p>
-        }
-      >
-        <For each={groups()} keyed={false}>
-          {(group) => (
-            <div class="settings-sidebar__group">
-              <Show when={group().labelKey}>
-                {(label) => <div class="settings-sidebar__group-label">{t(label())}</div>}
-              </Show>
-              <For each={group().items} keyed={false}>
-                {(item) => (
-                  <>
-                    <SettingsNavigationItem
-                      sidebar={props}
-                      routeId={item().routeId}
-                      branding={branding.read()}
-                    />
-                    <For each={item().blocks} keyed={false}>
-                      {(block) => <SettingsBlockItem sidebar={props} block={block()} />}
-                    </For>
-                  </>
-                )}
-              </For>
-            </div>
-          )}
-        </For>
-      </Show>
-    </nav>
-  );
-}
-
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const query = createMemo(() => props.searchQuery);
   let searchInput: HTMLInputElement | undefined;
+  function SettingsNavigation() {
+    const branding = projectSource(null, {
+      read: currentThemeBranding,
+      subscribe: (_source, notify) => subscribeThemeBranding(notify),
+      equality: Object.is,
+    });
+    const groups = createMemo(() => {
+      i18nRevision();
+      branding.read();
+      return filterSettingsNavigationGroups(
+        props.searchQuery,
+        props.searchBlockMatches ??
+          (props.searchParams ? findSettingsSearchBlocks(props.searchParams) : []),
+        props.canAdmin !== false,
+        props.nativeDeviceSettings ?? null,
+      );
+    });
+    return (
+      <nav
+        class="settings-sidebar__nav"
+        aria-label={t("common.settingsSections")}
+        onScroll={(event) =>
+          searchInput?.parentElement?.classList.toggle(
+            "settings-sidebar__search--scrolled",
+            event.currentTarget.scrollTop > 0,
+          )
+        }
+      >
+        <Show
+          when={groups().length > 0}
+          fallback={
+            <p class="settings-sidebar__empty" role="status">
+              {t("nav.settingsSearchNoResults")}
+            </p>
+          }
+        >
+          <For each={groups()} keyed={false}>
+            {(group) => (
+              <div class="settings-sidebar__group">
+                <Show when={group().labelKey}>
+                  {(label) => <div class="settings-sidebar__group-label">{t(label())}</div>}
+                </Show>
+                <For each={group().items} keyed={false}>
+                  {(item) => (
+                    <>
+                      <SettingsNavigationItem
+                        sidebar={props}
+                        routeId={item().routeId}
+                        branding={branding.read()}
+                      />
+                      <For each={item().blocks} keyed={false}>
+                        {(block) => <SettingsBlockItem sidebar={props} block={block()} />}
+                      </For>
+                    </>
+                  )}
+                </For>
+              </div>
+            )}
+          </For>
+        </Show>
+      </nav>
+    );
+  }
   return (
     <Show
       when={props.presentation !== "embed-page"}
@@ -483,7 +478,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           <section class="settings-embed-list">
             <EmbeddedSettingsHeader {...props} />
             <SettingsAgentSelector {...props} />
-            <SettingsNavigation {...props} />
+            <SettingsNavigation />
           </section>
         }
       >
@@ -538,7 +533,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
               </button>
             </Show>
           </div>
-          <SettingsNavigation {...props} />
+          <SettingsNavigation />
           <footer class="settings-sidebar__footer">
             <div class="settings-sidebar__connection">
               <SettingsConnectionStatus {...props} />

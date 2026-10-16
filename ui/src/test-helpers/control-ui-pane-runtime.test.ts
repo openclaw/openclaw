@@ -39,7 +39,7 @@ it("keeps private pane probes on the reported runtime while composing stream ins
   const runtime = new ChatPaneRuntime(element, fixture.pane.context);
   Reflect.set(runtime, "state", fixture.state);
   onTestFinished(() => {
-    runtime.disconnectedCallback();
+    runtime.dispose();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -88,7 +88,7 @@ it("keeps private pane probes on the reported runtime while composing stream ins
   expect(streamProbe).toHaveBeenCalledWith(runtime, "invalidate");
 
   for (const key of ["requestUpdate", "render"] as const) {
-    const ownerMethod = vi.spyOn(runtime, key);
+    const ownerMethod = vi.spyOn(runtime, key === "requestUpdate" ? "invalidate" : key);
     const original: unknown = Reflect.get(element, key);
     if (typeof original !== "function") {
       throw new Error(`Expected the recorded pane's ${key} operation`);

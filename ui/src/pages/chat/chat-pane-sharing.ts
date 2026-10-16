@@ -281,7 +281,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     const sessionKey = scope.state.sessionKey;
     const operation = Symbol("session-suggestion-add");
     this.sessionSuggestionAddOperation = operation;
-    this.requestUpdate();
+    this.invalidate();
     try {
       const result = await scope.client.request<{ suggestion: SessionSuggestion }>(
         "session.suggestions.add",
@@ -316,7 +316,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     } finally {
       if (this.sessionSuggestionAddOperation === operation) {
         this.sessionSuggestionAddOperation = undefined;
-        this.requestUpdate();
+        this.invalidate();
       }
     }
   }
@@ -358,12 +358,12 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     if (resolution === "edit") {
       scope.state.handleChatDraftChange(suggestion.text, []);
       queueMicrotask(() =>
-        this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
+        this.element.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
           preventScroll: true,
         }),
       );
     }
-    this.requestUpdate();
+    this.invalidate();
     try {
       const result = await scope.client.request<{ suggestion: SessionSuggestion }>(
         "session.suggestions.resolve",
@@ -407,7 +407,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
           this.sessionSuggestionEditOperation = undefined;
         }
         this.sessionSuggestionBusyIds.delete(suggestion.id);
-        this.requestUpdate();
+        this.invalidate();
       }
     }
   }
@@ -621,7 +621,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     }
     this.typingViews = views;
     this.typingOverflow = overflow;
-    this.requestUpdate();
+    this.invalidate();
   }
 
   protected typingActorViews(): ChatTypingActorView[] {

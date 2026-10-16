@@ -220,59 +220,25 @@ describe("restart health", () => {
   });
 
   it.each([
-    {
-      name: "restarts settling after an unhealthy probe",
-      pids: [8000, 8000, 8000, 8000, 8000, 8000],
-      reachable: [true, true, false, true, true, true],
-      attempts: 6,
-      outcome: "healthy",
-      elapsedMs: 2_500,
-    },
-    {
-      name: "restarts settling when the healthy process changes",
-      pids: [8000, 8000, 9000, 9000, 9000],
-      reachable: [true, true, true, true, true],
-      attempts: 6,
-      outcome: "healthy",
-      elapsedMs: 2_000,
-    },
-    {
-      name: "restarts settling when the boot changes under the same PID",
-      pids: [8000, 8000, 8000, 8000, 8000],
-      bootIds: ["boot-a", "boot-a", "boot-b", "boot-b", "boot-b"],
-      reachable: [true, true, true, true, true],
-      attempts: 6,
-      outcome: "healthy",
-      elapsedMs: 2_000,
-    },
-    {
-      name: "does not report an unsettled healthy snapshot as recovered at timeout",
-      pids: [8000, 8000, 8000, 8000, 8000],
-      bootIds: ["boot-a", "boot-a", "boot-a", "boot-a", "boot-a"],
-      reachable: [false, false, false, true, true],
-      attempts: 2,
-      outcome: "timeout",
-      elapsedMs: 2_000,
-    },
     ...(["linux"] as const).map((platform) => ({
       name: `times out without a runtime PID on ${platform}`,
       platform,
-      pids: [undefined, undefined, undefined, undefined, undefined],
-      reachable: [true, true, true, true, true],
-      attempts: 2,
-      outcome: "timeout",
-      elapsedMs: 2_000,
-    })),
-    {
-      name: "settles without a runtime PID on win32",
-      platform: "win32",
       pids: [undefined, undefined, undefined],
       reachable: [true, true, true],
       attempts: 2,
-      outcome: "healthy",
+      outcome: "timeout",
       elapsedMs: 1_000,
+    })),
+    {
+      name: "accepts readiness without a runtime PID on win32",
+      platform: "win32",
+      pids: [undefined],
+      reachable: [true],
+      attempts: 2,
+      outcome: "healthy",
+      elapsedMs: 0,
     },
-  ])("$name", async ({ platform, pids, bootIds, reachable, attempts, outcome, elapsedMs }) => {
+  ])("$name", async ({ platform, pids, reachable, attempts, outcome, elapsedMs }) => {
     if (platform) {
       Object.defineProperty(process, "platform", { value: platform, configurable: true });
     }
@@ -280,11 +246,11 @@ describe("restart health", () => {
     for (const pid of pids) {
       vi.mocked(service.readRuntime).mockResolvedValueOnce({ status: "running", pid });
     }
-    for (const [index, ok] of reachable.entries()) {
+    for (const ok of reachable) {
       if (ok) {
         callGateway.mockImplementationOnce(
           gatewayHealthResponse({
-            server: { version: "2026.8.1", ...(bootIds ? { bootId: bootIds[index] } : {}) },
+            server: { version: "2026.8.1" },
           }),
         );
       } else {
@@ -305,7 +271,6 @@ describe("restart health", () => {
       requireRunningService: true,
       attempts,
       delayMs: 500,
-      settle: { probes: 3 },
     });
 
     expect(snapshot.waitOutcome).toBe(outcome);
@@ -315,7 +280,7 @@ describe("restart health", () => {
     expect(callGateway).toHaveBeenCalledTimes(reachable.length);
   });
 
-  it("settles the selected LaunchAgent after its temporarily unloaded job returns", async () => {
+  it("accepts the selected LaunchAgent after its temporarily unloaded job returns", async () => {
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     const env = {
       HOME: tempDirs.make("openclaw-launchd-settle-"),
@@ -368,16 +333,15 @@ describe("restart health", () => {
       requireRunningService: true,
       attempts: 3,
       delayMs: 1,
-      settle: { probes: 3 },
     });
 
     expect(snapshot).toMatchObject({
       healthy: true,
       runtime: { status: "running", pid: 8000 },
       waitOutcome: "healthy",
-      elapsedMs: 3,
+      elapsedMs: 1,
     });
-    expect(sleep).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledOnce();
   });
 
   it("keeps the readiness window after an observed migration ends near the standard deadline", async () => {

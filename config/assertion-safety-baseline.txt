@@ -129,7 +129,6 @@ extensions/codex/src/app-server/native-skill-isolation.ts	1
 extensions/codex/src/app-server/plugin-activation.ts	1
 extensions/codex/src/app-server/plugin-inventory.ts	6
 extensions/codex/src/app-server/plugin-metadata-cache.ts	5
-extensions/codex/src/app-server/run-attempt-context.ts	2
 extensions/codex/src/app-server/run-attempt-resources.ts	12
 extensions/codex/src/app-server/run-attempt-runtime.ts	1
 extensions/codex/src/app-server/run-attempt-server-requests.ts	2
@@ -144,7 +143,6 @@ extensions/codex/src/app-server/thread-lifecycle-run.ts	1
 extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
 extensions/codex/src/app-server/transcript-mirror.ts	1
 extensions/codex/src/app-server/transport-stdio.ts	1
-extensions/codex/src/command-handlers.ts	2
 extensions/codex/src/command-rpc.ts	1
 extensions/codex/src/conversation-control.ts	1
 extensions/codex/src/migration/apply.ts	2
@@ -1986,7 +1984,6 @@ src/hooks/internal-hook-types.ts	2
 src/hooks/loader.ts	1
 src/hooks/message-hook-mappers.ts	2
 src/hooks/module-loader.ts	1
-src/hooks/policy.ts	1
 src/infra/advertised-lan-host.ts	1
 src/infra/agent-event-lifecycle.ts	1
 src/infra/agent-events.ts	2
@@ -2472,7 +2469,7 @@ src/tts/tts-config.ts	4
 src/tts/tts-core.ts	1
 src/tts/tts-provider-resolution.ts	1
 src/tts/tts-request.ts	1
-src/tts/tts-settings.ts	3
+src/tts/tts-settings.ts	2
 src/tts/tts-telephony.ts	1
 src/tts/voice-models.ts	3
 src/tui/components/chat-log.ts	1
@@ -2511,7 +2508,7 @@ src/wizard/setup.plugin-config.ts	4
 src/wizard/setup.post-install-migration.ts	1
 src/wizard/setup.shared.ts	1
 src/wizard/setup.ts	1
-src/worker/inference-stream.runtime.ts	2
+src/worker/inference-stream.runtime.ts	1
 src/worker/launch-descriptor.ts	1
 src/worker/node-workspace-protocol.ts	1
 src/worker/worker-connection-frames.ts	2

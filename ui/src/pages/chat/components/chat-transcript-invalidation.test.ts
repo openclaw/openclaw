@@ -9,8 +9,13 @@ import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import * as videoPoster from "../../../lib/media/video-poster.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
+import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createSessionCapabilityFixture, createTestChatPane } from "../chat-pane.test-support.ts";
+import {
+  createInitializationContext,
+  createSessionCapabilityFixture,
+  createTestChatPane,
+} from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import {
   buildCachedChatItems,
@@ -772,6 +777,7 @@ describe("chat transcript invalidation", () => {
   });
 
   it("updates MCP App pinning when the same provider's capability changes", async () => {
+    await import("../../../components/mcp-app-view.tsx");
     const provider = {
       sessionKey: "agent:main:main",
       canPinWidgets: true,
@@ -819,7 +825,14 @@ describe("chat transcript invalidation", () => {
       ],
     };
     const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
+    const container = document.body.appendChild(
+      createApplicationContextProvider(createInitializationContext()),
+    );
+    onTestFinished(() => {
+      render(null, container);
+      transcript.hostDisconnected();
+      container.remove();
+    });
 
     render(renderChatThread(props, transcript), container);
     transcript.hostConnected();

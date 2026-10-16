@@ -15,7 +15,13 @@ export type GenerationWireValue =
   | { kind: "value"; value: unknown }
   | { kind: "reference"; id: number }
   | { kind: "remote"; id: number }
-  | { kind: "function"; id: number; asynchronous: boolean; sourceCapture: boolean }
+  | {
+      kind: "function";
+      id: number;
+      asynchronous: boolean;
+      sourceCapture: boolean;
+      disposal?: true;
+    }
   | { kind: "source-resolver"; id: number; snapshot: GenerationWireValue }
   | { kind: "object"; id: number; entries: [string, GenerationWireValue][] }
   | { kind: "array" | "set"; id: number; entries: GenerationWireValue[] }
@@ -37,6 +43,7 @@ export class GenerationCodec {
       args: unknown[],
       asynchronous: boolean,
       sourceCapture: boolean,
+      disposal: boolean,
     ) => unknown,
     private readonly retainNativeRoot: (
       root: PluginNativeRecoverySnapshot["roots"][number],
@@ -85,6 +92,7 @@ export class GenerationCodec {
         id,
         asynchronous: value.constructor.name === "AsyncFunction" || Boolean(key?.endsWith("Async")),
         sourceCapture: isPluginSourceCaptureOperation(value),
+        ...(key === "dispose" || key === "disposeAsync" ? { disposal: true as const } : {}),
       };
     }
     if (isOwnedPluginNativeRecovery(value)) {
@@ -142,7 +150,13 @@ export class GenerationCodec {
     let result: object;
     if (value.kind === "function") {
       result = (...args: unknown[]) =>
-        this.invoke(value.id, args, value.asynchronous, value.sourceCapture);
+        this.invoke(
+          value.id,
+          args,
+          value.asynchronous,
+          value.sourceCapture,
+          value.disposal === true,
+        );
     } else if (value.kind === "source-resolver") {
       result = restorePluginRecoverySourceResolver(
         // SAFETY: the internal source-resolver encoder emits the lookup owner's snapshot.

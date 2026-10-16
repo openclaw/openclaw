@@ -120,10 +120,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
           } catch {
             // ignore probe errors
           }
-          const statusSink = createAccountStatusSink({
-            accountId: ctx.accountId,
-            setStatus: ctx.setStatus,
-          });
+          const statusSink = createAccountStatusSink(ctx);
           ctx.log?.info(`[${account.accountId}] starting zalouser provider${userLabel}`);
           const { monitorZalouserProvider } = await import("./monitor.js");
           return monitorZalouserProvider({
