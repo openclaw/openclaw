@@ -103,7 +103,7 @@ export function inspectGatewayCrashLoopBreakerInDatabase(db: EngineConnection, n
   });
 }
 
-export function readGatewayLastShutdownInDatabase(db: EngineConnection) {
+function readGatewayLastShutdownInDatabase(db: EngineConnection) {
   const row = executeSqliteQueryTakeFirstSync(
     db,
     getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db)

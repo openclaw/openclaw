@@ -3,10 +3,7 @@ import { randomUUID } from "node:crypto";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import {
-  executeExistingOpenClawStateRead,
-  withExistingOpenClawStateDatabaseReadOnly,
-} from "../state/openclaw-state-db-readonly.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -19,7 +16,6 @@ import {
   buildGatewayCrashLoopBreakerDecision,
   inspectGatewayCrashLoopBreakerInDatabase,
   maintenanceStartupReasons,
-  readGatewayLastShutdownInDatabase,
 } from "./gateway-boot-lifecycle.kernel.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
@@ -82,27 +78,18 @@ export type GatewayCrashLoopBreakerDecision = ReturnType<
   typeof buildGatewayCrashLoopBreakerDecision
 >;
 
-export function readGatewayLastShutdown(
-  env: NodeJS.ProcessEnv = process.env,
-): { reason: string | null; completedAtMs: number } | undefined {
-  try {
-    return withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => readGatewayLastShutdownInDatabase(db),
-      { env },
-    );
-  } catch {
-    return undefined;
-  }
-}
-
 /** Inspection keeps snapshot preparation off the caller's event loop. */
-export async function readGatewayLastInstallationReplacementAsync(env = process.env) {
+export async function readGatewayLastShutdownAsync(env = process.env) {
   const reply = await executeExistingOpenClawStateRead(
     { env },
     { type: "gatewayBoot.lastShutdown", input: undefined },
     { signal: getAsyncWorkSignal() },
   );
-  const lastShutdown = reply?.shutdown;
+  return reply?.shutdown;
+}
+
+export async function readGatewayLastInstallationReplacementAsync(env = process.env) {
+  const lastShutdown = await readGatewayLastShutdownAsync(env);
   return lastShutdown?.reason?.startsWith("gateway.installation_replaced:")
     ? { reason: lastShutdown.reason, completedAtMs: lastShutdown.completedAtMs }
     : undefined;

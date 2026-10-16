@@ -4148,7 +4148,6 @@
 ["src/cli/daemon-cli/status.gather.test.ts","../../daemon/restart-storm.js","414aa87923b3dd34784f72b84ef7b201da1a6b62be6ee9e39068319e69c2c9ab",1]
 ["src/cli/daemon-cli/status.gather.test.ts","../../daemon/service-audit.js","72cffb9c5d18dd32d8ba21afb767c5179cfe2520befbeb73a4ccfcb42968a561",1]
 ["src/cli/daemon-cli/status.gather.test.ts","../../gateway/control-ui-links.js","d98007ff9427edcfd50f51a75b6b8c53833c6aea3a3fe5c95f268cbbf17ebf2f",1]
-["src/cli/daemon-cli/status.gather.test.ts","../../infra/gateway-boot-lifecycle.js","c77e2077a4b4a34168a130d31987996b3e02deecaab892bc297a096e6dd26507",1]
 ["src/cli/daemon-cli/status.gather.test.ts","../../infra/ports-format.js","82d5b7b433fb55dc677f7eff5b206e1aaccb83aa5aaf9a54a4dfcaad8fca8008",1]
 ["src/cli/daemon-cli/status.gather.test.ts","../../infra/ports-inspect.js","1aa8aabd4e6ced3b64575405fcb213ffedda61fcb69a44a2fe84929e6c1f00aa",1]
 ["src/cli/daemon-cli/status.gather.test.ts","../../infra/tailnet.js","e1f99bd1f5e9eaf2ba43c1dd5af7e556cd9f3fae105724dadaa9de58a610f7ed",1]

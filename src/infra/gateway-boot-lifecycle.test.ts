@@ -16,7 +16,7 @@ import {
   inspectGatewayCrashLoopBreaker,
   inspectGatewayCrashLoopBreakerAsync,
   readGatewayLastInstallationReplacementAsync,
-  readGatewayLastShutdown,
+  readGatewayLastShutdownAsync,
   recordGatewayBootStart,
   recordGatewayCrashLoopRecovery,
   repairGatewayMaintenanceStartupFailures,
@@ -105,7 +105,7 @@ describe("gateway crash-loop breaker", () => {
         exec.mockRestore();
       }
 
-      expect(readGatewayLastShutdown(lifecycle.env)).toEqual(
+      expect(await readGatewayLastShutdownAsync(lifecycle.env)).toEqual(
         shutdown === "completed" ? { reason: "stop (SIGTERM)", completedAtMs: 4_000 } : undefined,
       );
       expect(inspectGatewayCrashLoopBreaker(lifecycle.env, 4_001)).toMatchObject({
@@ -189,7 +189,7 @@ describe("gateway crash-loop breaker", () => {
 
   it("reads the last shutdown without mistaking recovery segments or live boots for stops", async () => {
     const lifecycle = createLifecycleDb();
-    expect(readGatewayLastShutdown(lifecycle.env)).toBeUndefined();
+    expect(await readGatewayLastShutdownAsync(lifecycle.env)).toBeUndefined();
     const bootId = recordGatewayBootStart(lifecycle.env, 1_000);
     await completeGatewayBootLifecycle(
       bootId,
@@ -209,7 +209,7 @@ describe("gateway crash-loop breaker", () => {
       { bootId: "running", startedAtMs: 4_001 },
     ]);
 
-    expect(readGatewayLastShutdown(lifecycle.env)).toEqual({
+    expect(await readGatewayLastShutdownAsync(lifecycle.env)).toEqual({
       reason: "stop (SIGTERM)",
       completedAtMs: 3_000,
     });

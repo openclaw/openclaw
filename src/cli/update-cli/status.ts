@@ -110,7 +110,9 @@ async function readChannelStatusIssues(
 }
 
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
-  const timeoutMs = parseUpdateTimeoutMs(opts.timeout) ?? 30_000;
+  const checkTimeoutMs = parseUpdateTimeoutMs(opts.timeout);
+  // --timeout bounds update checks; a short network budget must not discard local history.
+  const timeoutMs = Math.max(30_000, checkTimeoutMs ?? 0);
   const scope = new AsyncWorkScope();
   const timer = setTimeout(
     () => scope.beginClose(new Error(`Update status timed out after ${timeoutMs / 1000} seconds`)),
@@ -122,7 +124,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       () =>
         scope.run(() =>
           withArtifactPreservingStateReads(() =>
-            inspectUpdateStatus(opts, scope.signal, timeoutMs),
+            inspectUpdateStatus(opts, scope.signal, timeoutMs, checkTimeoutMs),
           ),
         ),
     );
@@ -136,6 +138,7 @@ async function inspectUpdateStatus(
   opts: UpdateStatusOptions,
   signal: AbortSignal,
   timeoutMs: number,
+  checkTimeoutMs: number | undefined,
 ): Promise<void> {
   const inspectionErrors: { section: string; message: string }[] = [];
   const deadline = performance.now() + timeoutMs;
@@ -163,6 +166,16 @@ async function inspectUpdateStatus(
     }
   };
 
+  const runStatusPromise = inspect<Awaited<ReturnType<typeof readUpdateRunStatus>>>(
+    "update history",
+    readUpdateRunStatus,
+    { runStatusError: "Update history inspection unavailable" },
+  );
+  const recoveryStatusPromise = inspect<Awaited<ReturnType<typeof readUpdateRecoverySetStatus>>>(
+    "recovery sets",
+    readUpdateRecoverySetStatus,
+    { recoverySetsError: "Recovery set inspection unavailable" },
+  );
   const [root, config, runtimeFindings] = await Promise.all([
     inspect<string | null>("installation root", resolveUpdateRoot, null),
     inspect<OpenClawConfig>("configuration", readSourceConfigBestEffort, {}),
@@ -184,7 +197,7 @@ async function inspectUpdateStatus(
       () =>
         checkUpdateStatus({
           root,
-          timeoutMs: remainingMs(),
+          timeoutMs: Math.min(checkTimeoutMs ?? Infinity, remainingMs()),
           signal,
           fetchGit: true,
           useDetachedDevUpstream: configChannel === "dev",
@@ -200,7 +213,8 @@ async function inspectUpdateStatus(
     ),
     inspect(
       "channels",
-      () => readChannelStatusIssues(config, opts.timeout === undefined ? 5_000 : timeoutMs, signal),
+      () =>
+        readChannelStatusIssues(config, Math.min(checkTimeoutMs ?? 5_000, remainingMs()), signal),
       [],
     ),
   ]);
@@ -221,7 +235,7 @@ async function inspectUpdateStatus(
                   root: git.root,
                   sha: currentSha,
                   channel: gitTargetChannel,
-                  timeoutMs: remainingMs(),
+                  timeoutMs: Math.min(checkTimeoutMs ?? Infinity, remainingMs()),
                 }),
             ),
           undefined,
@@ -262,16 +276,7 @@ async function inspectUpdateStatus(
     }
   }
 
-  const runStatus = await inspect<Awaited<ReturnType<typeof readUpdateRunStatus>>>(
-    "update history",
-    readUpdateRunStatus,
-    { runStatusError: "Update history inspection unavailable" },
-  );
-  const recoveryStatus = await inspect<Awaited<ReturnType<typeof readUpdateRecoverySetStatus>>>(
-    "recovery sets",
-    readUpdateRecoverySetStatus,
-    { recoverySetsError: "Recovery set inspection unavailable" },
-  );
+  const [runStatus, recoveryStatus] = await Promise.all([runStatusPromise, recoveryStatusPromise]);
   const activeRun = "activeRun" in runStatus ? runStatus.activeRun : undefined;
   const updateInProgress =
     !("runStatusError" in runStatus) && activeRun && !runStatus.staleRun && !runStatus.abandonedRun;

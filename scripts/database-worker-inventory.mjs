@@ -971,6 +971,12 @@ const reviewedOperations = new Map([
     "src/infra/gateway-boot-lifecycle.kernel.ts",
     [
       {
+        tier: "W",
+        operations: ["readGatewayLastShutdownInDatabase"],
+        evidence:
+          "Private reader called only by gatewayBootReadOperations in the state read worker. Daemon status and update inspection both dispatch through readGatewayLastShutdownAsync; no synchronous caller remains.",
+      },
+      {
         tier: "T2",
         operations: [
           "inspectGatewayCrashLoopBreakerInDatabase",
