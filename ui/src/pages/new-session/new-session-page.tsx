@@ -1,4 +1,4 @@
-import { createEffect, createMemo, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, onCleanup, onSettled, Show } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
@@ -184,9 +184,9 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   const owner = pageOwners.get(host) ?? new NewSessionPageOwner(host);
   pageOwners.set(host, owner);
   owner.context = useOptionalApplication();
-  const state = projectOwner(owner, (value) => value);
-  const page = state.read;
-  const revision = createMemo(() => ({ value: state.revision() }));
+  const pageState = projectOwner(owner, (value) => value);
+  const page = pageState.read;
+  const revision = createMemo(() => ({ value: pageState.revision() }));
   owner.titlePreparation = createNewSessionTitle(() => ({
     context: page().context,
     data: page().data,
@@ -196,6 +196,9 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   }));
   // Both draft presentations share one preparation per revision, not one per binding.
   const options = createMemo(() => page().composerOptions());
+  // Gateway facts must be bound before the first effect adopts draft defaults.
+  owner.connect();
+  onCleanup(() => owner.disconnect());
   createEffect(revision, () => {
     owner.synchronize();
     owner.updated();
@@ -220,14 +223,12 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
     const keydown = (event: KeyboardEvent) => focusChatComposerFromPrintableKeydown(host, event);
     document.addEventListener("keydown", keydown, true);
     window.addEventListener("beforeunload", owner.flushDraft);
-    owner.connect();
     notify();
     return () => {
       stops.forEach((stop) => stop());
       dismiss();
       document.removeEventListener("keydown", keydown, true);
       window.removeEventListener("beforeunload", owner.flushDraft);
-      owner.disconnect();
     };
   });
   const visibilityControl = {

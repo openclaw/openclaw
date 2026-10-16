@@ -409,10 +409,10 @@ function createComposerPlaceholder(options: () => NewSessionComposerOptions) {
   let entered = false;
   createEffect(
     () => [target(), hasMessage()] as const,
-    ([text, hasMessage]) => {
-      entered ||= hasMessage;
+    ([text, hasText]) => {
+      entered ||= hasText;
       if (entered || reducedMotion) {
-        return;
+        return undefined;
       }
       let startedAt: number | undefined;
       let pending: number;

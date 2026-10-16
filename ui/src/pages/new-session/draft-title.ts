@@ -46,7 +46,7 @@ export function createNewSessionTitle(
   let composing = false;
   let submitted: DraftTitleInput | null = null;
 
-  createEffect(input, sync);
+  createEffect(readInput, sync);
   onCleanup(() => {
     disposed = true;
     sync(null);
@@ -56,10 +56,10 @@ export function createNewSessionTitle(
   return {
     setComposing(value: boolean) {
       composing = value;
-      sync(input());
+      sync(readInput());
     },
     takePreparedTitle(): string | undefined {
-      const next = input();
+      const next = readInput();
       const prepared = sameDraft(current, next) ? (title ?? undefined) : undefined;
       submitted = next ?? submitted;
       sync(null);
@@ -119,7 +119,7 @@ export function createNewSessionTitle(
     }
   }
 
-  function input(): DraftTitleInput | null {
+  function readInput(): DraftTitleInput | null {
     const { context, data, place, submission, dictating } = read();
     const snapshot = context?.gateway.snapshot;
     // Native prompts belong to the selected CLI, never OpenClaw title inference.

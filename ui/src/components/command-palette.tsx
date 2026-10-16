@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, onCleanup, Show } from "solid-js";
 import { useApplication } from "../lib/reactive/context.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { useSolidControllerHost } from "../lit/solid-controller-host.ts";
@@ -34,26 +34,12 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
       props.desktopAvailable,
       props.custodianAvailable,
     ]);
-    const legacyHost = {
-      ...lifecycle.host,
-      get updateComplete() {
-        return lifecycle.host.updateComplete;
-      },
-      get isConnected() {
-        return host.isConnected;
-      },
-      get ownerDocument() {
-        return host.ownerDocument;
-      },
-      querySelector: host.querySelector.bind(host),
-      querySelectorAll: host.querySelectorAll.bind(host),
-    };
     const controller = new PaletteController(
       host,
       props,
       () => context,
-      legacyHost,
-      () => lifecycle.host.requestUpdate(),
+      lifecycle.host,
+      lifecycle.host.requestUpdate,
     );
     controllers.set(host, controller);
     Object.defineProperty(host, "isOpen", { configurable: true, get: () => controller.isOpen });
@@ -64,15 +50,30 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
       pendingOpen.delete(host);
       controller.openPalette(pending.input);
     }
-    createEffect(lifecycle.revision, () => controller.updated());
+    const readProps = createMemo(() => {
+      lifecycle.revision();
+      return controller.readProps();
+    });
+    const draftInitialized = createMemo(() => readProps().draft.initialized);
+    createEffect(draftInitialized, (initialized) => {
+      if (!initialized) {
+        return undefined;
+      }
+      // Closed palettes still own pending submissions and preference acknowledgments.
+      const stops = [context.agents, context.agentIdentity, context.sessions, context.config].map(
+        (source) => source.subscribe(lifecycle.host.requestUpdate),
+      );
+      return () => stops.forEach((stop) => stop());
+    });
+    createEffect(readProps, () => {
+      controller.draft.synchronize();
+      controller.draft.settled();
+      controller.updated();
+    });
     onCleanup(() => {
       controller.disconnect();
       controllers.delete(host);
     });
-    const readProps = () => {
-      lifecycle.revision();
-      return controller.readProps();
-    };
     return (
       <Show when={readProps().open}>
         <CommandPaletteView readProps={readProps} />
