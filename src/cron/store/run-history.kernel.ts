@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sql } from "kysely";
+import { jsonPickObject, jsonValid } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -67,10 +69,22 @@ export function readCronRunRecordsInDatabase(
   db: EngineConnection,
   jobId?: string,
   runId?: string,
+  options?: {
+    /** Detail members to read; omit to read the whole retained payload. */
+    detailKeys?: readonly string[];
+    /** Read `terminal_summary`; a sweep that only writes it back may skip the column. */
+    terminalSummary?: boolean;
+    taskIds?: readonly string[];
+  },
 ): CronRunRecord[] {
+  // A maintenance sweep decides on identities and lifecycle facts, then loads the retained payloads
+  // only for the runs it will reconcile. Projecting the decision members keeps the row shape and the
+  // decode below unchanged while leaving a whole history unmaterialized.
+  const terminalSummary = options?.terminalSummary !== false;
+  const detailKeys = options?.detailKeys;
   let select = query(db)
     .selectFrom("task_runs")
-    .select([
+    .select((eb) => [
       "task_id",
       "source_id",
       "run_id",
@@ -87,8 +101,11 @@ export function readCronRunRecordsInDatabase(
       "notify_policy",
       "terminal_outcome",
       "error",
-      "terminal_summary",
-      "detail_json",
+      terminalSummary ? "terminal_summary" : sql<string | null>`NULL`.as("terminal_summary"),
+      detailKeys === undefined
+        ? "detail_json"
+        : sql<string | null>`CASE WHEN ${jsonValid(db, eb.ref("detail_json"))}
+            THEN ${jsonPickObject(db, eb.ref("detail_json"), detailKeys)} END`.as("detail_json"),
     ])
     .where("runtime", "=", "cron")
     .orderBy("created_at", "asc")
@@ -98,6 +115,9 @@ export function readCronRunRecordsInDatabase(
   }
   if (runId !== undefined) {
     select = select.where("run_id", "=", runId);
+  }
+  if (options?.taskIds !== undefined && options.taskIds.length > 0) {
+    select = select.where("task_id", "in", [...options.taskIds]);
   }
   return executeSqliteQuerySync(db, select).rows.map((row) => {
     // These released columns remain part of row admission even when Cron does not expose them.
@@ -332,6 +352,13 @@ function pruneCronRunHistoryInDatabase(
 }
 
 /** Plan synchronous maintenance on the serialized writer before opening a write transaction. */
+/**
+ * Detail members the history planner reads while deciding what to retain or reconcile: the store
+ * key groups rows, and `kind` partitions per-job retention. Everything else in `detail_json` is
+ * only written back, so a sweep may read it after planning instead of materializing it up front.
+ */
+export const CRON_RUN_MAINTENANCE_DETAIL_KEYS = ["storeKey", "kind"] as const;
+
 export function planCronRunHistoryMaintenance(
   records: readonly CronRunRecord[],
   now: number,
