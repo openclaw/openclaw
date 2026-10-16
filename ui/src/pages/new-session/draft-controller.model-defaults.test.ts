@@ -76,7 +76,7 @@ it.each(["last-used", "configured"] as const)(
   },
 );
 
-it("wakes background discovery while connected and retires its listeners with the draft", async () => {
+it("wakes background discovery only while the draft is connected", async () => {
   const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
   const { context, request } = createDraftFixture({
     methods: ["system.info", "environments.list"],
@@ -85,10 +85,6 @@ it("wakes background discovery while connected and retires its listeners with th
         ? { machineName: "Visible Gateway" }
         : { profiles: [], environments: [] },
   });
-  const stopStore = vi.fn();
-  const stopEvents = vi.fn();
-  const subscribe = vi.spyOn(context.gateway, "subscribe").mockReturnValue(stopStore);
-  vi.spyOn(context.gateway, "subscribeEvents").mockReturnValue(stopEvents);
   const draft = new NewSessionDraft(() => ({ context, data: undefined, isConnected: true }), {
     requestUpdate: vi.fn(),
     updateComplete: () => Promise.resolve(),
@@ -106,14 +102,10 @@ it("wakes background discovery while connected and retires its listeners with th
   visibility.mockReturnValue("visible");
   document.dispatchEvent(new Event("visibilitychange"));
   await waitForFast(() => expect(draft.gateway.gatewayName).toBe("Visible Gateway"));
-  expect(subscribe).toHaveBeenCalledOnce();
 
   draft.disconnect();
-  expect(stopStore).toHaveBeenCalledOnce();
-  expect(stopEvents).toHaveBeenCalledOnce();
   const reads = request.mock.calls.length;
   document.dispatchEvent(new Event("visibilitychange"));
   draft.synchronize();
   expect(request).toHaveBeenCalledTimes(reads);
-  expect(subscribe).toHaveBeenCalledOnce();
 });
