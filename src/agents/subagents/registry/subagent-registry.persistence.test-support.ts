@@ -53,17 +53,15 @@ export async function prepareSubagentRecoveryFixture(
       })
     : (fixture.storePath ?? resolveSessionStorePathCore(undefined, { agentId }));
   if (fixture.entries) {
-    fixture.entries[run.requesterSessionKey] = {
+    const entry: SessionEntry = {
       ...requester,
       sessionId,
       lifecycleRevision,
       updatedAt: Date.now(),
     };
+    fixture.entries[run.requesterSessionKey] = entry;
     if (fixture.storePath) {
-      await replaceSessionEntry(
-        { storePath, sessionKey: run.requesterSessionKey },
-        fixture.entries[run.requesterSessionKey],
-      );
+      await replaceSessionEntry({ storePath, sessionKey: run.requesterSessionKey }, entry);
     }
   }
   const source: NonNullable<SubagentRunRecord["operatorRecoverySource"]> = {
@@ -99,7 +97,7 @@ export async function prepareSubagentRecoveryFixture(
     operatorRecoverySource: source,
   });
   const original = vi.isMockFunction(recovery.restoreGatewayOperatorSource)
-    ? recovery.restoreGatewayOperatorSource.getMockImplementation()!
+    ? vi.mocked(recovery.restoreGatewayOperatorSource).getMockImplementation()!
     : recovery.restoreGatewayOperatorSource;
   const lifetimes = new Set<AbortController>();
   const restore = vi

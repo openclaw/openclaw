@@ -1,4 +1,5 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import {
@@ -24,12 +25,16 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const log = createSubsystemLogger("agents/subagents");
+// Only worker admission defers initial restoration; revoked custody never re-arms itself.
+const deferredCompletionSources = new WeakSet<object>();
 
 async function restoreSubagentCompletionSource(
   entry: SubagentRunRecord,
   resolver: GatewayContextResolver,
   isGatewayCurrent: () => boolean,
 ): Promise<void> {
+  const runtimeKey = getSubagentRunRuntimeKey(entry);
+  deferredCompletionSources.delete(runtimeKey);
   if (
     entry.collect ||
     (entry.execution.status === "terminal" &&
@@ -70,6 +75,7 @@ async function restoreSubagentCompletionSource(
       const current = getCurrentSubagentRunOwner(subagentRuns, entry);
       if (
         !current ||
+        subagentRuns.isCompletionAuthorityRetired(current) ||
         !isGatewayCurrent() ||
         resolver() !== gateway ||
         getEntryGatewayContextResolver(current) !== resolver ||
@@ -136,11 +142,30 @@ async function restoreSubagentCompletionSource(
     subagentRuns.bindCompletionAuthority(entry, continuation, true);
     continuation = undefined;
   } catch (error) {
+    if (error instanceof WorkerTaskError && error.code === "overloaded") {
+      deferredCompletionSources.add(runtimeKey);
+      return;
+    }
     log.warn("subagent completion authority was not restored", { runId: entry.runId, error });
   } finally {
     continuation?.release();
     releaseRestored?.();
   }
+}
+
+/** The existing sweep retries worker admission while retaining the original source restriction. */
+export function retryDeferredSubagentCompletionSource(
+  entry: SubagentRunRecord,
+): Promise<void> | undefined {
+  if (!deferredCompletionSources.has(getSubagentRunRuntimeKey(entry))) {
+    return undefined;
+  }
+  const resolver = getEntryGatewayContextResolver(entry);
+  const gateway = resolver?.();
+  if (resolver && gateway) {
+    return restoreSubagentCompletionSource(entry, resolver, () => resolver() === gateway);
+  }
+  return undefined;
 }
 
 /** A closed Gateway's unfinished work acquires fresh host custody, never its old aliases. */
