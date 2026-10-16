@@ -311,6 +311,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       });
       // Projection metadata and rendered prompt must advance together or retries can skip context.
       promptState.contextEngineProjection = contextEngineProjection;
+      promptState.contextEngineBootstrapPrompt =
+        contextEngineProjection && projectionDecision.project ? projection.promptText : undefined;
       promptState.promptText = projectionDecision.project ? projection.promptText : params.prompt;
       promptState.promptContextRange = projectionDecision.project
         ? projection.promptContextRange
@@ -596,6 +598,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       const projection = await preparedBootstrapProjection();
       assertProjectionCurrent();
       contextImageGroups = projection.imageGroups ?? [];
+      promptState.contextEngineBootstrapPrompt = projection.promptText;
       promptState.promptText = projection.promptText;
       promptState.promptContextRange = projection.promptContextRange;
       contextEngineBootstrapPromptApplied = true;

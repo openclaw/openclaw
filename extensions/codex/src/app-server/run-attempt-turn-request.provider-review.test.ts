@@ -170,6 +170,7 @@ async function prepare(
         turnState.codexTurnPromptText = include ? "workspace reference\nuser input" : "user input";
       },
       context: {
+        promptState: { contextEngineBootstrapPrompt: undefined },
         workspaceBootstrapContext: { promptContext: "workspace reference" },
         attemptTools: { tools: [], toolBridge: { availableTools: [], availableSpecs: [] } },
         runtime: {

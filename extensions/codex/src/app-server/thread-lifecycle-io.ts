@@ -600,6 +600,10 @@ export async function startFreshCodexThread(
   if (!preserveExistingBinding) {
     const nextBinding: CodexAppServerThreadBinding = {
       ...startedBinding,
+      // A fresh thread has not accepted its bootstrap input yet.
+      contextEngine: startedBinding.contextEngine
+        ? { ...startedBinding.contextEngine, projection: undefined }
+        : undefined,
       webSearchThreadConfigFingerprint,
       nativeToolPolicyRestricted: restrictedToolSurface ? true : undefined,
     };

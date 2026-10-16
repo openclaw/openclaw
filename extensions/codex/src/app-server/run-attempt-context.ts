@@ -225,6 +225,8 @@ export async function prepareCodexAttemptContext(
     promptContextRange: undefined as CodexProjectedContextRange | undefined,
     developerInstructions: baseDeveloperInstructions,
     contextEngineProjection: undefined as CodexContextEngineThreadBootstrapProjection | undefined,
+    // SAFETY: This mutable slot starts empty; prompt preparation assigns a rendered string.
+    contextEngineBootstrapPrompt: undefined as string | undefined,
     // Set by the no-engine continuity appliers; gates calibration recording so a
     // dense direct or active-engine prompt can never persist a density sample
     // that later shrinks continuity history it did not measure.

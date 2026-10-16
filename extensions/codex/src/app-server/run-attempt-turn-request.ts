@@ -297,6 +297,19 @@ export async function prepareCodexAttemptTurnRequest(
     const upstreamUserText = turnStartParams.input
       .flatMap((item) => (item.type === "text" ? [item.text] : []))
       .join("\n");
+    const bootstrapPrompt = context.promptState.contextEngineBootstrapPrompt;
+    const acceptedBootstrapBinding =
+      selectedThread.lifecycle.action === "started" &&
+      !selectedThread.lifecycle.preserveExistingBinding &&
+      selectedThread.contextEngine?.projection &&
+      bootstrapPrompt !== undefined &&
+      turnStartParams.input
+        .flatMap((item) => (item.type === "text" ? [item.text] : []))
+        // Historical images split contiguous slices of the same bootstrap prompt.
+        .join("")
+        .includes(bootstrapPrompt)
+        ? selectedThread.contextEngine
+        : undefined;
     try {
       const startedTurn = assertCodexTurnStartResponse(
         await turnClient.request("turn/start", turnStartParams, {
@@ -314,6 +327,35 @@ export async function prepareCodexAttemptTurnRequest(
       resources.nativeProcessAuthority?.bindTurn(turnClient, threadId, acceptedTurnId);
       assertTurnCurrent();
       resourceState.nativeSubagentMonitor?.bindTurn(acceptedTurnId, modelMapping);
+      if (acceptedBootstrapBinding) {
+        try {
+          const recorded = await connection.bindingStore.mutate(
+            connection.bindingIdentity,
+            {
+              kind: "patch",
+              threadId,
+              clientId: selectedThread.clientId,
+              patch: { contextEngine: acceptedBootstrapBinding },
+            },
+            assertTurnCurrent,
+            connection.authority,
+          );
+          if (!recorded) {
+            embeddedAgentLog.warn("codex bootstrap receipt owner changed after turn acceptance", {
+              threadId,
+              turnId: acceptedTurnId,
+            });
+          }
+        } catch (error) {
+          // The native turn already owns its input. Do not resend it or discard its
+          // result because an optimization receipt could not be saved.
+          embeddedAgentLog.warn("failed to save codex bootstrap receipt after turn acceptance", {
+            threadId,
+            turnId: acceptedTurnId,
+            error: formatErrorMessage(error),
+          });
+        }
+      }
       // Fitting may drop or truncate references; only acknowledge the complete block.
       if (upstreamUserText.includes(workspaceBootstrapContext.promptContext ?? "")) {
         references.accepted();
