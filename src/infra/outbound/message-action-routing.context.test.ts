@@ -1,5 +1,3 @@
-// Covers message-action cross-context policy, markers, and presentation
-// decoration behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { MessageActionDeniedError } from "./message-action-denial.js";
@@ -102,30 +100,13 @@ describe("runMessageAction context isolation", () => {
   });
 
   it.each([
-    {
-      name: "direct chat mismatch",
-      channel: "directchat",
-      target: "456@g.us",
-      currentChannelId: "123@g.us",
-    },
-    {
-      name: "local chat mismatch",
-      channel: "localchat",
-      target: "localchat:+15551230000",
-      currentChannelId: "localchat:+15551234567",
-    },
-  ] as const)("$name", async (testCase) => {
+    ["directchat", "456@g.us", "123@g.us"],
+    ["localchat", "localchat:+15551230000", "localchat:+15551234567"],
+  ] as const)("allows %s target mismatch", async (channel, target, currentChannelId) => {
     const result = await runDrySend({
       cfg: directChatConfig,
-      actionParams: {
-        channel: testCase.channel,
-        target: testCase.target,
-        message: "hi",
-      },
-      toolContext: {
-        currentChannelId: testCase.currentChannelId,
-        currentChannelProvider: testCase.channel,
-      },
+      actionParams: { channel, target, message: "hi" },
+      toolContext: { currentChannelId, currentChannelProvider: channel },
     });
 
     expect(result.kind).toBe("send");

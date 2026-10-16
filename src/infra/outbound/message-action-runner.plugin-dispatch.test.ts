@@ -493,7 +493,7 @@ describe("runMessageAction plugin dispatch", () => {
     ).rejects.toThrow("Message action read not supported for channel sendonly.");
   });
 
-  describe("presentation parsing", () => {
+  it.each([true, false])("validates presentation JSON (valid=%s)", async (valid) => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
       jsonResult({ ok: true, presentation: params.presentation ?? null }),
     );
@@ -509,29 +509,26 @@ describe("runMessageAction plugin dispatch", () => {
         handleAction,
       },
     };
-    const sendPresentation = (presentation: string) =>
-      runMessageAction({
-        cfg: {},
-        action: "send",
-        dryRun: false,
-        params: { channel: "componentchat", target: "channel:123", message: "hi", presentation },
-      });
-    beforeEach(() => {
-      setTestPlugin(componentsPlugin, "componentchat");
-      handleAction.mockClear();
+    setTestPlugin(componentsPlugin, "componentchat");
+    const presentation = { blocks: [{ type: "buttons", buttons: [{ label: "A", value: "a" }] }] };
+    const pending = runMessageAction({
+      cfg: {},
+      action: "send",
+      dryRun: false,
+      params: {
+        channel: "componentchat",
+        target: "channel:123",
+        message: "hi",
+        presentation: valid ? JSON.stringify(presentation) : "{not-json}",
+      },
     });
-
-    it.each([true, false])("validates presentation JSON (valid=%s)", async (valid) => {
-      const presentation = { blocks: [{ type: "buttons", buttons: [{ label: "A", value: "a" }] }] };
-      const pending = sendPresentation(valid ? JSON.stringify(presentation) : "{not-json}");
-      if (valid) {
-        const result = await pending;
-        expect(result.payload).toEqual(expect.objectContaining({ ok: true, presentation }));
-      } else {
-        await expect(pending).rejects.toThrow(/--presentation must be valid JSON/);
-        expect(handleAction).not.toHaveBeenCalled();
-      }
-    });
+    if (valid) {
+      const result = await pending;
+      expect(result.payload).toEqual(expect.objectContaining({ ok: true, presentation }));
+    } else {
+      await expect(pending).rejects.toThrow(/--presentation must be valid JSON/);
+      expect(handleAction).not.toHaveBeenCalled();
+    }
   });
 
   it.each([{ candidateChannels: ["accountchat"] }, { candidateChannels: [] }])(

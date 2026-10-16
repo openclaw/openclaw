@@ -1,5 +1,3 @@
-// Covers plugin-dispatched message actions, target resolution, dry-run behavior,
-// and plugin tool-result extraction.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
@@ -40,36 +38,33 @@ describe("runMessageAction plugin dispatch", () => {
     const { handleAction, plugin: actionHubPlugin } = useActionHubPluginFixture();
     const runHubAction = (input: PluginActionInput) =>
       runPluginAction("actionhub", { dryRun: false, ...input });
-    it.each([{ action: "unpin" as const, alias: "chatId", messageId: "om_unpin" }])(
-      "guards $alias delivery aliases for $action before plugin dispatch",
-      async (testCase) => {
-        const cfg = {
-          channels: { actionhub: { enabled: true } },
-          tools: { message: { crossContext: { allowWithinProvider: false } } },
-        } as OpenClawConfig;
-        const toolContext = {
-          currentChannelProvider: "actionhub" as const,
-          currentChannelId: "oc_current",
-        };
-        const runAlias = (target: string) =>
-          runHubAction({
-            cfg,
-            action: testCase.action,
-            params: { messageId: testCase.messageId, [testCase.alias]: target },
-            toolContext,
-            conversationReadOrigin: "direct-operator",
-          });
-
-        await expect(runAlias("oc_foreign")).rejects.toThrow("Cross-context messaging denied");
-        expect(handleAction).not.toHaveBeenCalled();
-
-        await expect(runAlias("oc_current")).resolves.toMatchObject({
-          kind: "action",
-          action: testCase.action,
+    it("guards chatId delivery aliases for unpin before plugin dispatch", async () => {
+      const cfg = {
+        channels: { actionhub: { enabled: true } },
+        tools: { message: { crossContext: { allowWithinProvider: false } } },
+      } as OpenClawConfig;
+      const toolContext = {
+        currentChannelProvider: "actionhub" as const,
+        currentChannelId: "oc_current",
+      };
+      const runAlias = (target: string) =>
+        runHubAction({
+          cfg,
+          action: "unpin",
+          params: { messageId: "om_unpin", chatId: target },
+          toolContext,
+          conversationReadOrigin: "direct-operator",
         });
-        expect(handleAction).toHaveBeenCalledOnce();
-      },
-    );
+
+      await expect(runAlias("oc_foreign")).rejects.toThrow("Cross-context messaging denied");
+      expect(handleAction).not.toHaveBeenCalled();
+
+      await expect(runAlias("oc_current")).resolves.toMatchObject({
+        kind: "action",
+        action: "unpin",
+      });
+      expect(handleAction).toHaveBeenCalledOnce();
+    });
 
     it("infers the trusted current target for resource-referenced edits", async () => {
       setTestPlugin(actionHubPlugin, "actionhub", "bundled");
@@ -286,6 +281,15 @@ describe("runMessageAction plugin dispatch", () => {
       directory: { listGroupsLive },
       actions: { describeMessageTool: () => ({ actions: ["send"] }), handleAction },
     };
+    const setGatewayAccountPlugin = (overrides: Partial<ChannelPlugin>) =>
+      setTestPlugin(
+        {
+          ...accountPlugin,
+          config: { ...accountPlugin.config, defaultAccountId: () => "ops" },
+          ...overrides,
+        },
+        "accountchat",
+      );
 
     beforeEach(() => {
       setTestPlugin(accountPlugin, "accountchat");
@@ -345,14 +349,9 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("leaves an omitted account absent when delegating an action to the Gateway", async () => {
-      setTestPlugin(
-        {
-          ...accountPlugin,
-          config: { ...accountPlugin.config, defaultAccountId: () => "ops" },
-          actions: { ...accountPlugin.actions, resolveExecutionMode: () => "gateway" },
-        },
-        "accountchat",
-      );
+      setGatewayAccountPlugin({
+        actions: { ...accountPlugin.actions, resolveExecutionMode: () => "gateway" },
+      });
       mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
       await sendAccountAction(
         {},
@@ -368,14 +367,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("leaves omitted outbound Gateway account selection remote in dry runs", async () => {
-      setTestPlugin(
-        {
-          ...accountPlugin,
-          config: { ...accountPlugin.config, defaultAccountId: () => "ops" },
-          outbound: { deliveryMode: "gateway" },
-        },
-        "accountchat",
-      );
+      setGatewayAccountPlugin({ outbound: { deliveryMode: "gateway" } });
       const { prepareMessageRoute } = await import("./message-action-routing.js");
       const route = await prepareMessageRoute({
         input: { cfg: {}, action: "send", params: {}, dryRun: true },

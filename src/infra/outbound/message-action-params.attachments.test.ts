@@ -1,17 +1,21 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-// Covers message-action media hydration, sandbox path normalization,
-// attachments, and channel/plugin media source aliases.
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelMessageActionName,
+  ChannelPlugin,
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 import {
   createAlwaysConfiguredPluginConfig,
@@ -37,6 +41,28 @@ const remoteMedia = {
   kind: "image" as const,
   fileName: "pic.png",
 };
+function mediaPlugin(
+  id: string,
+  actions: ChannelMessageActionName[],
+  handleAction: NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>,
+): ChannelPlugin {
+  return {
+    ...createChannelTestPluginBase({
+      id,
+      capabilities: { chatTypes: ["direct", "group"], media: true },
+      config: createAlwaysConfiguredPluginConfig(),
+    }),
+    actions: {
+      describeMessageTool: () => ({ actions }),
+      supportsAction: ({ action }) => actions.includes(action),
+      handleAction,
+    },
+  };
+}
+function attachmentPayload(params: Record<string, unknown>) {
+  const { buffer, filename, caption, contentType } = params;
+  return { ok: true, buffer, filename, caption, contentType };
+}
 type ActionInput = Parameters<typeof runMessageAction>[0];
 type Hydration = Parameters<typeof hydrateAttachmentParamsForAction>[0];
 const hydrate = (args: Hydration["args"], overrides: Partial<Omit<Hydration, "args">> = {}) =>
@@ -72,15 +98,7 @@ function requireActionPayload(
   result: Awaited<ReturnType<typeof runMessageAction>>,
 ): Record<string, unknown> {
   expect(result.kind).toBe("action");
-  if (result.kind !== "action") {
-    throw new Error("expected action result");
-  }
   return requireRecord(result.payload);
-}
-
-function requireLoadWebMediaOptions(): Record<string, unknown> {
-  const call = requireLoadWebMediaCall();
-  return requireRecord(call[1]);
 }
 
 function requireLoadWebMediaCall(): readonly unknown[] {
@@ -91,19 +109,11 @@ function requireLoadWebMediaCall(): readonly unknown[] {
   return call;
 }
 
-function expectAttachmentRemoteMediaPayload(result: Awaited<ReturnType<typeof runMessageAction>>) {
-  expect(requireActionPayload(result)).toMatchObject({
-    ok: true,
-    filename: "pic.png",
-    caption: "caption",
-    contentType: "image/png",
-    buffer: remoteMedia.buffer.toString("base64"),
-  });
-}
-
 describe("runMessageAction media behavior", () => {
-  beforeEach(async () => {
-    await resetMessageActionMediaMocks();
+  beforeEach(resetMessageActionMediaMocks);
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+    vi.clearAllMocks();
   });
 
   it("normalizes image/png data URLs and infers filenames for send", async () => {
@@ -133,8 +143,7 @@ describe("runMessageAction media behavior", () => {
 
     await hydrate(args, { action });
 
-    expect(args.contentType).toBe("image/jpeg");
-    expect(args.filename).toBe("attachment.jpg");
+    expect(args).toMatchObject({ contentType: "image/jpeg", filename: "attachment.jpg" });
   });
 
   it.each([
@@ -169,40 +178,12 @@ describe("runMessageAction media behavior", () => {
   });
 
   describe("sendAttachment hydration", () => {
-    const cfg = {
-      channels: {
-        attachmentchat: {
-          enabled: true,
-          serverUrl: "http://localhost:1234",
-          password: "test-password",
-        },
-      },
-    } as OpenClawConfig;
-    const attachmentPlugin: ChannelPlugin = {
-      id: "attachmentchat",
-      meta: {
-        id: "attachmentchat",
-        label: "AttachmentChat",
-        selectionLabel: "AttachmentChat",
-        docsPath: "/channels/attachmentchat",
-        blurb: "AttachmentChat test plugin.",
-      },
-      capabilities: { chatTypes: ["direct", "group"], media: true },
-      config: createAlwaysConfiguredPluginConfig(),
-      actions: {
-        describeMessageTool: () => ({ actions: ["sendAttachment", "upload-file", "setGroupIcon"] }),
-        supportsAction: ({ action }) =>
-          action === "sendAttachment" || action === "upload-file" || action === "setGroupIcon",
-        handleAction: async ({ params }) =>
-          jsonResult({
-            ok: true,
-            buffer: params.buffer,
-            filename: params.filename,
-            caption: params.caption,
-            contentType: params.contentType,
-          }),
-      },
-    };
+    const cfg: OpenClawConfig = { channels: { attachmentchat: { enabled: true } } };
+    const attachmentPlugin = mediaPlugin(
+      "attachmentchat",
+      ["sendAttachment", "upload-file", "setGroupIcon"],
+      async ({ params }) => jsonResult(attachmentPayload(params)),
+    );
     const runAttachment = (params: ActionInput["params"], overrides: Partial<ActionInput> = {}) =>
       runMessageAction({
         cfg,
@@ -216,19 +197,13 @@ describe("runMessageAction media behavior", () => {
       vi.mocked(loadWebMedia).mockResolvedValue(remoteMedia);
     });
 
-    afterEach(() => {
-      setActivePluginRegistry(createTestRegistry([]));
-      vi.clearAllMocks();
-    });
-
     it.each(["sendAttachment", "upload-file"] as const)(
       "delivers parameterized wrapped image data URLs through the %s handler",
       async (action) => {
         const result = await runAttachment({ buffer: parameterizedPngDataUrl }, { action });
 
         const payload = requireActionPayload(result);
-        expect(payload.contentType).toBe("image/png");
-        expect(payload.filename).toBe("attachment.png");
+        expect(payload).toMatchObject({ contentType: "image/png", filename: "attachment.png" });
         expect(canonicalizeBase64(String(payload.buffer))).toBe(onePixelPngBase64);
       },
     );
@@ -250,16 +225,13 @@ describe("runMessageAction media behavior", () => {
           },
         );
 
-        expect(result.kind).toBe("action");
-        expect(result.payload).toMatchObject({
+        expect(requireActionPayload(result)).toMatchObject({
           ok: true,
           filename: "secret.txt",
           caption: "caption",
           contentType: "text/plain",
+          buffer: Buffer.from("secret").toString("base64"),
         });
-        expect((result.payload as { buffer?: string }).buffer).toBe(
-          Buffer.from("secret").toString("base64"),
-        );
       });
     });
 
@@ -273,8 +245,14 @@ describe("runMessageAction media behavior", () => {
         { action: "upload-file" },
       );
 
-      expectAttachmentRemoteMediaPayload(result);
-      expect(requireLoadWebMediaOptions().optimizeImages).toBe(false);
+      expect(requireActionPayload(result)).toMatchObject({
+        ok: true,
+        filename: "pic.png",
+        caption: "caption",
+        contentType: "image/png",
+        buffer: Buffer.from("hello").toString("base64"),
+      });
+      expect(requireLoadWebMediaCall()[1]).toMatchObject({ optimizeImages: false });
     });
 
     it("enforces sandboxed attachment paths for attachment actions", async () => {
@@ -323,34 +301,14 @@ describe("runMessageAction media behavior", () => {
     // media policy without synthesizing attachment captions from reply text.
     const cfg: OpenClawConfig = { channels: { replychat: { enabled: true } } };
     const handleActionMock = vi.fn();
-    const replyPlugin: ChannelPlugin = {
-      id: "replychat",
-      meta: {
-        id: "replychat",
-        label: "ReplyChat",
-        selectionLabel: "ReplyChat",
-        docsPath: "/channels/replychat",
-        blurb: "ReplyChat test plugin.",
-      },
-      capabilities: { chatTypes: ["direct", "group"], media: true },
-      config: createAlwaysConfiguredPluginConfig(),
-      actions: {
-        describeMessageTool: () => ({ actions: ["reply"] }),
-        supportsAction: ({ action }) => action === "reply",
-        handleAction: async ({ params }) => {
-          handleActionMock(params);
-          return jsonResult({
-            ok: true,
-            buffer: params.buffer,
-            filename: params.filename,
-            caption: params.caption,
-            contentType: params.contentType,
-            text: params.text,
-            message: params.message,
-          });
-        },
-      },
-    };
+    const replyPlugin = mediaPlugin("replychat", ["reply"], async ({ params }) => {
+      handleActionMock(params);
+      return jsonResult({
+        ...attachmentPayload(params),
+        text: params.text,
+        message: params.message,
+      });
+    });
     const runReply = (params: ActionInput["params"], overrides: Partial<ActionInput> = {}) =>
       runMessageAction({
         cfg,
@@ -371,11 +329,6 @@ describe("runMessageAction media behavior", () => {
       handleActionMock.mockReset();
       setTestPlugin(replyPlugin, "replychat");
       vi.mocked(loadWebMedia).mockResolvedValue(remoteMedia);
-    });
-
-    afterEach(() => {
-      setActivePluginRegistry(createTestRegistry([]));
-      vi.clearAllMocks();
     });
 
     it("hydrates buffer and filename from a remote URL before the reply handler runs", async () => {
@@ -426,11 +379,13 @@ describe("runMessageAction media behavior", () => {
         expect(handleActionMock).toHaveBeenCalledTimes(1);
         expect(events).toEqual(["load", "release", "handler", "settled"]);
         const payload = requireActionPayload(result);
-        expect(payload.buffer).toBe(Buffer.from("hello").toString("base64"));
-        expect(payload.filename).toBe("pic.png");
-        expect(payload.contentType).toBe("image/png");
+        expect(payload).toMatchObject({
+          buffer: Buffer.from("hello").toString("base64"),
+          filename: "pic.png",
+          contentType: "image/png",
+          message: "look at this",
+        });
         expect(payload.caption).toBeUndefined();
-        expect(payload.message).toBe("look at this");
       } finally {
         // Release and join even when an ordering assertion fails before resolution.
         loaded.resolve(remoteMedia);
@@ -503,8 +458,10 @@ describe("runMessageAction media behavior", () => {
 
         expect(result.kind).toBe("action");
         const handlerParams = readHandlerParams();
-        expect(handlerParams.filename).toBe("photo.png");
-        expect(handlerParams.contentType).toBe("image/png");
+        expect(handlerParams).toMatchObject({
+          filename: "photo.png",
+          contentType: "image/png",
+        });
         expect(typeof handlerParams.buffer).toBe("string");
       });
     });

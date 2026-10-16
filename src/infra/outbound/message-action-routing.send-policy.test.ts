@@ -1,5 +1,3 @@
-// Covers core message-action send fallback, TTS application, and durable send
-// policy after plugin preparation is absent.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -33,21 +31,27 @@ function runSourceSend(input: SendInput) {
     ...input,
   });
 }
-function registerPlugin(plugin: ChannelPlugin) {
+function registerPlugin(
+  params: Parameters<typeof createOutboundTestPlugin>[0],
+  overrides: Partial<ChannelPlugin> = {},
+) {
+  const plugin = { ...createOutboundTestPlugin(params), ...overrides };
   setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
 }
 
 function registerSlackTextPlugin(accountIds: string[] = ["default"]) {
   const sendText = vi.fn().mockResolvedValue({ channel: "slack", messageId: "m1", chatId: "C123" });
-  registerPlugin({
-    ...createOutboundTestPlugin({ id: "slack", outbound: { deliveryMode: "direct", sendText } }),
-    config: {
-      listAccountIds: () => accountIds,
-      resolveAccount: () => ({ enabled: true }),
-      isConfigured: () => true,
+  registerPlugin(
+    { id: "slack", outbound: { deliveryMode: "direct", sendText } },
+    {
+      config: {
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      threading: { threadAddressing: "message" },
     },
-    threading: { threadAddressing: "message" },
-  });
+  );
   return sendText;
 }
 
@@ -130,17 +134,15 @@ describe("runMessageAction core send routing", () => {
   });
 
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {
-    registerPlugin(
-      createOutboundTestPlugin({
-        id: "telegram",
-        outbound: { deliveryMode: "direct", sendText: vi.fn() },
-        messaging: {
-          normalizeTarget: (raw) =>
-            raw === "-1001234567890:topic:42" ? "telegram:-1001234567890:topic:42" : undefined,
-          targetResolver: { looksLikeId: (raw) => raw === "-1001234567890:topic:42" },
-        },
-      }),
-    );
+    registerPlugin({
+      id: "telegram",
+      outbound: { deliveryMode: "direct", sendText: vi.fn() },
+      messaging: {
+        normalizeTarget: (raw) =>
+          raw === "-1001234567890:topic:42" ? "telegram:-1001234567890:topic:42" : undefined,
+        targetResolver: { looksLikeId: (raw) => raw === "-1001234567890:topic:42" },
+      },
+    });
 
     const result = await runSend({
       cfg: { channels: { telegram: { botToken: "123:test" } } },
@@ -152,12 +154,11 @@ describe("runMessageAction core send routing", () => {
       dryRun: true,
     });
 
-    if (result.kind !== "send") {
-      throw new Error(`Expected send result, got ${result.kind}`);
-    }
-    const payload = result.payload as { dryRun?: boolean; to?: string };
-    expect(result.to).toBe("telegram:-1001234567890:topic:42");
-    expect(payload).toMatchObject({ to: "telegram:-1001234567890:topic:42", dryRun: true });
+    expect(result).toMatchObject({
+      kind: "send",
+      to: "telegram:-1001234567890:topic:42",
+      payload: { to: "telegram:-1001234567890:topic:42", dryRun: true },
+    });
   });
 
   it("uses best-effort delivery for implicit message-tool-only source replies", async () => {
@@ -236,12 +237,10 @@ describe("runMessageAction core send routing", () => {
       messageId: "m1",
       chatId: "C999",
     });
-    registerPlugin(
-      createOutboundTestPlugin({
-        id: "telegram",
-        outbound: { deliveryMode: "direct", sendText },
-      }),
-    );
+    registerPlugin({
+      id: "telegram",
+      outbound: { deliveryMode: "direct", sendText },
+    });
 
     await expect(
       runSourceSend({
