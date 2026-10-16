@@ -21,6 +21,20 @@ Default: `OPENCLAW_WORKSPACE_DIR` when set, otherwise `<state-dir>/workspace`. T
 
 An explicit `agents.defaults.workspace` value takes precedence over `OPENCLAW_WORKSPACE_DIR`. A sole agent uses this path directly. In a multi-agent fleet, agents without their own `workspace` use an agent-id subdirectory so no implicit owner claims the shared root.
 
+<a id="workspace-paths" />
+
+Workspace paths in `agents.defaults.workspace` and `agents.entries.*.workspace`
+support leading `~` on all platforms, including Windows. OpenClaw expands it
+itself, using the Gateway process's home directory: `OPENCLAW_HOME`, then `HOME`,
+then `USERPROFILE`, then the operating system's home directory. The
+`"~/.openclaw/workspace"` example therefore works on native Windows as well as
+macOS and Linux; it does not depend on shell expansion.
+
+For an explicit native Windows path in JSON/JSON5, use forward slashes such as
+`"C:/Users/your-name/.openclaw/workspace"`, or escape each backslash:
+`"C:\\Users\\your-name\\.openclaw\\workspace"`. Paths refer to the machine running
+the Gateway. A Gateway running in WSL uses Linux paths inside WSL.
+
 ## `agents.defaults.cwd`
 
 Optional working directory for agent reply runs. Use it to run coding tools in an
@@ -47,9 +61,12 @@ identifies their separate roles so deliverables stay in the working directory.
 
 Optional repository root shown in the system prompt's Runtime line. If unset, OpenClaw auto-detects by walking upward from the workspace.
 
+Use an absolute path, such as `/path/to/openclaw` or `C:/path/to/openclaw` on
+native Windows. This setting does not expand `~`.
+
 ```json5
 {
-  agents: { defaults: { repoRoot: "~/path/to/openclaw" } },
+  agents: { defaults: { repoRoot: "/path/to/openclaw" } },
 }
 ```
 
