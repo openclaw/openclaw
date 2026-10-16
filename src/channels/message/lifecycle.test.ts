@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createLiveMessageState,
   defineFinalizableLivePreviewAdapter,
@@ -9,9 +9,29 @@ import { createMessageReceiveContext } from "./receive.js";
 
 type LivePreviewMediaPayload = { text?: string; mediaUrl: string };
 type LivePreviewMediaEdit = { text?: string };
+type PreviewAdapter<TPayload, TEdit> = Parameters<
+  typeof defineFinalizableLivePreviewAdapter<TPayload, string, TEdit>
+>[0];
 type PreviewDraft = NonNullable<
   Parameters<typeof defineFinalizableLivePreviewAdapter<unknown, string, unknown>>[0]["draft"]
 >;
+
+afterEach(() => vi.restoreAllMocks());
+
+function mediaAdapter(
+  id: string,
+  overrides: Partial<PreviewAdapter<LivePreviewMediaPayload, LivePreviewMediaEdit>> = {},
+) {
+  return {
+    draft: createDraft(id),
+    buildFinalEdit: (payload: LivePreviewMediaPayload) => ({ text: payload.text }),
+    editFinal: vi.fn(async () => undefined),
+    buildSupplementalPayload: (payload: LivePreviewMediaPayload) => ({
+      mediaUrl: payload.mediaUrl,
+    }),
+    ...overrides,
+  };
+}
 
 function createDraft(id: string, overrides: Partial<PreviewDraft> = {}): PreviewDraft {
   return {
@@ -20,6 +40,26 @@ function createDraft(id: string, overrides: Partial<PreviewDraft> = {}): Preview
     clear: vi.fn(async () => undefined),
     ...overrides,
   };
+}
+
+type TextAdapter = PreviewAdapter<{ text: string }, { text: string }>;
+
+function createAdapter(draft: PreviewDraft, overrides: Partial<TextAdapter> = {}): TextAdapter {
+  return {
+    draft,
+    buildFinalEdit: (payload) => ({ text: payload.text }),
+    editFinal: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+function receiveContext(options: Partial<Parameters<typeof createMessageReceiveContext>[0]>) {
+  return createMessageReceiveContext({
+    id: "rx-test",
+    channel: "telegram",
+    message: { text: "hello" },
+    ...options,
+  });
 }
 
 describe("message lifecycle primitives", () => {
@@ -49,19 +89,12 @@ describe("message lifecycle primitives", () => {
     const deliverNormally = vi.fn(async () => undefined);
     const onPreviewFinalized = vi.fn(async () => undefined);
     const draft = createDraft("preview-1", { seal: vi.fn(async () => undefined) });
-
     const result = await deliverWithFinalizableLivePreviewAdapter({
       kind: "final",
       payload: { text: "done" },
-      adapter: {
-        draft,
-        buildFinalEdit: (payload) => ({ text: payload.text }),
-        editFinal,
-        onPreviewFinalized,
-      },
+      adapter: createAdapter(draft, { editFinal, onPreviewFinalized }),
       deliverNormally,
     });
-
     expect(result.kind).toBe("preview-finalized");
     expect(draft.flush).toHaveBeenCalledTimes(1);
     expect(draft.seal).toHaveBeenCalledTimes(1);
@@ -72,10 +105,11 @@ describe("message lifecycle primitives", () => {
     if (!liveState) {
       throw new Error("expected finalized live state");
     }
-    expect(liveState.phase).toBe("finalized");
-    expect(liveState.canFinalizeInPlace).toBe(false);
-    expect(liveState.receipt?.primaryPlatformMessageId).toBe("preview-1");
-    expect(liveState.receipt?.platformMessageIds).toEqual(["preview-1"]);
+    expect(liveState).toMatchObject({
+      phase: "finalized",
+      canFinalizeInPlace: false,
+      receipt: { primaryPlatformMessageId: "preview-1", platformMessageIds: ["preview-1"] },
+    });
     expect(onPreviewFinalized).toHaveBeenCalledExactlyOnceWith(
       "preview-1",
       expect.objectContaining({ primaryPlatformMessageId: "preview-1" }),
@@ -139,43 +173,24 @@ describe("message lifecycle primitives", () => {
 
   it("uses normal delivery when a finalized preview has no supplemental sender", async () => {
     const deliverNormally = vi.fn(async () => true);
-
-    const result = await deliverWithFinalizableLivePreviewAdapter<
-      LivePreviewMediaPayload,
-      string,
-      LivePreviewMediaEdit
-    >({
+    const result = await deliverWithFinalizableLivePreviewAdapter({
       kind: "final",
       payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
-      adapter: {
-        draft: createDraft("preview-no-supplement-sender"),
-        buildFinalEdit: (payload) => ({ text: payload.text }),
-        editFinal: vi.fn(async () => undefined),
-        buildSupplementalPayload: (payload) => ({ mediaUrl: payload.mediaUrl }),
-      },
+      adapter: mediaAdapter("preview-no-supplement-sender"),
       deliverNormally,
     });
-
     expect(result.kind).toBe("preview-finalized");
     expect(deliverNormally).toHaveBeenCalledWith({ mediaUrl: "file:///tmp/reply.mp3" });
   });
 
   it("surfaces supplemental delivery failure after both sender paths report no send", async () => {
     await expect(
-      deliverWithFinalizableLivePreviewAdapter<
-        LivePreviewMediaPayload,
-        string,
-        LivePreviewMediaEdit
-      >({
+      deliverWithFinalizableLivePreviewAdapter({
         kind: "final",
         payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
-        adapter: {
-          draft: createDraft("preview-supplement-unsent"),
-          buildFinalEdit: (payload) => ({ text: payload.text }),
-          editFinal: vi.fn(async () => undefined),
-          buildSupplementalPayload: (payload) => ({ mediaUrl: payload.mediaUrl }),
+        adapter: mediaAdapter("preview-supplement-unsent", {
           deliverSupplemental: vi.fn(async () => false),
-        },
+        }),
         deliverNormally: vi.fn(async () => false),
       }),
     ).rejects.toThrow("Live preview supplemental payload was not delivered");
@@ -244,30 +259,24 @@ describe("message lifecycle primitives", () => {
       events.push("commit");
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    try {
-      const result = await deliverWithFinalizableLivePreviewAdapter({
-        kind: "final",
-        payload: { text: "already delivered" },
-        adapter: defineFinalizableLivePreviewAdapter({
-          draft,
+    const result = await deliverWithFinalizableLivePreviewAdapter({
+      kind: "final",
+      payload: { text: "already delivered" },
+      adapter: defineFinalizableLivePreviewAdapter(
+        createAdapter(draft, {
           buildFinalEdit: () => undefined,
-          editFinal: vi.fn(async () => undefined),
         }),
-        deliverNormally,
-        onNormalDelivered,
-      });
-
-      expect(result.kind).toBe("normal-delivered");
-      expect(events).toEqual(["discard", "deliver", "commit", "clear"]);
-      expect(deliverNormally).toHaveBeenCalledTimes(1);
-      expect(onNormalDelivered).toHaveBeenCalledTimes(1);
-      expect(warn).toHaveBeenCalledExactlyOnceWith(
-        "Live preview cleanup failed after delivery; a stale preview may remain",
-      );
-    } finally {
-      warn.mockRestore();
-    }
+      ),
+      deliverNormally,
+      onNormalDelivered,
+    });
+    expect(result.kind).toBe("normal-delivered");
+    expect(events).toEqual(["discard", "deliver", "commit", "clear"]);
+    expect(deliverNormally).toHaveBeenCalledTimes(1);
+    expect(onNormalDelivered).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "Live preview cleanup failed after delivery; a stale preview may remain",
+    );
   });
 
   it("keeps intentionally suppressed fallback delivery skipped without post-delivery cleanup", async () => {
@@ -275,24 +284,19 @@ describe("message lifecycle primitives", () => {
       throw new Error("suppressed reply must not be cleaned up as delivered");
     });
     const onNormalDelivered = vi.fn(async () => undefined);
-
     const result = await deliverWithFinalizableLivePreviewAdapter({
       kind: "final",
       payload: { text: "suppressed" },
-      adapter: {
-        draft: {
-          flush: vi.fn(async () => undefined),
-          id: () => "suppressed-preview",
+      adapter: createAdapter(
+        createDraft("suppressed-preview", {
           discardPending: vi.fn(async () => undefined),
           clear,
-        },
-        buildFinalEdit: () => undefined,
-        editFinal: vi.fn(async () => undefined),
-      },
+        }),
+        { buildFinalEdit: () => undefined },
+      ),
       deliverNormally: vi.fn(async () => false),
       onNormalDelivered,
     });
-
     expect(result.kind).toBe("normal-skipped");
     expect(onNormalDelivered).not.toHaveBeenCalled();
     expect(clear).not.toHaveBeenCalled();
@@ -302,90 +306,68 @@ describe("message lifecycle primitives", () => {
     const deliverNormally = vi.fn(async () => true);
     const onNormalDelivered = vi.fn(async () => undefined);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    try {
-      await expect(
-        deliverWithFinalizableLivePreviewAdapter({
-          kind: "final",
-          payload: { text: "not delivered" },
-          adapter: {
-            draft: {
-              flush: vi.fn(async () => undefined),
-              id: () => "pre-delivery-preview",
-              clear: vi.fn(async () => {
-                throw new Error("pre-delivery cleanup failed");
-              }),
-            },
-            buildFinalEdit: () => undefined,
-            editFinal: vi.fn(async () => undefined),
-          },
-          deliverNormally,
-          onNormalDelivered,
-        }),
-      ).rejects.toThrow("pre-delivery cleanup failed");
-
-      expect(deliverNormally).not.toHaveBeenCalled();
-      expect(onNormalDelivered).not.toHaveBeenCalled();
-      expect(warn).not.toHaveBeenCalled();
-    } finally {
-      warn.mockRestore();
-    }
+    await expect(
+      deliverWithFinalizableLivePreviewAdapter({
+        kind: "final",
+        payload: { text: "not delivered" },
+        adapter: createAdapter(
+          createDraft("pre-delivery-preview", {
+            clear: vi.fn(async () => {
+              throw new Error("pre-delivery cleanup failed");
+            }),
+          }),
+          { buildFinalEdit: () => undefined },
+        ),
+        deliverNormally,
+        onNormalDelivered,
+      }),
+    ).rejects.toThrow("pre-delivery cleanup failed");
+    expect(deliverNormally).not.toHaveBeenCalled();
+    expect(onNormalDelivered).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("preserves a delivery-commit failure when later preview cleanup also fails", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    try {
-      await expect(
-        deliverWithFinalizableLivePreviewAdapter({
-          kind: "final",
-          payload: { text: "already accepted" },
-          adapter: {
-            draft: {
-              flush: vi.fn(async () => undefined),
-              id: () => "commit-failure-preview",
-              discardPending: vi.fn(async () => undefined),
-              clear: vi.fn(async () => {
-                throw new Error("preview cleanup must not replace delivery failure");
-              }),
-            },
-            buildFinalEdit: () => undefined,
-            editFinal: vi.fn(async () => undefined),
-          },
-          deliverNormally: vi.fn(async () => true),
-          onNormalDelivered: vi.fn(async () => {
-            throw new Error("delivery commit failed");
+    await expect(
+      deliverWithFinalizableLivePreviewAdapter({
+        kind: "final",
+        payload: { text: "already accepted" },
+        adapter: createAdapter(
+          createDraft("commit-failure-preview", {
+            discardPending: vi.fn(async () => undefined),
+            clear: vi.fn(async () => {
+              throw new Error("preview cleanup must not replace delivery failure");
+            }),
           }),
+          { buildFinalEdit: () => undefined },
+        ),
+        deliverNormally: vi.fn(async () => true),
+        onNormalDelivered: vi.fn(async () => {
+          throw new Error("delivery commit failed");
         }),
-      ).rejects.toThrow("delivery commit failed");
-
-      expect(warn).toHaveBeenCalledTimes(1);
-    } finally {
-      warn.mockRestore();
-    }
+      }),
+    ).rejects.toThrow("delivery commit failed");
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it("does not complete live preview fallback state when normal delivery throws", async () => {
     const discardPending = vi.fn(async () => undefined);
     const clear = vi.fn(async () => undefined);
     const onNormalDelivered = vi.fn(async () => undefined);
-
     await expect(
       deliverWithFinalizableLivePreviewAdapter({
         kind: "final",
         payload: { text: "with media" },
-        adapter: {
-          draft: createDraft("preview-2", { discardPending, clear }),
+        adapter: createAdapter(createDraft("preview-2", { discardPending, clear }), {
           buildFinalEdit: () => undefined,
-          editFinal: vi.fn(async () => undefined),
-        },
+        }),
         deliverNormally: vi.fn(async () => {
           throw new Error("send failed");
         }),
         onNormalDelivered,
       }),
     ).rejects.toThrow("send failed");
-
     expect(discardPending).toHaveBeenCalledTimes(1);
     expect(onNormalDelivered).not.toHaveBeenCalled();
     expect(clear).not.toHaveBeenCalled();
@@ -411,32 +393,27 @@ describe("message lifecycle primitives", () => {
   });
 
   it("lets live preview adapters resolve the committed platform id after final edit", async () => {
-    const adapter = defineFinalizableLivePreviewAdapter({
-      draft: createDraft("preview-before-edit"),
-      buildFinalEdit: (payload: { text: string }) => ({ text: payload.text }),
-      editFinal: vi.fn(async () => undefined),
-      resolveFinalizedId: () => "message-after-edit",
-    });
-
+    const adapter = defineFinalizableLivePreviewAdapter(
+      createAdapter(createDraft("preview-before-edit"), {
+        resolveFinalizedId: () => "message-after-edit",
+      }),
+    );
     const result = await deliverWithFinalizableLivePreviewAdapter({
       kind: "final",
       payload: { text: "done" },
       adapter,
       deliverNormally: vi.fn(async () => undefined),
     });
-
     expect(result.liveState?.receipt?.primaryPlatformMessageId).toBe("message-after-edit");
   });
 
   it("falls back to normal delivery when no live preview adapter is available", async () => {
     const deliverNormally = vi.fn(async () => undefined);
-
     const result = await deliverWithFinalizableLivePreviewAdapter({
       kind: "final",
       payload: { text: "plain" },
       deliverNormally,
     });
-
     expect(result.kind).toBe("normal-delivered");
     expect(deliverNormally).toHaveBeenCalledWith({ text: "plain" });
   });
@@ -445,22 +422,20 @@ describe("message lifecycle primitives", () => {
     const deliverNormally = vi.fn(async () => undefined);
     const handlePreviewEditError = vi.fn(() => "retain" as const);
     const editError = new Error("timeout after request");
-    const adapter = defineFinalizableLivePreviewAdapter({
-      draft: createDraft("preview-maybe-final"),
-      buildFinalEdit: (payload: { text: string }) => ({ text: payload.text }),
-      editFinal: vi.fn(async () => {
-        throw editError;
+    const adapter = defineFinalizableLivePreviewAdapter(
+      createAdapter(createDraft("preview-maybe-final"), {
+        editFinal: vi.fn(async () => {
+          throw editError;
+        }),
+        handlePreviewEditError,
       }),
-      handlePreviewEditError,
-    });
-
+    );
     const result = await deliverWithFinalizableLivePreviewAdapter({
       kind: "final",
       payload: { text: "done" },
       adapter,
       deliverNormally,
     });
-
     expect(result.kind).toBe("preview-retained");
     expect(result.liveState?.phase).toBe("previewing");
     expect(deliverNormally).not.toHaveBeenCalled();
@@ -520,25 +495,19 @@ describe("message lifecycle primitives", () => {
   it("acks and nacks receive contexts through explicit hooks", async () => {
     const onAck = vi.fn(async () => undefined);
     const onNack = vi.fn(async () => undefined);
-    const ctx = createMessageReceiveContext({
-      id: "rx-ack",
-      channel: "telegram",
-      message: { text: "hello" },
+    const ctx = receiveContext({
       ackPolicy: "after_durable_send",
       onAck,
       onNack,
     });
-
     expect(ctx.shouldAckAfter("receive_record")).toBe(false);
     expect(ctx.shouldAckAfter("durable_send")).toBe(true);
-
     const beforeAck = Date.now();
     await ctx.ack();
     await ctx.ack();
     expect(onAck).toHaveBeenCalledTimes(1);
     expect(ctx.ackState).toBe("acked");
     expect(ctx.ackedAt).toBeGreaterThanOrEqual(beforeAck);
-
     const nackError = new Error("offset failed");
     await ctx.nack(nackError);
     await ctx.nack(new Error("duplicate failure"));
@@ -553,19 +522,11 @@ describe("message lifecycle primitives", () => {
       .fn<(error: unknown) => Promise<void>>()
       .mockRejectedValueOnce(new Error("temporary failure"))
       .mockResolvedValueOnce();
-    const ctx = createMessageReceiveContext({
-      id: "rx-nack-retry",
-      channel: "telegram",
-      message: { text: "hello" },
-      onNack,
-    });
-
+    const ctx = receiveContext({ onNack });
     await expect(ctx.nack(new Error("first failure"))).rejects.toThrow("temporary failure");
     expect(ctx.ackState).toBe("pending");
-
     const retryError = new Error("retry failure");
     await ctx.nack(retryError);
-
     expect(onNack).toHaveBeenCalledTimes(2);
     expect(ctx.ackState).toBe("nacked");
     expect(ctx.nackErrorMessage).toBe("retry failure");
@@ -579,20 +540,13 @@ describe("message lifecycle primitives", () => {
           resolveNack = resolve;
         }),
     );
-    const ctx = createMessageReceiveContext({
-      id: "rx-nack-overlap",
-      channel: "telegram",
-      message: { text: "hello" },
-      onNack,
-    });
+    const ctx = receiveContext({ onNack });
     const firstError = new Error("first failure");
-
     const first = ctx.nack(firstError);
     const duplicate = ctx.nack(new Error("duplicate failure"));
     await vi.waitFor(() => expect(onNack).toHaveBeenCalledOnce());
     resolveNack?.();
     await Promise.all([first, duplicate]);
-
     expect(onNack).toHaveBeenCalledWith(firstError);
     expect(ctx.ackState).toBe("nacked");
     expect(ctx.nackErrorMessage).toBe("first failure");

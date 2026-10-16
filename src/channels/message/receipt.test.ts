@@ -6,6 +6,17 @@ import {
   resolveReceiptSourceId,
 } from "./receipt.js";
 
+function nestedReceipt(id: string, threadId: string, sentAt: number) {
+  return {
+    receipt: {
+      platformMessageIds: [id],
+      parts: [{ platformMessageId: id, kind: "text" as const, index: 0 }],
+      threadId,
+      sentAt,
+    },
+  };
+}
+
 describe("createMessageReceiptFromOutboundResults", () => {
   it("excludes explicit no-send results from identity and aggregate receipt evidence", () => {
     const notSent = {
@@ -19,7 +30,6 @@ describe("createMessageReceiptFromOutboundResults", () => {
     const receipt = createMessageReceiptFromOutboundResults({
       results: [notSent, { messageId: "accepted" }],
     });
-
     expect(resolveReceiptSourceId(notSent)).toBeUndefined();
     expect(receipt.platformMessageIds).toEqual(["accepted"]);
     expect(receipt.parts.map((part) => part.platformMessageId)).toEqual(["accepted"]);
@@ -38,22 +48,17 @@ describe("createMessageReceiptFromOutboundResults", () => {
       replyToId: "reply-1",
       sentAt: 123,
     });
-
-    expect(receipt.primaryPlatformMessageId).toBe("m1");
-    expect(receipt.platformMessageIds).toEqual(["m1", "m2"]);
-    expect(receipt.threadId).toBe("topic-1");
-    expect(receipt.replyToId).toBe("reply-1");
-    expect(receipt.sentAt).toBe(123);
-    expect(
-      receipt.parts.map(({ platformMessageId, kind, index }) => ({
-        platformMessageId,
-        kind,
-        index,
-      })),
-    ).toEqual([
-      { platformMessageId: "m1", kind: "text", index: 0 },
-      { platformMessageId: "m2", kind: "text", index: 1 },
-    ]);
+    expect(receipt).toMatchObject({
+      primaryPlatformMessageId: "m1",
+      platformMessageIds: ["m1", "m2"],
+      threadId: "topic-1",
+      replyToId: "reply-1",
+      sentAt: 123,
+      parts: [
+        { platformMessageId: "m1", kind: "text", index: 0 },
+        { platformMessageId: "m2", kind: "text", index: 1 },
+      ],
+    });
   });
 
   it.each([undefined, ""])(
@@ -104,7 +109,6 @@ describe("createMessageReceiptFromOutboundResults", () => {
     const receipt = createMessageReceiptFromOutboundResults({
       results: [{ ...result, receipt: adapterReceipt }],
     });
-
     expect(receipt).toMatchObject({
       ...receiptMetadata,
       platformMessageIds: [],
@@ -202,26 +206,11 @@ describe("createMessageReceiptFromOutboundResults", () => {
   it("keeps conflicting provider threads on parts and omits the aggregate thread", () => {
     const receipt = createMessageReceiptFromOutboundResults({
       results: [
-        {
-          receipt: {
-            platformMessageIds: ["m1"],
-            parts: [{ platformMessageId: "m1", kind: "text", index: 0 }],
-            threadId: "canonical-thread-1",
-            sentAt: 123,
-          },
-        },
-        {
-          receipt: {
-            platformMessageIds: ["m2"],
-            parts: [{ platformMessageId: "m2", kind: "text", index: 0 }],
-            threadId: "canonical-thread-2",
-            sentAt: 124,
-          },
-        },
+        nestedReceipt("m1", "canonical-thread-1", 123),
+        nestedReceipt("m2", "canonical-thread-2", 124),
       ],
       threadId: "requested-thread",
     });
-
     expect(receipt.threadId).toBeUndefined();
     expect(receipt.parts.map((part) => part.threadId)).toEqual([
       "canonical-thread-1",
@@ -249,7 +238,6 @@ describe("createMessageReceiptFromOutboundResults", () => {
       ],
       replyToId: "reply-1",
     });
-
     expect(receipt.replyToId).toBe("reply-1");
     expect(receipt.parts.map((part) => part.replyToId)).toEqual(["reply-1", undefined]);
   });
@@ -261,7 +249,6 @@ describe("createMessageReceiptFromOutboundResults", () => {
       parts: [],
       sentAt: 123,
     };
-
     expect(listMessageReceiptPlatformIds(receipt)).toEqual(["m1", "m2"]);
     expect(resolveMessageReceiptPrimaryId(receipt)).toBe("m1");
   });
