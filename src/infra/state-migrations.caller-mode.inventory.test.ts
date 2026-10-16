@@ -77,25 +77,27 @@ ${params.prepareStateDir ? `    fs.mkdirSync(${JSON.stringify(params.prepareStat
   );
 }
 
-function makeEnv(root: string, bundled = true): NodeJS.ProcessEnv {
+function makeEnv(root: string) {
   return {
     ...process.env,
     HOME: root,
     OPENCLAW_HOME: root,
     OPENCLAW_STATE_DIR: path.join(root, "state"),
     OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    ...(bundled
-      ? {
-          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
-          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-        }
-      : { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
+    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
   };
 }
 
 function repairResult(requiredPluginIds: string[], changes: string[] = []) {
   return { changes, completedPluginIds: undefined, requiredPluginIds, warnings: [] };
+}
+
+function discoverActions(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  return resolveLivePluginDoctorStateMigrationInventory({ config, env }).descriptors.map(
+    ({ pluginId, id }) => ({ pluginId, id }),
+  );
 }
 
 function repair(
@@ -123,7 +125,6 @@ afterEach(async () => {
 it("repairs a planned bundled owner omitted by a partial index after acquiring fresh maintenance ownership", async () => {
   const root = await tempDirs.make("openclaw-doctor-partial-inventory-");
   const stateDir = path.join(root, "state");
-  const configPath = path.join(root, "openclaw.json");
   const bundledRoot = path.join(root, "bundled");
   const pluginIds = ["kept-owner", "omitted-owner"];
   for (const pluginId of pluginIds) {
@@ -139,7 +140,7 @@ it("repairs a planned bundled owner omitted by a partial index after acquiring f
     plugins: { allow: ["kept-owner"] },
   };
   const env = makeEnv(root);
-  fs.writeFileSync(configPath, JSON.stringify(config));
+  fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config));
   const fullIndex = withPluginCache(createPluginCache(), () =>
     loadInstalledPluginIndex({ config, env }),
   );
@@ -157,27 +158,24 @@ it("repairs a planned bundled owner omitted by a partial index after acquiring f
     expect(cached.source).toBe("persisted");
     expect(cached.snapshot.plugins.map((plugin) => plugin.pluginId)).toEqual(["kept-owner"]);
   });
-
   await withPluginCache(createPluginCache(), async () => {
     const snapshot = loadPluginMetadataSnapshot({ config, env, index: fullIndex });
-    await withPluginMetadataSnapshotScope(
+    return withPluginMetadataSnapshotScope(
       snapshot,
       async () => {
-        const inventory = resolveLivePluginDoctorStateMigrationInventory({ config, env });
-        const plannedActions = inventory.descriptors.map(({ pluginId, id }) => ({ pluginId, id }));
-        expect(plannedActions).toEqual([
+        const actions = discoverActions(config, env);
+        expect(actions).toEqual([
           { pluginId: "kept-owner", id: "session-action" },
           { pluginId: "omitted-owner", id: "session-action" },
         ]);
-        await expect(repair(config, env, plannedActions)).resolves.toEqual(
+        await expect(repair(config, env, actions)).resolves.toEqual(
           repairResult(pluginIds, ["migrated kept-owner", "migrated omitted-owner"]),
         );
         for (const pluginId of pluginIds) {
-          expect(fs.readFileSync(path.join(stateDir, `${pluginId}-migrated`), "utf8")).toBe(
-            "migrated",
-          );
+          const marker = path.join(stateDir, `${pluginId}-migrated`);
+          expect(fs.readFileSync(marker, "utf8")).toBe("migrated");
         }
-        await expect(repair(config, env, plannedActions)).resolves.toEqual(repairResult(pluginIds));
+        await expect(repair(config, env, actions)).resolves.toEqual(repairResult(pluginIds));
       },
       { config, env },
     );
@@ -192,27 +190,22 @@ it("keeps supported discovery and execution order stable when a configured alias
   const root = await tempDirs.make("openclaw-doctor-order-discovery-");
   const stateDir = path.join(root, "state");
   const bundledRoot = path.join(root, "bundled");
-  const markerPaths = {
-    acpx: path.join(stateDir, "acpx-migrated"),
-    codex: path.join(stateDir, "codex-migrated"),
-  };
+  const markerPath = (pluginId: string) => path.join(stateDir, `${pluginId}-migrated`);
   for (const pluginId of ["acpx", "codex"] as const) {
     writePlugin({
       pluginRoot: path.join(bundledRoot, pluginId),
       pluginId,
-      markerPath: markerPaths[pluginId],
+      markerPath: markerPath(pluginId),
       action: { ...sessionAction, id: `${pluginId}-session-action` },
       label: `${pluginId} session action`,
       prepareStateDir: stateDir,
     });
   }
   fs.mkdirSync(stateDir, { recursive: true });
-
   const baseConfig: OpenClawConfig = {
     plugins: { entries: { acpx: { enabled: true }, codex: { enabled: true } } },
   };
   const aliasConfig: OpenClawConfig = {
-    ...baseConfig,
     plugins: {
       ...baseConfig.plugins,
       // Model the supported configured-alias path directly to the bundled artifact.
@@ -220,34 +213,23 @@ it("keeps supported discovery and execution order stable when a configured alias
     },
   };
   const env = makeEnv(root);
-
-  const frozenActions = resolveLivePluginDoctorStateMigrationInventory({
-    config: aliasConfig,
-    env,
-  }).descriptors.map(({ pluginId, id }) => ({ pluginId, id }));
+  const frozenActions = discoverActions(aliasConfig, env);
   expect(frozenActions).toEqual([
     { pluginId: "acpx", id: "acpx-session-action" },
     { pluginId: "codex", id: "codex-session-action" },
   ]);
-
-  const afterAliasRemoval = resolveLivePluginDoctorStateMigrationInventory({
-    config: baseConfig,
-    env,
-  }).descriptors.map(({ pluginId, id }) => ({ pluginId, id }));
-  expect(afterAliasRemoval).toEqual(frozenActions);
-
+  expect(discoverActions(baseConfig, env)).toEqual(frozenActions);
   const refused = await repair(baseConfig, env, frozenActions.toReversed());
   expect(refused).toEqual({
     ...repairResult(["acpx", "codex"]),
     warnings: [expect.stringContaining("immutable action order")],
     warningDisposition: undefined,
   });
-
   await expect(repair(baseConfig, env, frozenActions)).resolves.toEqual(
     repairResult(["acpx", "codex"], ["migrated acpx", "migrated codex"]),
   );
-  expect(fs.readFileSync(markerPaths.acpx, "utf8")).toBe("migrated");
-  expect(fs.readFileSync(markerPaths.codex, "utf8")).toBe("migrated");
+  expect(fs.readFileSync(markerPath("acpx"), "utf8")).toBe("migrated");
+  expect(fs.readFileSync(markerPath("codex"), "utf8")).toBe("migrated");
 });
 
 it.each([
@@ -271,30 +253,26 @@ it.each([
       fs.writeFileSync(unavailableCacheRoot, "not a directory");
     }
     vi.stubEnv("XDG_CACHE_HOME", cacheRoot);
+    const declaration = {
+      ...sessionAction,
+      phase: inventory === "changed-phase" ? undefined : sessionAction.phase,
+      doctorOnly: inventory !== "changed-authority",
+    };
     writePlugin({
       pluginRoot,
       pluginId,
       markerPath: mutationPath,
       label: "Session action",
       change: "migrated session action",
-      declarations:
-        inventory === "undeclared-post-action"
-          ? []
-          : [
-              {
-                ...sessionAction,
-                ...(inventory === "changed-phase" ? { phase: undefined } : {}),
-                ...(inventory === "changed-authority" ? { doctorOnly: false } : {}),
-              },
-            ],
+      declarations: inventory === "undeclared-post-action" ? [] : [declaration],
     });
     const cfg: OpenClawConfig = {
       agents: { entries: { main: {} } },
       plugins: { load: { paths: [pluginRoot] }, entries: { [pluginId]: { enabled: true } } },
     };
     const env = {
-      ...makeEnv(root, false),
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      ...makeEnv(root),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       XDG_CACHE_HOME: cacheRoot,
     };
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
@@ -302,12 +280,10 @@ it.each([
     closeOpenClawStateDatabaseForTest();
     clearPluginDoctorContractRegistryCache();
     if (inventory === "staging-unavailable") {
-      // Ordinary reads remain valid. Clear their cache so the next inventory must
-      // attempt its own artifact-preserving snapshot rather than reuse this result.
+      // Invalidate an ordinary read before testing artifact-preserving discovery.
       expect(listPluginDoctorStateMigrationEntries({ config: cfg, env })).toHaveLength(1);
       clearPluginDoctorContractRegistryCache();
     }
-
     let stagingFaultArmed = false;
     const params: Parameters<typeof autoMigrateLegacyState>[0] = {
       cfg,
@@ -321,8 +297,7 @@ it.each([
           receipt.id === "config-machine-state" &&
           receipt.outcome !== "refused"
         ) {
-          // Schema preparation also needs snapshots. Fail the following inventory
-          // discovery only after the prerequisite state preparation has settled.
+          // Fail discovery snapshots only after prerequisite schema preparation.
           vi.stubEnv("XDG_CACHE_HOME", unavailableCacheRoot);
           env.XDG_CACHE_HOME = unavailableCacheRoot;
           stagingFaultArmed = true;
@@ -330,7 +305,6 @@ it.each([
       },
     };
     const result = await autoMigrateLegacyState(params);
-
     expect(fs.existsSync(mutationPath)).toBe(false);
     expect(stagingFaultArmed).toBe(inventory === "staging-unavailable");
     if (inventory === "automatic-cache") {
@@ -344,7 +318,6 @@ it.each([
       return;
     }
     if (inventory !== "readable") {
-      expect(result.stepReceipts).toContainEqual(expect.objectContaining({ outcome: "refused" }));
       const blocker = result.stepReceipts.findIndex((receipt) => receipt.outcome === "refused");
       // Agent history now needs the artifact-preserving snapshot before plugin inventory does.
       expect(result.stepReceipts[blocker]).toMatchObject({
@@ -354,16 +327,11 @@ it.each([
             inventory === "staging-unavailable" ? "agent-target-discovery-failed" : "step-refused",
         },
       });
-      expect(result.stepReceipts.slice(blocker + 1)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "plugin-doctor-post-session-state",
-            outcome: "refused",
-            refusal: expect.objectContaining({ code: "blocked-by-prior-refusal" }),
-          }),
-        ]),
+      const blockedReceipts = result.stepReceipts.slice(blocker + 1);
+      expect(blockedReceipts).toContainEqual(
+        expect.objectContaining({ id: "plugin-doctor-post-session-state" }),
       );
-      for (const receipt of result.stepReceipts.slice(blocker + 1)) {
+      for (const receipt of blockedReceipts) {
         expect(receipt).toMatchObject({
           outcome: "refused",
           refusal: { code: "blocked-by-prior-refusal" },
@@ -372,17 +340,14 @@ it.each([
       expect(result.postSessionPluginMigration).toBeUndefined();
       if (inventory === "undeclared-post-action") {
         const repeated = await autoMigrateLegacyState(params);
-        expect(
-          repeated.stepReceipts.map(({ id, outcome, refusal }) => ({ id, outcome, refusal })),
-        ).toEqual(
-          result.stepReceipts.map(({ id, outcome, refusal }) => ({ id, outcome, refusal })),
+        expect(repeated.stepReceipts.map((r) => [r.id, r.outcome, r.refusal])).toEqual(
+          result.stepReceipts.map((r) => [r.id, r.outcome, r.refusal]),
         );
       }
       return;
     }
     expect(result.warnings).toEqual([]);
-    // A preflight may stop before session health consumes its handoff. A later
-    // explicit Doctor invocation must still plan that pending owner from live state.
+    // A later Doctor invocation must still plan the unconsumed handoff from live state.
     const repeated = await autoMigrateLegacyState(params);
     expect(repeated.postSessionPluginMigration).toEqual(result.postSessionPluginMigration);
     expect(repeated.stepReceipts.length).toBeGreaterThan(0);

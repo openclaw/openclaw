@@ -46,16 +46,18 @@ async function makeFixture() {
   return { root, homeDir, stateDir, configPath, env };
 }
 
-async function planFixture(fixture: Awaited<ReturnType<typeof makeFixture>>) {
+async function planFixture({
+  root,
+  homeDir,
+  stateDir,
+  configPath,
+  env,
+}: Awaited<ReturnType<typeof makeFixture>>) {
   return planLegacyStateMigrationsReadOnly({
     mode: "doctor",
-    candidate: { root: fixture.root, version: "test" },
-    snapshot: {
-      homeDir: fixture.homeDir,
-      configPath: fixture.configPath,
-      stateDir: fixture.stateDir,
-    },
-    env: fixture.env,
+    candidate: { root, version: "test" },
+    snapshot: { homeDir, configPath, stateDir },
+    env,
   });
 }
 
@@ -146,27 +148,29 @@ describe("legacy state migration snapshot identity", () => {
       }
       const config = await readLegacyStateMigrationPlanConfig(fixture);
       expect(config.configInputHashes).toBeDefined();
+      const mutations = {
+        "file-content": () => fs.writeFileSync(earlyFile, '{"value":"changed"}\n'),
+        "file-replacement": () => {
+          fs.unlinkSync(earlyFile);
+          fs.writeFileSync(earlyFile, '{"value":"replacement"}\n');
+        },
+        "nested-entry": () => fs.writeFileSync(path.join(earlyDirectory, "added.json"), "{}\n"),
+        "config-content": () => fs.writeFileSync(fixture.configPath, changedConfig),
+        "config-replacement": () => {
+          fs.unlinkSync(fixture.configPath);
+          fs.writeFileSync(fixture.configPath, changedConfig);
+        },
+        "included-config": () => fs.writeFileSync(includedPath, changedConfig),
+        unchanged: () => {},
+        "included-unchanged": () => {},
+      };
       const realOpen = fs.promises.open.bind(fs.promises);
       let finalCaptureReached = false;
       vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
         const handle = await realOpen(...args);
         if (path.resolve(String(args[0])) === lateFile) {
           finalCaptureReached = true;
-          if (mutation === "file-content") {
-            fs.writeFileSync(earlyFile, '{"value":"changed"}\n');
-          } else if (mutation === "file-replacement") {
-            fs.unlinkSync(earlyFile);
-            fs.writeFileSync(earlyFile, '{"value":"replacement"}\n');
-          } else if (mutation === "nested-entry") {
-            fs.writeFileSync(path.join(earlyDirectory, "added.json"), "{}\n");
-          } else if (mutation === "config-content" || mutation === "config-replacement") {
-            if (mutation === "config-replacement") {
-              fs.unlinkSync(fixture.configPath);
-            }
-            fs.writeFileSync(fixture.configPath, changedConfig);
-          } else if (mutation === "included-config") {
-            fs.writeFileSync(includedPath, changedConfig);
-          }
+          mutations[mutation]();
         }
         return handle;
       });
@@ -185,8 +189,7 @@ describe("legacy state migration snapshot identity", () => {
         expect(identity.configDigest).toBeUndefined();
         expect(identity.stateDigest).toBeUndefined();
         if (mutation === "nested-entry") {
-          // A child addition can leave directory metadata unchanged at the
-          // filesystem's observed precision; the final child-list check still refuses it.
+          // The child-list check catches additions even when directory metadata is unchanged.
           expect(identity.warnings).toHaveLength(1);
           expect([
             `Could not bind copied snapshot: Snapshot entry changed while hashing: ${earlyDirectory}`,
@@ -215,17 +218,10 @@ describe("legacy state migration snapshot identity", () => {
       return realOpen(...args);
     });
 
-    try {
-      const identity = await captureLegacyStateSnapshotIdentityInProcess(fixture);
-      expect(replacementTriggered).toBe(true);
-      expect(identity.stateDigest).toBeUndefined();
-      expectWarning(identity.warnings, `Snapshot file changed while opening: ${probePath}`);
-    } finally {
-      if (replacementTriggered) {
-        fs.unlinkSync(probePath);
-        fs.renameSync(originalPath, probePath);
-      }
-    }
+    const identity = await captureLegacyStateSnapshotIdentityInProcess(fixture);
+    expect(replacementTriggered).toBe(true);
+    expect(identity.stateDigest).toBeUndefined();
+    expectWarning(identity.warnings, `Snapshot file changed while opening: ${probePath}`);
   });
 
   it.each([
