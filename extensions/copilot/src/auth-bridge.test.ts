@@ -2,12 +2,14 @@ import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveCopilotAuth, tokenFingerprint } from "./auth-bridge.js";
 
+const FAKE_HOME = "/fake-home";
+const fakeHomeDir = () => FAKE_HOME;
 const COPILOT_DEFAULT_AGENT_ID = "copilot";
 const COPILOT_TOKEN_PROFILE_ERROR =
   "[copilot-attempt] gitHubToken auth requires profileId+profileVersion (pool keying safety; per Q5/Q1 decisions)";
 
 function resolveAuth(input: Parameters<typeof resolveCopilotAuth>[0] = {}) {
-  return resolveCopilotAuth({ agentId: "agent-1", env: {}, homeDir: () => "/fake-home", ...input });
+  return resolveCopilotAuth({ agentId: "agent-1", env: {}, homeDir: fakeHomeDir, ...input });
 }
 
 function resolveAgentId(agentId: string | undefined): string {

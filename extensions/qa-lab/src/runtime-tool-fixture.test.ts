@@ -132,6 +132,7 @@ function asyncImageFixtureConfig() {
       bucket: "openclaw-dynamic-integration",
       expectedLayer: "openclaw-dynamic",
       required: false,
+      action: "optional runtime parity gate with async image completion coverage",
     },
   });
 }

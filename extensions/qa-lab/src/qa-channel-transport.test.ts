@@ -11,7 +11,7 @@ describe("qa channel transport", () => {
     transport = createQaChannelTransport(state);
   });
 
-  const waitReady = (call: ReturnType<typeof vi.fn>) =>
+  const waitReady = (call: Parameters<typeof transport.waitReady>[0]["gateway"]["call"]) =>
     transport.waitReady({ gateway: { call }, timeoutMs: 5, pollIntervalMs: 1 });
   const addFailure = (text: string) =>
     transport.state.addOutboundMessage({

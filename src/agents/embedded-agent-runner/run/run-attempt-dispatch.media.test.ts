@@ -9,12 +9,13 @@ import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparatio
 
 type Attempt = Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0]["attempt"];
 async function preparePluginHarnessPromptImages(
-  attempt: Omit<Attempt, "model">,
+  attempt: Omit<Attempt, "model" | "workspaceDir">,
   workspaceDir = "/tmp",
   input: NonNullable<Attempt["model"]["input"]> = ["text", "image"],
 ) {
   const result = await prepareEmbeddedAttemptPromptExecution({
     attempt: {
+      workspaceDir,
       config: { agents: { defaults: { sandbox: { mode: "off" } } } },
       ...attempt,
       model: { input },

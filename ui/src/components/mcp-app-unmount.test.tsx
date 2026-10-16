@@ -45,7 +45,8 @@ function mountGate(
     { container: root },
   );
   return {
-    find: <T extends Element = Element>(selector: string) => shadowRoot.querySelector<T>(selector),
+    find: <T extends Element = Element>(selector: string): T | null =>
+      shadowRoot.querySelector<T>(selector),
     get updateComplete() {
       return Promise.resolve().then(() => flush());
     },

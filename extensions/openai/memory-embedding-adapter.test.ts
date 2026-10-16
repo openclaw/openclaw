@@ -178,7 +178,7 @@ describe("OpenAI memory embedding adapter", () => {
 
     const requests = mocks.runOpenAiEmbeddingBatches.mock.calls[0]?.[0].requests;
     expect(requests).toHaveLength(1);
-    expect(requests?.[0].body).toEqual({
+    expect(requests?.[0]?.body).toEqual({
       model,
       input: "doc one",
       dimensions: 512,

@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events";
 import path from "node:path";
 import type { SessionEvent } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -8,7 +7,7 @@ import type {
   TranscriptTurnAdmission,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterAll, vi } from "vitest";
+import { afterAll, vi, type Mock } from "vitest";
 import { createAttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
@@ -20,16 +19,40 @@ export type FakeSession = SessionLike & {
 };
 
 type TranscriptRecorderContract = NonNullable<AttemptParamsLike["userTurnTranscriptRecorder"]>;
+type TranscriptRecorder = TranscriptRecorderContract & {
+  markBlocked: Mock<TranscriptRecorderContract["markBlocked"]>;
+  markRuntimePersisted: Mock<TranscriptRecorderContract["markRuntimePersisted"]>;
+  resolveMessage: Mock<TranscriptRecorderContract["resolveMessage"]>;
+};
+
+type AttemptTranscriptJournalFixture = {
+  attempt: AttemptParamsLike;
+  bridge: ReturnType<typeof attachEventBridge>;
+  journal: ReturnType<typeof createAttemptTranscriptJournal>;
+  recorder: TranscriptRecorder;
+  session: FakeSession;
+  target: SessionTranscriptTargetParams;
+  tempDir: string;
+};
 
 export function createFakeSession(): FakeSession {
-  const events = new EventEmitter();
+  const listeners = new Map<string, Array<(event: SessionEvent) => void>>();
   return {
     abort: vi.fn(async () => undefined),
     disconnect: vi.fn(async () => undefined),
-    emit: (sessionEvent) => void events.emit(sessionEvent.type, sessionEvent),
+    emit(sessionEvent) {
+      for (const listener of listeners.get(sessionEvent.type) ?? []) {
+        listener(sessionEvent);
+      }
+    },
     on: vi.fn((eventType: string, handler: (event: SessionEvent) => void) => {
-      events.on(eventType, handler);
-      return () => void events.off(eventType, handler);
+      listeners.set(eventType, [...(listeners.get(eventType) ?? []), handler]);
+      return () => {
+        listeners.set(
+          eventType,
+          (listeners.get(eventType) ?? []).filter((listener) => listener !== handler),
+        );
+      };
     }) as FakeSession["on"],
     send: vi.fn(async () => "sdk-user"),
     sendAndWait: vi.fn(async () => undefined),
@@ -99,7 +122,7 @@ export function emitReplayGroup(targetSession: FakeSession): void {
 export async function createFixture(
   trigger?: string,
   resultContentSourceByToolName?: ReadonlyMap<string, "network">,
-) {
+): Promise<AttemptTranscriptJournalFixture> {
   const tempDir = sessionDirs.make();
   const target: SessionTranscriptTargetParams = {
     agentId: "main",
@@ -130,7 +153,9 @@ export async function createFixture(
               : undefined;
       },
     ),
-    markBlocked: vi.fn(() => void (blocked = true)),
+    markBlocked: vi.fn(() => {
+      blocked = true;
+    }),
     hasPersisted: () => persisted,
     isBlocked: () => blocked,
     hasRuntimePersistencePending: () => false,
@@ -139,7 +164,7 @@ export async function createFixture(
     persistApproved: vi.fn(async () => undefined),
     persistBlocked: vi.fn(async () => undefined),
     persistFallback: vi.fn(async () => undefined),
-  } satisfies TranscriptRecorderContract;
+  } satisfies TranscriptRecorder;
   const attempt = {
     agentId: "main",
     prompt: "inspect both files",
@@ -152,21 +177,29 @@ export async function createFixture(
     userTurnTranscriptRecorder: recorder,
   } as unknown as AttemptParamsLike;
   await upsertSessionEntry({
-    ...target,
+    agentId: "main",
     entry: { sessionId: target.sessionId, updatedAt: 1 },
+    sessionKey: target.sessionKey,
+    storePath: target.storePath,
   });
-  const runtime = createJournalSession(attempt, [], resultContentSourceByToolName);
-  return { attempt, ...runtime, recorder, target, tempDir };
+  const { bridge, journal, session } = createJournalSession(
+    attempt,
+    [],
+    resultContentSourceByToolName,
+  );
+  return { attempt, bridge, journal, recorder, session, target, tempDir };
 }
 
 export function transcriptMessages(events: unknown[]) {
-  return events.filter(
-    (
-      entry,
-    ): entry is {
+  return events.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || (entry as { type?: unknown }).type !== "message") {
+      return [];
+    }
+    const record = entry as {
       id: string;
       parentId: string | null;
       message: AgentMessage & { display?: boolean; idempotencyKey?: string };
-    } => entry !== null && typeof entry === "object" && "type" in entry && entry.type === "message",
-  );
+    };
+    return [record];
+  });
 }

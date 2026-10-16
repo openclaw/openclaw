@@ -267,7 +267,7 @@ describe("OnboardingMemoryImport", () => {
     const element = await mount(createContext(request));
     (await waitForAction(element)).click();
 
-    await waitForOnboardingMemoryImport(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
     const applyCalls = request.mock.calls.filter(
       ([method]) => method === "migrations.memory.apply",
     );
