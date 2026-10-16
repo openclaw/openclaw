@@ -68,7 +68,7 @@ export function useOverlayControl(
         if (props.disabled) {
           event.preventDefault();
         }
-        if (!event.defaultPrevented) {
+        if (lazy && renderBody && !disposeBody && !event.defaultPrevented) {
           // Admission and initial keyboard focus need the body synchronously.
           mountBody();
           queueMicrotask(() => {

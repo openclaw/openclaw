@@ -176,7 +176,7 @@ export function Menu(props: BranchProps): JSX.Element {
   const lazy = untrack(() => props.lazy);
   let cancelPrewarm: (() => void) | undefined;
   let renderedCount = 0;
-  const [limit, setLimit] = createSignal(lazy === true ? 0 : Infinity);
+  let extendBody: ((count: number) => void) | undefined;
   const prewarmEnabled = createMemo(() => props.prewarm === true && !props.disabled);
   createEffect(prewarmEnabled, (enabled) => {
     if (enabled && lazy === true && renderedCount !== Infinity) {
@@ -519,21 +519,29 @@ export function Menu(props: BranchProps): JSX.Element {
       }}
     </For>
   );
-  const body = () => (
-    <>
-      {props.children}
-      {renderEntries(() => (limit() === Infinity ? props.items : props.items.slice(0, limit())))}
-    </>
-  );
+  const body = () => {
+    const [limit, setLimit] = createSignal(renderedCount || Infinity);
+    extendBody = setLimit;
+    return (
+      <>
+        {props.children}
+        {renderEntries(() => (limit() === Infinity ? props.items : props.items.slice(0, limit())))}
+      </>
+    );
+  };
   function prepareItems(count = Infinity) {
     cancelPrewarm?.();
     cancelPrewarm = undefined;
+    const partial = renderedCount > 0 && renderedCount !== Infinity;
     renderedCount = count;
-    setLimit(count);
-    control.mountBody();
-    // Native opening/focus must see the complete menu before showPopover.
-    if (count === Infinity) {
-      flush();
+    if (extendBody) {
+      extendBody(count);
+      // Only a partially prepared menu needs a synchronous native-focus commit.
+      if (partial && count === Infinity) {
+        flush();
+      }
+    } else {
+      control.mountBody();
     }
   }
 
@@ -544,7 +552,7 @@ export function Menu(props: BranchProps): JSX.Element {
         schedulePrewarm();
       } else {
         renderedCount = Infinity;
-        setLimit(Infinity);
+        extendBody?.(Infinity);
       }
     };
     if (typeof requestIdleCallback === "function") {
