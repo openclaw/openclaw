@@ -9,7 +9,6 @@ import {
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
@@ -32,6 +31,7 @@ import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjectionBackfill } from "./session-row-projection-backfill.js";
 import { create, identity, type EntryRow } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import { seedRow, watchRowFacts } from "./session-row-projection.read-fixture.test-support.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -91,24 +91,10 @@ it("refreshes streaming previews without rematerializing unchanged rows", async 
   await withStreamingProjection(async ({ projection, query, append, release }) => {
     const reads: string[] = [];
     const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
-    const readDatabases = history.withSessionHistoryWorkerDatabases;
-    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-      (targets, consume, lane) =>
-        readDatabases(
-          targets,
-          (owners) =>
-            consume(
-              owners.map((owner) => ({
-                ...owner,
-                readRowFacts(input) {
-                  reads.push(...input.sessionKeys);
-                  return owner.readRowFacts(input);
-                },
-              })),
-            ),
-          lane,
-        ),
-    );
+    watchRowFacts((owner) => (input) => {
+      reads.push(...input.sessionKeys);
+      return owner.readRowFacts(input);
+    });
     const before = projection.materializedCount;
     await append("Update 1");
     expect(projection.materializedCount - before).toBe(0);
@@ -145,6 +131,7 @@ it("reuses batch transcript facts across row-owner restarts", async () => {
     const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const target = { agentId: "main", sessionKey: "agent:main:batch", sessionId: "batch" };
+    const query = { agentId: "main", key: target.sessionKey };
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
     const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
     for (const content of ["First batch", "Second batch"]) {
@@ -159,12 +146,7 @@ it("reuses batch transcript facts across row-owner restarts", async () => {
       try {
         await projection.ensureMaterialized();
         expect(
-          projection.snapshot(
-            { agentId: "main", key: target.sessionKey },
-            {
-              includeLastMessage: true,
-            },
-          ).row?.lastMessagePreview,
+          projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
         ).toBe(content);
         await nextTurn();
         expect(backfill).not.toHaveBeenCalled();
@@ -182,33 +164,19 @@ it("refreshes committed metadata and lifecycle marks during a transcript window"
     await append("Pending update");
     expect(projection.materializedCount).toBe(before);
     const reads: string[] = [];
-    const readDatabases = history.withSessionHistoryWorkerDatabases;
     const captured = createDeferredCore();
     const resume = createDeferredCore();
     let pause = false;
-    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-      (targets, consume, lane) =>
-        readDatabases(
-          targets,
-          (owners) =>
-            consume(
-              owners.map((owner) => ({
-                ...owner,
-                async readRowFacts(input) {
-                  reads.push(...input.sessionKeys);
-                  const result = await owner.readRowFacts(input);
-                  if (pause) {
-                    pause = false;
-                    captured.resolve();
-                    await resume.promise;
-                  }
-                  return result;
-                },
-              })),
-            ),
-          lane,
-        ),
-    );
+    watchRowFacts((owner) => async (input) => {
+      reads.push(...input.sessionKeys);
+      const result = await owner.readRowFacts(input);
+      if (pause) {
+        pause = false;
+        captured.resolve();
+        await resume.promise;
+      }
+      return result;
+    });
     sessionChanges.emit({ all: true, scope: "catalog" });
     await projection.ensureMaterialized();
     expect(reads).toEqual([]);
@@ -308,6 +276,8 @@ it("eventually fills legacy titles and previews without waiting during startup o
     const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const target = { agentId: "main", sessionKey: "agent:main:legacy", sessionId: "legacy" };
+    const query = { agentId: "main", key: target.sessionKey };
+    const display = { includeDerivedTitles: true, includeLastMessage: true };
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
     await persistSessionTranscriptTurn(target, {
       messages: [
@@ -337,23 +307,12 @@ it("eventually fills legacy titles and previews without waiting during startup o
       expect(loadSessionEntry(target)?.displayName).toBeUndefined();
       release();
       await withinTest(backfilled, signal);
-      expect(
-        projection.snapshot(
-          { agentId: "main", key: target.sessionKey },
-          {
-            includeDerivedTitles: true,
-            includeLastMessage: true,
-          },
-        ).row,
-      ).toMatchObject({
+      expect(projection.snapshot(query, display).row).toMatchObject({
         lastMessagePreview: "The query is now bounded.",
       });
       expect(loadSessionEntry(target)).toEqual(before);
       expect(
-        projection.snapshot(
-          { agentId: "main", key: target.sessionKey },
-          { includeDerivedTitles: true },
-        ).row?.derivedTitle,
+        projection.snapshot(query, { includeDerivedTitles: true }).row?.derivedTitle,
       ).toBeUndefined();
     } finally {
       release();
@@ -377,17 +336,11 @@ it("eventually fills legacy titles and previews without waiting during startup o
     }
     const repairedProjection = await createSessionRowProjection({ cfg });
     try {
-      expect(
-        repairedProjection.snapshot(
-          { agentId: "main", key: target.sessionKey },
-          { includeDerivedTitles: true, includeLastMessage: true },
-        ).row,
-      ).toMatchObject({
+      expect(repairedProjection.snapshot(query, display).row).toMatchObject({
         derivedTitle: "Investigate the slow session query",
         lastMessagePreview: "The query is now bounded.",
       });
       replaceSessionEntrySync(target, { sessionId: "replacement", updatedAt: 2 });
-      const query = { agentId: "main", key: target.sessionKey };
       const replacement = await withReadySessionRows(
         repairedProjection,
         () => [query],
@@ -410,16 +363,13 @@ it.each([false, true])(
       const cfg = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg);
       const query = { agentId: "main", key: "agent:main:catalog" };
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: query.key },
-        {
-          sessionId: "catalog",
-          updatedAt: 1,
-          providerOverride: "unit-test",
-          modelOverride: "fixture",
-          visibility: "shared",
-        },
-      );
+      seedRow(query.key, {
+        sessionId: "catalog",
+        updatedAt: 1,
+        providerOverride: "unit-test",
+        modelOverride: "fixture",
+        visibility: "shared",
+      });
       const initial = [
         {
           id: "fixture",
@@ -483,15 +433,12 @@ it("updates one agent's catalog without rematerializing another agent's session"
       { agentId: "other", key: "agent:other:catalog-owner" },
     ] as const;
     for (const query of queries) {
-      replaceSessionEntrySync(
-        { agentId: query.agentId, sessionKey: query.key },
-        {
-          sessionId: `${query.agentId}-catalog-owner`,
-          updatedAt: 1,
-          providerOverride: "unit-test",
-          modelOverride: "fixture",
-        },
-      );
+      seedRow(query, {
+        sessionId: `${query.agentId}-catalog-owner`,
+        updatedAt: 1,
+        providerOverride: "unit-test",
+        modelOverride: "fixture",
+      });
     }
     const pluginRegistry = createEmptyPluginRegistry();
     const metadataSnapshot = createPluginMetadataSnapshotFixture();

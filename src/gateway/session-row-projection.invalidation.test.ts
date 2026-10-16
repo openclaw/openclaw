@@ -402,59 +402,41 @@ it("refreshes profile display fields on selected live and archived rows without 
     const owner = ensureProfileForEmail("owner@example.com");
     const participant = ensureProfileForEmail("participant@example.com");
     for (const archived of [false, true]) {
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: `agent:main:profile-${archived}` },
-        {
-          sessionId: `profile-${archived}`,
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: owner.id },
-          ...(archived
-            ? { archivedAt: 1, archivedBy: { type: "human" as const, id: owner.id } }
-            : {}),
-        },
-      );
-    }
-    for (const archived of [false, true]) {
-      recordSessionParticipant(
-        { agentId: "main", sessionKey: `agent:main:profile-${archived}` },
-        { identity: { type: "profile", id: participant.id }, promptedAt: 1 },
-      );
+      const scope = { agentId: "main", sessionKey: `agent:main:profile-${archived}` };
+      replaceSessionEntrySync(scope, {
+        sessionId: `profile-${archived}`,
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: owner.id },
+        ...(archived
+          ? { archivedAt: 1, archivedBy: { type: "human" as const, id: owner.id } }
+          : {}),
+      });
+      recordSessionParticipant(scope, {
+        identity: { type: "profile", id: participant.id },
+        promptedAt: 1,
+      });
     }
     const release = projectionWork.retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const list = (opts: Parameters<typeof listProjectedSessions>[0]["opts"], serialized = false) =>
+      listProjectedSessions({ projection, opts, acceptsSerializedJson: serialized });
+    const allPeople = { archived: "all", includePeople: true } as const;
+    const expectedPerson = (id: string, label: string) =>
+      expect.objectContaining({ identity: { type: "profile", id }, label, sessionCount: 2 });
     try {
-      await listProjectedSessions({
-        projection,
-        opts: { archived: "all", includePeople: true },
-        acceptsSerializedJson: true,
-      });
+      await list(allPeople, true);
       const reads = vi.spyOn(materialization, "readSessionRowEntry");
       setDisplayName(owner.id, "Current owner");
       setDisplayName(participant.id, "Current participant");
-      const result = await listProjectedSessions({
-        projection,
-        opts: { archived: "all", includePeople: true },
-        acceptsSerializedJson: true,
-      });
+      const result = await list(allPeople, true);
       expect(result.owners?.map((actor) => actor.label)).toEqual(["Current owner"]);
       expect(result.people).toEqual([
-        expect.objectContaining({
-          identity: { type: "profile", id: owner.id },
-          label: "Current owner",
-          sessionCount: 2,
-        }),
-        expect.objectContaining({
-          identity: { type: "profile", id: participant.id },
-          label: "Current participant",
-          sessionCount: 2,
-        }),
+        expectedPerson(owner.id, "Current owner"),
+        expectedPerson(participant.id, "Current participant"),
       ]);
       expect(result.sessions).toHaveLength(2);
       const originalPeople = structuredClone(result.people);
-      const live = await listProjectedSessions({
-        projection,
-        opts: { includePeople: true },
-      });
+      const live = await list({ includePeople: true });
       expect(live.people).toEqual(
         originalPeople?.map((person) => ({ ...person, sessionCount: 1 })),
       );
@@ -463,10 +445,7 @@ it("refreshes profile display fields on selected live and archived rows without 
         person.sessionCount = 99;
         person.label = "Changed response";
       }
-      const repeated = await listProjectedSessions({
-        projection,
-        opts: { archived: "all", includePeople: true },
-      });
+      const repeated = await list(allPeople);
       expect(repeated.people).toEqual(originalPeople);
       expect(result.people).toEqual(originalPeople);
       for (const row of result.sessions) {
@@ -481,22 +460,12 @@ it("refreshes profile display fields on selected live and archived rows without 
       }
       expect(reads).not.toHaveBeenCalled();
       linkEmail("participant@example.com", owner.id);
-      const merged = await listProjectedSessions({
-        projection,
-        opts: {
-          archived: "all",
-          includePeople: true,
-          profileRelation: { profileId: participant.id, relationship: "involving" },
-        },
+      const merged = await list({
+        ...allPeople,
+        profileRelation: { profileId: participant.id, relationship: "involving" },
       });
       expect(merged.sessions).toHaveLength(2);
-      expect(merged.people).toEqual([
-        expect.objectContaining({
-          identity: { type: "profile", id: owner.id },
-          label: "Current owner",
-          sessionCount: 2,
-        }),
-      ]);
+      expect(merged.people).toEqual([expectedPerson(owner.id, "Current owner")]);
       expect(merged.sessions.every((row) => row.participants === undefined)).toBe(true);
       expect(reads).not.toHaveBeenCalled();
     } finally {

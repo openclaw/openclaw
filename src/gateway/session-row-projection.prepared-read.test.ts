@@ -1,12 +1,9 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  replaceSessionEntry,
-  replaceSessionEntrySync,
-} from "../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -19,6 +16,7 @@ import * as databaseFactsRead from "./session-row-database-facts.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import { seedRow, waitForRead } from "./session-row-projection.read-fixture.test-support.js";
 import { projectWorkerSessionPlacement } from "./worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 import {
@@ -101,10 +99,7 @@ async function heldPlacementReads(
   for (let index = 0; index < sessionCount; index++) {
     const sessionId = options.sessionId?.(index) ?? `held-placement-${index}`;
     const key = `agent:main:held-placement-${index}`;
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: key },
-      { sessionId, updatedAt: 1, archivedAt: 1 },
-    );
+    seedRow(key, { sessionId, updatedAt: 1, archivedAt: 1 });
     rows.push({
       key,
       sessionId,
@@ -241,22 +236,18 @@ it.for([
       } else {
         describe(fixture.rows[0]!);
         // Bind waits to the test signal so a stall still releases the held placement reads.
-        await withinTest(
-          awaitGateBeforeSettlement(
-            fixture.entered.promise,
-            requests[0]!.completion,
-            "First placement read did not enter",
-          ),
+        await waitForRead(
+          fixture.entered.promise,
+          requests[0]!.completion,
           signal,
+          "First placement read did not enter",
         );
         describe(fixture.rows[1]!);
-        await withinTest(
-          awaitGateBeforeSettlement(
-            fixture.atCapacity.promise,
-            requests[1]!.completion,
-            "Second placement read did not enter",
-          ),
+        await waitForRead(
+          fixture.atCapacity.promise,
+          requests[1]!.completion,
           signal,
+          "Second placement read did not enter",
         );
         for (const row of fixture.rows.slice(2)) {
           describe(row);
@@ -321,13 +312,11 @@ it("reuses settled exact placement facts while archived row preparation is compl
     try {
       await fixture.entered.promise;
       fixture.release.resolve();
-      await withinTest(
-        awaitGateBeforeSettlement(
-          prepared.promise,
-          request.completion,
-          "Exact row preparation did not enter",
-        ),
+      await waitForRead(
+        prepared.promise,
+        request.completion,
         signal,
+        "Exact row preparation did not enter",
       );
       expect(request.respond).not.toHaveBeenCalled();
       await fixture.projection.ensureMaterialized();
@@ -359,15 +348,12 @@ it.each([
       const completed = Promise.allSettled([request.completion]);
       try {
         await fixture.entered.promise;
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: unrelated.key },
-          {
-            sessionId: unrelated.sessionId,
-            updatedAt: 2,
-            archivedAt: 1,
-            label: "Unrelated update",
-          },
-        );
+        seedRow(unrelated.key, {
+          sessionId: unrelated.sessionId,
+          updatedAt: 2,
+          archivedAt: 1,
+          label: "Unrelated update",
+        });
         sessionChanges.emit({ all: true, scope });
         fixture.release.resolve();
         expect(await completed).toEqual([{ status: "fulfilled", value: undefined }]);
@@ -394,14 +380,11 @@ it("keeps exact category reads independent of bulk placement preparation", async
     for (const name of ["exact", "bulk"]) {
       const sessionId = `independent-placement-${name}`;
       const key = `agent:main:${sessionId}`;
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: key },
-        {
-          sessionId,
-          updatedAt: 1,
-          label: name === "exact" ? "Fresh exact description" : undefined,
-        },
-      );
+      seedRow(key, {
+        sessionId,
+        updatedAt: 1,
+        label: name === "exact" ? "Fresh exact description" : undefined,
+      });
       rows.push({
         key,
         sessionId,
@@ -455,14 +438,7 @@ it("keeps exact category reads independent of bulk placement preparation", async
       reportPlacementTransition(undefined, bulkRow.placement);
       const bulk = projection.ensureMaterialized();
       pending.push(Promise.allSettled([bulk]));
-      await withinTest(
-        awaitGateBeforeSettlement(
-          bulkEntered.promise,
-          bulk,
-          "Bulk placement refresh did not enter",
-        ),
-        signal,
-      );
+      await waitForRead(bulkEntered.promise, bulk, signal, "Bulk placement refresh did not enter");
       exactRow.placement = await placements.transition({
         sessionId: exactRow.sessionId,
         from: "requested",
