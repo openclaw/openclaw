@@ -195,22 +195,39 @@ function evidence(dir: string, captureName = "merge-output.log") {
   };
 }
 
+type EvidenceFixture = Awaited<ReturnType<typeof fixture>>;
+type Scenario = (f: EvidenceFixture, command: CommandFixture) => Promise<void>;
+
+function scenario(body: Scenario) {
+  return ({ command }: { command: CommandFixture }) =>
+    command.lifetime.run(async () => body(await fixture(command), command));
+}
+
+function scenarioFor<T>(
+  body: (value: T, f: EvidenceFixture, command: CommandFixture) => Promise<void>,
+) {
+  return (value: T, context: { command: CommandFixture }) =>
+    scenario((f, command) => body(value, f, command))(context);
+}
+
+async function preserve(...readers: Array<() => unknown>) {
+  const snapshot = () => Promise.all(readers.map((read) => read()));
+  const before = await snapshot();
+  return async () => expect(await snapshot()).toEqual(before);
+}
+
 describePosix("native worktree cleanup preserves merge evidence", () => {
-  it("scopes dry-run and removal to the requested PR without observing siblings", async ({
-    command,
-  }) => {
-    await command.lifetime.run(async () => {
-      const f = await fixture(command);
+  it(
+    "scopes dry-run and removal without observing siblings",
+    scenario(async (f) => {
       const selected = await f.add(910001);
       const sibling = await f.add(910002);
-      const branches = await f.branches();
-      const registrations = await f.worktrees();
+      const unchanged = await preserve(f.branches, f.worktrees);
       const dry = await f.run(["gc_pr_worktrees true 910001"], "MERGED");
       expect(dry.status, dry.output).toBe(0);
       expect(dry.output).toContain("would remove .worktrees/pr-910001");
       expect(dry.output).not.toContain("pr-910002");
-      expect(await f.branches()).toBe(branches);
-      expect(await f.worktrees()).toBe(registrations);
+      await unchanged();
       const actual = await f.run(["gc_pr_worktrees false 910001"], "MERGED");
       expect(actual.status, actual.output).toBe(0);
       expect(existsSync(selected)).toBe(false);
@@ -220,23 +237,21 @@ describePosix("native worktree cleanup preserves merge evidence", () => {
         expect(await f.branches()).toContain(`refs/heads/${branch} ${f.head}`);
       }
       expect(readFileSync(join(f.root, "gh-calls"), "utf8")).not.toContain("910002");
-    });
-  });
+    }),
+  );
 
   it.for(["", ".local/nested"])(
     "defers removal while the parent session holds cwd %s, then removes after release",
-    async (subdirectory, { command }) => {
-      await command.lifetime.run(async () => {
-        const f = await fixture(command);
-        const dir = await f.add(910001);
-        const cwd = join(dir, subdirectory);
-        mkdirSync(cwd, { recursive: true });
-        mkdirSync(dir + "-sibling");
-        const result = await command.run(
-          process.execPath,
-          [
-            "-e",
-            `
+    scenarioFor<string>(async (subdirectory, f, command) => {
+      const dir = await f.add(910001);
+      const cwd = join(dir, subdirectory);
+      mkdirSync(cwd, { recursive: true });
+      mkdirSync(dir + "-sibling");
+      const result = await command.run(
+        process.execPath,
+        [
+          "-e",
+          `
 const { spawnSync } = require("node:child_process");
 const { existsSync } = require("node:fs");
 const [repo, target, scripts] = process.argv.slice(1);
@@ -258,260 +273,194 @@ process.stdout.write(JSON.stringify({
   released: released && { status: released.status, stderr: released.stderr },
 }));
 `,
-            f.repo,
-            dir,
-            scripts,
-          ],
-          { cwd, env: f.env },
-        );
-        expect(result.status, result.stdout + result.stderr).toBe(0);
-        const observation = JSON.parse(result.stdout);
-        expect(observation.held.status, observation.held.stderr).not.toBe(0);
-        expect(observation.held.stderr).toContain("live process");
-        expect(observation.preserved).toBe(true);
-        expect(observation.next).toEqual({ status: 0, stdout: cwd });
-        expect(observation.released.status, observation.released.stderr).toBe(0);
-        expect(existsSync(dir)).toBe(false);
-        expect(await f.worktrees()).not.toContain(`worktree ${dir}\n`);
+          f.repo,
+          dir,
+          scripts,
+        ],
+        { cwd, env: f.env },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const observation = JSON.parse(result.stdout);
+      expect(observation.held.status, observation.held.stderr).not.toBe(0);
+      expect(observation.held.stderr).toContain("live process");
+      expect(observation).toMatchObject({
+        preserved: true,
+        next: { status: 0, stdout: cwd },
+        released: { status: 0 },
       });
-    },
+      expect(existsSync(dir)).toBe(false);
+      expect(await f.worktrees()).not.toContain(`worktree ${dir}\n`);
+    }),
   );
 
-  it.for(["unpublished.txt"])("retains dirty %s and local branches", async (file, { command }) => {
-    await command.lifetime.run(async () => {
-      const f = await fixture(command);
+  it(
+    "retains dirty work and local branches",
+    scenario(async (f) => {
+      const file = "unpublished.txt";
       const dir = await f.add(910001);
       writeFileSync(join(dir, file), "unpublished work\n");
-      const branches = await f.branches();
-      const registrations = await f.worktrees();
+      const unchanged = await preserve(f.branches, f.worktrees);
       const dry = await f.run(["gc_pr_worktrees true"], "MERGED");
       expect(dry.output).not.toContain("would remove .worktrees/pr-910001");
-      expect(await f.branches()).toBe(branches);
-      expect(await f.worktrees()).toBe(registrations);
+      await unchanged();
       const result = await f.run(["gc_pr_worktrees false"], "MERGED");
       expect(result.status, result.output).toBe(0);
       expect(existsSync(join(dir, file)), result.output).toBe(true);
       expect(readFileSync(join(dir, file), "utf8")).toBe("unpublished work\n");
-      expect(await f.branches()).toBe(branches);
-      expect(await f.worktrees()).toBe(registrations);
+      await unchanged();
       expect(result.output).toContain("cleanup incomplete");
-    });
-  });
+    }),
+  );
 
   it.for(["intent", "advanced", "configured"])(
     "deletes only published or completed-receipt branch tips (%s)",
-    async (receipt, { command }) => {
-      await command.lifetime.run(async () => {
-        const f = await fixture(command);
-        await f.add(910001);
-        const tree = await f.git(["rev-parse", "HEAD^{tree}"]);
-        const prepared = await f.git(["commit-tree", tree, "-p", f.head], "Reviewed source\n");
-        await f.record(910001, receipt === "intent" ? "intent" : "complete", prepared);
-        const tip =
-          receipt === "advanced" || receipt === "configured"
-            ? await f.git(["commit-tree", tree, "-p", prepared], "Unpublished follow-up\n")
-            : prepared;
-        await f.git(["update-ref", "refs/heads/pr-910001-prep", tip]);
-        if (receipt === "configured") {
-          await f.git(["update-ref", "refs/heads/published", tip]);
-          await f.git(["update-ref", "refs/remotes/origin/published", f.head]);
-          await f.git(["config", "branch.pr-910001-prep.remote", "origin"]);
-          await f.git(["config", "branch.pr-910001-prep.merge", "refs/heads/published"]);
-        }
-        const outcomes = await f.outcomes();
-        const result = await f.run(["gc_pr_worktrees false"], "MERGED");
-        expect(result.status, result.output).toBe(0);
-        expect(await f.outcomes()).toBe(outcomes);
-        expect(await f.branches(), result.output).toContain(`refs/heads/pr-910001-prep ${tip}`);
-        expect(result.output).toContain("cleanup incomplete");
-      });
-    },
+    scenarioFor<string>(async (receipt, f) => {
+      await f.add(910001);
+      const tree = await f.git(["rev-parse", "HEAD^{tree}"]);
+      const prepared = await f.git(["commit-tree", tree, "-p", f.head], "Reviewed source\n");
+      await f.record(910001, receipt === "intent" ? "intent" : "complete", prepared);
+      const tip =
+        receipt === "advanced" || receipt === "configured"
+          ? await f.git(["commit-tree", tree, "-p", prepared], "Unpublished follow-up\n")
+          : prepared;
+      await f.git(["update-ref", "refs/heads/pr-910001-prep", tip]);
+      if (receipt === "configured") {
+        await f.git(["update-ref", "refs/heads/published", tip]);
+        await f.git(["update-ref", "refs/remotes/origin/published", f.head]);
+        await f.git(["config", "branch.pr-910001-prep.remote", "origin"]);
+        await f.git(["config", "branch.pr-910001-prep.merge", "refs/heads/published"]);
+      }
+      const outcomes = await f.outcomes();
+      const result = await f.run(["gc_pr_worktrees false"], "MERGED");
+      expect(result.status, result.output).toBe(0);
+      expect(await f.outcomes()).toBe(outcomes);
+      expect(await f.branches(), result.output).toContain(`refs/heads/pr-910001-prep ${tip}`);
+      expect(result.output).toContain("cleanup incomplete");
+    }),
   );
 
-  it.for(
-    ["CLOSED"].flatMap((state) =>
-      ["merge-output.log", "merge-output.11111111-1111-4111-8111-111111111111.log"].map(
-        (captureName) => ({ state, captureName }),
-      ),
-    ),
-  )(
-    "preserves registered captures during dry-run and actual GC for %j",
-    async ({ state, captureName }, { command }) => {
-      await command.lifetime.run(async () => {
-        const f = await fixture(command);
-        const protectedDirs: string[] = [];
-        for (const [index, shape] of (["empty", "populated", "symlink"] as const).entries()) {
-          protectedDirs.push(await f.add(910001 + index, shape, true, captureName));
+  it.for(["merge-output.log", "merge-output.11111111-1111-4111-8111-111111111111.log"])(
+    "preserves registered captures during dry-run and actual GC for %s",
+    scenarioFor<string>(async (captureName, f) => {
+      const protectedDirs: string[] = [];
+      for (const [index, shape] of (["empty", "populated", "symlink"] as const).entries()) {
+        protectedDirs.push(await f.add(910001 + index, shape, true, captureName));
+      }
+      const eligible = await f.add(910009);
+      const before = protectedDirs.map((dir) => evidence(dir, captureName));
+      const unchanged = await preserve(f.branches, f.worktrees);
+      const dry = await f.run(["gc_pr_worktrees true"]);
+      expect(dry.status, dry.output).toBe(0);
+      expect.soft(dry.output).toContain("would remove .worktrees/pr-910009");
+      for (const pr of [910001, 910002, 910003]) {
+        expect.soft(dry.output).not.toContain(`would remove .worktrees/pr-${pr}`);
+      }
+      await unchanged();
+      const actual = await f.run(["gc_pr_worktrees false"]);
+      expect(actual.status, actual.output).toBe(0);
+      // Check the original path first: moving evidence to Trash also violates recovery.
+      for (const [index, dir] of protectedDirs.entries()) {
+        expect(evidence(dir, captureName)).toEqual(before[index]);
+        expect.soft(actual.output).not.toContain(`removed .worktrees/pr-${910001 + index}`);
+        expect.soft(await f.worktrees()).toContain(`worktree ${dir}\n`);
+        for (const branch of [
+          `temp/pr-${910001 + index}`,
+          `pr-${910001 + index}`,
+          `pr-${910001 + index}-prep`,
+        ]) {
+          expect.soft(await f.branches()).toContain(`refs/heads/${branch} ${f.head}`);
         }
-        const eligible = await f.add(910009);
-        const before = protectedDirs.map((dir) => evidence(dir, captureName));
-        const branches = await f.branches();
-        const registrations = await f.worktrees();
-        const dry = await f.run(["gc_pr_worktrees true"], state);
-        expect(dry.status, dry.output).toBe(0);
-        expect.soft(dry.output).toContain("would remove .worktrees/pr-910009");
-        for (const pr of [910001, 910002, 910003]) {
-          expect.soft(dry.output).not.toContain(`would remove .worktrees/pr-${pr}`);
-        }
-        expect(await f.branches()).toBe(branches);
-        expect(await f.worktrees()).toBe(registrations);
-        const actual = await f.run(["gc_pr_worktrees false"], state);
-        expect(actual.status, actual.output).toBe(0);
-        // Check the original path first: moving evidence to Trash also violates recovery.
-        for (const [index, dir] of protectedDirs.entries()) {
-          expect.soft(existsSync(join(dir, ".local")), actual.output).toBe(true);
-          if (existsSync(join(dir, ".local"))) {
-            expect(evidence(dir, captureName)).toEqual(before[index]);
-          }
-          expect.soft(actual.output).not.toContain(`removed .worktrees/pr-${910001 + index}`);
-          expect.soft(await f.worktrees()).toContain(`worktree ${dir}\n`);
-          for (const branch of [
-            `temp/pr-${910001 + index}`,
-            `pr-${910001 + index}`,
-            `pr-${910001 + index}-prep`,
-          ]) {
-            expect.soft(await f.branches()).toContain(`refs/heads/${branch} ${f.head}`);
-          }
-        }
-        expect(actual.output).toContain("reconcile the earlier request manually");
-        expect(existsSync(eligible)).toBe(false);
-        expect(actual.output).toContain("removed .worktrees/pr-910009");
-        expect(await f.outcomes()).toBe("");
-        expect(
-          await f.git(["for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks/"]),
-        ).toBe("");
-        expect(existsSync(join(f.root, "trash"))).toBe(false);
-      });
-    },
+      }
+      expect(actual.output).toContain("reconcile the earlier request manually");
+      expect(existsSync(eligible)).toBe(false);
+      expect(actual.output).toContain("removed .worktrees/pr-910009");
+      expect(await f.outcomes()).toBe("");
+      expect(
+        await f.git(["for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks/"]),
+      ).toBe("");
+      expect(existsSync(join(f.root, "trash"))).toBe(false);
+    }),
   );
 
-  it.for([true])(
-    "preserves orphan evidence before scoped removal/provisioning (stale registration=%s)",
-    async (stale, { command }) => {
-      await command.lifetime.run(async () => {
-        const f = await fixture(command);
-        const dir = await f.add(910001, "empty", stale);
-        if (stale) {
-          const gitdir = readFileSync(join(dir, ".git"), "utf8").trim().slice(8);
-          writeFileSync(join(gitdir, "gitdir"), `${dir}-missing/.git\n`);
-          rmSync(join(dir, ".git"));
-        }
-        const before = evidence(dir);
-        const branches = await f.branches();
-        const registrations = await f.worktrees();
-        const result = await f.run([
-          "acquire_pr_operation_lock 910001",
-          "begin_pr_operation_validation_phase",
-          "enter_worktree 910001 false || exit $?",
-          "echo unexpected-entry-completed",
-        ]);
-        expect.soft(existsSync(join(dir, ".local/merge-output.log")), result.output).toBe(true);
-        if (existsSync(join(dir, ".local/merge-output.log"))) {
-          expect(evidence(dir)).toEqual(before);
-        }
-        expect.soft(await f.worktrees()).toBe(registrations);
-        expect(await f.branches()).toBe(branches);
-        expect(result.status, result.output).not.toBe(0);
-        expect(result.output).not.toContain("unexpected-entry-completed");
+  it.for(["entry", "removal"])(
+    "refuses %s without changing worktree evidence or branches",
+    scenarioFor<string>(async (operation, f) => {
+      const dir = await f.add(910001, operation === "entry" ? "empty" : "populated");
+      if (operation === "entry") {
+        const gitdir = readFileSync(join(dir, ".git"), "utf8").trim().slice(8);
+        writeFileSync(join(gitdir, "gitdir"), `${dir}-missing/.git\n`);
+        rmSync(join(dir, ".git"));
+      }
+      const before = evidence(dir);
+      const unchanged = await preserve(f.branches, f.worktrees);
+      const result = await f.run([
+        "acquire_pr_operation_lock 910001",
+        "begin_pr_operation_validation_phase",
+        `${operation === "entry" ? "enter_worktree 910001 false" : 'remove_worktree_if_present ".worktrees/pr-910001"'} || exit $?`,
+        "echo unexpected-completion",
+      ]);
+      expect(evidence(dir)).toEqual(before);
+      await unchanged();
+      expect(result.status, result.output).not.toBe(0);
+      expect(result.output).not.toContain("unexpected-completion");
+      if (operation === "entry") {
         expect(result.output).toContain(
           "Refusing PR worktree cleanup: unregistered or ambiguous PR worktree; scripts/pr refuses to mutate the shared canonical checkout",
         );
-        expect(existsSync(join(f.root, "trash"))).toBe(false);
         expect(await f.outcomes()).toBe("");
-      });
-    },
+      }
+      expect(existsSync(join(f.root, "trash"))).toBe(false);
+    }),
   );
 
-  it.for(["corrupt", "symbolic", "wrong-pr", "unretained", "local-tree"])(
+  it.for(["corrupt", "symbolic", "wrong-pr", "unretained", "local-tree", "orphan"])(
     "refuses GC with %s outcome",
-    async (fault, { command }) => {
-      await command.lifetime.run(async () => {
-        const f = await fixture(command);
-        const dir = await f.add(910001, "populated");
-        const localHead =
-          fault === "local-tree"
-            ? await f.git(
-                ["commit-tree", await f.git(["mktree"], ""), "-p", f.head],
-                "Different local tree\n",
-              )
-            : undefined;
-        const ref = await f.record(910001, "intent", f.head, localHead);
-        if (fault === "corrupt") {
-          await f.git(["update-ref", ref, await f.git(["hash-object", "-w", "--stdin"], "bad")]);
-        }
-        if (fault === "symbolic") {
-          await f.git(["update-ref", "refs/fixture/retained", await f.git(["rev-parse", ref])]);
-          await f.git(["symbolic-ref", ref, "refs/fixture/retained"]);
-        }
-        if (fault === "wrong-pr") {
-          const other = await f.record(910002);
-          await f.git(["update-ref", ref, await f.git(["rev-parse", other])]);
-        }
-        if (fault === "unretained") {
-          const tree = await f.git(["rev-parse", `${ref}^{tree}`]);
-          await f.git([
-            "update-ref",
-            ref,
-            await f.git(["commit-tree", tree], "Unretained fixture\n"),
-          ]);
-        }
-        const before = evidence(dir);
-        const branches = await f.branches();
-        const outcomes = await f.outcomes();
-        const result = await f.run(["gc_pr_worktrees false"]);
-        expect(result.status, result.output).toBe(0);
-        expect(existsSync(join(dir, ".local/merge-output.log")), result.output).toBe(true);
-        expect(evidence(dir)).toEqual(before);
-        expect(await f.branches()).toBe(branches);
-        expect(await f.outcomes()).toBe(outcomes);
-        expect(result.output).toContain("No merged/closed PR worktrees removed.");
-        expect(result.output).toContain("reconcile the earlier request manually");
-      });
-    },
-  );
-
-  it.for([true])(
-    "shared removal refuses capture (registered=%s)",
-    async (registered, { command }) => {
-      await command.lifetime.run(async () => {
-        const f = await fixture(command);
-        const dir = await f.add(910001, "populated", registered);
-        const before = evidence(dir);
-        const branches = await f.branches();
-        const registrations = await f.worktrees();
-        const result = await f.run([
-          "acquire_pr_operation_lock 910001",
-          "begin_pr_operation_validation_phase",
-          'remove_worktree_if_present ".worktrees/pr-910001" || exit $?',
-          "echo unexpected-removal-completed",
+    scenarioFor<string>(async (fault, f) => {
+      const dir = await f.add(910001, "populated", fault !== "orphan");
+      const localHead =
+        fault === "local-tree"
+          ? await f.git(
+              ["commit-tree", await f.git(["mktree"], ""), "-p", f.head],
+              "Different local tree\n",
+            )
+          : undefined;
+      const ref = await f.record(
+        910001,
+        fault === "orphan" ? "complete" : "intent",
+        f.head,
+        localHead,
+      );
+      if (fault === "corrupt") {
+        await f.git(["update-ref", ref, await f.git(["hash-object", "-w", "--stdin"], "bad")]);
+      }
+      if (fault === "symbolic") {
+        await f.git(["update-ref", "refs/fixture/retained", await f.git(["rev-parse", ref])]);
+        await f.git(["symbolic-ref", ref, "refs/fixture/retained"]);
+      }
+      if (fault === "wrong-pr") {
+        const other = await f.record(910002);
+        await f.git(["update-ref", ref, await f.git(["rev-parse", other])]);
+      }
+      if (fault === "unretained") {
+        const tree = await f.git(["rev-parse", `${ref}^{tree}`]);
+        await f.git([
+          "update-ref",
+          ref,
+          await f.git(["commit-tree", tree], "Unretained fixture\n"),
         ]);
-        expect(existsSync(join(dir, ".local/merge-output.log")), result.output).toBe(true);
-        expect(evidence(dir)).toEqual(before);
-        expect(await f.branches()).toBe(branches);
-        expect(await f.worktrees()).toBe(registrations);
-        expect(result.status, result.output).not.toBe(0);
-        expect(result.output).not.toContain("unexpected-removal-completed");
-        expect(existsSync(join(f.root, "trash"))).toBe(false);
-      });
-    },
-  );
-
-  it("retains an unregistered orphan even when its merge outcome is valid", async ({ command }) => {
-    await command.lifetime.run(async () => {
-      const f = await fixture(command);
-      const dir = await f.add(910001, "populated", false);
-      await f.record(910001, "complete");
-      const before = evidence(dir);
-      const branches = await f.branches();
-      const outcomes = await f.outcomes();
+      }
+      const unchanged = await preserve(() => evidence(dir), f.branches, f.outcomes);
       const result = await f.run(["gc_pr_worktrees false"]);
       expect(result.status, result.output).toBe(0);
-      expect(result.output).toContain("cleanup incomplete");
-      expect(result.output).not.toContain("removed .worktrees/pr-910001");
-      expect(evidence(dir)).toEqual(before);
-      expect(await f.branches()).toBe(branches);
-      expect(await f.outcomes()).toBe(outcomes);
-      expect(existsSync(join(f.root, "trash"))).toBe(false);
-    });
-  });
+      await unchanged();
+      if (fault === "orphan") {
+        expect(result.output).toContain("cleanup incomplete");
+        expect(result.output).not.toContain("removed .worktrees/pr-910001");
+        expect(existsSync(join(f.root, "trash"))).toBe(false);
+      } else {
+        expect(result.output).toContain("No merged/closed PR worktrees removed.");
+        expect(result.output).toContain("reconcile the earlier request manually");
+      }
+    }),
+  );
 });
