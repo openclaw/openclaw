@@ -25,6 +25,7 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectAgentSelection } from "../lib/reactive/application.ts";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { liveValue } from "../lib/reactive/live-value.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -466,12 +467,6 @@ function SettingsNavigation(props: SettingsSidebarProps) {
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const query = createMemo(() => props.searchQuery);
   let searchInput: HTMLInputElement | undefined;
-  // The compiler groups native value writes with unrelated footer bindings.
-  createEffect(query, (value, previous) => {
-    if (value !== previous && searchInput) {
-      searchInput.value = value;
-    }
-  });
   return (
     <Show
       when={props.presentation !== "embed-page"}
@@ -515,10 +510,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
               spellcheck="false"
               aria-label={t("nav.settingsSearchLabel")}
               placeholder={t("nav.settingsSearchPlaceholder")}
-              ref={(element) => {
-                searchInput = element;
-                element.value = query();
-              }}
+              ref={[(element) => (searchInput = element), liveValue(query)]}
               onInput={(event) => props.onSearchQueryChange(event.currentTarget.value)}
               onKeyDown={(event) => {
                 if (event.key !== "Escape" || isComposingKeyboardEvent(event)) {

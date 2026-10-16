@@ -9,6 +9,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   replaceSessionEntry,
   loadSessionEntry,
   upsertSessionEntryCore,
@@ -90,14 +94,17 @@ beforeAll(() => {
 });
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  setRuntimeConfigSnapshot(cfg);
 });
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   testing.resetToolsEffectiveCacheForTest();
   toolsEffectiveInventoryMocks.resolveEffectiveToolInventory.mockClear();
   heartbeat.mockClear();
   ingress.mockClear();
   resetSystemEventsForTest();
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
 });
 afterAll(async () => {
   memorySessionActorOwners.reset();

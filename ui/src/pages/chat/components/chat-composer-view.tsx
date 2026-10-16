@@ -19,7 +19,7 @@ import { ContextNotice } from "./chat-composer-context.tsx";
 import {
   renderChatAbortActionSolid,
   renderChatPrimaryActionsSolid as ChatPrimaryActions,
-  renderComposerDictationStatusSolid,
+  ComposerDictationStatus,
 } from "./chat-composer-controls.tsx";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import { EmojiMenu } from "./chat-composer-emoji.tsx";
@@ -366,7 +366,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0
                   }
                 />
-                {renderComposerDictationStatusSolid(context.dictation)}
+                <ComposerDictationStatus readDictation={() => context.dictation} />
                 <ChatAttachmentInputs
                   {...props}
                   disabled={!context.canCompose}

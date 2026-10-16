@@ -220,6 +220,7 @@ async function startRegisteredSentinel(
   const warn = vi.fn();
   try {
     await startGatewaySidecars({
+      trackStartupWork: (run) => run(new AbortController().signal),
       ...params,
       scheduler: sidecarScheduler,
       deps: {},

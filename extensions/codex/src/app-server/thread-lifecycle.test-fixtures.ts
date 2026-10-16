@@ -132,6 +132,7 @@ export function createCodexLifecycleHarness(options: {
           method: "thread/status/changed",
           params: { threadId, status: { type: "notLoaded" } },
         });
+        harness.send({ method: "thread/closed", params: { threadId } });
       }
       return response;
     }

@@ -292,7 +292,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       }
     }
     this.syncSessionSuggestionTarget(
-      stateValue.agentId ?? resolveChatAgentId(state) ?? "main",
+      resolveChatAgentId(state) ?? stateValue.agentId ?? "main",
       selectedSession,
     );
     if (selectedSessionDeleted) {
@@ -690,7 +690,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       });
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();
-      void this.refreshSessionSuggestions();
+      this.syncSessionSuggestionTarget(
+        resolveChatAgentId(state) ?? "main",
+        selectedChatSessionRow(state),
+      );
     }
     // Hello precedes recovery readiness. Wake parked outboxes on that publication;
     // the shared admission check still holds any recovered initial turn.

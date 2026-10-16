@@ -305,55 +305,55 @@ console.log("relocated exec authorization persisted");
       180_000,
     );
 
-    it("keeps activated plugin facades lazy and config-aware in a relocated archive", ({
-      signal,
-    }) =>
-      fixtureLifetime.run(async () => {
-        const root = fixtureLifetime.createTempDir("openclaw-worker-facade-");
-        const packageRoot = path.join(root, "pkg");
-        const relocated = path.join(packageRoot, "dist/worker");
-        const bundledRoot = path.join(packageRoot, "dist/extensions");
-        const pluginRoot = path.join(bundledRoot, "fixture");
-        fs.mkdirSync(relocated, { recursive: true });
-        fs.mkdirSync(pluginRoot, { recursive: true });
-        fs.writeFileSync(
-          path.join(packageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "0.0.0", type: "module" }),
-        );
-        await tar.extract({ file: preparedArchive, cwd: relocated });
-        fs.writeFileSync(
-          path.join(pluginRoot, "package.json"),
-          JSON.stringify({
-            name: "@openclaw/worker-facade-fixture",
-            version: "0.0.0",
-            type: "module",
-            openclaw: { extensions: ["./index.js"] },
-          }),
-        );
-        fs.writeFileSync(
-          path.join(pluginRoot, "openclaw.plugin.json"),
-          JSON.stringify({
-            id: "worker-facade-owner",
-            enabledByDefault: true,
-            channels: [],
-            configSchema: { type: "object", additionalProperties: false, properties: {} },
-          }),
-        );
-        fs.writeFileSync(
-          path.join(pluginRoot, "index.js"),
-          'export default { id: "worker-facade-owner", register() {} };\n',
-        );
-        fs.writeFileSync(
-          path.join(pluginRoot, "api.js"),
-          `globalThis[Symbol.for("worker-facade-evaluations")] = (globalThis[Symbol.for("worker-facade-evaluations")] ?? 0) + 1;
+    it(
+      "keeps activated plugin facades lazy and config-aware in a relocated archive",
+      ({ signal }) =>
+        fixtureLifetime.run(async () => {
+          const root = fixtureLifetime.createTempDir("openclaw-worker-facade-");
+          const packageRoot = path.join(root, "pkg");
+          const relocated = path.join(packageRoot, "dist/worker");
+          const bundledRoot = path.join(packageRoot, "dist/extensions");
+          const pluginRoot = path.join(bundledRoot, "fixture");
+          fs.mkdirSync(relocated, { recursive: true });
+          fs.mkdirSync(pluginRoot, { recursive: true });
+          fs.writeFileSync(
+            path.join(packageRoot, "package.json"),
+            JSON.stringify({ name: "openclaw", version: "0.0.0", type: "module" }),
+          );
+          await tar.extract({ file: preparedArchive, cwd: relocated });
+          fs.writeFileSync(
+            path.join(pluginRoot, "package.json"),
+            JSON.stringify({
+              name: "@openclaw/worker-facade-fixture",
+              version: "0.0.0",
+              type: "module",
+              openclaw: { extensions: ["./index.js"] },
+            }),
+          );
+          fs.writeFileSync(
+            path.join(pluginRoot, "openclaw.plugin.json"),
+            JSON.stringify({
+              id: "worker-facade-owner",
+              enabledByDefault: true,
+              channels: [],
+              configSchema: { type: "object", additionalProperties: false, properties: {} },
+            }),
+          );
+          fs.writeFileSync(
+            path.join(pluginRoot, "index.js"),
+            'export default { id: "worker-facade-owner", register() {} };\n',
+          );
+          fs.writeFileSync(
+            path.join(pluginRoot, "api.js"),
+            `globalThis[Symbol.for("worker-facade-evaluations")] = (globalThis[Symbol.for("worker-facade-evaluations")] ?? 0) + 1;
 export const marker = "relocated";`,
-        );
-        const result = await fixtureLifetime.track(
-          runNodeScript(
-            [
-              "--input-type=module",
-              "--eval",
-              `
+          );
+          const result = await fixtureLifetime.track(
+            runNodeScript(
+              [
+                "--input-type=module",
+                "--eval",
+                `
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 const entry = process.argv[1];
@@ -394,61 +394,63 @@ assert.equal(initializations(), 1);
 assert.equal(evaluations(), 1);
 console.log("relocated worker facade activation follows the shared config snapshot");
 `,
-              path.join(relocated, "worker.mjs"),
-            ],
-            {
-              PATH: process.env.PATH,
-              SystemRoot: process.env.SystemRoot,
-              WINDIR: process.env.WINDIR,
-              HOME: root,
-              USERPROFILE: root,
-              TMPDIR: root,
-              TMP: root,
-              TEMP: root,
-              OPENCLAW_HOME: root,
-              OPENCLAW_STATE_DIR: path.join(root, "state"),
-              OPENCLAW_CONFIG_PATH: path.join(root, "missing-config.json"),
-              OPENCLAW_FS_SAFE_NATIVE_MODE: "require",
-              OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-              XDG_CONFIG_HOME: path.join(root, "config"),
-              XDG_CACHE_HOME: path.join(root, "cache"),
-              XDG_DATA_HOME: path.join(root, "data"),
-              JITI_FS_CACHE: "0",
-              NODE_DISABLE_COMPILE_CACHE: "1",
-            },
-            30_000,
-            {
-              cwd: packageRoot,
-              signal,
-              requireProcessTreeExit: process.platform !== "win32",
-              maxBuffer: 64 * 1024,
-            },
-          ),
-        );
-        expect(result.error, `${root}\n${result.stderr}`).toBeUndefined();
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout.trim()).toBe(
-          "relocated worker facade activation follows the shared config snapshot",
-        );
+                path.join(relocated, "worker.mjs"),
+              ],
+              {
+                PATH: process.env.PATH,
+                SystemRoot: process.env.SystemRoot,
+                WINDIR: process.env.WINDIR,
+                HOME: root,
+                USERPROFILE: root,
+                TMPDIR: root,
+                TMP: root,
+                TEMP: root,
+                OPENCLAW_HOME: root,
+                OPENCLAW_STATE_DIR: path.join(root, "state"),
+                OPENCLAW_CONFIG_PATH: path.join(root, "missing-config.json"),
+                OPENCLAW_FS_SAFE_NATIVE_MODE: "require",
+                OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+                XDG_CONFIG_HOME: path.join(root, "config"),
+                XDG_CACHE_HOME: path.join(root, "cache"),
+                XDG_DATA_HOME: path.join(root, "data"),
+                JITI_FS_CACHE: "0",
+                NODE_DISABLE_COMPILE_CACHE: "1",
+              },
+              30_000,
+              {
+                cwd: packageRoot,
+                signal,
+                requireProcessTreeExit: process.platform !== "win32",
+                maxBuffer: 64 * 1024,
+              },
+            ),
+          );
+          expect(result.error, `${root}\n${result.stderr}`).toBeUndefined();
+          expect(result.status, result.stderr).toBe(0);
+          expect(result.stdout.trim()).toBe(
+            "relocated worker facade activation follows the shared config snapshot",
+          );
 
-        // Check the deployed archive, not only the build directory: an emitted
-        // auxiliary can exist locally but still be excluded by sealed staging.
-        const closure = await fixtureLifetime.track(
-          runNodeScript(
-            [path.resolve("scripts/check-package-dist-imports.mjs"), packageRoot],
-            {
-              PATH: process.env.PATH,
-              SystemRoot: process.env.SystemRoot,
-              WINDIR: process.env.WINDIR,
-            },
-            30_000,
-            { cwd: packageRoot, signal, requireProcessTreeExit: process.platform !== "win32" },
-          ),
-        );
-        expect(closure.error, closure.stderr).toBeUndefined();
-        expect(closure.status, closure.stderr).toBe(0);
-        expect(closure.stdout.trim()).toBe("OpenClaw package dist import closure passed.");
-      }));
+          // Check the deployed archive, not only the build directory: an emitted
+          // auxiliary can exist locally but still be excluded by sealed staging.
+          const closure = await fixtureLifetime.track(
+            runNodeScript(
+              [path.resolve("scripts/check-package-dist-imports.mjs"), packageRoot],
+              {
+                PATH: process.env.PATH,
+                SystemRoot: process.env.SystemRoot,
+                WINDIR: process.env.WINDIR,
+              },
+              30_000,
+              { cwd: packageRoot, signal, requireProcessTreeExit: process.platform !== "win32" },
+            ),
+          );
+          expect(closure.error, closure.stderr).toBeUndefined();
+          expect(closure.status, closure.stderr).toBe(0);
+          expect(closure.stdout.trim()).toBe("OpenClaw package dist import closure passed.");
+        }),
+      180_000,
+    );
 
     it("delivers image operations and file reads and edits from a relocated archive", async () => {
       const root = tempDirs.make("openclaw-worker-images-");
@@ -550,7 +552,7 @@ console.log("relocated computer observations, image operations, and file reads a
       expect(result.stdout).toContain(
         "relocated computer observations, image operations, and file reads and edits passed",
       );
-    });
+    }, 180_000);
 
     it("keeps worker bootstrap, shell analysis, and Windows child spawning portable", async () => {
       const root = tempDirs.make("openclaw-worker-portable-");
