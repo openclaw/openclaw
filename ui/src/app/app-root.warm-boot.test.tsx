@@ -3,6 +3,7 @@ import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/login-gate.ts";
 import { i18n } from "../i18n/index.ts";
 import { storeDeviceAuthToken } from "../lib/nodes/index.ts";
@@ -100,6 +101,10 @@ type LoginGateElement = HTMLElement & {
     onConnect: () => void;
     onOpenGatewaySettings?: () => void;
     onToggleGatewaySecret: () => void;
+    onGatewayUrlChange: (value: string) => void;
+    onSecretChange: (value: string) => void;
+    gatewayUrl: string;
+    secret: string;
     showGatewaySecret: boolean;
   };
 };
@@ -318,6 +323,36 @@ describe("warm boot app root", () => {
     second.snapshot.lastError = "Connect to continue";
     await second.draw();
     expect(loginGate(second.container).props.showGatewaySecret).toBe(false);
+  });
+
+  it("keeps credential drafts until the Gateway client changes", async () => {
+    const { snapshot, container, draw } = await createWarmSurface(false);
+    snapshot.phase = "offline";
+    snapshot.lastError = "Connect to continue";
+    await draw();
+    const gate = loginGate(container);
+    gate.props.onGatewayUrlChange("wss://draft.example");
+    gate.props.onSecretChange("draft-secret");
+    gate.props.onToggleGatewaySecret();
+    await draw();
+    expect(gate.props).toMatchObject({
+      gatewayUrl: "wss://draft.example",
+      secret: "draft-secret",
+      showGatewaySecret: true,
+    });
+
+    const connection = runtime!.context.gateway.connection;
+    connection.gatewayUrl = "wss://replacement.example";
+    connection.token = "replacement-token";
+    connection.password = "";
+    // SAFETY: The offline root observes client identity; it never calls this transport.
+    snapshot.client = {} as GatewayBrowserClient;
+    await draw();
+    expect(gate.props).toMatchObject({
+      gatewayUrl: "wss://replacement.example",
+      secret: "replacement-token",
+      showGatewaySecret: false,
+    });
   });
 
   it("provides the same ApplicationContext to native descendants and retires it on disposal", async () => {
