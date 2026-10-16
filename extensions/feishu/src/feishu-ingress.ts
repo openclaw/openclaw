@@ -152,7 +152,20 @@ function inspectFeishuIngressEnvelope(
         "Feishu message ingress envelope is missing event.message.chat_id.",
       );
     }
-    return { eventId, eventType, laneKey: `chat:${chatId}` };
+    const chatType = normalizeNullableString(message?.chat_type);
+    // Native topic groups identify the topic on the starter via root_id and on
+    // replies via thread_id; prefer thread_id for replies so both share a lane.
+    const topicId =
+      chatType === "topic_group"
+        ? (normalizeNullableString(message?.thread_id) ??
+          normalizeNullableString(message?.root_id) ??
+          normalizeNullableString(message?.message_id))
+        : null;
+    return {
+      eventId,
+      eventType,
+      laneKey: topicId ? `chat:${chatId}:topic:${topicId}` : `chat:${chatId}`,
+    };
   }
   const noticeMeta = isRecord(event.notice_meta) ? event.notice_meta : null;
   const fileType = normalizeNullableString(noticeMeta?.file_type);

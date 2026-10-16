@@ -31,6 +31,9 @@ function messageEnvelope(params: {
   eventId: string;
   messageId?: string;
   chatId?: string;
+  chatType?: "p2p" | "group" | "topic_group";
+  rootId?: string;
+  threadId?: string;
   createTime?: string;
   text?: string;
 }) {
@@ -49,7 +52,9 @@ function messageEnvelope(params: {
       message: {
         message_id: params.messageId ?? "om-message",
         chat_id: params.chatId ?? "oc-chat",
-        chat_type: "p2p",
+        chat_type: params.chatType ?? "p2p",
+        ...(params.rootId ? { root_id: params.rootId } : {}),
+        ...(params.threadId ? { thread_id: params.threadId } : {}),
         message_type: "text",
         content: JSON.stringify({ text: params.text ?? "hello" }),
         create_time: params.createTime ?? "1710000000000",
@@ -218,6 +223,63 @@ afterEach(async () => {
 });
 
 describe("Feishu durable ingress", () => {
+  it("uses topic lanes for native topic groups while preserving chat lanes", async () => {
+    await withQueue(async (queue, startIngress) => {
+      const ingress = startIngress({ queue, dispatcher: createDispatcher() });
+      const root = messageEnvelope({
+        eventId: "evt-group-root",
+        messageId: "om-root",
+        chatType: "group",
+      });
+      const reply = messageEnvelope({
+        eventId: "evt-group-reply",
+        messageId: "om-reply",
+        chatType: "group",
+        rootId: "om-root",
+      });
+      const other = messageEnvelope({
+        eventId: "evt-group-other",
+        messageId: "om-other",
+        chatType: "group",
+      });
+      const nativeTopicRoot = messageEnvelope({
+        eventId: "evt-native-topic-root",
+        messageId: "om-topic-starter",
+        chatType: "topic_group",
+        rootId: "omt-topic",
+      });
+      const nativeTopicReply = messageEnvelope({
+        eventId: "evt-native-topic-reply",
+        messageId: "om-topic-reply",
+        chatType: "topic_group",
+        rootId: "om-topic-starter",
+        threadId: "omt-topic",
+      });
+      const otherNativeTopic = messageEnvelope({
+        eventId: "evt-native-topic-other",
+        messageId: "om-other-topic",
+        chatType: "topic_group",
+        rootId: "omt-other-topic",
+      });
+      await ingress.invoke(root, { needCheck: false });
+      await ingress.invoke(reply, { needCheck: false });
+      await ingress.invoke(other, { needCheck: false });
+      await ingress.invoke(nativeTopicRoot, { needCheck: false });
+      await ingress.invoke(nativeTopicReply, { needCheck: false });
+      await ingress.invoke(otherNativeTopic, { needCheck: false });
+
+      const pending = await queue.listPending({ orderBy: "received" });
+      expect(pending.map((entry) => entry.laneKey)).toEqual([
+        "chat:oc-chat",
+        "chat:oc-chat",
+        "chat:oc-chat",
+        "chat:oc-chat:topic:omt-topic",
+        "chat:oc-chat:topic:omt-topic",
+        "chat:oc-chat:topic:omt-other-topic",
+      ]);
+    });
+  });
+
   it("waits for durable append before acknowledging the webhook", async () => {
     await withQueue(async (queue, startIngress) => {
       let releaseAppend!: () => void;
