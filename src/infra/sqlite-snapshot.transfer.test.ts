@@ -37,7 +37,6 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
 import { createVerifiedSqliteSnapshot, publishVerifiedSqliteFile } from "./sqlite-snapshot.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let sqlite: ReturnType<typeof requireNodeSqlite>;
 let sourcePath: string;
 let targetPath: string;
 let tempDir: string;
@@ -50,13 +49,7 @@ beforeEach(async () => {
   }
   sourcePath = path.join(tempDir, "source.sqlite");
   targetPath = path.join(tempDir, "snapshot.sqlite");
-  sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(sourcePath);
-  try {
-    database.exec("VACUUM;");
-  } finally {
-    database.close();
-  }
+  execSource("VACUUM;");
 });
 
 afterEach(() => {
@@ -66,25 +59,31 @@ afterEach(() => {
 
 type SnapshotOptions = Parameters<typeof createVerifiedSqliteSnapshot>[0];
 
-async function expectSnapshotFailureWithoutTarget(
-  options: SnapshotOptions,
-  pattern: RegExp,
-): Promise<void> {
-  await expect(createVerifiedSqliteSnapshot(options)).rejects.toThrow(pattern);
-  await expect(fs.access(options.targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+async function expectSnapshotFailureWithoutTarget(pattern: RegExp): Promise<void> {
+  await expect(snapshot()).rejects.toThrow(pattern);
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
-function withReadOnlySnapshot<T>(
-  sqliteModule: ReturnType<typeof requireNodeSqlite>,
-  snapshotPath: string,
-  operation: (snapshot: import("node:sqlite").DatabaseSync) => T,
-): T {
-  const snapshot = new sqliteModule.DatabaseSync(snapshotPath, { readOnly: true });
+function execSource(sql: string) {
+  const source = new (requireNodeSqlite().DatabaseSync)(sourcePath);
   try {
-    return operation(snapshot);
+    source.exec(sql);
   } finally {
-    snapshot.close();
+    source.close();
   }
+}
+
+function query(sql: string, file = targetPath) {
+  const database = new (requireNodeSqlite().DatabaseSync)(file, { readOnly: true });
+  try {
+    return database.prepare(sql).all();
+  } finally {
+    database.close();
+  }
+}
+
+function snapshot(options: Partial<SnapshotOptions> = {}) {
+  return createVerifiedSqliteSnapshot({ sourcePath, targetPath, preserveRowIds: true, ...options });
 }
 
 function mockExclusiveCopyTransfer() {
@@ -146,25 +145,15 @@ describe("owned SQLite snapshot transfer", () => {
     }
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     const destination = path.join(directory, "snapshot.sqlite");
-    const source = new sqlite.DatabaseSync(sourcePath);
-    try {
-      source.exec(
-        "CREATE TABLE records(value TEXT); INSERT INTO records(rowid,value) VALUES(71,'retained');",
-      );
-    } finally {
-      source.close();
-    }
+    execSource(
+      "CREATE TABLE records(value TEXT); INSERT INTO records(rowid,value) VALUES(71,'retained');",
+    );
     const original = await fs.readFile(sourcePath);
 
-    await createVerifiedSqliteSnapshot({
-      sourcePath,
-      targetPath: destination,
-      preserveRowIds: true,
-    });
-
+    await snapshot({ targetPath: destination });
     {
-      using snapshot = openNodeSqliteDatabase(destination, { readOnly: true });
-      expect(snapshot.prepare("SELECT rowid,value FROM records").all()).toEqual([
+      using database = openNodeSqliteDatabase(destination, { readOnly: true });
+      expect(database.prepare("SELECT rowid,value FROM records").all()).toEqual([
         { rowid: 71, value: "retained" },
       ]);
     }
@@ -185,21 +174,13 @@ describe("owned SQLite snapshot transfer", () => {
         mockUnavailableBirthtime(birthtime);
       }
       const copy = copyFallback ? mockExclusiveCopyTransfer() : undefined;
-      const source = new sqlite.DatabaseSync(sourcePath);
-      try {
-        source.exec(
-          "CREATE TABLE records(value TEXT, payload BLOB); INSERT INTO records(rowid,value,payload) VALUES(71,'retained',zeroblob(131072));",
-        );
-      } finally {
-        source.close();
-      }
+      execSource(
+        "CREATE TABLE records(value TEXT, payload BLOB); INSERT INTO records(rowid,value,payload) VALUES(71,'retained',zeroblob(131072));",
+      );
       const original = await fs.readFile(sourcePath);
       let inspected = false;
       let preparedBytes: Buffer | undefined;
-      const receipt = await createVerifiedSqliteSnapshot({
-        sourcePath,
-        targetPath,
-        preserveRowIds: true,
+      const receipt = await snapshot({
         ...(isolated
           ? { sourceAcquisition: { mode: "isolated-process" as const, stagingRoot: tempDir } }
           : {}),
@@ -210,10 +191,12 @@ describe("owned SQLite snapshot transfer", () => {
               const file = path.join(directory, entry.name);
               if (entry.isDirectory()) {
                 await visit(file);
-              } else if (entry.isFile() && file !== sourcePath) {
-                if ((await fs.stat(file)).size >= original.length) {
-                  images.push(file);
-                }
+              } else if (
+                entry.isFile() &&
+                file !== sourcePath &&
+                (await fs.stat(file)).size >= original.length
+              ) {
+                images.push(file);
               }
             }
           };
@@ -237,22 +220,15 @@ describe("owned SQLite snapshot transfer", () => {
       expect((await fs.readdir(tempDir)).toSorted()).toEqual(["snapshot.sqlite", "source.sqlite"]);
       expect(await fs.readFile(targetPath)).toEqual(preparedBytes);
       expect(await fs.readFile(sourcePath)).toEqual(original);
-      withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
-        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-        expect(
-          snapshot.prepare("SELECT rowid,value,length(payload) AS bytes FROM records").all(),
-        ).toEqual([{ rowid: 71, value: "retained", bytes: 131072 }]);
-      });
+      expect(query("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+      expect(query("SELECT rowid,value,length(payload) AS bytes FROM records")).toEqual([
+        { rowid: 71, value: "retained", bytes: 131072 },
+      ]);
     },
   );
 
   it("keeps a caller-owned source independent of its published image", async () => {
-    const source = new sqlite.DatabaseSync(sourcePath);
-    try {
-      source.exec("CREATE TABLE records(value TEXT); INSERT INTO records VALUES('before');");
-    } finally {
-      source.close();
-    }
+    execSource("CREATE TABLE records(value TEXT); INSERT INTO records VALUES('before');");
     const original = await fs.readFile(sourcePath);
     await publishVerifiedSqliteFile({
       sourcePath,
@@ -263,18 +239,11 @@ describe("owned SQLite snapshot transfer", () => {
         sizeBytes: original.length,
       },
       beforePublish: () => {
-        const changed = new sqlite.DatabaseSync(sourcePath);
-        try {
-          changed.exec("UPDATE records SET value='after';");
-        } finally {
-          changed.close();
-        }
+        execSource("UPDATE records SET value='after';");
       },
     });
     expect(await fs.readFile(targetPath)).toEqual(original);
-    withReadOnlySnapshot(sqlite, sourcePath, (snapshot) => {
-      expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "after" });
-    });
+    expect(query("SELECT value FROM records", sourcePath)).toEqual([{ value: "after" }]);
   });
 
   it("rejects same-size byte changes during a ctime-fallback transfer", async () => {
@@ -284,10 +253,7 @@ describe("owned SQLite snapshot transfer", () => {
       bytes.write("changed", 0, "utf8");
       await fs.writeFile(stagedPath, bytes);
     });
-    await expectSnapshotFailureWithoutTarget(
-      { sourcePath, targetPath, preserveRowIds: true },
-      /hash mismatch/,
-    );
+    await expectSnapshotFailureWithoutTarget(/hash mismatch/);
     expect(await fs.readFile(sourcePath)).toEqual(original);
   });
 
@@ -320,7 +286,6 @@ describe("owned SQLite snapshot transfer", () => {
         });
       }
       await expectSnapshotFailureWithoutTarget(
-        { sourcePath, targetPath, preserveRowIds: true },
         identityFailure
           ? /source changed during transfer/
           : failure === "allocation"

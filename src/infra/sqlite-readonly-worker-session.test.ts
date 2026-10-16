@@ -75,15 +75,38 @@ function requestId(child: MockChild): number {
 }
 function observeSettlement(promise: Promise<unknown>) {
   let settled = false;
-  void promise.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
+  const mark = () => {
+    settled = true;
+  };
+  void promise.then(mark, mark);
   return () => settled;
+}
+
+function reply(child: MockChild, result: unknown) {
+  child.emit("message", { id: requestId(child), result });
+}
+
+async function expectRetirement(
+  session: Session,
+  child: MockChild,
+  result: Promise<unknown>,
+  message: string,
+) {
+  const settled = observeSettlement(result);
+  await nextTurn();
+  expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+  expect(settled()).toBe(false);
+  const closing = session.close();
+  const closeSettled = observeSettlement(closing);
+  try {
+    await nextTurn();
+    expect([closeSettled(), settled()]).toEqual([false, false]);
+  } finally {
+    child.emit("close", null, "SIGKILL");
+    await closing;
+  }
+  await expect(result).rejects.toThrow(message);
+  expect(child.kill).toHaveBeenCalledOnce();
 }
 
 beforeEach(() => mock.spawn.mockReset());
@@ -124,9 +147,8 @@ describe("SQLite read-only session operation custody", () => {
         expect((error as Error).message).toContain(
           `runtime binary not executable: ${process.execPath}`,
         );
-        expect((error as Error).message).not.toMatch(/disk space|XDG_CACHE_HOME/);
-        expect((error as Error).message).toContain(process.execPath);
         expect((error as Error).message).toContain("/fixture/launch");
+        expect((error as Error).message).not.toMatch(/disk space|XDG_CACHE_HOME/);
         expect((error as Error).message).not.toContain("OPENCLAW_STATE_DIR");
         expect((error as Error).message).not.toContain("--fixture-readonly-session");
       }
@@ -141,10 +163,7 @@ describe("SQLite read-only session operation custody", () => {
       const first = session.run("/fixture/first.sqlite", { mode });
       const observed = first.catch((error: unknown) => error);
       const firstId = requestId(child);
-      child.emit("message", {
-        id: firstId,
-        result: { ok: false, message: "fixture staging refused" },
-      });
+      reply(child, { ok: false, message: "fixture staging refused" });
       // An incorrect retirement must fail here, without waiting forever for a mock child close.
       await nextTurn();
       expect(child.kill).not.toHaveBeenCalled();
@@ -155,7 +174,7 @@ describe("SQLite read-only session operation custody", () => {
       const second = session.run("/fixture/second.sqlite", { mode });
       const secondId = requestId(child);
       expect(secondId).not.toBe(firstId);
-      child.emit("message", { id: secondId, result: { ok: true, location: "/fixture/staged" } });
+      reply(child, { ok: true, location: "/fixture/staged" });
       await expect(second).resolves.toBe("/fixture/staged");
       expect(mock.spawn).toHaveBeenCalledOnce();
       expect(child.kill).not.toHaveBeenCalled();
@@ -165,26 +184,8 @@ describe("SQLite read-only session operation custody", () => {
   it("joins retirement for a malformed staging refusal instead of retaining its child", async () => {
     const { session, child } = createSession();
     const result = session.run("/fixture/source.sqlite", { mode: "staging-create" });
-    const settled = observeSettlement(result);
-    child.emit("message", {
-      id: requestId(child),
-      result: { ok: false, message: "fixture refusal", unexpected: true },
-    });
-    await nextTurn();
-    expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-    expect(settled()).toBe(false);
-    const closing = session.close();
-    const closeSettled = observeSettlement(closing);
-    try {
-      await nextTurn();
-      expect(closeSettled()).toBe(false);
-      expect(settled()).toBe(false);
-    } finally {
-      child.emit("close", null, "SIGKILL");
-      await closing;
-    }
-    await expect(result).rejects.toThrow("returned an invalid result");
-    expect(child.kill).toHaveBeenCalledOnce();
+    reply(child, { ok: false, message: "fixture refusal", unexpected: true });
+    await expectRetirement(session, child, result, "returned an invalid result");
   });
 
   it("joins a framed auth operation failure even when staging refusals may retain the child", async () => {
@@ -195,7 +196,6 @@ describe("SQLite read-only session operation custody", () => {
       expectedIdentity: "file:fixture-auth",
       env,
     });
-    const settled = observeSettlement(result);
     const id = requestId(child);
     expect(child.send.mock.calls[0]?.[0]).toMatchObject({
       id,
@@ -210,38 +210,22 @@ describe("SQLite read-only session operation custody", () => {
       { kinds: ["fields"] },
     );
     try {
-      child.emit("message", {
-        id,
-        result: { type: "start", handle },
-      });
+      reply(child, { type: "start", handle });
       expect(child.send).toHaveBeenLastCalledWith(
         { id, transfer: { type: "next", transferId: handle.id } },
         expect.any(Function),
       );
-      child.emit("message", {
-        id,
-        result: { type: "frame", frame: encodeSqliteAuthTransferFrame(transfer.next(handle.id)) },
+      reply(child, {
+        type: "frame",
+        frame: encodeSqliteAuthTransferFrame(transfer.next(handle.id)),
       });
       expect(child.send).toHaveBeenCalledTimes(3);
       expect(child.send).toHaveBeenLastCalledWith(
         { id, transfer: { type: "next", transferId: handle.id } },
         expect.any(Function),
       );
-      child.emit("message", { id, result: { ok: false, message: "fixture auth read refused" } });
-      await nextTurn();
-      expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-      expect(settled()).toBe(false);
-      const closing = session.close();
-      const closeSettled = observeSettlement(closing);
-      try {
-        await nextTurn();
-        expect(closeSettled()).toBe(false);
-      } finally {
-        child.emit("close", null, "SIGKILL");
-        await closing;
-      }
-      await expect(result).rejects.toThrow("fixture auth read refused");
-      expect(child.kill).toHaveBeenCalledOnce();
+      reply(child, { ok: false, message: "fixture auth read refused" });
+      await expectRetirement(session, child, result, "fixture auth read refused");
     } finally {
       transfer.cancel();
     }
@@ -286,10 +270,7 @@ it("keeps a detached staging command budget inside a caller-owned deadline scope
         const budgeted = timer.mock.calls.some(
           ([, delay]) => typeof delay === "number" && delay > 0,
         );
-        child.emit("message", {
-          id: requestId(child),
-          result: { ok: true, location: "/fixture/staged" },
-        });
+        reply(child, { ok: true, location: "/fixture/staged" });
         await expect(result).resolves.toBe("/fixture/staged");
         expect(budgeted).toBe(true);
         expect(child.kill).not.toHaveBeenCalled();
