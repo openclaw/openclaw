@@ -4,16 +4,36 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { Browser, BrowserContextOptions, Locator } from "playwright";
 import {
+  validateProofAnnotations,
+  type ProofAnnotation,
+} from "../../../scripts/lib/proof-annotations.ts";
+import {
   type ProofVideoCue,
   type ProofVideoCues,
   validateProofVideoCues,
 } from "../../../scripts/lib/proof-video-render.ts";
 import { resolveSystemBin } from "../../../src/infra/resolve-system-bin.ts";
+import { rasterizeProofAnnotations } from "./proof-annotations.ts";
 
 type Rect = NonNullable<Awaited<ReturnType<Locator["boundingBox"]>>>;
 
-export async function rasterizeCaptions(browser: Browser, cues: ProofVideoCues, dir: string) {
+export async function rasterizeProofOverlays(browser: Browser, cues: ProofVideoCues, dir: string) {
   validateProofVideoCues(cues);
+  for (const cue of cues.cues) {
+    if (cue.kind !== "annotation") {
+      continue;
+    }
+    const image = path.join(dir, cue.image);
+    await mkdir(path.dirname(image), { recursive: true });
+    await writeFile(
+      image,
+      await rasterizeProofAnnotations(browser, {
+        viewport: cues.viewport,
+        scale: cues.scale,
+        annotations: cue.annotations,
+      }),
+    );
+  }
   const context = await browser.newContext({
     viewport: { width: cues.viewport.width, height: cues.captionHeight },
     deviceScaleFactor: 1,
@@ -141,6 +161,20 @@ export async function startProofRecording(
     clearCaption() {
       end("caption", now());
     },
+    annotate(annotations: ProofAnnotation[]) {
+      const start = now();
+      validateProofAnnotations(annotations, viewport);
+      add({
+        kind: "annotation",
+        start,
+        end: start,
+        annotations: structuredClone(annotations),
+        image: `annotations/${sidecar.cues.filter((cue) => cue.kind === "annotation").length}.png`,
+      });
+    },
+    clearAnnotations() {
+      end("annotation", now());
+    },
     async zoom(target: Locator | Rect, { factor = 2, padding = 24, ease = 0.5 } = {}) {
       now();
       if (
@@ -207,7 +241,7 @@ export async function startProofRecording(
       }
       sidecar.video = path.basename(videoPath);
       validateProofVideoCues(sidecar);
-      await rasterizeCaptions(browser, sidecar, dir);
+      await rasterizeProofOverlays(browser, sidecar, dir);
       const cuesPath = path.join(dir, "cues.json");
       await writeFile(cuesPath, `${JSON.stringify(sidecar, null, 2)}\n`, { flag: "wx" });
       return { dir, videoPath, cuesPath };
