@@ -50,6 +50,10 @@ const expectValue = (locator: Locator, value: string) =>
   expect.poll(() => locator.inputValue()).toBe(value);
 const expectEnabled = (control: Locator, enabled = true) =>
   expect.poll(() => control.isEnabled()).toBe(enabled);
+async function expectDraft(page: Page, text: string, attachments: number) {
+  await expectValue(activeComposer(page), text);
+  await expectCount(activeAttachments(page), attachments);
+}
 const textFile = (name: string, text: string) => ({
   name,
   mimeType: "text/plain",
@@ -134,8 +138,6 @@ async function installDeferredAttachmentReader(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const proof = { aborts: 0, finish: undefined as (() => Promise<void>) | undefined };
     (globalThis as unknown as { attachmentReadProof: typeof proof }).attachmentReadProof = proof;
-    // Keep the native methods before overriding them so deferred completion and
-    // cancellation cannot recursively call their own test hooks.
     const { readAsDataURL, abort } = FileReader.prototype;
     FileReader.prototype.readAsDataURL = function (blob: Blob) {
       proof.finish = () => {
@@ -186,6 +188,24 @@ async function waitForCommittedAttachmentDraft(
     text,
     1,
   );
+}
+
+function readFollowUps(active: Element, content: string) {
+  const rows = (selector: string, id: string, match?: string) =>
+    [...active.querySelectorAll(selector)]
+      .filter((row) => match === undefined || row.textContent?.includes(match))
+      .map((row) => {
+        const rect = row.getBoundingClientRect();
+        return {
+          id: row.getAttribute(id),
+          visible: rect.height > 0 && rect.width > 0 && rect.bottom > 0 && rect.top < innerHeight,
+          text: row.querySelector(".chat-queue__text")?.textContent?.trim(),
+        };
+      });
+  return {
+    bubbles: rows(".chat-group.user .chat-bubble", "data-message-id", content),
+    queued: rows(".agent-chat__composer-shell .chat-queue__item", "data-chat-queue-item"),
+  };
 }
 
 suite.define(() => {
@@ -258,20 +278,17 @@ suite.define(() => {
       const retainsFile = !["rewind-completed", "rewind-pending"].includes(scenario);
       const expectedText =
         scenario === "rewind-newer-draft" ? newerText : retainsFile ? currentText : earlierText;
-      const prefix = {
-        role: "assistant",
-        content: "Earlier conversation.",
-        __openclaw: { id: "rewind-prefix", seq: 1 },
-      };
+      const rewindMessage = (role: string, content: string, id: string, seq: number) => ({
+        role,
+        content,
+        __openclaw: { id: `rewind-${id}`, seq },
+      });
+      const prefix = rewindMessage("assistant", "Earlier conversation.", "prefix", 1);
       const { gateway, pageErrors, composer, send } = await openChat(page, {
         historyMessages: [
           prefix,
-          { role: "user", content: earlierText, __openclaw: { id: "rewind-user", seq: 2 } },
-          {
-            role: "assistant",
-            content: "Later answer.",
-            __openclaw: { id: "rewind-answer", seq: 3 },
-          },
+          rewindMessage("user", earlierText, "user", 2),
+          rewindMessage("assistant", "Later answer.", "answer", 3),
         ],
       });
       await composer.fill(currentText);
@@ -292,10 +309,7 @@ suite.define(() => {
       }
       if (scenario !== "same-draft") {
         await gateway.deferNext("sessions.rewind");
-        await page
-          .locator(".chat-bubble")
-          .filter({ hasText: earlierText })
-          .click({ button: "right" });
+        await page.locator(".chat-bubble", { hasText: earlierText }).click({ button: "right" });
         await page.getByRole("menuitem", { name: "Rewind to here", exact: true }).click();
         await button(page.locator(".chat-confirm-popover"), "Rewind").click();
         const rewind = await gateway.waitForRequest("sessions.rewind");
@@ -322,9 +336,7 @@ suite.define(() => {
             editorAttachments: [],
           });
           if (scenario === "rewind-newer-draft" || scenario === "rewind-newer-file") {
-            await expect
-              .poll(() => page.locator(".chat-bubble").filter({ hasText: earlierText }).count())
-              .toBe(0);
+            await expectCount(page.locator(".chat-bubble", { hasText: earlierText }), 0);
           }
         }
         if (scenario !== "rewind-newer-file") {
@@ -398,6 +410,8 @@ suite.define(() => {
         await stageFollowUp();
         const terminalText = "First turn complete.";
         const terminalMessage = textMessage("assistant", terminalText, "held-enter-terminal", 3);
+        const terminalState = { activeRunIds: [], hasActiveRun: false };
+        const terminalSession = { ...terminalState, key: "agent:main:main", status: "done" };
         const historyMessages = [
           ready,
           textMessage("user", initialText, "held-enter-initial-user", 2, `${initialRunId}:user`),
@@ -412,18 +426,12 @@ suite.define(() => {
           .getByText(terminalText, { exact: true })
           .waitFor();
         await gateway.emitGatewayEvent("session.message", {
-          activeRunIds: [],
+          ...terminalState,
           clientRunId: initialRunId,
-          hasActiveRun: false,
           message: terminalMessage,
           messageId: "held-enter-terminal",
           messageSeq: 3,
-          session: {
-            activeRunIds: [],
-            hasActiveRun: false,
-            key: "agent:main:main",
-            status: "done",
-          },
+          session: terminalSession,
           sessionKey: "agent:main:main",
         });
         await gateway.waitForRequest("chat.history", { after: historyBefore });
@@ -458,8 +466,7 @@ suite.define(() => {
             await page.keyboard.down("Enter");
             if (!held) {
               await page.keyboard.up("Enter");
-              await expectValue(composer, "");
-              await expectCount(pane.locator(".chat-attachment-thumb"), 0);
+              await expectDraft(page, "", 0);
               await stageFollowUp();
               if (attachment) {
                 await expectEnabled(pane.getByRole("button", { name: "Send message" }));
@@ -476,8 +483,7 @@ suite.define(() => {
           ]);
           expect(await gateway.getRequests("chat.history")).toHaveLength(historyBefore + 1);
           expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-          await expectValue(composer, "");
-          await expectCount(pane.locator(".chat-attachment-thumb"), 0);
+          await expectDraft(page, "", 0);
           await expectCount(pane.locator(".chat-queue__item"), expectedTurns);
 
           const sendsBefore = (await gateway.getRequests("chat.send")).length;
@@ -486,11 +492,8 @@ suite.define(() => {
             messages: historyMessages,
             sessionId: "session:agent:main:main",
             sessionInfo: {
+              ...terminalSession,
               activeLeafEntryId: "held-enter-terminal",
-              activeRunIds: [],
-              hasActiveRun: false,
-              key: "agent:main:main",
-              status: "done",
             },
             thinkingLevel: null,
           });
@@ -500,11 +503,9 @@ suite.define(() => {
             idempotencyKey: expect.any(String),
             message: followUpText,
             sessionKey: "agent:main:main",
-            ...(attachment
-              ? {
-                  attachments: [{ ...textPayload(fileName, fileContents), type: "file" }],
-                }
-              : {}),
+            ...(attachment && {
+              attachments: [{ ...textPayload(fileName, fileContents), type: "file" }],
+            }),
           });
           const followUpRunId = (followUp.params as { idempotencyKey: string }).idempotencyKey;
           expect(followUpRunId).not.toBe("");
@@ -528,33 +529,8 @@ suite.define(() => {
             },
             {},
           );
-          // The held ACK keeps the first turn in the transcript; later
-          // waiting turns remain in the composer queue. Read both together.
-          const observed = await pane.evaluate(
-            (active, followUpContent) => {
-              const readRow = (row: Element, idAttribute: string) => {
-                const rect = row.getBoundingClientRect();
-                return {
-                  id: row.getAttribute(idAttribute),
-                  visible:
-                    rect.height > 0 && rect.width > 0 && rect.bottom > 0 && rect.top < innerHeight,
-                };
-              };
-              return {
-                bubbles: [...active.querySelectorAll(".chat-group.user .chat-bubble")]
-                  .filter((bubble) => bubble.textContent?.includes(followUpContent))
-                  .map((bubble) => readRow(bubble, "data-message-id")),
-                queued: [
-                  ...active.querySelectorAll(".agent-chat__composer-shell .chat-queue__item"),
-                ].map((row) =>
-                  Object.assign(readRow(row, "data-chat-queue-item"), {
-                    text: row.querySelector(".chat-queue__text")?.textContent?.trim(),
-                  }),
-                ),
-              };
-            },
-            attachment ? fileName : followUpText,
-          );
+          // Read the held ACK in the transcript and later waiting turns in the queue together.
+          const observed = await pane.evaluate(readFollowUps, attachment ? fileName : followUpText);
           expect(pageErrors).toEqual([]);
           expect(observed.bubbles.map((row) => row.id)).toEqual([`msg:send:${followUpRunId}:0`]);
           for (const rows of [observed.bubbles, observed.queued]) {
@@ -567,11 +543,7 @@ suite.define(() => {
           expect(observed.bubbles.length + observed.queued.length).toBe(expectedTurns);
           expect(await gateway.getRequests("chat.send")).toHaveLength(sendsBefore + 1);
         } finally {
-          try {
-            await keyProof.evaluate((proof) => proof.dispose());
-          } finally {
-            await keyProof.dispose();
-          }
+          await keyProof.evaluate((proof) => proof.dispose()).finally(() => keyProof.dispose());
         }
       });
     },
@@ -594,8 +566,7 @@ suite.define(() => {
 
       await page.reload();
       await gateway.setOnline(true);
-      await expectValue(composer, text);
-      await expectCount(page.locator(".chat-attachment-thumb"), 1);
+      await expectDraft(page, text, 1);
       await composer.press("Enter");
 
       const request = await gateway.waitForRequest("chat.send");
@@ -613,11 +584,7 @@ suite.define(() => {
     const sessionsList = sessionList(firstSession, secondSession);
     const firstDraft = "restart draft A with image";
     const secondDraft = "restart draft B with removable file";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     async function openFreshPage() {
       const page = await context.newPage();
       const { gateway } = await openChat(page, {
@@ -662,16 +629,13 @@ suite.define(() => {
         message: firstDraft,
         attachments: [pngPayload()],
       });
-      await expectValue(activeComposer(restoredPage), "");
-      await expectCount(activeAttachments(restoredPage), 0);
+      await expectDraft(restoredPage, "", 0);
       await restoredPage.close();
 
       const { page: clearedPage } = await openFreshPage();
-      await expectValue(activeComposer(clearedPage), "");
-      await expectCount(activeAttachments(clearedPage), 0);
+      await expectDraft(clearedPage, "", 0);
       await navigateToControlUiSession(clearedPage, secondSession);
-      await expectValue(activeComposer(clearedPage), secondDraft);
-      await expectCount(activeAttachments(clearedPage), 0);
+      await expectDraft(clearedPage, secondDraft, 0);
     } finally {
       await context.close();
     }
@@ -692,10 +656,7 @@ suite.define(() => {
         { name: "second.txt", mimeType: "text/plain", buffer: Buffer.alloc(200, 0x62) },
       ]);
 
-      await page
-        .locator(".app-toast")
-        .filter({ hasText: "Too large to send: second.txt" })
-        .waitFor();
+      await page.locator(".app-toast", { hasText: "Too large to send: second.txt" }).waitFor();
       await expectCount(page.locator('.chat-attachment-thumb[aria-busy="false"]'), 2);
       expect(await page.locator(".chat-attachment-failures").textContent()).toContain(
         "Too large to send: second.txt",
@@ -783,7 +744,6 @@ suite.define(() => {
       await expectEnabled(send, false);
       await page.locator(".chat-attachment-loading").waitFor();
 
-      // Advance virtual clock past the 15-second read timeout
       await page.clock.runFor(15_001);
 
       await page.locator(".chat-attachment-thumb--error").waitFor();

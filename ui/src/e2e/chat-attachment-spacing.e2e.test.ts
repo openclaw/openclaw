@@ -1,4 +1,5 @@
 import type { Locator, Page } from "playwright";
+import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -46,16 +47,18 @@ function attachment(index = 0) {
 }
 
 async function gap(above: Locator, below: Locator) {
-  const upper = await above.boundingBox();
-  const lower = await below.boundingBox();
-  if (!upper || !lower) {
-    throw new Error("Both neighboring blocks must be rendered");
-  }
+  const upper = (await above.boundingBox())!;
+  const lower = (await below.boundingBox())!;
   return lower.y - upper.y - upper.height;
 }
 
 async function expectGap(above: Locator, below: Locator, reference: number) {
   expect(Math.abs((await gap(above, below)) - reference)).toBeLessThanOrEqual(1);
+}
+
+async function paragraphGap(paragraphs: Locator) {
+  await paragraphs.last().waitFor();
+  return gap(paragraphs.nth(0), paragraphs.nth(1));
 }
 
 suite.define(() => {
@@ -102,15 +105,12 @@ suite.define(() => {
       ),
     )(async (page) => {
       const cards = page.locator(".chat-assistant-attachment-card");
-      const paragraphs = page.locator(".chat-text > p");
-      await paragraphs.last().waitFor();
+      const reference = await paragraphGap(page.locator(".chat-text > p"));
       await expect.poll(() => cards.count()).toBe(count);
-      expect(
-        await page
-          .locator(".chat-group.user .chat-bubble")
-          .evaluate((node) => getComputedStyle(node).backgroundColor),
-      ).toBe("rgba(0, 0, 0, 0)");
-      const reference = await gap(paragraphs.nth(0), paragraphs.nth(1));
+      await expectBrowser(page.locator(".chat-group.user .chat-bubble")).toHaveCSS(
+        "background-color",
+        "rgba(0, 0, 0, 0)",
+      );
       for (let index = 1; index < count; index += 1) {
         await expectGap(cards.nth(index - 1), cards.nth(index), reference);
       }
@@ -123,10 +123,7 @@ suite.define(() => {
     });
   });
 
-  it.each([
-    { self: true, name: "own" },
-    { self: false, name: "peer" },
-  ])("aligns visible media with the $name participant's text bubble", async ({ self }) => {
+  it.each([true, false])("aligns visible media with its participant (self=%s)", async (self) => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const url = await page.evaluate(() => {
         const canvas = document.createElement("canvas");
@@ -149,9 +146,7 @@ suite.define(() => {
             content: [
               { type: "image", url },
               attachment(),
-              textBlock(
-                "Please compare the screenshot and attached logs with the expected release notes.",
-              ),
+              textBlock("Compare the screenshot, logs, and release notes."),
             ],
             __openclaw: {
               senderId: sender.id,
@@ -167,28 +162,30 @@ suite.define(() => {
       await group
         .locator("img.chat-message-image")
         .evaluate((node: HTMLImageElement) => node.decode());
-      const layout = await group.evaluate((node) => {
+      const layout = await group.evaluate((node, own) => {
         const text = node.querySelector(".chat-text")!;
-        const rect = (element: Element) => {
-          const { left, right, top, bottom } = element.getBoundingClientRect();
-          return { left, right, top, bottom };
-        };
+        const textRect = text.getBoundingClientRect();
+        const edge = own ? "right" : "left";
         return {
           shellPaint: getComputedStyle(node.querySelector(".chat-bubble")!).backgroundColor,
           textPaint: getComputedStyle(text).backgroundColor,
-          text: rect(text),
           media: [
             ...node.querySelectorAll(".chat-message-image, .chat-assistant-attachment-card"),
-          ].map(rect),
+          ].map((media) => {
+            const rect = media.getBoundingClientRect();
+            return {
+              offset: Math.abs(rect[edge] - textRect[edge]),
+              gap: textRect.top - rect.bottom,
+            };
+          }),
         };
-      });
+      }, self);
       expect(layout.shellPaint).toBe("rgba(0, 0, 0, 0)");
       expect(layout.textPaint).not.toBe("rgba(0, 0, 0, 0)");
       expect(layout.media).toHaveLength(2);
-      const edge = self ? "right" : "left";
-      for (const media of layout.media) {
-        expect(Math.abs(media[edge] - layout.text[edge])).toBeLessThanOrEqual(1);
-        expect(media.bottom).toBeLessThan(layout.text.top);
+      for (const { offset, gap: separation } of layout.media) {
+        expect(offset).toBeLessThanOrEqual(1);
+        expect(separation).toBeGreaterThan(0);
       }
     });
   });
@@ -205,10 +202,7 @@ suite.define(() => {
       const text = page.locator(".chat-text");
       const nestedCode = text.locator("blockquote pre");
       await nestedCode.waitFor();
-      const reference = await gap(
-        text.locator(":scope > p").nth(0),
-        text.locator(":scope > p").nth(1),
-      );
+      const reference = await paragraphGap(text.locator(":scope > p"));
       const card = page.locator(".chat-assistant-attachment-card");
       for (const [above, below] of [
         [card, text],
@@ -239,9 +233,7 @@ suite.define(() => {
       const body = page.locator(".chat-tool-msg-body");
       const text = body.locator(":scope > .chat-text");
       await text.waitFor();
-      const paragraphs = page.locator(".chat-group.user .chat-text > p");
-      await paragraphs.last().waitFor();
-      const reference = await gap(paragraphs.nth(0), paragraphs.nth(1));
+      const reference = await paragraphGap(page.locator(".chat-group.user .chat-text > p"));
       const attachments = body.locator(":scope > .chat-assistant-attachments");
       await expectGap(attachments, text, reference);
       await expectGap(body.locator(":scope > .chat-message-images"), attachments, reference);

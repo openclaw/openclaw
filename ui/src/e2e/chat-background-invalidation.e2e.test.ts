@@ -18,10 +18,7 @@ const baseTime = 1_900_000_000_000;
 const paneSelector = "openclaw-chat-pane.chat-pane-cache__pane--active";
 
 type MeasuredPane = HTMLElement & {
-  state: Pick<
-    ChatPageHost,
-    "sessionKey" | "chatMessages" | "chatAvatarStatus" | "modelAuthStatusResult"
-  >;
+  state: ChatPageHost;
   presencePayload?: PresencePayload;
   render: () => unknown;
   updateComplete: Promise<boolean>;
@@ -29,8 +26,8 @@ type MeasuredPane = HTMLElement & {
 
 async function observePaneRenders(page: Page) {
   const context = await getControlUiContextHandle(page);
-  try {
-    return await context.evaluateHandle(
+  return context
+    .evaluateHandle(
       async (appContext, { foreignKey: observedKey, paneSelector: selector }) => {
         const pane = document.querySelector<MeasuredPane>(selector);
         const sidebar = document.querySelector<HTMLElement & Pick<MeasuredPane, "updateComplete">>(
@@ -68,19 +65,16 @@ async function observePaneRenders(page: Page) {
         };
       },
       { foreignKey, paneSelector },
-    );
-  } finally {
-    await context.dispose();
-  }
+    )
+    .finally(() => context.dispose());
 }
 
 suite.define(() => {
   it("updates the shared roster and viewers without repeatedly redrawing an unchanged conversation", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      // Startup timers must belong to the clock before the app schedules them.
       await page.clock.install();
-      let selected = createControlUiSessionRow(selectedKey, "Foreground conversation", baseTime);
-      let foreign = createControlUiSessionRow(foreignKey, "Background conversation", baseTime);
+      const selected = createControlUiSessionRow(selectedKey, "Foreground conversation", baseTime);
+      const foreign = createControlUiSessionRow(foreignKey, "Background conversation", baseTime);
       const gateway = await installMockGateway(page, {
         deferredMethods: ["agent.identity.get", "models.authStatus"],
         sessionKey: selectedKey,
@@ -100,29 +94,21 @@ suite.define(() => {
       await backgroundRow.waitFor({ state: "visible" });
       // Both independent startup reads must settle before attributing renders to events.
       const pane = page.locator(paneSelector);
-      for (const method of ["agent.identity.get", "models.authStatus"]) {
-        const field =
-          method === "agent.identity.get" ? "chatAvatarStatus" : "modelAuthStatusResult";
+      for (const [method, field, expected] of [
+        ["agent.identity.get", "chatAvatarStatus", "none"],
+        ["models.authStatus", "modelAuthStatusResult", expect.objectContaining({ providers: [] })],
+      ] as const) {
+        const readField = () =>
+          pane.evaluate((element: MeasuredPane, key) => element.state[key], field);
         await gateway.waitForRequest(
           method,
           method === "models.authStatus" ? { match: { agentId: "main" } } : undefined,
         );
-        expect(
-          await pane.evaluate((element: MeasuredPane, key) => element.state[key], field),
-        ).toBeNull();
+        expect(await readField()).toBeNull();
         await gateway.resolveDeferred(method);
-        await page.waitForFunction(
-          ({ paneSelector: selector, field: key }) => {
-            const state = document.querySelector<MeasuredPane>(selector)?.state;
-            return key === "chatAvatarStatus"
-              ? state?.chatAvatarStatus === "none"
-              : state?.modelAuthStatusResult?.providers.length === 0;
-          },
-          { paneSelector, field },
-        );
+        await expect.poll(readField).toEqual(expected);
       }
       await pauseVirtualClock(page);
-      // Advance delayed swarm scheduling and queued render frames before measuring events.
       await page.clock.runFor(1_000);
       const probe = await observePaneRenders(page);
       const foreignRenders: number[] = [];
@@ -131,19 +117,14 @@ suite.define(() => {
         return probe.evaluate((owner) => owner.read());
       }
       async function rename(session: typeof selected, label: string, revision: number) {
-        const updated = { ...session, label, displayName: label, updatedAt: baseTime + revision };
-        if (session.key === selectedKey) {
-          selected = updated;
-        } else {
-          foreign = updated;
-        }
+        Object.assign(session, { label, displayName: label, updatedAt: baseTime + revision });
         await gateway.setSessionsListResponse({ sessions: [selected, foreign] });
         await gateway.emitGatewayEvent("sessions.changed", {
           key: session.key,
           sessionKey: session.key,
           agentId: "main",
           reason: "chat.title",
-          session: updated,
+          session,
           ancestorSessions: [],
         });
         return readAfterEvent();
@@ -158,8 +139,7 @@ suite.define(() => {
           expect(observation).toMatchObject({ sharedLabel: label, selectedKey, messages: 2 });
           expect(await backgroundRow.textContent()).toContain(label);
         }
-        // The first publication can replace an empty-startup presentation memo.
-        // Later unrelated publications must not pay for the transcript again.
+        // Only the first publication may replace the empty-startup presentation memo.
         expect.soft(foreignRenders[0]).toBeLessThanOrEqual(1);
         expect.soft(foreignRenders.slice(1)).toEqual([0, 0]);
 
@@ -189,11 +169,11 @@ suite.define(() => {
         });
         expect((await readAfterEvent()).renders).toBeGreaterThan(0);
         const viewer = '[data-viewer-id="collaborator"]';
-        expect(await page.locator(`.chat-pane__presence ${viewer}`).count()).toBe(1);
-        const sidebarSession = page.locator(
-          `openclaw-app-sidebar [data-session-key="${selectedKey}"]`,
-        );
-        await expect.poll(() => sidebarSession.locator(viewer).count()).toBe(1);
+        const countViewers = (parent: string) => page.locator(`${parent} ${viewer}`).count();
+        expect(await countViewers(".chat-pane__presence")).toBe(1);
+        await expect
+          .poll(() => countViewers(`openclaw-app-sidebar [data-session-key="${selectedKey}"]`))
+          .toBe(1);
       } finally {
         await probe.evaluate((owner) => owner.restore());
         await probe.dispose();

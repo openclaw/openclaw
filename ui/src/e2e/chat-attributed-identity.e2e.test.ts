@@ -12,7 +12,7 @@ import {
   readFooterGeometry,
   sampleMetadataReveal,
 } from "./chat-attributed-identity.test-support.ts";
-import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { requireRecord, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -66,16 +66,11 @@ function expectStableFooter(
 }
 
 function readRunId(params: unknown, nonempty = false) {
-  if (
-    !params ||
-    typeof params !== "object" ||
-    !("idempotencyKey" in params) ||
-    typeof params.idempotencyKey !== "string" ||
-    (nonempty && !params.idempotencyKey.trim())
-  ) {
+  const id = requireRecord(params).idempotencyKey;
+  if (typeof id !== "string" || (nonempty && !id.trim())) {
     throw new Error("Expected chat.send run ID");
   }
-  return params.idempotencyKey;
+  return id;
 }
 
 async function send(page: Page, prompt: string) {
