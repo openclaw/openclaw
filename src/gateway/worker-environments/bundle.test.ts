@@ -58,6 +58,7 @@ async function writeFixture(
     ["sqlite-store.worker.mjs", "export const sqliteStore = true;\n"],
     ["worker-native-lifecycle.worker.mjs", "export const nativeLifecycle = true;\n"],
     ["worker.mjs", workerSource],
+    ["windows-security-helper.exe", "MZ\0worker-permission-helper"],
     ["workspace-rsync-receiver.mjs", "export const receiver = true;\n"],
   ] as const) {
     await fs.writeFile(path.join(packageRoot, "dist", "worker", artifactName), contents, {
@@ -237,6 +238,7 @@ describe("worker bundle producer", () => {
         "service-child-relay.mjs",
         "sqlite-source-revision.worker.mjs",
         "sqlite-store.worker.mjs",
+        "windows-security-helper.exe",
         "worker-native-lifecycle.worker.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
@@ -301,6 +303,7 @@ describe("worker bundle producer", () => {
         "service-child-relay.mjs",
         "sqlite-source-revision.worker.mjs",
         "sqlite-store.worker.mjs",
+        "windows-security-helper.exe",
         "worker-native-lifecycle.worker.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
@@ -736,6 +739,7 @@ describe("worker bundle producer", () => {
         "service-child-relay.mjs",
         "sqlite-source-revision.worker.mjs",
         "sqlite-store.worker.mjs",
+        "windows-security-helper.exe",
         "worker-native-lifecycle.worker.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
