@@ -184,6 +184,7 @@ describe("provider local service", () => {
   const fixture = createProviderLocalServiceTestFixture();
   const tempDirs = createTempDirTracker();
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await fixture.cleanup();
     tempDirs.cleanup();
   });

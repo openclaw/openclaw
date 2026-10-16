@@ -162,7 +162,8 @@ export function createSqliteWorkerLifecycle({
     captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
     const { worker, exited } = runInDetachedAsyncContext(() => ({
       worker: createCpuTrackedWorker(carrierUrl, {
-        resourceLimits: { maxOldGenerationSizeMb: 512 },
+        // V8's default young generation lets each carrier keep ~60 MiB of idle nursery.
+        resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 32 },
         env: resolveNodeCompileCacheEnv(),
         execArgv: resolveRuntimeWorkerThreadExecArgv(carrierUrl),
       }),

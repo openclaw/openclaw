@@ -4,6 +4,10 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  captureRetainedNativeWorkerSource,
+  closeDefaultRetainedNativeWorkerSource,
+} from "../infra/worker-native-lifecycle.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -19,6 +23,36 @@ import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-st
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
+
+it("joins retained capture workers before terminal native-source shutdown", async () => {
+  const root = fs.realpathSync(temp.make("plugin-generation-worker-shutdown-"));
+  const source = path.join(root, "source");
+  fs.mkdirSync(source);
+  fs.writeFileSync(
+    path.join(source, "package.json"),
+    '{"name":"shutdown-fixture","type":"module"}',
+  );
+  const entry = path.join(source, "index.js");
+  fs.writeFileSync(entry, "export const value = 42;");
+  await withArtifactPreservingStateReads(() =>
+    withPluginSourceCaptureStorage({ stateDir: root, placement: "temporary" }, async () => {
+      const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
+      const recovery = prepared.artifact.captureRecoverySource();
+      const nativeSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+      expect(nativeSource.hasActiveWorkers).toBe(true);
+      expect(fs.readFileSync(prepared.artifact.resolve(entry), "utf8")).toContain("42");
+      await closeDefaultRetainedNativeWorkerSource();
+      expect(nativeSource.hasActiveWorkers).toBe(false);
+      expect(fs.existsSync(prepared.artifact.boundaryRoot)).toBe(false);
+      await prepared.artifact.disposeAsync();
+      await recovery.disposeAsync();
+      prepared.artifact.dispose();
+      expect(() => prepared.artifact.prepareModule(entry)).toThrow(
+        "Plugin preparation worker has closed",
+      );
+    }),
+  );
+});
 
 it("finishes a capture after more than two minutes without retiring its worker", async () => {
   const root = fs.realpathSync(temp.make("plugin-generation-worker-long-capture-"));
@@ -94,6 +128,7 @@ it("publishes native admission to pinned install roots while capture storage is 
                 source: fixture.entry,
               });
               try {
+                expect(fs.existsSync(state.statePath("tmp", "plugin-captures"))).toBe(false);
                 const captured = fs.realpathSync(prepared.artifact.resolve(fixture.filename));
                 expect(fs.readFileSync(captured).equals(fixture.bytes)).toBe(true);
                 const persisted = await readPersistedInstalledPluginIndex({

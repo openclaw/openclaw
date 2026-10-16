@@ -393,7 +393,8 @@ process.exitCode = ${expectedExit};\n`,
     `control-ui.build-${process.pid}-live.retired`,
   ];
   it("invalidates a warm required-plugin cache when source metadata promises a new owner", () => {
-    const root = fs.realpathSync(tempDirs.make("openclaw-ui-required-cache-"));
+    // Preload module URLs must preserve spaces and URL fragment characters.
+    const root = fs.realpathSync(tempDirs.make("openclaw-ui-required-cache #"));
     copyUiFixture(root);
     for (const file of [
       "scripts/lib/build-artifact-cache.mts",

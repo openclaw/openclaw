@@ -125,10 +125,9 @@ it.each(["failed", "declined"] as const)(
     const { state, ctx, run, loadStore } = await makeFixture();
     const sourcePath = await state.writeText("credentials/oauth.json", "{}\n");
     const sourceBytes = fs.readFileSync(sourcePath);
-    const receipt = authMigration.createAuthProfileMigrationSourceReceipt({
-      sourcePath,
-      sourceBytes,
-      sourceRecordCount: 0,
+    const receipt = authMigration.prepareAuthProfileSourceReceipt({
+      pathname: sourcePath,
+      now: Date.now,
       targetDatabasePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
       targetTable: "auth_profile_store",
       env: state.env,

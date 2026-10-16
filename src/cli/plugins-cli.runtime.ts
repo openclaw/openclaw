@@ -99,9 +99,11 @@ function collectConfiguredRuntimePluginWarnings(params: {
           : `Enable the "${pluginId}" plugin, or ${alternative}.`;
       return [`${prefix}, but "${pluginId}" is disabled. ${guidance}`];
     }
-    const installSpec = resolvePluginInstallSources(candidate)[0]?.spec ?? candidate.pluginId;
+    const installSource = resolvePluginInstallSources(candidate)[0];
+    const installSpec = installSource?.spec ?? candidate.pluginId;
+    const installTarget = installSource?.source === "npm" ? `npm:${installSpec}` : installSpec;
     return [
-      `${prefix}, but no enabled "${pluginId}" plugin was found. Run "openclaw doctor --fix" to install ${installSpec}, or install it manually with "openclaw plugins install ${installSpec}".`,
+      `${prefix}, but no enabled "${pluginId}" plugin was found. Run "openclaw doctor --fix" to install ${installSpec}, or install it manually with "openclaw plugins install ${installTarget}".`,
     ];
   });
 }

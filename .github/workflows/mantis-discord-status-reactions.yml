@@ -432,7 +432,7 @@ jobs:
       - name: Create Mantis GitHub App token
         id: mantis_app_token
         if: ${{ always() && needs.resolve_request.outputs.pr_number != '' }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
           private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}

@@ -746,10 +746,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       ...mattermostSetupPlugin.gateway,
       startAccount: async (ctx) => {
         const account = ctx.account;
-        const statusSink = createAccountStatusSink({
-          accountId: ctx.accountId,
-          setStatus: ctx.setStatus,
-        });
+        const statusSink = createAccountStatusSink(ctx);
         statusSink({
           baseUrl: account.baseUrl,
           botTokenSource: account.botTokenSource,

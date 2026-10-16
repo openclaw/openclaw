@@ -24,10 +24,7 @@ const TELEGRAM_GET_FILE_RETRY_DEADLINE_MS = 20 * 60_000;
 const TELEGRAM_GET_FILE_RETRY_ATTEMPTS = 3;
 
 type TelegramMediaContext = Pick<TelegramContext, "getFile" | "me"> & {
-  message: Pick<
-    TelegramContext["message"],
-    "photo" | "video" | "video_note" | "document" | "audio" | "voice" | "sticker" | "animation"
-  >;
+  message: NonNullable<Parameters<typeof resolveTelegramPrimaryMedia>[0]>;
 };
 
 function buildTelegramMediaSsrfPolicy(apiRoot?: string, dangerouslyAllowPrivateNetwork?: boolean) {

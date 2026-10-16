@@ -15,7 +15,7 @@ Local typed decisions using pinned ONNX classifiers.
 ## Distribution
 
 - Package: `@openclaw/onnx`
-- Install route: npm or ClawHub: `clawhub:@openclaw/onnx`
+- Install route: npm or ClawHub: `@openclaw/onnx`
 
 ## Surface
 

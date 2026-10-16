@@ -188,42 +188,65 @@ describe("skills workshop cli", () => {
       },
     });
 
-  it("keeps the archived agent in the undo command while holding the offline Gateway lock", async () => {
+  it.each([
+    {
+      method: "archive",
+      flag: "--reason",
+      value: "superseded",
+      params: { name: "release-notes", reason: "superseded" },
+      output: "Archived release-notes. Undo with:",
+    },
+    {
+      method: "restore",
+      flag: "--version",
+      value: "saved-v1",
+      params: { name: "release-notes", versionId: "saved-v1" },
+      output: "Restored release-notes.\n",
+    },
+  ])("runs $method locally as the user while holding the Gateway lock", async (test) => {
     const release = vi.fn();
     mocks.acquireGatewayLock.mockResolvedValue({
       run: (action: () => unknown) => action(),
       release,
     });
-    mocks.archiveWorkshopSkill.mockResolvedValue(change);
-    mocks.restoreWorkshopSkill.mockResolvedValue({ ...change, action: "restore" });
+    const mutate =
+      test.method === "archive" ? mocks.archiveWorkshopSkill : mocks.restoreWorkshopSkill;
+    mutate.mockResolvedValue(change);
+    if (test.method === "archive") {
+      mocks.restoreWorkshopSkill.mockResolvedValue({ ...change, action: "restore" });
+    }
 
     await runCli([
       "skills",
       "workshop",
-      "archive",
+      test.method,
       "release-notes",
       "--agent",
       "writer",
-      "--reason",
-      "superseded",
+      test.flag,
+      test.value,
     ]);
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.archiveWorkshopSkill).toHaveBeenCalledWith(
+    expect(mutate).toHaveBeenCalledWith(
       { config: mocks.config, agentId: "writer", actor: "user" },
-      { name: "release-notes", reason: "superseded" },
+      test.params,
     );
     expect(release).toHaveBeenCalledOnce();
     expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
-      expect.stringContaining("Archived release-notes. Undo with:"),
+      expect.stringContaining(test.output),
     );
-    const [, undo] = mocks.defaultRuntime.writeStdout.mock.lastCall![0].trim().split("Undo with: ");
-    expect(undo).toMatch(/^openclaw /);
-    await runCli(undo!.split(" ").slice(1));
-    expect(mocks.restoreWorkshopSkill).toHaveBeenCalledWith(
-      { config: mocks.config, agentId: "writer", actor: "user" },
-      { name: "release-notes", versionId: undefined },
-    );
+    if (test.method === "archive") {
+      const [, undo] = mocks.defaultRuntime.writeStdout.mock
+        .lastCall![0].trim()
+        .split("Undo with: ");
+      expect(undo).toMatch(/^openclaw /);
+      await runCli(undo!.split(" ").slice(1));
+      expect(mocks.restoreWorkshopSkill).toHaveBeenCalledWith(
+        { config: mocks.config, agentId: "writer", actor: "user" },
+        { name: "release-notes", versionId: undefined },
+      );
+    }
   });
 
   it("never replays a mutation locally after dispatching it to the Gateway", async () => {

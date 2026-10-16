@@ -22,14 +22,9 @@ import {
   auditOpenClawPeerDependencyLink,
   resolveOpenClawHostDependency,
 } from "./plugin-peer-link.js";
-import type { PluginVerificationFailureReason } from "./runtime-degraded-state.js";
+import type { PluginVerificationFailure } from "./runtime-degraded-state.js";
 
-export type PluginPayloadSmokeFailure = {
-  pluginId: string;
-  installPath?: string;
-  reason: PluginVerificationFailureReason;
-  detail: string;
-};
+export type PluginPayloadSmokeFailure = PluginVerificationFailure;
 
 export type PluginPayloadSmokeResult = {
   checked: string[];

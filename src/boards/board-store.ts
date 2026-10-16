@@ -115,7 +115,7 @@ export type BoardWidgetNameIdentityMarker =
   | BoardWidgetGeneratedIdentityMarker
   | { kind: "invalid" };
 
-export function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
+function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
   return structuredClone(snapshot);
 }
 

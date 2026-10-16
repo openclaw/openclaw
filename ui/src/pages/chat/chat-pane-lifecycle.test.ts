@@ -30,7 +30,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
-} from "./components/chat-message-confirmation.ts";
+} from "./components/chat-message-confirmation-view.tsx";
 import * as chatThread from "./components/chat-thread-interactions.ts";
 import { handleChatDraftChange } from "./input-history.ts";
 import { beginQueuedMessageEdit, cancelQueuedMessageEdit } from "./queued-message-edit.ts";
@@ -79,7 +79,7 @@ function stopAtAttach(pane: TestChatPane) {
     throw error;
   });
   return () => {
-    expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(error);
+    expect(() => getPaneTestRuntime(pane).start()).toThrow(error);
     return attach.mock.calls[0]?.[0];
   };
 }

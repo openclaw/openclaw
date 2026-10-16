@@ -8,7 +8,7 @@ import { buildLocalUserMessage } from "../user-message-content.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { dismissConfirmedActionPopovers } from "./chat-message-confirmation-view.tsx";
 import { MessageGroup } from "./chat-message-group-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 
 beforeEach(() => localStorage.removeItem("openclaw:skip-rewind-confirm"));

@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -32,6 +31,7 @@ import {
   readAgentDatabaseLeaseProvenance,
   agentDatabaseLeaseProcessDeathRefusal,
 } from "./openclaw-agent-db-lease-provenance.js";
+import { agentDatabaseMaintenanceAuthority as maintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
 import {
   invalidateOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
@@ -77,12 +77,6 @@ export class OpenClawAgentDatabaseLeaseActiveError extends Error {
   }
 }
 
-const maintenanceAuthority = new AsyncLocalStorage<{
-  authority: OpenClawStateLeaseContext;
-  databasePath: string;
-  assertScopeCurrent?: () => void;
-}>();
-
 /** Ordinary agent worker routing cannot borrow native maintenance authority. */
 export function hasAgentDatabaseMaintenanceAuthority(): boolean {
   return maintenanceAuthority.getStore() !== undefined;
@@ -102,20 +96,6 @@ export function runWithAgentDatabaseMaintenanceAuthority<T>(
     },
     run,
   );
-}
-
-/** Revalidate the held lease, including immediately before committing a versioned rebuild. */
-export function assertAgentDatabaseMaintenanceAuthority(
-  expected?: OpenClawStateLeaseContext,
-): void {
-  const authority = maintenanceAuthority.getStore()?.authority;
-  if (!authority || (expected && authority !== expected)) {
-    throw new Error(
-      "Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.",
-    );
-  }
-  authority.assertOwned();
-  maintenanceAuthority.getStore()?.assertScopeCurrent?.();
 }
 
 /** Revalidate a maintenance owner when present, without requiring ordinary opens to hold one. */

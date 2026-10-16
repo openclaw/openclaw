@@ -19,7 +19,7 @@ import {
   type WorkerTurnClaimInput,
   type WorkerSessionTurnOwner,
 } from "./placement-record.js";
-import { find, getRequired, query } from "./placement-row-codec.js";
+import { find, fromRow, getRequired, query } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { createPlacementTransitionOps } from "./placement-transitions.worker.js";
 import { createPlacementTurnClaimOps } from "./placement-turn-claims.js";
@@ -307,7 +307,7 @@ export const placementTurnClaimOperations = {
         input.liveEvent,
         "live ACK cursor",
       );
-      const result = executeSqliteQuerySync(
+      const updated = executeSqliteQuerySync(
         db,
         query(db)
           .updateTable("worker_session_placements")
@@ -325,9 +325,10 @@ export const placementTurnClaimOperations = {
           .where("turn_claim_id", "=", claimId)
           .where("turn_claim_run_id", "=", runId)
           .where("turn_claim_generation", "=", placementGeneration)
-          .where("turn_claim_owner_epoch", "=", ownerEpoch),
-      );
-      if (result.numAffectedRows !== 1n) {
+          .where("turn_claim_owner_epoch", "=", ownerEpoch)
+          .returningAll(),
+      ).rows[0];
+      if (!updated) {
         throw new Error(`Worker session placement ${sessionId} changed during ACK`);
       }
       if (input.liveEvent !== undefined) {
@@ -335,7 +336,7 @@ export const placementTurnClaimOperations = {
         // fence protecting remote workspace results from stale-claim teardown.
         insertWorkerWorkspacePendingResult(db, input.claim, runtime.now(), runtime.instanceId);
       }
-      return { placement: getRequired(db, sessionId) };
+      return { placement: fromRow(updated) };
     },
     true,
   ),

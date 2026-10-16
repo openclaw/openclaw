@@ -32,7 +32,6 @@ import { loadSettings } from "../../app/settings.ts";
 import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
-import type { SolidControllerHost } from "../../lib/reactive/solid-controller-host.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
@@ -55,6 +54,7 @@ import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   createPaneTestHost as createRuntimeTestHost,
   type PaneRuntimeConstructor,
+  type PaneTestLifecycle,
 } from "./chat-pane-runtime.test-support.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
@@ -126,7 +126,8 @@ export function mountBoardPanel(
   };
 }
 
-export interface TestChatPane extends HTMLElement, SolidControllerHost {
+export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
+  readonly updateComplete: Promise<boolean>;
   readonly element: HTMLElement;
   render: ChatPaneRuntime["render"];
   readonly transcript: ChatTranscript;
@@ -699,7 +700,11 @@ class RenderTestChatPane extends ChatPaneRuntime {
     this.state = createPageState(
       context,
       { afterCommit: () => () => {}, invalidate: () => {} },
-      this,
+      {
+        sessionKey: this.sessionKey,
+        dispatchEvent: (event) => this.element.dispatchEvent(event),
+        querySelector: (selector) => this.element.querySelector(selector),
+      },
     );
     return this.state;
   }
