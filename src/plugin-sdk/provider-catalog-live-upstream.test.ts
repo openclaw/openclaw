@@ -39,7 +39,7 @@ function buildFetchGuard(body: unknown) {
 }
 
 async function fetchedModel(
-  model: UpstreamProviderCatalogModel | undefined,
+  model: UpstreamProviderCatalogModel,
   metadata = makeProvider("opencode", "https://opencode.ai/zen/v1", "@ai-sdk/openai-compatible"),
 ) {
   assert(model);
@@ -47,8 +47,10 @@ async function fetchedModel(
     [metadata.id]: { ...metadata, models: { [model.id]: model } },
   });
   const provider = await loadProvider(fetchGuard, metadata.id);
-  assert(provider?.models[model.id], "expected upstream provider model");
-  return project(provider.models[model.id], provider);
+  assert(provider, "expected upstream provider");
+  const upstreamModel = provider.models[model.id];
+  assert(upstreamModel, "expected upstream provider model");
+  return project(upstreamModel, provider);
 }
 
 beforeEach(() => clearLiveCatalogCacheForTests());
