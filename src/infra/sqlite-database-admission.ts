@@ -121,8 +121,8 @@ const scopedWrites = createSqliteDatabaseWriteReceipts({
   readRevision: readSqliteDatabaseWriteRevision,
   writer: (database) => state.dataWriters.get(database),
   suspended: (database) => state.suspended.has(database),
-  publish(record) {
-    state.registry.publish(record);
+  publish(record, keys) {
+    state.registry.publish(record, keys);
     exchange(record);
   },
 });
