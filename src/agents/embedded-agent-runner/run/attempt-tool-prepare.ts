@@ -38,6 +38,7 @@ import { resolveModelAuthModeAsync } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { resolveNativeWebSearchRoute } from "../../native-web-search.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
+import { ScopedInstructionDelivery } from "../../scoped-instructions.js";
 import { resolveSessionPlacementComputer } from "../../session-placement-computer.js";
 import {
   resolveSessionPermissionExecMode,
@@ -189,6 +190,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   // generation so retained tool-result text cannot authorize stale coordinates.
   const computerContextEpoch: ComputerContextEpoch = { value: 0 };
   const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
+  const scopedInstructionDelivery = new ScopedInstructionDelivery();
   const toolSearchCatalogRef = toolSurfaceRuntime.toolSearchCatalogRef;
   const nestedToolActivityState = createAttemptNestedToolActivityState();
   const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
@@ -523,6 +525,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       codeModeSkills,
       computerContextEpoch,
       skillInstructionDeliveryCache,
+      scopedInstructionDelivery,
       cronCreatorToolAllowlist,
       cronCreatorToolAllowlistCaptureRef,
       effectiveToolsAllow,

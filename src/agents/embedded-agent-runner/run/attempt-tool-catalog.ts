@@ -11,6 +11,7 @@ import {
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../../code-mode.js";
 import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
+import { wrapToolsWithScopedInstructions } from "../../scoped-instructions.js";
 import {
   buildEmptyExplicitToolAllowlistError,
   collectExplicitToolAllowlistSources,
@@ -71,6 +72,17 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     let effectiveTools = attempt.toolExecutionAllow
       ? gateToolExecution(uncompactedEffectiveTools, attempt.toolExecutionAllow)
       : uncompactedEffectiveTools;
+    // Capture only the policy-filtered, host-bound reader, before compaction hides
+    // tools behind Code Mode. Sandbox tools keep their existing filesystem owner.
+    if (preparedToolBase.scopedInstructionDelivery && !input.setup.sandbox?.enabled) {
+      const cwd = runtimeCapabilityProfile.workspace.runtimeRoot;
+      effectiveTools = wrapToolsWithScopedInstructions(
+        effectiveTools,
+        preparedToolBase.scopedInstructionDelivery,
+        cwd,
+        input.setup.sessionPermissionPolicy?.root ?? cwd,
+      );
+    }
     const catalogToolHookContext = preparedToolBase.toolHookContext;
     const compacted = preparedToolBase.toolSurfaceRuntime.compactTools(effectiveTools, {
       hookContext: catalogToolHookContext,

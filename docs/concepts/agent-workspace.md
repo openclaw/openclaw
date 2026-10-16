@@ -108,6 +108,43 @@ If a required bootstrap file is missing, OpenClaw injects a "missing file" marke
 
 The workspace document editor and `agents.files.set` accept up to 2 MiB of UTF-8 text per file. Larger saves are rejected before replacing the existing document. This byte limit is separate from prompt truncation settings and the identity form's avatar support.
 
+## Directory-scoped AGENTS.md
+
+The embedded agent's local `read`, `ls`, `write`, `edit`, and `apply_patch`
+tools discover `AGENTS.md` files from the admitted workspace root to each target's
+canonical directory. They do not search parent directories outside that root.
+Instructions are ordered root to nearest directory; sibling instructions apply
+only to their own subtrees.
+
+Read/list operations complete normally while OpenClaw appends applicable guides
+to the session for the next model decision. A mutation encountering previously
+unseen or changed substantive guidance returns a normal **not-executed
+continuation**, appends the complete guides, and lets the agent continue
+automatically with a new decision. There is no instruction-specific human approval gate. Once the
+guides are current in the model context, operations need no extra round trip.
+Discarding tool results inside Code Mode does not count as context delivery.
+
+Each operation uses the instruction snapshot from its start. A single patch may
+change guides and code together; updated guides apply to subsequent decisions,
+not retroactively to other hunks in that patch. Removed guides are reported as
+superseded, and context replacement invalidates prior delivery.
+
+Instruction discovery is best-effort, not filesystem admission. Automatic guide
+reads use the available, policy-wrapped read tool and its normal restrictions
+and budgets. Unreadable, escaping, unavailable, or incomplete guides produce
+bounded warnings without disabling the original operation or claiming complete
+delivery. Guides larger than 128 KiB, or incomplete under the reader's own
+budget, are skipped with that warning rather than silently truncated.
+
+This applies to those local tools in embedded attempts, both directly and through
+Code Mode. Other tool surfaces without this attempt-owned registration are not covered. It is
+**not a filesystem sandbox or an all-harness enforcement guarantee**: arbitrary
+shell commands, remote/sandbox filesystem tools, provider-native Codex/Claude
+tools, and third-party tools do not pass through this local boundary. Their own
+project-instruction support is separate. Repository instructions never grant
+permissions or override system, developer, or user instructions; configured
+tool and filesystem restrictions remain authoritative.
+
 ## What is NOT in the workspace
 
 These live under `~/.openclaw/` and should NOT be committed to the workspace repo:

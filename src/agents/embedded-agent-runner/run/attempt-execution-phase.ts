@@ -47,9 +47,28 @@ export async function runEmbeddedAttemptExecutionPhase(
     input.runAbortController.signal.throwIfAborted();
     throw new Error("embedded attempt requires an active admitted run");
   }
+  toolBase.scopedInstructionDelivery.bind(
+    (content, paths) => {
+      assertActive();
+      return withOwnedSessionTranscriptWrites(input.sessionLock.ownedTranscriptWriteContext, () =>
+        activeSession.sendCustomMessage(
+          {
+            customType: "openclaw.scoped-instructions",
+            content,
+            display: false,
+            details: { paths },
+          },
+          { deliverAs: "steer" },
+        ),
+      );
+    },
+    activeSession.messages,
+    () => input.prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames.has("read"),
+  );
   activeSession[agentSessionSetContextReplacementHook]((tokensAfter) => {
     declarePromptHistoryRewrite({ ...attempt, reason: "compaction" });
     toolBase.skillInstructionDeliveryCache.clear();
+    toolBase.scopedInstructionDelivery.clear();
     attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter });
   }, assertActive);
   let repairedRejectedProviderReplay = false;

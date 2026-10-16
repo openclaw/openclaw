@@ -1,5 +1,6 @@
 import { expect, onTestFinished, vi } from "vitest";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { ScopedInstructionDelivery } from "../../scoped-instructions.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import type { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
@@ -85,6 +86,7 @@ export async function createFixture(
     isCompacting: false,
     messages: [],
     prompt: vi.fn(async () => undefined),
+    sendCustomMessage: vi.fn(async () => undefined),
     sessionId: "active-session",
   };
   const sessionManager = {};
@@ -157,6 +159,7 @@ export async function createFixture(
       systemPrompt: { runtimeChannel: "telegram" },
       toolBase: {
         skillInstructionDeliveryCache,
+        scopedInstructionDelivery: new ScopedInstructionDelivery(),
         nestedToolActivityState: createAttemptNestedToolActivityState(),
       },
       toolCatalog: {

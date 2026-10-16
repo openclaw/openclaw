@@ -16,6 +16,7 @@ import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { setInternalRepetitionGuard } from "../../runtime/internal-hooks.js";
+import { wrapStreamWithScopedInstructions } from "../../scoped-instructions.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
@@ -138,6 +139,10 @@ export function installEmbeddedAttemptStreamGuards(
   ) => {
     session.agent.streamFn = wrapper(session.agent.streamFn, ...args);
   };
+  const scopedInstructions = input.prepared.toolBase?.scopedInstructionDelivery;
+  if (scopedInstructions) {
+    installStreamWrapper(wrapStreamWithScopedInstructions, scopedInstructions);
+  }
   const { sessionAgentId } = input.setup;
   const { signal: abortSignal } = input.runAbortController;
   const operatorAuthority = readRunOperatorAuthority(attempt);
