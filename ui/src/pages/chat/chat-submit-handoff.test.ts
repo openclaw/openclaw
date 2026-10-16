@@ -60,6 +60,20 @@ function idleChatHistory(sessionKey = "agent:main") {
   };
 }
 
+function sends(host: TestChatHost) {
+  return host.request.mock.calls.filter(([method]) => method === "chat.send");
+}
+
+function deliveryHandlers(status = "started") {
+  return {
+    "chat.history": () => idleChatHistory(),
+    "chat.send": (params: unknown) => ({
+      runId: requireRecord(params, "queued send").idempotencyKey,
+      status,
+    }),
+  };
+}
+
 describe("chat submission handoff", () => {
   it("keeps a setup-held original ahead of a steer through dispatch, custody, and persistence", async () => {
     const originalRunId = "setup-run";
@@ -167,9 +181,7 @@ describe("chat submission handoff", () => {
     const reentry = handleSendChat(host, "same prompt", undefined, firstAction);
     const second = handleSendChat(host, "same prompt", undefined, secondAction);
 
-    await waitForFast(() =>
-      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1),
-    );
+    await waitForFast(() => expect(sends(host)).toHaveLength(1));
     expect(host.chatQueue).toHaveLength(2);
     expect(host.chatQueue.map((item) => item.text)).toEqual(["same prompt", "same prompt"]);
 
@@ -243,10 +255,10 @@ describe("chat submission handoff", () => {
       });
 
       expect(accepted).toBe(true);
-      const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
-      expect(sends).toHaveLength(submitting ? 1 : 0);
+      const sent = sends(host);
+      expect(sent).toHaveLength(submitting ? 1 : 0);
       if (submitting) {
-        const payload = requireRecord(sends[0]?.[1], "active-run default send");
+        const payload = requireRecord(sent[0]?.[1], "active-run default send");
         expect(payload.message).toBe("follow up on the active run");
         expect(payload.queueMode).toBe(policy === "steer" ? "steer" : undefined);
       } else {
@@ -371,13 +383,7 @@ describe("chat submission handoff", () => {
     const host = makeChatHost({
       chatMessage: text,
       chatMentions: originalMentions,
-      requestHandlers: {
-        "chat.history": () => idleChatHistory(),
-        "chat.send": (params: unknown) => ({
-          runId: requireRecord(params, "replacement recipient send").idempotencyKey,
-          status: "started",
-        }),
-      },
+      requestHandlers: deliveryHandlers(),
     });
     let replacement: ChatQueueItem | undefined;
     const accepted = await submitAcrossBrowserInput(host, (queued) => {
@@ -398,8 +404,7 @@ describe("chat submission handoff", () => {
     expect(listStoredChatOutboxes(host)[0]?.queue).toEqual([replacement]);
 
     await flushChatQueueForEvent(host);
-    const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
-    expect(sends.map(([, params]) => params)).toEqual([
+    expect(sends(host).map(([, params]) => params)).toEqual([
       expect.objectContaining({ message: text, mentions: replacementMentions }),
     ]);
   });
@@ -409,13 +414,7 @@ describe("chat submission handoff", () => {
     async (change) => {
       const host = makeChatHost({
         connected: false,
-        requestHandlers: {
-          "chat.history": () => idleChatHistory(),
-          "chat.send": (params: unknown) => ({
-            runId: requireRecord(params, "canonical queued send").idempotencyKey,
-            status: "started",
-          }),
-        },
+        requestHandlers: deliveryHandlers(),
         chatMessage: "first input",
       });
       const accepted = await submitAcrossBrowserInput(host, async (queued) => {
@@ -430,12 +429,12 @@ describe("chat submission handoff", () => {
       });
       expect(accepted).toBe(true);
       expect(host.lastError).toBeNull();
-      const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
+      const sent = sends(host);
       if (change === "edit hold") {
-        expect(sends).toEqual([]);
+        expect(sent).toEqual([]);
         expect(host.chatQueuedEdit?.draftText).toBe("correction in progress");
       } else {
-        expect(sends.map(([, params]) => requireRecord(params, "send").message)).toEqual([
+        expect(sent.map(([, params]) => requireRecord(params, "send").message)).toEqual([
           "second input",
         ]);
       }
@@ -450,13 +449,7 @@ describe("chat submission handoff", () => {
     async ({ ack, connected }) => {
       const host = makeChatHost({
         connected,
-        requestHandlers: {
-          "chat.history": () => idleChatHistory(),
-          "chat.send": (params: unknown) => ({
-            runId: requireRecord(params, "reconnect send").idempotencyKey,
-            status: ack,
-          }),
-        },
+        requestHandlers: deliveryHandlers(ack),
         chatMessage: "one admitted turn",
       });
       let queueAfterReconnect: ChatQueueItem[] = [];
@@ -477,15 +470,13 @@ describe("chat submission handoff", () => {
         }
         host.connected = true;
         await resumeStoredChatOutboxes(host);
-        expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(
-          1,
-        );
+        expect(sends(host)).toHaveLength(1);
         queueAfterReconnect = [...host.chatQueue];
       });
       expect(accepted).toBe(true);
       expect(host.lastError).toBeNull();
       expect(host.chatQueue).toEqual(queueAfterReconnect);
-      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+      expect(sends(host)).toHaveLength(1);
     },
   );
 });

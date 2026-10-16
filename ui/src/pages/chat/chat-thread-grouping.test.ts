@@ -125,54 +125,37 @@ describe("queued input group continuity", () => {
 });
 
 describe("source attribution", () => {
-  it.each([
-    { source: "the same collected sources", next: [cli, web], text: "Next turn", split: false },
-  ])("groups messages from $source without losing provenance", ({ next, text, split }) => {
-    const clients = split ? [cli] : [cli, web];
-    const from = (sourceClients: MessageClientSource[], content: string) =>
+  it("groups messages from the same collected sources without losing provenance", () => {
+    const clients = [cli, web];
+    const from = (content: string) =>
       message("user", content, 1, {
         __openclaw: {
           senderId: "same-person",
           senderIdentity: { type: "profile", id: "same-person" },
-          transport: { clients: sourceClients },
+          transport: { clients },
         },
       });
-    const groups = cachedGroups([from(clients, "Continue"), from(next, text)]);
-    expect(groups.map((group) => group.sourceClients)).toEqual(split ? [clients, next] : [clients]);
-    expect(groups.map((group) => group.messages.length)).toEqual(split ? [1, 1] : [2]);
-    expect(groups.map((group) => group.sender?.identity)).toEqual(
-      Array.from({ length: split ? 2 : 1 }, () => ({ type: "profile", id: "same-person" })),
-    );
+    const groups = cachedGroups([from("Continue"), from("Next turn")]);
+    expect(groups.map((group) => group.sourceClients)).toEqual([clients]);
+    expect(groups.map((group) => group.messages.length)).toEqual([2]);
+    expect(groups.map((group) => group.sender?.identity)).toEqual([
+      { type: "profile", id: "same-person" },
+    ]);
     expect(groups.flatMap((group) => group.messages).map((entry) => entry.duplicateCount)).toEqual([
       undefined,
       undefined,
     ]);
   });
 
-  it.each([
-    {
-      name: "same source",
-      next: "agent:main:main",
-      text: "Second report",
-      labels: [undefined, undefined],
-      split: false,
-    },
-  ])("preserves forwarded provenance for $name", ({ next, text, labels, split }) => {
-    const first = labels[0] ? "agent:main:cron:daily:run:first" : "agent:main:main";
-    const sources = [first, labels[0] ? first : next].map((key, index) => ({
-      sessionKey: key,
-      agentId: "main",
-      label: labels[index],
-    }));
-    const messages = sources.map((source, index) => forwarded(source, index ? text : "Report"));
+  it("preserves forwarded provenance for the same source", () => {
+    const origin = { sessionKey: "agent:main:main", agentId: "main", label: undefined };
+    const messages = [forwarded(origin), forwarded({ ...origin }, "Second report")];
     const groups = cachedGroups(messages);
-    expect(groups.map((group) => group.senderSession)).toEqual(split ? sources : [sources[0]]);
-    expect(groups.map((group) => group.senderLabel)).toEqual(
-      split ? ["Forwarded from main", "Forwarded from main"] : ["Forwarded from main"],
-    );
-    expect(groups.map((group) => group.messages.map((source) => source.message))).toEqual(
-      split ? messages.map((entry) => [entry]) : [messages],
-    );
+    expect(groups.map((group) => group.senderSession)).toEqual([origin]);
+    expect(groups.map((group) => group.senderLabel)).toEqual(["Forwarded from main"]);
+    expect(groups.map((group) => group.messages.map((source) => source.message))).toEqual([
+      messages,
+    ]);
     expect(groups.flatMap((group) => group.messages).map((entry) => entry.duplicateCount)).toEqual([
       undefined,
       undefined,
@@ -340,24 +323,16 @@ describe("answer visibility across continuations", () => {
     };
   });
   const signedCases = [
-    { phase: "final_answer", withTool: false, mixed: false },
-    { phase: "commentary", withTool: true, mixed: false },
-  ].map(({ phase, withTool, mixed }) => {
+    { phase: "final_answer", withTool: false },
+    { phase: "commentary", withTool: true },
+  ].map(({ phase, withTool }) => {
     const run = { __openclaw: { runId: "run" } };
     const first = message("user", "Investigate", 1, run);
-    const answer = message(
-      "assistant",
-      [
-        ...(mixed ? [signed("Checking", "commentary")] : []),
-        signed("Substantive answer", "final_answer"),
-      ],
-      2,
-      run,
-    );
+    const answer = message("assistant", [signed("Substantive answer", "final_answer")], 2, run);
     const evidence = withTool ? [tool("call", 3, run)] : [];
     const later = message("assistant", [signed("Later update", phase)], 4, run);
     return {
-      name: `${mixed ? "mixed" : "signed"} answer before ${phase}, tool=${withTool}`,
+      name: `signed answer before ${phase}, tool=${withTool}`,
       messages: [first, answer, ...evidence, later],
       shown: [first, answer, ...(phase === "final_answer" ? [later] : [])],
       folded: [...evidence, ...(phase === "commentary" ? [later] : [])],
@@ -380,18 +355,13 @@ describe("answer visibility across continuations", () => {
     },
   );
 
-  it.each(["independent-run"])("keeps %s trailing activity with its owner", (ownership) => {
+  it("keeps independent-run trailing activity with its owner", () => {
     const messages = [
       message("user", "Watch the queue", 1),
       message("assistant", "Checking", 2, { phase: "commentary", runId: "reply" }),
       message("assistant", "Watching", 3, { phase: "final_answer", runId: "reply" }),
       ...[1, 2].flatMap((index) => {
-        const runId =
-          ownership === "unscoped"
-            ? undefined
-            : ownership === "same-run"
-              ? "reply"
-              : `wake-${index}`;
+        const runId = `wake-${index}`;
         return [
           message(
             "assistant",
@@ -414,25 +384,21 @@ describe("answer visibility across continuations", () => {
       const items = coalesceActivityRuns(
         collapseCompletedTurnWork(groups, { sessionKey, runWorking: false }),
       );
-      const independent = ownership === "independent-run";
-      expect(items.map((item) => item.kind)).toEqual(
-        independent
-          ? ["group", "work-group", "group", "activity-run"]
-          : ["group", "work-group", "group"],
-      );
-      expect(work(items)).toEqual(
-        independent ? [messages[1]] : [messages[1], ...messages.slice(3)],
-      );
-      if (independent) {
-        expect(items.find((item) => item.kind === "work-group")?.durationMs).toBeNull();
-      }
+      expect(items.map((item) => item.kind)).toEqual([
+        "group",
+        "work-group",
+        "group",
+        "activity-run",
+      ]);
+      expect(work(items)).toEqual([messages[1]]);
+      expect(items.find((item) => item.kind === "work-group")?.durationMs).toBeNull();
       expect(
         items
           .filter((item) => item.kind === "activity-run")
           .flatMap((item) =>
             item.groups.flatMap((group) => group.messages.map((source) => source.message)),
           ),
-      ).toEqual(independent ? messages.slice(3) : []);
+      ).toEqual(messages.slice(3));
     }
   });
 });

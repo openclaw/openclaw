@@ -3,6 +3,7 @@ import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import { coalesceStreamRuns } from "./chat-thread-grouping.ts";
+import { createProps } from "./chat-thread.test-support.ts";
 import { projectTranscriptIndex } from "./components/chat-transcript-message-index.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 
@@ -31,23 +32,36 @@ const pending = {
   },
 } as const;
 function props(overrides: Partial<BuildChatItemsProps> = {}): BuildChatItemsProps {
-  return {
+  return createProps({
     paneId: "live-final",
     sessionKey: "agent:main:live-final",
     messages: history,
-    toolMessages: [],
-    streamSegments: [],
     stream: "The answer being read.",
     streamStartedAt: 21,
     runId: "active",
     runWorking: true,
-    showToolCalls: true,
     pendingInputs: [pending],
     ...overrides,
-  };
+  });
 }
-function project(input: BuildChatItemsProps) {
-  return coalesceAgentRunFrames(coalesceStreamRuns(buildChatItems(input)));
+const settled = { stream: null, runId: null, runWorking: false };
+function build(overrides: Partial<BuildChatItemsProps> = {}) {
+  return buildChatItems(props(overrides));
+}
+function project(overrides: Partial<BuildChatItemsProps> = {}) {
+  return coalesceAgentRunFrames(coalesceStreamRuns(build(overrides)));
+}
+function visibleRows(
+  items: ReturnType<typeof build>,
+  extra: "notice" | "reading-indicator" = "notice",
+) {
+  return items.flatMap((item) =>
+    item.kind === "group"
+      ? item.messages.map(({ message }) => extractTextCached(message))
+      : item.kind === extra
+        ? [item.kind === "notice" ? item.text : "Working"]
+        : [],
+  );
 }
 function indexItems(
   items: ReturnType<typeof coalesceAgentRunFrames>,
@@ -100,24 +114,14 @@ describe("live terminal continuity with pending collaborators", () => {
         if (!localQueue && pendingInputs.length === 0) {
           continue;
         }
-        const rows = buildChatItems(
-          props({
-            messages: [],
-            queue: localQueue ? [local] : [],
-            runId,
-            stream: "",
-            pendingInputs,
-          }),
-        );
-        expect(
-          rows.flatMap((item) =>
-            item.kind === "group"
-              ? item.messages.map(({ message }) => extractTextCached(message))
-              : item.kind === "reading-indicator"
-                ? ["Working"]
-                : [],
-          ),
-        ).toEqual([
+        const rows = build({
+          messages: [],
+          queue: localQueue ? [local] : [],
+          runId,
+          stream: "",
+          pendingInputs,
+        });
+        expect(visibleRows(rows, "reading-indicator")).toEqual([
           "Current input",
           "Working",
           ...(pendingInputs.includes(pending) ? ["Peer follow-up"] : []),
@@ -132,16 +136,12 @@ describe("live terminal continuity with pending collaborators", () => {
         ? { kind: "internal_system", sourceTool: "main_session_restart_recovery" }
         : undefined;
       const pendingInputs = [{ ...pending, message: { ...pending.message, provenance } }];
-      const before = project(props({ pendingInputs }));
-      const after = project(
-        props({
-          messages: [...history, completed()],
-          pendingInputs,
-          stream: null,
-          runId: null,
-          runWorking: false,
-        }),
-      );
+      const before = project({ pendingInputs });
+      const after = project({
+        messages: [...history, completed()],
+        pendingInputs,
+        ...settled,
+      });
       const frames = [before, after].map((items) => {
         const runFrames = items.filter((item) => item.kind === "agent-run-frame");
         expect(runFrames).toHaveLength(1);
@@ -188,15 +188,11 @@ describe("live terminal continuity with pending collaborators", () => {
           ? [...history, { role: "assistant", content: "", timestamp: 40 }]
           : history;
       const stale = { ...pending, acceptedAt: 5, message: { ...pending.message, timestamp: 5 } };
-      const items = project(
-        props({
-          messages,
-          pendingInputs: [lateTerminal ? pending : stale],
-          stream: null,
-          runId: null,
-          runWorking: false,
-        }),
-      );
+      const items = project({
+        messages,
+        pendingInputs: [lateTerminal ? pending : stale],
+        ...settled,
+      });
       const groups = items.flatMap((item) =>
         item.kind === "agent-run-frame"
           ? item.parts.filter((part) => part.kind === "group")
@@ -271,23 +267,12 @@ describe("live terminal continuity with pending collaborators", () => {
           expected: [...originalRows, "New follow-up", "Peer follow-up"],
         },
       ]) {
-        const items = buildChatItems(
-          props({
-            pendingInputs: [automation],
-            stream: null,
-            runId: null,
-            runWorking: false,
-            ...overrides,
-          }),
-        );
-        const visibleRows = items.flatMap((item) =>
-          item.kind === "group"
-            ? item.messages.map(({ message }) => extractTextCached(message))
-            : item.kind === "notice"
-              ? [item.text]
-              : [],
-        );
-        expect(visibleRows).toEqual(expected);
+        const items = build({
+          pendingInputs: [automation],
+          ...settled,
+          ...overrides,
+        });
+        expect(visibleRows(items)).toEqual(expected);
       }
     },
   );
@@ -307,9 +292,9 @@ describe("live terminal continuity with pending collaborators", () => {
         timestamp: 22,
         __openclaw: { id: "latest-commentary", seq: 4, runId: "active" },
       };
-      const items = project(
-        props({ messages: withCommentary ? [...history, commentary, latest] : history }),
-      );
+      const items = project({
+        messages: withCommentary ? [...history, commentary, latest] : history,
+      });
       const frame = items.find((item) => item.kind === "agent-run-frame");
       if (frame?.kind !== "agent-run-frame") {
         throw new Error("Missing active frame");
@@ -343,15 +328,11 @@ describe("live terminal continuity with pending collaborators", () => {
       timestamp: 1,
       __openclaw: { id: "activity-message", seq: 1 },
     };
-    const groups = buildChatItems(
-      props({
-        messages: [message],
-        pendingInputs: [],
-        stream: null,
-        runId: null,
-        runWorking: false,
-      }),
-    ).filter((item) => item.kind === "group");
+    const groups = build({
+      messages: [message],
+      pendingInputs: [],
+      ...settled,
+    }).filter((item) => item.kind === "group");
     expect(groups).toHaveLength(1);
     const items = coalesceAgentRunFrames([
       { kind: "activity-run", key: "standalone-activity", groups },

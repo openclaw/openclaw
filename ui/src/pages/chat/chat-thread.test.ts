@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
@@ -32,6 +32,9 @@ import { publishChatSessionProjectionMessages } from "./history-merge.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 
 const { extractToolCardsCached: extractToolCards } = toolCards;
+
+beforeEach(() => resetChatThreadState());
+afterEach(() => vi.restoreAllMocks());
 
 function preparedGroup(key: string, message: unknown): MessageGroup {
   return requireGroup(groupMessages([{ kind: "message", key, message }])[0]);
@@ -162,6 +165,14 @@ function canvasToolOutput(viewId: string, title: string, preferredHeight: number
 
 function messageGroups(props: Partial<CachedChatItemsProps>): MessageGroup[] {
   return buildCachedChatItems(createProps(props)).filter((item) => item.kind === "group");
+}
+
+function messagesIn(groups: readonly MessageGroup[]) {
+  return groups.flatMap((group) => group.messages.map(({ message }) => message));
+}
+
+function expectKinds(items: readonly { kind: string }[], kinds: string[]) {
+  expect(items.map((item) => item.kind)).toEqual(kinds);
 }
 
 function firstMessageContent(group: MessageGroup): unknown[] {
@@ -430,7 +441,7 @@ describe("collapseCompletedTurnWork", () => {
     });
     expect(items[surrounding ? 1 : 0]).toMatchObject(divider);
     if (surrounding) {
-      expect(items.map((item) => item.kind)).toEqual(["group", "divider", "group"]);
+      expectKinds(items, ["group", "divider", "group"]);
       expect(requireGroup(items[2]).messages[0]?.message).toMatchObject({ content: "All done." });
     }
   });
@@ -450,7 +461,7 @@ describe("collapseCompletedTurnWork", () => {
         assistantMessage("All done.", 4_000),
       ],
     });
-    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group", "group"]);
+    expectKinds(items, ["group", "work-group", "group", "group"]);
     expect(canvasBlocksIn(requireGroup(items[2]))).toHaveLength(1);
     expect(requireWorkGroup(items[1]).groups.map((group) => group.role)).toEqual([
       "assistant",
@@ -476,7 +487,7 @@ describe("collapseCompletedTurnWork", () => {
 
     const rendered = collapseCompletedTurnWork(items, { sessionKey, runWorking: false });
 
-    expect(rendered.map((item) => item.kind)).toEqual(["group", "group", "group", "group"]);
+    expectKinds(rendered, ["group", "group", "group", "group"]);
   });
 
   it("does not borrow an unscoped answer across a queued message from a peer", () => {
@@ -506,24 +517,15 @@ describe("collapseCompletedTurnWork", () => {
     ).toBe(false);
 
     const completed = collapsedItems({ messages });
-    expect(completed.map((item) => item.kind)).toEqual([
-      "group",
-      "work-group",
-      "group",
-      "group",
-      "group",
-      "group",
+    expectKinds(completed, ["group", "work-group", "group", "group", "group", "group"]);
+    expect(messagesIn(requireWorkGroup(completed[1]).groups)).toEqual([messages[2]]);
+    expect(messagesIn(completed.filter((item) => item.kind === "group"))).toEqual([
+      messages[0],
+      messages[1],
+      messages[3],
+      messages[4],
+      messages[5],
     ]);
-    expect(
-      requireWorkGroup(completed[1]).groups.flatMap((group) =>
-        group.messages.map(({ message }) => message),
-      ),
-    ).toEqual([messages[2]]);
-    expect(
-      completed.flatMap((item) =>
-        item.kind === "group" ? item.messages.map(({ message }) => message) : [],
-      ),
-    ).toEqual([messages[0], messages[1], messages[3], messages[4], messages[5]]);
   });
 
   it.each([
@@ -546,7 +548,7 @@ describe("collapseCompletedTurnWork", () => {
       ],
     });
 
-    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group", "group"]);
+    expectKinds(items, ["group", "work-group", "group", "group"]);
     const work = requireWorkGroup(items[1]);
     expect(work.groups).toHaveLength(1);
     expect(requireGroup(items[3]).messages.map(({ message }) => message)).toContain(trailing);
@@ -571,30 +573,17 @@ describe("collapseCompletedTurnWork", () => {
       toolResult("supplementary", 6_000),
     ];
     const idle = collapsedItems({ messages });
-    expect(
-      idle
-        .filter((item) => item.kind === "group")
-        .flatMap((group) => group.messages.map(({ message }) => message)),
-    ).toContain(failed);
+    expect(messagesIn(idle.filter((item) => item.kind === "group"))).toContain(failed);
     const recovered = collapsedItems({
       messages: [...messages, assistantMessage("Recovered via another route.", 7_000)],
     });
-    expect(
-      recovered
-        .filter((item) => item.kind === "group")
-        .flatMap((group) => group.messages.map(({ message }) => message)),
-    ).not.toContain(failed);
-    expect(
-      requireWorkGroup(recovered[1]).groups.flatMap((group) =>
-        group.messages.map(({ message }) => message),
-      ),
-    ).toContain(failed);
+    expect(messagesIn(recovered.filter((item) => item.kind === "group"))).not.toContain(failed);
+    expect(messagesIn(requireWorkGroup(recovered[1]).groups)).toContain(failed);
   });
 });
 
 describe("buildCachedChatItems row identity", () => {
   it("preserves a same-role group key as messages are prepended and appended", () => {
-    resetChatThreadState();
     const first = assistantMessage("First", 2, { __openclaw: { id: "assistant-1", seq: 2 } });
     const second = assistantMessage("Second", 3, { __openclaw: { id: "assistant-2", seq: 3 } });
     const initial = groupAt(messageGroups({ messages: [first, second] }), 0);
@@ -623,7 +612,6 @@ describe("buildCachedChatItems row identity", () => {
   });
 
   it("does not reclaim a group key naturally owned by another reordered group", () => {
-    resetChatThreadState();
     const first = userMessage("First", 1, {
       __openclaw: { id: "first", seq: 1 },
       senderLabel: "same",
@@ -646,7 +634,6 @@ describe("buildCachedChatItems working spark", () => {
   const readingIndicator = (props: Partial<CachedChatItemsProps>) =>
     buildCachedChatItems(createProps(props)).find((item) => item.kind === "reading-indicator");
   it("keeps one working row from optimistic send through acknowledgement", () => {
-    resetChatThreadState();
     const sessionKey = "agent:main:working-row";
     const failed = queuedSend("failed", "Earlier failure", 0, "failed", {
       sendRunId: "failed-run",
@@ -746,38 +733,28 @@ describe("buildCachedChatItems", () => {
     const prepare = vi.spyOn(toolCards, "extractToolPreview");
     const rebuild = () =>
       buildItems({ paneId: "preview-pages", messages: [...owner.chatMessages] });
-    try {
-      rebuild();
-      rebuild();
-      expect(prepare.mock.calls.filter(([text]) => text === output)).toHaveLength(1);
-      publishChatSessionProjectionMessages(
-        owner,
-        prependUniqueNativeMessages([older, { ...current }], owner.chatMessages),
-      );
-      expect(owner.chatMessages).toHaveLength(2);
-      expect(owner.chatMessages[1]).toBe(current);
-      rebuild();
-      expect(prepare.mock.calls.filter(([text]) => text === output)).toHaveLength(1);
-      expect(prepare.mock.calls.filter(([text]) => text === olderOutput)).toHaveLength(1);
-      publishChatSessionProjectionMessages(owner, [older, { ...current }]);
-      rebuild();
-      expect(prepare.mock.calls.filter(([text]) => text === output)).toHaveLength(2);
-    } finally {
-      prepare.mockRestore();
-      resetChatThreadState("preview-pages");
-    }
+    rebuild();
+    rebuild();
+    expect(prepare.mock.calls.filter(([text]) => text === output)).toHaveLength(1);
+    publishChatSessionProjectionMessages(
+      owner,
+      prependUniqueNativeMessages([older, { ...current }], owner.chatMessages),
+    );
+    expect(owner.chatMessages).toHaveLength(2);
+    expect(owner.chatMessages[1]).toBe(current);
+    rebuild();
+    expect(prepare.mock.calls.filter(([text]) => text === output)).toHaveLength(1);
+    expect(prepare.mock.calls.filter(([text]) => text === olderOutput)).toHaveLength(1);
+    publishChatSessionProjectionMessages(owner, [older, { ...current }]);
+    rebuild();
+    expect(prepare.mock.calls.filter(([text]) => text === output)).toHaveLength(2);
   });
 
   it("does not inspect ordinary transcript messages for tool previews", () => {
     const messages = [userMessage("hello", 1_000), assistantMessage("reply", 1_001)];
     const previewExtraction = vi.spyOn(threadItems, "extractChatMessagePreview");
-    try {
-      buildItems({ paneId: "ordinary-transcript", messages });
-
-      expect(previewExtraction).not.toHaveBeenCalled();
-    } finally {
-      previewExtraction.mockRestore();
-    }
+    buildItems({ paneId: "ordinary-transcript", messages });
+    expect(previewExtraction).not.toHaveBeenCalled();
   });
 
   it("sender provenance separates namespaces without splitting profile renames", () => {
@@ -1516,28 +1493,20 @@ describe("buildCachedChatItems", () => {
 
 describe("tool expansion state", () => {
   it("skips the tool-card walk when the item array identity is unchanged", () => {
-    resetChatThreadState();
     const group = preparedGroup("assistant-stable", {
       role: "assistant",
       content: "No tools in this row",
     });
     const items = [group];
     const extractSpy = vi.spyOn(toolCards, "extractToolCardsCached");
-    try {
-      syncToolCardExpansionState("identity-stable", items, false);
-      const callsAfterFirstSync = extractSpy.mock.calls.length;
-
-      syncToolCardExpansionState("identity-stable", items, false);
-
-      expect(callsAfterFirstSync).toBeGreaterThan(0);
-      expect(extractSpy).toHaveBeenCalledTimes(callsAfterFirstSync);
-    } finally {
-      extractSpy.mockRestore();
-    }
+    syncToolCardExpansionState("identity-stable", items, false);
+    const callsAfterFirstSync = extractSpy.mock.calls.length;
+    syncToolCardExpansionState("identity-stable", items, false);
+    expect(callsAfterFirstSync).toBeGreaterThan(0);
+    expect(extractSpy).toHaveBeenCalledTimes(callsAfterFirstSync);
   });
 
   it("auto-expands top-level tool-name result disclosures", () => {
-    resetChatThreadState();
     const group = preparedGroup("tool-name-result", {
       role: "assistant",
       toolName: "bash",
@@ -1552,7 +1521,6 @@ describe("tool expansion state", () => {
 
 describe("expansion-state render dependencies", () => {
   it("reads unchanged tool and user expansion maps without locale sorting", () => {
-    resetChatThreadState();
     const tools = getExpandedToolCards("fast-session");
     const users = getExpandedUserMessages("fast-session");
     for (let index = 0; index < 128; index += 1) {
@@ -1560,17 +1528,12 @@ describe("expansion-state render dependencies", () => {
       setExpansionState(users, `user-${127 - index}`, index % 2 === 0);
     }
     const compare = vi.spyOn(String.prototype, "localeCompare");
-    try {
-      expect(getExpansionStateVersion(tools)).toBe(tools.size);
-      expect(getExpansionStateVersion(users)).toBe(users.size);
-      expect(compare.mock.calls.length).toBe(0);
-    } finally {
-      compare.mockRestore();
-    }
+    expect(getExpansionStateVersion(tools)).toBe(tools.size);
+    expect(getExpansionStateVersion(users)).toBe(users.size);
+    expect(compare.mock.calls.length).toBe(0);
   });
 
   it("shares user-message render versions across equivalent session aliases", () => {
-    resetChatThreadState();
     setExpansionState(getExpandedUserMessages("main"), "user-message", true);
 
     expect(getExpansionStateVersion(getExpandedUserMessages("main"))).toBe(1);
@@ -1582,7 +1545,6 @@ describe("expansion-state render dependencies", () => {
   });
 
   it("prunes cards removed during search when the same visible projection becomes complete", () => {
-    resetChatThreadState();
     const sessionKey = "search-removes-hidden-card";
     const group = (key: string) =>
       preparedGroup(key, {
@@ -1609,7 +1571,6 @@ describe("expansion-state render dependencies", () => {
   });
 
   it("auto-expands retained cards hidden while transcript search is active", () => {
-    resetChatThreadState();
     const sessionKey = "search-auto-expands-hidden-cards";
     const messages = [
       {
@@ -1672,7 +1633,6 @@ describe("thread item cache", () => {
   });
 
   it("updates the live stream without rescanning retained history", () => {
-    resetChatThreadState();
     const reads = { count: 0 };
     const messages = Array.from(
       { length: 1_000 },
@@ -1709,7 +1669,6 @@ describe("thread item cache", () => {
   });
 
   it("keeps same-session render caches isolated between panes", () => {
-    resetChatThreadState();
     const messages = [
       { role: "assistant", content: "needle" },
       { role: "user", content: "other" },

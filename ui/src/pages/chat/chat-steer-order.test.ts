@@ -30,6 +30,19 @@ it.each(["tool", "item"] as const)(
     history.messages = [original];
     const state = createState(history);
     await loadChatHistory(state);
+    const emitReply = (content: string, terminal = false, replace = false) =>
+      handleChatGatewayEvent(state, {
+        sessionKey: state.sessionKey,
+        runId: "active-run",
+        state: terminal ? "final" : "delta",
+        ...(replace ? { replace } : {}),
+        message: { role: "assistant", content },
+      });
+    const accept = (message: unknown) =>
+      applySessionMessagePayload(state, { message }, true, {
+        kind: "live",
+        activeRunId: "active-run",
+      });
     const emitTool = (toolCallId: string, seq: number, ts: number, completed = false) =>
       handleAgentEvent(state, {
         sessionKey: state.sessionKey,
@@ -57,12 +70,7 @@ it.each(["tool", "item"] as const)(
     emitTool("read-before-steer", 1, 5_000);
     await vi.runOnlyPendingTimersAsync();
     vi.setSystemTime(1_000);
-    handleChatGatewayEvent(state, {
-      sessionKey: state.sessionKey,
-      runId: "active-run",
-      state: "delta",
-      message: { role: "assistant", content: "Already visible answer." },
-    });
+    emitReply("Already visible answer.");
     const rows = () =>
       projectTranscriptChain(
         buildChatItems({
@@ -77,25 +85,17 @@ it.each(["tool", "item"] as const)(
           showToolCalls: true,
         }),
         { sessionKey: state.sessionKey, runWorking: state.chatRunId !== null, searchActive: false },
-      ).transcriptItems.flatMap((item) =>
-        item.kind === "stream-run"
-          ? item.parts.flatMap((part) => (part.kind === "stream" ? [part.text] : []))
-          : item.kind === "agent-run-frame"
-            ? item.parts.flatMap((part) =>
-                part.kind === "stream-run"
-                  ? part.parts.flatMap((stream) => (stream.kind === "stream" ? [stream.text] : []))
-                  : chatItemGroups(part).flatMap((group) =>
-                      group.messages.map(({ message }) =>
-                        group.role === "tool" ? "tool" : (extractText(message) ?? group.role),
-                      ),
-                    ),
-              )
+      )
+        .transcriptItems.flatMap((item) => (item.kind === "agent-run-frame" ? item.parts : [item]))
+        .flatMap((item) =>
+          item.kind === "stream-run"
+            ? item.parts.flatMap((part) => (part.kind === "stream" ? [part.text] : []))
             : chatItemGroups(item).flatMap((group) =>
                 group.messages.map(({ message }) =>
                   group.role === "tool" ? "tool" : (extractText(message) ?? group.role),
                 ),
               ),
-      );
+        );
     const before = rows();
     expect(before).toEqual(["Original prompt", "tool", "Already visible answer."]);
     // Durable sequence, not skewed event time, anchors output on either side of acceptance.
@@ -120,13 +120,7 @@ it.each(["tool", "item"] as const)(
       timestamp: 1_000,
       __openclaw: { id: "saved-answer", seq: 3, runId: "active-run" },
     };
-    handleChatGatewayEvent(state, {
-      sessionKey: state.sessionKey,
-      runId: "active-run",
-      state: "delta",
-      replace: true,
-      message: { role: "assistant", content: "" },
-    });
+    emitReply("", false, true);
     applySessionMessagePayload(state, { runId: "active-run", message: savedAnswer }, true, {
       kind: "live",
       activeRunId: "active-run",
@@ -143,10 +137,7 @@ it.each(["tool", "item"] as const)(
         steerTargetRunId: "active-run",
       },
     };
-    applySessionMessagePayload(state, { message: steer }, true, {
-      kind: "live",
-      activeRunId: "active-run",
-    });
+    accept(steer);
     expect(rows()).toEqual([...before, steer.content]);
     history.messages = [original, beforeTool, savedAnswer, steer];
     history.inFlightRun!.text = "";
@@ -157,20 +148,8 @@ it.each(["tool", "item"] as const)(
     await vi.runOnlyPendingTimersAsync();
     expect(rows()).toEqual([...before, steer.content, "tool"]);
     const afterTool = persistTool("read-after-steer", 5, 500);
-    handleChatGatewayEvent(state, {
-      sessionKey: state.sessionKey,
-      runId: "active-run",
-      state: "delta",
-      message: { role: "assistant", content: "Continued." },
-    });
-    const continued = [
-      "Original prompt",
-      "tool",
-      "Already visible answer.",
-      steer.content,
-      "tool",
-      "Continued.",
-    ];
+    emitReply("Continued.");
+    const continued = [...before, steer.content, "tool", "Continued."];
     expect(rows()).toEqual(continued);
     // Completion updates the original card in place.
     emitTool("read-before-steer", 3, 30_000, true);
@@ -187,52 +166,17 @@ it.each(["tool", "item"] as const)(
         idempotencyKey: "steer-run-2:user",
       },
     };
-    applySessionMessagePayload(state, { message: secondSteer }, true, {
-      kind: "live",
-      activeRunId: "active-run",
-    });
+    accept(secondSteer);
     const accepted = [...continued.slice(0, -1), secondSteer.content, "Continued."];
     expect(rows()).toEqual(accepted);
     history.messages = [original, beforeTool, savedAnswer, steer, afterTool, secondSteer];
     history.inFlightRun!.text = "Continued.";
     await loadChatHistory(state);
     expect(rows()).toEqual(accepted);
-    handleChatGatewayEvent(state, {
-      sessionKey: state.sessionKey,
-      runId: "active-run",
-      state: "delta",
-      message: {
-        role: "assistant",
-        content: "Continued. Finishing.",
-      },
-    });
-    expect(rows()).toEqual([
-      "Original prompt",
-      "tool",
-      "Already visible answer.",
-      steer.content,
-      "tool",
-      secondSteer.content,
-      "Continued. Finishing.",
-    ]);
+    emitReply("Continued. Finishing.");
+    expect(rows()).toEqual([...accepted.slice(0, -1), "Continued. Finishing."]);
     // The terminal owns the complete unsaved tail, without splitting it at a steer.
-    handleChatGatewayEvent(state, {
-      sessionKey: state.sessionKey,
-      runId: "active-run",
-      state: "final",
-      message: {
-        role: "assistant",
-        content: "Continued. Finishing. Done.",
-      },
-    });
-    expect(rows()).toEqual([
-      "Original prompt",
-      "tool",
-      "Already visible answer.",
-      steer.content,
-      "tool",
-      secondSteer.content,
-      "Continued. Finishing. Done.",
-    ]);
+    emitReply("Continued. Finishing. Done.", true);
+    expect(rows()).toEqual([...accepted.slice(0, -1), "Continued. Finishing. Done."]);
   },
 );
