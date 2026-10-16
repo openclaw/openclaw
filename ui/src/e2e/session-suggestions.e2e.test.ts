@@ -363,9 +363,12 @@ suite.define(() => {
       await ownerTyping();
       await expect(typingRow.locator(".agent-chat__typing-bubble > span")).toHaveCount(3);
       await expect(previewBubble).toHaveCount(0);
-      const typingAvatar = typingRow.locator(
-        ".chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot)",
-      );
+      // #165045: `:is(.chat-avatar, .chat-avatar-slot)` also matched the
+      // layout wrapper, so a placeholder slot satisfied this check with no
+      // avatar rendered. Assert the rendered sender avatar itself.
+      const typingAvatar = typingRow
+        .locator(".chat-message-avatar-anchor")
+        .getByRole("img", { name: "Owner" });
       await expect(typingAvatar).toBeVisible();
       await expect(typingAvatar).toHaveCSS("position", "absolute");
       await screenshot(page, "typing-dots-before.png");
