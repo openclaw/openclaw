@@ -28,18 +28,22 @@ export function fillInput(root: ParentNode, selector: string, value: string) {
   return element;
 }
 
-export async function waitForElement(root: ParentNode, selector: string) {
+export async function waitForElement<T extends HTMLElement = HTMLElement>(
+  root: ParentNode,
+  selector: string,
+) {
   await waitForSolid(() => expect(root.querySelector(selector)).not.toBeNull());
-  return root.querySelector<HTMLElement>(selector)!;
+  return root.querySelector<T>(selector)!;
 }
 
 type RecordedRequest = { mock: { calls: readonly (readonly unknown[])[] } };
 
+export function callsFor(request: RecordedRequest, method: string) {
+  return request.mock.calls.filter(([called]) => called === method);
+}
+
 export function expectCalls(request: RecordedRequest, methods: readonly string[], count: number) {
   for (const method of methods) {
-    expect(
-      request.mock.calls.filter(([called]) => called === method),
-      method,
-    ).toHaveLength(count);
+    expect(callsFor(request, method), method).toHaveLength(count);
   }
 }
