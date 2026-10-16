@@ -108,7 +108,7 @@ describe("check-max-lines-ratchet", () => {
     expect(isGovernedSourcePath("src/schema.generated.ts")).toBe(false);
   });
 
-  it.each([true])("reports baseline growth even when listed (CI=%s)", (advisory) => {
+  it("reports baseline growth as an advisory in GitHub Actions even when listed", () => {
     const root = tempDirs.make("openclaw-max-lines-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
@@ -126,15 +126,13 @@ describe("check-max-lines-ratchet", () => {
     );
     git(root, ["add", "."]);
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.stubEnv("GITHUB_ACTIONS", advisory ? "true" : "");
+    vi.stubEnv("GITHUB_ACTIONS", "true");
     vi.stubEnv("GITHUB_STEP_SUMMARY", path.join(root, "summary.md"));
-    expect(main(root, ["--base", "HEAD"])).toBe(advisory ? 0 : 1);
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
     expect(error).toHaveBeenCalledWith(
       expect.stringContaining("The max-lines baseline may only shrink"),
     );
-    if (advisory) {
-      expect(fs.readFileSync(path.join(root, "summary.md"), "utf8")).toContain("src/b.ts");
-    }
+    expect(fs.readFileSync(path.join(root, "summary.md"), "utf8")).toContain("src/b.ts");
   });
 
   it("transfers grandfathered debt across a verified rename", () => {
