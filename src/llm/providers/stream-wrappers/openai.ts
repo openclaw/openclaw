@@ -30,7 +30,6 @@ import {
   resolveOpenAITextVerbosity,
   type OpenAITextVerbosity,
 } from "../../../agents/openai-text-verbosity.js";
-import { createOpenAIResponsesTransportStreamFn } from "../../../agents/openai-transport-stream.js";
 import {
   getModelProviderRequestRouteFacts,
   resolveProviderRequestPolicyConfig,
@@ -44,6 +43,7 @@ import {
   logCodeModeDiagnostic,
 } from "../../../logging/code-mode-diagnostic.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { runInDetachedAsyncContext } from "../../../shared/detached-async-context.js";
 import { streamSimple } from "../../stream.js";
 import type { SimpleStreamOptions } from "../../types.js";
 import {
@@ -57,6 +57,14 @@ import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const log = createSubsystemLogger("llm/providers/stream-wrappers");
+
+const streamOpenAIResponses: StreamFn = async (...args) => {
+  // The process host loads only for a request and must not retain its async context.
+  const { createOpenAIResponsesTransportStreamFn } = await runInDetachedAsyncContext(
+    () => import("../../../agents/openai-transport-stream.js"),
+  );
+  return createOpenAIResponsesTransportStreamFn()(...args);
+};
 
 type DynamicFastMode = OpenAIFastMode | (() => OpenAIFastMode | undefined);
 type OpenClawSimpleStreamOptions = SimpleStreamOptions & {
@@ -690,7 +698,7 @@ export function createOpenAIAttributionHeadersWrapper(
       capabilities.endpointClass === "openai" &&
       (baseStreamFn === undefined || baseStreamFn === streamSimple);
     const streamFn = shouldCreateCodexTransport
-      ? (opts?.codexNativeTransportStreamFn ?? createOpenAIResponsesTransportStreamFn())
+      ? (opts?.codexNativeTransportStreamFn ?? streamOpenAIResponses)
       : underlying;
     return streamFn(model, context, {
       ...options,

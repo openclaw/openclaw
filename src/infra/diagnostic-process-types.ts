@@ -96,6 +96,8 @@ export type DiagnosticMemoryUsage = {
     script: string;
     heapUsed: number;
     heapTotal: number;
+    /** Node's finite native space set; absent for native-only fallback samples and Bun. */
+    heapSpaces?: Pick<HeapSpaceInfo, "space_name" | "space_used_size">[];
     /** Actual V8 isolate limit; unavailable on runtimes without V8. */
     heapSizeLimitBytes?: number;
     threadId?: number;
