@@ -1,6 +1,7 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
+    "rootDir": "..",
     "paths": {
       "openclaw/plugin-sdk/*": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"
