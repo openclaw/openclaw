@@ -63,7 +63,7 @@ function runArtifact(
   harness: ArtifactHarness,
   command: string,
   args: string[] = [],
-  env = harness.env,
+  env: NodeJS.ProcessEnv = harness.env,
   installer = harness.installerPath,
 ) {
   return runInstaller(mac, installer, [...artifactArgs(harness, command), ...args], env);

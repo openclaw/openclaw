@@ -427,6 +427,7 @@ const hoisted = vi.hoisted(() => ({
   })),
 }));
 
+// mock-isolation: Keep the external Gmail watcher inactive while testing reload lifecycle.
 vi.mock("../hooks/gmail-watcher.js", () => ({ stopGmailWatcher: hoisted.stopGmailWatcher }));
 
 vi.mock("../hooks/gmail-watcher-lifecycle.js", () => ({
@@ -2210,13 +2211,7 @@ describe("gateway hot reload model state", () => {
   });
 
   it("rejects an ownerless context cache reload before runtime commit", async () => {
-    const { applyHotReload, setState } = createReloadHandlersForTest(
-      undefined,
-      undefined,
-      undefined,
-      vi.fn(),
-      false,
-    );
+    const { applyHotReload, setState } = createReloadHandlersForTest({ recovery: false });
 
     await expect(
       applyHotReload(
