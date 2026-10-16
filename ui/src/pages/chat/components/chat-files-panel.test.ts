@@ -566,7 +566,7 @@ describe("workspace file tabs", () => {
       ];
       panel.previews = previews;
       panel.activeId = "app";
-      panel.renderDetail = (content) => (content.kind === "mcp-app" ? app : editor);
+      panel.renderDetail = ({ content }) => (content.kind === "mcp-app" ? app : editor);
       panel.onClose = (id) => {
         panel.previews = panel.previews.filter((preview) => preview.id !== id);
         panel.activeId = "file";

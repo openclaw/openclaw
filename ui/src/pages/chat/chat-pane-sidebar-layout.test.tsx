@@ -171,7 +171,7 @@ afterEach(() => {
 });
 
 describe("chat pane sidebar layout", () => {
-  it("keeps the parent layout writable after a panel context replacement", async () => {
+  it("keeps native content and the parent layout writable when the DOM provider changes", async () => {
     // SAFETY: the region transports application context; this fixture's panel reads no capabilities.
     const container = createApplicationContextProvider({} as ApplicationContext);
     containers.push(container);
@@ -180,12 +180,15 @@ describe("chat pane sidebar layout", () => {
     await renderLayout(container, layout);
     const region = container.querySelector("openclaw-chat-sidebar-region")!;
     const primary = container.querySelector("[data-primary]");
-    const detail = container.querySelector("[data-detail]");
+    const detail = container.querySelector("[data-detail]")!;
+    const checkbox = detail.querySelector("input")!;
+    checkbox.checked = true;
 
-    // SAFETY: a new context identity exercises the bridge's supported root replacement.
+    // Native JSX content stays with its parent Solid owner when the DOM provider changes.
     container.setContext({} as ApplicationContext);
     await region.updateComplete;
-    expect(container.querySelector("[data-detail]")).not.toBe(detail);
+    expect(container.querySelector("[data-detail]")).toBe(detail);
+    expect(checkbox.checked).toBe(true);
 
     await renderLayout(container, promoteSidebarPanel(layout, "detail"));
     expect(container.querySelector("[data-primary]")).toBe(primary);

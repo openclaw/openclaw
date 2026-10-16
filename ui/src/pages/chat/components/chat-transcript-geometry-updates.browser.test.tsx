@@ -1,6 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type { JSX } from "@solidjs/web";
-import { createMemo } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { createMountedPanes } from "../chat-pane-mounted.test-support.ts";
@@ -13,18 +11,8 @@ import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 
-const geometryView = vi.hoisted(() => ({ render: (): JSX.Element => null }));
-
 // Exercise the runtime's commit cadence independently of the full pane renderer.
-vi.mock("../chat-pane-layout-view.tsx", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../chat-pane-layout-view.tsx")>()),
-  PaneLayout(props: { layout: unknown }) {
-    return createMemo(() => {
-      void props.layout;
-      return geometryView.render();
-    });
-  },
-}));
+vi.mock("../chat-pane-layout-view.tsx", () => import("../chat-pane-layout.test-support.tsx"));
 
 class GeometryPane extends ChatPaneRuntime {
   session: ChatSessionVirtualizerHost | undefined;
@@ -52,7 +40,7 @@ class GeometryPane extends ChatPaneRuntime {
     });
   }
 
-  override render() {
+  renderGeometry() {
     const layout = this.transcript.renderSession(this.sessionKey, (session) => {
       if (!(session instanceof ChatSessionVirtualizerHost)) {
         throw new Error("Expected the session virtualizer owner");
@@ -70,9 +58,8 @@ class GeometryPane extends ChatPaneRuntime {
         size: virtualizer.getTotalSize(),
       };
     });
-    geometryView.render = () => <GeometryLayout {...layout} />;
     return {
-      layout: null,
+      layout: { component: GeometryLayout, props: layout },
       dialog: undefined,
       capabilityDialogs: undefined,
     };
@@ -92,7 +79,6 @@ function GeometryLayout(props: { contents: HTMLDivElement; size: number }) {
 
 let pane: (GeometryPane & HTMLElement) | undefined;
 afterEach(() => {
-  geometryView.render = () => null;
   pane?.remove();
   pane = undefined;
   vi.restoreAllMocks();
@@ -118,6 +104,7 @@ async function mountPane(followEnd = false) {
     client: null,
   });
   pane = createPaneTestHost("test-transcript-geometry-pane", GeometryPane);
+  Object.assign(pane, { render: pane.renderGeometry.bind(pane) });
   pane.initialize(fixture.context, followEnd);
   pane.style.cssText = "display: block; width: 800px";
   document.body.append(pane.element);
