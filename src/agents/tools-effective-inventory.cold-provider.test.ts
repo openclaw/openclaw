@@ -148,6 +148,17 @@ function resolveFixtureModel(fixture: ColdFixture, snapshot: Snapshot) {
 function expectConnection(fixture: ColdFixture, index: number, isOpen: boolean, disposals: number) {
   expect(fixture.connections[index]).toMatchObject({ database: { isOpen }, disposals });
 }
+function ambientRegistry(
+  hooks: Partial<ReturnType<typeof createEmptyPluginRegistry>["providers"][number]["provider"]>,
+) {
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "ambient-provider",
+    source: "test",
+    provider: { id: provider, label: "Ambient provider", auth: [], ...hooks },
+  });
+  return registry;
+}
 
 async function withColdFixture(run: (fixture: ReturnType<typeof createFixture>) => Promise<void>) {
   await withOpenClawTestState(
@@ -200,10 +211,7 @@ function createFixture(state: OpenClawTestState) {
     preparations: number;
     mode: string;
   }> = [];
-  const preparationGates: Array<{
-    started: Deferred;
-    resume: Deferred;
-  }> = [];
+  const preparationGates: Array<{ started: Deferred; resume: Deferred }> = [];
   const resources: {
     connections: typeof connections;
     nextPreparation?: (typeof preparationGates)[number];
@@ -641,8 +649,7 @@ it("joins cancelled preparation before replacing its database", async ({ signal 
       controller.abort(new Error("Synthetic cancelled preparation"));
       await expect(first).rejects.toMatchObject({ name: "AbortError" });
       pendingReplacement = acquireReadOnlyPreparedModelRuntime(input);
-      expect(original.database.isOpen).toBe(true);
-      expect(original.disposals).toBe(0);
+      expectConnection(fixture, 1, true, 0);
       gate.resume.resolve();
       replacement = await pendingReplacement;
       expect(fixture.connections).toHaveLength(3);
@@ -666,62 +673,52 @@ it("joins cancelled preparation before replacing its database", async ({ signal 
   });
 });
 
-it("joins held leases before global database disposal", async () => {
-  await withColdFixture(async (fixture) => {
-    const lease = await acquireReadOnlyPreparedModelRuntime(fixture.runtimeInput);
-    const isRegistryCurrent = capturePluginLifecycleAuthority(
-      lease.snapshot.pluginRegistry!,
-      undefined,
-      {
-        scopedRuntime: true,
-      },
-    );
-    expect(isRegistryCurrent?.()).toBe(true);
-    let closed = false;
-    const closing = closePreparedModelRuntimeSnapshots().then(() => {
-      closed = true;
-    });
-    try {
-      await nextTurn();
-      expect(closed).toBe(false);
-      expect(isRegistryCurrent?.()).toBe(false);
-      expectConnection(fixture, 0, true, 0);
-      await expect(acquireReadOnlyPreparedModelRuntime(fixture.input)).rejects.toThrow(
-        "process lifetime closed",
-      );
-      await lease[Symbol.asyncDispose]();
-      await closing;
-      expectConnection(fixture, 0, false, 1);
-    } finally {
-      await lease[Symbol.asyncDispose]();
-      await closing;
-    }
-  });
-});
-
-it("disposes old generations while close waits for successors", async () => {
+it.each([false, true])("joins held leases on close (replacement=%s)", async (displaced) => {
   await withColdFixture(async (fixture) => {
     const input = fixture.runtimeInput;
     const original = await acquireReadOnlyPreparedModelRuntime(input);
+    const current = displaced
+      ? undefined
+      : capturePluginLifecycleAuthority(original.snapshot.pluginRegistry!, undefined, {
+          scopedRuntime: true,
+        });
     let successor: Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>> | undefined;
     let closing: Promise<void> | undefined;
     let closed = false;
     try {
-      markPreparedModelRuntimeSnapshotsStale();
-      successor = await acquireReadOnlyPreparedModelRuntime(input);
-      expect(fixture.connections).toHaveLength(2);
-      expect(fixture.connections.every(({ database }) => database.isOpen)).toBe(true);
+      if (displaced) {
+        markPreparedModelRuntimeSnapshotsStale();
+        successor = await acquireReadOnlyPreparedModelRuntime(input);
+        expect(fixture.connections).toHaveLength(2);
+        expect(fixture.connections.every(({ database }) => database.isOpen)).toBe(true);
+      } else {
+        expect(current?.()).toBe(true);
+      }
       closing = closePreparedModelRuntimeSnapshots().then(() => {
         closed = true;
       });
-      await original[Symbol.asyncDispose]();
-      await expect.poll(() => fixture.connections[0]!.disposals).toBe(1);
-      expect(closed).toBe(false);
-      expect(fixture.connections[1]!.database.isOpen).toBe(true);
-      await successor[Symbol.asyncDispose]();
+      if (displaced) {
+        await original[Symbol.asyncDispose]();
+        await expect.poll(() => fixture.connections[0]!.disposals).toBe(1);
+        expect(closed).toBe(false);
+        expect(fixture.connections[1]!.database.isOpen).toBe(true);
+      } else {
+        await nextTurn();
+        expect(closed).toBe(false);
+        expect(current?.()).toBe(false);
+        expectConnection(fixture, 0, true, 0);
+        await expect(acquireReadOnlyPreparedModelRuntime(fixture.input)).rejects.toThrow(
+          "process lifetime closed",
+        );
+      }
+      await (successor ?? original)[Symbol.asyncDispose]();
       await closing;
-      expect(fixture.connections.map(({ disposals }) => disposals)).toEqual([1, 1]);
-      expect(fixture.connections.every(({ database }) => !database.isOpen)).toBe(true);
+      if (displaced) {
+        expect(fixture.connections.map(({ disposals }) => disposals)).toEqual([1, 1]);
+        expect(fixture.connections.every(({ database }) => !database.isOpen)).toBe(true);
+      } else {
+        expectConnection(fixture, 0, false, 1);
+      }
     } finally {
       await original[Symbol.asyncDispose]();
       await successor?.[Symbol.asyncDispose]();
@@ -749,9 +746,7 @@ it("loads persisted model tools without a full catalog", async () => {
         notices: undefined,
       });
       expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(true);
-      expect(fixture.config.agents?.defaults?.model).toEqual({
-        primary: "other/configured",
-      });
+      expect(fixture.config.agents?.defaults?.model).toEqual({ primary: "other/configured" });
       expect(pickerIds(fixture)).toEqual([curatedId]);
       expect(fixture.readNormalizations()).toEqual([
         {
@@ -799,20 +794,10 @@ it("owns base and sandbox MCP normalization without caching", async () => {
       .mockReturnValue(1);
     try {
       const { invoke, respond } = await createInventoryInvocation(fixture);
-      const ambient = createEmptyPluginRegistry();
       const normalizeAmbient = vi.fn(() => {
         throw new Error("Ambient generation must not normalize prepared inventory");
       });
-      ambient.providers.push({
-        pluginId: "ambient-provider",
-        source: "test",
-        provider: {
-          id: provider,
-          label: "Ambient provider",
-          auth: [],
-          normalizeToolSchemas: normalizeAmbient,
-        },
-      });
+      const ambient = ambientRegistry({ normalizeToolSchemas: normalizeAmbient });
       for (let request = 0; request < 2; request++) {
         await withPluginRuntimeRegistryScope(ambient, invoke);
         expect(respond.mock.calls.at(-1)?.[0]).toBe(true);
@@ -896,17 +881,9 @@ it.each([
       const ambientHook = vi.fn(() => {
         throw new Error("Ambient provider must not resolve the model");
       });
-      const registry = createEmptyPluginRegistry();
-      registry.providers.push({
-        pluginId: "ambient-provider",
-        source: "test",
-        provider: {
-          id: provider,
-          label: "Ambient provider",
-          auth: [],
-          prepareDynamicModel: ambientHook,
-          resolveDynamicModel: ambientHook,
-        },
+      const registry = ambientRegistry({
+        prepareDynamicModel: ambientHook,
+        resolveDynamicModel: ambientHook,
       });
       await withPluginRuntimeRegistryScope(registry, async () => {
         expect(resolveProviderRuntimePlugin({ provider, config })).toBeUndefined();

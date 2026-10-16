@@ -1,24 +1,17 @@
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
-import type { Api, Context, Model } from "openclaw/plugin-sdk/llm";
+import type { Api, Context } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
 const EXPECTED_FAILURE_MARKER =
   "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
 const NO_CONTENT_PLACEHOLDER = "[assistant turn failed before producing content]";
 
-function makeModel(api: Api, provider: string, id: string): Model {
-  return {
-    api,
-    provider,
-    id,
-    name: id,
-    input: [],
-    output: [],
-  } as unknown as Model;
-}
+const makeModel = (api: Api, provider: string, id: string) =>
+  makeProviderModelFixture({ api, provider, id, baseUrl: "https://example.test" });
 
 type ToolResultMessage = Extract<Context["messages"][number], { role: "toolResult" }>;
 const userMessage = (content: string, timestamp = Date.now()) => ({

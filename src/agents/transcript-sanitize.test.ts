@@ -7,6 +7,7 @@ const image =
 const ciphertext =
   "gAAAAABpQnQrXzzZqcAfo3unbAY-ku84xgsvB0fpLkbDvSh3WS5qzfSCmcgwr8_abcdefghijvK2RyV2GQ4ohzcfYwhRwTvY76TvR7Tvr_";
 const route = { provider: "openai", api: "openai-responses", model: "test-model" };
+const anthropicRoute = { provider: "anthropic", api: "anthropic-messages" };
 const replay = {
   ...route,
   v: 1,
@@ -16,20 +17,16 @@ const replay = {
   baseUrlHash: "ozhevd1smnk8s",
 };
 
-function sanitize(message: unknown) {
-  return sanitizeTranscriptMessage(castAgentMessage(message));
-}
-function assistant(content: unknown[], overrides: Record<string, unknown> = {}) {
-  return { role: "assistant", ...route, content, ...overrides };
+const sanitize = (message: unknown) => sanitizeTranscriptMessage(castAgentMessage(message));
+function sanitizeAssistant(content: unknown[], overrides: Record<string, unknown> = {}) {
+  return sanitize({ role: "assistant", ...route, content, ...overrides });
 }
 function sanitizeReplay(overrides: Record<string, unknown>) {
-  return sanitize(assistant([], { providerReplay: { ...replay, ...overrides } }));
+  return sanitizeAssistant([], { providerReplay: { ...replay, ...overrides } });
 }
 function expectReplay(overrides: Record<string, unknown>, expected: Record<string, unknown>) {
-  expect(sanitizeReplay(overrides)).toHaveProperty("providerReplay", { ...replay, ...expected });
-}
-function sanitizeAssistantBlock(block: unknown, api = route.api) {
-  return sanitize(assistant([block], { api }));
+  const result = sanitizeReplay(structuredClone(overrides));
+  expect(result).toHaveProperty("providerReplay", { ...replay, ...expected });
 }
 const text = (value: string) => ({ type: "text", text: value });
 const compaction = { type: "compaction", id: "cmp_1", encrypted_content: ciphertext };
@@ -73,15 +70,12 @@ it("normalizes circular result structures without masking their string fields", 
 });
 
 it("canonicalizes inline image MIME and data URLs while preserving adjacent text", () => {
-  const message = {
-    role: "toolResult",
-    content: [
-      text("sk-abcdef1234567890xyz"),
-      { type: "image", data: image, mimeType: "image/jpeg" },
-      { type: "image_url", image_url: { url: `data:image/png;charset=utf-8;base64,${image}` } },
-    ],
-  };
-  expect(sanitize(message)).toHaveProperty("content", [
+  const content = [
+    text("sk-abcdef1234567890xyz"),
+    { type: "image", data: image, mimeType: "image/jpeg" },
+    { type: "image_url", image_url: { url: `data:image/png;charset=utf-8;base64,${image}` } },
+  ];
+  expect(sanitize({ role: "toolResult", content })).toHaveProperty("content", [
     text("sk-abcdef1234567890xyz"),
     { type: "image", data: image, mimeType: "image/png" },
     { type: "image_url", image_url: { url: `data:image/png;base64,${image}` } },
@@ -93,40 +87,39 @@ it.each([
   { content: [] },
   { content: [{ type: "reasoning_text", text: "not part of replay" }] },
 ])("canonicalizes Responses reasoning and retains empty containers: %j", ({ content }) => {
-  const result = sanitizeAssistantBlock({
-    type: "thinking",
-    thinking: "",
-    thinkingSignature: JSON.stringify({
-      type: "reasoning",
-      id: "rs_1",
-      summary: [{ type: "summary_text", text: "not part of replay" }],
-      content,
-      encrypted_content: ciphertext,
-      status: "completed",
-      extra: "not part of replay",
-    }),
-  });
+  const result = sanitizeAssistant([
+    {
+      type: "thinking",
+      thinking: "",
+      thinkingSignature: JSON.stringify({
+        type: "reasoning",
+        id: "rs_1",
+        summary: [{ type: "summary_text", text: "not part of replay" }],
+        content,
+        encrypted_content: ciphertext,
+        status: "completed",
+        extra: "not part of replay",
+      }),
+    },
+  ]);
+  const emptyContent = content?.length === 0 ? ',"content":[]' : "";
   expect(result).toHaveProperty(
     "content.0.thinkingSignature",
-    JSON.stringify({
-      id: "rs_1",
-      type: "reasoning",
-      summary: [],
-      ...(content?.length === 0 ? { content: [] } : {}),
-      status: "completed",
-      encrypted_content: ciphertext,
-    }),
+    `{"id":"rs_1","type":"reasoning","summary":[]${emptyContent},` +
+      `"status":"completed","encrypted_content":"${ciphertext}"}`,
   );
 });
 
 it("canonicalizes OpenAI-compatible tool reasoning without changing arguments", () => {
   const signature = { type: "reasoning.encrypted", data: ciphertext, format: null };
-  const result = sanitizeAssistantBlock(
-    {
-      ...toolCall(),
-      thoughtSignature: JSON.stringify({ ...signature, extra: "discarded" }),
-    },
-    "openai-completions",
+  const result = sanitizeAssistant(
+    [
+      {
+        ...toolCall(),
+        thoughtSignature: JSON.stringify({ ...signature, extra: "discarded" }),
+      },
+    ],
+    { api: "openai-completions" },
   );
   expect(result).toHaveProperty("content.0", {
     ...toolCall(),
@@ -162,17 +155,12 @@ it("preserves Anthropic compaction summaries and validates the attached route", 
   const providerReplay = {
     ...replay,
     type: "anthropic-compaction",
-    provider: "anthropic",
-    api: "anthropic-messages",
+    ...anthropicRoute,
     data: "summary containing sk-abcdef1234567890xyz",
     encryptedContent: ciphertext,
     replayIndex: 0,
   };
-  const message = assistant([], {
-    providerReplay,
-    provider: "anthropic",
-    api: "anthropic-messages",
-  });
   const { id: _id, ...expected } = providerReplay;
-  expect(sanitize(message)).toHaveProperty("providerReplay", expected);
+  const result = sanitizeAssistant([], { providerReplay, ...anthropicRoute });
+  expect(result).toHaveProperty("providerReplay", expected);
 });

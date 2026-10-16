@@ -9,19 +9,11 @@ import {
 } from "./tools-effective-inventory.js";
 
 const runtimeMocks = vi.hoisted(() => {
-  const authStorage = { owner: "request" };
-  const modelRegistry = { owner: "request" };
-  const model = (id: string) => ({
-    id,
-    name: id,
-    provider: "openai",
-    api: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-  });
+  const stores = { authStorage: { owner: "request" }, modelRegistry: { owner: "request" } };
+  const model = (id: string) => ({ id, provider: "openai", api: "openai-responses" });
   const requestLease = {
-    authStorage,
-    modelRegistry,
-    snapshot: { createStores: () => ({ authStorage, modelRegistry }) },
+    ...stores,
+    snapshot: { createStores: () => stores },
     [Symbol.asyncDispose]: vi.fn(async () => {}),
   };
   return {
@@ -73,13 +65,6 @@ function acquire(modelId: string, overrides: Partial<Parameters<typeof acquireCo
     ...overrides,
   });
 }
-async function expectNoRuntimeLease(acquired: Awaited<ReturnType<typeof acquire>>) {
-  await acquired[Symbol.asyncDispose]();
-  expect(runtimeMocks.acquire).not.toHaveBeenCalled();
-  expect(runtimeMocks.resolveModelAsync).not.toHaveBeenCalled();
-  expect(runtimeMocks.requestLease[Symbol.asyncDispose]).not.toHaveBeenCalled();
-}
-
 beforeEach(() => {
   runtimeMocks.acquire.mockReset().mockResolvedValue(runtimeMocks.requestLease);
   runtimeMocks.resolveModelAsync.mockClear();
@@ -132,58 +117,45 @@ it("prepares dynamic model context with a runtime lease", async () => {
   expect(() => acquired.run(() => undefined)).toThrow("has been released");
 });
 
-it.each([" ", "bundled"])("uses static context without a runtime lease for %j", async (modelId) => {
-  if (modelId === "bundled") {
-    runtimeMocks.staticCatalogModel.mockReturnValue(runtimeMocks.model(modelId));
-  }
-  const acquired = await acquire(modelId);
-  const context = acquired.run((value) => value);
-  if (modelId === "bundled") {
-    expect(context).toMatchObject({
-      modelApi: "openai-responses",
-      runtimeModel: { id: modelId, provider: "openai" },
-    });
-  } else {
-    expect(context).toEqual({});
-  }
-  await expectNoRuntimeLease(acquired);
-});
-
-it("uses configured static-alias context without acquiring a runtime lease", async () => {
-  const provider = "xai";
-  const modelId = "grok-4.3-latest";
-  const configuredModel = {
-    ...makeModel("grok-4.3"),
-    name: "Configured",
-    compat: { supportsTools: true },
-  };
-  const cfg = makeOpenClawConfigFixture({
-    models: {
-      providers: {
-        [provider]: {
-          baseUrl: "https://configured.example.invalid",
-          api: "anthropic-messages",
-          models: [configuredModel],
-        },
-      },
-    },
-  });
-
-  const acquired = await acquire(modelId, { cfg, modelProvider: provider });
-  expect(acquired.run((context) => context)).toMatchObject({
-    modelApi: "anthropic-messages",
-    runtimeModel: {
-      id: modelId,
-      name: "Configured",
-      provider,
-      compat: { supportsTools: true },
-    },
-  });
-  expect(resolveConfiguredModelCompat({ cfg, modelProvider: provider, modelId })).toEqual({
-    supportsTools: true,
-  });
-  await expectNoRuntimeLease(acquired);
-});
+it.each(["blank", "bundled", "configured"])(
+  "uses %s context without a runtime lease",
+  async (source) => {
+    const alias = source === "configured";
+    const modelId = alias ? "grok-4.3-latest" : source === "blank" ? " " : "bundled";
+    const provider = alias ? "xai" : "openai";
+    const compat = { supportsTools: true };
+    const providerConfig = {
+      baseUrl: "https://configured.example.invalid",
+      api: "anthropic-messages" as const,
+      models: [{ ...makeModel("grok-4.3"), name: "Configured", compat: { ...compat } }],
+    };
+    const cfg = makeOpenClawConfigFixture(
+      alias ? { models: { providers: { [provider]: providerConfig } } } : {},
+    );
+    if (source === "bundled") {
+      runtimeMocks.staticCatalogModel.mockReturnValue(runtimeMocks.model(modelId));
+    }
+    const acquired = await acquire(modelId, { cfg, modelProvider: provider });
+    const context = acquired.run((value) => value);
+    if (source === "blank") {
+      expect(context).toEqual({});
+    } else {
+      expect(context).toMatchObject({
+        modelApi: alias ? "anthropic-messages" : "openai-responses",
+        runtimeModel: { id: modelId, provider, ...(alias ? { name: "Configured", compat } : {}) },
+      });
+    }
+    if (alias) {
+      expect(resolveConfiguredModelCompat({ cfg, modelProvider: provider, modelId })).toEqual(
+        compat,
+      );
+    }
+    await acquired[Symbol.asyncDispose]();
+    expect(runtimeMocks.acquire).not.toHaveBeenCalled();
+    expect(runtimeMocks.resolveModelAsync).not.toHaveBeenCalled();
+    expect(runtimeMocks.requestLease[Symbol.asyncDispose]).not.toHaveBeenCalled();
+  },
+);
 
 it("releases the runtime lease when dynamic model resolution fails", async () => {
   const failure = new Error("dynamic model failed");

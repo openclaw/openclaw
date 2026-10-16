@@ -36,8 +36,22 @@ function expectedTool(id: string, label: string, description: string, source: st
 function pluginTool(name: string, label: string, description: string, pluginId: string) {
   return mockTool({ name, label, description, pluginMeta: { pluginId, optional: false } });
 }
-function expectedGroup(id: string, label: string, tool: ReturnType<typeof expectedTool>) {
-  return { id, label, source: id, tools: [tool] };
+const groupLabels = {
+  core: "Built-in tools",
+  plugin: "Connected tools",
+  channel: "Channel tools",
+  mcp: "MCP server tools",
+};
+function expectedGroup(
+  source: keyof typeof groupLabels,
+  [id, label, description, extra]: [string, string, string, Record<string, string>?],
+) {
+  return {
+    id: source,
+    label: groupLabels[source],
+    source,
+    tools: [expectedTool(id, label, description, source, extra)],
+  };
 }
 async function loadExecHarness() {
   await loadHarness({
@@ -154,83 +168,59 @@ async function loadHarness(options?: {
   );
 }
 
+async function inventoryFor(options: Parameters<typeof loadHarness>[0]) {
+  await loadHarness(options);
+  return resolveEffectiveToolInventory({ cfg: {} });
+}
+
 beforeEach(async () => {
   await loadHarness();
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
 it("groups core, plugin, and channel tools from the effective runtime set", async () => {
-  await loadHarness({
+  const result = await inventoryFor({
     tools: [
-      mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
-      pluginTool("docs_lookup", "Docs Lookup", "Search docs", "docs"),
-      mockTool({
-        name: "message_actions",
-        label: "Message Actions",
-        description: "Act on messages",
-      }),
+      mockTool({ name: "exec", label: "Exec", description: "Run shell" }),
+      pluginTool("lookup", "Lookup", "Search docs", "docs"),
+      mockTool({ name: "actions", label: "Actions", description: "Act on messages" }),
     ],
-    channelMeta: { message_actions: { channelId: "telegram" } },
+    channelMeta: { actions: { channelId: "telegram" } },
   });
-
-  const result = await resolveEffectiveToolInventory({ cfg: {} });
 
   const { toolAccess: _toolAccess, ...inventory } = result;
   expect(inventory).toEqual({
     agentId: "main",
     profile: "full",
     groups: [
-      expectedGroup(
-        "core",
-        "Built-in tools",
-        expectedTool("exec", "Exec", "Run shell commands", "core"),
-      ),
-      expectedGroup(
-        "plugin",
-        "Connected tools",
-        expectedTool("docs_lookup", "Docs Lookup", "Search docs", "plugin", { pluginId: "docs" }),
-      ),
-      expectedGroup(
-        "channel",
-        "Channel tools",
-        expectedTool("message_actions", "Message Actions", "Act on messages", "channel", {
-          channelId: "telegram",
-        }),
-      ),
+      expectedGroup("core", ["exec", "Exec", "Run shell"]),
+      expectedGroup("plugin", ["lookup", "Lookup", "Search docs", { pluginId: "docs" }]),
+      expectedGroup("channel", [
+        "actions",
+        "Actions",
+        "Act on messages",
+        { channelId: "telegram" },
+      ]),
     ],
   });
 });
 
 it("groups bundled MCP tools separately from generic plugin tools", async () => {
-  await loadHarness({
-    tools: [pluginTool("reproProbe__probe_tool", "Probe", "Probe MCP", "bundle-mcp")],
+  const result = await inventoryFor({
+    tools: [pluginTool("probe__tool", "Probe", "Probe MCP", "bundle-mcp")],
   });
-
-  const result = await resolveEffectiveToolInventory({ cfg: {} });
-
   expect(result.groups).toEqual([
-    {
-      id: "mcp",
-      label: "MCP server tools",
-      source: "mcp",
-      tools: [
-        expectedTool("reproProbe__probe_tool", "Probe", "Probe MCP", "mcp", {
-          pluginId: "bundle-mcp",
-        }),
-      ],
-    },
+    expectedGroup("mcp", ["probe__tool", "Probe", "Probe MCP", { pluginId: "bundle-mcp" }]),
   ]);
 });
 
 it("disambiguates duplicate labels with source ids", async () => {
-  await loadHarness({
+  const result = await inventoryFor({
     tools: [
       pluginTool("docs_lookup", "Lookup", "Search docs", "docs"),
       pluginTool("jira_lookup", "Lookup", "Search Jira", "jira"),
     ],
   });
-
-  const result = await resolveEffectiveToolInventory({ cfg: {} });
   const labels = result.groups.flatMap((group) => group.tools.map((tool) => tool.label));
 
   expect(labels).toEqual(["Lookup (docs)", "Lookup (jira)"]);
@@ -262,15 +252,13 @@ it("projects plugin metadata published during provider normalization", async () 
       },
     },
   ];
-  await loadHarness({
+  const result = await inventoryFor({
     normalizeToolsMock: vi.fn((options) => {
       setActivePluginRegistry(registry);
       return options.tools;
     }),
     tools: [pluginTool("docs_lookup", "Lookup", "Search docs", "docs")],
   });
-
-  const result = await resolveEffectiveToolInventory({ cfg: {} });
 
   expect(result.groups[0]?.tools[0]).toEqual(
     expectedTool("docs_lookup", "Docs Search", "Curated docs lookup.", "plugin", {
@@ -293,7 +281,7 @@ it.each([
     reason: 'fuzzplugin_move_angles.parameters.type must be "object"',
   },
 ])("quarantines $name while preserving plugin ownership", async ({ parameters, reason }) => {
-  await loadHarness({
+  const result = await inventoryFor({
     tools: [
       mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
       mockTool({
@@ -305,8 +293,6 @@ it.each([
       }),
     ],
   });
-
-  const result = await resolveEffectiveToolInventory({ cfg: {} });
 
   expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual(["exec"]);
   expect(result.notices).toEqual([
@@ -334,10 +320,7 @@ it("reports unreadable inventory tool entries without crashing", async () => {
       return Reflect.get(target, property, receiver);
     },
   });
-  await loadHarness({ tools });
-
-  const result = await resolveEffectiveToolInventory({ cfg: {} });
-
+  const result = await inventoryFor({ tools });
   expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual(["exec"]);
   expect(result.notices).toEqual([
     {
@@ -502,7 +485,7 @@ it("uses prepared model context before quarantining runtime-normalized tools", a
 });
 
 it("prefers displaySummary over raw description", async () => {
-  await loadHarness({
+  const result = await inventoryFor({
     tools: [
       mockTool({
         name: "cron",
@@ -512,8 +495,6 @@ it("prefers displaySummary over raw description", async () => {
       }),
     ],
   });
-
-  const result = await resolveEffectiveToolInventory({ cfg: {} });
 
   expect(result.groups[0]?.tools[0]).toEqual({
     id: "cron",
@@ -525,7 +506,7 @@ it("prefers displaySummary over raw description", async () => {
 });
 
 it("falls back to a sanitized summary for multi-line raw descriptions", async () => {
-  await loadHarness({
+  const result = await inventoryFor({
     tools: [
       mockTool({
         name: "cron",
@@ -535,8 +516,6 @@ it("falls back to a sanitized summary for multi-line raw descriptions", async ()
       }),
     ],
   });
-
-  const result = await resolveEffectiveToolInventory({ cfg: {} });
 
   const description = result.groups[0]?.tools[0]?.description ?? "";
   expect(description).toContain(
@@ -555,7 +534,6 @@ it("includes the resolved tool profile", async () => {
     cfg: { tools: { profile: "minimal", byProvider: { openai: { profile: "coding" } } } },
     modelProvider: "openai",
   });
-
   expect(result.profile).toBe("coding");
 });
 
