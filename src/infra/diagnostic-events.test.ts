@@ -476,6 +476,7 @@ describe("diagnostic-events", () => {
       map: new Map([["value", 42]]),
       date: new Date(123),
       set: new Set([42]),
+      array: Object.assign([1], { bytes: new Uint8Array([42]) }),
     };
     const eventInput = { type: "message.queued" as const, source: "plugin", extra };
     onDiagnosticEvent((event) => {
@@ -483,6 +484,7 @@ describe("diagnostic-events", () => {
       captured.map.set("value", 0);
       captured.date.setTime(0);
       captured.set.clear();
+      captured.array.bytes[0] = 0;
     });
     const observed: DiagnosticEventPayload[] = [];
     onTrustedInternalDiagnosticEvent((event) => observed.push(event));
@@ -491,12 +493,12 @@ describe("diagnostic-events", () => {
 
     expect(observed).toHaveLength(1);
     const captured = (observed[0] as DiagnosticEventPayload & typeof eventInput).extra;
-    expect(captured.map.get("value")).toBe(42);
-    expect(captured.date.getTime()).toBe(123);
-    expect([...captured.set]).toEqual([42]);
-    expect(extra.map.get("value")).toBe(42);
-    expect(extra.date.getTime()).toBe(123);
-    expect([...extra.set]).toEqual([42]);
+    for (const value of [captured, extra]) {
+      expect(value.map.get("value")).toBe(42);
+      expect(value.date.getTime()).toBe(123);
+      expect([...value.set]).toEqual([42]);
+      expect(value.array.bytes[0]).toBe(42);
+    }
   });
 
   it("freezes extra array properties and cyclic plugin payloads before sharing", () => {

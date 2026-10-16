@@ -30,6 +30,10 @@ function freezeDiagnosticValue(value: unknown, seen: WeakSet<object>): boolean {
   if (!value || typeof value !== "object" || seen.has(value)) {
     return true;
   }
+  // Nonempty typed arrays cannot be frozen; keep buffer views listener-local.
+  if (ArrayBuffer.isView(value)) {
+    return false;
+  }
   seen.add(value);
   // Cloned plain graphs are immutable after freezing; Map/Date/etc. retain
   // mutable internals and must keep their individual listener copies.
