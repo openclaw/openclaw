@@ -2,9 +2,8 @@
 
 import type { JSX } from "@solidjs/web";
 import { render as mountSolid } from "@solidjs/web";
-import { createSignal, flush } from "solid-js";
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { createApplicationOverlays } from "../app/overlays.ts";
@@ -14,6 +13,7 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
+import { inboxMention } from "./sidebar-inbox.test-support.ts";
 import {
   SidebarIssueItem,
   renderSidebarMentionItem as SidebarMentionItem,
@@ -36,6 +36,7 @@ const item: SidebarAttentionItem = {
 };
 
 const container = document.createElement("div");
+const overlayDisposers: Array<() => void> = [];
 function find<K extends keyof HTMLElementTagNameMap>(selector: K): HTMLElementTagNameMap[K] | null;
 function find<T extends Element = HTMLElement>(selector: string): T | null;
 function find(selector: string) {
@@ -54,6 +55,9 @@ function render(view: (() => JSX.Element) | null) {
 
 afterEach(() => {
   render(null);
+  for (const stop of overlayDisposers.splice(0)) {
+    stop();
+  }
   container.remove();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -95,28 +99,12 @@ describe("renderSidebarScopeUpgradeItem", () => {
 });
 
 describe("renderSidebarMentionItem", () => {
-  const mention: MentionInboxItem = {
-    id: "mention-riley",
-    senderProfileId: "profile-riley",
-    senderLabel: "Riley",
-    sessionKey: "agent:writer:chat:12345678-90ab-cdef-1234-567890abcdef",
-    agentId: "writer",
-    sessionTitle: "Release notes",
-    messageId: "message-1",
-    createdAt: 1_780_000_000_000,
-    expiresAt: 1_780_003_600_000,
-    excerpt: "Can you review the release notes?",
-  };
+  const mention = { ...inboxMention("mention-riley"), messageId: "message-1" };
   const pathname = "/team/chat/writer/chat/12345678-90ab-cdef-1234-567890abcdef";
   const navigation = {
     pathname,
     search: undefined,
   };
-
-  let setMention: ((props: Parameters<typeof SidebarMentionItem>[0]) => void) | undefined;
-  afterEach(() => {
-    setMention = undefined;
-  });
 
   function renderMention(overrides: Partial<Parameters<typeof SidebarMentionItem>[0]> = {}) {
     const params = {
@@ -127,14 +115,7 @@ describe("renderSidebarMentionItem", () => {
       onNavigate: vi.fn(),
       ...overrides,
     };
-    if (setMention) {
-      setMention(params);
-      flush();
-    } else {
-      const [current, setCurrent] = createSignal(params);
-      setMention = setCurrent;
-      render(() => <SidebarMentionItem {...current()} />);
-    }
+    render(() => <SidebarMentionItem {...params} />);
     return params;
   }
 
@@ -214,6 +195,22 @@ type UpdateCard = HTMLElement & {
   canNativeUpdate: boolean;
   onCheckStatus?: () => Promise<boolean>;
 };
+function updateFixture(
+  request: Parameters<typeof updateRunHarness>[0],
+  hello: Partial<NonNullable<ApplicationContext["gateway"]["snapshot"]["hello"]>> = {},
+) {
+  const harness = updateRunHarness(request);
+  harness.update({
+    hello: {
+      ...harness.gateway.snapshot.hello!,
+      features: { methods: ["update.run", "update.status"] },
+      ...hello,
+    },
+  });
+  const overlays = createApplicationOverlays(harness.gateway);
+  overlayDisposers.push(() => overlays.dispose());
+  return { ...harness, overlays, context: { gateway: harness.gateway, overlays } };
+}
 function renderUpdate(
   context: Pick<ApplicationContext, "gateway" | "overlays">,
   onDismiss?: () => void,
@@ -242,14 +239,7 @@ describe("renderSidebarUpdateSurface", () => {
         entered.resolve();
         return response.promise;
       });
-      const harness = updateRunHarness(request);
-      harness.update({
-        hello: {
-          ...harness.gateway.snapshot.hello!,
-          features: { methods: ["update.run", "update.status"] },
-        },
-      });
-      const overlays = createApplicationOverlays(harness.gateway);
+      const harness = updateFixture(request);
       const fresh = {
         channel: "dev",
         currentVersion: "1.0.0",
@@ -261,7 +251,7 @@ describe("renderSidebarUpdateSurface", () => {
       };
       let preparing: Promise<unknown> | undefined;
       try {
-        const card = renderUpdate({ gateway: harness.gateway, overlays });
+        const card = renderUpdate(harness.context);
         await card.updateComplete;
         render(null);
         expect(card.isConnected).toBe(false);
@@ -290,7 +280,6 @@ describe("renderSidebarUpdateSurface", () => {
       } finally {
         response.resolve({ updateAvailable: fresh });
         await preparing;
-        overlays.dispose();
       }
     },
   );
@@ -303,44 +292,35 @@ describe("renderSidebarUpdateSurface", () => {
     "gates discovery and fresh confirmation for %s with %s",
     async (scope, method, canCheck, canNativeUpdate) => {
       const request = vi.fn(async () => ({}));
-      const harness = updateRunHarness(request);
-      harness.update({
-        hello: {
-          ...harness.gateway.snapshot.hello!,
-          auth: { role: "operator", scopes: [scope] },
-          features: { methods: [method] },
-        },
+      const harness = updateFixture(request, {
+        auth: { role: "operator", scopes: [scope] },
+        features: { methods: [method] },
       });
-      const overlays = createApplicationOverlays(harness.gateway);
-      try {
-        const card = renderUpdate({ gateway: harness.gateway, overlays }, vi.fn());
-        await card.updateComplete;
-        expect(card.canUpdate).toBe(false);
-        expect(card.canNativeUpdate).toBe(canNativeUpdate);
-        expect(Boolean(card.onCheckStatus)).toBe(canCheck);
-        const details = card.querySelector("details")!;
-        const expanded = new Promise<void>((resolve) => {
-          details.addEventListener("toggle", () => resolve(), { once: true });
-        });
-        details.open = true;
-        await expanded;
-        await card.updateComplete;
-        if (canCheck) {
-          expect(request).toHaveBeenCalledWith(
-            "update.status",
-            { refreshCheckout: true },
-            { timeoutMs: null },
-          );
-        } else {
-          expect(request).not.toHaveBeenCalledWith(
-            "update.status",
-            { refreshCheckout: true },
-            expect.anything(),
-          );
-          expect(card.textContent).not.toContain("Could not check");
-        }
-      } finally {
-        overlays.dispose();
+      const card = renderUpdate(harness.context, vi.fn());
+      await card.updateComplete;
+      expect(card.canUpdate).toBe(false);
+      expect(card.canNativeUpdate).toBe(canNativeUpdate);
+      expect(Boolean(card.onCheckStatus)).toBe(canCheck);
+      const details = card.querySelector("details")!;
+      const expanded = new Promise<void>((resolve) => {
+        details.addEventListener("toggle", () => resolve(), { once: true });
+      });
+      details.open = true;
+      await expanded;
+      await card.updateComplete;
+      if (canCheck) {
+        expect(request).toHaveBeenCalledWith(
+          "update.status",
+          { refreshCheckout: true },
+          { timeoutMs: null },
+        );
+      } else {
+        expect(request).not.toHaveBeenCalledWith(
+          "update.status",
+          { refreshCheckout: true },
+          expect.anything(),
+        );
+        expect(card.textContent).not.toContain("Could not check");
       }
     },
   );
@@ -352,41 +332,31 @@ describe("renderSidebarUpdateSurface", () => {
         phase: "finished",
         finishedAtMs: Date.now(),
       });
-      const harness = updateRunHarness(async () => ({
-        lastRun: run,
-        updateAvailable: { currentVersion: "2.0.0", latestVersion: "3.0.0", channel: "stable" },
-      }));
-      harness.update({
-        hello: {
-          ...harness.gateway.snapshot.hello!,
-          server: { version: "2.0.0", bootId: "fixture-boot" },
-          features: { methods: ["update.run", "update.status"] },
-        },
-      });
-      const overlays = createApplicationOverlays(harness.gateway);
-      const context = { gateway: harness.gateway, overlays };
-      try {
-        await overlays.refreshUpdateStatus();
-        if (state === "acknowledged") {
-          overlays.acknowledgeUpdateRun();
-        }
-        const dismissal = resolveSidebarUpdateAttention(context)?.dismissal;
-        const expected = {
-          kind: "updateAvailable",
-          signature: JSON.stringify(
-            state === "visible" ? ["run", run.runId] : ["3.0.0", "fixture-boot"],
-          ),
-        };
-        const dismiss = vi.fn();
-        const card = renderUpdate(context, () => dismiss(dismissal));
-        await card.updateComplete;
-        expect(container.textContent).toContain(state === "visible" ? "OpenClaw updated" : "3.0.0");
-        find<HTMLButtonElement>(".sidebar-issues-panel__dismiss")!.click();
-        expect(dismiss).toHaveBeenCalledExactlyOnceWith(expected);
-        expect(overlays.snapshot.updateRunAcknowledged).toBe(state === "acknowledged");
-      } finally {
-        overlays.dispose();
+      const { overlays, context } = updateFixture(
+        async () => ({
+          lastRun: run,
+          updateAvailable: { currentVersion: "2.0.0", latestVersion: "3.0.0", channel: "stable" },
+        }),
+        { server: { version: "2.0.0", bootId: "fixture-boot" } },
+      );
+      await overlays.refreshUpdateStatus();
+      if (state === "acknowledged") {
+        overlays.acknowledgeUpdateRun();
       }
+      const dismissal = resolveSidebarUpdateAttention(context)?.dismissal;
+      const expected = {
+        kind: "updateAvailable",
+        signature: JSON.stringify(
+          state === "visible" ? ["run", run.runId] : ["3.0.0", "fixture-boot"],
+        ),
+      };
+      const dismiss = vi.fn();
+      const card = renderUpdate(context, () => dismiss(dismissal));
+      await card.updateComplete;
+      expect(container.textContent).toContain(state === "visible" ? "OpenClaw updated" : "3.0.0");
+      find<HTMLButtonElement>(".sidebar-issues-panel__dismiss")!.click();
+      expect(dismiss).toHaveBeenCalledExactlyOnceWith(expected);
+      expect(overlays.snapshot.updateRunAcknowledged).toBe(state === "acknowledged");
     },
   );
 });

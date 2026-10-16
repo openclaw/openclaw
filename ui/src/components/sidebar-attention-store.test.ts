@@ -67,6 +67,40 @@ describe("sidebar attention source publication", () => {
       ).toHaveLength(count);
     }
   }
+  function inventoryGate(next?: string) {
+    const list = deferred<CompactCronPage>();
+    const status = deferred<CronStatus>();
+    const auth = deferred<ModelAuthStatusResult>();
+    const cronStatus = { enabled: true, triggersEnabled: true, jobs: 1 };
+    const calls = { list: 0, status: 0 };
+    const handlers: Record<string, () => Promise<unknown>> = {
+      "cron.list": () =>
+        ++calls.list === 1 || !next ? list.promise : Promise.resolve(cronPage(next)),
+      "cron.status": () =>
+        ++calls.status === 1 || !next ? status.promise : Promise.resolve(cronStatus),
+      "models.authStatus": () => auth.promise,
+    };
+    const request = vi.fn((method: string) => {
+      const handler = handlers[method];
+      if (!Object.hasOwn(handlers, method) || !handler) {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return handler();
+    });
+    return {
+      list,
+      status,
+      auth,
+      cronStatus,
+      calls,
+      request,
+      finish(id?: string) {
+        list.resolve(cronPage(id));
+        status.resolve(cronStatus);
+        auth.resolve({ ts: 1, providers: [] });
+      },
+    };
+  }
   function emitFinished(harness: ReturnType<typeof createGatewayHarness>) {
     harness.emitEvent("cron", {
       action: "finished",
@@ -224,12 +258,8 @@ describe("sidebar attention source publication", () => {
       await vi.advanceTimersByTimeAsync(60_001);
       setVisibility("visible");
       await vi.advanceTimersByTimeAsync(0);
-      for (const method of ["cron.list", "cron.status", "models.authStatus"]) {
-        expect(
-          request.mock.calls.filter(([name]) => name === method),
-          method,
-        ).toHaveLength(method === "models.authStatus" ? 1 : 3);
-      }
+      expectCalls(request, 3);
+      expectCalls(request, 1, ["models.authStatus"]);
       harness.emitEvent("config.changed", {});
       await vi.advanceTimersByTimeAsync(0);
       expectCalls(request, 4);
@@ -435,24 +465,8 @@ describe("sidebar attention source publication", () => {
   it.each(["list", "status"] as const)(
     "coalesces cron bursts until the whole inventory pair settles (%s first)",
     async (first) => {
-      const pendingList = deferred<CompactCronPage>();
-      const pendingStatus = deferred<CronStatus>();
-      const pendingAuth = deferred<ModelAuthStatusResult>();
-      const cronStatus = { enabled: true, triggersEnabled: true, jobs: 1 };
-      let listCalls = 0;
-      let statusCalls = 0;
-      const request = vi.fn((method: string) => {
-        if (method === "cron.list") {
-          return ++listCalls === 1 ? pendingList.promise : Promise.resolve(cronPage("latest"));
-        }
-        if (method === "cron.status") {
-          return ++statusCalls === 1 ? pendingStatus.promise : Promise.resolve(cronStatus);
-        }
-        if (method === "models.authStatus") {
-          return pendingAuth.promise;
-        }
-        throw new Error(`Unexpected request: ${method}`);
-      });
+      const gate = inventoryGate("latest");
+      const { request, cronStatus } = gate;
       const harness = createGatewayHarness(mockClient(request));
       harness.update({ selfUser: { id: "alice", name: "Alice" } });
       store = activate(harness);
@@ -461,36 +475,31 @@ describe("sidebar attention source publication", () => {
         for (let index = 0; index < 20; index++) {
           emitFinished(harness);
         }
-        expect([listCalls, statusCalls]).toEqual([1, 1]);
-        expect(
-          request.mock.calls.filter(([method]) => method === "models.authStatus"),
-        ).toHaveLength(1);
+        expect([gate.calls.list, gate.calls.status]).toEqual([1, 1]);
+        expectCalls(request, 1, ["models.authStatus"]);
 
         if (first === "list") {
-          pendingList.resolve(cronPage("stale"));
-          await pendingList.promise;
+          gate.list.resolve(cronPage("stale"));
+          await gate.list.promise;
         } else {
-          pendingStatus.resolve(cronStatus);
-          await pendingStatus.promise;
+          gate.status.resolve(cronStatus);
+          await gate.status.promise;
         }
         await Promise.resolve();
-        expect(listCalls).toBe(1);
-        expect(statusCalls).toBe(1);
+        expect(gate.calls).toEqual({ list: 1, status: 1 });
 
-        pendingList.resolve(cronPage("stale"));
-        pendingStatus.resolve(cronStatus);
+        gate.list.resolve(cronPage("stale"));
+        gate.status.resolve(cronStatus);
         await waitForFast(() =>
           expect(store?.entries).toMatchObject([
             { type: "attention", kind: "cronFailed", label: "latest" },
           ]),
         );
-        expect([listCalls, statusCalls]).toEqual([2, 2]);
+        expect([gate.calls.list, gate.calls.status]).toEqual([2, 2]);
       } finally {
         store?.dispose();
         store = undefined;
-        pendingList.resolve(cronPage());
-        pendingStatus.resolve(cronStatus);
-        pendingAuth.resolve({ ts: 1, providers: [] });
+        gate.finish();
       }
     },
   );
@@ -543,9 +552,7 @@ describe("sidebar attention source publication", () => {
         }
       });
       expectCalls(request, 2);
-      expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(
-        1,
-      );
+      expectCalls(request, 1, ["models.authStatus"]);
       if (initial === "pending with dismissal") {
         expect(loadDismissals(key)).toEqual({ cronFailed: ["current"] });
       }
@@ -765,22 +772,8 @@ describe("sidebar attention source publication", () => {
     "retires queued inventory and auth refreshes on %s",
     async (boundary) => {
       vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-      const pendingList = deferred<CompactCronPage>();
-      const pendingStatus = deferred<CronStatus>();
-      const pendingAuth = deferred<ModelAuthStatusResult>();
-      const cronStatus = { enabled: true, triggersEnabled: true, jobs: 1 };
-      const request = vi.fn((method: string) => {
-        if (method === "cron.list") {
-          return pendingList.promise;
-        }
-        if (method === "cron.status") {
-          return pendingStatus.promise;
-        }
-        if (method === "models.authStatus") {
-          return pendingAuth.promise;
-        }
-        throw new Error(`Unexpected request: ${method}`);
-      });
+      const gate = inventoryGate();
+      const { request, cronStatus } = gate;
       const harness = createGatewayHarness(mockClient(request));
       harness.update({ selfUser: { id: "alice", name: "Alice" } });
       store = createStore(harness.gateway);
@@ -808,17 +801,13 @@ describe("sidebar attention source publication", () => {
           store.dispose();
         }
         publish.mockClear();
-        pendingList.resolve(cronPage("retired"));
-        pendingStatus.resolve(cronStatus);
-        pendingAuth.resolve({ ts: 1, providers: [] });
+        gate.finish("retired");
         await settleRefresh();
 
         expectCalls(request, 1, ["cron.list", "cron.status", "models.authStatus"]);
         expect(publish).not.toHaveBeenCalled();
       } finally {
-        pendingList.resolve(cronPage());
-        pendingStatus.resolve(cronStatus);
-        pendingAuth.resolve({ ts: 1, providers: [] });
+        gate.finish();
       }
     },
   );

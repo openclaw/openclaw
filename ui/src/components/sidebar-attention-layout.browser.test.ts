@@ -6,22 +6,23 @@ import type { ApplicationContext } from "../app/context.ts";
 import { client, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import "../test-helpers/load-styles.ts";
-import "../styles/hub-tabs.css";
-import "../styles/sidebar-attention-floating.css";
-import "../styles/sidebar-issues.css";
 import {
   buildSidebarInboxEntries,
   type SidebarAttentionItem,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
-// Upgrade the real element: the floating layout once regressed because a base
-// class stamped inline `display: contents`, which only a live upgrade reveals.
-import "./sidebar-attention.tsx";
+import "../test-helpers/load-styles.ts";
+import "../styles/hub-tabs.css";
+import "../styles/sidebar-attention-floating.css";
+import "../styles/sidebar-issues.css";
 import {
   SidebarAttentionPanel,
   type SidebarAttentionPanelParams,
 } from "./sidebar-attention-panel.runtime.tsx";
+// Upgrade the real element: the floating layout once regressed because a base
+// class stamped inline `display: contents`, which only a live upgrade reveals.
+import "./sidebar-attention.tsx";
+import { inboxMention } from "./sidebar-inbox.test-support.ts";
 import { HubTabs, type HubTabsProps } from "./solid/hub-tabs.tsx";
 import layoutCss from "../styles/layout.css?inline";
 import floatingCss from "../styles/sidebar-attention-floating.css?inline";
@@ -32,9 +33,6 @@ function part<T extends HTMLElement = HTMLElement>(root: ParentNode, name: strin
 const bounds = (element: Element | Range) => element.getBoundingClientRect();
 const style = (element: Element) => getComputedStyle(element);
 const mountedPanels = new Map<Element, () => void>();
-function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams) {
-  return () => createComponent(SidebarAttentionPanel, params);
-}
 function render(view: () => JSX.Element, container: Element) {
   mountedPanels.get(container)?.();
   mountedPanels.set(container, renderSolid(view, container));
@@ -55,21 +53,23 @@ const authWarning: SidebarAttentionItem = {
   signature: "expired-profile",
 };
 
-function inboxMention(id: string): MentionInboxItem {
-  return {
-    id,
-    senderProfileId: "profile-riley",
-    senderLabel: "Riley",
-    sessionKey: "agent:writer:chat:12345678-90ab-cdef-1234-567890abcdef",
-    agentId: "writer",
-    sessionTitle: "Release notes",
-    messageId: `message-${id}`,
-    createdAt: 1_780_000_000_000,
-    expiresAt: 1_780_003_600_000,
-    excerpt: "Can you review the release notes?",
-  };
+function panel(params: SidebarAttentionPanelParams) {
+  return () => createComponent(SidebarAttentionPanel, params);
 }
-
+function inboxEntries(attention: SidebarAttentionItem[], mentions: MentionInboxItem[]) {
+  return buildSidebarInboxEntries({
+    approvals: [],
+    attention,
+    mentions,
+    scopeUpgrade: null,
+    update: null,
+  });
+}
+function mountPanel(params: SidebarAttentionPanelParams) {
+  const shell = document.body.appendChild(document.createElement("div"));
+  render(panel(params), shell);
+  return shell;
+}
 function panelParams(entries: readonly SidebarInboxEntry[]): SidebarAttentionPanelParams {
   return {
     context: {
@@ -128,7 +128,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       document.body.append(shell);
       const [selectedTab, setSelectedTab] = createSignal<"all" | "approvals">("all");
       render(
-        renderSidebarAttentionPanel({
+        panel({
           ...params,
           get selectedTab() {
             return selectedTab();
@@ -160,17 +160,13 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
   it.each(["system", "mentions", "all"] as const)(
     "dismisses only the selected %s tab without mixing mentions and local snoozes",
     (selectedTab) => {
-      const entries = buildSidebarInboxEntries({
-        approvals: [],
-        attention: [authWarning],
-        mentions: [inboxMention("mention-a"), inboxMention("mention-b")],
-        scopeUpgrade: null,
-        update: null,
-      });
+      const entries = inboxEntries(
+        [authWarning],
+        [inboxMention("mention-a"), inboxMention("mention-b")],
+      );
       const params = panelParams(entries);
       params.mentions.snapshot.dismissing = ["mention-b"];
-      const shell = document.body.appendChild(document.createElement("div"));
-      render(renderSidebarAttentionPanel({ ...params, selectedTab }), shell);
+      const shell = mountPanel({ ...params, selectedTab });
 
       expect(
         Array.from(shell.querySelectorAll("[data-mention-id]"), (row) =>
@@ -193,18 +189,11 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
   );
 
   it("keeps existing mentions visible with a refresh action after a request fails", () => {
-    const entries = buildSidebarInboxEntries({
-      approvals: [],
-      attention: [],
-      mentions: [inboxMention("mention-a")],
-      scopeUpgrade: null,
-      update: null,
-    });
+    const entries = inboxEntries([], [inboxMention("mention-a")]);
     const params = panelParams(entries);
     params.mentions.snapshot.phase = "error";
     params.mentions.snapshot.error = "Connection interrupted";
-    const shell = document.body.appendChild(document.createElement("div"));
-    render(renderSidebarAttentionPanel({ ...params, selectedTab: "mentions" }), shell);
+    const shell = mountPanel({ ...params, selectedTab: "mentions" });
 
     expect(shell.querySelector('[data-mention-id="mention-a"]')).not.toBeNull();
     expect(part(shell, "empty")).toBeNull();
@@ -263,8 +252,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       );
       const inbox = attention.querySelector<HTMLElement>(".sidebar-issues-button")!;
 
-      expect(style(attention).position).toBe("fixed");
-      expect(style(attention).display).toBe("flex");
+      expect(style(attention)).toMatchObject({ position: "fixed", display: "flex" });
       expect(bounds(attention).left).toBeGreaterThanOrEqual(bounds(chrome).right + 8);
       const paint = () => ({
         border: style(inbox).borderTopWidth,
@@ -373,30 +361,25 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       const list = part(fixture, "list");
       const item = fixture.querySelector<HTMLElement>("[data-attention-kind]");
       const summary = part(fixture, "summary");
-      const track = group!;
-      const nav = group!;
 
       expect(bounds(group!).width).toBeLessThanOrEqual(fixture.clientWidth);
       expect(style(group!).overflowX).toBe("auto");
       expect(style(group!).backgroundColor).toBe(style(header).backgroundColor);
       expect(style(group!).backgroundColor).not.toBe(style(list!).backgroundColor);
       // The track hairline is the header/list separator; it must span the panel.
-      expect(track).not.toBeNull();
       const colorProbe = document.createElement("span");
       colorProbe.style.cssText = "position: absolute; color: var(--track-color);";
-      track.append(colorProbe);
+      group.append(colorProbe);
       const separatorColor = style(colorProbe).color;
       colorProbe.remove();
       const paint = document.createElement("canvas").getContext("2d")!;
       paint.fillStyle = separatorColor;
       paint.fillRect(0, 0, 1, 1);
       expect(paint.getImageData(0, 0, 1, 1).data[3]).toBeGreaterThan(0);
-      expect(style(track).boxShadow).toBe(`${separatorColor} 0px -2px 0px 0px inset`);
-      expect(style(track).paddingBottom).toBe("2px");
-      expect(bounds(track!).width).toBeGreaterThanOrEqual(bounds(nav).width - 1);
-      expect(style(nav).overflowX).toBe("auto");
+      expect(style(group).boxShadow).toBe(`${separatorColor} 0px -2px 0px 0px inset`);
+      expect(style(group).paddingBottom).toBe("2px");
       if (width === 320) {
-        expect(nav.scrollWidth).toBeGreaterThan(nav.clientWidth);
+        expect(group.scrollWidth).toBeGreaterThan(group.clientWidth);
       }
       for (const [index, tab] of tabs.entries()) {
         const label = Array.from(tab.childNodes).find(
@@ -412,24 +395,13 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
           );
         }
         expect(labelBounds.width).toBeGreaterThan(0);
-        expect(
-          labelBounds.left,
-          `${label.textContent} starts inside its tab`,
-        ).toBeGreaterThanOrEqual(tabBounds.left - 1);
-        expect(labelBounds.right, `${label.textContent} fits inside its tab`).toBeLessThanOrEqual(
-          tabBounds.right + 1,
-        );
+        expect(labelBounds.left).toBeGreaterThanOrEqual(tabBounds.left - 1);
+        expect(labelBounds.right).toBeLessThanOrEqual(tabBounds.right + 1);
         const tabBadge = tab.querySelector<HTMLElement>(".hub-tab__badge");
         if (tabBadge) {
           const badgeBounds = bounds(tabBadge);
-          expect(
-            badgeBounds.left,
-            `${label.textContent} does not overlap its count`,
-          ).toBeGreaterThanOrEqual(labelBounds.right - 1);
-          expect(
-            badgeBounds.right,
-            `${label.textContent} count fits inside its tab`,
-          ).toBeLessThanOrEqual(tabBounds.right + 1);
+          expect(badgeBounds.left).toBeGreaterThanOrEqual(labelBounds.right - 1);
+          expect(badgeBounds.right).toBeLessThanOrEqual(tabBounds.right + 1);
         }
       }
       tabs[0]!.focus();
@@ -444,7 +416,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
           .poll(
             () => {
               const tabBounds = bounds(tab);
-              const viewport = bounds(nav);
+              const viewport = bounds(group);
               return Math.max(viewport.left - tabBounds.left, tabBounds.right - viewport.right);
             },
             {
@@ -452,10 +424,6 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
             },
           )
           .toBeLessThanOrEqual(1);
-        const viewport = bounds(nav);
-        const separator = bounds(track!);
-        expect(separator.left).toBeLessThanOrEqual(viewport.left + 1);
-        expect(separator.right).toBeGreaterThanOrEqual(viewport.right - 1);
       }
       // Count badges render as pills separated from the tab label.
       expect(badge).not.toBeNull();
@@ -490,7 +458,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     const dismiss = part(shell, "dismiss");
     const dismissShown = part(shell, "dismiss-shown");
     const close = part(shell, "mobile-close");
-    const panel = shell.querySelector<HTMLElement>(".sidebar-issues-panel")!;
+    const sheet = shell.querySelector<HTMLElement>(".sidebar-issues-panel")!;
     const header = part(shell, "header");
     const list = part(shell, "list-wrap");
     const dismissStyle = style(dismiss);
@@ -500,12 +468,10 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(bounds(dismiss).width).toBeGreaterThanOrEqual(40);
     expect(bounds(dismiss).height).toBeGreaterThanOrEqual(40);
     expect(bounds(dismissShown).height).toBeGreaterThanOrEqual(40);
-    expect(bounds(close).width).toBe(36);
-    expect(bounds(close).height).toBe(36);
-    expect(style(close).borderTopWidth).toBe("1px");
-    expect(style(close).borderRadius).toBe("9999px");
+    expect(bounds(close)).toMatchObject({ width: 36, height: 36 });
+    expect(style(close)).toMatchObject({ borderTopWidth: "1px", borderRadius: "9999px" });
     expect(style(close).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
-    expect(style(panel).backgroundColor).toBe(style(header).backgroundColor);
+    expect(style(sheet).backgroundColor).toBe(style(header).backgroundColor);
     expect(style(header).backgroundColor).not.toBe(style(list).backgroundColor);
   });
 });

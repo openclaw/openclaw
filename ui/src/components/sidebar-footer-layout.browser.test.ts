@@ -24,8 +24,8 @@ let page: Page;
 const uiCss = ["base.css", "components.css", "layout.css"]
   .map((file) => readStyleSheet(`ui/src/styles/${file}`))
   .join("\n");
-async function footerGeometry() {
-  return page.evaluate(() => {
+async function footerGeometry(includeIdentity = false) {
+  return page.evaluate((native) => {
     const box = (selector: string) => {
       const { top, bottom, left, right, height } = document
         .querySelector(selector)!
@@ -39,20 +39,19 @@ async function footerGeometry() {
       settingsFooter: box(".settings-sidebar__footer"),
       card: box(".sidebar-identity-card"),
       action: box(".sidebar-issues-button"),
+      identity: native
+        ? {
+            name: box(".sidebar-identity-card__name"),
+            gateway: box(".sidebar-identity-card__gateway"),
+            avatar: box(".sidebar-identity-card .viewer-avatar--footer"),
+          }
+        : null,
       divider: Number.parseFloat(
         getComputedStyle(document.querySelector(".sidebar-shell__footer")!).borderBlockStartWidth,
       ),
     };
-  });
+  }, includeIdentity);
 }
-
-beforeAll(async () => {
-  if (!chromiumAvailable) {
-    return;
-  }
-  browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
-  page = await browser.newPage({ viewport: { width: 800, height: 400 } });
-});
 
 afterAll(async () => {
   await page?.close().catch(() => {});
@@ -62,9 +61,8 @@ afterAll(async () => {
 describeBrowserLayout("sidebar footer layout", () => {
   setupSidebarTest();
   beforeAll(async () => {
-    if (!chromiumAvailable) {
-      return;
-    }
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+    page = await browser.newPage({ viewport: { width: 800, height: 400 } });
     await page.setContent(`
       <!doctype html><html data-theme-mode="light"><style>${uiCss}</style>
           <style>
@@ -130,36 +128,22 @@ describeBrowserLayout("sidebar footer layout", () => {
         createSessions("main", ["agent:main:main"]),
       );
       const card = sidebar.querySelector<HTMLElement>(".sidebar-identity-card")!;
-      const avatar = card.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
+      const avatarElement = card.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
         "openclaw-viewer-avatar",
       )!;
-      await avatar.updateComplete;
+      await avatarElement.updateComplete;
       await page.locator(".sidebar-identity-card").evaluate((element, markup) => {
         element.outerHTML = markup;
       }, card.outerHTML);
-      const geometry = await page.evaluate(() => {
-        const box = (selector: string) => {
-          const { top, bottom, right, height } = document
-            .querySelector(selector)!
-            .getBoundingClientRect();
-          return { top, bottom, right, height };
-        };
-        return {
-          footer: box(".sidebar-shell__footer"),
-          card: box(".sidebar-identity-card"),
-          name: box(".sidebar-identity-card__name"),
-          gateway: box(".sidebar-identity-card__gateway"),
-          avatar: box(".sidebar-identity-card .viewer-avatar--footer"),
-        };
-      });
-      expect(geometry.footer.height).toBe(53);
-      expect(geometry.name.height).toBe(18);
-      expect(geometry.gateway.height).toBe(14);
-      expect(geometry.gateway.top).toBeGreaterThanOrEqual(geometry.name.bottom);
-      expect(geometry.avatar.height).toBe(28);
+      const geometry = await footerGeometry(true);
+      const { name, gateway, avatar } = geometry.identity!;
+      expect([geometry.footer.height, name.height, gateway.height, avatar.height]).toEqual([
+        53, 18, 14, 28,
+      ]);
+      expect(gateway.top).toBeGreaterThanOrEqual(name.bottom);
       expect(geometry.card.top).toBeGreaterThan(geometry.footer.top);
       expect(geometry.card.bottom).toBeLessThan(geometry.footer.bottom);
-      for (const content of [geometry.name, geometry.gateway, geometry.avatar]) {
+      for (const content of [name, gateway, avatar]) {
         expect(content.top).toBeGreaterThanOrEqual(geometry.card.top);
         expect(content.bottom).toBeLessThanOrEqual(geometry.card.bottom);
         expect(content.right).toBeLessThanOrEqual(geometry.card.right);

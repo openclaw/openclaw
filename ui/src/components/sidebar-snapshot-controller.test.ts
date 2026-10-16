@@ -35,8 +35,6 @@ const model: SidebarSnapshotModel = {
   entries: ["route:usage"],
   ownerId: "profile-a",
   involvingMe: true,
-  footer: { id: "profile-a", name: "Juniper" },
-  brand: { name: "Synthetic workspace", avatar: null, icon: "mark", environment: null },
 };
 
 function bootRecord(): BootRecord {
@@ -53,9 +51,9 @@ function bootRecord(): BootRecord {
     sectionOrder: [],
   };
 }
-function fixture(initialAgentId = "main", initialPageScopeId: string | null = null) {
-  let selectedAgentId = initialAgentId;
-  let pageScopeId = initialPageScopeId;
+function fixture(initialPageScopeId: string | null = null) {
+  let selectedAgentId = "main";
+  const agentSelection = { state: { scopeId: initialPageScopeId } };
   const harness = createGatewayHarness(null);
   const { gateway } = harness;
   gateway.connection.gatewayUrl = scope.gatewayScope;
@@ -72,14 +70,7 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
   const capture = vi.fn(() => captured);
   const host: ConstructorParameters<typeof SidebarSnapshotController>[0] = {
     sidebarSnapshot: null,
-    sessionDataContext: {
-      gateway,
-      agentSelection: {
-        get state() {
-          return { scopeId: pageScopeId };
-        },
-      },
-    },
+    sessionDataContext: { gateway, agentSelection },
     expandedAgentId: () => selectedAgentId,
     captureSidebarSnapshot: capture,
     sidebarSnapshotSettled: () => settled,
@@ -107,7 +98,7 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
     controller,
     restored: restored.promise,
     selectPageScope(scopeId: string | null) {
-      pageScopeId = scopeId;
+      agentSelection.state.scopeId = scopeId;
       controller.synchronize();
     },
     selectAgent(agentId: string) {
@@ -169,7 +160,7 @@ describe("sidebar snapshot lifecycle", () => {
   }
   async function warmFixture(value = model, pageScope: string | null = null) {
     const store = await saveSnapshot(value);
-    const test = fixture("main", pageScope);
+    const test = fixture(pageScope);
     connect(test);
     expect(test.controller.pending).toBe(true);
     await test.restored;
@@ -349,52 +340,40 @@ describe("sidebar snapshot lifecycle", () => {
     ).toEqual(live);
   });
 
-  it("does not report an unchanged model saved while its write is pending", async () => {
-    const test = fixture();
-    const issued = createDeferred();
-    const written = createDeferred<boolean>();
-    vi.spyOn(SessionSnapshotStore.prototype, "writeSidebar").mockImplementation(() => {
-      issued.resolve();
-      return written.promise;
-    });
-    connect(test, false);
-    test.publish();
-    const saved = test.settle();
-    test.controller.capture();
-    await issued.promise;
-    try {
+  it.each([false, true])(
+    "waits for the current snapshot write (reverted: %s)",
+    async (reverted) => {
+      const test = reverted ? await warmFixture() : fixture();
+      const issued = createDeferred();
+      const written = createDeferred<boolean>();
+      vi.spyOn(SessionSnapshotStore.prototype, "writeSidebar").mockImplementation(() => {
+        issued.resolve();
+        return written.promise;
+      });
+      if (!reverted) {
+        connect(test, false);
+      }
+      test.publish();
+      const first = test.settle(reverted ? { ...model, peoplePresenceFilter: "all" } : model);
+      if (reverted) {
+        test.controller.synchronize();
+      }
       test.controller.capture();
-      expect(test.controller.saved).toBe(false);
-    } finally {
-      written.resolve(true);
-    }
-    await saved;
-    expect(test.controller.saved).toBe(true);
-  });
-
-  it("waits for a reverted model to finish writing after a different model was queued", async () => {
-    const test = await warmFixture();
-    const issued = createDeferred();
-    const written = createDeferred<boolean>();
-    vi.spyOn(SessionSnapshotStore.prototype, "writeSidebar").mockImplementation(() => {
-      issued.resolve();
-      return written.promise;
-    });
-    test.publish();
-    void test.settle({ ...model, peoplePresenceFilter: "all" });
-    test.controller.synchronize();
-    test.controller.capture();
-    await issued.promise;
-    const saved = test.settle(model);
-    try {
-      test.controller.capture();
-      test.controller.capture();
-      expect(test.controller.saved).toBe(false);
-    } finally {
-      written.resolve(true);
-    }
-    await saved;
-  });
+      await issued.promise;
+      const saved = reverted ? test.settle(model) : first;
+      try {
+        test.controller.capture();
+        if (reverted) {
+          test.controller.capture();
+        }
+        expect(test.controller.saved).toBe(false);
+      } finally {
+        written.resolve(true);
+      }
+      await saved;
+      expect(test.controller.saved).toBe(true);
+    },
+  );
 
   it.each(["profile", "connection"] as const)(
     "clears cached display when the %s changes even with the same recovery scope",

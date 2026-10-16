@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render as mountSolid } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -8,11 +7,11 @@ import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT } from "../app/native-link-routing.ts";
 import { formatDateTimeMs } from "../lib/format.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { SidebarUpdateCard, type SidebarUpdateCardProps } from "./sidebar-update-card.tsx";
 
 let originalWebkit: PropertyDescriptor | undefined;
-const disposers: Array<() => void> = [];
 async function settle() {
   await Promise.resolve();
   flush();
@@ -31,6 +30,15 @@ const gitUpdate: UpdateAvailable = {
   upstreamRef: "origin/main",
   commitsBehind: 7,
 };
+function packageSchedule(
+  campaign: NonNullable<UpdateScheduleState["campaign"]>,
+  version = "2.0.0",
+): UpdateScheduleState {
+  return { channel: "stable", autoEnabled: true, target: { kind: "package", version }, campaign };
+}
+function succeededRun(patch: Parameters<typeof createUpdateRunFixture>[0] = {}) {
+  return createUpdateRunFixture({ status: "succeeded", phase: "finished", ...patch });
+}
 function installNativeBridge(postMessage = vi.fn()) {
   Object.defineProperty(window, "webkit", {
     configurable: true,
@@ -59,19 +67,9 @@ async function mount(
     captureUpdateTarget: () => () => true,
     canStartNativeUpdate: (): boolean => props().canNativeUpdate ?? false,
   });
-  const element = document.createElement("div");
-  document.body.append(element);
-  const unmount = mountSolid(() => <SidebarUpdateCard {...props()} />, element);
-  let disposed = false;
-  const dispose = () => {
-    if (disposed) {
-      return;
-    }
-    disposed = true;
-    unmount();
-    element.remove();
-  };
-  disposers.push(dispose);
+  const { container: element, unmount: dispose } = mountSolid(() => (
+    <SidebarUpdateCard {...props()} />
+  ));
   await settle();
   function find<K extends keyof HTMLElementTagNameMap>(
     selector: K,
@@ -101,9 +99,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
+  cleanupSolid();
   document.body.replaceChildren();
   await Promise.resolve();
   vi.useRealTimers();
@@ -116,112 +112,85 @@ afterEach(async () => {
 });
 
 describe("SidebarUpdateCard", () => {
-  it.each([false, true])(
-    "retains admitted native ownership when the bridge disappears before confirmation=%s",
-    async (bridgeLost) => {
-      const restoreDialog = installDialogPolyfill();
-      const postMessage = installNativeBridge();
-      const check = createDeferred<boolean>();
-      const update: UpdateAvailable = gitUpdate;
-      const fresh = { ...update, upstreamSha: "c".repeat(40), commitsBehind: 9 };
-      const element = await mount(update);
-      await element.update({
-        canNativeUpdate: true,
-        compact: true,
-        onUpdate: vi.fn(),
-        onCheckStatus: vi.fn(async () => false),
-        prepareRetry: vi.fn(async () =>
-          (await check.promise) ? { updateAvailable: fresh, updateSchedule: null } : null,
-        ),
-      });
-      try {
-        element.action()!.click();
-        // Remove the bridge in the same turn, before any preflight promise continuation.
-        if (bridgeLost) {
-          Reflect.deleteProperty(window, "webkit");
-        }
-        await vi.dynamicImportSettled();
-        const { modal } = await getRenderedModalDialog(document.body);
-        const nativeConfirm = modalButton(modal, "Update Mac app and restart");
+  it.each([
+    ["native", false],
+    ["native", true],
+    ["retry", false],
+    ["retry", true],
+  ] as const)("revalidates %s confirmation (variant: %s)", async (mode, variant) => {
+    const native = mode === "native";
+    const bridgeLost = native && variant;
+    const successful = native || variant;
+    const restoreDialog = installDialogPolyfill();
+    const postMessage = native ? installNativeBridge() : vi.fn();
+    const check = createDeferred<boolean>();
+    const fresh = { ...gitUpdate, upstreamSha: "c".repeat(40), commitsBehind: 9 };
+    const element = await mount(gitUpdate);
+    await element.update({
+      compact: true,
+      canNativeUpdate: native,
+      onUpdate: vi.fn(),
+      onCheckStatus: native ? vi.fn(async () => false) : undefined,
+      updateRun: native
+        ? null
+        : createUpdateRunFixture({
+            status: "failed",
+            phase: "finished",
+            reason: "build-failed",
+            updatedAtMs: Date.now(),
+            finishedAtMs: Date.now(),
+          }),
+      prepareRetry: vi.fn(async () =>
+        (await check.promise)
+          ? {
+              updateAvailable: native ? fresh : (element.props().updateAvailable ?? null),
+              updateSchedule: native ? null : (element.props().updateSchedule ?? null),
+            }
+          : null,
+      ),
+    });
+    try {
+      element.action()!.click();
+      // Bridge loss must happen before the preflight promise continues.
+      if (bridgeLost) {
+        Reflect.deleteProperty(window, "webkit");
+      }
+      await vi.dynamicImportSettled();
+      const { modal } = await getRenderedModalDialog(document.body);
+      if (native) {
         expect(element.props().onCheckStatus).not.toHaveBeenCalled();
-        nativeConfirm.click();
-        if (bridgeLost) {
-          await vi.waitFor(() => expect(element.props().prepareRetry).toHaveBeenCalledOnce());
-          expect(element.props().onUpdate).not.toHaveBeenCalled();
-          check.resolve(true);
-          await vi.dynamicImportSettled();
+      }
+      modalButton(modal, native ? "Update Mac app and restart" : "Retry update").click();
+      if (native && !bridgeLost) {
+        await vi.waitFor(() => expect(postMessage).toHaveBeenCalledOnce());
+        expect(element.props().prepareRetry).not.toHaveBeenCalled();
+      } else {
+        await vi.waitFor(() => expect(element.props().prepareRetry).toHaveBeenCalledOnce());
+        expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull();
+        expect(element.props().onUpdate).not.toHaveBeenCalled();
+        if (!native) {
+          await element.update({ updateAvailable: fresh });
+        }
+        check.resolve(successful);
+        await vi.dynamicImportSettled();
+        if (!native) {
+          await settle();
+        }
+        if (successful) {
           const refreshed = await getRenderedModalDialog(document.body);
           expect(refreshed.modal.textContent).toContain("cccccccc");
           expect(refreshed.modal.textContent).toContain("9 commits behind");
           expect(refreshed.modal.textContent).not.toContain("bbbbbbbb");
           expect(element.props().onUpdate).not.toHaveBeenCalled();
-          const gatewayConfirm = modalButton(refreshed.modal, "Update and restart");
-          gatewayConfirm.click();
-          await vi.waitFor(() => expect(element.props().onUpdate).toHaveBeenCalledOnce());
-          expect(postMessage).not.toHaveBeenCalled();
+          if (bridgeLost) {
+            modalButton(refreshed.modal, "Update and restart").click();
+            await vi.waitFor(() => expect(element.props().onUpdate).toHaveBeenCalledOnce());
+            expect(postMessage).not.toHaveBeenCalled();
+          }
         } else {
-          await vi.waitFor(() => expect(postMessage).toHaveBeenCalledOnce());
-          expect(element.props().prepareRetry).not.toHaveBeenCalled();
-          expect(element.props().onUpdate).not.toHaveBeenCalled();
-        }
-      } finally {
-        check.resolve(false);
-        await vi.dynamicImportSettled();
-        document.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
-        restoreDialog();
-      }
-    },
-  );
-  it.each([false, true])(
-    "rechecks the target before retrying a failed run with successful discovery=%s",
-    async (successful) => {
-      const restoreDialog = installDialogPolyfill();
-      const check = createDeferred<boolean>();
-      const update: UpdateAvailable = gitUpdate;
-      const element = await mount(update);
-      await element.update({
-        updateRun: createUpdateRunFixture({
-          status: "failed",
-          phase: "finished",
-          reason: "build-failed",
-          updatedAtMs: Date.now(),
-          finishedAtMs: Date.now(),
-        }),
-        compact: true,
-        onUpdate: vi.fn(),
-        prepareRetry: vi.fn(async () =>
-          (await check.promise)
-            ? {
-                updateAvailable: element.props().updateAvailable ?? null,
-                updateSchedule: element.props().updateSchedule ?? null,
-              }
-            : null,
-        ),
-      });
-      try {
-        element.action()!.click();
-        await vi.dynamicImportSettled();
-        const { modal } = await getRenderedModalDialog(document.body);
-        const retry = modalButton(modal, "Retry update");
-        retry!.click();
-        await vi.waitFor(() => expect(element.props().prepareRetry).toHaveBeenCalledOnce());
-        expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull();
-        expect(element.props().onUpdate).not.toHaveBeenCalled();
-
-        await element.update({
-          updateAvailable: { ...update, upstreamSha: "c".repeat(40), commitsBehind: 9 },
-        });
-        check.resolve(successful);
-        await vi.dynamicImportSettled();
-        await settle();
-        if (successful) {
-          const fresh = await getRenderedModalDialog(document.body);
-          expect(fresh.modal.textContent).toContain("9 commits behind");
-          expect(fresh.modal.textContent).toContain("cccccccc");
-          expect(fresh.modal.textContent).not.toContain("bbbbbbbb");
-        } else {
-          expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull();
-          expect(document.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+          const failedModal = document.querySelector("openclaw-modal-dialog");
+          expect(failedModal).not.toBeNull();
+          expect(failedModal?.textContent).toContain(
             "Status could not be refreshed. Check your connection and try again.",
           );
           await element.update({
@@ -231,27 +200,24 @@ describe("SidebarUpdateCard", () => {
               text: "Latest target unavailable.",
             },
           });
-          expect(element.find('[role="alert"]')?.textContent).toContain(
-            "Latest target unavailable.",
-          );
-          expect(element.find("summary")?.textContent).toContain("Latest target unavailable.");
+          for (const selector of ['[role="alert"]', "summary"]) {
+            expect(element.find(selector)?.textContent).toContain("Latest target unavailable.");
+          }
         }
-        expect(element.props().onUpdate).not.toHaveBeenCalled();
-      } finally {
-        check.resolve(false);
-        await vi.dynamicImportSettled();
-        document.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
-        restoreDialog();
       }
-    },
-  );
+      if (!bridgeLost) {
+        expect(element.props().onUpdate).not.toHaveBeenCalled();
+      }
+    } finally {
+      check.resolve(false);
+      await vi.dynamicImportSettled();
+      document.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
+      restoreDialog();
+    }
+  });
 
   it("keeps native ownership separate from Gateway freshness and follows bridge availability", async () => {
-    const element = await mount(
-      { currentVersion: "1.0.0", latestVersion: "2.0.0", channel: "stable" },
-      null,
-      false,
-    );
+    const element = await mount(stableUpdate, null, false);
     await element.update({
       canNativeUpdate: true,
       compact: true,
@@ -283,41 +249,61 @@ describe("SidebarUpdateCard", () => {
     expect(action().getAttribute("aria-disabled")).toBe("true");
   });
 
-  it("checks and replaces the target on every expansion with acknowledged history", async () => {
-    const update: UpdateAvailable = gitUpdate;
-    const element = await mount(update);
-    const check = createDeferred<boolean>();
-    await element.update({
-      updateRun: createUpdateRunFixture({ status: "succeeded", phase: "finished" }),
-      updateRunAcknowledged: true,
-      compact: true,
-      onCheckStatus: vi.fn(() => check.promise),
-      onUpdate: vi.fn(),
-    });
-    const details = element.find("details")!;
-    details.open = true;
-    await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledOnce());
-    await settle();
-    expect(element.element.textContent).toContain("Checking for updates…");
-    expect(element.find(".update-git-revisions")).toBeNull();
-    expect(element.action()?.disabled).toBe(true);
-
-    await element.update({
-      updateAvailable: { ...update, upstreamSha: "c".repeat(40), commitsBehind: 9 },
-    });
-    check.resolve(true);
-    await vi.waitFor(() =>
-      expect(element.find(".update-git-revisions")?.textContent).toContain("cccccccc"),
-    );
-    expect(element.element.textContent).toContain("9 commits behind");
-    expect(element.props().onUpdate).not.toHaveBeenCalled();
-    details.open = false;
-    await new Promise<void>((resolve) => {
-      details.addEventListener("toggle", () => resolve(), { once: true });
-    });
-    details.open = true;
-    await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledTimes(2));
-  });
+  it.each(["history", "busy"] as const)(
+    "checks expansion before enabling a %s action",
+    async (mode) => {
+      const history = mode === "history";
+      const element = await mount(history ? gitUpdate : stableUpdate);
+      const check = createDeferred<boolean>();
+      await element.update({
+        compact: true,
+        onCheckStatus: vi.fn(() => check.promise),
+        onUpdate: vi.fn(),
+        updateRun: history ? succeededRun() : undefined,
+        updateRunAcknowledged: history,
+      });
+      const details = element.find("details")!;
+      const expanded = new Promise<void>((resolve) => {
+        details.addEventListener("toggle", () => resolve(), { once: true });
+      });
+      details.open = true;
+      if (!history) {
+        // A click before the queued toggle starts discovery must not activate.
+        expect(element.props().onCheckStatus).not.toHaveBeenCalled();
+        expect(element.action()?.disabled).toBe(true);
+        expect(element.action()?.getAttribute("aria-busy")).toBe("true");
+      }
+      await expanded;
+      await settle();
+      expect(element.props().onCheckStatus).toHaveBeenCalledOnce();
+      expect(element.action()?.disabled).toBe(true);
+      if (history) {
+        expect(element.element.textContent).toContain("Checking for updates…");
+        expect(element.find(".update-git-revisions")).toBeNull();
+        await element.update({
+          updateAvailable: { ...gitUpdate, upstreamSha: "c".repeat(40), commitsBehind: 9 },
+        });
+      }
+      check.resolve(true);
+      if (history) {
+        await vi.waitFor(() =>
+          expect(element.find(".update-git-revisions")?.textContent).toContain("cccccccc"),
+        );
+        expect(element.element.textContent).toContain("9 commits behind");
+        expect(element.props().onUpdate).not.toHaveBeenCalled();
+        details.open = false;
+        await new Promise<void>((resolve) => {
+          details.addEventListener("toggle", () => resolve(), { once: true });
+        });
+        details.open = true;
+        await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledTimes(2));
+      } else {
+        await vi.waitFor(() => expect(element.action()?.disabled).toBe(false));
+        expect(element.action()?.getAttribute("aria-busy")).toBe("false");
+        expect(element.action()?.textContent).toContain("Update Gateway");
+      }
+    },
+  );
 
   it("retries a failed fresh target check in the compact row", async () => {
     const element = await mount(stableUpdate);
@@ -355,31 +341,6 @@ describe("SidebarUpdateCard", () => {
     retry!.click();
     await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledTimes(3));
     expect(element.props().onUpdate).not.toHaveBeenCalled();
-  });
-
-  it("keeps the compact action busy from expansion until its target check settles", async () => {
-    const element = await mount(stableUpdate);
-    const check = createDeferred<boolean>();
-    await element.update({ compact: true, onCheckStatus: vi.fn(() => check.promise) });
-    const action = () => element.action()!;
-    const details = element.find("details")!;
-    const expanded = new Promise<void>((resolve) => {
-      details.addEventListener("toggle", () => resolve(), { once: true });
-    });
-    details.open = true;
-    // The toggle that starts the check is queued after opening; a press here must not land.
-    expect(element.props().onCheckStatus).not.toHaveBeenCalled();
-    expect(action().disabled).toBe(true);
-    expect(action().getAttribute("aria-busy")).toBe("true");
-
-    await expanded;
-    await settle();
-    expect(element.props().onCheckStatus).toHaveBeenCalledOnce();
-    expect(action().disabled).toBe(true);
-    check.resolve(true);
-    await vi.waitFor(() => expect(action().disabled).toBe(false));
-    expect(action().getAttribute("aria-busy")).toBe("false");
-    expect(action().textContent).toContain("Update Gateway");
   });
 
   it("ignores an obsolete refresh result after recovery state is re-established", async () => {
@@ -448,9 +409,7 @@ describe("SidebarUpdateCard", () => {
         expect(details.open).toBe(true);
       }
 
-      const completedRun = createUpdateRunFixture({
-        status: "succeeded",
-        phase: "finished",
+      const completedRun = succeededRun({
         finishedAtMs: Date.now(),
         after: { version: "2026.9.2" },
       });
@@ -563,11 +522,8 @@ describe("SidebarUpdateCard", () => {
       element.setProps({ compact: true });
       if (state === "campaign") {
         element.setProps({
-          updateSchedule: {
-            channel: "stable",
-            autoEnabled: true,
-            target: { kind: "package", version: "2026.9.2" },
-            campaign: {
+          updateSchedule: packageSchedule(
+            {
               id: "campaign-age",
               state: "countdown",
               announcedAtMs: now - 20 * 60_000,
@@ -575,16 +531,17 @@ describe("SidebarUpdateCard", () => {
               applyAtMs: now + 10 * 60_000,
               forceAtMs: now + 60 * 60_000,
             },
-          },
+            "2026.9.2",
+          ),
         });
       } else {
         element.setProps({
           updateRun: createUpdateRunFixture({
-            status: state,
-            phase: state === "running" ? "staging" : "finished",
+            status: "running",
+            phase: "staging",
             createdAtMs: now - 30 * 60_000,
             updatedAtMs: now - 60_000,
-            finishedAtMs: state === "running" ? null : now - 5 * 60_000,
+            finishedAtMs: null,
           }),
         });
       }
@@ -613,9 +570,7 @@ describe("SidebarUpdateCard", () => {
     const element = await mount(null);
     await element.update({
       compact: true,
-      updateRun: createUpdateRunFixture({
-        status: "succeeded",
-        phase: "finished",
+      updateRun: succeededRun({
         createdAtMs: now - 30 * 60_000,
         updatedAtMs: now - 5 * 60_000,
         finishedAtMs: now - 5 * 60_000,
@@ -663,20 +618,15 @@ describe("SidebarUpdateCard", () => {
     vi.setSystemTime(1_000);
     const clearInterval = vi.spyOn(globalThis, "clearInterval");
     const element = await mount(
-      { currentVersion: "1.0.0", latestVersion: "2.0.0", channel: "stable" },
-      {
-        channel: "stable",
-        autoEnabled: true,
-        target: { kind: "package", version: "2.0.0" },
-        campaign: {
-          id: "campaign-1",
-          state: "countdown",
-          announcedAtMs: 0,
-          applyAtMs: 55_000,
-          forceAtMs: 900_000,
-          updatedAtMs: 0,
-        },
-      },
+      stableUpdate,
+      packageSchedule({
+        id: "campaign-1",
+        state: "countdown",
+        announcedAtMs: 0,
+        applyAtMs: 55_000,
+        forceAtMs: 900_000,
+        updatedAtMs: 0,
+      }),
     );
 
     const card = element.find(".sidebar-update-card");
@@ -703,19 +653,14 @@ describe("SidebarUpdateCard", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const element = await mount(
-      { currentVersion: "1.0.0", latestVersion: "2.0.0", channel: "stable" },
-      {
-        channel: "stable",
-        autoEnabled: true,
-        target: { kind: "package", version: "2.0.0" },
-        campaign: {
-          id: "campaign-1",
-          state: "waiting-for-idle",
-          announcedAtMs: 0,
-          forceAtMs: 900_000,
-          updatedAtMs: 0,
-        },
-      },
+      stableUpdate,
+      packageSchedule({
+        id: "campaign-1",
+        state: "waiting-for-idle",
+        announcedAtMs: 0,
+        forceAtMs: 900_000,
+        updatedAtMs: 0,
+      }),
     );
     const onHoldUpdate = vi.fn(async () => true);
     await element.update({ onHoldUpdate });
