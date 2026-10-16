@@ -15,6 +15,7 @@ import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "../node-re
 import { NodeRegistry } from "../node-registry.js";
 import { makeClient, registerNodeSession } from "../node-registry.test-helpers.js";
 import { createNodeWorkspaceRetainCoordinator } from "./node-workspace-retain-coordinator.js";
+import { WorkerPlacementInventoryChangedError } from "./placement-inventory-changed-error.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
 
@@ -196,7 +197,7 @@ function createHarness(
               rows().find((row) => row.sessionId === sessionId),
             )
           ) {
-            throw new Error("Placement authority changed");
+            throw new WorkerPlacementInventoryChangedError(new Set([sessionId]));
           }
         },
         release: () => {},
@@ -214,7 +215,7 @@ function createHarness(
     warn,
   });
   coordinator.bindTransport(transport);
-  return { coordinator, invoke, warn, acceptBundleStatus };
+  return { coordinator, invoke, warn, acceptBundleStatus, placements };
 }
 
 describe("node workspace retain coordinator", () => {
@@ -760,6 +761,53 @@ describe("node workspace retain coordinator", () => {
     }
   });
 
+  it.each(["initial placement read", "inventory read"] as const)(
+    "retries the complete retention preparation after a stale %s",
+    async (phase) => {
+      const rows = [placement()];
+      const nextManifest = `sha256:${"c".repeat(64)}`;
+      const { coordinator, invoke, warn, placements } = createHarness({ placements: rows });
+      const prepare = vi.spyOn(placements, "prepareRuntimeRefresh");
+      if (phase === "initial placement read") {
+        prepare.mockRejectedValueOnce(
+          new WorkerPlacementInventoryChangedError(new Set(["session-1"])),
+        );
+      } else {
+        const inventory = placements.prepareMaintenancePlacements;
+        vi.spyOn(placements, "prepareMaintenancePlacements").mockImplementationOnce(async () => {
+          const snapshot = await inventory();
+          rows[0] = placement({ workspaceBaseManifestRef: nextManifest });
+          return snapshot;
+        });
+      }
+      try {
+        await coordinator.start();
+        expect(invoke).toHaveBeenCalledOnce();
+        expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
+          retain: [expect.objectContaining({ manifestRefs: [rows[0]!.workspaceBaseManifestRef] })],
+        });
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        await coordinator.stop();
+      }
+    },
+  );
+
+  it("does not retry a typed placement failure after invoking retention", async () => {
+    const { coordinator, invoke, warn } = createHarness({
+      onInvoke: () => {
+        throw new WorkerPlacementInventoryChangedError(new Set(["session-1"]));
+      },
+    });
+    try {
+      await coordinator.start();
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      await coordinator.stop();
+    }
+  });
+
   it.each([
     "current",
     "placement",
@@ -783,7 +831,7 @@ describe("node workspace retain coordinator", () => {
         const capturedRevision = resultRevision;
         return () => {
           if (capturedRevision !== resultRevision) {
-            throw new Error("Prepared workspace result custody changed");
+            throw new WorkerPlacementInventoryChangedError(new Set(["session-1"]));
           }
         };
       },
@@ -835,7 +883,9 @@ describe("node workspace retain coordinator", () => {
       expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
         retain: [
           expect.objectContaining({
-            manifestRefs: change === "current" ? [baseManifest, `sha256:${"a".repeat(64)}`] : null,
+            manifestRefs: ["current", "placement", "result"].includes(change)
+              ? [baseManifest, `sha256:${"a".repeat(64)}`]
+              : null,
           }),
         ],
       });
