@@ -53,8 +53,9 @@ export async function startGatewayRestartProvider(signal: AbortSignal) {
     const executionTool =
       Array.isArray(body.tools) &&
       body.tools.some((tool) => isRecord(tool) && tool.name === "exec");
-    const currentInput =
-      JSON.stringify(input.findLast((item) => isRecord(item) && item.role === "user")) ?? "";
+    const currentInput = JSON.stringify(
+      input.slice(input.findLastIndex((item) => isRecord(item) && item.role === "assistant") + 1),
+    );
     const recoveryRequest =
       recovering &&
       currentInput.includes("Your previous turn was interrupted by a gateway restart");
