@@ -456,11 +456,11 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
 
       sidebar.requestUpdate();
       provider.remove();
-      expect(observed.has(scrollBody!)).toBe(false);
       const timersAfterDetach = vi.getTimerCount();
       const observationsAfterDetach = observe.mock.calls.length;
       await settleLitElement(sidebar);
-      // Solid disposal may retire existing timers; a detached owner must not add any.
+      // The bridge disposes its root after the same-turn reparenting window.
+      // Disposal may retire existing timers; a detached owner must not add any.
       expect.soft(vi.getTimerCount()).toBeLessThanOrEqual(timersAfterDetach);
       expect.soft(observe).toHaveBeenCalledTimes(observationsAfterDetach);
       expect.soft(observed.has(scrollBody!)).toBe(false);

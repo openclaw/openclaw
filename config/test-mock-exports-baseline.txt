@@ -1207,7 +1207,6 @@
 ["extensions/qa-lab/src/cli.runtime.test.ts","./manual-lane.runtime.js","51c4453ddbe987085505da33044671463767fc8bfa3b281aca86867264f456ce",1]
 ["extensions/qa-lab/src/cli.runtime.test.ts","./model-selection.runtime.js","8e5f2d4372c332d6f6f56bef0130db0d106e0a5f09e7ee389de3a26257bfe308",1]
 ["extensions/qa-lab/src/cli.runtime.test.ts","./multipass.runtime.js","5bb008d92357082a3bdbe787d8b1b1f6f6dd22532c769f0d1dbc7e06dde45d96",1]
-["extensions/qa-lab/src/cli.test.ts","./cli.runtime.js","41b82c2330e8295a64f05fad1b3b8585216938ec523ada3673b4f249c61d705c",1]
 ["extensions/qa-lab/src/cli.test.ts","./live-transports/telegram/cli.runtime.js","350f2b1a7045ded8b12d8a7214f6685104adea9a926f318bc16906bcf9a2214d",1]
 ["extensions/qa-lab/src/cli.test.ts","./mantis/cli.runtime.js","7a2ff49294858e2c13b9bcee8d43ff65436cf3f67fe23287de348c33319f98b6",1]
 ["extensions/qa-lab/src/gateway-child-bootstrap.test.ts","./gateway-rpc-client.js","0293ef012fe8b93d57bdb0d900e49916900f0046e3c1d26b53ee3ab6be6f3f45",1]

@@ -26,10 +26,7 @@ import {
   SessionCatalogLiveState,
   sessionCatalogListClient,
 } from "./app-sidebar-session-catalog-live.ts";
-import type {
-  SidebarSessionMutationScope,
-  SidebarSessionsScrollState,
-} from "./app-sidebar-session-types.ts";
+import type { SidebarSessionMutationScope } from "./app-sidebar-session-types.ts";
 import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
 import {
   applySessionCatalogContinuation,
@@ -60,7 +57,6 @@ import {
   subscribeSessionDataGatewayEvents,
   subscribeSessionCatalogBrowserEvents,
 } from "./session-data-controller-events.ts";
-import { SessionDataScrollController } from "./session-data-scroll-controller.ts";
 import { SessionLineageController } from "./session-lineage-controller.ts";
 import { SidebarOwnerSessionCounts } from "./sidebar-owner-session-counts.ts";
 
@@ -118,8 +114,6 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   // Retiring the epoch aborts it so a dialog open across a reconnect dismisses
   // itself instead of confirming into a mutation scope that no longer applies.
   private sessionMutationAbortController = new AbortController();
-  // Scroll observations already publish in their layout frame.
-  private readonly scroll = new SessionDataScrollController(() => this.host.requestUpdate());
   private readonly lineage = new SessionLineageController(
     this,
     () => ({ routeId: this.host.activeRouteId, key: this.host.getRouteSessionKey() }),
@@ -286,7 +280,6 @@ export class SessionDataController implements SolidController, SessionCatalogDat
       this.synchronizeSessionScope();
       this.synchronizeOwnerSessionCounts();
       this.lineage.synchronize();
-      this.scroll.synchronize(this.host);
       this.synchronizePresentedSessions();
     }
   }
@@ -319,7 +312,6 @@ export class SessionDataController implements SolidController, SessionCatalogDat
     this.agentSelectionSource = undefined;
     this.agentSelectionIntentRevision = undefined;
     retireSessionCatalogData(this);
-    this.scroll.dispose();
     this.lineage.disconnect();
     this.subscriptions.hostDisconnected();
   }
@@ -427,12 +419,6 @@ export class SessionDataController implements SolidController, SessionCatalogDat
 
   loadMoreSessionCatalog = (catalogId: string): Promise<void> =>
     loadMoreSessionCatalogData(this, catalogId);
-
-  get sessionsScrollState(): SidebarSessionsScrollState {
-    return this.scroll.state;
-  }
-
-  updateSessionsScrollState = this.scroll.update.bind(this.scroll);
 
   private resetChildSessionState(preserveOperatorContext = false): void {
     for (const query of this.childSessionQueries.values()) {

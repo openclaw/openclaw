@@ -407,6 +407,7 @@ function createComposerPlaceholder(options: () => NewSessionComposerOptions) {
     (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
   const [frame, setFrame] = createSignal({ target: "", text: "" });
   let entered = false;
+  // Restart the browser animation only when its text changes; typing cancels pending frames.
   createEffect(
     () => [target(), hasMessage()] as const,
     ([text, hasText]) => {

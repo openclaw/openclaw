@@ -70,8 +70,11 @@ including session transcripts and agent memory, still use SQLite, as do other
 stores without PostgreSQL support. Incognito storage remains memory-only.
 The supported PostgreSQL families are:
 
-- **Shared state:** runtime storage for fresh state directories. Porting existing
-  shared-state databases is not available yet.
+- **Shared state:** runtime storage, bidirectional database ports, and
+  matched backups. The provider covers the selected `state/openclaw.sqlite` and
+  retained Voice Call state roots, including explicitly configured store paths
+  and disabled plugin entries. Matrix account/token roots are excluded from this
+  provider; their discovery and custody belong to the Matrix account-root lane.
 - **Workboard:** runtime storage, bidirectional database ports, and matched backups.
 - **Logbook:** runtime frames, batches, observations, cards, and standups;
   bidirectional database ports; and matched backups. Frame images remain local
@@ -88,9 +91,8 @@ connection or admission fails.
 Doctor can acquire offline maintenance custody and run data-only state migrations
 on PostgreSQL. A live or unverifiable Gateway owner still prevents maintenance;
 state writes use the existing PostgreSQL writer advisory lock. State schema
-migrations remain blocked until PostgreSQL state-family backup support is
-available. Keep the current database and retry with a version that supports those
-backups.
+migrations remain a separate Doctor capability: the schema-migration runner
+still requires PostgreSQL-aware migration backup and repair integration.
 
 Use `openclaw database port` to move existing supported data between engines.
 Changing `database.engine` alone does not migrate existing data. Omitting
@@ -98,11 +100,10 @@ Changing `database.engine` alone does not migrate existing data. Omitting
 configuration or data migration.
 
 Existing SQLite shared state refuses a PostgreSQL selection and names
-`openclaw database port` as the migration path. The port command currently handles
-Workboard, Logbook, and Team Reports; shared-state porting is not available yet. Keep existing
-installations on SQLite until that support lands, or use a fresh state directory
-for experimental PostgreSQL shared state. Do not remove existing data to switch
-engines.
+`openclaw database port` as the migration path. The port command handles
+current-schema shared state, Workboard, Logbook, and Team Reports. Upgrade older
+shared state with `openclaw doctor --fix` using a compatible binary before porting.
+Do not remove existing data to switch engines.
 
 ## Search on PostgreSQL
 
@@ -185,8 +186,8 @@ openclaw database port --to postgres
 
 Port, backup, restore, and fingerprint operations share one database-family
 provider registry. Each provider resolves its stores and supplies the generated
-schema descriptor and expected PostgreSQL catalog. **Workboard, Logbook, and Team Reports
-are registered families.** State, agent, and Matrix-root
+schema descriptor and expected PostgreSQL catalog. **Shared state, Workboard,
+Logbook, and Team Reports are registered families.** Agent and Matrix-root
 support are not enabled by this registry yet. An unrecognized PostgreSQL anchor
 refuses the operation and names the supported families.
 For separately installed plugins such as Team Reports, operations load the
@@ -194,9 +195,11 @@ selected installed plugin's schema and admission API. Keep the matching plugin
 installed for port, backup, and restore. Preflight does not require absent
 optional plugins.
 
-The command inventories all existing registered Workboard, Logbook, and Team Reports stores,
-including disabled plugin stores. It does not create missing stores or port
-shared state, agent databases, or safety journals. A dry run checks read-only
+The command inventories existing shared state, Workboard, Logbook, and Team Reports stores,
+including disabled plugin stores. A real SQLite-to-PostgreSQL port initializes
+missing shared state before capture so the config writer uses the same selected
+store after the switch. It does not create missing plugin stores or port agent
+databases. A dry run checks read-only
 prerequisites and reports checks that still require private migration, copying,
 or a PostgreSQL privilege probe. It creates no manifest, migrated copy, or target
 namespace. Add `--json` for machine-readable results without connection strings
@@ -356,7 +359,12 @@ refuses the copy. Restore re-admits that same fragment set. Canonical triggers
 are installed after loading rows, while declared derived projections are omitted
 from copying and rebuilt by their owner before verification. Unknown triggers
 and views refuse the operation. Owners can migrate an older SQLite source only
-in the operation's private copy; the original capture remains intact.
+in the operation's private copy; the original capture remains intact. Shared-state
+ports require the current schema and preserve absent optional fragments, including
+Doctor-owned deletion history. Its persisted projection columns and tables are
+canonical data, so they are retained rather than rebuilt. Exact captures keep
+secrets and transient rows; user exports apply the existing shared-state sanitizer.
+Restore uses normal owner admission, including PostgreSQL catalog drift checks.
 
 Preserve the complete matched set: an anchor alone contains
 no PostgreSQL rows. Existing format-1 SQLite backups remain readable.

@@ -40,6 +40,7 @@ const DEFERRED_TERMINAL_METADATA_KEYS = [
   "livenessState",
   "replayInvalid",
   "errorObservation",
+  "suppressErrorNotice",
   "assistantTranscriptIdempotencyKey",
 ] as const;
 
