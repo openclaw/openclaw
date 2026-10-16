@@ -98,8 +98,9 @@ async function copyFileExclusive(
   source: FileHandle,
   sourcePath: string,
   targetPath: string,
+  expectedContent: SqliteFileContent,
   beforeByteCopy?: PublishVerifiedSqliteFileOptions["beforeByteCopy"],
-): Promise<{ content: SqliteFileContent; identity: BigIntStats }> {
+): Promise<BigIntStats> {
   const sourceFingerprint = await source.stat({ bigint: true });
   let target: Awaited<ReturnType<typeof fs.open>> | undefined;
   let targetIdentity: BigIntStats | undefined;
@@ -117,17 +118,18 @@ async function copyFileExclusive(
       throw new Error(`SQLite snapshot target changed during publication: ${targetPath}`);
     }
     targetIdentity = openedIdentity;
-    const content = await hashOpenPublishedFile(target, targetPath, targetIdentity);
-    await assertMutationFingerprintUnchanged(source, sourceFingerprint, targetPath, content);
+    await assertMutationFingerprintUnchanged(
+      source,
+      sourceFingerprint,
+      targetPath,
+      expectedContent,
+    );
     await target.sync();
     const currentIdentity = await fs.lstat(targetPath, { bigint: true });
     if (!sameFileIdentity(targetIdentity, currentIdentity)) {
       throw new Error(`SQLite snapshot target changed during publication: ${targetPath}`);
     }
-    return {
-      content,
-      identity: currentIdentity,
-    };
+    return currentIdentity;
   } catch (error) {
     if (targetIdentity) {
       await target?.close().catch(() => undefined);
@@ -361,17 +363,14 @@ async function publishSqliteFile(
     // Snapshot creation owns this closed private image. Transfer that image into
     // publication custody instead of allocating another database-sized file.
     // Public callers retain their independently mutable source and still copy it.
-    let staged: { content: SqliteFileContent; identity: FileIdentityStat & { size: bigint } };
+    let staged: FileIdentityStat & { size: bigint };
     if (consumeOwnedSource === "prepared") {
       if (options.sourcePath !== stagedPath || sourceIdentity.dev !== stagingIdentity.dev) {
         throw new Error(
           `SQLite prepared image is not on its publication volume: ${options.sourcePath}`,
         );
       }
-      staged = {
-        content: await hashOpenPublishedFile(source, options.sourcePath, sourceIdentity),
-        identity: sourceIdentity,
-      };
+      staged = sourceIdentity;
     } else if (
       consumeOwnedSource &&
       sourceIdentity.dev !== 0n &&
@@ -385,8 +384,6 @@ async function publishSqliteFile(
         strategy: "link-or-copy",
       });
       requireDirectorySync(moved.directorySync, "SQLite staging transfer directory");
-      const content = await hashPublishedFile(stagedPath, moved.exactIdentity);
-      assertExpectedContent(content, options.expectedContent, stagedPath);
       // The shared publisher falls back to copying on filesystems without hard
       // links. Retire only our still-pinned source name, never a replacement.
       const opened = fsSync.fstatSync(source.fd, { bigint: true });
@@ -408,22 +405,22 @@ async function publishSqliteFile(
       ) {
         throw new Error(`SQLite snapshot staging file changed during transfer: ${stagedPath}`);
       }
-      staged = { content, identity: { ...moved.exactIdentity, size: identity.size } };
+      staged = { ...moved.exactIdentity, size: identity.size };
     } else {
       staged = await copyFileExclusive(
         source,
         options.sourcePath,
         stagedPath,
+        options.expectedContent,
         options.beforeByteCopy,
       );
     }
     const expectedContent = options.expectedContent;
-    assertExpectedContent(staged.content, expectedContent, options.targetPath);
     await source.close();
     source = undefined;
 
     await options.validatePublished?.(stagedPath);
-    const validatedContent = await hashPublishedFile(stagedPath, staged.identity);
+    const validatedContent = await hashPublishedFile(stagedPath, staged);
     assertExpectedContent(validatedContent, expectedContent, options.targetPath);
     await options.beforePublish?.();
     if (!replacement) {
@@ -431,7 +428,7 @@ async function publishSqliteFile(
     }
     const stagedStatOptions = { bigint: true } as const;
     const currentStagedIdentity = await fs.lstat(stagedPath, stagedStatOptions);
-    if (!sameFileStatFingerprint(staged.identity, currentStagedIdentity)) {
+    if (!sameFileStatFingerprint(staged, currentStagedIdentity)) {
       throw new Error(`SQLite snapshot staging file changed during publication: ${stagedPath}`);
     }
     if (replacement) {
@@ -484,7 +481,7 @@ async function publishSqliteFile(
           ? await fs.lstat(stagedPath, stagedStatOptions).catch(() => undefined)
           : undefined;
         const stagedPathChanged =
-          !stagedAfterFailure || !sameFileStatFingerprint(staged.identity, stagedAfterFailure);
+          !stagedAfterFailure || !sameFileStatFingerprint(staged, stagedAfterFailure);
         // Failed-publication cleanup belongs to the publisher's opened identity.
         // A later staging/target lookup cannot grant ownership of a replacement.
         if (options.requireAtomicPublication && isHardlinkFallbackError(error)) {

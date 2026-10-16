@@ -30,15 +30,41 @@ export class ReadOnlySqliteTranscriptReader {
   private sessionKey?: StatementSync;
   private readonly eventJsonSql: string;
   private readonly labelRowsSql: string;
+  private readonly labelDetectionSql: string;
 
   // Statements belong to one read-only pass, but no cursor survives a snapshot call.
   // Prepare lazily so older databases need only the schema used by that detection path.
   constructor(private readonly database: DatabaseSync) {
     // Doctor also inspects databases before their storage migration runs.
-    this.eventJsonSql = tableHasColumn(database, "transcript_events", "event_zstd")
+    const compressed = tableHasColumn(database, "transcript_events", "event_zstd");
+    this.eventJsonSql = compressed
       ? transcriptEventJsonSql(database).compile(getSessionKysely(database)).sql
       : "event_json";
     this.labelRowsSql = `SELECT ${this.eventJsonSql} AS event_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC`;
+    if (compressed) {
+      database.function(
+        "openclaw_doctor_label_candidate",
+        { deterministic: true, directOnly: true },
+        (metadata) => {
+          if (typeof metadata !== "string") {
+            return 1;
+          }
+          // The stored projection preserves duplicate keys; SQL role columns use first-key semantics.
+          const { navigation } = JSON.parse(metadata) as { navigation: unknown };
+          return Number(
+            isRecord(navigation) &&
+              navigation.type === "message" &&
+              isRecord(navigation.message) &&
+              (navigation.message.role === "user" || navigation.message.role === "assistant"),
+          );
+        },
+      );
+    }
+    this.labelDetectionSql = compressed
+      ? `SELECT CASE WHEN event_json IS NOT NULL THEN event_json
+          WHEN openclaw_doctor_label_candidate(navigation_json) THEN ${this.eventJsonSql}
+          ELSE NULL END AS event_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC`
+      : this.labelRowsSql;
   }
 
   sessionIds(): string[] {
@@ -53,7 +79,7 @@ export class ReadOnlySqliteTranscriptReader {
     return rows.flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
   }
 
-  repairSnapshot(
+  labelRepairSnapshot(
     sessionId: string,
     needsRepair: (event: unknown) => boolean,
     mayNeedRepair: (eventJson: string) => boolean,
@@ -62,7 +88,7 @@ export class ReadOnlySqliteTranscriptReader {
     try {
       // Unchanged histories retain one payload. Re-read positive candidates in full so
       // malformed siblings and exact-snapshot guards still govern the surgical repair.
-      this.labelDetection ??= this.database.prepare(this.labelRowsSql);
+      this.labelDetection ??= this.database.prepare(this.labelDetectionSql);
       iterator = this.labelDetection.iterate(sessionId);
       for (const row of iterator) {
         if (typeof row.event_json !== "string" || typeof row.seq !== "number") {

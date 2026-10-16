@@ -343,6 +343,14 @@ It does not discard committed WAL pages, repair the source, or change plan ident
 Snapshot debug telemetry reports operation and owner,
 main and WAL sizes, copied bytes, attempt, duration, and outcome.
 
+Verified snapshot publication hashes the private staged image once after validation
+and verifies the published file again after transfer. Source and output integrity
+checks, durable backup publication, and recovery ownership remain unchanged.
+Doctor's legacy transcript-label inspection uses stored navigation metadata to skip
+expanding compressed events outside user and assistant messages. A detected repair
+still reads the complete exact transcript and revalidates it before writing;
+plaintext and older transcript stores retain their existing inspection behavior.
+
 Update validation reuses the prepared rehearsal databases for read-only checks.
 The complete updater isolation markers and physical containment of the database
 and its sidecars are required; external paths still use artifact-preserving

@@ -13,12 +13,18 @@ import {
 
 const durabilityTestState = vi.hoisted(() => ({
   transfer: undefined as PublicationFixture | undefined,
+  hashedBytes: 0,
 }));
 
 vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/fs-safe/durability")>();
   return {
     ...actual,
+    sha256File: async (...args: Parameters<typeof actual.sha256File>) => {
+      const result = await actual.sha256File(...args);
+      durabilityTestState.hashedBytes += result.bytes;
+      return result;
+    },
     publishFileExclusive: async (...args: Parameters<typeof actual.publishFileExclusive>) => {
       if (
         durabilityTestState.transfer &&
@@ -51,6 +57,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   durabilityTestState.transfer = undefined;
+  durabilityTestState.hashedBytes = 0;
   vi.restoreAllMocks();
 });
 
@@ -170,6 +177,8 @@ it.each(["native", "isolated", "copy", "zero", "ctime"] as const)(
       userVersion: 0,
       ...snapshotContent(published),
     });
+    // Bound digest IO to capture, staged admission, and final publication.
+    expect(durabilityTestState.hashedBytes).toBeLessThanOrEqual(3 * receipt.sizeBytes);
     if (copy) {
       expect(copy).toHaveBeenCalledOnce();
     }
@@ -198,10 +207,13 @@ it("keeps a caller-owned source independent of its published image", async () =>
 });
 
 it("rejects same-size byte changes during a ctime-fallback transfer", async () => {
+  execSource("CREATE TABLE records(value TEXT); INSERT INTO records VALUES('retained');");
   const original = await fs.readFile(sourcePath);
   mockUnavailableBirthtime("ctime", async (stagedPath) => {
     const bytes = await fs.readFile(stagedPath);
-    bytes.write("changed", 0, "utf8");
+    const offset = bytes.indexOf("retained");
+    expect(offset).toBeGreaterThanOrEqual(0);
+    bytes.write("modified", offset, "utf8");
     await fs.writeFile(stagedPath, bytes);
   });
   await expectSnapshotFailureWithoutTarget(/hash mismatch/);
