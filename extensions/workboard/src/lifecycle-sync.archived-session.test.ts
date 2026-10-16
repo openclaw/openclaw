@@ -10,7 +10,7 @@ describe("Workboard archived session recovery", () => {
     { sessionStatus: "done", cardStatus: "review" },
     { sessionStatus: "killed", cardStatus: "blocked" },
   ] as const)(
-    "recovers both cards linked to a $sessionStatus session after it was archived",
+    "recovers linked $sessionStatus sessions beyond the catalog page without reading unrelated rows",
     async ({ sessionStatus, cardStatus }) => {
       vi.useFakeTimers();
       try {
@@ -32,6 +32,11 @@ describe("Workboard archived session recovery", () => {
           sessionKey: "agent:main:active-worker",
         });
         const sessions = [
+          ...Array.from({ length: 10_000 }, (_, index) => ({
+            key: `agent:main:unrelated-${index}`,
+            status: "running",
+            updatedAt: active.updatedAt + 2,
+          })),
           {
             key: sessionKey,
             status: sessionStatus,
@@ -40,18 +45,27 @@ describe("Workboard archived session recovery", () => {
           },
           { key: active.sessionKey, status: sessionStatus, updatedAt: active.updatedAt + 1 },
         ];
+        let returnedRows = 0;
         const gateway = {
           isAvailable: async () => true,
-          // Match sessions.list's public archive filter: omitted means active only.
-          request: vi
-            .fn()
-            .mockImplementation(async (_method: string, params: Record<string, unknown>) => ({
-              sessions: sessions.filter(
+          request: vi.fn(async (method: string, params: Record<string, unknown>) => {
+            if (method === "sessions.describe") {
+              const session = sessions.find((row) => row.key === params.key) ?? null;
+              returnedRows += session ? 1 : 0;
+              return { session };
+            }
+            // Model the public list's archive filtering and pagination boundary.
+            const selected = sessions
+              .filter(
                 (session) =>
                   params.archived === "all" ||
-                  Boolean(session.archivedAt) === (params.archived === true),
-              ),
-            })),
+                  Boolean("archivedAt" in session && session.archivedAt) ===
+                    (params.archived === true),
+              )
+              .slice(0, Number(params.limit));
+            returnedRows += selected.length;
+            return { sessions: selected };
+          }),
         };
         const service = createWorkboardLifecycleService({
           store,
@@ -69,6 +83,7 @@ describe("Workboard archived session recovery", () => {
           expect(operations).toHaveBeenCalled();
           await operations.mock.results[0]?.value;
           expect(context.logger.warn).not.toHaveBeenCalled();
+          expect(returnedRows).toBe(2);
           expect(await store.get(card.id)).toMatchObject({ status: cardStatus });
           expect(await store.get(sibling.id)).toMatchObject({ status: cardStatus });
           expect(await store.get(active.id)).toMatchObject({ status: cardStatus });
