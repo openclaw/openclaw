@@ -4,16 +4,15 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
-import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
   acknowledgeCompletedWorkerTurn,
+  appendWorkerReply,
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   createWorkerTurnTunnel,
-  credential,
   openSessionManager,
   placements,
   reconcileUnchangedLocalWorkspace,
@@ -23,7 +22,7 @@ import {
   sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
-  unusedEnvironments,
+  workerTurnEnvironments,
 } from "./worker-turn-launcher.test-support.js";
 import {
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
@@ -56,15 +55,9 @@ describe("worker final reply before workspace settlement", () => {
         } else {
           followupWorkspace = await readFile(workspaceFile, "utf8");
         }
-        const leafId = await (
-          await openSessionManager()
-        ).appendMessageAsync(
-          makeAgentAssistantMessage({
-            content: [
-              { type: "text", text: launchCount === 1 ? "Worker reply" : "Follow-up reply" },
-            ],
-            timestamp: launchCount,
-          }),
+        const leafId = await appendWorkerReply(
+          launchCount === 1 ? "Worker reply" : "Follow-up reply",
+          launchCount,
         );
         if (launchCount === 1) {
           terminalId = leafId;
@@ -104,13 +97,10 @@ describe("worker final reply before workspace settlement", () => {
       const provider = createWorkerSessionTurnPlacementProvider({
         placements,
         reconcileActivePlacement,
-        environments: {
-          ...unusedEnvironments(),
+        environments: workerTurnEnvironments(tunnel, {
           get: () => ({ ...attachedEnvironment(), nodeDeviceId: "paired-node", sshEndpoint: null }),
-          acquireTurnCredential: async () => credential(),
           acknowledgeCredentialDelivery: async () => true,
-          startTunnel: async () => tunnel,
-        },
+        }),
       });
       const runLocal = vi.fn();
       const first = provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, runLocal);

@@ -10,7 +10,6 @@ import {
   type SessionPlacementTurnParams,
 } from "../../agents/session-placement-admission.js";
 import { resolveSessionPlacementTurnSettlementAssertion } from "../../agents/session-placement-forced-terminal-settlement.js";
-import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
   createReplyOperation,
   forceClearReplyOperation,
@@ -32,13 +31,13 @@ import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerPlacementRedispatch } from "./worker-placement-redispatch.js";
 import {
   ENVIRONMENT_ID,
+  appendWorkerReply,
   OWNER_EPOCH,
   MANIFEST_REF,
   attachedEnvironment,
   credential,
   measureLaunchTurn,
   readLaunchToolNames,
-  openSessionManager,
   root,
   seedActivePlacement,
   SESSION_ID,
@@ -54,6 +53,7 @@ import {
   setupWorkerTurnLauncherTest,
   turn,
   unusedEnvironments,
+  workerTurnRequest,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
@@ -350,14 +350,7 @@ describe("worker pre-launch claim recovery", () => {
           "node cancellation unconfirmed",
         );
       }
-      const leafId = await (
-        await openSessionManager()
-      ).appendMessageAsync(
-        makeAgentAssistantMessage({
-          content: [{ type: "text", text: "First turn complete" }],
-          timestamp: 41,
-        }),
-      );
+      const leafId = await appendWorkerReply("First turn complete", 41);
       await createWorkerSessionPlacementGate(placements).updateAckCursors({
         claim: request.turnClaim,
         transcriptSeq: 2,
@@ -414,22 +407,7 @@ describe("worker pre-launch claim recovery", () => {
         readLaunchToolNames,
         launchTurn: launch,
         quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
-        reconcileWorkspace: async (
-          request: Parameters<WorkerTurnTunnelHandle["reconcileWorkspace"]>[0],
-        ) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected local workspace");
-          }
-          await request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-            publishStagedResult: async () => {},
-            discardPreparedStagedResult: async () => {},
-          };
-        },
+        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
       }),
       destroy,
     };
@@ -746,16 +724,7 @@ describe("worker turn launcher node-loss continuation", () => {
     });
     const runLocal = vi.fn();
     const attempt = provider
-      .executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "node-loss-reconnect",
-        },
-        turn("node-loss-reconnect"),
-        runLocal,
-      )
+      .executeTurn(workerTurnRequest("node-loss-reconnect"), turn("node-loss-reconnect"), runLocal)
       .catch((error: unknown) => error);
     try {
       await awaitGateBeforeSettlement(
@@ -830,12 +799,7 @@ describe("worker turn launcher node-loss continuation", () => {
     });
     await expect(
       provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "node-loss-unavailable",
-        },
+        workerTurnRequest("node-loss-unavailable"),
         turn("node-loss-unavailable"),
         vi.fn(),
       ),

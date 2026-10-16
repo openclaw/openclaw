@@ -5,7 +5,6 @@ import {
   isEmbeddedAgentRunHandleActive,
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
@@ -37,6 +36,7 @@ import {
   createWorkerTurnTunnel,
   reconcileUnchangedLocalWorkspace,
   acknowledgeCompletedWorkerTurn,
+  appendWorkerReply,
   ENVIRONMENT_ID,
   OWNER_EPOCH,
   SESSION_ID,
@@ -54,6 +54,7 @@ import {
   setupWorkerTurnLauncherTest,
   turn,
   unusedEnvironments,
+  workerTurnRequest,
   type WorkerTurnEnvironmentService,
   type WorkerTurnLauncherOptions,
 } from "./worker-turn-launcher.test-support.js";
@@ -144,14 +145,7 @@ async function createBuildRecoveryHarness(
     if (rejection === "handoff") {
       throw new StaleWorkerBuildError();
     }
-    const leafId = await (
-      await openSessionManager()
-    ).appendMessageAsync(
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Continued on the replacement worker" }],
-        timestamp: 51,
-      }),
-    );
+    const leafId = await appendWorkerReply("Continued on the replacement worker", 51);
     return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
   });
   const destroy = vi.fn(async () => environment);
@@ -335,7 +329,7 @@ async function createBuildRecoveryHarness(
       dispatch.reclaim({ sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" }),
     execute: (abortSignal?: AbortSignal, assertRunCurrent?: () => void) =>
       provider.executeTurn(
-        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
+        workerTurnRequest(runId),
         {
           ...input,
           ...(options.replyOperation ? { replyOperation: options.replyOperation } : {}),
@@ -406,14 +400,7 @@ describe("worker turn launcher build recovery", () => {
     };
     const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
       request.onDispatchReady?.();
-      const leafId = await (
-        await openSessionManager()
-      ).appendMessageAsync(
-        makeAgentAssistantMessage({
-          content: [{ type: "text", text: "Ran on the refreshed worker" }],
-          timestamp: 51,
-        }),
-      );
+      const leafId = await appendWorkerReply("Ran on the refreshed worker", 51);
       return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
     });
     const acquireTurnCredential = vi.fn(async () => {
@@ -474,7 +461,7 @@ describe("worker turn launcher build recovery", () => {
       },
       execute: (signal: AbortSignal) =>
         provider.executeTurn(
-          { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: input.runId },
+          workerTurnRequest(input.runId),
           { ...input, abortSignal: signal },
           vi.fn(async () => ({ meta: { durationMs: 1 } })),
           onAdmitted,
@@ -583,7 +570,7 @@ describe("worker turn launcher build recovery", () => {
     });
     const input = turn();
     const execution = provider.executeTurn(
-      { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: input.runId },
+      workerTurnRequest(input.runId),
       input,
       vi.fn(async () => ({ meta: { durationMs: 1 } })),
     );

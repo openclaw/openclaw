@@ -13,6 +13,7 @@ import {
 import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { CORE_WORKER_LAUNCH_TOOL_NAMES } from "../../agents/tool-catalog.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
@@ -289,6 +290,29 @@ export async function openSessionManager(): Promise<SessionManager> {
   return await SessionManager.openAsync(sessionTarget);
 }
 
+export async function appendWorkerReply(text: string, timestamp: number) {
+  return (await openSessionManager()).appendMessageAsync(
+    makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp }),
+  );
+}
+
+export function workerTurnRequest(runId: string) {
+  return { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId };
+}
+
+export function workerTurnEnvironments(
+  tunnel: WorkerTurnTunnelHandle,
+  overrides: Partial<WorkerTurnEnvironmentService> = {},
+): WorkerTurnEnvironmentService {
+  return {
+    ...unusedEnvironments(),
+    get: attachedEnvironment,
+    acquireTurnCredential: async () => credential(),
+    startTunnel: async () => tunnel,
+    ...overrides,
+  };
+}
+
 export function readWorkerTurnTranscriptStorageRows() {
   const transcriptDatabase = openOpenClawAgentDatabase(
     toDatabaseOptions(resolveSqliteReadScope(sessionTarget)),
@@ -485,28 +509,19 @@ export function credential(deliveryId = "c".repeat(43)): MintedWorkerCredential 
 }
 
 export function unusedEnvironments(): WorkerTurnEnvironmentService {
-  const unexpected = () => new Error("unexpected worker environment call");
+  const unexpected = (): never => {
+    throw new Error("unexpected worker environment call");
+  };
+  const unexpectedAsync = async () => unexpected();
   return {
     get: vi.fn(() => undefined),
     createGatewayTools: prepareGatewayTools,
-    resolveSshIdentity: vi.fn(async () => {
-      throw unexpected();
-    }),
-    acquireTurnCredential: vi.fn(async () => {
-      throw unexpected();
-    }),
-    acknowledgeCredentialDelivery: vi.fn(() => {
-      throw unexpected();
-    }),
-    startTunnel: vi.fn(async () => {
-      throw unexpected();
-    }),
-    stopTunnel: vi.fn(async () => {
-      throw unexpected();
-    }),
-    destroy: vi.fn(async () => {
-      throw unexpected();
-    }),
+    resolveSshIdentity: vi.fn(unexpectedAsync),
+    acquireTurnCredential: vi.fn(unexpectedAsync),
+    acknowledgeCredentialDelivery: vi.fn(unexpected),
+    startTunnel: vi.fn(unexpectedAsync),
+    stopTunnel: vi.fn(unexpectedAsync),
+    destroy: vi.fn(unexpectedAsync),
   };
 }
 

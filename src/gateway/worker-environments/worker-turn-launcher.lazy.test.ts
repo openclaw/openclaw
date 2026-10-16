@@ -1,5 +1,6 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
@@ -96,12 +97,7 @@ describe("worker turn execution loading", () => {
         }
       });
       const runLocal = vi.fn();
-      const request = {
-        sessionId: fixture.SESSION_ID,
-        sessionKey: fixture.SESSION_KEY,
-        agentId: "main",
-        runId: "run-lazy-execution",
-      };
+      const request = fixture.workerTurnRequest("run-lazy-execution");
       const run = provider.executeTurn(
         request,
         { ...fixture.turn(request.runId), abortSignal: cancellation.signal },
@@ -109,17 +105,9 @@ describe("worker turn execution loading", () => {
         onAdmitted,
         assertCurrent,
       );
-      const settled = run.then(
-        () => undefined,
-        () => undefined,
-      );
+      const settled = run.catch(() => {});
       try {
-        expect(
-          await Promise.race([
-            loadStarted.promise.then(() => "loading"),
-            settled.then(() => "settled"),
-          ]),
-        ).toBe("loading");
+        await awaitGateBeforeSettlement(loadStarted.promise, settled, "execution never loaded");
         expect(load).toHaveBeenCalledOnce();
         expect(unselected).not.toHaveBeenCalled();
         expect(createOwner).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
@@ -168,7 +156,6 @@ describe("worker turn execution loading", () => {
           expect(onAdmitted).toHaveBeenCalledOnce();
           expect(execute).toHaveBeenCalledOnce();
           expect(execute.mock.calls[0]?.[0].turnClaim).toEqual(retained);
-          expect(createOwner).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
           if (mode === "worker-turn") {
             expect(executionAssertion).toThrow();
           }
@@ -182,10 +169,10 @@ describe("worker turn execution loading", () => {
           } else {
             await expect(run).rejects.toThrow("placement changed while loading turn execution");
           }
-          expect(createOwner).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
           expect(onAdmitted).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
           expect(execute).not.toHaveBeenCalled();
         }
+        expect(createOwner).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
         expect(runLocal).not.toHaveBeenCalled();
         expect(environments.startTunnel).not.toHaveBeenCalled();
         expect(environments.destroy).not.toHaveBeenCalled();
@@ -273,12 +260,7 @@ describe("worker turn execution loading", () => {
       environments: fixture.unusedEnvironments(),
       placements: fixture.placements,
     });
-    const request = {
-      sessionId: fixture.SESSION_ID,
-      sessionKey: fixture.SESSION_KEY,
-      agentId: "main",
-      runId: "run-local-lazy",
-    };
+    const request = fixture.workerTurnRequest("run-local-lazy");
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
     await expect(
       provider.executeTurn(request, fixture.turn(request.runId), runLocal),
@@ -330,17 +312,9 @@ describe("worker turn execution loading", () => {
         agentId: "main",
         workspaceDir: fixture.root,
       });
-      const settled = sandbox.then(
-        () => undefined,
-        () => undefined,
-      );
+      const settled = sandbox.catch(() => {});
       try {
-        expect(
-          await Promise.race([
-            loadStarted.promise.then(() => "loading"),
-            settled.then(() => "settled"),
-          ]),
-        ).toBe("loading");
+        await awaitGateBeforeSettlement(loadStarted.promise, settled, "sandbox never loaded");
         expect(sandboxCalls).toBe(0);
         if (scenario === "revoked") {
           const placement = fixture.placements.get(fixture.SESSION_ID);
