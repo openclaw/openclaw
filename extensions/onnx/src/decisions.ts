@@ -70,15 +70,9 @@ export function createOnnxProvider(
       }
       try {
         const entries = Object.entries(batch.questions);
-        if (entries.length === 0 || entries.length > 32) {
-          throw new UnsupportedInputError("Unsupported batch size.");
-        }
         const text = render(batch.state);
         const inputs = entries.map(([, question]): ClassificationInput => {
           const selected = rubric(question);
-          if (selected.labels.length < 2 || selected.labels.length > 64) {
-            throw new UnsupportedInputError("Unsupported label count.");
-          }
           return {
             text,
             task: "decision",

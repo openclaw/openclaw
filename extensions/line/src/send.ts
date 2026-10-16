@@ -120,7 +120,6 @@ type LinePushOpts = Pick<
 >;
 
 interface LinePushBehavior {
-  errorContext?: string;
   verboseMessage?: (chatId: string, messageCount: number) => string;
 }
 
@@ -316,21 +315,6 @@ export function createLocationMessage(location: LineLocation): LocationMessage |
   };
 }
 
-function logLineHttpError(err: unknown, context: string): void {
-  if (!err || typeof err !== "object") {
-    return;
-  }
-  const { status, statusText, body } = err as {
-    status?: number;
-    statusText?: string;
-    body?: string;
-  };
-  if (typeof body === "string") {
-    const summary = status ? `${status} ${statusText ?? ""}`.trim() : "unknown status";
-    logVerbose(`line: ${context} failed (${summary}): ${body}`);
-  }
-}
-
 function recordLineOutboundActivity(
   accountId: string,
   delivery: { messageIds: string[]; receipt?: LineSendResult["receipt"] },
@@ -390,23 +374,18 @@ async function pushLineMessages(
   // an attempt that was accepted before its outcome reached us.
   const retryKey = randomUUID();
 
-  const response = await runLinePushWithRetries(async () => {
-    try {
-      return await sendLineProviderMessages(
+  const response = await runLinePushWithRetries(
+    () =>
+      sendLineProviderMessages(
         "push",
         token,
         { to: chatId, messages: normalizedMessages },
         retryKey,
         opts.authorize,
         opts.assertDirectAdapterHandoff,
-      );
-    } catch (err) {
-      if (behavior.errorContext) {
-        logLineHttpError(err, behavior.errorContext);
-      }
-      throw err;
-    }
-  }, "line:push");
+      ),
+    "line:push",
+  );
   const { messageId, messageIds } = resolveLineProviderMessageIds(response, "push");
   const result: LineSendResult = {
     messageId,
@@ -494,9 +473,7 @@ export async function pushMessagesLine(
   messages: Message[],
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
-  return pushLineMessages(to, messages, opts, {
-    errorContext: "push message",
-  });
+  return pushLineMessages(to, messages, opts);
 }
 
 export function createFlexMessage(
@@ -527,7 +504,6 @@ export async function pushFlexMessage(
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
   return pushLineMessages(to, [createFlexMessage(altText, contents)], opts, {
-    errorContext: "push flex message",
     verboseMessage: (chatId) => `line: pushed flex message to ${chatId}`,
   });
 }

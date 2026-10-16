@@ -50,13 +50,7 @@ describe("provider-catalog-shared live catalog cache", () => {
   it("allows unrelated catalogs while abandoned loads remain unsettled", async () => {
     const completion = createDeferred<string>();
     const controllers = Array.from({ length: 99 }, () => new AbortController());
-    const signals: AbortSignal[] = [];
-    const load = (signal?: AbortSignal) => {
-      if (signal) {
-        signals.push(signal);
-      }
-      return completion.promise;
-    };
+    const load = vi.fn(() => completion.promise);
     const pending = controllers.map((controller, index) =>
       getCachedLiveCatalogValue({
         keyParts: ["pending"],
@@ -75,11 +69,10 @@ describe("provider-catalog-shared live catalog cache", () => {
     try {
       controllers.forEach((controller) => controller.abort(new Error("observer closed")));
       await Promise.allSettled(pending);
-      expect(signals.filter((signal) => signal.aborted)).toHaveLength(99);
+      expect(load).toHaveBeenCalledTimes(100);
       await expect(
         getCachedLiveCatalogValue({ keyParts: ["overflow"], load: async () => "ready" }),
       ).resolves.toBe("ready");
-      expect(signals.at(-1)?.aborted).toBe(false);
     } finally {
       completion.resolve("settled");
       await Promise.allSettled([...pending, retained]);
@@ -89,13 +82,7 @@ describe("provider-catalog-shared live catalog cache", () => {
   it("preserves consumers when pending entries are evicted without rewarming them", async () => {
     const controller = new AbortController();
     const completion = createDeferred<string>();
-    const signals: AbortSignal[] = [];
-    const load = (signal?: AbortSignal) => {
-      if (signal) {
-        signals.push(signal);
-      }
-      return completion.promise;
-    };
+    const load = vi.fn(() => completion.promise);
     const keyParts = ["evicted", 0];
     const first = getCachedLiveCatalogValue({ keyParts, load, signal: controller.signal });
     const survivor = getCachedLiveCatalogValue({ keyParts, load });
@@ -110,8 +97,7 @@ describe("provider-catalog-shared live catalog cache", () => {
       const reason = new Error("evicted consumer closed");
       controller.abort(reason);
       await expect(first).rejects.toBe(reason);
-      expect(signals).toHaveLength(100);
-      expect(signals.every((signal) => !signal.aborted)).toBe(true);
+      expect(load).toHaveBeenCalledTimes(100);
       completion.resolve("original");
       await expect(survivor).resolves.toBe("original");
       await settled;
@@ -125,7 +111,7 @@ describe("provider-catalog-shared live catalog cache", () => {
     }
   });
 
-  it("replaces an abandoned load before physical settlement without losing the replacement", async () => {
+  it("shares and retains admitted metadata after its sole consumer cancels", async () => {
     const controller = new AbortController();
     const completion = createDeferred<string>();
     const load = vi.fn(() => completion.promise);
@@ -135,18 +121,17 @@ describe("provider-catalog-shared live catalog cache", () => {
     try {
       controller.abort(reason);
       const replacementLoad = vi.fn(async () => "replacement");
-      const replacement = getCachedLiveCatalogValue({ keyParts, load: replacementLoad });
-      const startedBeforeSettlement = replacementLoad.mock.calls.length;
-      completion.resolve("abandoned result");
-      await Promise.allSettled([first, replacement]);
+      const next = getCachedLiveCatalogValue({ keyParts, load: replacementLoad });
+      completion.resolve("admitted result");
+      await Promise.allSettled([first, next]);
       await expect(first).rejects.toBe(reason);
-      expect(startedBeforeSettlement).toBe(1);
-      await expect(replacement).resolves.toBe("replacement");
+      await expect(next).resolves.toBe("admitted result");
+      expect(replacementLoad).not.toHaveBeenCalled();
       expect(load).toHaveBeenCalledOnce();
-      await expect(getCachedLiveCatalogValue({ keyParts, load })).resolves.toBe("replacement");
+      await expect(getCachedLiveCatalogValue({ keyParts, load })).resolves.toBe("admitted result");
       expect(load).toHaveBeenCalledOnce();
     } finally {
-      completion.resolve("abandoned result");
+      completion.resolve("admitted result");
       await Promise.allSettled([first, completion.promise]);
     }
   });

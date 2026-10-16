@@ -272,7 +272,7 @@ it("renders required placement as a readonly indicator, not a machine or workspa
   );
   expect(container.textContent).toContain("OpenClaw worker");
   expect(container.querySelector("[data-required-placement]")).not.toBeNull();
-  expect(container.querySelector("button, input, wa-popover")).toBeNull();
+  expect(container.querySelector("button, input, .oc-popover")).toBeNull();
 });
 
 it("keeps an initial failed catalog closed and allows its existing refresh owner to recover", async () => {

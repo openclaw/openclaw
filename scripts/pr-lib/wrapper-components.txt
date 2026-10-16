@@ -1,4 +1,5 @@
 .github/workflows/pr-crabbox-gate-publisher.yml
+cli-invocation.mjs
 cli-root-options.mjs
 config/ci-test-timings.json
 node-compile-cache.mjs
@@ -66,15 +67,12 @@ packages/memory-host-sdk/src/host/config-utils.ts
 packages/memory-host-sdk/src/host/embedding-vector.ts
 packages/memory-host-sdk/src/host/error-utils.ts
 packages/memory-host-sdk/src/host/memory-schema-base.ts
-packages/memory-host-sdk/src/host/memory-schema-fts.ts
 packages/memory-host-sdk/src/host/memory-schema-provenance.ts
 packages/memory-host-sdk/src/host/memory-schema-recall.ts
 packages/memory-host-sdk/src/host/memory-schema-storage-migration.ts
 packages/memory-host-sdk/src/host/memory-schema.ts
 packages/memory-host-sdk/src/host/openclaw-runtime-paths.ts
 packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts
-packages/memory-host-sdk/src/host/sqlite-vec-platform-variant.ts
-packages/memory-host-sdk/src/host/sqlite-vec.ts
 packages/model-catalog-core/package.json
 packages/model-catalog-core/src/canonical-model-key.ts
 packages/model-catalog-core/src/configured-model-refs.ts
@@ -366,6 +364,16 @@ src/infra/database-engine/physical-facts.ts
 src/infra/database-engine/policy.ts
 src/infra/database-engine/postgres-catalog.ts
 src/infra/database-engine/postgres-schema.ts
+src/infra/database-engine/postgres-search-schema.ts
+src/infra/database-engine/postgres-search.ts
+src/infra/database-engine/postgres-vector.ts
+src/infra/database-engine/search.ts
+src/infra/database-engine/sqlite-full-text.ts
+src/infra/database-engine/sqlite-search-schema.ts
+src/infra/database-engine/sqlite-vector-subprocess.ts
+src/infra/database-engine/sqlite-vector-types.ts
+src/infra/database-engine/sqlite-vector.ts
+src/infra/database-engine/vector-contract.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
@@ -432,6 +440,7 @@ src/channels/plugins/setup-contract.ts
 src/channels/registry-lookup.ts
 src/channels/registry-normalize.ts
 src/channels/registry.ts
+src/claws/add-state-worker-contract.ts
 src/claws/provenance-secondary-references.ts
 src/cli/command-format.ts
 src/cli/daemon-cli/restart-health.types.ts
@@ -888,6 +897,7 @@ src/infra/diagnostic-trace-context.ts
 src/infra/diagnostic-trace-propagation.ts
 src/infra/diagnostics-timeline.ts
 src/infra/directory-durability.ts
+src/infra/directory-watch-host.ts
 src/infra/disk-space.ts
 src/infra/dispatch-wrapper-resolution.ts
 src/infra/device-identity-process-cache.ts
@@ -995,6 +1005,7 @@ src/infra/net/proxy/managed-proxy-undici.ts
 src/infra/net/proxy/proxy-tls.ts
 src/infra/net/redirect-headers.ts
 src/infra/net/runtime-fetch.ts
+src/infra/net/ssrf-trusted-host-linklocal-exemptions.ts
 src/infra/net/ssrf.ts
 src/infra/net/undici-dispatcher-options.ts
 src/infra/net/undici-error-diagnostics.ts
@@ -1264,7 +1275,11 @@ src/infra/zstd-codec.ts
 src/logger.ts
 src/logging/config.ts
 src/logging/console.ts
+src/logging/diagnostic-cpu-profile.ts
+src/logging/diagnostic-heap-profile.ts
+src/logging/diagnostic-profile.ts
 src/logging/diagnostic-support-redaction.ts
+src/logging/diagnostic-worker-gc-profile.ts
 src/logging/env-log-level.ts
 src/logging/json-console-line.ts
 src/logging/levels.ts
@@ -1528,6 +1543,7 @@ src/plugins/plugin-registry-id-normalizer.ts
 src/plugins/plugin-registry-snapshot.ts
 src/plugins/plugin-registry.ts
 src/plugins/plugin-return-value.ts
+src/plugins/plugin-tool-execution.ts
 src/plugins/plugin-runtime-artifact-identity.ts
 src/plugins/plugin-runtime-artifact-resolution.ts
 src/plugins/plugin-runtime-artifact-selection.ts
@@ -1610,6 +1626,7 @@ src/process/output-drain.ts
 src/process/process-deadline.ts
 src/process/scoped-child-reaper.ts
 src/process/spawn-broker/child-completion.ts
+src/process/spawn-broker/child-diagnostics.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/context.ts
@@ -1621,6 +1638,7 @@ src/process/spawn-broker/host.ts
 src/process/spawn-broker/ipc.ts
 src/process/spawn-broker/pipe.ts
 src/process/spawn-broker/protocol.ts
+src/process/spawn-broker/resource-authority.ts
 src/process/spawn-broker/resource-host.ts
 src/process/spawn-broker/resource-protocol.ts
 src/process/spawn-diagnostics.ts
@@ -2111,6 +2129,7 @@ src/config/sessions/session-accessor.sqlite-identity.ts
 src/config/sessions/session-accessor.sqlite-worker-coordination.ts
 src/config/sessions/session-accessor.sqlite-worker-transport.ts
 src/config/sessions/session-actor-replica.ts
+src/config/sessions/session-actor-replica-index.ts
 src/config/sessions/session-actor-replica-receipts.ts
 src/config/sessions/session-actor-bounded-history.ts
 src/config/sessions/session-actor-transcript-anchors.ts
@@ -2248,6 +2267,8 @@ src/agents/failover/assistant-request-failure-copy.ts
 src/agents/failover/classification-rules.ts
 src/agents/failover/classify-core.ts
 src/agents/failover/context-overflow-tables.ts
+src/agents/failover/error.ts
+src/agents/failover/local-preparation-error.ts
 src/agents/failover/message-patterns.ts
 src/agents/failover/request-error-facets.ts
 src/agents/failover/signal-details.ts

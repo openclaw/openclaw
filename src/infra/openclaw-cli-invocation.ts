@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { resolveRuntimeArgs, resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
@@ -139,8 +140,12 @@ export function resolveCurrentOpenClawCliInvocation(
       ? { TSX_TSCONFIG_PATH: path.join(packageRoot, "tsconfig.json") }
       : undefined;
   return {
-    command: execPath,
-    args: [...cliArgs, ...args],
+    ...resolveOpenClawCliInvocation({
+      execPath,
+      entryPath: cliArgs.at(-1),
+      execArgv: cliArgs.slice(0, -1),
+      args,
+    }),
     cwd: invocationCwd,
     ...(env ? { env } : {}),
   };

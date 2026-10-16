@@ -1,6 +1,9 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../../../auto-reply/reply-payload.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import {
   markCoreTtsAttemptResult,
@@ -546,12 +549,19 @@ describe("prepareEmbeddedRunTerminal", () => {
       ...assistantMessage("stop"),
       content: [{ type: "text" as const, text: finalText }],
     };
-    payloadMocks.buildEmbeddedRunPayloads.mockReturnValueOnce([
+    const completedPayload = setReplyPayloadMetadata(
       { text: completedText },
+      { assistantMessageIndex: 0 },
+    );
+    const partialPayload = setReplyPayloadMetadata(
       { text: partialText },
-    ]);
+      { assistantMessageIndex: 1 },
+    );
+    payloadMocks.buildEmbeddedRunPayloads.mockReturnValueOnce([completedPayload, partialPayload]);
 
     const prepared = await prepareAttempt({
+      replyDeliveryState: "delivered",
+      sourceReplyDeliveryState: "missing",
       attempt: attemptResult({
         terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
         assistantTexts: [completedText, partialText],
@@ -580,6 +590,10 @@ describe("prepareEmbeddedRunTerminal", () => {
       }),
       { text: finalText },
     ]);
+    expect(getReplyPayloadMetadata(partialPayload)?.localTranscriptDeliveryConfirmed).toBe(true);
+    const [kept, text] = prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout!;
+    expect(getReplyPayloadMetadata(kept!)?.localTranscriptDeliveryConfirmed).toBe(true);
+    expect(getReplyPayloadMetadata(text!)?.localTranscriptDeliveryConfirmed).toBeUndefined();
   });
 
   it("does not recover stale session text after the current prompt times out", async () => {

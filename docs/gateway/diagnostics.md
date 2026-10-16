@@ -732,6 +732,11 @@ scavenges, major mark/sweep/compact collections, incremental work, and weak-refe
 processing. Counts and elapsed durations are grouped by main thread or bounded
 worker script kind, without per-GC log lines. Instrumented workers use their
 existing memory telemetry port and observe GC only while an exporter is interested.
+One native `GCProfiler` per isolate supplies batches on a one-second timer, shared
+with the Code Mode thrash guard. It does not schedule JavaScript after each GC:
+per-collection `PerformanceObserver` delivery can keep an idle worker collecting.
+Native counts and durations remain exact; callback flags are unavailable, so the
+`reason` label is `other`.
 Worker GC batches ride the next heap sample (normally every 30 seconds), with a
 flush after 256 pending samples or on orderly worker shutdown. Individual collection counts and durations
 are preserved; worker histogram updates can lag by one sampling interval.
@@ -748,9 +753,29 @@ The record includes the window count and duration plus isolate-local `heapUsed`,
 `heapTotal`, `external`, `arrayBuffers`, and `heapSizeLimitBytes`. ArrayBuffers are
 included in external memory. These warnings use the existing memory port and do
 not require an exporter; they contain no guest source, arguments, or results.
-Attribution describes the cell active when the observer delivers the batch, not
-proof that the cell caused every collection in the window. Node's observer cannot
+Attribution describes the cell active when the sampler delivers the batch, not
+proof that the cell caused every collection in the window. The sampler cannot
 report while synchronous guest execution blocks its event loop.
+
+The first storm starts a five-second allocation and CPU capture in the affected
+worker, at most once per worker per hour (failed attempts also consume the hour).
+Heap sampling uses a 256 KiB interval and includes objects collected by both major
+and minor GC, so short-lived allocation churn remains visible. CPU sampling uses
+a 10 ms interval over the same window. CPU and allocation profiling start only
+after a storm; periodic GC sampling remains active. Active tracing, debugging,
+or profiling can make capture unavailable.
+
+The Gateway writes sanitized results to `<state>/diagnostics/code-mode-gc-*`
+as `.heapprofile.json` and `.cpuprofile.json`. The completion warning lists
+`profileFiles`; failures report `captureStatus: "unavailable"` and a fixed
+`captureReason`. Files contain sampled stacks, counters, and timing, not guest
+source, arguments, results, or heap objects. Unknown/guest frame names and URLs
+are redacted using the profiling RPC policy. Each result is bounded to 1 MiB;
+the Gateway retains at most 20 storm profile files globally, with owner-only
+permissions. Other diagnostic artifacts are untouched. These files are not
+automatically included in support exports. The existing profiling RPCs still
+target the main isolate. Capture duration can exceed five seconds if synchronous
+guest work blocks the worker's event loop; retiring the worker can interrupt capture.
 
 ## RPC response size and heap changes
 

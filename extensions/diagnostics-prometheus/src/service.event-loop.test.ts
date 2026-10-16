@@ -16,7 +16,7 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus runtime metrics", () => {
-  it("separates Code Mode isolate GC and replaces live heap gauges at each sample", () => {
+  it("separates Code Mode isolate GC and replaces live memory gauges at each sample", () => {
     const metrics = createMetricsHarness();
     const memory = {
       rssBytes: 1000,
@@ -51,6 +51,8 @@ describe("diagnostics-prometheus runtime metrics", () => {
               heapUsed: 900,
               heapTotal: 1000,
               heapSizeLimitBytes: 1024,
+              external: 300,
+              arrayBuffers: 100,
             },
             {
               script: "code-mode-node.worker.js",
@@ -58,7 +60,11 @@ describe("diagnostics-prometheus runtime metrics", () => {
               heapUsed: 100,
               heapTotal: 200,
               heapSizeLimitBytes: 1024,
+              external: 50,
+              arrayBuffers: 20,
             },
+            // Slot overflow still contributes to script totals; native-only samples lack buffers.
+            { script: "code-mode-node.worker.js", heapUsed: 10, heapTotal: 20, external: 50 },
           ],
         },
       });
@@ -74,15 +80,40 @@ describe("diagnostics-prometheus runtime metrics", () => {
         'openclaw_code_mode_worker_heap_bytes{kind="limit",slot="1"} 1024\n',
       );
       expect(before).toContain(
-        'openclaw_worker_heap_used_bytes{script="code-mode-node.worker.js"} 1000\n',
+        'openclaw_worker_heap_used_bytes{script="code-mode-node.worker.js"} 1010\n',
       );
+      expect(before).toContain(
+        'openclaw_worker_external_bytes{script="code-mode-node.worker.js"} 400\n',
+      );
+      expect(before).toContain(
+        'openclaw_worker_array_buffers_bytes{script="code-mode-node.worker.js"} 120\n',
+      );
+      for (const [slot, external, buffers] of [
+        [1, 300, 100],
+        [2, 50, 20],
+      ]) {
+        expect(before).toContain(
+          `openclaw_code_mode_worker_memory_bytes{kind="external",slot="${slot}"} ${external}\n`,
+        );
+        expect(before).toContain(
+          `openclaw_code_mode_worker_memory_bytes{kind="array_buffers",slot="${slot}"} ${buffers}\n`,
+        );
+      }
       // Retirement or stale sampling removes gauges; slot reuse keeps cumulative GC counts.
       metrics.record({
         type: "diagnostic.memory.sample",
         memory: {
           ...memory,
           workerHeaps: [
-            { script: "code-mode-node.worker.js", workerSlot: 1, heapUsed: 50, heapTotal: 100 },
+            {
+              script: "code-mode-node.worker.js",
+              workerSlot: 1,
+              heapUsed: 50,
+              heapTotal: 100,
+              external: 0,
+              arrayBuffers: 0,
+            },
+            { script: "sqlite-store.worker.js", heapUsed: 10, heapTotal: 20, external: 25 },
           ],
         },
       });
@@ -91,10 +122,33 @@ describe("diagnostics-prometheus runtime metrics", () => {
       expect(after).not.toContain('openclaw_code_mode_worker_heap_bytes{kind="limit"');
       expect(after).not.toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="2"}');
       expect(after).toContain(
+        'openclaw_worker_external_bytes{script="code-mode-node.worker.js"} 0\n',
+      );
+      expect(after).toContain(
+        'openclaw_worker_array_buffers_bytes{script="code-mode-node.worker.js"} 0\n',
+      );
+      expect(after).toContain(
+        'openclaw_worker_external_bytes{script="sqlite-store.worker.js"} 25\n',
+      );
+      expect(after).not.toContain(
+        'openclaw_worker_array_buffers_bytes{script="sqlite-store.worker.js"}',
+      );
+      for (const kind of ["external", "array_buffers"]) {
+        expect(after).toContain(
+          `openclaw_code_mode_worker_memory_bytes{kind="${kind}",slot="1"} 0\n`,
+        );
+        expect(after).not.toContain(
+          `openclaw_code_mode_worker_memory_bytes{kind="${kind}",slot="2"}`,
+        );
+      }
+      expect(after).toContain(
         'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",reason="forced",slot="1",thread="code-mode-node.worker.js"} 2\n',
       );
       metrics.record({ type: "diagnostic.memory.sample", memory });
       expect(metrics.render()).not.toContain("openclaw_code_mode_worker_heap_bytes");
+      expect(metrics.render()).not.toContain("openclaw_code_mode_worker_memory_bytes");
+      expect(metrics.render()).not.toContain("openclaw_worker_external_bytes");
+      expect(metrics.render()).not.toContain("openclaw_worker_array_buffers_bytes");
     } finally {
       metrics.stop();
     }

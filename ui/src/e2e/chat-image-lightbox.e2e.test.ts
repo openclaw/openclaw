@@ -258,11 +258,62 @@ suite.define(() => {
           ]),
         );
       }
-      await page.getByRole("button", { name: "Close image preview" }).click();
-      await expect.poll(() => sidebarDialog.count()).toBe(0);
-      await expect
-        .poll(() => sidebarTrigger.evaluate((element) => element.matches(":focus")))
-        .toBe(true);
+      const closeProbe = await page.evaluateHandle(() => {
+        const controller = new AbortController();
+        const events: { type: string; capture: boolean; target: string; prevented: boolean }[] = [];
+        for (const type of ["click", "image-lightbox-close"]) {
+          for (const capture of [true, false]) {
+            document.addEventListener(
+              type,
+              (event) => {
+                const target = event.target;
+                if (target instanceof Element && target.closest("openclaw-image-lightbox")) {
+                  events.push({
+                    type,
+                    capture,
+                    target: target.localName,
+                    prevented: event.defaultPrevented,
+                  });
+                }
+              },
+              { capture, signal: controller.signal },
+            );
+          }
+        }
+        return { events, dispose: () => controller.abort() };
+      });
+      try {
+        await page.getByRole("button", { name: "Close image preview" }).click();
+        await expect.poll(() => sidebarDialog.count()).toBe(0);
+        await expect
+          .poll(() => sidebarTrigger.evaluate((element) => element.matches(":focus")))
+          .toBe(true);
+      } catch (error) {
+        console.error(
+          "Sidebar lightbox Close diagnostic",
+          await closeProbe.evaluate(({ events }) => ({
+            events,
+            visibility: document.visibilityState,
+            lightboxes: Array.from(document.querySelectorAll("openclaw-image-lightbox")).map(
+              (host) => ({
+                connected: host.isConnected,
+                dialogs: Array.from(host.querySelectorAll("dialog")).map((nativeDialog) => ({
+                  connected: nativeDialog.isConnected,
+                  open: nativeDialog.open,
+                })),
+              }),
+            ),
+            focus: {
+              tag: document.activeElement?.localName,
+              class: document.activeElement?.getAttribute("class"),
+            },
+          })),
+        );
+        throw error;
+      } finally {
+        await closeProbe.evaluate(({ dispose }) => dispose());
+        await closeProbe.dispose();
+      }
 
       await page.setViewportSize({ height: 844, width: 390 });
       await sidebarTrigger.click();
@@ -338,8 +389,80 @@ suite.define(() => {
         mobileImage.evaluate((image) =>
           Number(new DOMMatrixReadOnly(getComputedStyle(image).transform).a.toFixed(2)),
         );
-      await mobileImage.dblclick();
-      await expect.poll(readMobileScale).toBeGreaterThan(1);
+      const zoomDiagnostic = await page.evaluateHandle(() => {
+        const host = document.querySelector("openclaw-image-lightbox")!;
+        const originalImage = host.querySelector<HTMLImageElement>(".image")!;
+        const originalSrc = originalImage.getAttribute("src");
+        const originalCurrentSrc = originalImage.currentSrc;
+        const doubleClicks: { originalTarget: boolean; currentTarget: boolean }[] = [];
+        const panzoomScales: number[] = [];
+        const snapshot = () => {
+          const image = host.querySelector<HTMLImageElement>(".image");
+          const box = image?.getBoundingClientRect();
+          const stage = host.querySelector(".stage")?.getBoundingClientRect();
+          return {
+            originalNodeConnected: originalImage.isConnected,
+            sameImageNode: image === originalImage,
+            sameSrc: image?.getAttribute("src") === originalSrc,
+            sameCurrentSrc: image?.currentSrc === originalCurrentSrc,
+            complete: image?.complete,
+            naturalWidth: image?.naturalWidth,
+            naturalHeight: image?.naturalHeight,
+            imageBox: box && { x: box.x, y: box.y, width: box.width, height: box.height },
+            stageSize: stage && { width: stage.width, height: stage.height },
+            viewport: { width: innerWidth, height: innerHeight },
+            displayedScale: image
+              ? Number(new DOMMatrixReadOnly(getComputedStyle(image).transform).a.toFixed(2))
+              : null,
+            zoomInDisabled: host
+              .querySelector('[aria-label="Zoom in"]')
+              ?.getAttribute("aria-disabled"),
+            zoomLabel: host.querySelector('[aria-label="Reset zoom"]')?.textContent?.trim(),
+          };
+        };
+        const before = snapshot();
+        const onDoubleClick = (event: Event) => {
+          doubleClicks.push({
+            originalTarget: event.target === originalImage,
+            currentTarget: event.target === host.querySelector(".image"),
+          });
+        };
+        const onPanzoomChange = (event: Event) => {
+          const detail: unknown = event instanceof CustomEvent ? event.detail : undefined;
+          if (
+            typeof detail === "object" &&
+            detail !== null &&
+            "scale" in detail &&
+            typeof detail.scale === "number"
+          ) {
+            panzoomScales.push(detail.scale);
+          }
+        };
+        host.addEventListener("dblclick", onDoubleClick, true);
+        host.addEventListener("panzoomchange", onPanzoomChange, true);
+        return {
+          read: () => ({ before, after: snapshot(), doubleClicks, panzoomScales }),
+          dispose: () => {
+            host.removeEventListener("dblclick", onDoubleClick, true);
+            host.removeEventListener("panzoomchange", onPanzoomChange, true);
+          },
+        };
+      });
+      try {
+        await mobileImage.dblclick();
+        try {
+          await expect.poll(readMobileScale).toBeGreaterThan(1);
+        } catch (error) {
+          console.error(
+            "Lightbox double-click zoom diagnostic:",
+            JSON.stringify(await zoomDiagnostic.evaluate((diagnostic) => diagnostic.read())),
+          );
+          throw error;
+        }
+      } finally {
+        await zoomDiagnostic.evaluate((diagnostic) => diagnostic.dispose());
+        await zoomDiagnostic.dispose();
+      }
       await page.getByRole("button", { name: "Reset zoom" }).click();
       await expect.poll(readMobileScale).toBe(1);
       const zoomIn = page.getByRole("button", { name: "Zoom in" });

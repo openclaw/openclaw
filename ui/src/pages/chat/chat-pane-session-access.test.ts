@@ -1,12 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createPaneHeaderWorkspaceFixture,
@@ -212,7 +212,7 @@ describe("chat pane session access", () => {
     } satisfies GatewaySessionRow;
     const container = document.createElement("div");
 
-    render(
+    renderPaneLegacyContent(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         session,
@@ -248,7 +248,7 @@ describe("chat pane session access", () => {
     document.body.append(container);
     onTestFinished(() => container.remove());
 
-    render(
+    renderPaneLegacyContent(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         session,

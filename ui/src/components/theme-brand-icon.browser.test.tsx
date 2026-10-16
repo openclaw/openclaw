@@ -6,12 +6,11 @@ import {
   readAvatarGatewayContext,
   setAvatarGatewayOrigin,
 } from "../lib/identity-avatar-context.ts";
-import { LitContent } from "../lit/solid-content.tsx";
-import { renderSubagentActivity } from "../pages/chat/components/chat-subagent-activity.ts";
+import { SubagentActivity } from "../pages/chat/components/chat-subagent-activity.tsx";
 import { ChatWorkingIndicator } from "../pages/chat/components/chat-working-indicator.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { renderPluginThemeArtwork } from "./plugin-theme-artwork.ts";
+import { PluginThemeArtwork } from "./plugin-theme-artwork.tsx";
 import "../test-helpers/load-styles.ts";
 
 afterEach(cleanupSolid);
@@ -46,8 +45,8 @@ it.each([
     );
     const view = mountSolid(() =>
       kind === "subagent" ? (
-        <LitContent
-          value={renderSubagentActivity([
+        <SubagentActivity
+          rows={[
             {
               key: "agent:main:synthetic-subagent",
               label: "Synthetic review",
@@ -59,7 +58,7 @@ it.each([
                 updatedAt: null,
               },
             },
-          ])}
+          ]}
         />
       ) : (
         <ChatWorkingIndicator
@@ -85,7 +84,7 @@ it.each([
   }
 });
 
-it("shows the fallback while replacing legacy artwork with a different URL", async () => {
+it("shows the fallback while replacing artwork with a different URL", async () => {
   const gateway = readAvatarGatewayContext();
   const firstUrl = "/__openclaw__/plugin-theme-art/synthetic/reload/icons/first";
   const nextUrl = "/__openclaw__/plugin-theme-art/synthetic/reload/icons/next";
@@ -109,7 +108,7 @@ it("shows the fallback while replacing legacy artwork with a different URL", asy
   try {
     setAvatarGatewayOrigin(location.origin);
     const view = mountSolid(() => (
-      <LitContent value={renderPluginThemeArtwork(url(), "synthetic-hat", "Loading artwork")} />
+      <PluginThemeArtwork url={url()} class="synthetic-hat" fallback="Loading artwork" />
     ));
     await waitForSolid(() =>
       expect(view.container.querySelector<HTMLImageElement>("img")?.naturalWidth).toBe(256),

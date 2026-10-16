@@ -277,8 +277,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   include short-publisher turnover in burst estimates. Preflight and downstream Node jobs are
   restore-only consumers on eligible self-hosted runners. Exact misses and
   hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
-- Trusted canonical hybrid first attempts route `ci-gate` to the Blacksmith
-  4-class after hosted assignment added 416 seconds to main's critical chain.
+- Ordinary canonical same-repository hybrid first attempts keep `preflight`,
+  `pr-failure-report`, and `ci-gate` on hosted Ubuntu. October 15's 26-PR sample
+  found 148 minutes of Blacksmith preflight queueing, with a 12.9-minute p75.
+  Fork first attempts, RunsOn, and admitted qualification/release dispatches
+  retain their existing routes. Count these mandatory hosted controls before
+  optional offload; keep the 45-row ceiling and all job/worker limits.
   Core lint uses the 16-class on canonical automatic first attempts with an
   unset, `blacksmith`, or `hybrid` backend, including fork PRs. Admitted
   qualifications retain their existing routes. The first packed lint row took
@@ -288,11 +292,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   jobs or registrations and keeps the deadline and complete stripe inventory. The gate has no checkout or dependency setup; retries, ordinary
   manual dispatches, noncanonical contexts, and the GitHub override stay hosted.
   Core lint additionally retains hosted routing for frozen targets. Normal hybrid
-  main/same-repository PRs add three assignments; fork PRs can add six because
+  main/same-repository PRs add two lint assignments; fork PRs can add six because
   their logical GitHub check profile emits five lint rows. These fit the fresh
   71-row union and reserved 84-row non-Node allowance described above.
-  Automatic canonical hybrid and RunsOn first-attempt `preflight` uses the
-  existing 4-class, matching default Blacksmith preflight. The former 16-class
+  Automatic canonical RunsOn and fork hybrid first-attempt `preflight` uses
+  the existing 4-class, matching default Blacksmith preflight. The former 16-class
   placement addressed hosted queue stalls. October 13 observations found 610
   4-class runs with no OOMs and 113s p95 duration; full and changed manifest plans
   also fit two CPUs and 4 GiB without swap with unchanged outputs. Keep the
@@ -302,9 +306,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   `security-fast` stays hosted
   outside eligible hybrid first attempts and when the bounded hosted plan is admitted. Security hooks use pinned installed packages
   and local hook definitions, without remote Git initialization. The `github`
-  outage override remains intact. Budget three control-job registrations per eligible
-  hybrid first attempt when optional hosted admission is closed, two when admitted,
-  and one per normal Blacksmith run. All occur in the reserved non-Node inventory.
+  outage override remains intact. Ordinary same-repository hybrid controls add
+  at most one Blacksmith security registration when optional hosted admission is
+  closed, none when admitted; fork hybrid first attempts retain up to three,
+  and normal Blacksmith runs retain their existing control registrations. All occur in the reserved non-Node inventory.
   Selected baseline ratchets and Node rows start independently after preflight.
   Keep the standalone ratchet owner and exact merge-parent/base checks; the final
   gate still requires every selected ratchet to pass. Same-repository
@@ -313,7 +318,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Preserve the existing hosted fallbacks and deadline.
   The existing `check-plan` prerequisite uses the 16-class for shared compiler
   snapshot memory on canonical automatic first attempts with an unset,
-  `blacksmith`, or `hybrid` backend, including fork PRs. Fork core type stripes
+  `blacksmith`, or `hybrid` backend, including fork PRs. Same-repository hybrid
+  PR first attempts instead use hosted planning with the existing serial
+  compiler discovery mode; reserve that mandatory row before optional offloads.
+  Never move the complete compiler snapshot onto the smaller hosted runner.
+  Fork core type stripes
   with an unset or `blacksmith` backend also use the 16-class on those attempts;
   hybrid health admission retains its existing placement rules. These routes
   add paid assignments, not jobs. Preserve logical GitHub stripe coverage,

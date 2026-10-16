@@ -23,7 +23,6 @@ export async function executeParallelFreeWebSearchProviderTool(
     endpoint: PARALLEL_MCP_SEARCH_URL,
     args,
     searchConfig,
-    signal,
     search: ({ count, clientModel, ...request }, timeoutSeconds) =>
       runParallelMcpSearch({
         ...request,

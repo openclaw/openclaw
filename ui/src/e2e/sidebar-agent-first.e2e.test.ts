@@ -35,8 +35,8 @@ const sessionRow = (
   ...extra,
 });
 const sessionRows = [
-  sessionRow("project", "Project"),
-  sessionRow("weekly", "Weekly"),
+  sessionRow("project", "Project next steps"),
+  sessionRow("weekly", "Weekly review"),
   sessionRow("parent", "Implement the navigation sidebar without losing independent outcomes", {
     lastMessagePreview: "A preview must not create a second line in team mode.",
   }),
@@ -140,8 +140,8 @@ suite.define(() => {
           ).toBe(width + 52);
           await captureSidebarUiProof(suite, page, `agent-first-${mode}-${width}-ready.png`);
           for (const [id, label] of [
-            ["project", "Project"],
-            ["weekly", "Weekly"],
+            ["project", "Project next steps"],
+            ["weekly", "Weekly review"],
           ]) {
             const title = group.locator(
               `[data-session-key="agent:main:${id}"] .sidebar-recent-session__name`,

@@ -309,7 +309,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 
 /* Quiet chip row directly above the composer: the agent and place pickers
    share one trigger treatment so the row reads as a single control
-   strip. Web Awesome owns popup/listbox behavior. */
+   strip. Shared pickers own popup/listbox behavior. */
 .new-session-page__triggers {
   display: flex;
   flex-wrap: wrap;

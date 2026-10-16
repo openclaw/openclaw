@@ -15,7 +15,7 @@ import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { observeBackgroundWorkRpc } from "./background-work.real-gateway.test-support.ts";
 import {
   createWaitClockInstance,
@@ -142,23 +142,33 @@ function assertClocks(measured: Awaited<ReturnType<typeof clocks>>, endedAt: num
 }
 async function capture(page: Page, parent: Locator, name: string, content: Locator[]) {
   const text = (await page.locator("body").textContent()) ?? "";
-  for (const secret of [
-    instance.gatewayToken,
-    instance.hookToken,
-    instance.homeDir,
-    instance.stateDir,
-    "synthetic-wait-fixture-key",
-  ]) {
-    expect(text.includes(secret), "capture contains private fixture data").toBe(false);
+  // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText separately proves rendered visible text.
+  const visibleText = await page.locator("body").innerText();
+  for (const [category, secret] of [
+    ["gatewayToken", instance.gatewayToken],
+    ["hookToken", instance.hookToken],
+    ["homeDir", instance.homeDir],
+    ["stateDir", instance.stateDir],
+    ["fixtureKey", "synthetic-wait-fixture-key"],
+  ] as const) {
+    expect(
+      text.includes(secret),
+      `${category}: visible-text-match=${visibleText.includes(secret)}`,
+    ).toBe(false);
   }
   expect(new URL(page.url()).hash).toBe("");
   expect(await page.locator(".community-invite-card:visible").count()).toBe(0);
-  const frame = await takeControlUiScreenshotFrame(page, parent, content, {
-    animations: "disabled",
-  });
-  await fs.writeFile(path.join(artifactDir, name + ".png"), frame.png);
-  screenshots.push(name + ".png");
-  await saveProof();
+  await pauseVirtualClock(page);
+  try {
+    const frame = await takeControlUiScreenshotFrame(page, parent, content, {
+      animations: "disabled",
+    });
+    await fs.writeFile(path.join(artifactDir, name + ".png"), frame.png);
+    screenshots.push(name + ".png");
+    await saveProof();
+  } finally {
+    await page.clock.resume();
+  }
 }
 
 suite.define(() => {
@@ -179,6 +189,7 @@ suite.define(() => {
           );
         });
         const page = await context.newPage();
+        await page.clock.install();
         const wire = observeBackgroundWorkRpc(page, signal);
         try {
           proof.stage = "create parent and pair browser";

@@ -1,9 +1,13 @@
-import type { AuthProfileAuthorization } from "../agents/auth-profiles/authorization-contract.js";
+import {
+  AuthProfileAuthorizationError,
+  type AuthProfileAuthorization,
+} from "../agents/auth-profiles/authorization-contract.js";
 import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
 import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
+import { isConfiguredKeyAuthSource } from "../agents/provider-model-auth-source-plan.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -67,10 +71,11 @@ export async function captureCronInferenceBinding(params: {
       authProfileStore: store,
     }).attempts;
     if (attempt?.kind !== "profile") {
+      // A configured key keeps the job unbound, the same rule its runs follow.
       const source = attempt?.plan.credentialSource;
-      if (source?.kind === "direct" && source.evidence !== "synthetic") {
+      if (source?.kind === "direct" && !isConfiguredKeyAuthSource(source)) {
         throw new Error(
-          "Automation requires a stored inference account. Select one with model@profile; environment and provider-config keys have no durable account ownership.",
+          "Automation requires a stored inference account or a key in the environment or provider config. Select an account with model@profile.",
         );
       }
       return undefined;
@@ -137,23 +142,34 @@ export async function acquireCronInferenceAuthorization(params: {
   cfg: OpenClawConfig;
   agentDir: string;
 }) {
-  const authority = await captureAuthProfileAuthorization({
-    profileId: params.binding.profileId,
-    agentDir: params.agentDir,
-    cfg: params.cfg,
-    assertCurrent() {},
-  });
-  if (authority.authorizationId !== params.binding.authorizationId) {
-    authority.dispose();
-    throw new Error(
-      "Automation inference account was replaced. Explicitly select an authorized account again.",
-    );
-  }
+  let authority: AuthProfileAuthorization | undefined;
   try {
+    authority = await captureAuthProfileAuthorization({
+      profileId: params.binding.profileId,
+      agentDir: params.agentDir,
+      cfg: params.cfg,
+      assertCurrent() {},
+    });
+    if (authority.authorizationId !== params.binding.authorizationId) {
+      throw new Error(
+        "Automation inference account was replaced. Explicitly select an authorized account again.",
+      );
+    }
     authority.assertCurrent();
     return authority;
   } catch (error) {
-    authority.dispose();
+    authority?.dispose();
+    // The shared authorization owner names its retired error for MCP callers; say what an
+    // automation lost instead.
+    if (
+      error instanceof AuthProfileAuthorizationError &&
+      error.code === "MCP_AUTHORIZATION_RETIRED"
+    ) {
+      throw new Error(
+        `Automation inference account ${params.binding.profileId} was removed or signed out. Explicitly select an authorized account again.`,
+        { cause: error },
+      );
+    }
     throw error;
   }
 }

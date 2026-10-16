@@ -20,10 +20,12 @@ the saved key remains; follow the reported recovery step. Removing a stored key
 keeps model defaults and provider connection settings. See
 [Auth profiles](/cli/models#auth-profiles) for the matching CLI commands.
 
-The initial loading view stays in place until credentials, the model catalog,
-configuration, and the installed-app inventory are ready. Usage and local costs
-load independently afterward, so a slow usage response does not block provider
-settings. The AI setup summary stays in place when model discovery finishes.
+Configured global model defaults remain available while provider details load.
+Provider and installed-app details keep their initial loading view until
+credentials, the model catalog, configuration, and the installed-app inventory
+are ready. Usage and local costs load independently afterward, so a slow usage
+response does not block provider settings. The AI setup summary stays in place
+when model discovery finishes.
 
 Background catalog updates keep the current provider rows and usage visible.
 Finishing sign-in updates that provider's credentials without restarting usage

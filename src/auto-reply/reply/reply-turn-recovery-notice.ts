@@ -102,8 +102,8 @@ export async function sendReplyRestartRecoveryNotice(params: {
     });
     const hint =
       entry.modelSelectionLocked === true
-        ? "Open it in WebChat and use Resume in new session."
-        : "Use /reset or /new to start a replacement session.";
+        ? "Open it in WebChat and use Resume."
+        : "Use Resume in WebChat, or /reset or /new to start a replacement session.";
     if (!(await params.deliver(`My session in this room ended during restart recovery. ${hint}`))) {
       log.warn(
         `restart recovery notice delivery was not confirmed for session ${params.sessionKey}`,

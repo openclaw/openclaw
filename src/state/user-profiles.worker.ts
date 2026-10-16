@@ -25,7 +25,6 @@ import {
   selectStoredGitHubIdentities,
   selectUserProfileRoleAuthority,
 } from "./user-profile-github-identity.js";
-import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import {
   createUserProfileWriteOperation,
   linkEmail,
@@ -212,13 +211,6 @@ export const userProfileOperations = {
     input: { profileId: string; provider: string },
     { stateOptions },
   ) => readSelectedUserModelAccount(input.profileId, input.provider, stateOptions()),
-  "userProfiles.list": (
-    input: { githubAccountIds: readonly number[] } | undefined,
-    { open, stateOptions },
-  ) => {
-    const options = { ...stateOptions(), database: open() };
-    return readUserProfileSnapshotSync(options, input?.githubAccountIds);
-  },
   "userProfiles.directory": ({ limit }: { limit: number }, { open, stateOptions }) => {
     const database = open();
     ensureUserProfilesSchema(stateOptions(), database);

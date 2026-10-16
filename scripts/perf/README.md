@@ -175,7 +175,9 @@ without a model replay. Utility calls never count as primary arrivals.
 The Gateway uses a fake fixture token. Clients use a non-ephemeral UI connection
 mode and sign the normal Gateway device challenge with generated Ed25519 keys.
 All clients pair through the normal loopback/shared-token admission before the
-crash and reconnect with the same device keys after restart. Connect verifies
+crash in batches of 32, avoiding the per-IP preauth limit during setup. They
+reconnect concurrently with the same device keys after restart; admission refusals
+and retries remain part of the measurement. Connect verifies
 token authentication, retained read/admin scopes, and a durable owner profile through
 `users.self`, so `projects.list` exercises the signed-in session/recents phase.
 A generated catalog plugin consumes the real Gateway session metadata snapshot
@@ -208,6 +210,18 @@ Synthetic state and logs remain for
 inspection. This reproduces recovery and reconnect/list pressure, rather than
 production provider latency or arbitrary plugin load. Never point it at live
 state, and apply the sandbox rules below to every Team command.
+
+Add `--writer-reads --clients 150` to measure read traffic competing with startup
+writes. This enables the Prometheus plugin, makes each synthetic catalog request
+read its persisted plugin metadata, and adds `sessions.github.options` for an
+owned synthetic session to each client's polling batch. GitHub accounts remain
+disconnected; no external publication occurs. At five minutes from restart spawn
+(or the requested shorter duration), the driver saves `writer-metrics.prom` and
+includes writer queue wait sums/counts by request class in `result.json`. These
+are cumulative exporter observations since its startup, so work before exporter
+subscription is not covered. The `execute` class groups multiple unclassified
+commands; it does not identify an individual caller. Use the same driver options
+and fresh fixtures for both revisions.
 
 ## Sandbox measurements
 

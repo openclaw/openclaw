@@ -30,8 +30,6 @@ async function setTheme(page: import("playwright").Page, theme: "dark" | "light"
     const root = document.documentElement;
     root.dataset.themeMode = nextTheme;
     root.dataset.themeResolved = nextTheme;
-    root.classList.toggle("wa-dark", nextTheme === "dark");
-    root.classList.toggle("wa-light", nextTheme === "light");
     root.style.colorScheme = nextTheme;
   }, theme);
 }

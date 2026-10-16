@@ -1,5 +1,5 @@
 import { createSignal, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatSessionSharing, type ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
@@ -33,6 +33,18 @@ function sharingSession(overrides: Partial<NonNullable<ChatSessionSharingProps["
 }
 
 let container: HTMLDivElement | undefined;
+
+// JSDOM has no visibility API; browser menu tests cover layout and hidden controls.
+beforeAll(() => {
+  Object.defineProperty(Element.prototype, "checkVisibility", {
+    configurable: true,
+    value: () => true,
+  });
+});
+
+afterAll(() => {
+  Reflect.deleteProperty(Element.prototype, "checkVisibility");
+});
 
 afterEach(() => {
   container?.remove();

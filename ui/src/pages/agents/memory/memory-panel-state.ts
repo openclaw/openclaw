@@ -13,13 +13,13 @@ import { t } from "../../../i18n/index.ts";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { currentConfigObject } from "../../../lib/config/config-state-model.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
+import { GatewayPageBinding } from "../../../lib/gateway-page-binding.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
-import { GatewayPageController } from "../../../lit/gateway-page-controller.ts";
 import {
   ControllerHost,
   SubscriptionsController,
   viewState,
-} from "../../../lit/subscriptions-controller.ts";
+} from "../../../lib/subscriptions-controller.ts";
 import {
   canCallDreamingMethod,
   copyDreamingArchivePath,
@@ -73,7 +73,7 @@ export class AgentMemoryState extends ControllerHost {
   @viewState() private pendingEnabled: boolean | null = null;
 
   private readonly viewState: DreamingViewState = createDreamingViewState();
-  private readonly gateway = new GatewayPageController(this, {
+  private readonly gateway = new GatewayPageBinding(() => this.requestUpdate(), {
     getGateway: () => this.context?.gateway,
     onSnapshot: ({ snapshot, initial, sourceChanged }) =>
       this.applyGatewaySnapshot(
@@ -94,6 +94,7 @@ export class AgentMemoryState extends ControllerHost {
   );
 
   override connect() {
+    this.gateway.connect();
     super.connect();
     this.applyAgentId();
   }
@@ -103,6 +104,7 @@ export class AgentMemoryState extends ControllerHost {
     this.resetTransientState();
     this.dreaming = createDreamingState();
     super.disconnect();
+    this.gateway.dispose();
   }
 
   private captureTaskScope(): DreamingTaskScope | null {

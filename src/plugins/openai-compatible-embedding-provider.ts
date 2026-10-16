@@ -2,6 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveAzureApiVersionRequestTarget } from "../../packages/memory-host-sdk/src/host/azure-api-version-request.js";
 import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
 import {
   addEmbeddingErrorContext,
@@ -355,11 +356,15 @@ async function postEmbeddingRequest(params: {
       context,
       inputCount: input.length,
     });
-    return await withRemoteHttpResponse({
+    const target = resolveAzureApiVersionRequestTarget({
       url: client.endpointUrl,
+      headers: client.headers,
+    });
+    return await withRemoteHttpResponse({
+      url: target.url,
       init: {
         method: "POST",
-        headers: client.headers,
+        headers: target.headers,
         body: JSON.stringify(body),
       },
       signal: callOptions?.signal,

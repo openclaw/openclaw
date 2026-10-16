@@ -9,7 +9,7 @@ const CLAUDE_PACKAGE_SHIM_TARGET =
   /(?:\$basedir|%dp0%)\/([^"'\r\n]*?node_modules\/@anthropic-ai\/claude-code\/bin\/claude\.exe)/giu;
 const MAX_SHIM_PROBE_BYTES = 4096;
 
-let cachedNativeReplacement: { key: string; executable: string | null } | undefined;
+let cachedNativeReplacement: { key: string; executable: string | undefined } | undefined;
 
 function readSmallExecutableSource(executable: string):
   | {
@@ -115,14 +115,14 @@ function resolveNativeReplacement(env: NodeJS.ProcessEnv): string | undefined {
   const homeDir = resolveClaudeCatalogHomeDir(env);
   const cacheKey = `${process.platform}\0${homeDir}`;
   if (cachedNativeReplacement?.key === cacheKey) {
-    return cachedNativeReplacement.executable ?? undefined;
+    return cachedNativeReplacement.executable;
   }
   // Claude installations are process-stable metadata. Cache the lookup so
   // catalog requests do not poll the filesystem; installs take effect on restart.
   const executable =
     resolveExecutableFromDirectory(path.join(homeDir, ".local", "bin"), env) ??
     resolveClaudeDesktopExecutable(homeDir, env);
-  cachedNativeReplacement = { key: cacheKey, executable: executable ?? null };
+  cachedNativeReplacement = { key: cacheKey, executable };
   return executable;
 }
 

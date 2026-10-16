@@ -8,7 +8,6 @@ import type { OpenClawConfig } from "./api.js";
 import plugin from "./index.js";
 import {
   loadMemoryWikiCompiledCache,
-  resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
 } from "./src/compiled-cache.js";
@@ -195,7 +194,6 @@ describe("memory-wiki plugin", () => {
     const publication = writeMemoryWikiCompiledCache(
       config,
       snapshot,
-      resolveMemoryWikiCompiledCacheGeneration(snapshot),
       publicationId,
       null,
       async () => {
@@ -262,7 +260,6 @@ describe("memory-wiki plugin", () => {
         writeMemoryWikiCompiledCache(
           config,
           snapshot,
-          resolveMemoryWikiCompiledCacheGeneration(snapshot),
           randomUUID(),
           null,
           async () => {},
@@ -309,7 +306,6 @@ describe("memory-wiki plugin", () => {
     await writeMemoryWikiCompiledCache(
       config,
       snapshot,
-      resolveMemoryWikiCompiledCacheGeneration(snapshot),
       publicationId,
       parentPublicationId,
       async () => {},

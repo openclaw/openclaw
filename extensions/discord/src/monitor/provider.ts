@@ -283,9 +283,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
   let gatewaySupervisor: ReturnType<typeof createDiscordGatewaySupervisor> | undefined;
   let deactivateMessageHandler: (() => Promise<void>) | undefined;
   let stopMonitorListeners: (() => Promise<void>) | undefined;
-  let autoPresenceController: Awaited<
-    ReturnType<typeof createDiscordMonitorClient>
-  >["autoPresenceController"] = null;
+  let autoPresenceController:
+    | Awaited<ReturnType<typeof createDiscordMonitorClient>>["autoPresenceController"]
+    | null = null;
   let earlyGatewayEmitter = gatewaySupervisor?.emitter;
   let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
   try {
@@ -494,7 +494,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
     runtime.log?.(
       formatDiscordStartupStatusMessage({
-        gatewayReady: lifecycleGateway?.isConnected === true,
+        gatewayReady: lifecycleGateway.isConnected,
         botIdentity: botIdentity || undefined,
       }),
     );

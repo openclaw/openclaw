@@ -10,7 +10,6 @@ import {
 } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { emptyLegacyContent, LitContent } from "../lit/solid-content.tsx";
 import { createOverlayAnchor } from "./overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
 import type { OverlayNativeAdapter } from "./overlay-types.ts";
@@ -342,7 +341,8 @@ export function PickerContent<Option extends PickerOption>(props: {
       } else {
         setQuery("");
         setSearching(false);
-        setCollapsed(new Set<string>());
+        // Disabled overlays can retire repeatedly as unrelated DOM content changes.
+        setCollapsed((current) => (current.size ? new Set<string>() : current));
         hoverOpened = false;
         if (sheetScroll) {
           sheetScroll.root.scrollTop = sheetScroll.top;
@@ -358,12 +358,8 @@ export function PickerContent<Option extends PickerOption>(props: {
   const Leading = (row: { option?: Option }) => {
     const content = createMemo(() => row.option && props.params.renderLeading?.(row.option));
     return (
-      <Show
-        when={content() !== undefined && content() !== null && content() !== emptyLegacyContent}
-      >
-        <span class="picker-select__leading">
-          <LitContent value={content()} />
-        </span>
+      <Show when={content() !== undefined && content() !== null}>
+        <span class="picker-select__leading">{content()}</span>
       </Show>
     );
   };
@@ -578,7 +574,7 @@ export function PickerContent<Option extends PickerOption>(props: {
                         })
                       }
                     >
-                      <LitContent value={group().leading} />
+                      {group().leading}
                       <span class="picker-select__group-label">{group().label}</span>
                       <span>{section().options.length}</span>
                       <span class="picker-select__chevron" aria-hidden="true">

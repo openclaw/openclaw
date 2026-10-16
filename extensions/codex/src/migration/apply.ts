@@ -299,12 +299,14 @@ async function requestTargetCodexAppServerJson(params: {
     return await requestCodexAppServerJson(params);
   }
 
-  const deadline = Date.now() + params.timeoutMs;
+  // Use the monotonic clock so NTP adjustments or sleep resumes cannot stretch
+  // or shrink the discovery budget while request timers (also monotonic) are in flight.
+  const deadline = performance.now() + params.timeoutMs;
   const discoveryTimeoutMs = targetCodexMarketplaceDiscoveryTimeoutMs();
-  const discoveryDeadline = Math.min(deadline, Date.now() + discoveryTimeoutMs);
+  const discoveryDeadline = Math.min(deadline, performance.now() + discoveryTimeoutMs);
   let lastResponse: v2.PluginListResponse;
   do {
-    const remainingMs = Math.max(1, discoveryDeadline - Date.now());
+    const remainingMs = Math.max(1, discoveryDeadline - performance.now());
     lastResponse = await requestCodexAppServerJson<v2.PluginListResponse>({
       ...params,
       timeoutMs: remainingMs,
@@ -316,15 +318,15 @@ async function requestTargetCodexAppServerJson(params: {
     ) {
       return lastResponse;
     }
-    if (Date.now() >= discoveryDeadline) {
+    if (performance.now() >= discoveryDeadline) {
       return lastResponse;
     }
     const waitMs = Math.min(
       TARGET_CODEX_MARKETPLACE_DISCOVERY_POLL_MS,
-      discoveryDeadline - Date.now(),
+      discoveryDeadline - performance.now(),
     );
     await sleep(waitMs);
-  } while (Date.now() < discoveryDeadline);
+  } while (performance.now() < discoveryDeadline);
 
   return lastResponse;
 }

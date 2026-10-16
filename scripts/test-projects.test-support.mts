@@ -102,6 +102,8 @@ import {
   createExtensionTestProcessTargetChunks,
   listTrackedTestPlanFiles,
   resolveExtensionTestConfig,
+  shouldSplitExtensionTestProcesses,
+  splitExtensionTestJobTargets,
   splitExtensionTestProcessTargets,
 } from "./lib/extension-test-plan.mts";
 import {
@@ -5715,7 +5717,7 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
   const expandToProjectConfigs =
     process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS === "1" ||
     (parallelShardCount !== null && parallelShardCount > 1) ||
-    shouldExpandLocalFullSuiteShardsByDefault(process.env);
+    !isCiLikeEnv(process.env);
   return fullSuiteVitestShards.flatMap((shard) => {
     if (
       process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD === "1" &&
@@ -5795,6 +5797,14 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
           }
         }
         if (chunks !== null) {
+          if (
+            config === EXTENSION_DATABASE_WORKERS_VITEST_CONFIG &&
+            !isCiLikeEnv(process.env) &&
+            shouldSplitExtensionTestProcesses(config, forwardedArgs)
+          ) {
+            // Bound the large native-worker cohorts without merging singleton process owners.
+            chunks = chunks.flatMap((targets) => splitExtensionTestJobTargets(config, targets));
+          }
           return chunks.map((targets) => ({
             config,
             forwardedArgs: [...forwardedArgs, ...targets],
@@ -5814,17 +5824,6 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
       ];
     });
   });
-}
-
-function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
-  if (hasConservativeVitestWorkerBudget(env)) {
-    return false;
-  }
-  return env.OPENCLAW_TEST_PROJECTS_SERIAL !== "1" && !isCiLikeEnv(env);
-}
-
-function shouldExpandLocalFullSuiteShardsByDefault(env = process.env) {
-  return !isCiLikeEnv(env);
 }
 
 function parsePositiveInt(value: string | undefined, label: string) {
@@ -5908,18 +5907,10 @@ export function resolveParallelFullSuiteConcurrency(
   if (override !== null) {
     return Math.min(override, specCount);
   }
-  if (env.OPENCLAW_TEST_PROJECTS_SERIAL === "1") {
-    return 1;
-  }
-  if (isCiLikeEnv(env)) {
-    return 1;
-  }
-  if (hasConservativeVitestWorkerBudget(env)) {
-    return 1;
-  }
   if (
-    env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS !== "1" &&
-    !shouldUseLocalFullSuiteParallelByDefault(env)
+    env.OPENCLAW_TEST_PROJECTS_SERIAL === "1" ||
+    isCiLikeEnv(env) ||
+    hasConservativeVitestWorkerBudget(env)
   ) {
     return 1;
   }

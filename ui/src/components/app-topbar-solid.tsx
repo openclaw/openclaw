@@ -1,17 +1,17 @@
+import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
-import { LitContent } from "../lit/solid-content.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, ShortcutText } from "./solid/kbd.tsx";
 import "./tooltip.ts";
 
 type Props = {
   navDrawerOpen: boolean;
-  newSessionAction: unknown;
+  newSessionAction: (() => JSX.Element) | undefined;
   resourceBasePath: string;
   environment: ControlUiEnvironment | null;
   onToggleDrawer: ((trigger: HTMLElement) => void) | undefined;
@@ -58,7 +58,7 @@ defineSolidBridge<Props>(
             </div>
           </div>
           <div class="topnav-shell__actions">
-            <LitContent value={props.newSessionAction} />
+            {props.newSessionAction?.()}
             <openclaw-tooltip prop:content={t("chat.commandPaletteTitle")}>
               <span slot="content">
                 <ShortcutText

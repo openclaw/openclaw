@@ -12,7 +12,6 @@ import {
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { requireWhatsAppInboundAdmission } from "../inbound/admission.js";
 import {
   listWhatsAppSendResultMessageIds,
   mergeWhatsAppAcceptedSendError,
@@ -46,7 +45,7 @@ export type WhatsAppReplyTransportContext = Omit<
 };
 
 export function createWhatsAppReplyTransportContext(msg: AdmittedWebInboundMessage) {
-  const admission = requireWhatsAppInboundAdmission(msg);
+  const admission = msg.admission;
   return {
     accountId: admission.accountId,
     conversationId: admission.conversation.id,

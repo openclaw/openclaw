@@ -90,17 +90,19 @@ Release builds use a stable 16-character hash of the build ID. On Windows,
 OpenClaw skips cache paths longer than 200 characters with a warning and disables
 unsafe inherited caches for child processes, avoiding a Node startup hang.
 
-The compile-cache bootstrap owner starts best-effort maintenance in a background
-worker that does not keep CLI commands alive. Node permission mode skips this
-maintenance because workers do not inherit its filesystem restrictions; cache
-entries remain until removed by an unrestricted invocation or by the operator.
-Cleanup stops when the command exits; long-lived processes give it time to
-complete. It removes superseded build directories as units. At most once an hour, or after retiring another build, it removes bytecode older than seven days
-and trims the current cache to 512 MiB, oldest files first. This is a maintenance
-target, not a hard disk quota: concurrent writes and processes that exit before
-cleanup completes can temporarily exceed it. Interrupted maintenance is eligible
-for another attempt after an hour. Other applications' caches outside
-the `openclaw` subtree are preserved.
+The compile-cache bootstrap owner starts best-effort maintenance in a detached
+process, so cleanup can finish after a short CLI command exits. Node permission
+mode skips maintenance because a child process cannot inherit its filesystem
+restrictions. Other applications' caches outside the `openclaw` subtree are preserved.
+
+Cleanup streams the combined release caches in bounded passes, evicting the oldest
+observed files to target 512 MiB and 4,096 files, and removing bytecode older than
+seven days. Each pass visits at most 16,384 entries and stops scheduling filesystem
+work after 30 seconds. A filesystem lock serializes cleanup; an abandoned lock
+can be reclaimed after five minutes. Only a completed pass advances the hourly
+maintenance timestamp. An incomplete pass leaves the next invocation eligible to
+continue pruning. These are maintenance targets, not hard disk quotas: concurrent
+writes can temporarily exceed them, and a large backlog may need several invocations.
 
 ### Gateway and authentication
 

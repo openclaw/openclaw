@@ -333,7 +333,7 @@ export function renderSessionSection(params: {
                         group: group() ?? "",
                       };
                     },
-                    get className() {
+                    get class() {
                       return "sidebar-session-group-actions sidebar-new-session";
                     },
                     get label() {

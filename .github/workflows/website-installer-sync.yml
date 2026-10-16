@@ -40,7 +40,7 @@ env:
 
 jobs:
   static:
-    runs-on: ubuntu-24.04
+    runs-on: &linux_runner_ubuntu ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,7 +76,7 @@ jobs:
           }
 
   linux-docker:
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,7 +100,7 @@ jobs:
             bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
 
   debian-installer:
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -128,7 +128,7 @@ jobs:
           CONTAINER
 
   linux-build-tools-failure:
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -193,7 +193,7 @@ jobs:
           CONTAINER
 
   linux-non-root:
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -236,7 +236,7 @@ jobs:
       fail-fast: false
       matrix:
         user: [root, non-root]
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -394,7 +394,7 @@ jobs:
     if: >
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && inputs.sync_website)
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     env:
       OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}
     steps:
