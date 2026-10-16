@@ -38,7 +38,6 @@ import {
   createSessionFilesHandlerInvoker,
   createSessionFilesClient,
   createSessionFileDownloadClient,
-  fetchSessionFileDownload,
 } from "./sessions-files.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import * as workspaceFs from "./workspace-fs.js";
@@ -46,6 +45,7 @@ import * as workspaceFs from "./workspace-fs.js";
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const key = "agent:main:dashboard:incognito-files";
 const sid = "private-files";
+const target = { sessionKey: key, agentId: "main" };
 let storePath: string;
 let env: NodeJS.ProcessEnv;
 let workspace: string;
@@ -60,12 +60,8 @@ const context = {
 
 async function withoutHostSql(run: () => Promise<void>) {
   const sql = observeHostDataSql();
-  try {
-    await run();
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
+  await run().finally(sql.restore);
+  expect(sql.queries).toEqual([]);
 }
 
 function setConfig(value: OpenClawConfig) {
@@ -103,9 +99,7 @@ beforeAll(async () => {
   );
 });
 
-beforeEach(() => {
-  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-});
+beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR));
 afterEach(() => vi.restoreAllMocks());
 afterAll(async () => {
   memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
@@ -117,8 +111,7 @@ afterAll(async () => {
 it("serves unbound memory files and the complete diff baseline without opening host SQLite", () =>
   withoutHostSql(async () => {
     await writeFile(path.join(workspace, "example.txt"), "after session\n");
-    const list = await files.ok("list");
-    expect(list.browser.entries).toEqual(
+    expect((await files.ok("list")).browser.entries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ path: "example.txt", sessionKind: "modified" }),
       ]),
@@ -127,19 +120,18 @@ it("serves unbound memory files and the complete diff baseline without opening h
     expect(file.file.content).toBe("after session\n");
     using connection = createSessionFileDownloadClient();
     const download = await files.ok("download", "example.txt", undefined, connection);
-    const fetched = await fetchSessionFileDownload(connection.client, download.url);
+    const fetched = await connection.fetch(download.url);
     expect(fetched.response.statusCode).toBe(200);
     expect(Buffer.from(fetched.body as Uint8Array).toString()).toBe("after session\n");
     expect(await files.error("get", "../outside.txt")).toMatchObject({
       details: { reason: "outside_session_boundary" },
     });
     expect(await files.ok("assets", { path: "example.txt", refs: [] })).toEqual({ assets: [] });
-    expect(
-      await loadSessionDiff(
-        { sessionKey: key },
-        context as GatewayRequestHandlerOptions["context"],
-      ),
-    ).toMatchObject({ files: [expect.objectContaining({ path: "example.txt" })] });
+    const diff = await loadSessionDiff(
+      { sessionKey: key },
+      context as GatewayRequestHandlerOptions["context"],
+    );
+    expect(diff).toMatchObject({ files: [expect.objectContaining({ path: "example.txt" })] });
     const saved = await files.ok("set", {
       path: "example.txt",
       content: "saved\n",
@@ -157,7 +149,6 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
   withoutHostSql(async () => {
     using connection = createSessionFileDownloadClient();
     const options = {
-      params: {},
       client: {
         connId: "actor-file-view",
         connect: { role: "operator", scopes: ["operator.admin"] },
@@ -166,30 +157,22 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
       context: { ...context, broadcastToConnIds() {} },
       hasCurrentClientAuthority: () => true,
     } as unknown as GatewayRequestHandlerOptions;
+    const resource = {
+      uri: "ui://fixture/editor",
+      mimeType: "text/html;profile=mcp-app",
+      text: "<p>editor</p>",
+    };
     const runtime = {
       sessionId: sid,
       sessionKey: key,
       mcpAppsEnabled: true,
       markUsed() {},
-      readResource: async () => ({
-        contents: [
-          {
-            uri: "ui://fixture/editor",
-            mimeType: "text/html;profile=mcp-app",
-            text: "<p>editor</p>",
-          },
-        ],
-      }),
+      readResource: async () => ({ contents: [resource] }),
     } as unknown as SessionMcpRuntime;
-    const file = await prepareMcpAppHostFile(options, {
-      sessionKey: key,
-      agentId: "main",
-      path: "example.txt",
-    });
+    const file = await prepareMcpAppHostFile(options, { ...target, path: "example.txt" });
     const upload = createMcpAppWorkspaceUploadProvider({
       workspaceDir: workspace,
-      sessionKey: key,
-      agentId: "main",
+      ...target,
       assertCurrent() {},
     });
     const uploadText = (name: string, text: string) =>
@@ -204,7 +187,7 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
       agentId: "main",
       serverName: "fixture",
       toolName: "edit",
-      uiResourceUri: "ui://fixture/editor",
+      uiResourceUri: resource.uri,
       toolInput: {},
       toolResult: { content: [] },
       allowedAppToolNames: new Set(),
@@ -249,9 +232,7 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
       }
       await rejected;
       await replaceSessionEntry({ sessionKey: key, storePath }, entry);
-      expect(
-        (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
-      ).toBe(404);
+      expect((await connection.fetch(download.url)).response.statusCode).toBe(404);
       await expect(read()).rejects.toThrow(/Incognito|incognito/);
       await expect(uploadText("refused.txt", "stale")).rejects.toThrow(/Incognito|incognito/);
     } finally {

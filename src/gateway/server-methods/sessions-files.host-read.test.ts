@@ -15,7 +15,6 @@ import {
   createSessionFilesHandlerInvoker,
   createSessionFilesClient,
   createSessionFileDownloadClient,
-  fetchSessionFileDownload,
   createVisibleMessagesMock,
   expectError,
   expectOkPayload,
@@ -138,7 +137,7 @@ it("downloads original binary bytes beyond preview limits with safe HTTP metadat
   fs.writeFileSync(path.join(workspaceRoot, filename), bytes);
   const download = await fixture.files.ok("download", filename, undefined, connection);
   expect(download).toMatchObject({ filename, mimeType: "application/zip" });
-  const fetched = await fetchSessionFileDownload(connection.client, download.url);
+  const fetched = await connection.fetch(download.url);
   expect(fetched.response.statusCode).toBe(200);
   expect(Buffer.from(fetched.body as Uint8Array).equals(bytes)).toBe(true);
   expect(fetched.response.getHeader("content-disposition")).toContain("attachment;");
@@ -147,29 +146,24 @@ it("downloads original binary bytes beyond preview limits with safe HTTP metadat
   );
   expect(fetched.response.getHeader("content-type")).toBe(download.mimeType);
   expect(fetched.response.getHeader("cache-control")).toBe("private, no-store");
-  const head = await fetchSessionFileDownload(connection.client, download.url, "HEAD");
+  const head = await connection.fetch(download.url, "HEAD");
   expect(head.body).toBeUndefined();
   expect(head.response.getHeader("content-length")).toBe(String(bytes.length));
-  const range = await fetchSessionFileDownload(connection.client, download.url, "GET", {
+  const range = await connection.fetch(download.url, "GET", {
     range: "bytes=524280-524300",
   });
   expect(range.response.statusCode).toBe(206);
   expect(Buffer.from(range.body as Uint8Array)).toEqual(bytes.subarray(524280, 524301));
   using other = createSessionFileDownloadClient();
-  expect((await fetchSessionFileDownload(other.client, download.url)).response.statusCode).toBe(
-    404,
-  );
+  expect((await other.fetch(download.url)).response.statusCode).toBe(404);
   fs.writeFileSync(path.join(workspaceRoot, filename), "replacement");
-  expect(
-    (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
-  ).toBe(404);
+  expect((await connection.fetch(download.url)).response.statusCode).toBe(404);
 });
 
 it("rejects workspace escapes and links before granting downloads", async () => {
   using connection = createSessionFileDownloadClient();
   const fixture = prepareHostFileRead({ permissionMode: "read-only" });
-  const outsidePath = outsideFile();
-  fs.writeFileSync(outsidePath, "private");
+  const outsidePath = outsideFile("private");
   fs.symlinkSync(outsidePath, path.join(workspaceRoot, "link"));
   for (const filePath of [outsidePath, "../outside", "link"]) {
     await fixture.files.error("download", filePath, undefined, connection);
@@ -195,13 +189,11 @@ it.each([
       ...connection,
     });
     expect(download.filename).toBe(filename);
-    const result = await fetchSessionFileDownload(connection.client, download.url);
+    const result = await connection.fetch(download.url);
     expect(result.response.statusCode).toBe(200);
     expect(Buffer.from(result.body as Uint8Array).equals(bytes)).toBe(true);
     fixture.entry.permissionMode = "read-only";
-    expect(
-      (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
-    ).toBe(404);
+    expect((await connection.fetch(download.url)).response.statusCode).toBe(404);
     await fixture.files.error("download", outsidePath, undefined, {
       ...fixture.options,
       ...connection,
@@ -209,26 +201,19 @@ it.each([
   },
 );
 
-it.each<{
-  label: string;
-  entry?: Partial<InternalSessionEntry>;
-  cfg?: OpenClawConfig;
-}>([
-  { label: "read-only mode", entry: { permissionMode: "read-only" } },
-  { label: "global filesystem policy", cfg: { tools: { fs: { workspaceOnly: true } } } },
-  {
-    label: "required sandbox in full mode",
-    entry: { permissionMode: "full", sandbox: "required" },
-  },
-  {
-    label: "configured sandbox in full mode",
-    entry: { permissionMode: "full" },
-    cfg: { agents: { defaults: { sandbox: { mode: "all" } } } },
-  },
-  { label: "exec-node placement", entry: { execNode: "build-mac" } },
+it.each<[string, Partial<InternalSessionEntry>?, OpenClawConfig?]>([
+  ["read-only mode", { permissionMode: "read-only" }],
+  ["global filesystem policy", undefined, { tools: { fs: { workspaceOnly: true } } }],
+  ["required sandbox in full mode", { permissionMode: "full", sandbox: "required" }],
+  [
+    "configured sandbox in full mode",
+    { permissionMode: "full" },
+    { agents: { defaults: { sandbox: { mode: "all" } } } },
+  ],
+  ["exec-node placement", { execNode: "build-mac" }],
 ])(
-  "contains previews under $label without disclosing outside file existence",
-  async ({ entry, cfg }) => {
+  "contains previews under %s without disclosing outside file existence",
+  async (_label, entry, cfg) => {
     const outsidePath = outsideFile("outside\n");
     const fixture = prepareHostFileRead(entry, cfg);
     mockVisibleMessages([assistantToolCall("read", { path: outsidePath })]);
@@ -239,12 +224,9 @@ it.each<{
       "~/.openclaw-outside-preview.txt",
       `${outsidePath}.missing`,
     ]) {
-      const error = await fixture.files.error("get", requestedPath);
-
-      expect(error.details).toMatchObject({
+      expect((await fixture.files.error("get", requestedPath)).details).toMatchObject({
         path: requestedPath,
-        type: "session_file_not_found",
-        reason: "outside_session_boundary",
+        ...outsideBoundary,
       });
     }
     const inRoot = await fixture.files.ok("get", "src/readme.md");
@@ -318,10 +300,7 @@ it("keeps host previews bounded and classifies image and unsupported bytes", asy
   const outsidePath = outsideFile();
   const cases = [
     { bytes: Buffer.from("GIF89a", "ascii"), previewKind: "image" },
-    {
-      bytes: Buffer.from("SQLite format 3\0"),
-      previewKind: "unsupported",
-    },
+    { bytes: Buffer.from("SQLite format 3\0"), previewKind: "unsupported" },
     { bytes: Buffer.alloc(256 * 1024 + 1, "x"), previewKind: "too_large" },
   ];
   for (const { bytes, previewKind } of cases) {
@@ -356,8 +335,9 @@ it.runIf(process.platform !== "win32")(
     const link = outsideFile();
     fs.symlinkSync("/dev/null", link);
     for (const requestedPath of [path.dirname(link), link]) {
-      const error = await fixture.files.error("get", requestedPath);
-      expect(error.details.type).toBe("session_file_not_found");
+      expect((await fixture.files.error("get", requestedPath)).details.type).toBe(
+        "session_file_not_found",
+      );
     }
   },
 );

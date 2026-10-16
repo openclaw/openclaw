@@ -29,6 +29,7 @@ const publisherIdentity = {
   account: { accountId: publisher.accountId, login: publisher.login, avatarUrl: null },
 };
 type ReadFixture = Parameters<Parameters<typeof withReadFixture>[0]>[0];
+type Worktree = Awaited<ReturnType<typeof registerWorktree>>;
 const options = (fixture: ReadFixture) => fixture.invoke("sessions.github.options", { sessionKey });
 const expectedOptions = (supported: boolean) => ({
   personal: null,
@@ -44,10 +45,7 @@ function expectFailure(
   expect(response).toHaveBeenCalledWith(false, undefined, expect.objectContaining(detail));
 }
 async function withWorktree(
-  run: (
-    fixture: ReadFixture,
-    worktree: Awaited<ReturnType<typeof registerWorktree>>,
-  ) => Promise<void>,
+  run: (fixture: ReadFixture, worktree: Worktree) => Promise<void>,
   origin: string | undefined = githubOrigin,
 ) {
   await withReadFixture(async (fixture) => run(fixture, await registerWorktree(origin)), guest);
@@ -67,19 +65,10 @@ afterEach(() => vi.restoreAllMocks());
 async function registerWorktree(origin?: string) {
   const root = await fs.realpath(temporary.make("publication-read-target-"));
   await git(root, "init", "--initial-branch=feature");
-  const config = [
-    "user.name=Publication Fixture",
-    "user.email=publication@example.invalid",
-    "commit.gpgsign=false",
-  ];
-  await git(
-    root,
-    ...config.flatMap((value) => ["-c", value]),
-    "commit",
-    "--allow-empty",
-    "-m",
-    "fixture",
-  );
+  await git(root, "config", "user.name", "Publication Fixture");
+  await git(root, "config", "user.email", "publication@example.invalid");
+  await git(root, "config", "commit.gpgsign", "false");
+  await git(root, "commit", "--allow-empty", "-m", "fixture");
   if (origin) {
     await git(root, "remote", "add", "origin", origin);
   }
@@ -140,13 +129,7 @@ describe("registered guest publication target discovery", () => {
         expect(await options(fixture)).toHaveBeenCalledWith(true, sharedOptions);
       }
       expect(lookup).toHaveBeenCalledOnce();
-      await git(
-        worktree.path,
-        "remote",
-        "set-url",
-        "origin",
-        "https://example.test/replacement.git",
-      );
+      await git(worktree.path, "remote", "set-url", "origin", "https://example.test/repo.git");
       now += 14_999;
       expect(await options(fixture)).toHaveBeenCalledWith(true, sharedOptions);
       expect(lookup).toHaveBeenCalledOnce();

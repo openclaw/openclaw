@@ -7,7 +7,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getUserProfileDisplay } from "../../state/user-profile-list.js";
@@ -23,6 +22,7 @@ import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-cli
 import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { prepareGatewayConnectOperatorAccess } from "../server/ws-connection/connect-operator-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import type * as SessionStore from "../session-utils-store-worker.js";
 import { sessionsGitHubHandlers } from "./sessions-github.js";
 import type {
   GatewayClient,
@@ -32,10 +32,7 @@ import type {
 
 const mocks = vi.hoisted(() => ({
   caller: vi.fn(),
-  loadSession:
-    vi.fn<
-      typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
-    >(),
+  loadSession: vi.fn<typeof SessionStore.loadGatewaySessionEntryReadOnlyInWorker>(),
   request: vi.fn<GitHubPublicationCoordinator["requestForSessionV2"]>(),
 }));
 
@@ -44,16 +41,9 @@ vi.mock("../../agents/tools/gateway-caller-context.js", async (importOriginal) =
   getGatewayToolCallerIdentity: mocks.caller,
 }));
 vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  ...(await importOriginal<typeof SessionStore>()),
   loadGatewaySessionEntryReadOnlyInWorker: mocks.loadSession,
 }));
-
-async function useRealSessionReads() {
-  const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
-    typeof import("../session-utils-store-worker.js")
-  >("../session-utils-store-worker.js");
-  mocks.loadSession.mockImplementation(loadGatewaySessionEntryReadOnlyInWorker);
-}
 
 async function withRealSessions(config: OpenClawConfig, run: () => Promise<void>) {
   await withOpenClawTestState(
@@ -62,7 +52,8 @@ async function withRealSessions(config: OpenClawConfig, run: () => Promise<void>
       await state.writeConfig(config);
       await captureRuntimeConfigAsyncReader()();
       mocks.caller.mockReturnValue(undefined);
-      await useRealSessionReads();
+      const real = await vi.importActual<typeof SessionStore>("../session-utils-store-worker.js");
+      mocks.loadSession.mockImplementation(real.loadGatewaySessionEntryReadOnlyInWorker);
       await run();
     },
   );
@@ -82,19 +73,6 @@ const acceptedPublication = {
   message: "Publication was accepted.",
 } as const;
 const callerSession = "agent:main:dashboard:task";
-const systemClient = () =>
-  createSyntheticPluginRuntimeClient({
-    operatorRoleActor: { kind: "system" },
-    scopes: ["operator.admin"],
-  });
-function expectInvalidRequest(respond: Awaited<ReturnType<typeof invoke>>) {
-  expect(mocks.request).not.toHaveBeenCalled();
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code: "INVALID_REQUEST" }),
-  );
-}
 function expectPublication(overrides: Record<string, unknown> = {}) {
   expect(mocks.request).toHaveBeenCalledExactlyOnceWith({
     sessionKey: callerSession,
@@ -121,19 +99,23 @@ async function invoke(
       githubPublicationService: { requestForSessionV2: mocks.request },
       getRuntimeConfig,
     } as never,
-    client: options.client ?? systemClient(),
+    client:
+      options.client ??
+      createSyntheticPluginRuntimeClient({
+        operatorRoleActor: { kind: "system" },
+        scopes: ["operator.admin"],
+      }),
     req: { type: "req", id: "req-publication", method: "sessions.github.publish", params },
     isWebchatConnect: () => false,
     sessionMutationAuthorization: options.sessionMutationAuthorization,
   };
-  if (options.registered) {
-    await handleGatewayRequest(request);
-  } else {
-    await expectDefined(
-      sessionsGitHubHandlers["sessions.github.publish"],
-      "sessions.github.publish handler",
-    )(request);
-  }
+  const handler = options.registered
+    ? handleGatewayRequest
+    : expectDefined(
+        sessionsGitHubHandlers["sessions.github.publish"],
+        "sessions.github.publish handler",
+      );
+  await handler(request);
   return respond;
 }
 
@@ -166,9 +148,7 @@ describe("sessions.github.publish", () => {
     });
   });
 
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-  });
+  afterEach(clearRuntimeConfigSnapshot);
 
   it("uses host-owned caller identity", async () => {
     const respond = await invoke({ idempotencyKey: "tool-call-1", title: "Publish the fix" });
@@ -180,15 +160,21 @@ describe("sessions.github.publish", () => {
     expect(respond).toHaveBeenCalledWith(true, acceptedPublication);
   });
 
-  it.each([{ agentId: "research" }, { sessionKey: "agent:research:main" }])(
-    "rejects a conflicting tool caller target %j",
-    async (target) => {
-      const respond = await invoke({ idempotencyKey: "conflicting-owner", ...target });
+  it.each([
+    { agentId: "research" },
+    { sessionKey: "agent:research:main" },
+    { repository: "openclaw/openclaw", branch: "main", token: "secret" },
+  ])("rejects caller-supplied authority %j", async (target) => {
+    const respond = await invoke({ idempotencyKey: "conflicting-owner", ...target });
 
-      expectInvalidRequest(respond);
-      expect(mocks.loadSession).not.toHaveBeenCalled();
-    },
-  );
+    expect(mocks.request).not.toHaveBeenCalled();
+    expect(mocks.loadSession).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
 
   it.each(["fresh", "wrong-key", "ordinary"])(
     "forwards only the exact owner's %s selection rejection fact",
@@ -214,17 +200,6 @@ describe("sessions.github.publish", () => {
     },
   );
 
-  it("rejects caller-supplied repository authority at the protocol boundary", async () => {
-    const respond = await invoke({
-      idempotencyKey: "tool-call-1",
-      repository: "openclaw/openclaw",
-      branch: "main",
-      token: "secret",
-    });
-
-    expectInvalidRequest(respond);
-  });
-
   it.each(["admitted", "unprepared"] as const)(
     "preserves %s operator authority through the registered publication handler",
     async (source) => {
@@ -233,62 +208,57 @@ describe("sessions.github.publish", () => {
         agents: ["main"],
         sessions: { others: "write" as const },
       };
-      await withRealSessions(
-        { gateway: { roles: { definitions: { staff }, default: "staff" } } },
-        async () => {
-          const profile = await ensureCanonicalUserProfileForEmail("publisher@example.test");
-          const creator = await ensureCanonicalUserProfileForEmail("session-creator@example.test");
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey: "agent:main:main" },
-            {
-              sessionId: "session-main",
-              updatedAt: 1,
-              ...buildSessionCreationStamp({
-                via: "operator",
-                actor: { type: "human", source: "profile", id: creator.id },
-              }),
-            },
-          );
-          const client = createOperatorWsClient({ scopes: ["operator.write"] });
-          client.authenticatedUserProfile = {
-            profileId: profile.id,
-            displayName: profile.displayName,
-            avatarRevision: getUserProfileDisplay(profile.id).avatarRevision,
-            hasAvatar: false,
-            updatedAt: profile.updatedAt,
-          };
-          if (source === "admitted") {
-            prepareGatewayConnectOperatorAccess(client);
-          }
-          const respond = await invoke(
-            { sessionKey: "main", idempotencyKey: "operator-publication-1" },
-            { client, registered: true },
-          );
+      const config = { gateway: { roles: { definitions: { staff }, default: "staff" } } };
+      await withRealSessions(config, async () => {
+        const profile = await ensureCanonicalUserProfileForEmail("publisher@example.test");
+        const creator = await ensureCanonicalUserProfileForEmail("session-creator@example.test");
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: "agent:main:main" },
+          {
+            sessionId: "session-main",
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: creator.id },
+          },
+        );
+        const client = createOperatorWsClient({ scopes: ["operator.write"] });
+        client.authenticatedUserProfile = {
+          profileId: profile.id,
+          displayName: profile.displayName,
+          avatarRevision: getUserProfileDisplay(profile.id).avatarRevision,
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        };
+        if (source === "admitted") {
+          prepareGatewayConnectOperatorAccess(client);
+        }
+        const respond = await invoke(
+          { sessionKey: "main", idempotencyKey: "operator-publication-1" },
+          { client, registered: true },
+        );
 
-          if (source === "unprepared") {
-            expect(mocks.request).not.toHaveBeenCalled();
-            expect(respond).toHaveBeenCalledWith(false, undefined, {
-              code: "UNAVAILABLE",
-              message: new GitHubPublicationRequesterUnavailableError().message,
-            });
-            return;
-          }
-          expect(mocks.request).toHaveBeenCalledExactlyOnceWith({
-            sessionKey: "agent:main:main",
-            idempotencyKey: "operator-publication-1",
-            agentId: "main",
-            requester: {
-              ...expectedSystemRequester,
-              snapshot: {
-                ...expectedSystemRequester.snapshot,
-                actor: { kind: "operator", profileId: profile.id },
-                scopes: ["operator.write"],
-              },
-            },
+        if (source === "unprepared") {
+          expect(mocks.request).not.toHaveBeenCalled();
+          expect(respond).toHaveBeenCalledWith(false, undefined, {
+            code: "UNAVAILABLE",
+            message: new GitHubPublicationRequesterUnavailableError().message,
           });
-          expect(respond).toHaveBeenCalledWith(true, acceptedPublication);
-        },
-      );
+          return;
+        }
+        expect(mocks.request).toHaveBeenCalledExactlyOnceWith({
+          sessionKey: "agent:main:main",
+          idempotencyKey: "operator-publication-1",
+          agentId: "main",
+          requester: {
+            ...expectedSystemRequester,
+            snapshot: {
+              ...expectedSystemRequester.snapshot,
+              actor: { kind: "operator", profileId: profile.id },
+              scopes: ["operator.write"],
+            },
+          },
+        });
+        expect(respond).toHaveBeenCalledWith(true, acceptedPublication);
+      });
     },
   );
 

@@ -66,7 +66,12 @@ export function createSessionFileDownloadClient() {
       client: { id: "test", version: "test", platform: "test", mode: "test" },
     },
   };
-  return { client, [Symbol.dispose]: () => controller.abort() };
+  return {
+    client,
+    fetch: (url: string, method?: string, headers?: Record<string, string>) =>
+      fetchSessionFileDownload(client, url, method, headers),
+    [Symbol.dispose]: () => controller.abort(),
+  };
 }
 
 export function createSessionFilesClient(

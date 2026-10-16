@@ -38,15 +38,15 @@ import {
   REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS,
 } from "../github-repository-publication-snapshot.js";
 import { nodeWorkerGatewayNamespace } from "../worker-environments/node-worker-gateway-namespace.js";
-import { createNodeWorkerTunnelManager } from "../worker-environments/node-worker-tunnel.js";
 import {
   BUILD,
+  createManager,
   environment,
   transport,
   workspaceTransfer,
 } from "../worker-environments/node-worker-tunnel.test-support.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
-import { seedAttachedPlacementEnvironment } from "../worker-environments/placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "../worker-environments/placement-test-fixtures.js";
 import { createRepositoryWorkspaceMutationService } from "../worker-environments/repository-workspace-mutation.js";
 import type { WorkerEnvironmentService } from "../worker-environments/service.js";
 import {
@@ -205,6 +205,16 @@ function checkpointData(base: Awaited<ReturnType<typeof capture>>, current = bas
 
 const createRepository = (url: string) =>
   store.create({ agentId: "main", sessionKey, url, assertCurrent() {} });
+async function publishCheckpoint(base: Awaited<ReturnType<typeof capture>>, current = base) {
+  const staged = await stageSessionRepositoryCheckpoint({
+    store,
+    workspaceId: source.workspaceId,
+    expectedRevision: source.revision,
+    ...checkpointData(base, current),
+    assertCurrent() {},
+  });
+  source = await staged.publish();
+}
 async function bindBase(baseCommit: string, baseManifestHash: string) {
   source = await store.bindBase({
     workspaceId: source.workspaceId,
@@ -283,15 +293,7 @@ beforeEach(async () => {
   source = await createRepository("https://example.test/repository.git");
   const base = await capture(git("rev-parse", "HEAD"));
   await bindBase(base.manifest.baseCommit!, base.manifestRef);
-  // Repository startup accepts its first checkpoint before exposing an active editor.
-  const initial = await stageSessionRepositoryCheckpoint({
-    store,
-    workspaceId: source.workspaceId,
-    expectedRevision: source.revision,
-    ...checkpointData(base),
-    assertCurrent: () => {},
-  });
-  source = await initial.publish();
+  await publishCheckpoint(base);
   mocks.store.mockReturnValue(store);
   mocks.workspace.mockReturnValue(gatewayRoot);
   mocks.load.mockImplementation(() => ({
@@ -335,35 +337,24 @@ async function persistSessionEntry() {
 async function withCheckpointAcceptance(failCapture = false) {
   const database = openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") });
   const placements = createWorkerSessionPlacementStore({ database });
-  seedAttachedPlacementEnvironment(database, {
-    environmentId: identity.environmentId,
-    sessionId: identity.sessionId,
-    ownerEpoch: identity.generation,
-  });
-  let placement = await placements.startDispatch({
-    sessionId: identity.sessionId,
-    sessionKey,
-    agentId: "main",
-    executionMode: "remote-exec",
-  });
-  for (const [from, to, patch] of [
-    ["requested", "provisioning", { environmentId: identity.environmentId }],
-    ["provisioning", "syncing", { workerBundleHash: BUILD.bundleHash }],
-    [
-      "syncing",
-      "starting",
-      { workspaceBaseManifestRef: source.baseManifestHash, remoteWorkspaceDir: workspace },
-    ],
-    ["starting", "active", { activeOwnerEpoch: identity.generation }],
-  ] as const) {
-    placement = await placements.transition({
+  const placement = await advancePlacementFixtureToActive(
+    placements,
+    database,
+    {
       sessionId: identity.sessionId,
-      from,
-      to,
-      expectedGeneration: placement.generation,
-      patch,
-    });
-  }
+      sessionKey,
+      agentId: "main",
+      executionMode: "remote-exec",
+    },
+    {
+      environmentId: identity.environmentId,
+      ownerEpoch: identity.generation,
+      workerBundleHash: BUILD.bundleHash,
+      workspaceBaseManifestRef: source.baseManifestHash!,
+      remoteWorkspaceDir: workspace,
+      seedEnvironment: "before-dispatch",
+    },
+  );
   generation = placement.generation;
   const base = await capture();
   const environments = {
@@ -436,22 +427,17 @@ it("accepts editor bytes and Git-normalized publication before acknowledging the
   await files.ok("set", edit("saved\r\n"), accepted.context);
   await withSessionRepositoryCheckpoint(
     { store, workspaceId: source.workspaceId, includePublication: true },
-    async (snapshot) => {
-      expect(fs.readFileSync(path.join(snapshot.stagingRoot, "changed.txt"), "utf8")).toBe(
-        "saved\r\n",
-      );
-      expect(snapshot.publicationDigest).toBeDefined();
+    async ({ stagingRoot, publicationDigest, publicationStagingRoot }) => {
+      expect(fs.readFileSync(path.join(stagingRoot, "changed.txt"), "utf8")).toBe("saved\r\n");
+      expect(publicationDigest).toBeDefined();
       const { snapshot: publication } = await readGitHubRepositoryPublicationMetadata(
-        snapshot.publicationStagingRoot!,
-        snapshot.publicationDigest!,
+        publicationStagingRoot!,
+        publicationDigest!,
       );
       const published = publication.entries.find((entry) => entry.path === "changed.txt")!;
       expect(
         (
-          await readGitHubRepositoryPublicationBlob(
-            snapshot.publicationStagingRoot!,
-            published.sha!,
-          )
+          await readGitHubRepositoryPublicationBlob(publicationStagingRoot!, published.sha!)
         ).toString(),
       ).toBe("saved\n");
     },
@@ -562,10 +548,9 @@ it("downloads original live repository bytes in bounded windows and rejects stal
 
 it("browses, previews, edits and diffs only the live repository without a Gateway checkout", async () => {
   const list = await files.ok("list");
-  expect(list.browser.entries.map((entry: { path: string }) => entry.path)).toContain("README");
-  expect(list.browser.entries.map((entry: { path: string }) => entry.path)).not.toContain(
-    "package.json",
-  );
+  const listedPaths = list.browser.entries.map((entry: { path: string }) => entry.path);
+  expect(listedPaths).toContain("README");
+  expect(listedPaths).not.toContain("package.json");
   expect(list.root).toBeUndefined();
   const before = await files.ok("get", "changed.txt");
   const content = "x".repeat(192 * 1024);
@@ -581,9 +566,10 @@ it("browses, previews, edits and diffs only the live repository without a Gatewa
   writeFile("second.txt", "second edit\n");
   const diff = await loadSessionDiff({ sessionKey }, context as never);
   expect(diff.root).toBeUndefined();
-  expect(diff.files.map((file) => file.path)).toEqual(["changed.txt", "second.txt"]);
-  expect(diff.files[0]?.patch).toContain("+after");
-  expect(diff.files[1]?.patch).toContain("+second edit");
+  expect(diff.files).toMatchObject([
+    { path: "changed.txt", patch: expect.stringContaining("+after") },
+    { path: "second.txt", patch: expect.stringContaining("+second edit") },
+  ]);
   const reveal = await files.ok("reveal");
   expect(reveal).toMatchObject({
     ok: false,
@@ -627,29 +613,19 @@ it.each(["reset", "archive", "lifecycle revision"])(
 );
 
 it("keeps stopped inspection limited to verified changed artifacts", async () => {
+  const changedPaths = ["changed.txt", "oversized.txt", "second.txt"];
+  const oversizedBytes = Buffer.alloc(8 * 1024 * 1024 + 1, 97);
   const base = await capture();
   writeFile("changed.txt", "retained first\n");
   writeFile("second.txt", "retained second\n");
-  writeFile("oversized.txt", Buffer.alloc(8 * 1024 * 1024 + 1, 97));
-  const current = await capture();
-  const staged = await stageSessionRepositoryCheckpoint({
-    store,
-    workspaceId: source.workspaceId,
-    expectedRevision: source.revision,
-    ...checkpointData(base, current),
-    assertCurrent: () => {},
-  });
-  source = await staged.publish();
+  writeFile("oversized.txt", oversizedBytes);
+  await publishCheckpoint(base, await capture());
   active = false;
   const originalGitRead = worktreeGit.runGitBuffered;
   const hostReads = vi.spyOn(worktreeGit, "runGitBuffered");
   onTestFinished(() => hostReads.mockRestore());
   const list = await files.ok("list");
-  expect(list.browser.entries.map((entry: { path: string }) => entry.path)).toEqual([
-    "changed.txt",
-    "oversized.txt",
-    "second.txt",
-  ]);
+  expect(list.browser.entries.map((entry: { path: string }) => entry.path)).toEqual(changedPaths);
   expect(hostReads.mock.calls.map(([, args]) => args.slice(0, 2))).toEqual([
     ["cat-file", "commit"],
     ["ls-tree", "-r"],
@@ -666,9 +642,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   const download = await files.ok("download", "oversized.txt", undefined, connection);
   const fetched = await fetchSessionFileDownload(connection.client, download.url);
   expect(fetched.response.statusCode).toBe(200);
-  expect(
-    Buffer.from(fetched.body as Uint8Array).equals(Buffer.alloc(8 * 1024 * 1024 + 1, 97)),
-  ).toBe(true);
+  expect(Buffer.from(fetched.body as Uint8Array).equals(oversizedBytes)).toBe(true);
   await files.error("download", "README", undefined, connection);
   await files.error("download", "../changed.txt", undefined, connection);
   const beforeOversized = blobsRead();
@@ -681,18 +655,14 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
       type: "session_file_too_large",
       path: "oversized.txt",
       maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
-      size: 8 * 1024 * 1024 + 1,
+      size: oversizedBytes.length,
     },
   });
   expect(blobsRead()).toBe(beforeOversized);
   await expect(files.request("get", "README")).rejects.toThrow("not a retained changed artifact");
   const diff = await loadSessionDiff({ sessionKey }, context as never);
   expect(diff.unavailableReason).toBe("workspace_stopped");
-  expect(diff.files.map((file) => file.path)).toEqual([
-    "changed.txt",
-    "oversized.txt",
-    "second.txt",
-  ]);
+  expect(diff.files.map((file) => file.path)).toEqual(changedPaths);
   expect(run).not.toHaveBeenCalled();
   expect(mocks.workspace).not.toHaveBeenCalled();
 
@@ -776,13 +746,9 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     }
     return { ok: true, payloadJSON: JSON.stringify(await runtime.exec(input, request.signal)) };
   };
-  const manager = createNodeWorkerTunnelManager({
+  const manager = createManager(record, {
     gatewayDeviceId,
-    getEnvironment: () => record,
-    listEnvironments: () => [record],
     getTransport: () => nodeTransport,
-    launchNodeWorker: vi.fn(),
-    validateWorkerTurn: () => true,
     workspaceTransfer: { ...workspaceTransfer(), prepareRepository: vi.fn(async () => {}) },
   });
   manager.bindWorkspaceBindingResolver(async () => ({
@@ -810,16 +776,15 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     },
   };
   let saveSettled = false;
-  const saving = files.request("set", edit("saved\n"), managerContext).then(
-    () => {
+  const saving = files
+    .request("set", edit(), managerContext)
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    .finally(() => {
       saveSettled = true;
-      return undefined;
-    },
-    (error: unknown) => {
-      saveSettled = true;
-      return error;
-    },
-  );
+    });
   await draining.promise;
   let stopEntered = false;
   let contentAtStop: string | undefined;
