@@ -53,9 +53,14 @@ function spawnNotification(
 function notifyCollab(
   client: ReturnType<typeof createClient>,
   tool: "wait" | "sendInput",
-  item: JsonObject,
-  turnId: string,
-  phase: "started" | "completed" = "completed",
+  {
+    turnId = "parent-turn",
+    phase = "completed",
+    ...item
+  }: JsonObject & {
+    turnId?: string;
+    phase?: "started" | "completed";
+  },
 ) {
   return client.notify({
     method: `item/${phase}`,
@@ -86,9 +91,7 @@ function createCustody() {
         lifetime.signal.throwIfAborted();
         return retain(!executions.has(hold));
       },
-      settleExecution: () => {
-        executions.delete(hold);
-      },
+      settleExecution: () => executions.delete(hold),
       release() {
         executions.delete(hold);
         lifetime.abort();
@@ -100,12 +103,7 @@ function createCustody() {
     }
     return hold;
   };
-  return {
-    root: retain(),
-    holds,
-    executions,
-    live: () => holds.filter((hold) => !hold.signal.aborted),
-  };
+  return { root: retain(), holds, executions, live: () => holds.filter((h) => !h.signal.aborted) };
 }
 
 function createHarness(
@@ -340,7 +338,7 @@ describe("native assignment completion custody", () => {
     const parent = await registerParent(monitor);
     parent.bindTurn("parent-turn");
     await client.notify(spawnNotification("child-thread", "parent-turn"));
-    await notifyCollab(client, "sendInput", { id: "send-child" }, "parent-turn");
+    await notifyCollab(client, "sendInput", { id: "send-child" });
     await client.notify(
       successfulSendInputOutput({ callId: "send-child", submissionId: "followup-turn" }),
     );
@@ -518,14 +516,10 @@ async function createSubmissionFixture() {
   await notifyChildStarted(client);
   await client.notify(turnStartedNotification("turn-a"));
   await completeTurn(client, "turn-a", "result A", { id: "a" });
-  await notifyCollab(
-    client,
-    "wait",
-    {
-      agentsStates: { "child-thread": { status: "completed", message: "result A" } },
-    },
-    "parent-turn-a",
-  );
+  await notifyCollab(client, "wait", {
+    turnId: "parent-turn-a",
+    agentsStates: { "child-thread": { status: "completed", message: "result A" } },
+  });
   await vi.waitFor(() =>
     expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(false),
   );
@@ -534,15 +528,11 @@ async function createSubmissionFixture() {
 
   const submit = async (submissionId: string) => {
     parent.bindTurn("parent-turn-b");
-    await notifyCollab(
-      client,
-      "sendInput",
-      {
-        id: "send-b",
-        agentsStates: { "child-thread": { status: "running" } },
-      },
-      "parent-turn-b",
-    );
+    await notifyCollab(client, "sendInput", {
+      turnId: "parent-turn-b",
+      id: "send-b",
+      agentsStates: { "child-thread": { status: "running" } },
+    });
     await client.notify(
       successfulSendInputOutput({
         parentThreadId: binding.threadId,
@@ -638,38 +628,12 @@ async function collabCall(client: Client, tool: "wait" | "sendInput", id: string
   for (const phase of ["started", "completed"] as const) {
     const state =
       tool === "wait" ? { status: "completed", message: "A result" } : { status: "running" };
-    await notifyCollab(
-      client,
-      tool,
-      {
-        id,
-        agentsStates: phase === "started" ? {} : { "child-thread": state },
-      },
-      "parent-turn",
+    await notifyCollab(client, tool, {
+      id,
       phase,
-    );
+      agentsStates: phase === "started" ? {} : { "child-thread": state },
+    });
   }
-}
-
-async function deliverInitialResult(client: Client) {
-  await client.notify({
-    method: "rawResponseItem/completed",
-    params: {
-      threadId: "parent-thread",
-      turnId: "parent-turn",
-      item: {
-        type: "message",
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: '<subagent_notification>\n{"agent_path":"child-thread","status":{"completed":"A result"}}\n</subagent_notification>',
-          },
-        ],
-      },
-    },
-  });
-  await collabCall(client, "wait", "wait-a");
 }
 
 async function submitFollowup(client: Client, submissionId = "turn-b") {
@@ -735,13 +699,16 @@ function expectUnheld(fixture: Awaited<ReturnType<typeof createFixture>>) {
   expect(fixture.heldThreads.size).toBe(0);
 }
 
-function createReceiptStore(onRecord = () => {}) {
+function createReceiptStore(onRecord = () => {}, beforeRecord?: () => Promise<void>) {
   const receipts = new Map<string, CodexNativeSubagentSubmission>();
   const submissionStore = {
     assertCurrent: () => {},
     assertCurrentAsync: async () => {},
     read: async () => [...receipts.values()],
     record: vi.fn<CodexNativeSubagentSubmissionStore["record"]>(async (receipt, guard) => {
+      if (beforeRecord) {
+        await beforeRecord();
+      }
       guard();
       onRecord();
       receipts.set(receipt.callId, structuredClone(receipt));
@@ -774,7 +741,7 @@ describe("Codex native transient predecessor anchor", () => {
         await startTurn(client, "turn-a");
       }
       if (order !== "parent-output-before-a-end") {
-        await deliverInitialResult(client);
+        await collabCall(client, "wait", "wait-a");
       }
       await submitFollowup(client);
       if (order === "parent-unregister-before-anchor") {
@@ -786,7 +753,7 @@ describe("Codex native transient predecessor anchor", () => {
       }
       await completeTurn(client, "turn-a", "A result");
       if (order === "parent-output-before-a-end") {
-        await deliverInitialResult(client);
+        await collabCall(client, "wait", "wait-a");
       }
       if (order === "parent-unregister-before-anchor") {
         expect(submissionStore.record).toHaveBeenCalledExactlyOnceWith(
@@ -817,28 +784,20 @@ describe("Codex native transient predecessor anchor", () => {
   );
 
   it("persists an admitted held receipt after detached observation loses its backing", async () => {
-    const { receipts, submissionStore } = createReceiptStore();
     const recordEntered = createDeferred<void>();
     const releaseRecord = createDeferred<void>();
-    let recordCompletion: Promise<boolean> | undefined;
-    submissionStore.record.mockImplementation((receipt, guard) => {
-      recordCompletion = (async () => {
-        recordEntered.resolve();
-        await releaseRecord.promise;
-        guard();
-        receipts.set(receipt.callId, structuredClone(receipt));
-        return true;
-      })();
-      return recordCompletion;
+    const { receipts, submissionStore } = createReceiptStore(undefined, async () => {
+      recordEntered.resolve();
+      await releaseRecord.promise;
     });
     submissionStore.consume.mockResolvedValue(false);
     const fixture = await createFixture(submissionStore, async () => {
       releaseRecord.resolve();
-      await recordCompletion?.catch(() => undefined);
+      await submissionStore.record.mock.results[0]?.value.catch(() => undefined);
     });
     const { client, monitor, owner } = fixture;
     await notifyChildStarted(client);
-    await deliverInitialResult(client);
+    await collabCall(client, "wait", "wait-a");
     await submitFollowup(client);
     await owner.unregister();
     await startTurn(client, "turn-a");
@@ -852,7 +811,7 @@ describe("Codex native transient predecessor anchor", () => {
     expectUnheld(fixture);
 
     releaseRecord.resolve();
-    await expect(recordCompletion).resolves.toBe(true);
+    await expect(submissionStore.record.mock.results[0]!.value).resolves.toBe(true);
     await setImmediate();
     expect([...receipts.values()]).toEqual([
       {
@@ -875,7 +834,7 @@ describe("Codex native transient predecessor anchor", () => {
     await submitFollowup(client, "opaque-steer-submission");
     await startTurn(client, "turn-a");
     await completeTurn(client, "turn-a", "A result");
-    await deliverInitialResult(client);
+    await collabCall(client, "wait", "wait-a");
     fixture.releaseHistory(threadRead({ turnId: "turn-a", result: "A result" }));
     await owner.unregister();
     await setImmediate();

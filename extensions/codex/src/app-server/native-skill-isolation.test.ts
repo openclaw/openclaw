@@ -70,7 +70,7 @@ it("refreshes isolated skill rules on native changes and coalesces each client s
       ["instance", instanceSkill],
     ] as const) {
       await writeSkill(skillPath, name);
-      skills.push({ name, description: name, path: skillPath, scope: "user", enabled: true });
+      skills.push(skill(name, skillPath, "user"));
     }
     await fixture.notify({ method: "skills/changed", params: {} });
     const [refreshed, shared] = await Promise.all([
@@ -121,8 +121,7 @@ it("retries a failed native skill reload instead of caching its rejection", asyn
 
 it("does not share native skill reloads across independently cancellable turns", async () => {
   return withNativeSkillHome(async (home) => {
-    const request = vi.fn(async () => skillResponse(home));
-    const { client } = createFakeCodexAppServerClient(request);
+    const { client, request } = createFakeCodexAppServerClient(async () => skillResponse(home));
     const firstSignal = new AbortController();
     const secondSignal = new AbortController();
 
@@ -254,7 +253,7 @@ it("disables native user-scope skills only for non-default state directories", a
       "dir",
     );
     await fs.symlink(nestedSymlinkTarget, skillNamedDirectoryLink, "dir");
-    const request = vi.fn(async () =>
+    const { client, request } = createFakeCodexAppServerClient(async () =>
       skillResponse(workspace, [
         skill("personal", personalSkill, "user"),
         skill("project", projectSkill, "repo"),
@@ -265,7 +264,6 @@ it("disables native user-scope skills only for non-default state directories", a
         skill("nested", nestedSymlinkSkill, "user"),
       ]),
     );
-    const { client } = createFakeCodexAppServerClient(request);
     const params = { client, codexHome: customCodexHome, cwd: workspace };
     await expect(
       withEnvAsync({ HOME: home, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") }, () =>
