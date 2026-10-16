@@ -22,6 +22,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -59,12 +60,36 @@ import * as transcriptWatch from "./transcript-watch.js";
 import { readMemoryResultFromSessionRecord } from "./transcript.js";
 import { resetTriggerRecallRunsForTests } from "./trigger-recall.js";
 
+type FixtureRecord = Record<string, unknown>;
+type SessionPatch = {
+  sessionKey: string;
+  fallbackEntry?: FixtureRecord;
+  replaceEntry?: boolean;
+  skipMaintenance?: boolean;
+  prepare: (
+    entry: FixtureRecord,
+    context: { existingEntry?: FixtureRecord },
+  ) => FixtureRecord | null;
+};
+function patchSession(store: Record<string, FixtureRecord>, params: SessionPatch) {
+  const existingEntry = store[params.sessionKey];
+  const entry = existingEntry ?? params.fallbackEntry;
+  if (!entry) {
+    return null;
+  }
+  const patch = params.prepare({ ...entry }, { existingEntry });
+  if (!patch) {
+    return entry;
+  }
+  return (store[params.sessionKey] = params.replaceEntry ? { ...patch } : { ...entry, ...patch });
+}
+
 // Match only lone surrogates so valid supplementary-plane characters remain allowed.
 const UNPAIRED_SURROGATE_RE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 const hoisted = vi.hoisted(() => {
-  const sessionStore: Record<string, Record<string, unknown>> = {
+  const sessionStore: Record<string, FixtureRecord> = {
     "agent:main:main": {
       sessionId: "s-main",
       updatedAt: 0,
@@ -86,10 +111,7 @@ const hoisted = vi.hoisted(() => {
       supportsPrivateTranscriptRecall: true,
     },
     updateSessionStore: vi.fn(
-      async (
-        _storePath: string,
-        updater: (store: Record<string, Record<string, unknown>>) => void,
-      ) => {
+      async (_storePath: string, updater: (store: Record<string, FixtureRecord>) => void) => {
         updater(sessionStore);
       },
     ),
@@ -219,7 +241,7 @@ describe("active-memory plugin", () => {
   const resolveCliBackendDispatchEligibility = vi.fn(
     () => undefined as { provider: string } | undefined,
   );
-  const runtimeRunEmbeddedAgent = vi.fn(async (params: Record<string, unknown>) => {
+  const runtimeRunEmbeddedAgent = vi.fn(async (params: FixtureRecord) => {
     const sessionId =
       typeof params.sessionId === "string" && params.sessionId.length > 0
         ? params.sessionId
@@ -227,24 +249,13 @@ describe("active-memory plugin", () => {
     const testSessionFile = path.join(stateDir, `${sessionId}.jsonl`);
     hoisted.runtimeTranscriptFiles[sessionId] = testSessionFile;
     const result = await runEmbeddedAgent({ ...params, sessionFile: testSessionFile });
-    if (typeof result !== "object" || result === null || Array.isArray(result)) {
+    if (!isRecord(result)) {
       return result;
     }
-    const resultRecord = result as Record<string, unknown>;
-    const meta =
-      typeof resultRecord.meta === "object" &&
-      resultRecord.meta !== null &&
-      !Array.isArray(resultRecord.meta)
-        ? (resultRecord.meta as Record<string, unknown>)
-        : {};
-    const agentMeta =
-      typeof meta.agentMeta === "object" &&
-      meta.agentMeta !== null &&
-      !Array.isArray(meta.agentMeta)
-        ? (meta.agentMeta as Record<string, unknown>)
-        : {};
+    const meta = asNonArrayRecord(result.meta);
+    const agentMeta = asNonArrayRecord(meta.agentMeta);
     return {
-      ...resultRecord,
+      ...result,
       meta: {
         ...meta,
         agentMeta: {
@@ -258,18 +269,18 @@ describe("active-memory plugin", () => {
   let fixtureRoot = "";
   let pluginStateDir = "";
   let stateDir = "";
-  let configFile: Record<string, unknown> = {};
-  let pluginConfig: Record<string, unknown> = {
+  let configFile: FixtureRecord = {};
+  let pluginConfig: FixtureRecord = {
     agents: ["main"],
     mode: "always",
     logging: true,
   };
-  let apiConfig: Record<string, unknown> = {};
-  const syncRuntimePluginConfig = (nextPluginConfig: Record<string, unknown>) => {
+  let apiConfig: FixtureRecord = {};
+  const syncRuntimePluginConfig = (nextPluginConfig: FixtureRecord) => {
     pluginConfig = { mode: "always", ...nextPluginConfig };
-    const plugins = configFile.plugins as Record<string, unknown> | undefined;
-    const entries = plugins?.entries as Record<string, unknown> | undefined;
-    const existingEntry = entries?.["active-memory"] as Record<string, unknown> | undefined;
+    const plugins = configFile.plugins as FixtureRecord | undefined;
+    const entries = plugins?.entries as FixtureRecord | undefined;
+    const existingEntry = entries?.["active-memory"] as FixtureRecord | undefined;
     configFile = {
       ...configFile,
       plugins: {
@@ -286,13 +297,13 @@ describe("active-memory plugin", () => {
     };
   };
   const setMemorySlot = (memory: string) => {
-    const plugins = configFile.plugins as Record<string, unknown> | undefined;
+    const plugins = configFile.plugins as FixtureRecord | undefined;
     configFile = {
       ...configFile,
       plugins: {
         ...plugins,
         slots: {
-          ...(plugins?.slots as Record<string, unknown> | undefined),
+          ...(plugins?.slots as FixtureRecord | undefined),
           memory,
         },
       },
@@ -302,13 +313,13 @@ describe("active-memory plugin", () => {
     get pluginConfig() {
       return pluginConfig;
     },
-    set pluginConfig(nextPluginConfig: Record<string, unknown>) {
+    set pluginConfig(nextPluginConfig: FixtureRecord) {
       syncRuntimePluginConfig(nextPluginConfig);
     },
     get config() {
       return apiConfig;
     },
-    set config(nextConfig: Record<string, unknown>) {
+    set config(nextConfig: FixtureRecord) {
       apiConfig = nextConfig;
       const plugins = configFile.plugins;
       configFile = {
@@ -341,33 +352,13 @@ describe("active-memory plugin", () => {
               return match ? { sessionKey: match[0], entry: match[1] } : undefined;
             },
           ),
-          prepareSessionEntryPatch: vi.fn(
-            async (params: {
-              sessionKey: string;
-              fallbackEntry?: Record<string, unknown>;
-              prepare: (entry: Record<string, unknown>) => Record<string, unknown> | null;
-            }) => {
-              let result: Record<string, unknown> | null = null;
-              await hoisted.updateSessionStore(
-                path.join(stateDir, "sessions.json"),
-                (store: Record<string, Record<string, unknown>>) => {
-                  const existing = store[params.sessionKey] ?? params.fallbackEntry;
-                  if (!existing) {
-                    return;
-                  }
-                  const patch = params.prepare({ ...existing });
-                  if (!patch) {
-                    result = existing;
-                    return;
-                  }
-                  const next = { ...existing, ...patch };
-                  store[params.sessionKey] = next;
-                  result = next;
-                },
-              );
-              return result;
-            },
-          ),
+          prepareSessionEntryPatch: vi.fn(async (params: SessionPatch) => {
+            let result: FixtureRecord | null = null;
+            await hoisted.updateSessionStore(path.join(stateDir, "sessions.json"), (store) => {
+              result = patchSession(store, params);
+            });
+            return result;
+          }),
         },
       },
       state: {
@@ -380,14 +371,12 @@ describe("active-memory plugin", () => {
       },
       config: {
         current: () => configFile,
-        mutateConfigFile: vi.fn(
-          async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
-            const draft = structuredClone(configFile);
-            mutate(draft);
-            configFile = draft;
-            return { changed: true, config: configFile };
-          },
-        ),
+        mutateConfigFile: vi.fn(async ({ mutate }: { mutate: (draft: FixtureRecord) => void }) => {
+          const draft = structuredClone(configFile);
+          mutate(draft);
+          configFile = draft;
+          return { changed: true, config: configFile };
+        }),
       },
     },
     registerCommand: vi.fn((command) => {
@@ -399,6 +388,18 @@ describe("active-memory plugin", () => {
   };
   type EmbeddedRunParams = { sessionFile: string; abortSignal?: AbortSignal };
   const reply = (text: string) => ({ payloads: [{ text }] });
+  const capped = (...originalDetailKeys: string[]) => ({
+    persistedDetailsTruncated: true,
+    originalDetailKeys,
+  });
+  const textContent = (text: string) => [{ type: "text", text }];
+  const jsonContent = (value: unknown, pretty = false) =>
+    textContent(JSON.stringify(value, null, pretty ? 2 : undefined));
+  const expectUncalled = (...mocks: unknown[]) => {
+    for (const mock of mocks) {
+      expect(mock).not.toHaveBeenCalled();
+    }
+  };
   const failedSearch = () =>
     memoryToolRecord("memory_search", {
       disabled: true,
@@ -431,6 +432,13 @@ describe("active-memory plugin", () => {
     new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
+  const clearRecords = (...records: FixtureRecord[]) => {
+    for (const record of records) {
+      for (const key of Object.keys(record)) {
+        delete record[key];
+      }
+    }
+  };
   const resetRecall = () => {
     resetActiveRecallStateForTests();
     resetActiveMemoryConfigForTests();
@@ -475,7 +483,7 @@ describe("active-memory plugin", () => {
   };
   let runtimeTranscriptCounter = 0;
   const writeRuntimeTranscript = async (
-    records: Array<{ type?: string; message: Record<string, unknown> }>,
+    records: Array<{ type?: string; message: FixtureRecord }>,
     target: SessionTranscriptTargetParams = {
       agentId: "main",
       sessionId: `bounded-transcript-${++runtimeTranscriptCounter}`,
@@ -530,11 +538,11 @@ describe("active-memory plugin", () => {
       "string",
     );
   };
-  const requireRecord = (value: unknown, message: string): Record<string, unknown> => {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  const requireRecord = (value: unknown, message: string): FixtureRecord => {
+    if (!isRecord(value)) {
       throw new Error(message);
     }
-    return value as Record<string, unknown>;
+    return value;
   };
   const requireNonEmptyString = (value: unknown, message: string): string => {
     if (typeof value !== "string" || value.length === 0) {
@@ -582,7 +590,7 @@ describe("active-memory plugin", () => {
     requireNonEmptyString(lastEmbeddedRunParams().prompt, "expected embedded prompt");
   const lastEmbeddedSessionKey = () =>
     requireNonEmptyString(lastEmbeddedRunParams().sessionKey, "expected embedded session key");
-  const activeMemoryEntryFrom = (config: Record<string, unknown>) => {
+  const activeMemoryEntryFrom = (config: FixtureRecord) => {
     const plugins = requireRecord(config.plugins, "expected plugins config");
     const entries = requireRecord(plugins.entries, "expected plugin entries");
     return requireRecord(entries["active-memory"], "expected active-memory entry");
@@ -594,8 +602,8 @@ describe("active-memory plugin", () => {
     expect(params).toMatchObject({ messageChannel, messageProvider });
   };
   const runPromptBuild = (
-    event: string | Record<string, unknown> = "what wings should i order?",
-    context: Record<string, unknown> = {},
+    event: string | FixtureRecord = "what wings should i order?",
+    context: FixtureRecord = {},
   ) => {
     const defaultSession =
       "sessionKey" in context || "sessionId" in context ? {} : { sessionKey: "agent:main:main" };
@@ -617,7 +625,7 @@ describe("active-memory plugin", () => {
   };
   const recallFor = (sessionKey: string, prompt = "what wings should i order?") =>
     runPromptBuild(prompt, { sessionKey });
-  const runActiveMemoryCommand = (params: Record<string, unknown>) => {
+  const runActiveMemoryCommand = (params: FixtureRecord) => {
     const args = typeof params.args === "string" ? params.args : "status";
     return registeredCommands["active-memory"].handler({
       channel: "webchat",
@@ -630,7 +638,7 @@ describe("active-memory plugin", () => {
       ...params,
     });
   };
-  const registerPluginConfig = (overrides: Record<string, unknown>) => {
+  const registerPluginConfig = (overrides: FixtureRecord) => {
     api.pluginConfig = { agents: ["main"], mode: "always", ...overrides };
     plugin.register(api as unknown as OpenClawPluginApi);
   };
@@ -638,11 +646,7 @@ describe("active-memory plugin", () => {
     hoisted.sessionStore[sessionKey] = { sessionId, updatedAt };
   };
 
-  const configureTimedRecall = (
-    timeoutMs: number,
-    overrides: Record<string, unknown> = {},
-    graceMs = 5,
-  ) => {
+  const configureTimedRecall = (timeoutMs: number, overrides: FixtureRecord = {}, graceMs = 5) => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     setTimeoutPartialDataGraceMsForTests(graceMs);
     configureRecallTimeout(timeoutMs, overrides);
@@ -674,7 +678,7 @@ describe("active-memory plugin", () => {
     }
     return result;
   };
-  const configureRecallTimeout = (timeoutMs: number, overrides: Record<string, unknown> = {}) => {
+  const configureRecallTimeout = (timeoutMs: number, overrides: FixtureRecord = {}) => {
     setMinimumTimeoutMsForTests(1);
     registerPluginConfig({ timeoutMs, logging: true, ...overrides });
   };
@@ -743,50 +747,18 @@ describe("active-memory plugin", () => {
         },
       },
     };
-    for (const key of Object.keys(hoisted.sessionStore)) {
-      delete hoisted.sessionStore[key];
-    }
-    for (const key of Object.keys(hoisted.runtimeTranscriptFiles)) {
-      delete hoisted.runtimeTranscriptFiles[key];
-    }
+    clearRecords(hoisted.sessionStore, hoisted.runtimeTranscriptFiles);
     hoisted.rawDeltaReads.length = 0;
     seedSession("agent:main:main", "s-main", 0);
-    for (const key of Object.keys(hooks)) {
-      delete hooks[key];
-    }
-    for (const key of Object.keys(registeredCommands)) {
-      delete registeredCommands[key];
-    }
+    clearRecords(hooks, registeredCommands);
     runEmbeddedAgent.mockImplementation(async (params: { sessionFile: string }) => {
       await writeUsableMemoryTranscript(params.sessionFile, "lemon pepper wings with blue cheese");
       return {
         payloads: [{ text: "- lemon pepper wings\n- blue cheese" }],
       };
     });
-    hoisted.prepareSessionEntryPatch.mockImplementation(
-      async (params: {
-        fallbackEntry?: Record<string, unknown>;
-        replaceEntry?: boolean;
-        sessionKey: string;
-        skipMaintenance?: boolean;
-        prepare: (
-          entry: Record<string, unknown>,
-          context: { existingEntry?: Record<string, unknown> },
-        ) => Record<string, unknown> | null;
-      }) => {
-        const existingEntry = hoisted.sessionStore[params.sessionKey];
-        const entry = existingEntry ?? params.fallbackEntry;
-        if (!entry) {
-          return null;
-        }
-        const patch = params.prepare({ ...entry }, { existingEntry });
-        if (!patch) {
-          return existingEntry ?? entry;
-        }
-        const next = params.replaceEntry ? { ...patch } : { ...entry, ...patch };
-        hoisted.sessionStore[params.sessionKey] = next;
-        return next;
-      },
+    hoisted.prepareSessionEntryPatch.mockImplementation(async (params: SessionPatch) =>
+      patchSession(hoisted.sessionStore, params),
     );
     hoisted.cleanupSessionLifecycleArtifacts.mockImplementation(
       async (params: { sessionKeySegmentPrefix: string }) => {
@@ -849,8 +821,7 @@ describe("active-memory plugin", () => {
 
     expect(result).toBeUndefined();
     expect(assertActive).toHaveBeenCalled();
-    expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expectUncalled(hoisted.getActiveMemorySearchManager, runEmbeddedAgent);
     expect(hasInfoLine("active-memory: recall skipped reason=policy-disabled")).toBe(true);
   });
 
@@ -864,8 +835,7 @@ describe("active-memory plugin", () => {
     });
 
     expect(result).toBeUndefined();
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
+    expectUncalled(runEmbeddedAgent, hoisted.getActiveMemorySearchManager);
     expect(hasInfoLine("active-memory: recall skipped reason=session-ineligible")).toBe(true);
   });
 
@@ -922,8 +892,8 @@ describe("active-memory plugin", () => {
   });
 
   it("creates and removes the exact SQLite recall session around the embedded run", async () => {
-    let persistedEntryAtRun: Record<string, unknown> | undefined;
-    runEmbeddedAgent.mockImplementationOnce(async (params: Record<string, unknown>) => {
+    let persistedEntryAtRun: FixtureRecord | undefined;
+    runEmbeddedAgent.mockImplementationOnce(async (params: FixtureRecord) => {
       const sessionKey = requireNonEmptyString(params.sessionKey, "expected embedded session key");
       persistedEntryAtRun = structuredClone(hoisted.sessionStore[sessionKey]);
       const sessionFile = requireNonEmptyString(
@@ -1485,8 +1455,7 @@ describe("active-memory plugin", () => {
       const result = await recallFor(sessionKey, "continue this native Codex task");
 
       expect(result).toBeUndefined();
-      expect(openKeyedStore).not.toHaveBeenCalled();
-      expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
+      expectUncalled(openKeyedStore, hoisted.updateSessionStore);
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
     },
   );
@@ -1498,15 +1467,14 @@ describe("active-memory plugin", () => {
 
     await expect(recallFor("agent:main:incognito:test", "what did we decide?")).rejects.toBe(ended);
 
-    expect(openKeyedStore).not.toHaveBeenCalled();
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expectUncalled(openKeyedStore, runEmbeddedAgent);
     expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
   });
 
   it("rechecks the audience after asynchronous parent metadata preparation", async () => {
     registerPluginConfig({ mode: "always" });
     const prepared = createDeferred<void>();
-    const resume = createDeferred<Record<string, unknown>>();
+    const resume = createDeferred<FixtureRecord>();
     let audienceCurrent = true;
     api.runtime.agent.session.getSessionEntryAsync.mockImplementationOnce(() => {
       prepared.resolve();
@@ -1529,8 +1497,7 @@ describe("active-memory plugin", () => {
       audienceCurrent = false;
       resume.resolve(expectDefined(hoisted.sessionStore["agent:main:main"], "main session"));
       expect(await pending).toBeUndefined();
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-      expect(hoisted.prepareSessionEntryPatch).not.toHaveBeenCalled();
+      expectUncalled(runEmbeddedAgent, hoisted.prepareSessionEntryPatch);
     } finally {
       resume.resolve(expectDefined(hoisted.sessionStore["agent:main:main"], "main session"));
       await Promise.allSettled([pending]);
@@ -1714,8 +1681,8 @@ describe("active-memory plugin", () => {
 
   it.each<{
     name: string;
-    config: Record<string, unknown>;
-    event: string | Record<string, unknown>;
+    config: FixtureRecord;
+    event: string | FixtureRecord;
     contains: string[];
     excludes?: string[];
     query?: string;
@@ -1943,19 +1910,11 @@ describe("active-memory plugin", () => {
   });
 
   it("recognizes usable persisted memory results after details are capped", () => {
-    const cappedDetails = {
-      persistedDetailsTruncated: true,
-      originalDetailKeys: ["results"],
-    };
+    const cappedDetails = capped("results");
     const customTool = "memory_lookup_custom";
     const ramen = "User usually orders ramen.";
     const cases: Array<
-      [
-        toolName: string,
-        details: Record<string, unknown>,
-        text: string | string[],
-        expected: boolean,
-      ]
+      [toolName: string, details: FixtureRecord, text: string | string[], expected: boolean]
     > = [
       ["memory_search", cappedDetails, '{\n  "results": [\n    {"text": "ramen"}\n  ]\n}', true],
       ["memory_search", cappedDetails, '{\n  "results": []\n}', false],
@@ -2006,19 +1965,13 @@ describe("active-memory plugin", () => {
       ],
       [
         "lcm_grep",
-        {
-          persistedDetailsTruncated: true,
-          originalDetailKeys: ["totalMatches", "messages", "summaries"],
-        },
+        capped("totalMatches", "messages", "summaries"),
         "## LCM Grep Results\n**Pattern:** `ramen`\n**Total matches:** 2\n\n### Messages",
         true,
       ],
       [
         "lcm_expand_query",
-        {
-          persistedDetailsTruncated: true,
-          originalDetailKeys: ["answer", "expandedSummaryCount"],
-        },
+        capped("answer", "expandedSummaryCount"),
         JSON.stringify({
           answer: ramen,
           expandedSummaryCount: 1,
@@ -2027,14 +1980,12 @@ describe("active-memory plugin", () => {
         true,
       ],
 
-      ...["failed", "TIMED OUT"].map(
-        (status): [string, Record<string, unknown>, string, boolean] => [
-          customTool,
-          { status },
-          "The memory backend is unavailable.",
-          false,
-        ],
-      ),
+      ...["failed", "TIMED OUT"].map((status): [string, FixtureRecord, string, boolean] => [
+        customTool,
+        { status },
+        "The memory backend is unavailable.",
+        false,
+      ]),
       [customTool, { status: "not_failed" }, ramen, true],
       [customTool, { status: "not_found" }, "No memories found.", false],
     ];
@@ -2053,16 +2004,12 @@ describe("active-memory plugin", () => {
     }
   });
 
-  it.each([
-    {
-      name: "skips missing custom memory tools using the resolved custom allowlist",
-      sources:
-        "tools.allow: *, lobster; runtime toolsAllow: lcm_grep, lcm_describe, lcm_expand_query",
-      suffix: "missing-custom-memory-tools",
-      prompt: "what did we decide? missing custom memory tools",
-      toolsAllow: ["lcm_grep", "lcm_describe", "lcm_expand_query"],
-    },
-  ])("$name", async ({ suffix, prompt, sources, toolsAllow }) => {
+  it("skips missing custom memory tools using the resolved custom allowlist", async () => {
+    const toolsAllow = ["lcm_grep", "lcm_describe", "lcm_expand_query"];
+    const sources =
+      "tools.allow: *, lobster; runtime toolsAllow: lcm_grep, lcm_describe, lcm_expand_query";
+    const suffix = "missing-custom-memory-tools";
+    const prompt = "what did we decide? missing custom memory tools";
     registerPluginConfig({ toolsAllow, logging: true });
     const sessionKey = `agent:main:${suffix}`;
     seedSession(sessionKey, `s-${suffix}`, 0);
@@ -2372,7 +2319,7 @@ describe("active-memory plugin", () => {
           toolName: "memory_search",
           isError: false,
           result: {
-            content: [{ type: "text", text: '{"results":[{"text":"User likes ramen."}]}' }],
+            content: jsonContent({ results: [{ text: "User likes ramen." }] }),
             details: { results: [{ text: "User likes ramen." }] },
           },
         });
@@ -2544,25 +2491,14 @@ describe("active-memory plugin", () => {
       await writeTranscriptJsonl(params.sessionFile, [
         memoryToolRecord(
           "memory_search",
-          {
-            persistedDetailsTruncated: true,
-            originalDetailKeys: ["results", "debug"],
-          },
-          [
+          capped("results", "debug"),
+          jsonContent(
             {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  results: [
-                    { path: "memory/food.md", text: "User usually orders tonkotsu ramen." },
-                  ],
-                  debug: { backend: "builtin", hits: 1, searchMs: 8 },
-                },
-                null,
-                2,
-              ),
+              results: [{ path: "memory/food.md", text: "User usually orders tonkotsu ramen." }],
+              debug: { backend: "builtin", hits: 1, searchMs: 8 },
             },
-          ],
+            true,
+          ),
         ),
         memoryToolRecord("memory_search", {
           disabled: true,
@@ -2598,21 +2534,10 @@ describe("active-memory plugin", () => {
     expectLinesToContain(lines, "Active Memory: status=ok");
   });
 
-  it.each([
-    {
-      name: "failed memory search",
-      toolsAllow: ["memory_lookup_custom", "memory_search"],
-      failed: memoryToolRecord("memory_search", {
-        disabled: true,
-        error: "embedding request failed",
-      }),
-      success: {
-        persistedDetailsTruncated: true,
-        success: true,
-        originalDetailKeys: ["success", "results"],
-      },
-    },
-  ])("waits for custom-tool evidence after $name", async ({ toolsAllow, failed, success }) => {
+  it("waits for custom-tool evidence after failed memory search", async () => {
+    const toolsAllow = ["memory_lookup_custom", "memory_search"];
+    const failed = failedSearch();
+    const success = { ...capped("success", "results"), success: true };
     configureTimedRecall(1_000, { toolsAllow });
     const sessionKey = seedRecall("custom-tool-evidence");
     const transcriptWritten = createDeferred<void>();
@@ -2624,9 +2549,11 @@ describe("active-memory plugin", () => {
       });
       await writeTranscriptJsonl(params.sessionFile, [
         failed,
-        memoryToolRecord("memory_lookup_custom", success, [
-          { type: "text", text: "User usually orders ramen." },
-        ]),
+        memoryToolRecord(
+          "memory_lookup_custom",
+          success,
+          textContent("User usually orders ramen."),
+        ),
       ]);
       return reply("User usually orders ramen.");
     });
