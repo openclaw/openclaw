@@ -17,6 +17,19 @@ const nodeFile = "src/process/spawn-broker/cleanup.test.ts";
 const bunFile = "src/process/spawn-broker/context.test.ts";
 
 describe("explicit all-test runtime trials", () => {
+  it.each([
+    "src/infra/owned-directory-observation.test.ts",
+    "src/infra/tailscale-route-owner.worker.test.ts",
+    "src/state/openclaw-database-preflight.startup-prepared.test.ts",
+    "src/state/openclaw-state-ownership.test.ts",
+  ])("keeps the blocked native contract in %s on Node", (file) => {
+    for (const policy of ["bun-all", "dual-all"] as const) {
+      expect(resolveCiTestRuntimeSelections({ targets: [file] }, policy)).toEqual([
+        { runtime: "node" },
+      ]);
+    }
+  });
+
   it.each(["node", "bun-compatible", "dual", "bun-all", "dual-all"] as const)(
     "accepts %s without changing the default",
     (policy) => {
