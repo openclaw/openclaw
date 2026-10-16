@@ -261,7 +261,7 @@ describe("agent tool definition adapter", () => {
     { name: "details-only", details: { hits: [{ id: "a1", score: 0.9 }] }, key: '"hits"' },
     { name: "plain object", details: { count: 2, ids: ["m1", "m2"] }, key: '"count"' },
   ])("coerces $name results to text content", async ({ name, details, key }) => {
-    const value = name === "details-only" ? { details } : details;
+    const value = structuredClone(name === "details-only" ? { details } : details);
     const tool = toolFixture(
       "memory_query",
       (async () => value) as unknown as AgentTool["execute"],
