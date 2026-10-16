@@ -11,6 +11,13 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
+import { handleMcpJsonRpc } from "../../gateway/mcp-http.handlers.js";
+import {
+  resolveMcpLoopbackPolicyTools,
+  resolveMcpLoopbackScopedTools,
+} from "../../gateway/mcp-http.runtime.js";
+import { buildMcpToolSchema } from "../../gateway/mcp-http.schema.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -205,6 +212,113 @@ describe("CLI attempt session MCP overrides", () => {
             url: "https://mcp.example.test/docs",
           });
         }
+      } finally {
+        params.preparedRunAdmission?.close();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "enforces generated-media message restriction disabled=%s on the CLI MCP surface",
+    async (disableMessageTool) => {
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        agents: { defaults: { skipBootstrap: true, workspace: root } },
+        skills: { load: { watch: false } },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      let grantContext: McpLoopbackRequestContext | undefined;
+      setCliRunnerPrepareTestDeps({
+        resolveMcpLoopbackPolicyTools,
+        resolveMcpLoopbackScopedTools,
+        mintMcpLoopbackClientGrant: (
+          params: Parameters<typeof createTestMcpLoopbackClientGrant>[0],
+        ) => {
+          const grant = createTestMcpLoopbackClientGrant(params);
+          grantContext = grant.context;
+          return grant;
+        },
+      });
+      executePreparedCliRun.mockImplementationOnce(async (prepared: PreparedCliRunContext) => {
+        if (!grantContext) {
+          throw new Error("CLI preparation did not mint its MCP grant");
+        }
+        const scoped = await resolveMcpLoopbackScopedTools({
+          cfg,
+          context: grantContext,
+          admittedRunContext: prepared.params.admittedRunContext,
+        });
+        const toolSchema = buildMcpToolSchema(scoped.tools);
+        const listed = await handleMcpJsonRpc({
+          message: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+          tools: scoped.tools,
+          toolSchema,
+        });
+        const messageSchema = expect.objectContaining({ name: "message" });
+        expect(listed).toMatchObject({
+          result: {
+            tools: disableMessageTool
+              ? expect.not.arrayContaining([messageSchema])
+              : expect.arrayContaining([messageSchema]),
+          },
+        });
+        if (disableMessageTool) {
+          const rejected = await handleMcpJsonRpc({
+            message: {
+              jsonrpc: "2.0",
+              id: 2,
+              method: "tools/call",
+              params: {
+                name: "message",
+                arguments: {
+                  action: "send",
+                  target: "synthetic-requester",
+                  message: "generated media",
+                },
+              },
+            },
+            tools: scoped.tools,
+            toolSchema,
+          });
+          expect(rejected).toMatchObject({
+            result: {
+              isError: true,
+              content: [{ type: "text", text: "Tool not available: message" }],
+            },
+          });
+        }
+        return { text: "done" };
+      });
+      const sessionEntry = makeSessionEntry(`media-completion-${disableMessageTool}`);
+      const params = makeRunAgentAttemptParams({
+        agentDir: path.join(root, "agents", "main", "agent"),
+        workspaceDir: root,
+        sessionEntry,
+        sessionKey: "agent:main:main",
+        providerOverride: "claude-cli",
+        modelOverride: "sonnet",
+        cfg,
+        skillsSnapshot: { prompt: "", skills: [] },
+        opts: {
+          disableMessageTool,
+          forceRestartSafeTools: true,
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool: "image_generate",
+            sourceChannel: "internal",
+          },
+        },
+        preparedRunAdmission: prepareSystemAgentRunAdmission(
+          cfg,
+          `run-media-completion-${disableMessageTool}`,
+          "main",
+          "generated-media-cli-tools-test",
+        ),
+      });
+      try {
+        const result = await runAgentAttempt(params);
+        expect(result.payloads).toEqual([expect.objectContaining({ text: "done" })]);
+        expect(executePreparedCliRun).toHaveBeenCalledOnce();
       } finally {
         params.preparedRunAdmission?.close();
       }

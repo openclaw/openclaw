@@ -155,6 +155,8 @@ export type RunCliAgentParams = {
   execOverrides?: ExecPolicyOverrides;
   /** Effective elevated-exec defaults resolved before entering the CLI runtime. */
   bashElevated?: ExecElevatedDefaults;
+  /** Host-owned message-tool restriction, retained by the CLI MCP grant. */
+  disableMessageTool?: boolean;
   /** Runtime tool allow-list. CLI harnesses need a backend-owned exact translation. */
   toolsAllow?: string[];
   skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
