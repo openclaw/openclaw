@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled, Show, untrack } from "solid-js";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
@@ -457,7 +457,12 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
   const textarea = untrack(() => props.options.textareaController);
   const visibleMessage = createMemo(() => frame().visibleMessage);
   const messageValue = createLiveValue(visibleMessage);
-  onCleanup(() => textarea.ref());
+  let input: HTMLTextAreaElement;
+  // A replacement can render before the old branch retires; claim only the committed input.
+  onSettled(() => {
+    textarea.ref(input);
+    return () => textarea.ref();
+  });
   return (
     <div
       class="agent-chat__composer-shell new-session-page__composer"
@@ -569,7 +574,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
             </Show>
             <textarea
               ref={(element) => {
-                textarea.ref(element);
+                input = element;
                 messageValue(element);
               }}
               class="new-session-page__message"

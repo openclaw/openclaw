@@ -39,7 +39,7 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
       props,
       () => context,
       lifecycle.host,
-      lifecycle.host.requestUpdate,
+      () => lifecycle.host.requestUpdate(),
     );
     controllers.set(host, controller);
     Object.defineProperty(host, "isOpen", { configurable: true, get: () => controller.isOpen });
@@ -50,22 +50,26 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
       pendingOpen.delete(host);
       controller.openPalette(pending.input);
     }
-    const readProps = createMemo(() => {
+    // Event handlers read owner changes immediately, before Solid settles.
+    const readProps = () => {
       lifecycle.revision();
       return controller.readProps();
+    };
+    const draftInitialized = createMemo(() => {
+      lifecycle.revision();
+      return controller.draft.initialized;
     });
-    const draftInitialized = createMemo(() => readProps().draft.initialized);
     createEffect(draftInitialized, (initialized) => {
       if (!initialized) {
         return undefined;
       }
       // Closed palettes still own pending submissions and preference acknowledgments.
       const stops = [context.agents, context.agentIdentity, context.sessions, context.config].map(
-        (source) => source.subscribe(lifecycle.host.requestUpdate),
+        (source) => source.subscribe(() => lifecycle.host.requestUpdate()),
       );
       return () => stops.forEach((stop) => stop());
     });
-    createEffect(readProps, () => {
+    createEffect(lifecycle.revision, () => {
       controller.draft.synchronize();
       controller.draft.settled();
       controller.updated();
