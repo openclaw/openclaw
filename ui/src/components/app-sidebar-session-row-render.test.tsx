@@ -60,7 +60,7 @@ const emptySnapshot: SidebarSnapshotModel = {
   brand: { name: "Harbor", avatar: null, icon: "claw", environment: null },
 };
 
-function createHost(mode: "chip" | "roster" = "roster") {
+function createHost(mode: "chip" | "roster" = "roster", snapshot?: Partial<SidebarSnapshotModel>) {
   const context = createContext(
     createGateway(createTestGatewayClient(async () => ({}))),
     createSessions("main", []),
@@ -76,6 +76,9 @@ function createHost(mode: "chip" | "roster" = "roster") {
   );
   host.sessionOwnershipVisibility = { filters: true, avatars: true };
   document.body.append(container);
+  if (snapshot) {
+    host.restoreSidebarSnapshot({ ...emptySnapshot, ...snapshot });
+  }
   return { host, container, context, dom: domProbe(container) };
 }
 
@@ -101,7 +104,7 @@ async function createCachedHost() {
   gateway.publish({ client: null, phase: "connecting", hello: null });
   const context = createContext(gateway.gateway, createSessions("main", []));
   const { sidebar: host } = await mountSidebarContext(context);
-  return { host, context };
+  return { host, context, dom: domProbe(host) };
 }
 
 function observeHost(host: AppSidebarOwner) {
@@ -135,7 +138,7 @@ function mountObservedHost(
 }
 
 it("hides archived pages in the restored sidebar before live data arrives", async () => {
-  const { host, context } = await createCachedHost();
+  const { host, context, dom } = await createCachedHost();
   host.restoreSidebarSnapshot({
     ...emptySnapshot,
     mode: "roster",
@@ -157,16 +160,17 @@ it("hides archived pages in the restored sidebar before live data arrives", asyn
   });
   host.requestUpdate();
   await host.updateComplete;
-
   expect(
-    host.querySelector('.sidebar-pages [data-session-key="agent:main:active"]'),
-  ).not.toBeNull();
-  expect(host.querySelector('.sidebar-pages [data-session-key="agent:main:archived"]')).toBeNull();
-  expect(host.querySelector(".sidebar-pages .sidebar-session-sort")).toBeNull();
+    dom.present(
+      '.sidebar-pages [data-session-key="agent:main:active"]',
+      '.sidebar-pages [data-session-key="agent:main:archived"]',
+      ".sidebar-pages .sidebar-session-sort",
+    ),
+  ).toEqual([true, false, false]);
 });
 
 it("paints the restored roster and workspace in the first sidebar update", async () => {
-  const { host } = await createCachedHost();
+  const { host, dom } = await createCachedHost();
   host.sidebarAgentsMode = "chip";
   host.sidebarLiveActivity = false;
 
@@ -177,13 +181,11 @@ it("paints the restored roster and workspace in the first sidebar update", async
   });
   host.requestUpdate();
   await host.updateComplete;
-
-  expect(host.querySelector('aside[data-snapshot-state="cached"]')).not.toBeNull();
-  expect(host.querySelector("openclaw-sidebar-agent-roster")).not.toBeNull();
-  await waitForSolid(() =>
-    expect(host.querySelector('[data-agent-group="main"]')?.textContent).toContain("Harbor"),
-  );
-  expect(host.querySelector('[data-avatar="⚓"]')).not.toBeNull();
+  expect(
+    dom.present('aside[data-snapshot-state="cached"]', "openclaw-sidebar-agent-roster"),
+  ).toEqual([true, true]);
+  await waitForSolid(() => expect(dom.text('[data-agent-group="main"]')).toContain("Harbor"));
+  expect(dom.query('[data-avatar="⚓"]')).not.toBeNull();
 });
 
 it("keeps cached session rows while the live roster settles", async () => {
@@ -392,8 +394,7 @@ it("materializes the archive hint on hover without changing the action name", ()
 });
 
 it("renders the saved chip identity before agent discovery without reviving another agent's chip", async () => {
-  const { host, container, context, dom } = createHost();
-  host.sidebarAgentsMode = "chip";
+  const { host, container, context, dom } = createHost("chip");
   host.sessionKey = "agent:main:thread";
   expect(host.activeChipAgent().agent).toBeUndefined();
   host.restoreSidebarSnapshot({
@@ -418,8 +419,7 @@ it("renders the saved chip identity before agent discovery without reviving anot
 });
 
 it("retains the workspace name DOM across unrelated sidebar publications and renames", () => {
-  const { host, container, dom } = createHost();
-  host.restoreSidebarSnapshot(emptySnapshot);
+  const { host, container, dom } = createHost("roster", {});
   const update = mountObservedHost(host, container, renderSidebarAgentCard);
   const name = () => dom.query(".sidebar-agent-card__name-text");
   const original = name();
@@ -438,8 +438,7 @@ it("retains the workspace name DOM across unrelated sidebar publications and ren
 });
 
 it("keeps the rendered preview slot after caching without restoring live run authority", () => {
-  const { host, container, dom } = createHost();
-  host.sidebarAgentsMode = "chip";
+  const { host, container, dom } = createHost("chip");
   host.sessionsShowPreview = true;
   const session = projectSidebarSession({
     key: "agent:main:thread",
@@ -460,18 +459,14 @@ it("keeps the rendered preview slot after caching without restoring live run aut
   update();
   expect(dom.text(".sidebar-recent-session__subtitle")).toBe("The report is ready for review.");
   expect(dom.query(".sidebar-recent-session--single-line")).toBeNull();
-  expect(restored.hasActiveRun).toBe(false);
-  expect(restored.attention).toEqual({ kind: "none" });
+  expect([restored.hasActiveRun, restored.attention]).toEqual([false, { kind: "none" }]);
   expect(
     dom.all("[data-sidebar-session-pin]:enabled, [data-sidebar-session-archive]:enabled"),
   ).toHaveLength(0);
 });
 
 it("keeps Users visible despite a cached legacy collapse preference", () => {
-  const { host, container, dom } = createHost();
-  host.sidebarAgentsMode = "chip";
-  host.restoreSidebarSnapshot({
-    ...emptySnapshot,
+  const { host, container, dom } = createHost("chip", {
     collapsedSections: ["online"],
     onlineUsers: [{ id: "ada", name: "Ada", watchedSessions: [] }],
   });
@@ -484,12 +479,8 @@ it("keeps Users visible despite a cached legacy collapse preference", () => {
 });
 
 it("shows unavailable counts after a failed live summary instead of retaining saved totals", () => {
-  const { host, container, dom } = createHost();
-  host.restoreSidebarSnapshot({
-    ...emptySnapshot,
+  const { host, container, dom } = createHost("roster", {
     mode: "roster",
-    peoplePresenceFilter: "online",
-    offlineUsers: [],
     onlineUsers: [
       { id: "ada", name: "Ada", identity: { type: "profile", id: "ada" }, watchedSessions: [] },
     ],
@@ -500,8 +491,7 @@ it("shows unavailable counts after a failed live summary instead of retaining sa
   host.releaseSidebarSnapshot();
   host.sessionData.ownerCounts.error = "Synthetic count failure";
   update();
-  expect(dom.query(".sidebar-online__counts")).toBeNull();
-  expect(dom.query(".sidebar-online__retry")).not.toBeNull();
+  expect(dom.present(".sidebar-online__counts", ".sidebar-online__retry")).toEqual([false, true]);
 });
 
 it.each([false, true])(

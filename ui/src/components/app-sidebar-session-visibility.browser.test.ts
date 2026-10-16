@@ -27,6 +27,13 @@ const agents = {
 };
 const ring = (row: HTMLElement) => row.querySelector<HTMLElement>(".session-glyph__ring")!;
 const trace = (row: HTMLElement) => row.querySelector<SVGElement>(".session-glyph__trace-run")!;
+const indicatorSelector = ".session-glyph__ring, .session-glyph__trace-run";
+const owner = { actor: { type: "human", id: "ada", label: "Ada" } } as const;
+const pair: Pick<GatewaySessionRow, "owner" | "participants" | "participantCount"> = {
+  owner,
+  participants: [{ identity: { type: "profile", id: "bob" }, label: "Bob" }],
+  participantCount: 1,
+};
 const offscreen = (indicator: Element) =>
   indicator.classList.contains("session-run-indicator--offscreen");
 function expectIndicator(indicator: Element, hidden: boolean, animation: string) {
@@ -50,16 +57,24 @@ async function revealPages(sidebar: Parameters<typeof settleRoster>[0]) {
     await settleRoster(sidebar);
   }
 }
-function fillRuns(rows: GatewaySessionRow[], extra: Partial<GatewaySessionRow>) {
-  rows.forEach((row, index) => {
+function runState(
+  extra: Partial<GatewaySessionRow> | ((index: number) => Partial<GatewaySessionRow>),
+  count = 301,
+) {
+  const state = createSessionState(
+    "main",
+    Array.from({ length: count }, (_, i) => `agent:main:run-${i}`),
+  );
+  state.result!.sessions.forEach((row, index) => {
     const running = index === 0 || (index >= 20 && index < 30);
     Object.assign(row, {
       createdAt: 1000 - index,
       hasActiveRun: running,
       status: running ? "running" : "done",
-      ...extra,
+      ...(typeof extra === "function" ? extra(index) : extra),
     });
   });
+  return state;
 }
 
 function visibilityProbe() {
@@ -125,11 +140,7 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
   const probe = visibilityProbe();
   const { observers, activeObservers, intersections } = probe;
   const harness = createSessionsHarness("main", []);
-  const roster = createSessionState(
-    "main",
-    Array.from({ length: 301 }, (_, index) => `agent:main:run-${index}`),
-  );
-  fillRuns(roster.result!.sessions, { icon: "🦞" });
+  const roster = runState({ icon: "🦞" });
   roster.result!.owners = [
     { type: "human", id: "ada", label: "Ada" },
     { type: "human", id: "bob", label: "Bob" },
@@ -145,8 +156,7 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
   const revealRunningRows = async () => {
     await revealPages(sidebar);
     await waitForSolid(() => {
-      const running = runningRows(sidebar, ".session-glyph__ring, .session-glyph__trace-run");
-      // Solid retains observed rows, so existing entries also satisfy readiness.
+      const running = runningRows(sidebar, indicatorSelector);
       expect(running).toHaveLength(11);
       expect(running.every((row) => intersections.has(row))).toBe(true);
     });
@@ -195,22 +205,12 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
       await probe.delivered;
     }
   };
-  // Queuing replaces the ring's class binding without moving its observed row.
   await updateRows({ status: "queued" });
   await waitForSolid(() => expect(offscreen(ring(first))).toBe(true));
-  expect(offscreen(ring(last))).toBe(false);
+  expectIndicator(ring(last), false, "paused");
   expect(ring(first).classList.contains("session-glyph__ring--queued")).toBe(true);
   expect(getComputedStyle(ring(first)).animationPlayState).toBe("paused");
-  expect(getComputedStyle(ring(last)).animationPlayState).toBe("paused");
-
-  // A shared session replaces its circular ring with the paired-avatar trace.
-  await updateRows({
-    status: "running",
-    icon: "",
-    owner: { actor: { type: "human", id: "ada", label: "Ada" } },
-    participants: [{ identity: { type: "profile", id: "bob" }, label: "Bob" }],
-    participantCount: 1,
-  });
+  await updateRows({ status: "running", icon: "", ...pair });
   await waitForSolid(() => expect(offscreen(trace(first))).toBe(true));
   expect(getComputedStyle(trace(first)).animationPlayState).toBe("paused");
   expectIndicator(trace(last), false, "running");
@@ -219,7 +219,7 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
   const unobserve = vi.spyOn([...activeObservers][0]!, "unobserve");
   await updateRows({ hasActiveRun: false, status: "done" });
   expect(unobserve).toHaveBeenCalledTimes(11);
-  expect(sidebar.querySelector(".session-glyph__trace-run, .session-glyph__ring")).toBeNull();
+  expect(sidebar.querySelector(indicatorSelector)).toBeNull();
   expect(activeObservers.size).toBe(0);
   await updateRows({ hasActiveRun: true, status: "running" });
   expect(activeObservers.size).toBe(1);
@@ -248,11 +248,7 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
 
 it("registers running rows rendered by the real roster child after its parent update", async () => {
   const probe = visibilityProbe();
-  const rows = createSessionState(
-    "main",
-    Array.from({ length: 301 }, (_, index) => `agent:main:roster-${index}`),
-  ).result!.sessions;
-  fillRuns(rows, { agentId: "main", isMain: false });
+  const rows = runState({ agentId: "main", isMain: false }).result!.sessions;
   const { sidebar } = await mountRoster(agents, rows);
   const scroller = sizeSidebar(sidebar, 800);
   sidebar.sidebarAgentsMode = "roster";
@@ -291,30 +287,18 @@ it("registers running rows rendered by the real roster child after its parent up
 it.each(["chip", "roster"] as const)(
   "preserves running animations through %s session refreshes",
   async (mode) => {
-    const roster = createSessionState(
-      "main",
-      ["bare", "icon", "owner", "pair"].map((kind) => "agent:main:" + kind),
-    );
-    roster.result!.sessions.forEach((row, index) => {
-      Object.assign(row, {
-        label: ["Review changes", "Run focused tests", "Check documentation", "Verify the fix"][
-          index
-        ],
+    const variants: Partial<GatewaySessionRow>[] = [{}, { icon: "🦞" }, { owner }, pair];
+    const roster = runState(
+      (index) => ({
+        label: `Run ${index}`,
         agentId: "main",
         isMain: false,
         hasActiveRun: true,
         status: "running",
-        createdAt: 1000 - index,
-        ...(index === 1 ? { icon: "🦞" } : {}),
-        ...(index >= 2 ? { owner: { actor: { type: "human", id: "ada", label: "Ada" } } } : {}),
-        ...(index === 3
-          ? {
-              participants: [{ identity: { type: "profile", id: "bob" }, label: "Bob" }],
-              participantCount: 1,
-            }
-          : {}),
-      });
-    });
+        ...variants[index],
+      }),
+      4,
+    );
     const {
       sidebar,
       sessions: harness,
@@ -326,9 +310,7 @@ it.each(["chip", "roster"] as const)(
     sidebar.sidebarAgentsMode = mode;
     await settleRoster(sidebar);
     const indicators = () => [
-      ...sidebar.querySelectorAll<HTMLElement>(
-        ".sidebar-recent-session .session-glyph__ring, .sidebar-recent-session .session-glyph__trace-run",
-      ),
+      ...sidebar.querySelectorAll<HTMLElement>(`.sidebar-recent-session :is(${indicatorSelector})`),
     ];
     await waitForSolid(() => expect(indicators()).toHaveLength(4));
     const original = indicators();
@@ -358,10 +340,10 @@ it.each(["chip", "roster"] as const)(
         await rosterActivityStore(context).refresh();
       }
       await settleRoster(sidebar);
-      expect(sidebar.textContent).toContain("Review changes " + update);
+      expect(sidebar.textContent).toContain("Run 0 " + update);
       const current = keys.map((key) =>
         sidebar.querySelector<HTMLElement>(
-          `[data-session-key="${key}"] :is(.session-glyph__ring, .session-glyph__trace-run)`,
+          `[data-session-key="${key}"] :is(${indicatorSelector})`,
         )!,
       );
       expect(current).toHaveLength(4);

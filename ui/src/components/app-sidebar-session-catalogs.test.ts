@@ -26,10 +26,10 @@ const session = (
   canArchive: false,
   ...overrides,
 });
-const host = (sessions: SessionCatalogSession[], remote = false): SessionCatalogHost => ({
-  hostId: remote ? "node:remote" : "gateway:codex",
-  label: remote ? "Remote node" : "Local Codex",
-  kind: remote ? "node" : "gateway",
+const host = (sessions: SessionCatalogSession[]): SessionCatalogHost => ({
+  hostId: "gateway:codex",
+  label: "Local Codex",
+  kind: "gateway",
   connected: true,
   sessions,
 });
@@ -78,7 +78,6 @@ it("preserves adopted naming while distinguishing repository and workspace conte
       }),
     ]),
   ]);
-  source.capabilities.archive = true;
   type LiveRow = Parameters<typeof findCatalogSessionHovercardRow>[0]["liveRow"];
   const find = (id: string, liveRow?: LiveRow) =>
     findCatalogSessionHovercardRow({
@@ -125,7 +124,6 @@ it.each([
 ] as const)("applies shared %s visibility to adopted rows only", (statusFilter, expected) => {
   const row: GatewaySessionRow = { key: "agent:main:adopted", kind: "direct", snoozedUntil: 200 };
   const local = host([session("native"), session("adopted", { sessionKey: row.key })]);
-  Object.assign(local, { hostId: "gateway:local", label: "Gateway" });
   const visibility = projectSidebarArchiveVisibility({
     sessionData: {
       sessionsAgentId: "main",
@@ -173,7 +171,6 @@ it.each([false, true])(
           : ["mine", "theirs"].map((id) =>
               session(id, { createdActor: { id: "operator:" + id, type: "human" } }),
             ),
-        true,
       ),
     ];
     const ownerId = adopted ? "operator:owner" : "operator:mine";
