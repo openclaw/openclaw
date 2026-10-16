@@ -115,6 +115,7 @@ export function createMatrixCryptoApi(
     requestVerificationDM: vi.fn(async () => new MockVerificationRequest()),
     createRecoveryKeyFromPassphrase: vi.fn(async () => ({ privateKey: new Uint8Array(32) })),
     getSecretStorageStatus: vi.fn(async () => ({ ready: false, defaultKeyId: null })),
+    getOwnIdentity: vi.fn(async () => undefined),
     getDeviceVerificationStatus: vi.fn(async () => null),
     getSessionBackupPrivateKey: vi.fn(async () => null),
     loadSessionBackupPrivateKeyFromSecretStorage: vi.fn(async () => {}),

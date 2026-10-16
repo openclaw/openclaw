@@ -533,7 +533,9 @@ suite.define(() => {
             message: "Synthetic plugin catalog temporarily unavailable",
           });
           await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-          await sidebar.locator(".sidebar-rail button.sidebar-new-session:enabled").waitFor();
+          await sidebar
+            .locator('.sidebar-rail a.sidebar-new-session[href]:not([aria-disabled="true"])')
+            .waitFor();
           const pluginPin = sidebar.locator(
             '.sidebar-rail [data-sidebar-entry="plugin:reports/overview"]',
           );
@@ -564,7 +566,9 @@ suite.define(() => {
           });
           await gateway.resolveDeferred("connect");
           await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-          await sidebar.locator(".sidebar-rail button.sidebar-new-session:enabled").waitFor();
+          await sidebar
+            .locator('.sidebar-rail a.sidebar-new-session[href]:not([aria-disabled="true"])')
+            .waitFor();
           expect(await sidebar.getAttribute("data-snapshot-saved")).toBe("false");
         },
       );

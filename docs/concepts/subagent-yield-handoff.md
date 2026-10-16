@@ -170,9 +170,13 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   time, completion time, and child session identity as tie-breakers. Superseded
   child rows are excluded. Batch identity includes requester identity, child
   IDs, and yield generation.
-- **Bounded delivery.** Existing limits remain: three attempts, three ambiguous
-  transport replays, and ten stale deferrals. Active descendants do not consume
-  the stale-deferral budget. Delivery bookkeeping for executions that ended
+- **Bounded delivery.** Delivery retains three attempts and three ambiguous
+  transport replays. Active descendants resume settlement through completion
+  events, without periodic wake retries or retry-state writes. Terminal descendants
+  with unresolved delivery get one fallback timer, five minutes after the latest
+  recorded completion in the batch's descendant tree. Settlement events can release
+  the wait earlier; restart does not recharge it. The fallback delivers the finished
+  batch with an explicit notice that a descendant result remains undelivered. Delivery bookkeeping for executions that ended
   before the current batch's earliest child was created cannot block its
   continuation. Active descendants and delivery settlement overlapping that
   batch still hold the wake; historical failure records remain available.

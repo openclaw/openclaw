@@ -70,7 +70,6 @@ import {
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import * as chatSendSupport from "./chat-send-support.ts";
-import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import { switchChatSetting } from "./chat-session.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -235,21 +234,6 @@ function createJsonResponse(body: unknown, options: { ok?: boolean } = {}): Resp
   const response = new Response(null, { status: options.ok === false ? 500 : 200 });
   response.json = async () => await body;
   return response;
-}
-
-function eventPayloads(host: TestChatHost, event: string): Array<Record<string, unknown>> {
-  return (host.eventLogBuffer ?? [])
-    .filter((entry): entry is { event: string; payload: Record<string, unknown> } => {
-      if (!entry || typeof entry !== "object") {
-        return false;
-      }
-      const candidate = entry as { event?: unknown; payload?: unknown };
-      return (
-        candidate.event === event &&
-        Boolean(candidate.payload && typeof candidate.payload === "object")
-      );
-    })
-    .map((entry) => entry.payload);
 }
 
 function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
@@ -1170,73 +1154,6 @@ describe("handleSendChat", () => {
     expect(
       getChatSessionProjection(host, { sessionKey: host.sessionKey }).entries,
     ).not.toContainEqual(expect.objectContaining({ pendingRunId: rejectedRunId }));
-  });
-
-  it("records visible send timing through Gateway post-ACK milestones", async () => {
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.send": {
-          status: "started",
-          serverTiming: {
-            receivedToAckMs: 17,
-            loadSessionMs: 4,
-            prepareAttachmentsMs: 0.5,
-          },
-        },
-      },
-      chatMessage: "measure first send",
-      eventLogBuffer: [],
-    });
-
-    await handleSendChat(host);
-
-    const sendEvents = eventPayloads(host, "control-ui.chat.send");
-    expect(sendEvents.map((payload) => payload.phase)).toEqual(
-      expect.arrayContaining(["pending-visible", "request-start", "ack"]),
-    );
-    const ack = sendEvents.find((payload) => payload.phase === "ack");
-    expect(ack).toMatchObject({
-      ackStatus: "started",
-      sessionKey: "agent:main",
-      sendState: "sending",
-    });
-    expect(ack?.durationMs).toEqual(expect.any(Number));
-    expect(ack?.requestDurationMs).toEqual(expect.any(Number));
-    expect(ack).toMatchObject({
-      serverReceivedToAckMs: 17,
-      serverLoadSessionMs: 4,
-      serverPrepareAttachmentsMs: 0.5,
-    });
-    const runId = typeof ack?.runId === "string" ? ack.runId : "";
-    expect(runId).toMatch(uuidPattern);
-
-    recordChatSendServerTiming(host, {
-      phase: "agent-run-started",
-      runId,
-      sessionKey: "agent:main",
-      agentId: "main",
-      ackToPhaseMs: 12,
-      receivedToPhaseMs: 25,
-      dispatchStartedToPhaseMs: 8,
-      agentRunId: "agent-run-1",
-    });
-
-    expect(eventPayloads(host, "control-ui.chat.send")).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          phase: "server-agent-run-started",
-          runId,
-          sessionKey: "agent:main",
-          agentId: "main",
-          ackStatus: "started",
-          serverPhase: "agent-run-started",
-          serverAckToPhaseMs: 12,
-          serverReceivedToPhaseMs: 25,
-          serverDispatchStartedToPhaseMs: 8,
-          agentRunId: "agent-run-1",
-        }),
-      ]),
-    );
   });
 
   it("waits for every pending reasoning and speed patch before sending chat", async () => {

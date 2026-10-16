@@ -62,6 +62,7 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
           ? { status: "terminal", startedAt: now - 200, endedAt: now }
           : { status: "running", startedAt: now - 200 },
       ...(scenario === "paused member" ? { pauseReason: "sessions_yield" as const } : {}),
+      ...(scenario === "pending cleanup" ? { delivery: { status: "pending" as const } } : {}),
       requesterSettleWake: {
         status: "pending",
         attemptCount: 0,
@@ -75,6 +76,7 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
       [...runs.values()].filter((entry) => entry.requesterSessionKey === key),
     );
     readDescendantFacts.mockImplementation(async (params) => ({
+      deliveryWaitUntil: now + 300_000,
       unsettled: hasDescendantRunAwaitingSettleFromRuns(
         runs,
         params.requesterSessionKey,

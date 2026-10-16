@@ -54,7 +54,22 @@ export type PageHost = SolidBridgeElement<
 export class NewSessionPageOwner {
   private readonly listeners = new Set<() => void>();
   isConnected = false;
+  private pendingChange = false;
   readonly changed = () => {
+    if (!this.pendingChange && this.isConnected) {
+      this.pendingChange = true;
+      // Reconcile before Solid's queued render reads this mutable snapshot.
+      queueMicrotask(() => {
+        try {
+          if (this.isConnected) {
+            this.synchronize();
+            this.titlePreparation?.synchronize();
+          }
+        } finally {
+          this.pendingChange = false;
+        }
+      });
+    }
     for (const listener of this.listeners) {
       listener();
     }
@@ -63,18 +78,9 @@ export class NewSessionPageOwner {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
-  get updateComplete() {
-    return this.host.updateComplete;
-  }
   context?: ApplicationContext;
   get data() {
     return this.host.data;
-  }
-  get ownerDocument() {
-    return this.host.ownerDocument;
-  }
-  querySelector(selector: string) {
-    return this.host.querySelector(selector);
   }
 
   retainedForHandoff: object | null = null;
@@ -130,9 +136,9 @@ export class NewSessionPageOwner {
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {
         requestUpdate: this.changed,
-        querySelector: (selector) => this.querySelector(selector),
-        activeElement: () => this.ownerDocument.activeElement,
-        body: () => this.ownerDocument.body,
+        querySelector: (selector) => this.host.querySelector(selector),
+        activeElement: () => this.host.ownerDocument.activeElement,
+        body: () => this.host.ownerDocument.body,
         onInvalidate: () => {
           this.closeAttachmentPanel();
           this.connectMachine?.close();
@@ -145,7 +151,7 @@ export class NewSessionPageOwner {
           closeSessionMenus(this.host);
         },
         takePreparedTitle: () => this.titlePreparation?.takePreparedTitle(),
-        updateComplete: () => this.updateComplete,
+        updateComplete: () => this.host.updateComplete,
         retainForHandoff: () => {
           if (!this.data || !this.isConnected) {
             return undefined;
@@ -197,7 +203,7 @@ export class NewSessionPageOwner {
     const context = this.context;
     const owner = this.routeOwnerKey();
     const previousFocus = document.activeElement;
-    void this.updateComplete.then(() => {
+    void this.host.updateComplete.then(() => {
       if (
         this.isConnected &&
         !this.retainedForHandoff &&
@@ -220,6 +226,7 @@ export class NewSessionPageOwner {
     this.draft.connect();
     this.submission.draftPersistence.connect();
     this.critterImport.schedule();
+    this.changed();
   }
 
   disconnect() {
@@ -262,9 +269,7 @@ export class NewSessionPageOwner {
       attachmentPanelElement,
       this.attachmentPanel !== null,
     );
-  }
 
-  updated() {
     if (this.connectMachine.open && !this.place.isAdmin()) {
       this.connectMachine.close();
     }

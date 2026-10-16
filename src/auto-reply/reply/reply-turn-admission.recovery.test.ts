@@ -234,6 +234,7 @@ it("keeps new input and followups behind a concurrent recovery winner", async ()
       expect(request).toMatchObject({
         expectedSessionId: sessionId,
         expectedRecoveryRunId: "old-channel-claim",
+        lane: "main",
         expectedRecoverySourceRunId: "old-channel-source",
         gatewayRuntime: context.recoveryRuntime,
       });
@@ -325,6 +326,7 @@ it.each([
       }),
     ]);
     expect(retry).toHaveBeenCalledOnce();
+    expect(retry.mock.calls[0]?.[0].lane).toBe(kind === "visible" ? "main" : "background");
     await setImmediate();
     expect(f.read()).toMatchObject(f.entry);
     expect(replyRunRegistry.get(sessionKey)).toBeUndefined();

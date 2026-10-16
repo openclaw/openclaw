@@ -1,8 +1,5 @@
 import { createMemo, createRenderEffect, createSignal } from "solid-js";
-import {
-  PRESENTATION_CHANGED_EVENT,
-  type PresentationValue,
-} from "../../lit/presentation-binding.ts";
+import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../lib/presentation.ts";
 
 /** Park immediately; reveal alongside the parent's next props unless explicitly previewing. */
 export function usePanePresentation(source: () => PresentationValue) {

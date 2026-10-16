@@ -338,6 +338,26 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it.each([
+    { name: "text alone", media: false, delivered: false, visible: false },
+    { name: "already-delivered media", media: true, delivered: true, visible: false },
+    { name: "unsent media", media: true, delivered: false, visible: true },
+  ])(
+    "filters internal formatting after media dedupe: $name",
+    async ({ media, delivered, visible }) => {
+      const mediaUrl = "file:///tmp/result.png";
+      const { replyPayloads } = await buildTestReplyPayloads({
+        payloads: [{ text: "───", ...(media ? { mediaUrl } : {}) }],
+        directBlockDeliveries: delivered ? [{ payload: { mediaUrl }, outcome: "delivered" }] : [],
+      });
+
+      expect(replyPayloads).toHaveLength(visible ? 1 : 0);
+      if (visible) {
+        expect(replyPayloads[0]?.mediaUrl).toBe(mediaUrl);
+      }
+    },
+  );
+
+  it.each([
     { isHeartbeat: false, visibleAlreadyClean: false },
     { isHeartbeat: true, visibleAlreadyClean: false },
     { isHeartbeat: true, visibleAlreadyClean: true },

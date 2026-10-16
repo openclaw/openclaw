@@ -153,7 +153,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           acceptCapabilities: pluginsCommand.acceptCapabilities,
           force: pluginsCommand.force,
           snapshot: {
-            config: structuredClone(snapshot.sourceConfig),
+            config: snapshot.sourceConfig,
             baseHash: snapshot.hash,
             writeOptions,
           },
@@ -178,7 +178,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
       if (!snapshot.valid) {
         return commandReply("⚠️ Config file is invalid; fix it before using /plugins.");
       }
-      const config = structuredClone(snapshot.resolved);
+      const config = snapshot.resolved;
       const reportParams = { config, workspaceDir: params.workspaceDir };
 
       if (pluginsCommand.action === "inspect") {

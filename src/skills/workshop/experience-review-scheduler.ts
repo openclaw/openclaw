@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
+import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { getCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
@@ -17,6 +18,8 @@ import { resolveSkillWorkshopConfig } from "./config.js";
 const EXPERIENCE_REVIEW_ITERATION_THRESHOLD = 10;
 const EXPERIENCE_REVIEW_IDLE_MS = 30_000;
 const EXPERIENCE_REVIEW_RETRY_IDLE_MS = 30_000;
+const EXPERIENCE_REVIEW_RATE_LIMIT_BACKOFF_MS = 15 * 60_000;
+const EXPERIENCE_REVIEW_MAX_BACKOFF_MS = 60 * 60_000;
 const EXPERIENCE_REVIEW_MAX_PENDING = 32;
 const EXPERIENCE_REVIEW_MAX_COUNTERS = 1024;
 const EXPERIENCE_REVIEW_BLOCKED_TRIGGERS = new Set(["cron", "heartbeat", "memory", "overflow"]);
@@ -140,6 +143,22 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
   const iterationsBySession = new Map<string, number>();
   const pendingBySession = new Map<string, PendingExperienceReview>();
   let reviewInFlight = false;
+  let cooldownUntil = 0;
+  let rateLimitBackoffMs = 0;
+  const deferForRateLimit = () => {
+    // One saturated organization can affect every agent/model. Do not let the
+    // next queued session replace the failed review with another paid attempt.
+    const now = Date.now();
+    if (now < cooldownUntil) {
+      cooldownUntil = now + rateLimitBackoffMs;
+      return;
+    }
+    rateLimitBackoffMs = Math.min(
+      EXPERIENCE_REVIEW_MAX_BACKOFF_MS,
+      rateLimitBackoffMs * 2 || EXPERIENCE_REVIEW_RATE_LIMIT_BACKOFF_MS,
+    );
+    cooldownUntil = now + rateLimitBackoffMs;
+  };
   const setTimer = deps.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const clearTimer = deps.clearTimer ?? clearTimeout;
 
@@ -158,19 +177,29 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         if (pendingBySession.get(key) !== pending || pending.generation !== generation) {
           return;
         }
-        if (active || reviewInFlight) {
-          arm(key, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
+        const cooldownRemaining = cooldownUntil - Date.now();
+        if (active || reviewInFlight || cooldownRemaining > 0) {
+          arm(key, pending, Math.max(EXPERIENCE_REVIEW_RETRY_IDLE_MS, cooldownRemaining));
           return;
         }
         reviewInFlight = true;
         try {
           pendingBySession.delete(key);
           await deps.runReview(pending.candidate);
+          rateLimitBackoffMs = 0;
+        } catch (error) {
+          if (resolveFailoverReasonFromError(error) === "rate_limit") {
+            deferForRateLimit();
+          }
+          throw error;
         } finally {
           reviewInFlight = false;
         }
       })().catch((error: unknown) => {
-        if (isExpectedRunCancellation(error)) {
+        if (
+          isExpectedRunCancellation(error) ||
+          (error instanceof Error && error.name === "AbortError")
+        ) {
           log.debug(`skill experience review cancelled: ${formatErrorMessage(error)}`);
         } else {
           log.warn(`skill experience review failed: ${formatErrorMessage(error)}`);
@@ -216,6 +245,9 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       // Errored completions (provider/prompt failures) are environment noise, not
       // learnable evidence. User aborts carry no error and stay eligible.
       if (typeof params.event.error === "string" && params.event.error.trim() !== "") {
+        if (resolveFailoverReasonFromError(new Error(params.event.error)) === "rate_limit") {
+          deferForRateLimit();
+        }
         log.debug(`experience review skipped: reason=errored-completion session=${sessionKey}`);
         return;
       }
@@ -285,6 +317,8 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       }
       pendingBySession.clear();
       iterationsBySession.clear();
+      cooldownUntil = 0;
+      rateLimitBackoffMs = 0;
     },
   };
 }

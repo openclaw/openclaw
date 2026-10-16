@@ -62,7 +62,6 @@ import type {
   AgentTurnExecutionResult,
   AgentTurnInternalResult,
   AgentTurnParams,
-  InternalFollowupRun,
 } from "./agent-runner-execution.types.js";
 import {
   markAgentRunFailureReplyPayload,
@@ -201,9 +200,8 @@ async function executeAgentTurnInternalLoop(
           buildReplyMediaContextParams(params.followupRun, params.sessionKey, runtimeConfig),
         ),
       );
-    const internalFollowupRun = params.followupRun as InternalFollowupRun;
     const hasQueuedCurrentTurnImages =
-      internalFollowupRun.currentTurnImagesPrepared === true ||
+      params.followupRun.currentTurnImagesPrepared === true ||
       Object.hasOwn(params.followupRun, "images") ||
       Object.hasOwn(params.followupRun, "imageOrder");
     // Queue admission owns current-turn materialization, including empty results.
@@ -212,7 +210,7 @@ async function executeAgentTurnInternalLoop(
       ? {
           images: params.followupRun.images,
           imageOrder: params.followupRun.imageOrder,
-          mediaImageLayout: internalFollowupRun.mediaImageLayout,
+          mediaImageLayout: params.followupRun.mediaImageLayout,
         }
       : await agentTurnTiming.measure("current_turn_images", () =>
           resolveCurrentTurnImages({

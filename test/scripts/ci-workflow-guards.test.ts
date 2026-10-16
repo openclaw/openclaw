@@ -4452,7 +4452,7 @@ ${step.run}`,
     { historical: true, hasWatchRtc: false, expected: false },
   ])("prepares Watch RTC by source capability: %j", ({ historical, hasWatchRtc, expected }) => {
     const workflow = readCiWorkflow();
-    for (const jobName of ["ios-build", "ios-screenshot-shard"]) {
+    for (const jobName of ["ios-build", "ios-screenshot-capture"]) {
       const install = workflow.jobs[jobName].steps.find(
         (step: WorkflowStep) => step.name === "Install Watch Rust toolchain",
       );
