@@ -163,8 +163,8 @@ describe("agent database lease acquisition owner", () => {
     expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
     expect(owner.leases()).toEqual([]);
     open.mockRestore();
-    const retained = nativeOpen(original.path, { readOnly: true });
-    try {
+    {
+      using retained = nativeOpen(original.path, { readOnly: true });
       expect(
         retained.prepare("SELECT sql FROM sqlite_schema WHERE name='idx_agent_cache_expiry'").get(),
       ).toBeUndefined();
@@ -178,8 +178,6 @@ describe("agent database lease acquisition owner", () => {
           updated_at: 1,
         },
       ]);
-    } finally {
-      retained.close();
     }
     await expect(
       withOpenClawAgentDatabaseAdmission(options, admitted, (database) => database.agentId),
@@ -473,11 +471,9 @@ describe("openclaw agent database handle cache", () => {
     expect(cachedReopen.db.isOpen).toBe(false);
     fs.copyFileSync(evicted.path, `${evicted.path}.replacement`);
     fs.renameSync(`${evicted.path}.replacement`, evicted.path);
-    const divergent = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(evicted.path);
-    try {
+    {
+      using divergent = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(evicted.path);
       divergent.exec("ALTER TABLE session_nodes DROP COLUMN project_id;");
-    } finally {
-      divergent.close();
     }
     const reopened = openOpenClawAgentDatabase(options);
     expect(reopened).not.toBe(cachedReopen);

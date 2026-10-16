@@ -8,6 +8,7 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import type { SqlConnection } from "../infra/sql-connection.js";
 import { readSqliteCleanCloseSeal } from "../infra/sqlite-clean-close-seal.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -111,18 +112,34 @@ async function openChild(pathname: string, env: NodeJS.ProcessEnv, sharedPath?: 
 
 function openOwner() {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-lease-") };
-  const database = openOpenClawAgentDatabase({ agentId: "integrity-lease", env });
+  const options = { agentId: "integrity-lease", env };
+  const database = openOpenClawAgentDatabase(options);
   return {
     env,
+    options,
     database,
+    reopen: () => openOpenClawAgentDatabase(options),
+    close: () => closeOpenClawAgentDatabaseByPath(database.path),
     cleanClose: () => readSqliteDatabaseCleanClose(database.path),
   };
+}
+
+type Database = Pick<SqlConnection, "prepare">;
+const queryRow = (database: Database, sql: string) => database.prepare(sql).get();
+const preservedRow = (database: Database) =>
+  queryRow(database, "SELECT state_json FROM auth_profile_state WHERE state_key='preserved'");
+const deletionJournal = (database: Database) =>
+  queryRow(database, "SELECT name FROM sqlite_schema WHERE name='agent_deletion_journal'");
+function removeDatabase(pathname: string) {
+  for (const file of resolveSqliteDatabaseFilePaths(pathname)) {
+    fs.rmSync(file, { force: true });
+  }
 }
 
 it("independent schema registration lets an agent writer commit shared state before admission", async () => {
   const owner = openOwner();
   const shared = openOpenClawStateDatabase({ env: owner.env });
-  closeOpenClawAgentDatabaseByPath(owner.database.path);
+  owner.close();
   using database = openNodeSqliteDatabase(owner.database.path);
   const child = await openChild(owner.database.path, owner.env, shared.path);
   const committed = once(child, "message");
@@ -167,20 +184,16 @@ it.each(process.platform === "win32" ? [false] : [false, true])(
     const childPath = alias ? `${owner.database.path}.alias` : owner.database.path;
     if (alias) {
       fs.symlinkSync(owner.database.path, childPath);
-      closeOpenClawAgentDatabaseByPath(owner.database.path);
-      openOpenClawAgentDatabase({ agentId: "integrity-lease", env: owner.env, path: childPath });
+      owner.close();
+      openOpenClawAgentDatabase({ ...owner.options, path: childPath });
       closeOpenClawAgentDatabaseByPath(childPath);
-      const reopened = openOpenClawAgentDatabase({
-        agentId: "integrity-lease",
-        env: owner.env,
-        path: owner.database.path,
-      });
+      const reopened = owner.reopen();
       reopened.db.exec("INSERT INTO auth_profile_state VALUES ('alias-writer', '{}', 1)");
     }
     const child = await openChild(childPath, owner.env);
     expect(owner.cleanClose()).toBe(false);
 
-    closeOpenClawAgentDatabaseByPath(owner.database.path);
+    owner.close();
     expect(owner.cleanClose()).toBe(false);
 
     const exited = once(child, "exit");
@@ -233,10 +246,10 @@ it.each(["forced cleanup", "stale admission"])(
         lease: receipt,
       });
       expect(owner.cleanClose()).toBe(false);
-      closeOpenClawAgentDatabaseByPath(owner.database.path);
+      owner.close();
       expect(owner.cleanClose()).toBe(false);
     } else {
-      closeOpenClawAgentDatabaseByPath(owner.database.path);
+      owner.close();
       expect(owner.cleanClose()).toBe(false);
     }
     const gate = schema.agentDatabaseIntegrityBeforeMutationSteps;
@@ -248,15 +261,16 @@ it.each(["forced cleanup", "stale admission"])(
       diagnostics = args[3];
       return result;
     });
-    const reopened = openOpenClawAgentDatabase({ agentId: "integrity-lease", env: owner.env });
+    const reopened = owner.reopen();
     expect(diagnostics?.integrityGateOutcome).toBe("healthy");
     if (recovery === "stale admission") {
       expect(diagnostics?.integrityGateReason).toBe("stale-lease-full");
     }
     expect(
-      reopened.db
-        .prepare("SELECT state_key FROM auth_profile_state WHERE state_key='killed-write'")
-        .get(),
+      queryRow(
+        reopened.db,
+        "SELECT state_key FROM auth_profile_state WHERE state_key='killed-write'",
+      ),
     ).toBeUndefined();
     expect(owner.cleanClose()).toBe(false);
     expect(
@@ -264,7 +278,7 @@ it.each(["forced cleanup", "stale admission"])(
         .prepare("SELECT lease_id FROM agent_database_leases WHERE owner_pid = ?")
         .all(child.pid!),
     ).toEqual([]);
-    closeOpenClawAgentDatabaseByPath(owner.database.path);
+    owner.close();
     expect(owner.cleanClose()).toBe(true);
   },
 );
@@ -281,11 +295,11 @@ it("does not certify a failed checkpoint or native close", () => {
     error: checkpointFailure.message,
   });
   prepare.mockRestore();
-  closeOpenClawAgentDatabaseByPath(owner.database.path);
+  owner.close();
   expect(owner.cleanClose()).toBe(false);
 
   closeOpenClawAgentDatabasesForTest();
-  const reopened = openOpenClawAgentDatabase({ agentId: "integrity-lease", env: owner.env });
+  const reopened = owner.reopen();
   const failure = new Error("synthetic native close failed");
   vi.spyOn(reopened.db, "close").mockImplementationOnce(() => {
     throw failure;
@@ -300,7 +314,7 @@ it.each(["idle-peer", "settled", "pinned", "checkpoint-error"] as const)(
   "certifies only an empty WAL after the final native close (%s)",
   (outcome) => {
     const owner = openOwner();
-    closeOpenClawAgentDatabaseByPath(owner.database.path);
+    owner.close();
     const db = openNodeSqliteDatabase(owner.database.path);
     registerOpenClawAgentDatabaseIdentity(db);
     const database = {
@@ -426,7 +440,7 @@ it("preserves dirty proof without quarantine SQL when a healthy peer closes befo
     observer.restore();
   }
   expect(owner.cleanClose()).toBe(false);
-  closeOpenClawAgentDatabaseByPath(owner.database.path);
+  owner.close();
   expect(owner.cleanClose()).toBe(true);
 });
 
@@ -445,17 +459,11 @@ it.each(["closing", "unregistering", "reopening shared state before closing"])(
 
     closeOpenClawStateDatabase();
     expect(shared.db.isOpen).toBe(false);
-    for (const file of resolveSqliteDatabaseFilePaths(shared.path)) {
-      fs.rmSync(file, { force: true });
-    }
+    removeDatabase(shared.path);
 
     if (operation === "reopening shared state before closing") {
       const reopened = openOpenClawStateDatabase({ env });
-      expect(
-        reopened.db
-          .prepare("SELECT name FROM sqlite_schema WHERE name='agent_deletion_journal'")
-          .get(),
-      ).toBeUndefined();
+      expect(deletionJournal(reopened.db)).toBeUndefined();
     }
     expect(() =>
       operation === "unregistering"
@@ -465,19 +473,11 @@ it.each(["closing", "unregistering", "reopening shared state before closing"])(
     expect(database.db.isOpen).toBe(false);
     {
       using retained = openNodeSqliteDatabase(pathname, { readOnly: true });
-      expect(
-        retained
-          .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='preserved'")
-          .get(),
-      ).toEqual({ state_json: '{"ok":true}' });
+      expect(preservedRow(retained)).toEqual({ state_json: '{"ok":true}' });
     }
     {
       using reopened = openNodeSqliteDatabase(shared.path, { readOnly: true });
-      expect(
-        reopened
-          .prepare("SELECT name FROM sqlite_schema WHERE name='agent_deletion_journal'")
-          .get(),
-      ).toBeUndefined();
+      expect(deletionJournal(reopened)).toBeUndefined();
       expect(reopened.prepare("SELECT * FROM agent_database_leases").all()).toEqual([]);
     }
     const discovery = discoverAgentDatabaseMigrationTargets({
@@ -492,11 +492,7 @@ it.each(["closing", "unregistering", "reopening shared state before closing"])(
     expect(discovery.warnings.join("\n")).toContain(`Held agent retained database ${pathname}`);
     expect(discovery.warnings.join("\n")).toContain("openclaw doctor --fix");
     const reopened = openOpenClawAgentDatabase({ agentId: "retained", path: pathname, env });
-    expect(
-      reopened.db
-        .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='preserved'")
-        .get(),
-    ).toEqual({ state_json: '{"ok":true}' });
+    expect(preservedRow(reopened.db)).toEqual({ state_json: '{"ok":true}' });
   },
 );
 
@@ -529,9 +525,7 @@ it("retains the selected sibling inventory when failed-open cleanup must recreat
     .mockImplementation((file, options) => {
       if (file === pathname) {
         closeOpenClawStateDatabase();
-        for (const part of resolveSqliteDatabaseFilePaths(sharedPath)) {
-          fs.rmSync(part, { force: true });
-        }
+        removeDatabase(sharedPath);
         throw failure;
       }
       return nativeOpen(file, options);
@@ -544,9 +538,7 @@ it("retains the selected sibling inventory when failed-open cleanup must recreat
     open.mockRestore();
   }
   using shared = openNodeSqliteDatabase(sharedPath, { readOnly: true });
-  expect(
-    shared.prepare("SELECT name FROM sqlite_schema WHERE name='agent_deletion_journal'").get(),
-  ).toBeUndefined();
+  expect(deletionJournal(shared)).toBeUndefined();
   expect(shared.prepare("SELECT * FROM agent_database_leases").all()).toEqual([]);
   expect(fs.existsSync(pathname)).toBe(false);
   expect(fs.readFileSync(siblingPath)).toEqual(before);
@@ -562,11 +554,7 @@ it.each(["", "-wal", "-shm", "-journal"])(
     fs.writeFileSync(quarantinePath + suffix, "");
     for (let attempt = 0; attempt < 2; attempt++) {
       const reopened = openOpenClawStateDatabase({ env });
-      expect(
-        reopened.db
-          .prepare("SELECT name FROM sqlite_schema WHERE name='agent_deletion_journal'")
-          .get(),
-      ).toBeUndefined();
+      expect(deletionJournal(reopened.db)).toBeUndefined();
       closeOpenClawStateDatabase();
     }
   },
@@ -576,8 +564,8 @@ it.each(["quarantine", "schema-version latch"] as const)(
   "gates fresh read-only admission on %s and permits a repaired generation",
   (condition) => {
     const owner = openOwner();
-    const options = { agentId: "integrity-lease", env: owner.env };
-    closeOpenClawAgentDatabaseByPath(owner.database.path);
+    const options = owner.options;
+    owner.close();
     closeOpenClawStateDatabase();
     if (condition === "quarantine") {
       // Drop process-held proof after persisting quarantine, as on restart.

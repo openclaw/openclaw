@@ -39,6 +39,23 @@ function validationStatements(queries: string[]): string[] {
   );
 }
 
+function expectCachedMetadata(
+  database: Parameters<typeof readExistingAgentSchemaMeta>[0],
+  schemaVersion: number,
+) {
+  const observed = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+  try {
+    expect(readExistingAgentSchemaMeta(database)).toEqual({
+      agentId: "main",
+      role: "agent",
+      schemaVersion,
+    });
+    expect(observed.queries).toEqual([]);
+  } finally {
+    observed.restore();
+  }
+}
+
 it.each(["transaction", "implicit snapshot"] as const)(
   "keeps agent metadata versions with their %s catalog",
   async (snapshot) => {
@@ -57,17 +74,7 @@ it.each(["transaction", "implicit snapshot"] as const)(
           writer.exec("CREATE TABLE metadata_migration (id INTEGER); PRAGMA user_version=2");
           persistAgentSchemaMetadata(writer, "main", 2);
         });
-        const observed = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-        try {
-          expect(readExistingAgentSchemaMeta(reader)).toEqual({
-            agentId: "main",
-            role: "agent",
-            schemaVersion: 1,
-          });
-          expect(observed.queries).toEqual([]);
-        } finally {
-          observed.restore();
-        }
+        expectCachedMetadata(reader, 1);
         expect(reader.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
           schema_version: 1,
         });
@@ -77,17 +84,7 @@ it.each(["transaction", "implicit snapshot"] as const)(
       } else {
         runSqliteSchemaReadSnapshotSync(reader, migrateWhileReading);
       }
-      const observed = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-      try {
-        expect(readExistingAgentSchemaMeta(reader)).toEqual({
-          agentId: "main",
-          role: "agent",
-          schemaVersion: 2,
-        });
-        expect(observed.queries).toEqual([]);
-      } finally {
-        observed.restore();
-      }
+      expectCachedMetadata(reader, 2);
     });
   },
 );
@@ -115,18 +112,8 @@ it.each(["drop", "recreate"] as const)(
       }
       persistAgentSchemaMetadata(writer, "main", 1);
       using reopened = openNodeSqliteDatabase(filename);
-      const observed = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-      try {
-        for (const database of [writer, reopened]) {
-          expect(readExistingAgentSchemaMeta(database)).toEqual({
-            agentId: "main",
-            role: "agent",
-            schemaVersion: 1,
-          });
-        }
-        expect(observed.queries).toEqual([]);
-      } finally {
-        observed.restore();
+      for (const database of [writer, reopened]) {
+        expectCachedMetadata(database, 1);
       }
     });
   },
@@ -271,11 +258,7 @@ it.each(["tracked", "raw"] as const)(
         opener === "tracked"
           ? openNodeSqliteDatabase(first.path)
           : new (requireNodeSqlite().DatabaseSync)(first.path);
-      ensureOpenClawAgentDatabaseSchema(database, {
-        ...options,
-        path: first.path,
-        register: true,
-      });
+      ensureOpenClawAgentDatabaseSchema(database, { ...options, path: first.path, register: true });
       expect(listOpenClawRegisteredAgentDatabases({ env })).toContainEqual(
         expect.objectContaining({ agentId: "main", path: first.path }),
       );

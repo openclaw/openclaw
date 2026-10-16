@@ -83,6 +83,12 @@ const { closeOpenClawStateDatabaseForTest, openOpenClawStateDatabase } =
 const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const backends = new Set<ReturnType<typeof openExistingSqliteWorkerBackend>>();
+const makeOptions = () => ({
+  agentId: "worker-1",
+  env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-agent-permissions-") },
+});
+const permissionFailure = (message: string) =>
+  Object.assign(new Error(message), { code: "EACCES" });
 
 describe("agent database permission repair", () => {
   afterEach(async () => {
@@ -98,10 +104,7 @@ describe("agent database permission repair", () => {
   });
 
   it("rolls back a warm borrowed write after commit authority is refused", async () => {
-    const options = {
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-agent-worker-permissions-") },
-    };
+    const options = makeOptions();
     const seeded = openOpenClawAgentDatabase(options);
     const databasePath = seeded.path;
     seeded.db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
@@ -159,9 +162,7 @@ describe("agent database permission repair", () => {
     if (process.platform !== "win32") {
       fs.chmodSync(databasePath, 0o644);
     }
-    const refused = Object.assign(new Error("authority refused before commit"), {
-      code: "EACCES",
-    });
+    const refused = permissionFailure("authority refused before commit");
     chmodFailHook.calls = [];
     workerAdmission.mockClear();
     workerAdmission.mockImplementation((request) => {
@@ -194,16 +195,10 @@ describe("agent database permission repair", () => {
   });
 
   it("refuses to open a database when permission repair fails", () => {
-    const stateDir = tempDirs.make("openclaw-agent-chmod-");
-    const options = {
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    };
+    const options = makeOptions();
     const database = openOpenClawAgentDatabase(options);
     closeOpenClawAgentDatabasesForTest();
-    const permissionError = Object.assign(new Error("EACCES: chmod failed"), {
-      code: "EACCES",
-    });
+    const permissionError = permissionFailure("EACCES: chmod failed");
     if (process.platform !== "win32") {
       fs.chmodSync(database.path, 0o644);
     }
@@ -217,10 +212,7 @@ describe("agent database permission repair", () => {
   it.runIf(process.platform !== "win32")(
     "bounds warm write filesystem checks and repairs permission drift on reopen",
     () => {
-      const options = {
-        agentId: "worker-1",
-        env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-agent-chmod-") },
-      };
+      const options = makeOptions();
       const database = openOpenClawAgentDatabase(options);
       const directory = path.dirname(database.path);
       const files = [database.path, `${database.path}-wal`, `${database.path}-shm`];
@@ -295,10 +287,7 @@ describe("agent database permission repair", () => {
   });
 
   it("opens when a transient sidecar disappears during permission repair", () => {
-    const options = {
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-agent-sidecar-") },
-    };
+    const options = makeOptions();
     const database = openOpenClawAgentDatabase(options);
     const journal = `${database.path}-journal`;
     closeOpenClawAgentDatabasesForTest();
