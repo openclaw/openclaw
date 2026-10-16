@@ -6454,6 +6454,14 @@ their native compatibility paths. Bundled callers prepare presence before
 invoking that factory. Schemas, stored bytes, retention, and update behavior are
 unchanged.
 
+Runtime auth discovery retains canonical credential and health rows in its existing
+Gateway cache. Auth-cell writes and generic machine-state writes to the two auth
+keys invalidate those rows through the database owner's committed admission
+receipts; unrelated writes leave them warm. Receipts carry no credential payload.
+A write overtaking a discovery read invalidates its cached result on the next
+lookup. Credential use still checks the live credential authority at the effect;
+canonical reads, maintenance, and pinned snapshots retain their existing paths.
+
 Question answer and cancellation authority composes fresh tool-policy classification
 with the question owner's final session-reader batch. The original physical store,
 creator, caller, and backend remain bound across preparation and persistence waits;
