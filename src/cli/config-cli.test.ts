@@ -870,6 +870,25 @@ describe("config cli", () => {
       expectErrorIncludes(message);
     });
 
+    it("rejects a reserved __proto__ provider env key before writing", async () => {
+      await expect(
+        runConfigSet(
+          "secrets.providers.runner",
+          "--provider-source",
+          "exec",
+          "--provider-command",
+          "/usr/bin/env",
+          "--provider-env",
+          "__proto__=SYNTHETIC_PROVIDER_ENV_SECRET",
+          "--dry-run",
+        ),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes('--provider-env key "__proto__" is reserved');
+    });
+
     it.skipIf(process.platform === "win32")(
       "rejects an unsafe exec provider command before writing",
       async () => {

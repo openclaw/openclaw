@@ -91,6 +91,43 @@ describe("mcp cli", () => {
     });
   });
 
+  it("rejects a reserved __proto__ key in --env and --header before writing", async () => {
+    await withMcpHome(async () => {
+      await expect(
+        runMcpCommand([
+          "mcp",
+          "add",
+          "docs",
+          "--command",
+          "node",
+          "--no-probe",
+          "--env",
+          "__proto__=injected",
+        ]),
+      ).rejects.toMatchObject({ code: 1 });
+      expect(lastErrorLine()).toBe(
+        '--env key "__proto__" is reserved; use a different key name.',
+      );
+
+      mockError.mockClear();
+      await expect(
+        runMcpCommand([
+          "mcp",
+          "add",
+          "docs",
+          "--url",
+          "https://mcp.example.com/mcp",
+          "--no-probe",
+          "--header",
+          "__proto__=injected",
+        ]),
+      ).rejects.toMatchObject({ code: 1 });
+      expect(lastErrorLine()).toBe(
+        '--header key "__proto__" is reserved; use a different key name.',
+      );
+    });
+  });
+
   it("rejects an existing MCP server before probing", async () => {
     await withMcpHome(async () => {
       await runMcpCommand(["mcp", "set", "docs", '{"command":"node","args":["existing.mjs"]}']);
