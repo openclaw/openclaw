@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { setGatewayStateOwnerCustodyRestartHandler } from "../../infra/gateway-state-owner-restart.js";
 import {
   consumeGatewaySuspendHandoff,
   type GatewaySuspendHandoffOwner,
@@ -317,6 +318,12 @@ export function createGatewayRunSignals(params: {
   process.on("SIGINT", onSigint);
   // SIGUSR1 belongs to Node's on-demand inspector; never register a listener for it.
   process.on("SIGUSR2", onRestartSignal);
+  // Custody loss fences every later state operation, so the run loop answers it
+  // through the supervisor. The state-owner graph must not carry an edge into the
+  // restart graph (PR wrapper source-closure gate), so the handler is bound here.
+  const releaseCustodyRestart = setGatewayStateOwnerCustodyRestartHandler((reason) => {
+    eagerLifecycleRuntime.scheduleGatewayRestart({ reason, skipDeferral: true, delayMs: 0 });
+  });
   const retire = () => {
     signalsActive = false;
     openSignalStore();
@@ -338,6 +345,7 @@ export function createGatewayRunSignals(params: {
       process.removeListener("SIGTERM", onSigterm);
       process.removeListener("SIGINT", onSigint);
       process.removeListener("SIGUSR2", onRestartSignal);
+      releaseCustodyRestart();
     },
   };
 }
