@@ -73,6 +73,57 @@ type PendingPluginApproval = {
   id: string;
   request?: { pluginId?: string; allowedDecisions?: string[]; title?: string };
 };
+type NodeStatus = {
+  connected?: boolean;
+  paired?: boolean;
+  approvalState?: string;
+  commands?: string[];
+  sessionHost?: boolean;
+};
+type Environment = {
+  id?: string;
+  status?: string;
+  sessionHost?: boolean;
+  workerSlots?: { total: number; available: number };
+  invocableCommands?: string[];
+};
+type Session = {
+  execCwd?: string;
+  spawnedCwd?: string;
+  placement?: {
+    state?: string;
+    remoteWorkspaceDir?: string;
+    generation?: number;
+    environmentId?: string;
+    activeOwnerEpoch?: number;
+  };
+};
+
+async function readEnvironment(reviewer: GatewayClient, nodeId: string) {
+  const inventory = await reviewer.request<{ environments?: Environment[] }>(
+    "environments.list",
+    {},
+  );
+  return inventory.environments?.find((entry) => entry.id === `node:${nodeId}`);
+}
+
+async function describeSession(gateway: GatewayHandle) {
+  return (await gateway.call("sessions.describe", { key: SESSION_KEY })) as { session?: Session };
+}
+
+async function pendingCodexApprovals(reviewer: GatewayClient) {
+  return (await reviewer.request<PendingPluginApproval[]>("plugin.approval.list", {})).filter(
+    (approval) => approval.request?.pluginId === "codex",
+  );
+}
+
+function waitForTurn(reviewer: GatewayClient, runId: string, timeoutMs = REQUEST_TIMEOUT_MS) {
+  return reviewer.request<{ status?: string; error?: string }>(
+    "agent.wait",
+    { runId, timeoutMs },
+    { timeoutMs: timeoutMs + 5_000 },
+  );
+}
 type ProofProvider = {
   readonly baseUrl: string;
   readonly sessionObserverUrl: string;
@@ -369,11 +420,7 @@ async function resolveNextApproval(
   try {
     pending = await vi.waitFor(
       async () => {
-        const approvals = await reviewer.request<PendingPluginApproval[]>(
-          "plugin.approval.list",
-          {},
-        );
-        const candidate = approvals.find((approval) => approval.request?.pluginId === "codex");
+        const [candidate] = await pendingCodexApprovals(reviewer);
         expect(candidate, "expected a pending Codex paired-node approval").toBeDefined();
         return candidate!;
       },
@@ -509,11 +556,7 @@ async function expectSuccessfulTurn(params: {
   provider: ProofProvider;
   runId: string;
 }): Promise<void> {
-  const outcome = await params.reviewer.request<{ status?: string; error?: string }>(
-    "agent.wait",
-    { runId: params.runId, timeoutMs: REQUEST_TIMEOUT_MS },
-    { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
-  );
+  const outcome = await waitForTurn(params.reviewer, params.runId);
   if (outcome.status !== "ok") {
     throw new Error(
       `Codex paired-node turn failed: ${JSON.stringify({
@@ -649,14 +692,7 @@ describe("Codex paired-device exec-server carrier", () => {
         node = startNodeProcess(gatewayPort, nodeEnv);
         await approvePairing(gateway, "node", nodeId);
         await vi.waitFor(async () => {
-          const approved = (await readNode(gateway!, nodeId)) as
-            | {
-                connected?: boolean;
-                approvalState?: string;
-                commands?: string[];
-                sessionHost?: boolean;
-              }
-            | undefined;
+          const approved = (await readNode(gateway!, nodeId)) as NodeStatus | undefined;
           expect(approved).toMatchObject({
             connected: true,
             approvalState: "approved",
@@ -674,29 +710,12 @@ describe("Codex paired-device exec-server carrier", () => {
           worktreeBaseRef: "main",
           cwd: published.source,
         });
-        const localSession = (await gateway.call("sessions.describe", { key: SESSION_KEY })) as {
-          session?: {
-            execCwd?: string;
-            spawnedCwd?: string;
-            placement?: Record<string, unknown>;
-          };
-        };
+        const localSession = await describeSession(gateway);
         const localWorkspace = localSession.session?.execCwd ?? localSession.session?.spawnedCwd;
         expect(localWorkspace).toBeTruthy();
 
         await vi.waitFor(async () => {
-          const inventory = await reviewer!.request<{
-            environments?: Array<{
-              id?: string;
-              status?: string;
-              sessionHost?: boolean;
-              workerSlots?: { total: number; available: number };
-              invocableCommands?: string[];
-            }>;
-          }>("environments.list", {});
-          const environment = inventory.environments?.find(
-            (entry) => entry.id === `node:${nodeId}`,
-          );
+          const environment = await readEnvironment(reviewer!, nodeId);
           expect(environment).toMatchObject({ status: "available", sessionHost: true });
           expect(environment?.workerSlots?.available).toBeGreaterThan(0);
           expect(environment?.invocableCommands ?? []).not.toContain(COMMAND);
@@ -710,15 +729,9 @@ describe("Codex paired-device exec-server carrier", () => {
             { timeoutMs: REQUEST_TIMEOUT_MS },
           ),
         ).rejects.toThrow(/codex\.exec-server\.stdio\.v1|enabled|approved|command/iu);
-        const rejectedSession = (await gateway.call("sessions.describe", { key: SESSION_KEY })) as {
-          session?: { placement?: Record<string, unknown> };
-        };
+        const rejectedSession = await describeSession(gateway);
         expect(rejectedSession.session?.placement).toEqual(localSession.session?.placement);
-        expect(
-          (await reviewer.request<PendingPluginApproval[]>("plugin.approval.list", {})).filter(
-            (approval) => approval.request?.pluginId === "codex",
-          ),
-        ).toEqual([]);
+        expect(await pendingCodexApprovals(reviewer)).toEqual([]);
         expect(
           (await nodeChildCommands(unapprovedNodePid!)).filter((command) =>
             launchCommandHasArg(command, WORKER_OR_CODEX_COMMAND_ARGS),
@@ -734,27 +747,14 @@ describe("Codex paired-device exec-server carrier", () => {
         await stopChild(node);
         node = startNodeProcess(gatewayPort, nodeEnv);
         await vi.waitFor(async () => {
-          const approved = (await readNode(gateway!, nodeId)) as
-            | {
-                connected?: boolean;
-                approvalState?: string;
-                commands?: string[];
-                sessionHost?: boolean;
-              }
-            | undefined;
+          const approved = (await readNode(gateway!, nodeId)) as NodeStatus | undefined;
           expect(approved).toMatchObject({
             connected: true,
             approvalState: "approved",
             sessionHost: true,
           });
           expect(approved?.commands).toContain(COMMAND);
-          const inventory = await reviewer!.request<{
-            environments?: Array<{ id?: string; invocableCommands?: string[] }>;
-          }>("environments.list", {});
-          expect(
-            inventory.environments?.find((entry) => entry.id === `node:${nodeId}`)
-              ?.invocableCommands,
-          ).toContain(COMMAND);
+          expect((await readEnvironment(reviewer!, nodeId))?.invocableCommands).toContain(COMMAND);
         }, WAIT_OPTIONS);
 
         const dispatched = (await gateway.call(
@@ -768,11 +768,7 @@ describe("Codex paired-device exec-server carrier", () => {
 
         const denied = await startTurn(requester, SUCCESS_MARKER);
         await resolveNextApproval(reviewer, "deny", { gateway, runId: denied.runId });
-        const deniedOutcome = await reviewer.request<{ status?: string; error?: unknown }>(
-          "agent.wait",
-          { runId: denied.runId, timeoutMs: REQUEST_TIMEOUT_MS },
-          { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
-        );
+        const deniedOutcome = await waitForTurn(reviewer, denied.runId);
         expect(deniedOutcome).toMatchObject({ status: "error" });
         expect(provider.nativeExecCalls).toBe(0);
         await expect(
@@ -796,14 +792,13 @@ describe("Codex paired-device exec-server carrier", () => {
           privateCodexHome: true,
           http: "CODEX_NODE_HTTP_OK",
         };
+        const expectEvidence = async (filename: string) => {
+          expect(
+            await readRemoteEvidence<Record<string, unknown>>(path.join(localWorkspace!, filename)),
+          ).toMatchObject(expectedEvidence);
+        };
         await waitForProofState(
-          async () => {
-            expect(
-              await readRemoteEvidence<Record<string, unknown>>(
-                path.join(localWorkspace!, "codex-node-proof.json"),
-              ),
-            ).toMatchObject(expectedEvidence);
-          },
+          () => expectEvidence("codex-node-proof.json"),
           "initial Codex node execution evidence",
           signal,
         );
@@ -817,21 +812,11 @@ describe("Codex paired-device exec-server carrier", () => {
         const repeated = await startTurn(requester, REPEAT_MARKER);
         await expectSuccessfulTurn({ reviewer, gateway, node, provider, runId: repeated.runId });
         await waitForProofState(
-          async () => {
-            expect(
-              await readRemoteEvidence<Record<string, unknown>>(
-                path.join(localWorkspace!, "codex-node-repeat.json"),
-              ),
-            ).toMatchObject(expectedEvidence);
-          },
+          () => expectEvidence("codex-node-repeat.json"),
           "repeated Codex node execution evidence",
           signal,
         );
-        expect(
-          (await reviewer.request<PendingPluginApproval[]>("plugin.approval.list", {})).filter(
-            (approval) => approval.request?.pluginId === "codex",
-          ),
-        ).toEqual([]);
+        expect(await pendingCodexApprovals(reviewer)).toEqual([]);
         expect(provider.httpHits).toBe(2);
 
         await requester.request("sessions.messages.subscribe", { key: SESSION_KEY });
@@ -878,11 +863,7 @@ describe("Codex paired-device exec-server carrier", () => {
             { cause: error },
           );
         }
-        const interruptedTerminal = reviewer.request<{ status?: string; error?: unknown }>(
-          "agent.wait",
-          { runId: interrupted.runId, timeoutMs: 12_000 },
-          { timeoutMs: 17_000 },
-        );
+        const interruptedTerminal = waitForTurn(reviewer, interrupted.runId, 12_000);
         await stopChild(node);
         node = undefined;
         const interruptedOutcome = await interruptedTerminal;
@@ -917,15 +898,7 @@ describe("Codex paired-device exec-server carrier", () => {
 
         node = startNodeProcess(gatewayPort, nodeEnv);
         await vi.waitFor(async () => {
-          const reconnected = (await readNode(gateway!, nodeId)) as
-            | {
-                connected?: boolean;
-                paired?: boolean;
-                approvalState?: string;
-                commands?: string[];
-                sessionHost?: boolean;
-              }
-            | undefined;
+          const reconnected = (await readNode(gateway!, nodeId)) as NodeStatus | undefined;
           expect(reconnected).toMatchObject({
             connected: true,
             paired: true,
@@ -934,17 +907,7 @@ describe("Codex paired-device exec-server carrier", () => {
           });
           expect(reconnected?.commands).toContain(COMMAND);
         }, WAIT_OPTIONS);
-        const reconnectPlacement = (await gateway.call("sessions.describe", {
-          key: SESSION_KEY,
-        })) as {
-          session?: {
-            placement?: {
-              generation?: number;
-              environmentId?: string;
-              activeOwnerEpoch?: number;
-            };
-          };
-        };
+        const reconnectPlacement = await describeSession(gateway);
         const moveSource = reconnectPlacement.session?.placement;
         expect(moveSource).toMatchObject({
           generation: expect.any(Number),
@@ -982,11 +945,7 @@ describe("Codex paired-device exec-server carrier", () => {
         await expectSuccessfulTurn({ reviewer, gateway, node, provider, runId: recovered.runId });
         await waitForProofState(
           async () => {
-            expect(
-              await readRemoteEvidence<Record<string, unknown>>(
-                path.join(localWorkspace!, "codex-node-recovery.json"),
-              ),
-            ).toMatchObject(expectedEvidence);
+            await expectEvidence("codex-node-recovery.json");
             expect(
               await readRemoteEvidence<{ pid?: number }>(
                 path.join(localWorkspace!, "codex-node-disconnect.json"),

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { GatewayClientRequestError } from "@openclaw/gateway-client";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
@@ -58,17 +59,17 @@ async function listConversations(gateway: GatewayHarness["gateway"], agentId: st
   );
 }
 
-async function waitForConversation(params: {
-  gateway: GatewayHarness["gateway"];
-  agentId: string;
-  accountId: string;
-  targetIncludes: string;
-}) {
+async function waitForConversation(
+  gateway: GatewayHarness["gateway"],
+  agentId: string,
+  accountId: string,
+  targetIncludes: string,
+) {
   const deadline = Date.now() + 30_000;
   let latest: Array<Record<string, unknown>> = [];
   while (Date.now() < deadline) {
     try {
-      latest = await listConversations(params.gateway, params.agentId);
+      latest = await listConversations(gateway, agentId);
     } catch (error) {
       const cause = error instanceof Error ? error.cause : undefined;
       if (
@@ -81,16 +82,14 @@ async function waitForConversation(params: {
       // Seed binding publications can invalidate this read while ownership is converging.
       latest = [];
     }
-    const match = findConversation(latest, params.accountId, params.targetIncludes);
+    const match = findConversation(latest, accountId, targetIncludes);
     if (match) {
       return match;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 100);
-    });
+    await delay(100);
   }
   throw new Error(
-    `timed out waiting for ${params.agentId} to own ${params.accountId}/${params.targetIncludes}: ${JSON.stringify(latest)}`,
+    `timed out waiting for ${agentId} to own ${accountId}/${targetIncludes}: ${JSON.stringify(latest)}`,
   );
 }
 
@@ -105,9 +104,7 @@ async function waitForAppliedConfig(gateway: GatewayHarness["gateway"], hash: st
     ) {
       return;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 100);
-    });
+    await delay(100);
   }
   throw new Error(`Gateway did not apply config revision ${hash}`);
 }
@@ -127,18 +124,8 @@ function outboundMessagesWithText(
     );
 }
 
-async function sendConversation(params: {
-  gateway: GatewayHarness["gateway"];
-  agentId: string;
-  conversationRef: string;
-  message: string;
-}) {
-  return await params.gateway.call("conversations.send", {
-    agentId: params.agentId,
-    operationId: randomUUID(),
-    conversationRef: params.conversationRef,
-    message: params.message,
-  });
+function route(agentId: string, accountId: string) {
+  return { type: "route" as const, agentId, match: { channel: CHANNEL_ID, accountId } };
 }
 
 afterEach(async () => {
@@ -195,16 +182,8 @@ describe("conversation route ownership clean-machine proof", () => {
             },
           },
           bindings: [
-            {
-              type: "route",
-              agentId: PRIMARY_AGENT_ID,
-              match: { channel: CHANNEL_ID, accountId: PRIMARY_ACCOUNT_ID },
-            },
-            {
-              type: "route",
-              agentId: SIBLING_AGENT_ID,
-              match: { channel: CHANNEL_ID, accountId: SIBLING_ACCOUNT_ID },
-            },
+            route(PRIMARY_AGENT_ID, PRIMARY_ACCOUNT_ID),
+            route(SIBLING_AGENT_ID, SIBLING_ACCOUNT_ID),
           ],
           channels: {
             ...config.channels,
@@ -223,6 +202,13 @@ describe("conversation route ownership clean-machine proof", () => {
         }),
       });
       const { gateway } = harness;
+      const send = (agentId: string, conversationRef: string, message: string) =>
+        gateway.call("conversations.send", {
+          agentId,
+          operationId: randomUUID(),
+          conversationRef,
+          message,
+        });
 
       state.addInboundMessage({
         accountId: PRIMARY_ACCOUNT_ID,
@@ -237,35 +223,25 @@ describe("conversation route ownership clean-machine proof", () => {
         text: "seed sibling ownership",
       });
 
-      const primaryConversation = await waitForConversation({
+      const primaryConversation = await waitForConversation(
         gateway,
-        agentId: PRIMARY_AGENT_ID,
-        accountId: PRIMARY_ACCOUNT_ID,
-        targetIncludes: PRIMARY_PEER_ID,
-      });
-      const siblingConversation = await waitForConversation({
+        PRIMARY_AGENT_ID,
+        PRIMARY_ACCOUNT_ID,
+        PRIMARY_PEER_ID,
+      );
+      const siblingConversation = await waitForConversation(
         gateway,
-        agentId: SIBLING_AGENT_ID,
-        accountId: SIBLING_ACCOUNT_ID,
-        targetIncludes: SIBLING_PEER_ID,
-      });
+        SIBLING_AGENT_ID,
+        SIBLING_ACCOUNT_ID,
+        SIBLING_PEER_ID,
+      );
       const primaryList = await listConversations(gateway, PRIMARY_AGENT_ID);
       const siblingList = await listConversations(gateway, SIBLING_AGENT_ID);
-      expect(findConversation(primaryList, SIBLING_ACCOUNT_ID, SIBLING_PEER_ID)).toBeUndefined();
-      expect(findConversation(siblingList, PRIMARY_ACCOUNT_ID, PRIMARY_PEER_ID)).toBeUndefined();
 
       const primaryConversationRef = String(primaryConversation.conversationRef);
       const siblingConversationRef = String(siblingConversation.conversationRef);
       const initialAllowedText = `ownership-proof-initial-${randomUUID()}`;
-      await sendConversation({
-        gateway,
-        agentId: PRIMARY_AGENT_ID,
-        conversationRef: primaryConversationRef,
-        message: initialAllowedText,
-      });
-      expect(outboundMessagesWithText(state, PRIMARY_ACCOUNT_ID, initialAllowedText)).toHaveLength(
-        1,
-      );
+      await send(PRIMARY_AGENT_ID, primaryConversationRef, initialAllowedText);
 
       const configBefore = await gateway.call("config.get", {});
       if (!isRecord(configBefore) || typeof configBefore.hash !== "string") {
@@ -274,16 +250,8 @@ describe("conversation route ownership clean-machine proof", () => {
       const patchResult = await gateway.call("config.patch", {
         raw: JSON.stringify({
           bindings: [
-            {
-              type: "route",
-              agentId: SIBLING_AGENT_ID,
-              match: { channel: CHANNEL_ID, accountId: PRIMARY_ACCOUNT_ID },
-            },
-            {
-              type: "route",
-              agentId: SIBLING_AGENT_ID,
-              match: { channel: CHANNEL_ID, accountId: SIBLING_ACCOUNT_ID },
-            },
+            route(SIBLING_AGENT_ID, PRIMARY_ACCOUNT_ID),
+            route(SIBLING_AGENT_ID, SIBLING_ACCOUNT_ID),
           ],
         }),
         baseHash: configBefore.hash,
@@ -298,17 +266,10 @@ describe("conversation route ownership clean-machine proof", () => {
       const staleSendText = `ownership-proof-stale-send-${randomUUID()}`;
       let staleSendDenied = false;
       try {
-        await sendConversation({
-          gateway,
-          agentId: PRIMARY_AGENT_ID,
-          conversationRef: primaryConversationRef,
-          message: staleSendText,
-        });
+        await send(PRIMARY_AGENT_ID, primaryConversationRef, staleSendText);
       } catch {
         staleSendDenied = true;
       }
-      expect(staleSendDenied).toBe(true);
-      expect(outboundMessagesWithText(state, PRIMARY_ACCOUNT_ID, staleSendText)).toHaveLength(0);
 
       const staleTurnText = `ownership-proof-stale-turn-${randomUUID()}`;
       let staleTurnDenied = false;
@@ -323,19 +284,9 @@ describe("conversation route ownership clean-machine proof", () => {
       } catch {
         staleTurnDenied = true;
       }
-      expect(staleTurnDenied).toBe(true);
-      expect(outboundMessagesWithText(state, PRIMARY_ACCOUNT_ID, staleTurnText)).toHaveLength(0);
 
       const siblingAllowedText = `ownership-proof-sibling-${randomUUID()}`;
-      await sendConversation({
-        gateway,
-        agentId: SIBLING_AGENT_ID,
-        conversationRef: siblingConversationRef,
-        message: siblingAllowedText,
-      });
-      expect(outboundMessagesWithText(state, SIBLING_ACCOUNT_ID, siblingAllowedText)).toHaveLength(
-        1,
-      );
+      await send(SIBLING_AGENT_ID, siblingConversationRef, siblingAllowedText);
 
       const verdict = {
         ok: true,
@@ -354,7 +305,15 @@ describe("conversation route ownership clean-machine proof", () => {
         siblingOwnerDeliveredExactlyOnce:
           outboundMessagesWithText(state, SIBLING_ACCOUNT_ID, siblingAllowedText).length === 1,
       };
-      expect(Object.values(verdict).every(Boolean)).toBe(true);
+      expect(verdict).toEqual({
+        ok: true,
+        siblingAccountHiddenFromPrimaryAgent: true,
+        primaryAccountHiddenFromSiblingAgent: true,
+        initialOwnerDeliveredExactlyOnce: true,
+        staleSendDeniedWithoutProviderIo: true,
+        staleTurnDeniedWithoutProviderIo: true,
+        siblingOwnerDeliveredExactlyOnce: true,
+      });
       console.log(`CONVERSATION_ROUTE_OWNERSHIP_PROOF=${JSON.stringify(verdict)}`);
     },
   );

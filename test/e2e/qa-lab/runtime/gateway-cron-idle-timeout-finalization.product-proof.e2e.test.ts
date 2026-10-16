@@ -16,9 +16,7 @@ import {
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
-// Product proof for #141032: a scheduled run whose model stream stalls after a
-// settled tool batch must end as a failed run. Summary recovery that produces
-// no answer cannot turn the idle timeout into a successful fallback report.
+// #141032: empty summary recovery must not turn a post-tool idle timeout into success.
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const PROMPT = "Write proof-note.txt with the word settled, then report what you did.";
 const NOTE_FILE = "proof-note.txt";
@@ -32,10 +30,8 @@ const RUN_WAIT_MS = 100_000;
 const TEST_TIMEOUT_MS = RUN_WAIT_MS + 500_000;
 const SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT =
   "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
-// Optional Control UI capture of the Automations run history for the proof record.
 const SCREENSHOT_DIR = process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_SCREENSHOT_DIR?.trim();
 const PROOF_LABEL = process.env.OPENCLAW_PROOF_HEAD_SHA?.trim() || "local-checkout";
-// Optional built CLI entry (for example dist/entry.js) to run instead of the tsx source entry.
 const GATEWAY_ENTRY = process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_GATEWAY_ENTRY?.trim();
 
 type ProviderRequest = {
@@ -75,6 +71,18 @@ afterEach(async () => {
   }
 });
 
+function completedEvent(id: string, item: object, input_tokens: number, output_tokens: number) {
+  return {
+    type: "response.completed",
+    response: {
+      id,
+      status: "completed",
+      output: [item],
+      usage: { input_tokens, output_tokens, total_tokens: input_tokens + output_tokens },
+    },
+  };
+}
+
 function writeFunctionCall(response: ServerResponse, seq: number): void {
   const args = JSON.stringify({ path: NOTE_FILE, content: "settled" });
   const item = {
@@ -100,15 +108,7 @@ function writeFunctionCall(response: ServerResponse, seq: number): void {
       arguments: args,
     },
     { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_idle_timeout_proof_${seq}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 32, output_tokens: 12, total_tokens: 44 },
-      },
-    },
+    completedEvent(`resp_idle_timeout_proof_${seq}`, item, 32, 12),
   ]);
 }
 
@@ -128,15 +128,7 @@ function writeEmptyAssistant(response: ServerResponse, seq: number): void {
       item: { ...message, status: "in_progress" },
     },
     { type: "response.output_item.done", output_index: 0, item: message },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_idle_timeout_proof_empty_${seq}`,
-        status: "completed",
-        output: [message],
-        usage: { input_tokens: 8, output_tokens: 0, total_tokens: 8 },
-      },
-    },
+    completedEvent(`resp_idle_timeout_proof_empty_${seq}`, message, 8, 0),
   ]);
 }
 
@@ -168,20 +160,25 @@ async function startControlledProvider() {
       const toolsOffered = Array.isArray(body.tools) && body.tools.length > 0;
       const inputText = JSON.stringify(body.input ?? []);
       const seq = requests.length + 1;
-      if (!toolsOffered) {
-        // Isolated settled-turn finalization runs with tools disabled.
-        requests.push({ seq, kind: "finalization", startedAt: Date.now() });
+      const entry: ProviderRequest = {
+        seq,
+        kind: !toolsOffered
+          ? "finalization"
+          : !inputText.includes("function_call_output")
+            ? "tool-call"
+            : "stalled",
+        startedAt: Date.now(),
+      };
+      requests.push(entry);
+      if (entry.kind === "finalization") {
         writeEmptyAssistant(response, seq);
         return;
       }
-      if (!inputText.includes("function_call_output")) {
-        requests.push({ seq, kind: "tool-call", startedAt: Date.now() });
+      if (entry.kind === "tool-call") {
         writeFunctionCall(response, seq);
         return;
       }
       // The post-tool turn: stay silent until the Gateway's idle watchdog aborts it.
-      const entry: ProviderRequest = { seq, kind: "stalled", startedAt: Date.now() };
-      requests.push(entry);
       response.once("close", () => {
         entry.clientClosedAt ??= Date.now();
       });
@@ -237,8 +234,7 @@ async function captureAutomationsScreenshots(params: {
       viewport,
     });
     const page = await context.newPage();
-    // Same hook the native shells use: the page pairs with the Gateway token
-    // and a fixed client identity, so no interactive connection prompt appears.
+    // Native-shell auth avoids an interactive pairing prompt.
     await page.addInitScript(
       (auth) => {
         (window as Window & { ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: unknown })[
@@ -290,7 +286,6 @@ async function captureAutomationsScreenshots(params: {
     if (await history.isVisible().catch(() => false)) {
       await history.click().catch(() => undefined);
       await sleep(3_000);
-      // Run entries render status and summary inline (.cron-run-entry).
       await page
         .locator(".cron-run-entry")
         .first()
@@ -299,7 +294,7 @@ async function captureAutomationsScreenshots(params: {
       await sleep(1_000);
       await capture("automations-run-history");
     }
-    // The recording is finalized only after the context closes.
+    // Closing the context finalizes the recording.
     const video = page.video();
     await context.close();
     const recordedPath = await video?.path();
@@ -336,7 +331,6 @@ describe.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1"
         const provider = await startControlledProvider();
         cleanups.push(() => provider.stop());
         phase = "gateway-start";
-        // The announce destination is the qa-lab bus channel, so delivered text is observable.
         const busState = createQaBusState();
         const transport = createQaChannelTransport(busState);
         const bus = await startQaBusServer({ state: busState });
@@ -345,7 +339,6 @@ describe.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1"
         cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
         const gateway = await gatewayOwner.start({
           repoRoot: process.cwd(),
-          // Run the Gateway from source so the proof does not depend on a dist build.
           command: {
             executablePath: process.execPath,
             argsPrefix: GATEWAY_ENTRY ? [GATEWAY_ENTRY] : ["--import", "tsx", "src/entry.ts"],
@@ -364,18 +357,16 @@ describe.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1"
             if (!stateDir) {
               throw new Error("QA gateway state directory is missing");
             }
-            // Exercise unanswered finalization after the supported retry budget
-            // is exhausted, rather than stalling tools-enabled continuation too.
+            // Exhaust retries before exercising unanswered finalization.
             const agentDir = path.join(stateDir, "agents", "qa", "agent");
             new FileSettingsStorage(process.cwd(), agentDir).withLock("global", (raw) => {
               const settings: Settings = raw ? JSON.parse(raw) : {};
-              return JSON.stringify({
-                ...settings,
-                retry: {
-                  ...settings.retry,
-                  provider: { ...settings.retry?.provider, maxRetries: PROVIDER_MAX_RETRIES },
-                },
-              });
+              settings.retry ??= {};
+              settings.retry.provider = {
+                ...settings.retry.provider,
+                maxRetries: PROVIDER_MAX_RETRIES,
+              };
+              return JSON.stringify(settings);
             });
           },
           mutateConfig: (config) => {
@@ -391,7 +382,6 @@ describe.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1"
                   ...config.models?.providers,
                   "mock-openai": {
                     ...providerConfig,
-                    // Explicit provider ceiling drives the stream idle watchdog.
                     timeoutSeconds: PROVIDER_IDLE_TIMEOUT_SECONDS,
                   },
                 },
@@ -471,19 +461,16 @@ describe.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1"
           .map((message) => ({ conversation: message.conversation, text: message.text }));
 
         phase = "screenshots";
-        const screenshots: string[] = [];
-        if (SCREENSHOT_DIR) {
-          screenshots.push(
-            ...(await captureAutomationsScreenshots({
+        const screenshots = SCREENSHOT_DIR
+          ? await captureAutomationsScreenshots({
               baseUrl: gateway.baseUrl,
               wsUrl: gateway.wsUrl,
               token: gateway.token,
               jobId: added.id,
               jobName: JOB_NAME,
               outputDir: SCREENSHOT_DIR,
-            })),
-          );
-        }
+            })
+          : [];
 
         console.log(
           JSON.stringify(

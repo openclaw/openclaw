@@ -44,58 +44,33 @@ function messageText(content: unknown): string {
     : "";
 }
 
+async function readRequests(log: string): Promise<AppServerMessage[]> {
+  return (await fs.readFile(log, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
 describe("Gateway Codex failure recovery with automatic cyber failover off", () => {
-  it.each([
-    {
-      failureKind: "bio",
-      firstStatus: "error",
-      firstTurnStartCount: 1,
-      totalTurnStartCount: 2,
-      visibleReplies: [LATER_TURN_TEXT],
-      terminalFailureSummary:
-        "Your request couldn't be completed: The provider refused this request (category: bio). Revise the request and try again.",
-    },
-    {
-      failureKind: "cyber",
-      firstStatus: "error",
-      firstTurnStartCount: 1,
-      totalTurnStartCount: 2,
-      visibleReplies: [LATER_TURN_TEXT],
-      terminalFailureSummary:
-        "Your request couldn't be completed: The provider refused this request (category: cyber). Revise the request and try again.",
-    },
-    {
-      failureKind: "misalignment",
-      firstStatus: "error",
-      firstTurnStartCount: 1,
-      totalTurnStartCount: 1,
-      visibleReplies: [],
-      terminalFailureSummary:
-        "Your request couldn't be completed: Chat stopped as a precaution. Review the findings in chat before continuing.",
-    },
-    {
-      failureKind: "retryable",
-      firstStatus: "ok",
-      firstTurnStartCount: 2,
-      totalTurnStartCount: 3,
-      visibleReplies: [LATER_TURN_TEXT, LATER_TURN_TEXT],
-      terminalFailureSummary: undefined,
-    },
-  ])(
-    "$failureKind preserves terminal, review, and retry behavior on the same native thread",
+  it.each(["bio", "cyber", "misalignment", "retryable"])(
+    "%s preserves terminal, review, and retry behavior on the same native thread",
     { timeout: 180_000 },
-    async (scenario) => {
+    async (failureKind) => {
+      const paused = failureKind === "misalignment";
+      const retryable = failureKind === "retryable";
+      const terminalFailureSummary = retryable
+        ? undefined
+        : paused
+          ? "Your request couldn't be completed: Chat stopped as a precaution. Review the findings in chat before continuing."
+          : `Your request couldn't be completed: The provider refused this request (category: ${failureKind}). Revise the request and try again.`;
       const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginFacade<{
         CODEX_APP_SERVER_VERSION: string;
       }>({ pluginId: "codex", artifactBasename: "test-api.js" });
-      const fixture = fileURLToPath(
-        new URL("./codex-refusal-app-server.fixture.mjs", import.meta.url),
-      );
       instance = await createOpenClawTestInstance({
         name: "qa-codex-refusal-product-proof",
         env: {
           OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
-          OPENCLAW_QA_CODEX_FAILURE_KIND: scenario.failureKind,
+          OPENCLAW_QA_CODEX_FAILURE_KIND: failureKind,
           OPENCLAW_SKIP_PROVIDERS: undefined,
           // Native task admission needs the configured owner published by full Gateway startup.
           OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
@@ -111,7 +86,11 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
                   appServer: {
                     mode: "yolo",
                     command: process.execPath,
-                    args: [fixture],
+                    args: [
+                      fileURLToPath(
+                        new URL("./codex-refusal-app-server.fixture.mjs", import.meta.url),
+                      ),
+                    ],
                     requestTimeoutMs: 60_000,
                     // This fixture proves terminal refusals on the selected model.
                     cyberFailover: { mode: "off" },
@@ -178,13 +157,10 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
         const { runId: firstRunId, status: firstStatus } = await send(
           "Exercise the harmless synthetic protocol failure.",
         );
-        const firstEntries = (await fs.readFile(requestLog, "utf8"))
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line) as AppServerMessage);
+        const firstEntries = await readRequests(requestLog);
         const firstTurnStarts = firstEntries.filter((entry) => entry.method === "turn/start");
-        expect(firstTurnStarts).toHaveLength(scenario.firstTurnStartCount);
-        expect(firstStatus).toBe(scenario.firstStatus);
+        expect(firstTurnStarts).toHaveLength(retryable ? 2 : 1);
+        expect(firstStatus).toBe(retryable ? "ok" : "error");
         expect(firstEntries.some((entry) => entry.method === "thread/compact/start")).toBe(false);
         expect(firstEntries).toContainEqual({
           method: "thread/status/changed",
@@ -195,16 +171,16 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
         });
 
         let laterStatus: string | undefined;
-        if (scenario.failureKind === "misalignment") {
+        if (paused) {
           await expect(send("Complete this ordinary later turn.")).rejects.toThrow(
             "paused as a precaution",
           );
           laterStatus = "blocked";
-          const paused = await client.request<{ session: { providerReview?: unknown } }>(
+          const session = await client.request<{ session: { providerReview?: unknown } }>(
             "sessions.describe",
             { key: sessionKey },
           );
-          expect(paused.session.providerReview).toMatchObject({ canContinue: false });
+          expect(session.session.providerReview).toMatchObject({ canContinue: false });
         } else {
           laterStatus = (await send("Complete this ordinary later turn.")).status;
         }
@@ -215,19 +191,9 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
           .filter((message) => message.role === "assistant")
           .map((message) => messageText(message.content))
           .filter(Boolean);
-        const allEntries = (await fs.readFile(requestLog, "utf8"))
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line) as AppServerMessage);
+        const allEntries = await readRequests(requestLog);
         const allTurnStarts = allEntries.filter((entry) => entry.method === "turn/start");
         const proof = {
-          failureKind: scenario.failureKind,
-          configuredFallback: REPAIRED_FALLBACK_MODEL,
-          firstTurnStartCount: firstTurnStarts.length,
-          compactionRequestCount: firstEntries.filter(
-            (entry) => entry.method === "thread/compact/start",
-          ).length,
-          firstStatus,
           visibleReplies: assistantTexts,
           failureNotices: (history.messages ?? []).map(readRunFailureNotice).filter(Boolean),
           laterStatus,
@@ -238,17 +204,16 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
         };
         console.log(`[gateway Codex failure recovery proof] ${JSON.stringify(proof)}`);
         expect(proof).toEqual({
-          failureKind: scenario.failureKind,
-          configuredFallback: REPAIRED_FALLBACK_MODEL,
-          firstTurnStartCount: scenario.firstTurnStartCount,
-          compactionRequestCount: 0,
-          firstStatus: scenario.firstStatus,
-          visibleReplies: scenario.visibleReplies,
-          failureNotices: scenario.terminalFailureSummary
-            ? [{ runId: firstRunId, summary: scenario.terminalFailureSummary }]
+          visibleReplies: paused
+            ? []
+            : retryable
+              ? [LATER_TURN_TEXT, LATER_TURN_TEXT]
+              : [LATER_TURN_TEXT],
+          failureNotices: terminalFailureSummary
+            ? [{ runId: firstRunId, summary: terminalFailureSummary }]
             : [],
-          laterStatus: scenario.failureKind === "misalignment" ? "blocked" : "ok",
-          totalTurnStartCount: scenario.totalTurnStartCount,
+          laterStatus: paused ? "blocked" : "ok",
+          totalTurnStartCount: paused ? 1 : retryable ? 3 : 2,
           threadStartCount: 1,
           nativeThreadIds: [expect.any(String)],
           selectedModels: [REPAIRED_MODEL_ID],

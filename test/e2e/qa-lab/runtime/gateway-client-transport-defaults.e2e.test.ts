@@ -24,6 +24,35 @@ function parseRequest(data: RawData): RequestFrame {
   return JSON.parse(rawDataToString(data)) as RequestFrame;
 }
 
+function sendFrame(socket: WebSocket, frame: unknown): void {
+  socket.send(JSON.stringify(frame));
+}
+
+function startClient(options: GatewayClientOptions): GatewayClient {
+  const client = new GatewayClient(options);
+  clients.push(client);
+  client.start();
+  return client;
+}
+
+function waitForClose(socket: WebSocket) {
+  return new Promise<{ code: number; reason: string }>((resolve) => {
+    socket.once("close", (code: number, reason: Buffer) => {
+      resolve({ code, reason: reason.toString() });
+    });
+  });
+}
+
+function firstConnection() {
+  const ready = createDeferred<WebSocket>();
+  server?.once("connection", (socket) => {
+    // Establish the real transport before timers become deterministic.
+    enableFakeTimeAfterSocketEstablishment();
+    ready.resolve(socket);
+  });
+  return ready.promise;
+}
+
 function enableFakeTimeAfterSocketEstablishment(): void {
   vi.useFakeTimers({
     toFake: ["Date", "clearInterval", "clearTimeout", "setInterval", "setTimeout"],
@@ -64,42 +93,38 @@ async function listen(
 }
 
 function sendChallenge(socket: WebSocket, sequence = 1): void {
-  socket.send(
-    JSON.stringify({
-      type: "event",
-      event: "connect.challenge",
-      seq: sequence,
-      payload: { nonce: `defaults-${sequence}`, ts: 1_777_777_777_000 },
-    }),
-  );
+  sendFrame(socket, {
+    type: "event",
+    event: "connect.challenge",
+    seq: sequence,
+    payload: { nonce: `defaults-${sequence}`, ts: 1_777_777_777_000 },
+  });
 }
 
 function sendHello(socket: WebSocket, requestId: string, tickIntervalMs: number): void {
-  socket.send(
-    JSON.stringify({
-      type: "res",
-      id: requestId,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: PROTOCOL_VERSION,
-        server: { version: "gateway-client-defaults", connId: "defaults-connection" },
-        features: { methods: ["chat.send", "status"], events: ["tick"] },
-        snapshot: {
-          presence: [],
-          health: {},
-          stateVersion: { presence: 1, health: 1 },
-          uptimeMs: 1,
-        },
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        policy: {
-          maxPayload: 512 * 1024,
-          maxBufferedBytes: 1024 * 1024,
-          tickIntervalMs,
-        },
+  sendFrame(socket, {
+    type: "res",
+    id: requestId,
+    ok: true,
+    payload: {
+      type: "hello-ok",
+      protocol: PROTOCOL_VERSION,
+      server: { version: "gateway-client-defaults", connId: "defaults-connection" },
+      features: { methods: ["chat.send", "status"], events: ["tick"] },
+      snapshot: {
+        presence: [],
+        health: {},
+        stateVersion: { presence: 1, health: 1 },
+        uptimeMs: 1,
       },
-    }),
-  );
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      policy: {
+        maxPayload: 512 * 1024,
+        maxBufferedBytes: 1024 * 1024,
+        tickIntervalMs,
+      },
+    },
+  });
 }
 
 async function connectWithFakeTime(params: {
@@ -107,7 +132,6 @@ async function connectWithFakeTime(params: {
   onRequest?: (socket: WebSocket, request: RequestFrame) => void;
   tickIntervalMs: number;
 }): Promise<{ client: GatewayClient; socket: WebSocket }> {
-  const socketReady = createDeferred<WebSocket>();
   const helloReady = createDeferred();
   const url = await listen((socket, request) => {
     if (request.method === "connect") {
@@ -116,21 +140,14 @@ async function connectWithFakeTime(params: {
     }
     params.onRequest?.(socket, request);
   });
-  server?.once("connection", (socket) => {
-    // The real transport is established before timers become deterministic.
-    enableFakeTimeAfterSocketEstablishment();
-    socketReady.resolve(socket);
-  });
-  const client = new GatewayClient({
+  const socketReady = firstConnection();
+  const client = startClient({
     ...params.clientOptions,
     url,
     onHelloOk: () => helloReady.resolve(undefined),
     onConnectError: (error) => helloReady.reject(error),
   });
-  clients.push(client);
-  client.start();
-
-  const socket = await socketReady.promise;
+  const socket = await socketReady;
   await flushSocketIo();
   sendChallenge(socket);
   await helloReady.promise;
@@ -167,16 +184,12 @@ describe("GatewayClient transport defaults", () => {
     });
 
     let settled = false;
-    const outcome = client.request("status").then(
-      () => {
+    const outcome = client
+      .request("status")
+      .catch((error: unknown) => error)
+      .finally(() => {
         settled = true;
-        return undefined;
-      },
-      (error: unknown) => {
-        settled = true;
-        return error;
-      },
-    );
+      });
     await requestReady.promise;
 
     await vi.advanceTimersByTimeAsync(29_999);
@@ -194,26 +207,15 @@ describe("GatewayClient transport defaults", () => {
   });
 
   it("enforces the 30 second connect-challenge watchdog", async () => {
-    const socketReady = createDeferred<WebSocket>();
     const errors: Error[] = [];
     const url = await listen(() => {});
-    server?.once("connection", (socket) => {
-      enableFakeTimeAfterSocketEstablishment();
-      socketReady.resolve(socket);
-    });
-    const client = new GatewayClient({
+    const socketReady = firstConnection();
+    startClient({
       url,
       onConnectError: (error) => errors.push(error),
     });
-    clients.push(client);
-    client.start();
-
-    const socket = await socketReady.promise;
-    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
-      socket.once("close", (code: number, reason: Buffer) => {
-        resolve({ code, reason: reason.toString() });
-      });
-    });
+    const socket = await socketReady;
+    const closed = waitForClose(socket);
     await flushSocketIo();
 
     await vi.advanceTimersByTimeAsync(29_999);
@@ -245,12 +247,10 @@ describe("GatewayClient transport defaults", () => {
       }
       void waitForImmediate().then(() => socket.close(1012, "retry"));
     });
-    const client = new GatewayClient({
+    startClient({
       url,
       onClose: (code, reason) => closeEvents.push({ code, reason }),
     });
-    clients.push(client);
-    client.start();
 
     const initialSocket = await firstSocket.promise;
     await flushSocketIo();
@@ -285,11 +285,7 @@ describe("GatewayClient transport defaults", () => {
         onClose: (code, reason) => closeEvents.push({ code, reason }),
       },
     });
-    const serverClose = new Promise<{ code: number; reason: string }>((resolve) => {
-      socket.once("close", (code: number, reason: Buffer) => {
-        resolve({ code, reason: reason.toString() });
-      });
-    });
+    const serverClose = waitForClose(socket);
 
     await vi.advanceTimersByTimeAsync(100);
     expect(closeEvents).toEqual([]);
@@ -324,26 +320,22 @@ describe("GatewayClient transport defaults", () => {
 
     for (let sequence = 1; sequence <= 8; sequence += 1) {
       await vi.advanceTimersByTimeAsync(4_000);
-      socket.send(
-        JSON.stringify({
-          type: "event",
-          event: "tick",
-          seq: sequence,
-          payload: { ts: Date.now() },
-        }),
-      );
+      sendFrame(socket, {
+        type: "event",
+        event: "tick",
+        seq: sequence,
+        payload: { ts: Date.now() },
+      });
       await flushSocketIo();
     }
 
     expect(closeEvents).toEqual([]);
-    socket.send(
-      JSON.stringify({
-        type: "res",
-        id: requestFrame.id,
-        ok: true,
-        payload: { status: "ok" },
-      }),
-    );
+    sendFrame(socket, {
+      type: "res",
+      id: requestFrame.id,
+      ok: true,
+      payload: { status: "ok" },
+    });
     await expect(request).resolves.toEqual({ status: "ok" });
   });
 });
