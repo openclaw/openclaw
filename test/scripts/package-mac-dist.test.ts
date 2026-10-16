@@ -28,12 +28,27 @@ function fixtureFiles(root: string) {
     file,
     read: (...parts: string[]) => readFileSync(file(...parts), "utf8"),
     exists: (...parts: string[]) => existsSync(file(...parts)),
+    package: (args: string[], env: NodeJS.ProcessEnv, shell = "bash") =>
+      spawnSync(shell, [file(scriptPath), ...args], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          APP_VERSION: "2026.8.2",
+          APP_BUILD: "2608000290",
+          BUILD_CONFIG: "release",
+          SKIP_DSYM: "0",
+          ...env,
+        },
+      }),
   };
 }
 
-function makeCheckpointFixture() {
-  const root = checkpointDirs.make("openclaw-dist-checkpoint-");
-  const tools = path.join(root, "tools");
+function packageFixture(fakeTools: boolean) {
+  const files = fixtureFiles(checkpointDirs.make("openclaw-dist-"));
+  const { root } = files;
+  const tools = files.file("tools");
+  const scripts = files.file("scripts");
   mkdirSync(tools);
   mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
   for (const file of [
@@ -43,15 +58,26 @@ function makeCheckpointFixture() {
     "lib/plistbuddy.sh",
     "lib/mac-disk-image.sh",
     "lib/mac-signing-identity.sh",
+    ...(fakeTools ? [] : ["notarize-mac-artifact.sh"]),
   ]) {
-    writeFileSync(
-      path.join(root, "scripts", file),
-      readFileSync(path.join("scripts", file), "utf8")
-        .replaceAll("/usr/bin/codesign", path.join(tools, "codesign"))
-        .replaceAll("/usr/bin/lipo", path.join(tools, "lipo"))
-        .replaceAll("/usr/libexec/PlistBuddy", path.join(tools, "PlistBuddy")),
-    );
+    const target = path.join(scripts, file);
+    copyFileSync(path.join("scripts", file), target);
+    if (fakeTools) {
+      writeFileSync(
+        target,
+        readFileSync(target, "utf8")
+          .replaceAll("/usr/bin/codesign", path.join(tools, "codesign"))
+          .replaceAll("/usr/bin/lipo", path.join(tools, "lipo"))
+          .replaceAll("/usr/libexec/PlistBuddy", path.join(tools, "PlistBuddy")),
+      );
+    }
   }
+  return { ...files, tools, scripts };
+}
+
+function makeCheckpointFixture() {
+  const f = packageFixture(true);
+  const { root, tools } = f;
   const fake = path.join(tools, "fake");
   writeFileSync(
     fake,
@@ -149,29 +175,24 @@ else: sys.exit("unexpected fake tool: " + name)
   writeFileSync(path.join(symbols, "symbols"), "debug symbols");
   const checkpoint = path.join(root, "dist/macos-notarization-recovery");
   return {
-    ...fixtureFiles(root),
+    ...f,
     checkpoint,
     events: () => readFileSync(path.join(root, "events"), "utf8"),
     run: (mode: string, env: NodeJS.ProcessEnv = {}) =>
-      spawnSync("/bin/bash", [path.join(root, scriptPath), mode], {
-        cwd: root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
+      f.package(
+        [mode],
+        {
           PATH: `${tools}${path.delimiter}${process.env.PATH}`,
-          APP_VERSION: "2026.8.2",
-          APP_BUILD: "2608000290",
-          BUILD_CONFIG: "release",
           BUILD_ARCHS: "arm64",
           SIGN_IDENTITY: "fixture",
           ALLOW_ADHOC_SIGNING: "0",
           SKIP_NOTARIZE: "0",
           SKIP_DMG: "0",
-          SKIP_DSYM: "0",
           EXPECTED_DEVELOPER_TEAM_ID: "",
           ...env,
         },
-      }),
+        "/bin/bash",
+      ),
   };
 }
 
@@ -333,22 +354,8 @@ describe("macOS packaging checkpoint boundary", () => {
 });
 
 function makeDistributionFixture(layout: "native" | "xcode", missingArch?: string) {
-  const root = checkpointDirs.make("openclaw-dist-symbols-");
-  const scripts = path.join(root, "scripts");
-  const tools = path.join(root, "tools");
-  mkdirSync(path.join(scripts, "lib"), { recursive: true });
-  mkdirSync(tools);
-  for (const file of [
-    "package-mac-dist.sh",
-    "notarize-mac-artifact.sh",
-    "lib/mac-notarization-recovery.py",
-    "lib/plistbuddy.sh",
-    "lib/mac-disk-image.sh",
-    "lib/mac-signing-identity.sh",
-    "lib/swift-toolchain.sh",
-  ]) {
-    copyFileSync(path.join("scripts", file), path.join(scripts, file));
-  }
+  const f = packageFixture(false);
+  const { root, scripts, tools } = f;
   writeExecutable(path.join(scripts, "package-mac-app.sh"), "exit 0");
   writeExecutable(path.join(tools, "swift"), "echo 'Apple Swift version 6.3'");
   writeExecutable(path.join(tools, "xcrun"), "echo 'Xcode 26.4'");
@@ -407,55 +414,20 @@ Path(__file__).resolve().parents[3].joinpath("async-frame-audit.log").write_text
     }
   }
   return {
-    ...fixtureFiles(root),
+    ...f,
     auditScript,
     expectedUUIDs,
     run: (options: { resume?: boolean; notarize?: boolean; dmg?: boolean; archs?: string } = {}) =>
-      spawnSync(
-        "bash",
-        [
-          path.join(scripts, "package-mac-dist.sh"),
-          ...(options.resume ? ["--resume-notarization"] : []),
-        ],
-        {
-          cwd: root,
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            PATH: `${tools}:/usr/bin:/bin`,
-            APP_VERSION: "2026.8.2",
-            APP_BUILD: "2608000290",
-            BUILD_CONFIG: "release",
-            BUILD_ARCHS: options.archs ?? "all",
-            SKIP_NOTARIZE: options.notarize ? "0" : "1",
-            ALLOW_ADHOC_SIGNING: "1",
-            SIGN_IDENTITY: "-",
-            NOTARYTOOL_PROFILE: "test-profile",
-            SKIP_DMG: options.dmg ? "0" : "1",
-            SKIP_DSYM: "0",
-          },
-        },
-      ),
+      f.package(options.resume ? ["--resume-notarization"] : [], {
+        PATH: `${tools}:/usr/bin:/bin`,
+        BUILD_ARCHS: options.archs ?? "all",
+        SKIP_NOTARIZE: options.notarize ? "0" : "1",
+        ALLOW_ADHOC_SIGNING: "1",
+        SIGN_IDENTITY: "-",
+        NOTARYTOOL_PROFILE: "test-profile",
+        SKIP_DMG: options.dmg ? "0" : "1",
+      }),
   };
-}
-
-function makePlist(): string {
-  const dir = checkpointDirs.make("openclaw-dist-plist-");
-  const plist = path.join(dir, "Info.plist");
-  writeFileSync(
-    plist,
-    `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-<key>CFBundleShortVersionString</key>
-<string>1.2.3</string>
-</dict>
-</plist>
-`,
-    "utf8",
-  );
-  return plist;
 }
 
 function runHelper(script: string) {
@@ -810,7 +782,11 @@ hdiutil create -fs HFS+ -format UDZO -srcfolder "$stage" "$2" >/dev/null
   it.runIf(process.platform === "darwin")(
     "prints required plist keys and fails when a key is missing",
     () => {
-      const plist = makePlist();
+      const plist = path.join(checkpointDirs.make("openclaw-dist-plist-"), "Info.plist");
+      writeFileSync(
+        plist,
+        '<plist version="1.0"><dict><key>CFBundleShortVersionString</key><string>1.2.3</string></dict></plist>',
+      );
       const result = runHelper(`
         set -euo pipefail
         source scripts/lib/plistbuddy.sh

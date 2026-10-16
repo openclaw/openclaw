@@ -36,7 +36,19 @@ function guestFixture() {
     guestScriptPath: file("guest-script"),
     uploadedScriptPath: file("uploaded-script"),
     runArgsPath: file("run-args"),
-    install: (script: string) => writeFileSync(file("prlctl"), script, { mode: 0o755 }),
+    install: (script: string, fallback = 1) =>
+      writeFileSync(
+        file("prlctl"),
+        `#!/usr/bin/env bash
+set -euo pipefail
+log_path=${JSON.stringify(file("prlctl.log"))}
+printf '%s\\n' "$*" >>"$log_path"
+args=" $* "
+${script}
+exit ${fallback}
+`,
+        { mode: 0o755 },
+      ),
     run: <T>(callback: () => Promise<T> | T) =>
       withEnvAsync(
         {
@@ -53,18 +65,14 @@ describe("Parallels npm update guest scripts", () => {
     "uses the selected Windows VM for same-guest update transport",
     async () => {
       const f = guestFixture();
-      f.install(
-        `#!/usr/bin/env bash\nprintf '%s|%s|%s\\n' "$1" "$2" "$3" >'${f.logPath}'\ncat >/dev/null\nexit 7\n`,
-      );
+      f.install(`printf '%s|%s|%s\\n' "$1" "$2" "$3" >'${f.logPath}'\ncat >/dev/null\nexit 7`);
       await f.run(async () => {
         const smoke = new NpmUpdateSmoke({ ...parseArgs([]), windowsVm: "Windows Test Guest" });
-        const guestWindows = Reflect.get(smoke, "guestWindows") as (
-          script: string,
-          timeoutMs: number,
-          ctx: { append: (chunk: string) => void },
-        ) => Promise<void>;
         await expect(
-          guestWindows.call(smoke, "Write-Output update", 180_000, { append: () => undefined }),
+          smoke["guestWindows"]("Write-Output update", 180_000, {
+            append: () => undefined,
+            signal: new AbortController().signal,
+          }),
         ).rejects.toThrow("background script write failed");
       });
       expect(readFileSync(f.logPath, "utf8")).toBe("exec|Windows Test Guest|--current-user\n");
@@ -77,12 +85,7 @@ describe("Parallels npm update guest scripts", () => {
       const f = guestFixture();
       const { logPath, guestScriptPath, uploadedScriptPath } = f;
       f.install(
-        `#!/usr/bin/env bash
-set -euo pipefail
-log_path=${JSON.stringify(logPath)}
-printf '%s\\n' "$*" >>"$log_path"
-args=" $* "
-if [[ "$args" == *" /usr/bin/tee /tmp/openclaw-parallels-npm-update-linux-"* ]]; then
+        `if [[ "$args" == *" /usr/bin/tee /tmp/openclaw-parallels-npm-update-linux-"* ]]; then
   head -c ${phase === "write" ? 4 : 11} >${JSON.stringify(guestScriptPath)}
   cp ${JSON.stringify(guestScriptPath)} ${JSON.stringify(uploadedScriptPath)}
   ${phase === "write" ? 'printf "write denied\\n" >&2; exit 7' : "exit 0"}
@@ -96,7 +99,6 @@ if [[ "$args" == *" /bin/rm -f /tmp/openclaw-parallels-npm-update-linux-"* ]]; t
   rm -f ${JSON.stringify(guestScriptPath)}
   exit 0
 fi
-exit 1
 `,
       );
       await f.run(() => {
@@ -132,12 +134,7 @@ exit 1
       const f = guestFixture();
       const { logPath, runArgsPath, uploadedScriptPath, guestScriptPath } = f;
       f.install(
-        `#!/usr/bin/env bash
-set -euo pipefail
-log_path=${JSON.stringify(logPath)}
-printf '%s\\n' "$*" >>"$log_path"
-args=" $* "
-if [[ "$args" == *" --current-user whoami "* ]]; then
+        `if [[ "$args" == *" --current-user whoami "* ]]; then
   printf 'desktop-user\\n'
   exit 0
 fi
@@ -161,7 +158,6 @@ if [[ "$args" == *" /bin/rm -f /tmp/openclaw-parallels-npm-update-macos-"* ]]; t
   rm -f ${JSON.stringify(guestScriptPath)}
   exit 0
 fi
-exit 1
 `,
       );
       const output: string[] = [];
@@ -268,14 +264,7 @@ fi`,
     "resolves macOS desktop $field on spaced mounted volumes",
     async ({ field, script, expected }) => {
       const f = guestFixture();
-      f.install(
-        `#!/usr/bin/env bash
-set -euo pipefail
-args=" $* "
-${script}
-exit 7
-`,
-      );
+      f.install(script, 7);
       await f.run(() => {
         const smoke = new NpmUpdateSmoke(smokeOptions("macos"));
         const actual =

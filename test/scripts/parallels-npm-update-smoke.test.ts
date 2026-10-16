@@ -211,6 +211,35 @@ function windowsJob(options: Pick<WindowsJob, "label" | "runCommand"> & Partial<
   });
 }
 
+function windowsFixture(
+  options: {
+    launch?: () => ReturnType<typeof hostCommandRun>;
+    input?: () => void;
+    poll?: (command: string) => ReturnType<typeof hostCommandRun>;
+  } = {},
+) {
+  const commands: string[] = [];
+  const inputs: string[] = [];
+  const runCommand: typeof hostCommandRun = (_command, args, runOptions) => {
+    if (runOptions?.input) {
+      inputs.push(runOptions.input);
+      if (options.input) {
+        options.input();
+        return commandResult();
+      }
+    }
+    const decoded = decodePowerShellFromArgs(args);
+    commands.push(decoded);
+    if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
+      return options.launch?.() ?? commandResult("started\n");
+    }
+    return args.includes("cmd.exe")
+      ? (options.poll?.(args.at(-1) ?? "") ?? commandResult())
+      : commandResult();
+  };
+  return { commands, inputs, runCommand };
+}
+
 function extractWindowsBackgroundControlMarkers(decoded: string): {
   done: string;
   exitPrefix: string;
@@ -261,42 +290,37 @@ afterEach(() => {
 });
 
 describe("parallels npm update smoke", () => {
-  it("reports exact ready prerequisites for default and explicit providers", () => {
-    const defaultSecret = "sentinel-default-provider-secret";
-    const defaultResult = runPrerequisiteCli(["--prerequisite-check", "--json"], {
-      OPENAI_API_KEY: defaultSecret,
-    });
-    expect(defaultResult.status).toBe(0);
-    expect(defaultResult.stdout).toBe(
-      '{"schema":"openclaw.parallels-prerequisite.v1","status":"ready","reason":null}\n',
-    );
-    expect(defaultResult.stderr).toBe("");
-    expect(defaultResult.stdout).not.toContain(defaultSecret);
-
-    const explicitSecret = "sentinel-explicit-provider-secret";
-    const explicitResult = runPrerequisiteCli(
-      [
-        "--",
-        "--prerequisite-check",
-        "--only",
-        "linux",
-        "--provider",
-        "anthropic",
-        "--model",
-        "anthropic/custom",
-        "--api-key-env",
-        "CUSTOM_ANTHROPIC_KEY",
-        "--json",
-      ],
-      { CUSTOM_ANTHROPIC_KEY: explicitSecret },
-    );
-    expect(explicitResult.status).toBe(0);
-    expect(explicitResult.stdout).toBe(defaultResult.stdout);
-    expect(explicitResult.stderr).toBe("");
-    expect(`${explicitResult.stdout}${explicitResult.stderr}`).not.toContain(explicitSecret);
-    expect(explicitResult.stdout).not.toContain("CUSTOM_ANTHROPIC_KEY");
-    expect(explicitResult.stdout).not.toContain("anthropic/custom");
-  });
+  it.each(["default", "explicit"] as const)(
+    "reports exact ready prerequisites for the %s provider",
+    (mode) => {
+      const secret = `sentinel-${mode}-provider-secret`;
+      const args =
+        mode === "explicit"
+          ? [
+              "--",
+              "--only",
+              "linux",
+              "--provider",
+              "anthropic",
+              "--model",
+              "anthropic/custom",
+              "--api-key-env",
+              "CUSTOM_ANTHROPIC_KEY",
+            ]
+          : [];
+      const env =
+        mode === "explicit" ? { CUSTOM_ANTHROPIC_KEY: secret } : { OPENAI_API_KEY: secret };
+      const result = runPrerequisiteCli([...args, "--prerequisite-check", "--json"], env);
+      expect(result).toMatchObject({
+        status: 0,
+        stderr: "",
+        stdout: '{"schema":"openclaw.parallels-prerequisite.v1","status":"ready","reason":null}\n',
+      });
+      for (const value of [secret, "CUSTOM_ANTHROPIC_KEY", "anthropic/custom"]) {
+        expect(`${result.stdout}${result.stderr}`).not.toContain(value);
+      }
+    },
+  );
 
   it("blocks missing credentials before smoke-only validation or side effects", () => {
     const root = tempDirs.make("openclaw-parallels-prerequisite-");
@@ -555,39 +579,25 @@ ${script}`,
     }
   });
 
-  it("accepts keyed and nested npm metadata for published update targets", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain("curl -fsSL --connect-timeout 10 --max-time 120 --retry 2");
-    expect(script).toContain("timeoutMs: 150_000");
-
-    expect(
-      parseRegistryPackageMetadata(
-        JSON.stringify({
-          version: "2026.5.20-beta.1",
-          "dist.tarball": "https://registry.example/openclaw-keyed.tgz",
-          gitHead: "abcdef0123456789",
-        }),
-      ),
-    ).toEqual({
-      version: "2026.5.20-beta.1",
-      tarball: "https://registry.example/openclaw-keyed.tgz",
-      gitHead: "abcdef0123456789",
-    });
-
-    expect(
-      parseRegistryPackageMetadata(
-        JSON.stringify({
-          version: "2026.5.20-beta.1",
-          dist: { tarball: "https://registry.example/openclaw-nested.tgz" },
-        }),
-      ),
-    ).toEqual({
-      version: "2026.5.20-beta.1",
-      tarball: "https://registry.example/openclaw-nested.tgz",
-      gitHead: "",
-    });
-  });
+  it.each(["keyed", "nested"] as const)(
+    "accepts %s npm metadata for published targets",
+    (shape) => {
+      const script = readFileSync(SCRIPT_PATH, "utf8");
+      expect(script).toContain("curl -fsSL --connect-timeout 10 --max-time 120 --retry 2");
+      expect(script).toContain("timeoutMs: 150_000");
+      const version = "2026.5.20-beta.1";
+      const tarball = `https://registry.example/openclaw-${shape}.tgz`;
+      const metadata =
+        shape === "keyed"
+          ? { "dist.tarball": tarball, gitHead: "abcdef0123456789" }
+          : { dist: { tarball } };
+      expect(parseRegistryPackageMetadata(JSON.stringify({ version, ...metadata }))).toEqual({
+        version,
+        tarball,
+        gitHead: shape === "keyed" ? "abcdef0123456789" : "",
+      });
+    },
+  );
 
   it("guards beta validation against cross-version harness checkouts", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
@@ -735,22 +745,28 @@ ${script}`,
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "lets fresh lane descendants exit during timeout kill grace",
-    async ({ signal, onTestFinished }) => {
+  it.runIf(process.platform !== "win32").for(["fresh", "update"] as const)(
+    "lets %s descendants exit during timeout kill grace",
+    async (lane, { signal, onTestFinished }) => {
       const f = processFixture(onTestFinished, true);
-      const code = await f.run(
-        () =>
-          spawnLoggedCommand(process.execPath, [f.scriptPath], f.logPath, {}, undefined, {
-            timeoutKillGraceMs: 500,
-            timeoutLabel: "fresh lane grace test",
-            timeoutMs: 500,
-          }),
-        500,
-        "fresh lane descendant readiness",
-        signal,
-      );
-      expect(code).toBe(124);
+      const start =
+        lane === "fresh"
+          ? () =>
+              spawnLoggedCommand(process.execPath, [f.scriptPath], f.logPath, {}, undefined, {
+                timeoutKillGraceMs: 500,
+                timeoutLabel: "fresh lane grace test",
+                timeoutMs: 500,
+              })
+          : withEnv({ OPENAI_API_KEY: "test-key" }, () => {
+              const smoke = new NpmUpdateSmoke(smokeOptions());
+              return () =>
+                smoke["runStreamingToJobLog"](process.execPath, [f.scriptPath], 500, {
+                  append: () => undefined,
+                  signal: new AbortController().signal,
+                });
+            });
+      const label = lane === "fresh" ? "fresh lane" : "update stream";
+      expect(await f.run(start, 500, `${label} descendant readiness`, signal)).toBe(124);
       expect(readFileSync(f.donePath, "utf8")).toBe("done");
     },
   );
@@ -768,57 +784,19 @@ ${script}`,
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "lets update stream descendants exit during timeout kill grace",
-    async ({ signal, onTestFinished }) => {
-      const f = processFixture(onTestFinished, true);
-      const smoke = withEnv(
-        { OPENAI_API_KEY: "test-key" },
-        () => new NpmUpdateSmoke(smokeOptions()),
-      );
-      const code = await f.run(
-        () =>
-          smoke["runStreamingToJobLog"](process.execPath, [f.scriptPath], 500, {
-            append: () => undefined,
-            signal: new AbortController().signal,
-          }),
-        500,
-        "update stream descendant readiness",
-        signal,
-      );
-      expect(code).toBe(124);
-      expect(readFileSync(f.donePath, "utf8")).toBe("done");
-    },
-  );
-
   it("cleans timed-out Windows background work", async () => {
-    const decodedCommands: string[] = [];
-    const inputs: string[] = [];
-    const fakeRun: typeof hostCommandRun = (_command, args, options) => {
-      const decoded = decodePowerShellFromArgs(args);
-      decodedCommands.push(decoded);
-      if (options?.input) {
-        inputs.push(options.input);
-      }
-      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
-        return commandResult("started\n");
-      }
-      if (args.includes("cmd.exe")) {
-        return commandResult("wait\n");
-      }
-      return commandResult();
-    };
+    const f = windowsFixture({ poll: () => commandResult("wait\n") });
 
     await expect(
       windowsJob({
         label: "windows background timeout",
-        runCommand: fakeRun,
+        runCommand: f.runCommand,
         script: "Start-Sleep -Seconds 60",
       }),
     ).rejects.toThrow("windows background timeout timed out");
 
-    const commands = decodedCommands.join("\n---\n");
-    const payloads = inputs.join("\n---\n");
+    const commands = f.commands.join("\n---\n");
+    const payloads = f.inputs.join("\n---\n");
     expect(commands).toContain("$pidPath");
     expect(commands).toContain("function Write-OpenClawUtf8File");
     expect(commands).toContain("[System.Text.UTF8Encoding]::new($false)");
@@ -841,93 +819,68 @@ ${script}`,
   });
 
   it.each([
-    {
-      scenario: "a successfully launched job",
-      launchStatus: 0,
-      launchOutput: "started\n",
-      expectedError: "windows setup deadline timed out",
-    },
-    {
-      scenario: "a launch that never materializes",
-      launchStatus: 0,
-      launchOutput: "",
-      expectedError: "windows setup deadline background launch failed with exit code 0",
-    },
-    {
-      scenario: "a genuine launch failure",
-      launchStatus: 17,
-      launchOutput: "",
-      expectedError: "windows setup deadline background launch failed with exit code 17",
-    },
-  ])("preserves $scenario when Windows setup exhausts its active budget", async (testCase) => {
-    let now = 1_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    let launchAttempts = 0;
-    const fakeRun: typeof hostCommandRun = (_command, args, options) => {
-      if (options?.input) {
-        now += 2;
-        return commandResult();
-      }
-      const decoded = decodePowerShellFromArgs(args);
-      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
-        launchAttempts++;
-        return { status: testCase.launchStatus, stderr: "", stdout: testCase.launchOutput };
-      }
-      return commandResult();
-    };
+    [0, "started\n", "timed out"],
+    [0, "", "background launch failed with exit code 0"],
+    [17, "", "background launch failed with exit code 17"],
+  ] as const)(
+    "preserves launch status %s with output %j when setup exhausts its budget",
+    async (launchStatus, launchOutput, expectedError) => {
+      let now = 1_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      let launchAttempts = 0;
+      const f = windowsFixture({
+        input: () => {
+          now += 2;
+        },
+        launch: () => {
+          launchAttempts++;
+          return commandResult(launchOutput, launchStatus);
+        },
+      });
 
-    try {
-      await expect(
-        windowsJob({
-          label: "windows setup deadline",
-          runCommand: fakeRun,
-          script: "Write-Output test",
-        }),
-      ).rejects.toThrow(testCase.expectedError);
-      expect(launchAttempts).toBe(1);
-    } finally {
-      clock.mockRestore();
-    }
-  });
+      try {
+        await expect(
+          windowsJob({
+            label: "windows setup deadline",
+            runCommand: f.runCommand,
+            script: "Write-Output test",
+          }),
+        ).rejects.toThrow(`windows setup deadline ${expectedError}`);
+        expect(launchAttempts).toBe(1);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 
   it("drains a completed Windows job when setup exhausts the active budget", async () => {
     let now = 1_000;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     let completionProbes = 0;
     let logProbes = 0;
-    const fakeRun: typeof hostCommandRun = (_command, args, options) => {
-      if (options?.input) {
+    const f = windowsFixture({
+      input: () => {
         now += 2;
-        return commandResult();
-      }
-      const decoded = decodePowerShellFromArgs(args);
-      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
-        return commandResult("started\n");
-      }
-      if (args.includes("cmd.exe")) {
-        const command = args.at(-1) ?? "";
+      },
+      poll: (command) => {
         if (command.includes("__OPENCLAW_BACKGROUND_DONE__")) {
           logProbes++;
           const markers = extractWindowsBackgroundControlMarkers(command);
-          return {
-            status: 0,
-            stderr: "",
-            stdout: [`${markers.exitPrefix}0`, markers.done, ""].join("\n"),
-          };
+          return commandResult([`${markers.exitPrefix}0`, markers.done, ""].join("\n"));
         }
         if (command.includes("(echo done) else (echo wait)")) {
           completionProbes++;
           return commandResult("done\n");
         }
-      }
-      return commandResult();
-    };
+        return commandResult();
+      },
+    });
 
     try {
       await expect(
         windowsJob({
           label: "windows completed before first poll",
-          runCommand: fakeRun,
+          runCommand: f.runCommand,
         }),
       ).resolves.toBeUndefined();
       expect(completionProbes).toBe(1);
@@ -938,60 +891,39 @@ ${script}`,
   });
 
   it("does not treat Windows background log text as completion control", async () => {
-    const decodedCommands: string[] = [];
-    const fakeRun: typeof hostCommandRun = (_command, args) => {
-      const decoded = decodePowerShellFromArgs(args);
-      decodedCommands.push(decoded);
-      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
-        return commandResult("started\n");
-      }
-      if (args.includes("cmd.exe")) {
-        return commandResult("done\n");
-      }
-      return commandResult();
-    };
+    const f = windowsFixture({ poll: () => commandResult("done\n") });
 
     await expect(
       windowsJob({
         label: "windows background marker smuggle",
-        runCommand: fakeRun,
+        runCommand: f.runCommand,
         completedLogDrainGraceMs: 5,
       }),
     ).rejects.toThrow("windows background marker smuggle timed out");
 
-    expect(decodedCommands.join("\n")).toContain(
+    expect(f.commands.join("\n")).toContain(
       "Stop-OpenClawBackgroundProcessTree ([int]$backgroundPid)",
     );
   });
 
   it("drains completed Windows background logs before cleanup", async () => {
-    const decodedCommands: string[] = [];
     const output: string[] = [];
     let pollCount = 0;
-    const fakeRun: typeof hostCommandRun = (_command, args) => {
-      const decoded = decodePowerShellFromArgs(args);
-      decodedCommands.push(decoded);
-      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
-        return commandResult("started\n");
-      }
-      if (args.includes("cmd.exe")) {
-        const command = args.at(-1) ?? "";
+    const f = windowsFixture({
+      poll: (command) => {
         if (command.includes("type")) {
           pollCount += 1;
           const markers = extractWindowsBackgroundControlMarkers(command);
-          return {
-            status: 0,
-            stderr: "",
-            stdout: ["first chunk", `${markers.exitPrefix}0`, markers.done, ""].join("\n"),
-          };
+          return commandResult(
+            ["first chunk", `${markers.exitPrefix}0`, markers.done, ""].join("\n"),
+          );
         }
         if (command.includes("if exist")) {
           return commandResult("done\n");
         }
         return commandResult();
-      }
-      return commandResult();
-    };
+      },
+    });
 
     await expect(
       windowsJob({
@@ -999,15 +931,15 @@ ${script}`,
         completedLogDrainGraceMs: 1000,
         label: "windows background drain",
         pollIntervalMs: 5000,
-        runCommand: fakeRun,
+        runCommand: f.runCommand,
         timeoutMs: 20,
       }),
     ).resolves.toBeUndefined();
 
     expect(pollCount).toBe(1);
     expect(output.join("")).toContain("first chunk");
-    expect(decodedCommands.join("\n")).not.toContain("Stop-OpenClawBackgroundProcessTree");
-    expect(decodedCommands.join("\n")).toContain(
+    expect(f.commands.join("\n")).not.toContain("Stop-OpenClawBackgroundProcessTree");
+    expect(f.commands.join("\n")).toContain(
       "Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath",
     );
   });

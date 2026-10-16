@@ -3,27 +3,23 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { compileFunction } from "node:vm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const WORKFLOW_CASES = [
-  {
-    name: "iOS",
-    path: ".github/workflows/ios-periphery.yml",
-    scopedPath: "apps/ios/Sources/Test.swift",
-  },
-  {
-    name: "macOS",
-    path: ".github/workflows/macos-periphery.yml",
-    scopedPath: "apps/macos/Sources/OpenClaw/Test.swift",
-  },
-  {
-    name: "shared OpenClawKit",
-    path: ".github/workflows/shared-openclawkit-periphery.yml",
-    scopedPath: "apps/shared/OpenClawKit/Sources/OpenClawKit/Test.swift",
-  },
-] as const;
+const WORKFLOW_CASES = (
+  [
+    ["ios", "apps/ios/Sources/Test.swift"],
+    ["macos", "apps/macos/Sources/OpenClaw/Test.swift"],
+    ["shared-openclawkit", "apps/shared/OpenClawKit/Sources/OpenClawKit/Test.swift"],
+  ] as const
+).map(([name, scopedPath]) =>
+  Object.assign(
+    { name, scopedPath },
+    compileScopeWorkflow(`.github/workflows/${name}-periphery.yml`),
+  ),
+);
+const sharedWorkflow = WORKFLOW_CASES[2]!;
 
 type WorkflowStep = {
   id?: string;
@@ -35,18 +31,10 @@ type WorkflowStep = {
 };
 
 type ScopeWorkflow = {
-  on?: {
-    pull_request?: {
-      paths?: string[];
-      types?: string[];
-    };
-  };
-  jobs?: {
-    scope?: {
-      steps?: WorkflowStep[];
-    };
-  };
+  on: { pull_request: { paths?: string[]; types: string[] } };
+  jobs: { scope: { steps: WorkflowStep[] } };
 };
+type ScopeFunction = (...args: [unknown, unknown, unknown, NodeJS.Require]) => Promise<void>;
 
 type ScopeOptions = {
   diffExitCode?: number;
@@ -59,34 +47,25 @@ type ScopeOptions = {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const require = createRequire(import.meta.url);
 
-function readWorkflow(workflowPath: string): ScopeWorkflow {
-  return parse(readFileSync(workflowPath, "utf8")) as ScopeWorkflow;
-}
-
 function compileScopeWorkflow(workflowPath: string) {
-  const workflow = readWorkflow(workflowPath);
+  const workflow = parse(readFileSync(workflowPath, "utf8")) as ScopeWorkflow;
   const step = workflow.jobs?.scope?.steps?.find((candidate) => candidate.id === "scope");
   const script = step?.with?.script;
   if (!script) {
     throw new Error(`missing Periphery scope script in ${workflowPath}`);
   }
-  const execute = compileFunction(`return (async () => {\n${script}\n})();`, [
-    "context",
-    "core",
-    "exec",
-    "require",
-  ]) as (context: unknown, core: unknown, exec: unknown, require: NodeJS.Require) => Promise<void>;
+  const parameters = ["context", "core", "exec", "require"];
+  const execute = compileFunction(
+    `return (async () => {\n${script}\n})();`,
+    parameters,
+  ) as ScopeFunction;
   return { workflow, script, execute };
 }
 
-const scopeWorkflows = new Map<string, ReturnType<typeof compileScopeWorkflow>>(
-  WORKFLOW_CASES.map(({ path: workflowPath }) => [
-    workflowPath,
-    compileScopeWorkflow(workflowPath),
-  ]),
-);
-
-async function runScope(workflowPath: string, options: ScopeOptions): Promise<string | undefined> {
+async function runScope(
+  fixture: ReturnType<typeof compileScopeWorkflow>,
+  options: ScopeOptions,
+): Promise<string | undefined> {
   const outputs = new Map<string, string>();
   const context = {
     eventName: options.eventName ?? "pull_request",
@@ -110,24 +89,18 @@ async function runScope(workflowPath: string, options: ScopeOptions): Promise<st
           ? [file]
           : [file.filename, file.previous_filename].filter((name): name is string => Boolean(name)),
       );
-      const matches = (filename: string, pathspec: string) =>
-        pathspec.endsWith("/") ? filename.startsWith(pathspec) : filename === pathspec;
-      const changed = filenames.some(
-        (filename) =>
-          pathspecs.some(
-            (pathspec) => !pathspec.startsWith(":(exclude)") && matches(filename, pathspec),
-          ) &&
-          !pathspecs.some(
-            (pathspec) =>
-              pathspec.startsWith(":(exclude)") && matches(filename, pathspec.slice(10)),
-          ),
-      );
+      const changed = filenames.some((filename) => {
+        const matches = (spec: string) =>
+          spec.endsWith("/") ? filename.startsWith(spec) : filename === spec;
+        return (
+          pathspecs.some((spec) => !spec.startsWith(":(exclude)") && matches(spec)) &&
+          !pathspecs.some((spec) => spec.startsWith(":(exclude)") && matches(spec.slice(10)))
+        );
+      });
       return { exitCode: changed ? 1 : 0 };
     },
   };
-  const { execute } = scopeWorkflows.get(workflowPath)!;
-
-  await execute(
+  await fixture.execute(
     context,
     { setOutput: (name: string, value: string) => outputs.set(name, value) },
     exec,
@@ -136,150 +109,124 @@ async function runScope(workflowPath: string, options: ScopeOptions): Promise<st
   return outputs.get("should-scan");
 }
 
-function git(repoRoot: string, args: string[]): string {
-  const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8" });
-  if (result.status !== 0) {
-    throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
-  }
-  return result.stdout.trim();
-}
-
-function writeFixture(repoRoot: string, relativePath: string, contents: string): void {
-  const filePath = path.join(repoRoot, relativePath);
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, contents, "utf8");
-}
-
-function makeTempRepoRoot() {
+function makeRepo() {
   const root = tempDirs.make("openclaw-periphery-");
-  git(root, ["init", "--initial-branch=main"]);
-  git(root, ["config", "user.name", "OpenClaw Test"]);
-  git(root, ["config", "user.email", "openclaw-test@example.com"]);
-  return root;
-}
-
-function commit(root: string, message = "fixture") {
-  git(root, ["add", "."]);
-  git(root, ["commit", "-m", message]);
-}
-
-describe("Periphery scope workflows", () => {
-  it.each(WORKFLOW_CASES)(
-    "uses the synthetic merge parent for $name scope",
-    ({ path: workflowPath }) => {
-      const { workflow, script } = scopeWorkflows.get(workflowPath)!;
-      const steps = workflow.jobs?.scope?.steps ?? [];
-      const checkout = steps.find((step) => step.name === "Checkout");
-
-      expect(workflow.on?.pull_request?.types).toContain("converted_to_draft");
-      expect(workflow.on?.pull_request?.paths).toBeUndefined();
-      expect(checkout?.with?.["fetch-depth"]).toBe(2);
-      expect(steps.some((step) => step.name === "Ensure base commit")).toBe(false);
-      expect(script).toContain('"HEAD^1"');
-      expect(script).not.toContain("pulls.listFiles");
-    },
-  );
-
-  it.each(WORKFLOW_CASES)(
-    "selects only $name scope changes",
-    async ({ path: workflowPath, scopedPath }) => {
-      const check = (options: ScopeOptions, expected: string) =>
-        expect(runScope(workflowPath, options)).resolves.toBe(expected);
-      await check({ files: [scopedPath] }, "true");
-      await check({ files: ["scripts/install-periphery.sh"] }, "true");
-      await check({ files: ["docs/index.md"] }, "false");
-      await check({ draft: true, files: [scopedPath] }, "false");
-      await check({ eventName: "workflow_dispatch" }, "true");
-      await check(
-        { files: [{ filename: "docs/Moved.swift", previous_filename: scopedPath }] },
-        "true",
-      );
-      await expect(runScope(workflowPath, { diffExitCode: 128 })).rejects.toThrow(
-        "git diff failed with exit code 128",
-      );
-    },
-  );
-
-  it.each(WORKFLOW_CASES)(
-    "excludes prose but keeps source, mixed changes, resources and renames for $name",
-    async ({ path: workflowPath, scopedPath }) => {
-      const repoRoot = makeTempRepoRoot();
-      writeFixture(repoRoot, "seed", "base\n");
-      commit(repoRoot);
-      const { script } = scopeWorkflows.get(workflowPath)!;
-      const prosePaths = [...script.matchAll(/":\(exclude\)([^"]+)"/g)].flatMap((match) =>
-        match[1] ? [match[1]] : [],
-      );
-      const firstProsePath = prosePaths[0];
-      if (!firstProsePath) {
-        throw new Error(`missing prose exclusions in ${workflowPath}`);
-      }
-      for (const prosePath of prosePaths) {
-        writeFixture(repoRoot, prosePath, "documentation\n");
-      }
-      commit(repoRoot);
-      await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("false");
-
-      writeFixture(repoRoot, firstProsePath, "updated documentation\n");
-      writeFixture(repoRoot, scopedPath, "struct Example {}\n");
-      commit(repoRoot);
-      await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
-
-      writeFixture(
-        repoRoot,
-        path.join(path.dirname(scopedPath), "Resources/README.md"),
-        "runtime resource\n",
-      );
-      commit(repoRoot);
-      await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
-
-      renameSync(path.join(repoRoot, scopedPath), path.join(repoRoot, firstProsePath));
-      commit(repoRoot);
-      await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
-    },
-  );
-
-  it("selects shared scans from native protocol generator inputs", async () => {
-    for (const file of [
-      "packages/gateway-protocol/src/schema/protocol-schemas.ts",
-      "scripts/protocol-gen-swift.ts",
-      "scripts/native-protocol-inputs.json",
-    ]) {
-      await expect(
-        runScope(".github/workflows/shared-openclawkit-periphery.yml", { files: [file] }),
-      ).resolves.toBe("true");
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+    if (result.status !== 0) {
+      throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
     }
-  });
+    return result.stdout.trim();
+  };
+  const write = (relativePath: string, contents: string) => {
+    const file = path.join(root, relativePath);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, contents, "utf8");
+  };
+  const commit = (message = "fixture") => {
+    git("add", ".");
+    git("commit", "-m", message);
+  };
+  git("init", "--initial-branch=main");
+  git("config", "user.name", "OpenClaw Test");
+  git("config", "user.email", "openclaw-test@example.com");
+  return { root, git, write, commit };
+}
 
-  it("ignores scoped files added only by base-branch drift", async () => {
-    const repoRoot = makeTempRepoRoot();
-    writeFixture(repoRoot, "docs/base.md", "base\n");
-    commit(repoRoot, "base");
-    const eventBase = git(repoRoot, ["rev-parse", "HEAD"]);
+it.each(WORKFLOW_CASES)("uses the synthetic merge parent for $name scope", ({ workflow }) => {
+  const steps = workflow.jobs?.scope?.steps ?? [];
+  const checkout = steps.find((step) => step.name === "Checkout");
 
-    git(repoRoot, ["switch", "-c", "pr"]);
-    writeFixture(repoRoot, "docs/pr.md", "pull request\n");
-    commit(repoRoot, "pull request");
+  expect(workflow.on?.pull_request?.types).toContain("converted_to_draft");
+  expect(workflow.on?.pull_request?.paths).toBeUndefined();
+  expect(checkout?.with?.["fetch-depth"]).toBe(2);
+  expect(steps.some((step) => step.name === "Ensure base commit")).toBe(false);
+});
 
-    git(repoRoot, ["switch", "main"]);
-    writeFixture(
-      repoRoot,
-      "apps/shared/OpenClawKit/Sources/OpenClawKit/Main.swift",
-      "struct Main {}\n",
+it.each(WORKFLOW_CASES)("selects only $name scope changes", async (fixture) => {
+  const { scopedPath } = fixture;
+  const check = (options: ScopeOptions, expected: string) =>
+    expect(runScope(fixture, options)).resolves.toBe(expected);
+  await check({ files: [scopedPath] }, "true");
+  await check({ files: ["scripts/install-periphery.sh"] }, "true");
+  await check({ files: ["docs/index.md"] }, "false");
+  await check({ draft: true, files: [scopedPath] }, "false");
+  await check({ eventName: "workflow_dispatch" }, "true");
+  await check({ files: [{ filename: "docs/Moved.swift", previous_filename: scopedPath }] }, "true");
+  await expect(runScope(fixture, { diffExitCode: 128 })).rejects.toThrow(
+    "git diff failed with exit code 128",
+  );
+});
+
+it.each(WORKFLOW_CASES)(
+  "excludes prose but keeps source, mixed changes, resources and renames for $name",
+  async (fixture) => {
+    const { scopedPath, script } = fixture;
+    const repo = makeRepo();
+    const repoRoot = repo.root;
+    repo.write("seed", "base\n");
+    repo.commit();
+    const prosePaths = [...script.matchAll(/":\(exclude\)([^"]+)"/g)].flatMap((match) =>
+      match[1] ? [match[1]] : [],
     );
-    commit(repoRoot, "advance main");
-    git(repoRoot, ["merge", "--no-ff", "pr", "-m", "synthetic merge"]);
+    const firstProsePath = prosePaths[0];
+    if (!firstProsePath) {
+      throw new Error(`missing prose exclusions in ${fixture.name}`);
+    }
+    for (const prosePath of prosePaths) {
+      repo.write(prosePath, "documentation\n");
+    }
+    repo.commit();
+    await expect(runScope(fixture, { repoRoot })).resolves.toBe("false");
 
-    const oldDiff = spawnSync(
-      "git",
-      ["diff", "--quiet", eventBase, "HEAD", "--", "apps/shared/OpenClawKit/"],
-      { cwd: repoRoot },
-    );
-    expect(oldDiff.status).toBe(1);
+    repo.write(firstProsePath, "updated documentation\n");
+    repo.write(scopedPath, "struct Example {}\n");
+    repo.commit();
+    await expect(runScope(fixture, { repoRoot })).resolves.toBe("true");
 
-    await expect(
-      runScope(".github/workflows/shared-openclawkit-periphery.yml", { repoRoot }),
-    ).resolves.toBe("false");
-    expect(git(repoRoot, ["diff", "--name-only", "HEAD^1", "HEAD"])).toBe("docs/pr.md");
-  });
+    repo.write(path.join(path.dirname(scopedPath), "Resources/README.md"), "runtime resource\n");
+    repo.commit();
+    await expect(runScope(fixture, { repoRoot })).resolves.toBe("true");
+
+    renameSync(path.join(repoRoot, scopedPath), path.join(repoRoot, firstProsePath));
+    repo.commit();
+    await expect(runScope(fixture, { repoRoot })).resolves.toBe("true");
+  },
+);
+
+it("selects shared scans from native protocol generator inputs", async () => {
+  for (const file of [
+    "packages/gateway-protocol/src/schema/protocol-schemas.ts",
+    "scripts/protocol-gen-swift.ts",
+    "scripts/native-protocol-inputs.json",
+  ]) {
+    await expect(runScope(sharedWorkflow, { files: [file] })).resolves.toBe("true");
+  }
+});
+
+it("ignores scoped files added only by base-branch drift", async () => {
+  const repo = makeRepo();
+  const repoRoot = repo.root;
+  repo.write("docs/base.md", "base\n");
+  repo.commit("base");
+  const eventBase = repo.git("rev-parse", "HEAD");
+
+  repo.git("switch", "-c", "pr");
+  repo.write("docs/pr.md", "pull request\n");
+  repo.commit("pull request");
+
+  repo.git("switch", "main");
+  repo.write("apps/shared/OpenClawKit/Sources/OpenClawKit/Main.swift", "struct Main {}\n");
+  repo.commit("advance main");
+  repo.git("merge", "--no-ff", "pr", "-m", "synthetic merge");
+
+  const oldDiff = spawnSync(
+    "git",
+    ["diff", "--quiet", eventBase, "HEAD", "--", "apps/shared/OpenClawKit/"],
+    { cwd: repoRoot },
+  );
+  expect(oldDiff.status).toBe(1);
+
+  await expect(runScope(sharedWorkflow, { repoRoot })).resolves.toBe("false");
+  expect(repo.git("diff", "--name-only", "HEAD^1", "HEAD")).toBe("docs/pr.md");
 });

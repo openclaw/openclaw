@@ -22,7 +22,6 @@ const changelog = `# Changelog
 
 function rootManifest(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
-    name: "openclaw",
     version: "2026.8.1",
     dependencies: {
       "@openclaw/ai": "workspace:*",
@@ -34,11 +33,19 @@ function rootManifest(overrides: Record<string, unknown> = {}) {
 
 function aiManifest(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
-    name: "@openclaw/ai",
     version: "2026.8.1",
     dependencies: {
       openai: "6.49.0",
     },
+    ...overrides,
+  });
+}
+
+function validateSource(overrides: Partial<Parameters<typeof validatePackageSource>[0]> = {}) {
+  return validatePackageSource({
+    aiManifestContent: aiManifest(),
+    changelogContent: changelog,
+    rootManifestContent: rootManifest(),
     ...overrides,
   });
 }
@@ -96,6 +103,35 @@ function readOutputs(file: string) {
   );
 }
 
+function workflowFixture(prefix: string) {
+  const root = tempDirs.make(prefix);
+  const file = (...parts: string[]) => path.join(root, ...parts);
+  mkdirSync(file("bin"));
+  return {
+    root,
+    file,
+    executable: (name: string, script: string) =>
+      writeFileSync(file("bin", name), `#!/usr/bin/env bash\nset -euo pipefail\n${script}\n`, {
+        mode: 0o755,
+      }),
+    run: (step: WorkflowStep, env: NodeJS.ProcessEnv, clearStepEnv = false) =>
+      spawnSync("bash", ["--noprofile", "--norc", "-c", step.run ?? ""], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ...(clearStepEnv
+            ? Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]))
+            : {}),
+          GITHUB_OUTPUT: file("output"),
+          GITHUB_STEP_SUMMARY: file("summary"),
+          PATH: `${file("bin")}:${process.env.PATH}`,
+          ...env,
+        },
+      }),
+  };
+}
+
 function fixtureGit(root: string, ...args: string[]) {
   return execFileSync(
     "git",
@@ -115,69 +151,46 @@ function fixtureGit(root: string, ...args: string[]) {
 }
 
 function runSourceRequirement(step: WorkflowStep, env: Record<string, string>) {
-  const tempDir = tempDirs.make("openclaw-package-source-workflow-");
-  const outputPath = path.join(tempDir, "output");
-  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", step.run ?? ""], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      ...Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""])),
-      ...env,
-      GITHUB_OUTPUT: outputPath,
-    },
-  });
+  const f = workflowFixture("openclaw-package-source-workflow-");
+  const result = f.run(step, env, true);
   expect(result.status, result.stderr).toBe(0);
-  return readFileSync(outputPath, "utf8").trim();
+  return readFileSync(f.file("output"), "utf8").trim();
 }
 
 function runLiveArtifactTupleValidation(packageEnv: Record<string, string>) {
   const workflow = readWorkflow(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml");
   const step = workflowStep(workflow, "validate_selected_ref", "Validate selected ref");
-  const tempDir = tempDirs.make("openclaw-live-artifact-tuple-");
-  const fakeBin = path.join(tempDir, "bin");
-  const outputPath = path.join(tempDir, "output");
-  const summaryPath = path.join(tempDir, "summary");
+  const f = workflowFixture("openclaw-live-artifact-tuple-");
   const selectedSha = "a".repeat(40);
-  mkdirSync(fakeBin);
-  mkdirSync(path.join(tempDir, ".release-harness", "scripts"), { recursive: true });
+  mkdirSync(f.file(".release-harness", "scripts"), { recursive: true });
   copyFileSync(
     path.resolve("scripts/resolve-fs-safe-native-contract.mjs"),
-    path.join(tempDir, ".release-harness", "scripts/resolve-fs-safe-native-contract.mjs"),
+    f.file(".release-harness", "scripts/resolve-fs-safe-native-contract.mjs"),
   );
-  writeFileSync(
-    path.join(fakeBin, "git"),
-    `#!/usr/bin/env bash
-set -euo pipefail
-if [[ "$1" == "rev-parse" && "$2" == "--verify" ]]; then
+  f.executable(
+    "git",
+    `if [[ "$1" == "rev-parse" && "$2" == "--verify" ]]; then
   printf '%s\\n' "$SELECTED_SHA"
   exit 0
 fi
 if [[ "$1" == "merge-base" && "$2" == "--is-ancestor" ]]; then
   exit 0
 fi
-exit 64
-`,
-    { mode: 0o755 },
+exit 64`,
   );
-  const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
-  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", step.run ?? ""], {
-    cwd: tempDir,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      ...stepEnv,
-      GITHUB_OUTPUT: outputPath,
-      GITHUB_STEP_SUMMARY: summaryPath,
+  const result = f.run(
+    step,
+    {
       INPUT_REF: "main",
-      PATH: `${fakeBin}:${process.env.PATH}`,
       PROVIDED_BARE_IMAGE: "ghcr.io/openclaw/openclaw:test",
       SELECTED_SHA: selectedSha,
       SHARED_IMAGE_POLICY: "existing-only",
       TRUSTED_WORKFLOW_SHA: selectedSha,
       ...packageEnv,
     },
-  });
-  const output = result.status === 0 ? readOutputs(outputPath) : {};
+    true,
+  );
+  const output = result.status === 0 ? readOutputs(f.file("output")) : {};
   return { output, result };
 }
 
@@ -186,18 +199,12 @@ function runLiveSourcePackageBuildAndValidation(packageEnv: Record<string, strin
   const pack = step("Pack OpenClaw package for Docker E2E");
   const validate = step("Validate OpenClaw Docker E2E package");
   const artifactTuple = runLiveArtifactTupleValidation(packageEnv);
-  const tempDir = tempDirs.make("openclaw-live-source-package-");
-  const fakeBin = path.join(tempDir, "bin");
-  const callsPath = path.join(tempDir, "calls");
-  const outputPath = path.join(tempDir, "output");
-  const summaryPath = path.join(tempDir, "summary");
+  const f = workflowFixture("openclaw-live-source-package-");
+  const callsPath = f.file("calls");
   const selectedSha = "a".repeat(40);
-  mkdirSync(fakeBin);
-  writeFileSync(
-    path.join(fakeBin, "node"),
-    `#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\\n' "$*" >> "$CALLS_PATH"
+  f.executable(
+    "node",
+    `printf '%s\\n' "$*" >> "$CALLS_PATH"
 if [[ "$1" == "scripts/package-openclaw-for-docker.mjs" ]]; then
   shift
   output_dir=""
@@ -217,56 +224,27 @@ if [[ "$1" == "scripts/package-openclaw-for-docker.mjs" ]]; then
   rm -rf "$fixture"
   exit 0
 fi
-exit 64
-`,
-    { mode: 0o755 },
+exit 64`,
   );
-  writeFileSync(
-    path.join(fakeBin, "timeout"),
-    `#!/usr/bin/env bash
-set -euo pipefail
-shift 2
-exec "$@"
-`,
-    { mode: 0o755 },
-  );
-  writeFileSync(
-    path.join(fakeBin, "sha256sum"),
-    `#!/usr/bin/env bash
-set -euo pipefail
-printf '%064d  %s\\n' 0 "$1"
-`,
-    { mode: 0o755 },
-  );
+  f.executable("timeout", 'shift 2\nexec "$@"');
+  f.executable("sha256sum", `printf '%064d  %s\\n' 0 "$1"`);
   const commonEnv = {
-    ...process.env,
     ALLOW_UNRELEASED_CHANGELOG: "false",
     CALLS_PATH: callsPath,
-    GITHUB_OUTPUT: outputPath,
-    GITHUB_STEP_SUMMARY: summaryPath,
-    GITHUB_WORKSPACE: tempDir,
-    PATH: `${fakeBin}:${process.env.PATH}`,
+    GITHUB_WORKSPACE: f.root,
     SELECTED_SHA: selectedSha,
     SHARED_IMAGE_POLICY: "existing-only",
   };
-  const buildResult = spawnSync("bash", ["--noprofile", "--norc", "-c", pack.run ?? ""], {
-    cwd: tempDir,
-    encoding: "utf8",
-    env: commonEnv,
-  });
+  const buildResult = f.run(pack, commonEnv);
   const artifactPresent = artifactTuple.output.package_artifact_present === "true";
-  const validationResult = spawnSync("bash", ["--noprofile", "--norc", "-c", validate.run ?? ""], {
-    cwd: tempDir,
-    encoding: "utf8",
-    env: {
-      ...commonEnv,
-      EXPECTED_PACKAGE_FILE_NAME: artifactPresent ? packageEnv.PACKAGE_FILE_NAME : "",
-      EXPECTED_PACKAGE_SHA256: artifactPresent ? packageEnv.PACKAGE_SHA256 : "",
-      EXPECTED_PACKAGE_SOURCE_SHA: artifactPresent ? packageEnv.PACKAGE_SOURCE_SHA : "",
-      EXPECTED_PACKAGE_VERSION: artifactPresent ? packageEnv.PACKAGE_VERSION : "",
-    },
+  const validationResult = f.run(validate, {
+    ...commonEnv,
+    EXPECTED_PACKAGE_FILE_NAME: artifactPresent ? packageEnv.PACKAGE_FILE_NAME : "",
+    EXPECTED_PACKAGE_SHA256: artifactPresent ? packageEnv.PACKAGE_SHA256 : "",
+    EXPECTED_PACKAGE_SOURCE_SHA: artifactPresent ? packageEnv.PACKAGE_SOURCE_SHA : "",
+    EXPECTED_PACKAGE_VERSION: artifactPresent ? packageEnv.PACKAGE_VERSION : "",
   });
-  const output = validationResult.status === 0 ? readOutputs(outputPath) : {};
+  const output = validationResult.status === 0 ? readOutputs(f.file("output")) : {};
   const calls = readFileSync(callsPath, "utf8").trim().split("\n");
   return { artifactTuple, buildResult, calls, output, validationResult, validate };
 }
@@ -277,10 +255,8 @@ function runReleaseInputCapture(params: {
 }) {
   const workflow = readWorkflow(".github/workflows/openclaw-release-checks.yml");
   const step = workflowStep(workflow, "resolve_target", "Capture selected inputs");
-  const tempDir = tempDirs.make("openclaw-release-inputs-");
-  const outputPath = path.join(tempDir, "output");
-  const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
-  const tooling = path.join(tempDir, "workflow");
+  const f = workflowFixture("openclaw-release-inputs-");
+  const tooling = f.file("workflow");
   for (const file of [
     "scripts/preflight-frozen-target-contracts.mjs",
     "scripts/lib/frozen-target-source.mjs",
@@ -323,42 +299,28 @@ function runReleaseInputCapture(params: {
   git("add", ".");
   git("commit", "-qm", "candidate tooling fixture");
   const toolingSha = git("rev-parse", "HEAD");
-  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", step.run ?? ""], {
-    cwd: tempDir,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      ...stepEnv,
+  const result = f.run(
+    step,
+    {
       ADMISSION_TOOLING_ROOT: tooling,
       ADMISSION_TOOLING_SHA: toolingSha,
       CANDIDATE_ARTIFACT_JSON_INPUT: params.candidateArtifactJson ?? "",
-      GITHUB_OUTPUT: outputPath,
-      RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT: "false",
-      RELEASE_CROSS_OS_SUITE_FILTER_INPUT: "",
-      RELEASE_FAIL_FAST_INPUT: "false",
       RELEASE_FILTER_VALIDATOR: path.join(
         tooling,
         "scripts/github/validate-release-suite-filters.sh",
       ),
-      RELEASE_LIVE_SUITE_FILTER_INPUT: "",
       RELEASE_MODE_INPUT: "both",
       RELEASE_PACKAGE_SPEC_INPUT: params.releasePackageSpec ?? "",
       RELEASE_PHASE_INPUT: "all",
       RELEASE_PROFILE_INPUT: "beta",
       RELEASE_PROVIDER_INPUT: "openai",
-      RELEASE_QA_DISCORD_LIVE_CI_ENABLED: "false",
-      RELEASE_QA_SLACK_LIVE_CI_ENABLED: "false",
-      RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED: "false",
       RELEASE_REF_INPUT: "main",
       RELEASE_RERUN_GROUP_INPUT: "package",
-      RELEASE_RUN_MATURITY_SCORECARD_INPUT: "false",
-      RELEASE_RUN_RELEASE_SOAK_INPUT: "false",
-      RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: "false",
-      TELEGRAM_WAIVER: "",
     },
-  });
+    true,
+  );
   expect(result.status, result.stderr).toBe(0);
-  return readOutputs(outputPath);
+  return readOutputs(f.file("output"));
 }
 
 describe("package source preflight", () => {
@@ -384,7 +346,7 @@ describe("package source preflight", () => {
     ["2026.9.1", "2026.8.3 (Unreleased)"],
   ])("accepts aligned %s source manifests with %s notes", (version, heading) => {
     expect(
-      validatePackageSource({
+      validateSource({
         aiManifestContent: aiManifest({ version }),
         allowUnreleasedChangelog: true,
         changelogContent: changelog.replace("## Unreleased", `## ${heading}`),
@@ -394,20 +356,14 @@ describe("package source preflight", () => {
   });
 
   it("uses canonical package changelog validation", () => {
-    expect(() =>
-      validatePackageSource({
-        aiManifestContent: aiManifest(),
-        changelogContent: changelog,
-        rootManifestContent: rootManifest(),
-      }),
-    ).toThrow("CHANGELOG.md does not contain a release section for 2026.8.1.");
+    expect(() => validateSource()).toThrow(
+      "CHANGELOG.md does not contain a release section for 2026.8.1.",
+    );
   });
 
   it("accepts complete oversized contribution records through the package renderer", () => {
     expect(
-      validatePackageSource({
-        aiManifestContent: aiManifest(),
-        rootManifestContent: rootManifest(),
+      validateSource({
         changelogContent: `# Changelog\n\n## 2026.8.1\n\n- A complete release note with its original credit. Thanks @contributor.\n\n### Complete contribution record\n\n${"- **PR #123** Thanks @contributor.\n".repeat(20_000)}`,
       }),
     ).toBe("2026.8.1");
@@ -415,11 +371,9 @@ describe("package source preflight", () => {
 
   it("rejects source package version drift", () => {
     expect(() =>
-      validatePackageSource({
+      validateSource({
         aiManifestContent: aiManifest({ version: "2026.8.2" }),
         allowUnreleasedChangelog: true,
-        changelogContent: changelog,
-        rootManifestContent: rootManifest(),
       }),
     ).toThrow("packages/ai/package.json version must match package.json");
   });
@@ -524,37 +478,31 @@ describe("package source preflight", () => {
     expect(preflightIndex).toBeGreaterThan(-1);
     expect(preflightIndex).toBeLessThan(setupIndex);
     expect(preflightIndex).toBeLessThan(packageIndex);
-    expect(runReleaseInputCapture({ releasePackageSpec: " \t " })).toMatchObject({
-      candidate_artifact_json: "",
-      package_mode: "source",
-      release_package_spec: "",
+    const expectMode = (
+      input: Parameters<typeof runReleaseInputCapture>[0],
+      package_mode: string,
+      release_package_spec = "",
+      candidate_artifact_json = "",
+    ) =>
+      expect(runReleaseInputCapture(input)).toMatchObject({
+        package_mode,
+        release_package_spec,
+        candidate_artifact_json,
+      });
+    expectMode({ releasePackageSpec: " \t " }, "source");
+    expectMode({ releasePackageSpec: "openclaw@beta" }, "published", "openclaw@beta");
+    expectMode({ candidateArtifactJson: " \t " }, "source");
+    const artifactJson = '{"packagePublished":false,"packageArtifactId":"1"}';
+    expectMode({ candidateArtifactJson: artifactJson }, "artifact", "", artifactJson);
+    expect(preflight).toMatchObject({
+      if: "needs.resolve_target.outputs.package_mode == 'source'",
+      env: { PACKAGE_REF: "${{ needs.resolve_target.outputs.revision }}" },
+      run: expect.stringContaining("node scripts/package-source-preflight.mjs"),
     });
-    expect(runReleaseInputCapture({ releasePackageSpec: "openclaw@beta" })).toMatchObject({
-      candidate_artifact_json: "",
-      package_mode: "published",
-      release_package_spec: "openclaw@beta",
+    expect(packageStep.env).toMatchObject({
+      PACKAGE_MODE: "${{ needs.resolve_target.outputs.package_mode }}",
+      CANDIDATE_PUBLISHED: "${{ needs.resolve_target.outputs.candidate_published }}",
     });
-    expect(runReleaseInputCapture({ candidateArtifactJson: " \t " })).toMatchObject({
-      candidate_artifact_json: "",
-      package_mode: "source",
-      release_package_spec: "",
-    });
-    expect(
-      runReleaseInputCapture({
-        candidateArtifactJson: '{"packagePublished":false,"packageArtifactId":"1"}',
-      }),
-    ).toMatchObject({
-      candidate_artifact_json: '{"packagePublished":false,"packageArtifactId":"1"}',
-      package_mode: "artifact",
-      release_package_spec: "",
-    });
-    expect(preflight.if).toBe("needs.resolve_target.outputs.package_mode == 'source'");
-    expect(preflight.env?.PACKAGE_REF).toBe("${{ needs.resolve_target.outputs.revision }}");
-    expect(preflight.run).toContain("node scripts/package-source-preflight.mjs");
-    expect(packageStep.env?.PACKAGE_MODE).toBe("${{ needs.resolve_target.outputs.package_mode }}");
-    expect(packageStep.env?.CANDIDATE_PUBLISHED).toBe(
-      "${{ needs.resolve_target.outputs.candidate_published }}",
-    );
     expect(setup.if).toBe("needs.resolve_target.outputs.package_mode != 'artifact'");
     expect(packageStep.if).toBe("needs.resolve_target.outputs.package_mode != 'artifact'");
     expect(packageStep.run).toContain('if [[ "$PACKAGE_MODE" == "published" ]]');
@@ -587,22 +535,11 @@ describe("package source preflight", () => {
     const setup = step("Setup Node environment");
     const pack = step("Pack OpenClaw package for Docker E2E");
 
-    expect(
-      runSourceRequirement(sourceRequirement, {
-        PACKAGE_ARTIFACT_PRESENT: "false",
-      }),
-    ).toBe("required=true");
-    expect(
-      runSourceRequirement(sourceRequirement, {
-        PACKAGE_ARTIFACT_PRESENT: "true",
-      }),
-    ).toBe("required=false");
-    expect(
-      runSourceRequirement(sourceRequirement, {
-        PACKAGE_ARTIFACT_PRESENT: "false",
-        PREPARED_NPM_BUNDLE_JSON: "{}",
-      }),
-    ).toBe("required=false");
+    const expectRequirement = (env: Record<string, string>, required: boolean) =>
+      expect(runSourceRequirement(sourceRequirement, env)).toBe(`required=${required}`);
+    expectRequirement({ PACKAGE_ARTIFACT_PRESENT: "false" }, true);
+    expectRequirement({ PACKAGE_ARTIFACT_PRESENT: "true" }, false);
+    expectRequirement({ PACKAGE_ARTIFACT_PRESENT: "false", PREPARED_NPM_BUNDLE_JSON: "{}" }, false);
     expect(steps.indexOf(prepareOnlyPreflight)).toBeLessThan(steps.indexOf(harnessSetup));
     expect(harnessSetup.uses).toBe("./.release-harness/.github/actions/setup-release-harness");
     expect(steps.indexOf(plannedPreflight)).toBeGreaterThan(
