@@ -124,7 +124,7 @@ describe("e2e helper numeric env limits", () => {
 
   it("bounds generated ClickClack plugin response bodies", async () => {
     const tempDir = tempDirs.make("openclaw-clickclack-plugin-");
-    const headersSent = createDeferred<void>();
+    const headersSent = createDeferred();
     const server = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });
       response.flushHeaders();

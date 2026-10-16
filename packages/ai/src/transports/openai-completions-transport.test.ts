@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
@@ -17,7 +18,7 @@ import { buildOpenAISdkRequestOptions } from "./openai-transport-params.js";
 async function captureTransportRequest(
   model: Model<"openai-completions">,
   tools: Context["tools"] = [],
-  options: OpenAICompletionsOptions = {},
+  options: SimpleStreamOptions & Pick<OpenAICompletionsOptions, "toolChoice"> = {},
 ) {
   const previousHost = getAiTransportHost();
   let captured: Request | undefined;
@@ -229,7 +230,13 @@ describe("openai completions transport", () => {
       expect(doneReason).toBe("stop");
     } finally {
       await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
+        server.close((error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
       });
     }
   });

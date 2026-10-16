@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
+// mock-isolation: catalog tests supply provider metadata without loading provider runtimes.
 vi.mock("../plugins/provider-runtime.runtime.js", () => mocks);
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture();

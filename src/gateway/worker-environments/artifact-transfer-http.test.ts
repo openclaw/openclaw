@@ -445,7 +445,9 @@ describe("artifact transfer interruption observations", () => {
     ["released", (h: Harness) => h.service.revoke(h.prepared.token)],
     ["shutdown", (h: Harness) => h.service.closeAll()],
   ] as const)("reports partial transfer closure for %s", async (closure, close) => {
-    const h = await prepare(() => close(h), 3);
+    const h = await prepare(() => {
+      close(h);
+    }, 3);
     await h.run();
     expect(h.interrupted).toHaveBeenCalledExactlyOnceWith(
       2,

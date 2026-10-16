@@ -40,9 +40,11 @@ const fixture = vi.hoisted(() => ({
   },
 }));
 
+// mock-isolation: capture lifecycle diagnostics without installing real log sinks.
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
+// mock-isolation: lifecycle cases share an in-memory registry rather than durable sandbox state.
 vi.mock("./registry.js", () => ({
   readRegistryEntry: vi.fn(async (name: string) => fixture.registry.get(name) ?? null),
   updateRegistry: vi.fn(async (entry: SandboxRegistryEntry) => fixture.save(entry)),
@@ -66,6 +68,7 @@ vi.mock("./mount-plan.js", () => ({
   sandboxMountPlanMatchesContainer: vi.fn(async () => true),
   resolveSandboxContainerOnlyMounts: vi.fn(async () => []),
 }));
+// mock-isolation: simulate container commands and failures without invoking a container engine.
 vi.mock("./container-engine.js", () => ({
   DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
   PODMAN_SANDBOX_ENGINE: { id: "podman", command: "podman", displayName: "Podman" },

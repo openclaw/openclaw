@@ -295,11 +295,17 @@ type RegisterResolver = (resolve: ConnectionResolver, serverName?: string) => vo
 function withResolverRegistry(run: (register: RegisterResolver) => Promise<void>) {
   return async () => {
     const registry = createMcpProofPluginRegistry();
-    await withPluginRuntimeRegistryScope(registry.registry, () =>
-      run((resolve, serverName = "user-mail") =>
-        registry.apiFor("test-plugin").registerMcpServerConnectionResolver({ serverName, resolve }),
-      ).finally(cleanupOwned),
-    );
+    await withPluginRuntimeRegistryScope(registry.registry, async () => {
+      try {
+        await run((resolve, serverName = "user-mail") =>
+          registry
+            .apiFor("test-plugin")
+            .registerMcpServerConnectionResolver({ serverName, resolve }),
+        );
+      } finally {
+        await cleanupOwned();
+      }
+    });
   };
 }
 
@@ -527,7 +533,11 @@ async function expiryRuntime(stateful: boolean) {
     ),
   );
   cleanupTasks.push(async () => {
-    await pending.then((runtime) => runtime.dispose()).finally(() => server.close());
+    try {
+      await (await pending).dispose();
+    } finally {
+      await server.close();
+    }
   });
   return { runtime: await pending, state: server.state };
 }
@@ -942,7 +952,7 @@ describe("session MCP runtime", () => {
     const catalog = await runtime.getCatalog();
     expect(catalog.tools.map((tool) => tool.toolName).toSorted()).toEqual(row.expectedTools);
     expect(catalog.servers[row.serverName]).toMatchObject(row.expectedServer);
-    if ("expectedDenied" in row) {
+    if (row.expectedDenied) {
       expect(catalog.sessionDeniedTools).toMatchObject(row.expectedDenied);
     }
     if ("expectedMaterialized" in row) {

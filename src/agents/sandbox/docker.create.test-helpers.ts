@@ -187,8 +187,11 @@ export function createSandboxContainerTestHarness() {
 
   beforeAll(async () => {
     vi.resetModules();
+    // mock-isolation: keep container registration in the suite-owned registry fixture.
     vi.doMock("./registry.js", () => registryMocks);
+    // mock-isolation: route runtime logging and exits to fixture spies.
     vi.doMock("../../runtime.js", () => ({ defaultRuntime: runtimeMocks }));
+    // mock-isolation: model container namespaces without consulting host mount state.
     vi.doMock("./docker-mount-source.js", createNamespaceMock);
     vi.doMock("../../process/exec.js", async (importOriginal) => ({
       ...(await importOriginal<typeof import("../../process/exec.js")>()),

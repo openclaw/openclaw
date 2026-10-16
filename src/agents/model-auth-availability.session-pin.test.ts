@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/types.js";
-import {
-  createApiKeyCredential as key,
-  createOAuthRefreshCredential as oauth,
-} from "./auth-profiles/credential-fixtures.test-support.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_OAUTH_REF_PROVIDER } from "./auth-profiles/legacy-oauth-ref.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
@@ -13,65 +9,28 @@ import {
   evaluate,
   routeResolverFactory,
 } from "./model-auth-availability.test-support.js";
-import { providerConfig } from "./model-auth.fixtures.test-support.js";
 import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
-
-function readiness(
-  cfg: OpenClawConfig,
-  store: AuthProfileStore,
-  options: Partial<Parameters<typeof createModelAuthAvailabilityResolver>[0]> = {},
-) {
-  return createModelAuthAvailabilityResolver({
-    cfg,
-    authStore: store,
-    env: {},
-    preparedRuntimeAuthStore: authStore(),
-    ...options,
-  });
-}
-
-function preparePin(
-  provider: string,
-  config: OpenClawConfig,
-  store: AuthProfileStore,
-  pin: string,
-  sessionAuthProfileSource: "user" | "user-link" = "user",
-  modelId = "gpt-5.5",
-) {
-  return prepareAgentRuntimeAuth({
-    provider,
-    config,
-    authProfileStore: store,
-    sessionAuthProfileId: pin,
-    sessionAuthProfileSource,
-    modelId,
-    env: {},
-  });
-}
-
-function unresolvedOAuth(provider: string) {
-  return oauth({
-    provider,
-    access: "",
-    refresh: "",
-    expires: 0,
-    oauthRef: {
-      source: "openclaw-credentials",
-      provider: LEGACY_OAUTH_REF_PROVIDER,
-      id: "00000000000000000000000000000000",
-    },
-  });
-}
 
 describe.each(["acme", "openai"])("%s session account readiness", (provider) => {
   it.each(["api-key", "oauth"] as const)(
     "requires provider SecretRef %s auth instead of a shared profile",
     (mode) => {
-      const config = providerConfig(provider, {
-        auth: mode,
-        apiKey: { source: "env", provider: "default", id: "SYNTHETIC_PROVIDER_KEY" },
-      });
-      const store = authStore({ shared: key(provider, "synthetic-shared") });
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            [provider]: {
+              baseUrl: "",
+              models: [],
+              auth: mode,
+              apiKey: { source: "env", provider: "default", id: "SYNTHETIC_PROVIDER_KEY" },
+            },
+          },
+        },
+      };
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: { shared: { type: "api_key", provider, key: "synthetic-shared" } },
+      };
       const env = { SYNTHETIC_PROVIDER_KEY: "synthetic-ref" };
       const runtime = prepareAgentRuntimeAuth({
         provider,
@@ -82,8 +41,11 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
       });
       expect(runtime.attempts.map((attempt) => attempt.kind)).toEqual(["direct"]);
       expect(
-        readiness(config, store, {
+        createModelAuthAvailabilityResolver({
+          cfg: config,
+          authStore: store,
           env,
+          preparedRuntimeAuthStore: { version: 1, profiles: {} },
           routeResolverFactory: routeResolverFactory(provider === "openai" ? dualRoutes : null),
         }).evaluateModelAuth(provider, { modelId: "gpt-5.5" }),
       ).toMatchObject({ availability: true, evidence: "provider-config", selectedAuthMode: mode });
@@ -101,29 +63,46 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
     const pin = personal ? "personal:owner:account" : `${provider}:selected`;
     const shared = `${provider}:shared`;
     const config: OpenClawConfig = { auth: { order: { [provider]: [shared] } } };
-    const store = authStore({
-      [pin]: oauth({
-        provider,
-        access: "synthetic-personal",
-        refresh: state === "expired-oauth" ? "" : "synthetic-refresh",
-        expires: state === "expired-oauth" || state === "refresh-needed" ? 1 : Date.now() + 600_000,
-      }),
-      [shared]: key(provider, "synthetic-shared"),
-    });
-    if (state === "cooldown") {
-      store.usageStats = { [pin]: { cooldownUntil: Date.now() + 600_000 } };
-    }
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [pin]: {
+          type: "oauth",
+          provider,
+          access: "synthetic-personal",
+          refresh: state === "expired-oauth" ? "" : "synthetic-refresh",
+          expires:
+            state === "expired-oauth" || state === "refresh-needed" ? 1 : Date.now() + 600_000,
+        },
+        [shared]: { type: "api_key", provider, key: "synthetic-shared" },
+      },
+      ...(state === "cooldown"
+        ? { usageStats: { [pin]: { cooldownUntil: Date.now() + 600_000 } } }
+        : {}),
+    };
     const expected = state === "ready" || state === "refresh-needed" ? [pin, shared] : [shared];
-    const runtime = preparePin(provider, config, store, pin, personal ? "user-link" : "user");
+    const runtime = prepareAgentRuntimeAuth({
+      provider,
+      modelId: "gpt-5.5",
+      config,
+      env: {},
+      authProfileStore: store,
+      sessionAuthProfileId: pin,
+      sessionAuthProfileSource: personal ? "user-link" : "user",
+    });
     expect(runtime.attempts.map((attempt) => attempt.profileId)).toEqual(expected);
-    const result = readiness(config, store, {
+    const readiness = createModelAuthAvailabilityResolver({
+      cfg: config,
+      authStore: store,
+      env: {},
+      preparedRuntimeAuthStore: { version: 1, profiles: {} },
       routeResolverFactory: routeResolverFactory(provider === "openai" ? dualRoutes : null),
     }).evaluateModelAuth(provider, {
       modelId: "gpt-5.5",
       preferredProfileId: pin,
       pinnedProfileId: pin,
     });
-    expect(result).toMatchObject({
+    expect(readiness).toMatchObject({
       availability: true,
       selectedProfileId: state === "refresh-needed" && provider !== "openai" ? shared : expected[0],
     });
@@ -135,19 +114,47 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
       const pin = `${provider}:selected`;
       const shared = `${provider}:shared`;
       const config: OpenClawConfig = { auth: { order: { [provider]: [shared] } } };
-      const store = authStore({ [shared]: key(provider, "synthetic-shared") });
-      if (state !== "missing") {
-        store.profiles[pin] =
-          state === "unresolved-oauth"
-            ? unresolvedOAuth(provider)
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          ...(state === "missing"
+            ? {}
             : {
-                type: "token",
-                provider: state === "wrong-provider" ? "other" : provider,
-                token: "synthetic-invalid",
-                expires: state === "expired-token" ? 1 : Date.now() + 600_000,
-              };
-      }
-      expect(() => preparePin(provider, config, store, pin)).toThrow(
+                [pin]:
+                  state === "unresolved-oauth"
+                    ? {
+                        type: "oauth" as const,
+                        provider,
+                        access: "",
+                        refresh: "",
+                        expires: 0,
+                        oauthRef: {
+                          source: "openclaw-credentials" as const,
+                          provider: LEGACY_OAUTH_REF_PROVIDER,
+                          id: "00000000000000000000000000000000",
+                        },
+                      }
+                    : {
+                        type: "token" as const,
+                        provider: state === "wrong-provider" ? "other" : provider,
+                        token: "synthetic-invalid",
+                        expires: state === "expired-token" ? 1 : Date.now() + 600_000,
+                      },
+              }),
+          [shared]: { type: "api_key", provider, key: "synthetic-shared" },
+        },
+      };
+      expect(() =>
+        prepareAgentRuntimeAuth({
+          provider,
+          modelId: "gpt-5.5",
+          config,
+          env: {},
+          authProfileStore: store,
+          sessionAuthProfileId: pin,
+          sessionAuthProfileSource: "user",
+        }),
+      ).toThrow(
         state === "missing"
           ? expect.objectContaining({
               code: "selected_auth_profile_unavailable",
@@ -160,7 +167,11 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
           : "is not configured",
       );
       expect(
-        readiness(config, store, {
+        createModelAuthAvailabilityResolver({
+          cfg: config,
+          authStore: store,
+          env: {},
+          preparedRuntimeAuthStore: { version: 1, profiles: {} },
           routeResolverFactory: routeResolverFactory(provider === "openai" ? dualRoutes : null),
         }).evaluateModelAuth(provider, { modelId: "gpt-5.5", pinnedProfileId: pin }),
       ).toMatchObject({ availability: false, unavailableReason: "auth-failed" });
@@ -177,13 +188,26 @@ describe("session account pin admission", () => {
         selection === "ordered"
           ? { auth: { order: { openai: [pin] } } }
           : selection === "configured"
-            ? providerConfig("openai", { auth: "oauth" })
+            ? { models: { providers: { openai: { auth: "oauth", baseUrl: "", models: [] } } } }
             : {};
       const store = authStore({
-        [pin]: oauth(),
-        ...(selection === "required" ? { "openai:shared": key("openai", "synthetic-key") } : {}),
+        [pin]: {
+          type: "oauth",
+          provider: "openai",
+          access: "synthetic-access",
+          refresh: "synthetic-refresh",
+          expires: Date.now() + 600_000,
+        },
+        ...(selection === "required"
+          ? { "openai:shared": { type: "api_key", provider: "openai", key: "synthetic-key" } }
+          : {}),
       });
-      const result = readiness(cfg, store).evaluateModelAuth("openai", {
+      const result = createModelAuthAvailabilityResolver({
+        cfg,
+        authStore: store,
+        env: {},
+        preparedRuntimeAuthStore: { version: 1, profiles: {} },
+      }).evaluateModelAuth("openai", {
         modelId: "CHAT-LATEST",
         ...(selection === "pinned" ? { pinnedProfileId: pin } : {}),
         ...(selection === "required" ? { requiredProfileId: pin } : {}),
@@ -209,23 +233,47 @@ describe("session account pin admission", () => {
     "keeps $state authentication distinct from route incompatibility",
     ({ state, availability }) => {
       const hasProfiles = state !== "missing" && state !== "required-missing";
-      const store = authStore(hasProfiles ? { "openai:chatgpt": oauth() } : {});
-      if (hasProfiles && state !== "direct-fallback") {
-        store.profiles["openai:platform"] =
-          state === "unread"
-            ? {
-                type: "api_key",
+      const store = authStore(
+        hasProfiles
+          ? {
+              "openai:chatgpt": {
+                type: "oauth",
                 provider: "openai",
-                keyRef: { source: "env", provider: "default", id: "UNREAD_KEY" },
-              }
-            : key("openai", "synthetic-key");
-      }
+                access: "synthetic-access",
+                refresh: "synthetic-refresh",
+                expires: Date.now() + 600_000,
+              },
+              ...(state !== "direct-fallback"
+                ? {
+                    "openai:platform": {
+                      type: "api_key",
+                      provider: "openai",
+                      ...(state === "unread"
+                        ? { keyRef: { source: "env", provider: "default", id: "UNREAD_KEY" } }
+                        : { key: "synthetic-key" }),
+                    },
+                  }
+                : {}),
+            }
+          : {},
+      );
       if (state === "cooldown") {
         store.usageStats = { "openai:platform": { cooldownUntil: Date.now() + 600_000 } };
       }
       const cfg: OpenClawConfig =
-        state === "direct-fallback" ? providerConfig("openai", { apiKey: "synthetic-direct" }) : {};
-      const result = readiness(cfg, store).evaluateModelAuth("openai", {
+        state === "direct-fallback"
+          ? {
+              models: {
+                providers: { openai: { apiKey: "synthetic-direct", baseUrl: "", models: [] } },
+              },
+            }
+          : {};
+      const result = createModelAuthAvailabilityResolver({
+        cfg,
+        authStore: store,
+        env: {},
+        preparedRuntimeAuthStore: { version: 1, profiles: {} },
+      }).evaluateModelAuth("openai", {
         modelId: "chat-latest",
         ...(state === "shared-fallback" ? { pinnedProfileId: "openai:chatgpt" } : {}),
         ...(state === "required-missing" ? { requiredProfileId: "openai:missing" } : {}),
@@ -243,27 +291,36 @@ describe("session account pin admission", () => {
   );
 
   it.each([
-    ["openai:platform", undefined, "api-key"],
-    ["openai:chatgpt", "openai:platform", "subscription"],
-  ] as const)(
-    "keeps %s ahead of inherited and automatic billing preferences",
-    (pinnedProfile, primaryProfile, requirement) => {
-      const cfg: OpenClawConfig = primaryProfile
-        ? {
-            agents: { defaults: { model: `openai/gpt-5.4@${primaryProfile}` } },
-            auth: { profiles: { "openai:platform": { provider: "openai", mode: "api_key" } } },
-          }
-        : {};
-      const store = authStore({
-        "openai:platform": key("openai", "fixture-key"),
-        "openai:chatgpt": oauth(),
-      });
-      const result = createModelAuthAvailabilityResolver({
-        cfg,
-        authStore: store,
-        env: {},
-      }).evaluateModelAuth("openai", { modelId: "gpt-5.5", pinnedProfileId: pinnedProfile });
-      expect(result).toMatchObject({
+    { pinnedProfile: "openai:platform", primaryProfile: undefined, requirement: "api-key" },
+    {
+      pinnedProfile: "openai:chatgpt",
+      primaryProfile: "openai:platform",
+      requirement: "subscription",
+    },
+  ])(
+    "keeps $pinnedProfile ahead of inherited and automatic billing preferences",
+    ({ pinnedProfile, primaryProfile, requirement }) => {
+      expect(
+        createModelAuthAvailabilityResolver({
+          cfg: primaryProfile
+            ? {
+                agents: { defaults: { model: `openai/gpt-5.4@${primaryProfile}` } },
+                auth: { profiles: { "openai:platform": { provider: "openai", mode: "api_key" } } },
+              }
+            : {},
+          env: {},
+          authStore: authStore({
+            "openai:platform": { type: "api_key", provider: "openai", key: "fixture-key" },
+            "openai:chatgpt": {
+              type: "oauth",
+              provider: "openai",
+              access: "fixture-access",
+              refresh: "fixture-refresh",
+              expires: Date.now() + 60_000,
+            },
+          }),
+        }).evaluateModelAuth("openai", { modelId: "gpt-5.5", pinnedProfileId: pinnedProfile }),
+      ).toMatchObject({
         availability: true,
         selectedProfileId: pinnedProfile,
         selectedRoute: { authRequirement: requirement },
@@ -281,28 +338,48 @@ describe("session account pin admission", () => {
           profiles: { [pin]: { provider, mode: "aws-sdk" } },
           order: { [provider]: ["acme:shared"] },
         },
-        ...providerConfig(provider, { auth: "aws-sdk" }),
+        models: { providers: { [provider]: { baseUrl: "", models: [], auth: "aws-sdk" } } },
       };
-      const store = authStore({ "acme:shared": key(provider, "synthetic-shared") });
-      if (state !== "absent") {
-        store.profiles[pin] =
-          state === "wrong-mode"
-            ? key(provider, "synthetic-key")
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          ...(state === "absent"
+            ? {}
             : {
-                type: "token",
-                provider: state === "wrong-provider" ? "other" : provider,
-                token: "synthetic-token",
-                expires: state === "expired-token" ? 1 : Date.now() + 600_000,
-              };
-      }
-      const prepare = () => preparePin(provider, config, store, pin, "user", "synthetic-model");
+                [pin]:
+                  state === "wrong-mode"
+                    ? { type: "api_key" as const, provider, key: "synthetic-key" }
+                    : {
+                        type: "token" as const,
+                        provider: state === "wrong-provider" ? "other" : provider,
+                        token: "synthetic-token",
+                        expires: state === "expired-token" ? 1 : Date.now() + 600_000,
+                      },
+              }),
+          "acme:shared": { type: "api_key", provider, key: "synthetic-shared" },
+        },
+      };
+      const prepare = () =>
+        prepareAgentRuntimeAuth({
+          provider,
+          modelId: "synthetic-model",
+          config,
+          env: {},
+          authProfileStore: store,
+          sessionAuthProfileId: pin,
+          sessionAuthProfileSource: "user",
+        });
       if (state === "absent") {
         expect(prepare().attempts[0]?.profileId).toBe(pin);
       } else {
         expect(prepare).toThrow("is not configured");
       }
       expect(
-        readiness(config, store, {
+        createModelAuthAvailabilityResolver({
+          cfg: config,
+          authStore: store,
+          env: {},
+          preparedRuntimeAuthStore: { version: 1, profiles: {} },
           routeResolverFactory: routeResolverFactory(null),
         }).evaluateModelAuth(provider, { modelId: "synthetic-model", pinnedProfileId: pin }),
       ).toMatchObject(
@@ -317,111 +394,178 @@ describe("session account pin admission", () => {
     const provider = "acme";
     const pin = "acme:hydrated";
     const config: OpenClawConfig = {};
-    const store = authStore({ [pin]: unresolvedOAuth(provider) });
-    const runtimeStore = authStore({ [pin]: oauth({ provider }) });
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [pin]: {
+          type: "oauth",
+          provider,
+          access: "",
+          refresh: "",
+          expires: 0,
+          oauthRef: {
+            source: "openclaw-credentials",
+            provider: LEGACY_OAUTH_REF_PROVIDER,
+            id: "00000000000000000000000000000000",
+          },
+        },
+      },
+    };
+    const runtimeStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [pin]: {
+          type: "oauth",
+          provider,
+          access: "synthetic-access",
+          refresh: "synthetic-refresh",
+          expires: Date.now() + 600_000,
+        },
+      },
+    };
     expect(
-      preparePin(provider, config, runtimeStore, pin, "user", "synthetic-model").attempts.map(
-        (attempt) => attempt.profileId,
-      ),
+      prepareAgentRuntimeAuth({
+        provider,
+        modelId: "synthetic-model",
+        config,
+        env: {},
+        authProfileStore: runtimeStore,
+        sessionAuthProfileId: pin,
+        sessionAuthProfileSource: "user",
+      }).attempts.map((attempt) => attempt.profileId),
     ).toEqual([pin]);
     expect(
-      readiness(config, store, {
+      createModelAuthAvailabilityResolver({
+        cfg: config,
+        authStore: store,
         preparedRuntimeAuthStore: runtimeStore,
+        env: {},
         routeResolverFactory: routeResolverFactory(null),
       }).evaluateModelAuth(provider, { modelId: "synthetic-model", pinnedProfileId: pin }),
     ).toMatchObject({ availability: true, selectedProfileId: pin });
   });
 });
 
-it.each(["automatic", "pinned", "unavailable", "no-preference"] as const)(
-  "keeps current %s selection authoritative over past API-route success",
-  (selection) => {
-    const subscriptionSelected = selection === "automatic";
-    const store = authStore({
-      "openai:metered": key("openai", "synthetic-api-key"),
-      "openai:subscription": oauth(
-        selection === "unavailable" ? { access: "", refresh: "", expires: 1 } : {},
-      ),
-    });
-    const result = evaluate({
-      store,
-      resolution: {
-        ...dualRoutes,
-        preferredAuthRequirement: selection === "no-preference" ? undefined : "subscription",
-      },
-      ref: {
-        modelId: "gpt-5.4-mini",
-        ...(selection === "pinned" ? { pinnedProfileId: "openai:metered" } : {}),
-      },
-      preparedRuntimeAuthMaterializations: [
-        {
+describe("OpenAI materialized route readiness", () => {
+  it.each(["automatic", "pinned", "unavailable", "no-preference"] as const)(
+    "keeps current %s selection authoritative over past API-route success",
+    (selection) => {
+      const subscriptionSelected = selection === "automatic";
+      const store = authStore({
+        "openai:metered": { type: "api_key", provider: "openai", key: "synthetic-api-key" },
+        "openai:subscription": {
+          type: "oauth",
           provider: "openai",
-          modelId: "gpt-5.4-mini",
-          modelApi: "openai-responses",
-          modelBaseUrl: "https://api.openai.com/v1",
-          requestTransportOverrides: "none",
-          authMode: "api-key",
-          runtimeOwnerId: "codex",
-          authProfileId: "openai:metered",
+          access: selection === "unavailable" ? "" : "synthetic-access",
+          refresh: selection === "unavailable" ? "" : "synthetic-refresh",
+          expires: selection === "unavailable" ? 1 : Date.now() + 600_000,
         },
-      ],
-    });
-    expect(result).toMatchObject({
-      availability: true,
-      selectedProfileId: subscriptionSelected ? "openai:subscription" : "openai:metered",
-      selectedRoute: { authRequirement: subscriptionSelected ? "subscription" : "api-key" },
-      evidence: subscriptionSelected || selection === "pinned" ? "profile" : "runtime",
-    });
-  },
-);
-it.each(["profile-only", "plain-literal-fallback", "explicit-api-auth"] as const)(
-  "keeps planner and availability aligned for %s",
-  (shape) => {
-    const explicitApi = shape === "explicit-api-auth";
-    const config: OpenClawConfig =
-      shape === "profile-only"
-        ? {}
-        : providerConfig("openai", {
-            apiKey: "synthetic-direct-key",
-            auth: explicitApi ? "api-key" : undefined,
-          });
-    const subscription = "openai:subscription";
-    const store = authStore({ [subscription]: oauth() }, { openai: [subscription] });
-    const availability = createModelAuthAvailabilityResolver({
-      cfg: config,
-      authStore: store,
-      env: {},
-    }).evaluateModelAuth("openai", { modelId: "gpt-5.5" });
-    expect.soft(availability).toMatchObject({
-      availability: true,
-      selectedRoute: { authRequirement: explicitApi ? "api-key" : "subscription" },
-    });
-    expect
-      .soft(availability.selectedProfileId)
-      .toBe(explicitApi ? undefined : "openai:subscription");
-    const preparation = prepareAgentRuntimeAuth({
-      provider: "openai",
-      modelId: "gpt-5.5",
-      config,
-      env: {},
-      authProfileStore: store,
-      harnessId: "openclaw",
-      harnessRuntime: "openclaw",
-    });
-    const profileAttempt = ["profile", "openai:subscription", "subscription", undefined];
-    expect(
-      preparation.attempts.map((attempt) => [
-        attempt.kind,
-        attempt.profileId,
-        attempt.plan.modelRoute?.authRequirement,
-        attempt.requiresPriorProfileAttempt,
-      ]),
-    ).toEqual(
-      explicitApi
-        ? [["direct", undefined, "api-key", false]]
-        : shape === "plain-literal-fallback"
-          ? [profileAttempt, ["direct", undefined, "api-key", true]]
-          : [profileAttempt],
-    );
-  },
-);
+      });
+      const result = evaluate({
+        store,
+        resolution: {
+          ...dualRoutes,
+          preferredAuthRequirement: selection === "no-preference" ? undefined : "subscription",
+        },
+        ref: {
+          modelId: "gpt-5.4-mini",
+          ...(selection === "pinned" ? { pinnedProfileId: "openai:metered" } : {}),
+        },
+        preparedRuntimeAuthMaterializations: [
+          {
+            provider: "openai",
+            modelId: "gpt-5.4-mini",
+            modelApi: "openai-responses",
+            modelBaseUrl: "https://api.openai.com/v1",
+            requestTransportOverrides: "none",
+            authMode: "api-key",
+            runtimeOwnerId: "codex",
+            authProfileId: "openai:metered",
+          },
+        ],
+      });
+      expect(result).toMatchObject({
+        availability: true,
+        selectedProfileId: subscriptionSelected ? "openai:subscription" : "openai:metered",
+        selectedRoute: { authRequirement: subscriptionSelected ? "subscription" : "api-key" },
+        evidence: subscriptionSelected || selection === "pinned" ? "profile" : "runtime",
+      });
+    },
+  );
+});
+
+describe("declared OpenAI fallback routing", () => {
+  it.each(["profile-only", "plain-literal-fallback", "explicit-api-auth"] as const)(
+    "keeps planner and availability aligned for %s",
+    (shape) => {
+      const explicitApi = shape === "explicit-api-auth";
+      const config: OpenClawConfig =
+        shape === "profile-only"
+          ? {}
+          : {
+              models: {
+                providers: {
+                  openai: {
+                    baseUrl: "",
+                    models: [],
+                    apiKey: "synthetic-direct-key",
+                    auth: explicitApi ? "api-key" : undefined,
+                  },
+                },
+              },
+            };
+      const store = authStore(
+        {
+          "openai:subscription": {
+            type: "oauth",
+            provider: "openai",
+            access: "synthetic-access",
+            refresh: "synthetic-refresh",
+            expires: Date.now() + 600_000,
+          },
+        },
+        { openai: ["openai:subscription"] },
+      );
+      const availability = createModelAuthAvailabilityResolver({
+        cfg: config,
+        authStore: store,
+        env: {},
+      }).evaluateModelAuth("openai", { modelId: "gpt-5.5" });
+      expect
+        .soft({
+          available: availability.availability,
+          profileId: availability.selectedProfileId,
+          requirement: availability.selectedRoute?.authRequirement,
+        })
+        .toEqual({
+          available: true,
+          profileId: explicitApi ? undefined : "openai:subscription",
+          requirement: explicitApi ? "api-key" : "subscription",
+        });
+      const preparation = prepareAgentRuntimeAuth({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        config,
+        env: {},
+        authProfileStore: store,
+        harnessId: "openclaw",
+        harnessRuntime: "openclaw",
+      });
+      const profileAttempt = ["profile", "openai:subscription", "subscription", undefined];
+      expect(
+        preparation.attempts.map((attempt) => [
+          attempt.kind,
+          attempt.profileId,
+          attempt.plan.modelRoute?.authRequirement,
+          attempt.requiresPriorProfileAttempt,
+        ]),
+      ).toEqual(
+        explicitApi
+          ? [["direct", undefined, "api-key", false]]
+          : shape === "plain-literal-fallback"
+            ? [profileAttempt, ["direct", undefined, "api-key", true]]
+            : [profileAttempt],
+      );
+    },
+  );
+});

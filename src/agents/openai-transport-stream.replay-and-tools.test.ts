@@ -14,94 +14,84 @@ import { testing } from "./openai-transport-stream.test-support.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 type ReplayContextSpec = {
+  source?: Pick<Model, "api" | "id" | "provider">;
+  api?: string;
+  provider?: string;
+  model?: string;
+  stopReason?: "stop" | "toolUse";
+  thinking?: {
+    signature: string | Record<string, unknown>;
+    replayMetadata?: unknown;
+    text?: string;
+  };
+  text?: true | { id: string; phase: "commentary" | "final_answer"; text: string };
+  toolCalls?: ReadonlyArray<{ id: string; name: string; arguments: unknown }>;
   results?: ReadonlyArray<{
     id: string;
     name: string;
     content: readonly unknown[];
+    timestamp?: number;
   }>;
   before?: readonly unknown[];
   after?: readonly unknown[];
 };
 
-function replayContext(
-  source: Pick<Model, "api" | "id" | "provider">,
-  content: readonly unknown[],
-  spec: ReplayContextSpec = {},
-) {
+function replayContext(spec: ReplayContextSpec) {
+  const content: Array<Record<string, unknown>> = [];
+  if (spec.thinking) {
+    content.push({
+      type: "thinking",
+      thinking: spec.thinking.text ?? "Need a tool.",
+      thinkingSignature:
+        typeof spec.thinking.signature === "string"
+          ? spec.thinking.signature
+          : JSON.stringify(spec.thinking.signature),
+      ...(spec.thinking.replayMetadata === undefined
+        ? {}
+        : { openclawReasoningReplay: spec.thinking.replayMetadata }),
+    });
+  }
+  if (spec.text) {
+    const text =
+      spec.text === true
+        ? { id: "msg_prior", phase: "commentary" as const, text: "Checking the price." }
+        : spec.text;
+    content.push({
+      type: "text",
+      text: text.text,
+      textSignature: JSON.stringify({ v: 1, id: text.id, phase: text.phase }),
+    });
+  }
+  for (const toolCall of spec.toolCalls ?? []) {
+    content.push({ type: "toolCall", ...toolCall });
+  }
   const messages = [
     ...(spec.before ?? []),
     {
       role: "assistant",
-      api: source.api,
-      provider: source.provider,
-      model: source.id,
+      api: spec.source?.api ?? spec.api ?? "openai-responses",
+      provider: spec.source?.provider ?? spec.provider ?? "openai",
+      model: spec.source?.id ?? spec.model ?? "gpt-5.5",
       usage: createZeroUsageFixture(),
-      stopReason: "toolUse",
+      stopReason: spec.stopReason ?? "toolUse",
       timestamp: 1,
       content,
     },
-    ...(spec.results ?? []).map(({ id, name, content: resultContent }) => ({
+    ...(spec.results ?? []).map(({ id, name, content: resultContent, timestamp = 2 }) => ({
       role: "toolResult",
       toolCallId: id,
       toolName: name,
       content: resultContent,
       isError: false,
-      timestamp: 2,
+      timestamp,
     })),
     ...(spec.after ?? []),
   ];
   return { systemPrompt: "system", messages, tools: [] } as never;
 }
 
-type ReplayParams = {
-  store?: boolean;
-  input?: Array<
-    Partial<
-      Record<"type" | "role" | "id" | "call_id" | "phase" | "status" | "encrypted_content", string>
-    > & { summary?: unknown }
-  >;
-};
-
-function priceReplay(source: Model, replayMetadata?: unknown, withResult = false) {
-  const id = "call_abc|fc_prior";
-  return replayContext(
-    source,
-    [
-      {
-        type: "thinking",
-        thinking: "Need a tool.",
-        thinkingSignature: JSON.stringify({
-          type: "reasoning",
-          id: "rs_prior",
-          encrypted_content: "ciphertext",
-        }),
-        ...(replayMetadata === undefined ? {} : { openclawReasoningReplay: replayMetadata }),
-      },
-      {
-        type: "text",
-        text: "Checking the price.",
-        textSignature: JSON.stringify({ v: 1, id: "msg_prior", phase: "commentary" }),
-      },
-      { type: "toolCall", id, name: "price_lookup", arguments: { symbol: "SOL" } },
-    ],
-    {
-      results: withResult
-        ? [{ id, name: "price_lookup", content: [{ type: "text", text: "$83.95" }] }]
-        : [],
-    },
-  );
-}
-
-function expectStorelessReplay(params: ReplayParams) {
-  const assistantMessage = params.input?.find(
-    (item) => item.type === "message" && item.role === "assistant",
-  );
-  expectRecordFields(assistantMessage, { type: "message", role: "assistant", phase: "commentary" });
-  expect(assistantMessage?.id).toBeUndefined();
-  const functionCall = params.input?.find((item) => item.type === "function_call");
-  expectRecordFields(functionCall, { type: "function_call", call_id: "call_abc" });
-  expect(functionCall?.id).toBeUndefined();
-  return assistantMessage;
+function responsesModelFixture(id: string, name: string) {
+  return makeResponsesModel({ id, name });
 }
 
 function emptyResponsesContext() {
@@ -110,20 +100,49 @@ function emptyResponsesContext() {
 
 describe("openai transport stream", () => {
   it("omits Responses replay item ids when OpenAI Responses requests disable store", () => {
-    const model = makeResponsesModel({
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-      provider: "mycodex",
-      baseUrl: "http://127.0.0.1:8317/v1",
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-    });
-    const request = buildOpenAIResponsesParams(model, priceReplay(model, undefined, true), {
-      sessionId: "session-123",
-    });
+    const request = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        provider: "mycodex",
+        baseUrl: "http://127.0.0.1:8317/v1",
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      }),
+      replayContext({
+        provider: "mycodex",
+        thinking: {
+          signature: { type: "reasoning", id: "rs_prior", encrypted_content: "ciphertext" },
+        },
+        text: true,
+        toolCalls: [
+          { id: "call_abc|fc_prior", name: "price_lookup", arguments: { symbol: "SOL" } },
+        ],
+        results: [
+          {
+            id: "call_abc|fc_prior",
+            name: "price_lookup",
+            content: [{ type: "text", text: "$83.95" }],
+          },
+        ],
+      }),
+      { sessionId: "session-123" },
+    );
     const params = JSON.parse(
       new TextDecoder().decode(serializeModelRequestBody(request).body),
-    ) as ReplayParams;
+    ) as {
+      store?: boolean;
+      input?: Array<{
+        type?: string;
+        role?: string;
+        id?: string;
+        call_id?: string;
+        phase?: string;
+        status?: string;
+        encrypted_content?: string;
+        summary?: unknown;
+      }>;
+    };
 
     expect(params.store).toBe(false);
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
@@ -133,8 +152,22 @@ describe("openai transport stream", () => {
     });
     expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("encrypted_content");
-    const assistantMessage = expectStorelessReplay(params);
+    const assistantMessage = params.input?.find(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expectRecordFields(assistantMessage, {
+      type: "message",
+      role: "assistant",
+      phase: "commentary",
+    });
+    expect(assistantMessage?.id).toBeUndefined();
     expect(assistantMessage?.status).toBeUndefined();
+    const functionCall = params.input?.find((item) => item.type === "function_call");
+    expectRecordFields(functionCall, {
+      type: "function_call",
+      call_id: "call_abc",
+    });
+    expect(functionCall?.id).toBeUndefined();
   });
 
   it("preserves Responses replay item ids when a store-enabled wrapper requests replay", () => {
@@ -205,15 +238,32 @@ describe("openai transport stream", () => {
 
     const params = buildOpenAIResponsesParams(
       model,
-      priceReplay(
-        model,
-        testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
-          authProfileId: "openai:oauth",
-          sessionId: "session-123",
-        }),
-      ),
+      replayContext({
+        source: model,
+        thinking: {
+          signature: { type: "reasoning", id: "rs_prior", encrypted_content: "ciphertext" },
+          replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+            authProfileId: "openai:oauth",
+            sessionId: "session-123",
+          }),
+        },
+        text: true,
+        toolCalls: [
+          { id: "call_abc|fc_prior", name: "price_lookup", arguments: { symbol: "SOL" } },
+        ],
+      }),
       { authProfileId: "openai:oauth", sessionId: "session-123" },
-    ) as ReplayParams;
+    ) as {
+      input?: Array<{
+        type?: string;
+        role?: string;
+        id?: string;
+        call_id?: string;
+        phase?: string;
+        encrypted_content?: string;
+        summary?: unknown;
+      }>;
+    };
 
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
     expectRecordFields(reasoningItem, {
@@ -223,7 +273,21 @@ describe("openai transport stream", () => {
     });
     expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
-    expectStorelessReplay(params);
+    const assistantMessage = params.input?.find(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expectRecordFields(assistantMessage, {
+      type: "message",
+      role: "assistant",
+      phase: "commentary",
+    });
+    expect(assistantMessage?.id).toBeUndefined();
+    const functionCall = params.input?.find((item) => item.type === "function_call");
+    expectRecordFields(functionCall, {
+      type: "function_call",
+      call_id: "call_abc",
+    });
+    expect(functionCall?.id).toBeUndefined();
   });
 
   it("drops oversized GitHub Copilot Responses reasoning replay ids before send", () => {
@@ -472,32 +536,30 @@ describe("openai transport stream", () => {
   it("normalizes overlong Copilot Responses replay tool ids before dispatch", () => {
     const longToolItemId = "iVec" + "A".repeat(360);
     const longToolCallId = `call_ug6lFGKwZDjHfzW8H0PDQRwN|${longToolItemId}`;
-    const model = makeResponsesModel({
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-      provider: "github-copilot",
-      baseUrl: "https://api.githubcopilot.com",
-    });
     const params = buildOpenAIResponsesParams(
-      model,
-      replayContext(
-        model,
-        [
+      makeResponsesModel({
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        provider: "github-copilot",
+        baseUrl: "https://api.githubcopilot.com",
+      }),
+      replayContext({
+        provider: "github-copilot",
+        before: [{ role: "user", content: "read the queue", timestamp: 0 }],
+        toolCalls: [
           {
-            type: "toolCall",
             id: longToolCallId,
             name: "exec",
             arguments: { command: "gh pr list --limit 1" },
           },
         ],
-        {
-          before: [{ role: "user", content: "read the queue", timestamp: 0 }],
-          results: [{ id: longToolCallId, name: "exec", content: [{ type: "text", text: "[]" }] }],
-          after: [{ role: "user", content: "continue", timestamp: 3 }],
-        },
-      ),
+        results: [{ id: longToolCallId, name: "exec", content: [{ type: "text", text: "[]" }] }],
+        after: [{ role: "user", content: "continue", timestamp: 3 }],
+      }),
       { sessionId: "session-123" },
-    ) as ReplayParams;
+    ) as {
+      input?: Array<{ type?: string; id?: string; call_id?: string }>;
+    };
 
     const functionCall = params.input?.find((item) => item.type === "function_call");
     const functionOutput = params.input?.find((item) => item.type === "function_call_output");
@@ -725,7 +787,7 @@ describe("openai transport stream", () => {
         return Reflect.get(target, property, receiver);
       },
     });
-    const responsesModel = makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" });
+    const responsesModel = responsesModelFixture("gpt-5.5", "GPT-5.5");
     const completionsModel = makeCompletionsModel({
       ...responsesModel,
       api: "openai-completions",

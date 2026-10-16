@@ -100,8 +100,11 @@ export function createSandboxBrowserTestHarness(scopeKey = "session:test") {
     vi.doMock("./docker.js", createDockerMock);
     vi.doMock("./docker-mount-source.js", createNamespaceMock);
     vi.doMock("./container-engine.js", createEngineMock);
+    // mock-isolation: keep sandbox registry reads and writes in the suite fixture.
     vi.doMock("./registry.js", () => registryMocks);
+    // mock-isolation: browser bridge lifecycle is simulated without opening live bridges.
     vi.doMock("../../plugin-sdk/browser-bridge.js", () => bridgeMocks);
+    // mock-isolation: capture runtime logging and exits through the fixture.
     vi.doMock("../../runtime.js", () => ({ defaultRuntime: runtimeMocks }));
     vi.doMock("../../plugin-sdk/browser-profiles.js", createProfilesMock);
     ({ prepareSandboxMountPlan } = await import("./mount-plan.js"));

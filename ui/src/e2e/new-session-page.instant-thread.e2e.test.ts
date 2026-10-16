@@ -1,16 +1,10 @@
 import { Buffer } from "node:buffer";
-import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
-  pollText,
-  pollAttribute,
-  pollValue,
-  pollCount,
   ONE_PIXEL_PNG_B64,
   captureUiProof,
   checkoutBaseRefInput,
@@ -30,45 +24,6 @@ function createParams(request: { params?: unknown }): Record<string, unknown> {
   return request.params as Record<string, unknown>;
 }
 
-async function createThread(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
-  const gateway = await installMockGateway(page, scenario);
-  const composer = page.locator(".new-session-page__message");
-  const followUpComposer = page.locator(
-    ".agent-chat__composer-combobox textarea:not(.new-session-page__message)",
-  );
-  async function submit(after?: number) {
-    await page.getByRole("button", { name: "Start session", exact: true }).click();
-    return createParams(
-      await gateway.waitForRequest("sessions.create", after === undefined ? undefined : { after }),
-    );
-  }
-  return {
-    gateway,
-    composer,
-    followUpComposer,
-    submit,
-    async start() {
-      await gateway.deferNext("sessions.create");
-      const params = await submit();
-      await pollCount(page.locator("openclaw-chat-page")).toBe(1);
-      return params;
-    },
-    async queue(message: string) {
-      await followUpComposer.fill(message);
-      await followUpComposer.press("Enter");
-      await page.locator(".chat-queue__item", { hasText: message }).waitFor();
-    },
-    async attachPhoto() {
-      await page.locator(".agent-chat__photo-input").setInputFiles({
-        name: "synthetic-pixel.png",
-        mimeType: "image/png",
-        buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
-      });
-      await page.getByRole("button", { name: "Open image synthetic-pixel.png" }).waitFor();
-    },
-  };
-}
-
 suite.define(() => {
   it.each([
     { incognito: false, canonicalReplacement: false },
@@ -83,7 +38,7 @@ suite.define(() => {
           viewport: incognito ? { width: 1280, height: 800 } : { width: 390, height: 844 },
         },
         async ({ page }) => {
-          const { gateway, composer, followUpComposer, submit, queue } = await createThread(page, {
+          const gateway = await installMockGateway(page, {
             featureMethods: [
               "chat.metadata",
               "chat.startup",
@@ -93,58 +48,58 @@ suite.define(() => {
             ],
             methodResponses: { "mcp.app.discover": { servers: [] } },
           });
-          const requests = async (method: string) =>
-            (await gateway.getRequests(method)).map(createParams);
-          const header = page.locator(".chat-pane__header");
-          const bubble = page.locator(".chat-group.user .chat-bubble");
-          const navToggle = page.locator(".chat-pane__nav-toggle");
-          const queueText = page.locator(".chat-queue__text");
-          const geometry = [header, page.locator(".agent-chat__composer-shell"), bubble];
-          const settledGeometry = async () => {
-            await waitForControlUiProofSurface(header, [followUpComposer, bubble]);
-            return Promise.all(geometry.map((element) => element.boundingBox()));
-          };
           await page.goto(`${suite.server.baseUrl}new?agent=main#draft-return`);
           if (incognito) {
             await page.getByRole("switch", { name: "Incognito" }).click();
           }
-          await composer.fill("start the synthetic thread");
+          await page.locator(".new-session-page__message").fill("start the synthetic thread");
           const originalUrl = page.url();
           const historyLength = await page.evaluate(() => history.length);
           await captureUiProof(suite, page, `instant-${incognito}-before.png`);
           await gateway.deferNext("sessions.create");
-          const params = await submit();
+          await page.getByRole("button", { name: "Start session", exact: true }).click();
+          const params = createParams(await gateway.waitForRequest("sessions.create"));
           await expect
             .poll(() => page.locator("openclaw-chat-page").count(), { timeout: 5_000 })
             .toBe(1);
-          await pollText(page.locator(".chat-thread")).toContain("start the synthetic thread");
+          await expect
+            .poll(() => page.locator(".chat-thread").textContent())
+            .toContain("start the synthetic thread");
           expect(await page.locator("openclaw-chat-pane").count()).toBe(0);
           await captureUiProof(suite, page, `instant-${incognito}-pending-chrome.png`);
-          expect(await header.isVisible()).toBe(true);
-
+          expect(await page.locator(".chat-pane__header").isVisible()).toBe(true);
+          const followUpComposer = page.locator(
+            ".agent-chat__composer-combobox textarea:not(.new-session-page__message)",
+          );
           await followUpComposer.waitFor({ state: "visible" });
           expect(await followUpComposer.isEnabled()).toBe(true);
           const followers = ["Also check keyboard navigation", "Then verify the mobile layout"];
           for (const message of followers) {
-            await queue(message);
+            await followUpComposer.fill(message);
+            await followUpComposer.press("Enter");
+            await page.locator(".chat-queue__item", { hasText: message }).waitFor();
           }
           await followUpComposer.fill("Still writing my next message");
-          expect(await queueText.allTextContents()).toEqual(followers);
+          expect(await page.locator(".chat-queue__text").allTextContents()).toEqual(followers);
           expect(await page.locator(".chat-pane__incognito").count()).toBe(incognito ? 1 : 0);
           if (!incognito) {
-            await navToggle.click();
+            await page.locator(".chat-pane__nav-toggle").click();
             // The sliding drawer can hover a tooltip under the stationary pointer.
             await page.mouse.move(0, 0);
-            await pollAttribute(navToggle, "aria-expanded").toBe("true");
+            await expect
+              .poll(() => page.locator(".chat-pane__nav-toggle").getAttribute("aria-expanded"))
+              .toBe("true");
             await page.keyboard.press("Escape");
-            await pollAttribute(navToggle, "aria-expanded").toBe("false");
+            await expect
+              .poll(() => page.locator(".chat-pane__nav-toggle").getAttribute("aria-expanded"))
+              .toBe("false");
           }
           expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
           expect(
-            (await requests("mcp.app.discover")).filter(
-              (request) => request.sessionKey === params.key,
+            (await gateway.getRequests("mcp.app.discover")).filter(
+              (request) => createParams(request).sessionKey === params.key,
             ),
           ).toHaveLength(0);
           expect(page.url()).toBe(originalUrl);
@@ -163,7 +118,13 @@ suite.define(() => {
           expect(savedSettings.join("\n")).not.toContain(String(params.key));
 
           await captureUiProof(suite, page, `instant-${incognito}-pending.png`);
-          const pendingGeometry = await settledGeometry();
+          await waitForControlUiProofSurface(page.locator(".chat-pane__header"), [
+            followUpComposer,
+            page.locator(".chat-group.user .chat-bubble"),
+          ]);
+          const pendingHeader = await page.locator(".chat-pane__header").boundingBox();
+          const pendingComposer = await page.locator(".agent-chat__composer-shell").boundingBox();
+          const pendingBubble = await page.locator(".chat-group.user .chat-bubble").boundingBox();
           const confirmedKey = canonicalReplacement
             ? "agent:main:dashboard:incognito-canonical-instant-thread"
             : String(params.key);
@@ -177,29 +138,49 @@ suite.define(() => {
           expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(confirmedKey));
           await gateway.waitForRequest("chat.startup", { match: { sessionKey: confirmedKey } });
           await gateway.waitForRequest("mcp.app.discover", { match: { sessionKey: confirmedKey } });
-          await pollCount(page.locator("openclaw-chat-pane")).toBe(1);
+          await expect.poll(() => page.locator("openclaw-chat-pane").count()).toBe(1);
+          expect(await gateway.getRequests("chat.startup")).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                params: expect.objectContaining({ sessionKey: confirmedKey }),
+              }),
+            ]),
+          );
           expect(
-            (await requests("chat.startup")).every(
-              (request) => request.sessionKey === confirmedKey,
+            (await gateway.getRequests("chat.startup")).every(
+              (request) => createParams(request).sessionKey === confirmedKey,
             ),
           ).toBe(true);
           expect(await page.evaluate(() => history.length)).toBe(historyLength + 1);
-          await pollText(page.locator(".chat-thread")).toContain("start the synthetic thread");
+          await expect
+            .poll(() => page.locator(".chat-thread").textContent())
+            .toContain("start the synthetic thread");
           expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-          await pollValue(followUpComposer).toBe("Still writing my next message");
-          await expect.poll(() => queueText.allTextContents()).toEqual(followers);
+          await expect
+            .poll(() => followUpComposer.inputValue())
+            .toBe("Still writing my next message");
+          await expect
+            .poll(() => page.locator(".chat-queue__text").allTextContents())
+            .toEqual(followers);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           await captureUiProof(suite, page, `instant-${incognito}-committed.png`);
-          const committedGeometry = await settledGeometry();
+          await waitForControlUiProofSurface(page.locator(".chat-pane__header"), [
+            followUpComposer,
+            page.locator(".chat-group.user .chat-bubble"),
+          ]);
           for (const selector of [".chat-pane__incognito", ".chat-pane__incognito-notice"]) {
             expect(await page.locator(selector).isVisible()).toBe(incognito);
           }
-          for (const [index, pending] of pendingGeometry.entries()) {
-            const committed = committedGeometry[index];
+          for (const [selector, pending] of [
+            [".chat-pane__header", pendingHeader],
+            [".agent-chat__composer-shell", pendingComposer],
+            [".chat-group.user .chat-bubble", pendingBubble],
+          ] as const) {
+            const committed = await page.locator(selector).boundingBox();
             expect(pending).not.toBeNull();
             expect(committed).not.toBeNull();
-            expect(committed!.y).toBeCloseTo(pending!.y, 0);
-            expect(committed!.x).toBeCloseTo(pending!.x, 0);
+            expect(committed!.y, selector).toBeCloseTo(pending!.y, 0);
+            expect(committed!.x, selector).toBeCloseTo(pending!.x, 0);
           }
           await gateway.emitChatFinal({
             sessionKey: confirmedKey,
@@ -216,9 +197,11 @@ suite.define(() => {
               text: `Follow-up ${index + 1} finished.`,
             });
           }
-          expect((await requests("chat.send")).map((request) => request.message)).toEqual(
-            followers,
-          );
+          expect(
+            (await gateway.getRequests("chat.send")).map(
+              (request) => createParams(request).message,
+            ),
+          ).toEqual(followers);
           expect(await followUpComposer.inputValue()).toBe("Still writing my next message");
         },
       );
@@ -232,52 +215,56 @@ suite.define(() => {
     "restores the full draft and exact URL after rejection (incognito: $incognito, cross-agent: $crossAgent)",
     async ({ incognito, crossAgent }) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-        const { gateway, composer, followUpComposer, submit, start, queue, attachPhoto } =
-          await createThread(page, {
-            workspace: "/tmp/synthetic-workspace",
-            workspaceGit: true,
-            featureMethods: [
-              "chat.metadata",
-              "chat.startup",
-              "sessions.create",
-              "sessions.dispatch",
-              "worktrees.branches",
-            ],
-            models: [
-              {
-                id: "synthetic-model",
-                name: "Synthetic Model",
-                provider: "synthetic",
-                reasoning: true,
-              },
-            ],
-            methodResponses: {
-              "agents.list": {
-                agents: ["main", "research"].map((id) => ({
-                  id,
-                  name: id,
-                  workspace: "/tmp/synthetic-workspace",
-                  workspaceGit: true,
-                })),
-                defaultId: "main",
-                mainKey: "main",
-                scope: "agent",
-              },
-              "worktrees.branches": {
-                branches: [
-                  { kind: "local", name: "main" },
-                  { kind: "local", name: "release/proof" },
-                ],
-                defaultBranch: "main",
-                repositoryStatus: "git",
-              },
+        const gateway = await installMockGateway(page, {
+          workspace: "/tmp/synthetic-workspace",
+          workspaceGit: true,
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "sessions.create",
+            "sessions.dispatch",
+            "worktrees.branches",
+          ],
+          models: [
+            {
+              id: "synthetic-model",
+              name: "Synthetic Model",
+              provider: "synthetic",
+              reasoning: true,
             },
-          });
+          ],
+          methodResponses: {
+            "agents.list": {
+              agents: ["main", "research"].map((id) => ({
+                id,
+                name: id,
+                workspace: "/tmp/synthetic-workspace",
+                workspaceGit: true,
+              })),
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
+            "worktrees.branches": {
+              branches: [
+                { kind: "local", name: "main" },
+                { kind: "local", name: "release/proof" },
+              ],
+              defaultBranch: "main",
+              repositoryStatus: "git",
+            },
+          },
+        });
         const requestedAgent = crossAgent ? "research" : "main";
         await page.goto(`${suite.server.baseUrl}new?agent=${requestedAgent}#keep-exact-fragment`);
-
+        const composer = page.locator(".new-session-page__message");
         await composer.fill("  preserve my full draft  ");
-        await attachPhoto();
+        await page.locator(".agent-chat__photo-input").setInputFiles({
+          name: "synthetic-pixel.png",
+          mimeType: "image/png",
+          buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+        });
+        await page.getByRole("button", { name: "Open image synthetic-pixel.png" }).waitFor();
         if (incognito) {
           await page.getByRole("switch", { name: "Incognito" }).click();
         }
@@ -299,19 +286,28 @@ suite.define(() => {
         });
         const originalUrl = page.url();
         const historyLength = await page.evaluate(() => history.length);
-        const first = await start();
+        await gateway.deferNext("sessions.create");
+        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        const first = createParams(await gateway.waitForRequest("sessions.create"));
         expect(first.agentId).toBe(requestedAgent);
-
-        await queue("Preserve this follow-up too");
+        await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
+        const followUpComposer = page.locator(
+          ".agent-chat__composer-combobox textarea:not(.new-session-page__message)",
+        );
+        await followUpComposer.fill("Preserve this follow-up too");
+        await followUpComposer.press("Enter");
+        await page
+          .locator(".chat-queue__item", { hasText: "Preserve this follow-up too" })
+          .waitFor();
         await followUpComposer.fill("Unfinished follow-up draft");
         await gateway.rejectDeferred("sessions.create", {
           code: "UNAVAILABLE",
           message: "Synthetic admission refused",
         });
-        await pollValue(composer).toBe("  preserve my full draft  ");
-        await pollText(page.locator("openclaw-new-session-page")).toContain(
-          "Synthetic admission refused",
-        );
+        await expect.poll(() => composer.inputValue()).toBe("  preserve my full draft  ");
+        await expect
+          .poll(() => page.locator("openclaw-new-session-page").textContent())
+          .toContain("Synthetic admission refused");
         expect(page.url()).toBe(originalUrl);
         expect(await page.evaluate(() => history.length)).toBe(historyLength);
         expect(await followUpComposer.inputValue()).toBe("Unfinished follow-up draft");
@@ -327,7 +323,8 @@ suite.define(() => {
         ).toBe(1);
         await captureUiProof(suite, page, `instant-${incognito}-cross-${crossAgent}-rollback.png`);
         await gateway.deferNext("sessions.create");
-        const second = await submit(1);
+        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        const second = createParams(await gateway.waitForRequest("sessions.create", { after: 1 }));
         expect(second).toMatchObject({
           message: "preserve my full draft",
           model: "synthetic/synthetic-model",
@@ -346,13 +343,13 @@ suite.define(() => {
         expect(secondId).not.toBe(firstId);
         await gateway.resolveDeferred("sessions.create", { key: secondKey });
         await waitForCommittedChatRoute(page);
-        await pollValue(followUpComposer).toBe("Unfinished follow-up draft");
+        await expect.poll(() => followUpComposer.inputValue()).toBe("Unfinished follow-up draft");
         expect(createParams(await gateway.waitForRequest("chat.send"))).toMatchObject({
           sessionKey: secondKey,
           message: "Preserve this follow-up too",
         });
         await navigateInApp(page, "new-session", "?agent=main");
-        await pollValue(composer).toBe("");
+        await expect.poll(() => composer.inputValue()).toBe("");
       });
     },
   );
@@ -364,9 +361,10 @@ suite.define(() => {
       const submitted = readiness ? "old admission" : "old submitted text";
       const message = readiness ? "newer during pending readiness" : "new draft must win";
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-        const { gateway, composer, submit, start } = await createThread(page);
+        const gateway = await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}new?agent=main`);
-        await composer.fill(submitted);
+        await page.locator(".new-session-page__message").fill(submitted);
+        await gateway.deferNext("sessions.create");
         if (readiness) {
           await evaluateControlUiContext(page, (context) => {
             const original = context.router.navigate.bind(context.router);
@@ -389,7 +387,9 @@ suite.define(() => {
             });
           });
         }
-        const first = await start();
+        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        const first = createParams(await gateway.waitForRequest("sessions.create"));
+        await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
         if (readiness) {
           await gateway.resolveDeferred("sessions.create", { key: first.key });
           await page.waitForFunction(
@@ -408,13 +408,13 @@ suite.define(() => {
           // SAFETY: This registered Solid bridge exposes its mount completion promise.
           await (element as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
         });
-
+        const composer = page.locator(".new-session-page__message");
         if (readiness) {
           // Accepted input retires even while preview readiness is pending.
-          await pollValue(composer).toBe("");
+          await expect.poll(() => composer.inputValue()).toBe("");
         }
         await composer.fill(message);
-        await pollValue(composer).toBe(message);
+        await expect.poll(() => composer.inputValue()).toBe(message);
         const newerUrl = page.url();
         if (readiness) {
           await page.evaluate(() =>
@@ -433,13 +433,14 @@ suite.define(() => {
         expect(await composer.inputValue()).toBe(message);
         expect(page.url()).toBe(newerUrl);
         await gateway.deferNext("sessions.create");
-        const second = await submit(1);
+        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        const second = createParams(await gateway.waitForRequest("sessions.create", { after: 1 }));
         expect(second.message).toBe(message);
         expect(second.key).not.toBe(first.key);
         await gateway.rejectDeferred("sessions.create", {
           message: readiness ? "Return the newer draft" : "New admission refused",
         });
-        await pollValue(composer).toBe(message);
+        await expect.poll(() => composer.inputValue()).toBe(message);
         expect(page.url()).toBe(newerUrl);
       });
     },
@@ -447,19 +448,28 @@ suite.define(() => {
 
   it("resumes a transport interruption with the same frozen startup request", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const { gateway, composer, followUpComposer, start, queue } = await createThread(page);
+      const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}new?agent=main#reconnect`);
-      await composer.fill("resume exactly once");
-      const first = await start();
-
-      await queue("Queued before reconnect");
+      await page.locator(".new-session-page__message").fill("resume exactly once");
+      await gateway.deferNext("sessions.create");
+      await page.getByRole("button", { name: "Start session", exact: true }).click();
+      const first = createParams(await gateway.waitForRequest("sessions.create"));
+      await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
+      const followUpComposer = page.locator(
+        ".agent-chat__composer-combobox textarea:not(.new-session-page__message)",
+      );
+      await followUpComposer.fill("Queued before reconnect");
+      await followUpComposer.press("Enter");
+      await page.locator(".chat-queue__item", { hasText: "Queued before reconnect" }).waitFor();
       await followUpComposer.fill("Draft survives reconnect");
       await gateway.setOnline(false);
       await captureUiProof(suite, page, "submitted-prompt-during-reconnect.png");
-      await pollText(page.locator("openclaw-pending-session-create")).toContain(
-        "resume exactly once",
-      );
-      await pollText(page.locator("openclaw-pending-session-create")).toContain("Reconnecting");
+      await expect
+        .poll(() => page.locator("openclaw-pending-session-create").textContent())
+        .toContain("resume exactly once");
+      await expect
+        .poll(() => page.locator("openclaw-pending-session-create").textContent())
+        .toContain("Reconnecting");
       await gateway.deferNext("sessions.create");
       await gateway.setOnline(true);
       const second = createParams(await gateway.waitForRequest("sessions.create", { after: 1 }));
@@ -469,7 +479,7 @@ suite.define(() => {
       await gateway.resolveDeferred("sessions.create", { key: second.key });
       await gateway.resolveDeferred("sessions.create", { key: second.key });
       await waitForCommittedChatRoute(page);
-      await pollValue(followUpComposer).toBe("Draft survives reconnect");
+      await expect.poll(() => followUpComposer.inputValue()).toBe("Draft survives reconnect");
       expect(createParams(await gateway.waitForRequest("chat.send"))).toMatchObject({
         sessionKey: second.key,
         message: "Queued before reconnect",
@@ -487,22 +497,30 @@ suite.define(() => {
     "fences interrupted admission after a $change change (follow-ups: $followUps)",
     async ({ change, message, followUps }) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-        const { gateway, composer, followUpComposer, start, queue } = await createThread(page);
+        const gateway = await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}new?agent=main${change === "boot" ? "#boot" : ""}`);
         if (change !== "boot") {
           await page.getByRole("switch", { name: "Incognito" }).click();
         }
-
+        const composer = page.locator(".new-session-page__message");
         await composer.fill(message);
         const originalUrl = page.url();
-        const hello = await evaluateControlUiContext(
-          page,
-          (application) => application.gateway.snapshot.hello!,
+        const hello = await evaluateControlUiContext(page, (application) => {
+          return application.gateway.snapshot.hello!;
+        });
+        await gateway.deferNext("sessions.create");
+        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        await gateway.waitForRequest("sessions.create");
+        await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
+        const followUpComposer = page.locator(
+          ".agent-chat__composer-combobox textarea:not(.new-session-page__message)",
         );
-        await start();
-
         if (followUps) {
-          await queue("private staged follow-up");
+          await followUpComposer.fill("private staged follow-up");
+          await followUpComposer.press("Enter");
+          await page
+            .locator(".chat-queue__item", { hasText: "private staged follow-up" })
+            .waitFor();
           await followUpComposer.fill("private unfinished follow-up");
         }
         if (change === "gateway") {
@@ -548,8 +566,8 @@ suite.define(() => {
             expect(await page.locator("textarea:visible").count()).toBe(1);
           }
         } else {
-          await pollCount(page.locator("openclaw-new-session-page")).toBe(1);
-          await pollValue(composer).toBe("");
+          await expect.poll(() => page.locator("openclaw-new-session-page").count()).toBe(1);
+          await expect.poll(() => composer.inputValue()).toBe("");
           expect(await page.locator("openclaw-new-session-page").textContent()).not.toContain(
             message,
           );
@@ -577,7 +595,8 @@ suite.define(() => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         if (storageFailure) {
           await page.addInitScript(() => {
-            const setItem = Storage.prototype.setItem;
+            const setItem = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")
+              ?.value as Storage["setItem"];
             Storage.prototype.setItem = function (key: string, value: string) {
               if (key.startsWith("openclaw.control.chatComposer.v2:")) {
                 throw new DOMException("Synthetic quota", "QuotaExceededError");
@@ -586,13 +605,21 @@ suite.define(() => {
             };
           });
         }
-        const { gateway, composer, start, attachPhoto } = await createThread(page, {
+        const gateway = await installMockGateway(page, {
           methodResponses: { "chat.send": { runId: "synthetic-retry", status: "started" } },
         });
         await page.goto(`${suite.server.baseUrl}new?agent=main`);
-        await composer.fill("retry this first turn");
-        await attachPhoto();
-        const params = await start();
+        await page.locator(".new-session-page__message").fill("retry this first turn");
+        await page.locator(".agent-chat__photo-input").setInputFiles({
+          name: "synthetic-pixel.png",
+          mimeType: "image/png",
+          buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+        });
+        await page.getByRole("button", { name: "Open image synthetic-pixel.png" }).waitFor();
+        await gateway.deferNext("sessions.create");
+        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        const params = createParams(await gateway.waitForRequest("sessions.create"));
+        await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
         await gateway.resolveDeferred("sessions.create", {
           key: params.key,
           runStarted: false,
@@ -600,7 +627,9 @@ suite.define(() => {
         });
         await waitForCommittedChatRoute(page);
         const failed = page.locator(".chat-group.user", { hasText: "retry this first turn" });
-        await pollText(failed.locator(".chat-send-status")).toContain("Not sent");
+        await expect
+          .poll(() => failed.locator(".chat-send-status").textContent())
+          .toContain("Not sent");
         await page.getByRole("button", { name: "Retry queued message" }).click();
         expect((await gateway.waitForRequest("chat.send")).params).toMatchObject({
           sessionKey: params.key,
@@ -616,13 +645,13 @@ suite.define(() => {
     "adopts a confirmed create after a %s navigation failure without recreating it",
     async (stage) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-        const { gateway, composer, submit } = await createThread(page);
+        const gateway = await installMockGateway(page);
         await page.goto(
           `${suite.server.baseUrl}new?agent=main${stage === "committed" ? "#navigation-error" : ""}`,
         );
         const message =
           stage === "preview" ? "keep the confirmed creation" : "create this session only once";
-        await composer.fill(message);
+        await page.locator(".new-session-page__message").fill(message);
         if (stage === "preview") {
           await evaluateControlUiContext(page, (context) => {
             const original = context.router.navigate.bind(context.router);
@@ -640,9 +669,10 @@ suite.define(() => {
           });
         }
         await gateway.deferNext("sessions.create");
-        const params = await submit();
+        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        const params = createParams(await gateway.waitForRequest("sessions.create"));
         if (stage === "committed") {
-          await pollCount(page.locator("openclaw-chat-page")).toBe(1);
+          await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
           await evaluateControlUiContext(page, (context) => {
             const original = context.navigateAndWait;
             Object.defineProperty(context, "navigateAndWait", {
@@ -659,11 +689,13 @@ suite.define(() => {
         }
         await gateway.resolveDeferred("sessions.create", { key: params.key });
         if (stage === "committed") {
-          await pollText(page.locator("openclaw-new-session-page")).toContain(
-            "Synthetic committed route failed",
-          );
+          await expect
+            .poll(() => page.locator("openclaw-new-session-page").textContent())
+            .toContain("Synthetic committed route failed");
           await captureUiProof(suite, page, "submitted-prompt-after-navigation-failure.png");
-          await pollText(page.locator(".new-session-page__starting")).toContain(message);
+          await expect
+            .poll(() => page.locator(".new-session-page__starting").textContent())
+            .toContain(message);
           await page.getByRole("button", { name: "Open session", exact: true }).click();
         }
         await waitForCommittedChatRoute(page);
@@ -675,13 +707,12 @@ suite.define(() => {
 
   it("keeps the existing draft flow when the Gateway has no authenticated recovery scope", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const { gateway, composer, submit } = await createThread(page);
+      const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
-      await composer.fill("legacy scope still starts");
-      const hello = await evaluateControlUiContext(
-        page,
-        (application) => application.gateway.snapshot.hello!,
-      );
+      await page.locator(".new-session-page__message").fill("legacy scope still starts");
+      const hello = await evaluateControlUiContext(page, (application) => {
+        return application.gateway.snapshot.hello!;
+      });
       await gateway.setMethodResponse("connect", {
         ...hello,
         auth: { role: hello.auth?.role, scopes: hello.auth?.scopes },
@@ -696,10 +727,11 @@ suite.define(() => {
           }),
         )
         .toBe(true);
-
+      const composer = page.locator(".new-session-page__message");
       await composer.fill("legacy scope still starts");
       await gateway.deferNext("sessions.create");
-      await submit();
+      await page.getByRole("button", { name: "Start session", exact: true }).click();
+      await gateway.waitForRequest("sessions.create");
       expect(await page.locator("openclaw-chat-page").count()).toBe(0);
       await gateway.resolveDeferred("sessions.create", {
         key: "agent:main:dashboard:legacy-scope",

@@ -10,97 +10,14 @@ import {
   createControlUiE2eSuite,
   createControlUiE2eContextOptions,
 } from "./control-ui-e2e-suite.test-support.ts";
-import {
-  pollAttribute,
-  pollText,
-  pollValue,
-  pollEnabled,
-  installMockGateway,
-  waitForCommittedChatRoute,
-} from "./new-session-page.test-support.ts";
+import { installMockGateway, waitForCommittedChatRoute } from "./new-session-page.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Configured fresh-session defaults" });
+const suite = createControlUiE2eSuite({
+  name: "Configured fresh-session defaults",
+});
 const thinkingLevels = ["low", "medium", "high"].map((id) => ({ id, label: id }));
 const preference = { model: "openai/gpt-4.1-mini", thinkingLevel: "low", fastMode: true };
-const sessionKey = "agent:main:configured-defaults-proof";
-const requiredProfile = { id: "dedicated", providerId: "device", executionModes: ["worker-turn"] };
-
-// Serialized into the browser: keep all IndexedDB dependencies inside this function.
-async function draftStorage(action: "read-old" | "seed-old" | "read-selection") {
-  const once = (target: EventTarget, event: string, listener: () => void) =>
-    target.addEventListener(event, listener, { once: true });
-  const read = <T>(request: IDBRequest<T>) =>
-    new Promise<T>((resolve, reject) => {
-      once(request, "success", () => resolve(request.result));
-      once(request, "error", () => reject(request.error ?? new Error("IndexedDB request failed")));
-    });
-  const db = await read(indexedDB.open("openclaw-control-ui"));
-  try {
-    if (action === "seed-old") {
-      await new Promise<void>((resolve, reject) => {
-        const transaction = db.transaction("composerDrafts", "readwrite");
-        const store = transaction.objectStore("composerDrafts");
-        const request = store.getAll();
-        once(request, "success", () => {
-          const old = request.result.find((row) => row.text === "Unsent before upgrade");
-          if (!old) {
-            transaction.abort();
-            return;
-          }
-          // Exact pre-change serializer fields (60d9d1042375f014944b94006f4b1c2b2f5af9c0).
-          store.put({
-            key: old.key,
-            ownerKey: old.ownerKey,
-            gatewayOwner: old.gatewayOwner,
-            recoveryScope: old.recoveryScope,
-            scopeKey: old.scopeKey,
-            revision: old.revision,
-            writeId: old.writeId,
-            updatedAt: old.updatedAt,
-            text: "Unsent before upgrade",
-            attachments: [
-              {
-                blob: new Blob(["Keep these attachment bytes"], { type: "text/plain" }),
-                mimeType: "text/plain",
-                origin: "file",
-                fileName: "upgrade-notes.txt",
-                sizeBytes: 27,
-              },
-            ],
-          });
-        });
-        once(transaction, "complete", () => resolve());
-        once(transaction, "abort", () =>
-          reject(transaction.error ?? new Error("Legacy fixture missing")),
-        );
-        once(transaction, "error", () =>
-          reject(transaction.error ?? new Error("Legacy fixture failed")),
-        );
-      });
-      return;
-    }
-    const rows: {
-      text: string;
-      modelSelection?: { thinkingLevel?: string };
-      attachments: { blob: Blob }[];
-    }[] = await read(db.transaction("composerDrafts").objectStore("composerDrafts").getAll());
-    const row = rows.find(
-      (value) =>
-        value.text === (action === "read-old" ? "Unsent before upgrade" : "Resume this draft"),
-    );
-    if (action === "read-selection") {
-      return row?.modelSelection?.thinkingLevel;
-    }
-    return {
-      text: row?.text,
-      hasModelSelection: row ? Object.hasOwn(row, "modelSelection") : null,
-      attachmentText: await row?.attachments[0]?.blob.text(),
-    };
-  } finally {
-    db.close();
-  }
-}
 
 suite.define(() => {
   it.each([
@@ -118,8 +35,6 @@ suite.define(() => {
         await suite.withPage(
           { ...createControlUiE2eContextOptions(), reducedMotion: "reduce" },
           async ({ page }) => {
-            const draftInput = page.locator(".new-session-page__message");
-            const modelPicker = page.locator('[data-chat-model-select="true"]');
             await page.addInitScript(createControlUiMockSameOriginGatewayScript());
             const storageKey =
               "openclaw.new-session.preferences.v1:" +
@@ -135,16 +50,23 @@ suite.define(() => {
             const gateway = await installMockGateway(page, {
               agentModel: "openai/gpt-4.1",
               models: [
-                { id: "gpt-4.1", name: "GPT-4.1" },
-                { id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
-              ].map((model) =>
-                Object.assign(model, {
+                {
+                  id: "gpt-4.1",
                   provider: "openai",
+                  name: "GPT-4.1",
                   reasoning: true,
                   thinkingLevels,
                   supportsFastMode: true,
-                }),
-              ),
+                },
+                {
+                  id: "gpt-4.1-mini",
+                  provider: "openai",
+                  name: "GPT-4.1 mini",
+                  reasoning: true,
+                  thinkingLevels,
+                  supportsFastMode: true,
+                },
+              ],
               ...(source === "identity"
                 ? { presenceUsers: [{ self: true, id: "sample-user", name: "Sample User" }] }
                 : {}),
@@ -170,10 +92,21 @@ suite.define(() => {
                   defaultId: "main",
                   mainKey: "main",
                   scope: "agent",
-                  sessionPlacement: required ? { requiredProfile } : {},
+                  sessionPlacement: required
+                    ? {
+                        requiredProfile: {
+                          id: "dedicated",
+                          providerId: "device",
+                          executionModes: ["worker-turn"],
+                        },
+                      }
+                    : {},
                 },
                 "sessions.describe": {
-                  session: { key: sessionKey, placement: { state: "active" } },
+                  session: {
+                    key: "agent:main:configured-defaults-proof",
+                    placement: { state: "active" },
+                  },
                 },
                 "sessions.send": { runId: "configured-defaults-proof", status: "started" },
                 "users.prefs.get": {
@@ -181,7 +114,10 @@ suite.define(() => {
                   entries: { "new-session.migration.v1": true, "new-session.v1:main": preference },
                 },
                 "users.prefs.set": { status: "ok" },
-                "sessions.create": { key: sessionKey, runStarted: true },
+                "sessions.create": {
+                  key: "agent:main:configured-defaults-proof",
+                  runStarted: true,
+                },
               },
             });
             await page.route("**/control-ui-config.json", (route) =>
@@ -194,22 +130,25 @@ suite.define(() => {
             );
             await page.goto(suite.server.baseUrl + "new");
             const effort = page.locator('[data-chat-thinking-select="true"]');
-            await pollAttribute(effort, "data-chat-thinking-value").toBe(
-              configuredDefaults ? "" : "low",
-            );
+            await expect
+              .poll(() => effort.getAttribute("data-chat-thinking-value"))
+              .toBe(configuredDefaults ? "" : "low");
             if (configuredDefaults) {
               await expect
                 .poll(async () => (await effort.textContent())?.toLowerCase())
                 .toContain("high");
             }
-            await pollText(modelPicker).toContain(configuredDefaults ? "GPT-4.1" : "GPT-4.1 mini");
+            await expect
+              .poll(() => page.locator('[data-chat-model-select="true"]').textContent())
+              .toContain(configuredDefaults ? "GPT-4.1" : "GPT-4.1 mini");
             if (source === "browser" && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
               await page.screenshot({
                 path: path.join(suite.artifactDir, configuredDefaults ? "after.png" : "before.png"),
                 animations: "disabled",
               });
             }
-            // Identity preferences mirror to storage independently of model rendering.
+            // Configured model metadata can render before the independent identity
+            // preference request mirrors its result into browser storage.
             await expect
               .poll(() =>
                 page.evaluate(
@@ -221,20 +160,67 @@ suite.define(() => {
               .toBe("low");
             if (configuredDefaults) {
               if (source === "browser") {
-                await draftInput.fill("Unsent before upgrade");
+                // A draft with no explicit model choice has exactly the pre-change row
+                // format: content and blobs, without the optional modelSelection field.
+                await page.locator(".new-session-page__message").fill("Unsent before upgrade");
                 await page.locator(".agent-chat__file-input").setInputFiles({
                   name: "upgrade-notes.txt",
                   mimeType: "text/plain",
                   buffer: Buffer.from("Keep these attachment bytes"),
                 });
                 await expect
-                  .poll(() => page.evaluate(draftStorage, "read-old"))
+                  .poll(() =>
+                    page.evaluate(async () => {
+                      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+                        const request = indexedDB.open("openclaw-control-ui");
+                        request.addEventListener("success", () => resolve(request.result), {
+                          once: true,
+                        });
+                        request.addEventListener(
+                          "error",
+                          () => reject(request.error ?? new Error("IndexedDB request failed")),
+                          { once: true },
+                        );
+                      });
+                      try {
+                        const rows = await new Promise<
+                          {
+                            text: string;
+                            modelSelection?: unknown;
+                            attachments: { blob: Blob }[];
+                          }[]
+                        >((resolve, reject) => {
+                          const request = db
+                            .transaction("composerDrafts")
+                            .objectStore("composerDrafts")
+                            .getAll();
+                          request.addEventListener("success", () => resolve(request.result), {
+                            once: true,
+                          });
+                          request.addEventListener(
+                            "error",
+                            () => reject(request.error ?? new Error("IndexedDB request failed")),
+                            { once: true },
+                          );
+                        });
+                        const row = rows.find((value) => value.text === "Unsent before upgrade");
+                        return {
+                          text: row?.text,
+                          hasModelSelection: row ? Object.hasOwn(row, "modelSelection") : null,
+                          attachmentText: await row?.attachments[0]?.blob.text(),
+                        };
+                      } finally {
+                        db.close();
+                      }
+                    }),
+                  )
                   .toEqual({
                     text: "Unsent before upgrade",
                     hasModelSelection: false,
                     attachmentText: "Keep these attachment bytes",
                   });
-                // Unmount before seeding the legacy row with its existing identity/fences.
+                // Remove the running app before seeding the old serializer shape. Only
+                // its already-scoped identity/fence fields are reused; no new row fields.
                 await page.route("**/legacy-draft-seed", (route) =>
                   route.fulfill({
                     contentType: "text/html",
@@ -242,32 +228,150 @@ suite.define(() => {
                   }),
                 );
                 await page.goto(suite.server.baseUrl + "legacy-draft-seed");
-                await page.evaluate(draftStorage, "seed-old");
+                await page.evaluate(async () => {
+                  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+                    const request = indexedDB.open("openclaw-control-ui");
+                    request.addEventListener("success", () => resolve(request.result), {
+                      once: true,
+                    });
+                    request.addEventListener(
+                      "error",
+                      () => reject(request.error ?? new Error("IndexedDB request failed")),
+                      { once: true },
+                    );
+                  });
+                  try {
+                    await new Promise<void>((resolve, reject) => {
+                      const transaction = db.transaction("composerDrafts", "readwrite");
+                      const store = transaction.objectStore("composerDrafts");
+                      const request = store.getAll();
+                      request.addEventListener(
+                        "success",
+                        () => {
+                          const old = request.result.find(
+                            (row) => row.text === "Unsent before upgrade",
+                          );
+                          if (!old) {
+                            transaction.abort();
+                            return;
+                          }
+                          // Matches writeDurableComposerDraft at the pre-change base:
+                          // 60d9d1042375f014944b94006f4b1c2b2f5af9c0.
+                          store.put({
+                            key: old.key,
+                            ownerKey: old.ownerKey,
+                            gatewayOwner: old.gatewayOwner,
+                            recoveryScope: old.recoveryScope,
+                            scopeKey: old.scopeKey,
+                            revision: old.revision,
+                            writeId: old.writeId,
+                            updatedAt: old.updatedAt,
+                            text: "Unsent before upgrade",
+                            attachments: [
+                              {
+                                blob: new Blob(["Keep these attachment bytes"], {
+                                  type: "text/plain",
+                                }),
+                                mimeType: "text/plain",
+                                origin: "file",
+                                fileName: "upgrade-notes.txt",
+                                sizeBytes: 27,
+                              },
+                            ],
+                          });
+                        },
+                        { once: true },
+                      );
+                      transaction.addEventListener("complete", () => resolve(), { once: true });
+                      transaction.addEventListener(
+                        "abort",
+                        () => reject(transaction.error ?? new Error("Legacy fixture missing")),
+                        { once: true },
+                      );
+                      transaction.addEventListener(
+                        "error",
+                        () => reject(transaction.error ?? new Error("Legacy fixture failed")),
+                        { once: true },
+                      );
+                    });
+                  } finally {
+                    db.close();
+                  }
+                });
                 await page.goto(suite.server.baseUrl + "new");
-                await pollValue(draftInput).toBe("Unsent before upgrade");
-                await pollText(page.locator(".chat-attachment-file__name")).toContain(
-                  "upgrade-notes.txt",
-                );
-                await pollAttribute(effort, "data-chat-thinking-value").toBe("");
-                await pollText(effort).toContain("High");
+                await expect
+                  .poll(() => page.locator(".new-session-page__message").inputValue())
+                  .toBe("Unsent before upgrade");
+                await expect
+                  .poll(() => page.locator(".chat-attachment-file__name").textContent())
+                  .toContain("upgrade-notes.txt");
+                await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("");
+                await expect.poll(() => effort.textContent()).toContain("High");
               }
-              await modelPicker.click();
+              await page.locator('[data-chat-model-select="true"]').click();
               await page.locator('[data-chat-model-search="true"]').fill("mini");
               await page.locator('[data-chat-model-option="openai/gpt-4.1-mini"]').click();
               await effort.click();
               await page.locator('[data-chat-thinking-slider="true"]').fill("0");
               await page.keyboard.press("Escape");
-              await draftInput.fill("Resume this draft");
-              await expect.poll(() => page.evaluate(draftStorage, "read-selection")).toBe("low");
+              await page.locator(".new-session-page__message").fill("Resume this draft");
+              await expect
+                .poll(() =>
+                  page.evaluate(async () => {
+                    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+                      const request = indexedDB.open("openclaw-control-ui");
+                      request.addEventListener("success", () => resolve(request.result), {
+                        once: true,
+                      });
+                      request.addEventListener(
+                        "error",
+                        () => reject(request.error ?? new Error("IndexedDB request failed")),
+                        { once: true },
+                      );
+                    });
+                    try {
+                      return await new Promise<unknown>((resolve, reject) => {
+                        const request = db
+                          .transaction("composerDrafts")
+                          .objectStore("composerDrafts")
+                          .getAll();
+                        request.addEventListener(
+                          "success",
+                          () =>
+                            resolve(
+                              request.result.find((row) => row.text === "Resume this draft")
+                                ?.modelSelection?.thinkingLevel,
+                            ),
+                          { once: true },
+                        );
+                        request.addEventListener(
+                          "error",
+                          () => reject(request.error ?? new Error("IndexedDB request failed")),
+                          { once: true },
+                        );
+                      });
+                    } finally {
+                      db.close();
+                    }
+                  }),
+                )
+                .toBe("low");
               await page.reload();
-              await pollAttribute(effort, "data-chat-thinking-value").toBe("low");
-              await pollValue(draftInput).toBe("Resume this draft");
-              await pollText(modelPicker).toContain("GPT-4.1 mini");
+              await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("low");
+              await expect
+                .poll(() => page.locator(".new-session-page__message").inputValue())
+                .toBe("Resume this draft");
+              await expect
+                .poll(() => page.locator('[data-chat-model-select="true"]').textContent())
+                .toContain("GPT-4.1 mini");
             }
-            await draftInput.fill("Start with the selected defaults");
+            await page
+              .locator(".new-session-page__message")
+              .fill("Start with the selected defaults");
             await page.getByRole("button", { name: "Start session", exact: true }).click();
             const request = await gateway.waitForRequest("sessions.create");
-            expect(request.params).toMatchObject(preference);
+            expect(request.params).toMatchObject({ model: preference.model, thinkingLevel: "low" });
+            expect(request.params).toHaveProperty("fastMode", true);
             const initialTurn = required ? await gateway.waitForRequest("sessions.send") : request;
             if (configuredDefaults && source === "browser") {
               expect(initialTurn.params).toMatchObject({
@@ -285,11 +389,13 @@ suite.define(() => {
               // Replacing the document must not interrupt the submitted draft's cleanup.
               await waitForCommittedComposerDraft(page, JSON.stringify(["", "", ""]), null, 0);
               await page.goto(suite.server.baseUrl + "new");
-              await pollAttribute(effort, "data-chat-thinking-value").toBe("");
+              await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("");
               await expect
                 .poll(async () => (await effort.textContent())?.toLowerCase())
                 .toContain("high");
-              await pollText(modelPicker).not.toContain("mini");
+              await expect
+                .poll(() => page.locator('[data-chat-model-select="true"]').textContent())
+                .not.toContain("mini");
               await page.keyboard.press("ControlOrMeta+K");
               const palette = page.locator("openclaw-command-palette");
               const prompt = palette.locator(".cmd-palette__input");
@@ -298,7 +404,7 @@ suite.define(() => {
                 name: "Start new session in background",
                 exact: true,
               });
-              await pollEnabled(start).toBe(true);
+              await expect.poll(() => start.isEnabled()).toBe(true);
               await start.click();
               const paletteRequest = await gateway.waitForRequest("sessions.create");
               expect(paletteRequest.params).not.toHaveProperty("model");

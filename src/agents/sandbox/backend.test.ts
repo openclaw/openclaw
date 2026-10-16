@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import * as backend from "./backend.js";
 import type { ReservedSandboxBackendFactoryV1 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent as resolveTestSandboxConfig } from "./config.js";
-const { getSandboxBackendCapabilities, getSandboxBackendFactory, registerSandboxBackend } = backend;
+const {
+  getSandboxBackendCapabilities,
+  getSandboxBackendFactory,
+  getSandboxBackendManager,
+  getSandboxBackendWorkdirResolver,
+  registerSandboxBackend,
+} = backend;
 const hooks = (id: string, api = backend) => [
   api.getSandboxBackendFactory(id),
   api.getSandboxBackendManager(id),

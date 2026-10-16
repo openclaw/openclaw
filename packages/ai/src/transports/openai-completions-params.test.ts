@@ -21,10 +21,10 @@ const proxy = makeCompletionsModel({
   contextWindow: 10_000,
   maxTokens: 10_000,
 });
-function objectSchema<
-  T extends Record<string, unknown>,
-  R extends Record<string, unknown> = Record<never, never>,
->(properties: T, rest?: R) {
+function objectSchema<T extends Record<string, unknown>>(
+  properties: T,
+  rest?: Record<string, unknown>,
+) {
   return { type: "object", properties, ...rest };
 }
 
