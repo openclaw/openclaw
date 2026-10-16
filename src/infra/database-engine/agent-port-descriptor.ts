@@ -42,14 +42,14 @@ const agentSourceSearchPostData: NonNullable<PortDescriptor["postgresSourcePostD
   source,
 ) => {
   const row = (
-    await source.db.query<{ definitions: string | null }>(
-      `SELECT to_jsonb(meta)->>'search_extensions' AS definitions
+    await source.db.query<{ metadata: { search_extensions?: string | null } }>(
+      `SELECT to_jsonb(meta) AS metadata
        FROM ${pgSearchName(source.namespace)}.openclaw_schema_meta AS meta WHERE store = 'agent'`,
     )
   ).rows[0];
   let parsed: unknown;
   try {
-    parsed = JSON.parse(row?.definitions ?? "{}");
+    parsed = JSON.parse(row?.metadata.search_extensions ?? "{}");
   } catch {
     throw new DatabasePortDataError("Malformed agent search-extension metadata");
   }
