@@ -284,11 +284,11 @@ async function syncWorkboardLifecycleSessions(params: {
   for (const card of params.cards) {
     const lookupKey = workboardCardSessionLookupKey(card);
     const candidates = lookupKey.startsWith("subagent:workboard-")
-      ? params.sessions.filter((session) => session.key.endsWith(`:${lookupKey}`))
+      ? params.sessions.filter((entry) => entry.key.endsWith(`:${lookupKey}`))
       : [];
     // Persisted links win; an unlinked dispatcher claim needs one configured owner.
     const session =
-      params.sessions.find((session) => session.key === lookupKey) ??
+      params.sessions.find((entry) => entry.key === lookupKey) ??
       (candidates.length === 1 ? candidates[0] : undefined);
     if (!session && candidates.length > 1) {
       continue;
