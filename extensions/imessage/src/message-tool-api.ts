@@ -58,7 +58,9 @@ export function describeIMessageMessageTool({
       action === "edit" &&
       privateApiStatus?.selectors &&
       !privateApiStatus.selectors.editMessage &&
-      !privateApiStatus.selectors.editMessageItem
+      !privateApiStatus.selectors.editMessageItem &&
+      // macOS 26 reports the translation edit selector instead of the legacy pair.
+      !privateApiStatus.selectors.editMessageItemTranslation
     ) {
       continue;
     }
