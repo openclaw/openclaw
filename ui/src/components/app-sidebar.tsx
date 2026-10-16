@@ -13,7 +13,7 @@ import {
 } from "solid-js";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { PluginView } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
@@ -71,6 +71,10 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     subscribe: (current, notify) => current.subscribe(notify),
     equality: "revision",
   });
+  const snapshot = owner.snapshot;
+  const snapshotProjection = projectOwner(snapshot, (current) => current.read());
+  const snapshotPending = createMemo(() => snapshotProjection.read().pending);
+  const snapshotModel = createMemo(() => snapshotProjection.read().model);
   const people = (owner.peopleView = createSidebarPeople(owner, owner.people, () => {
     Object.values(props);
     return projection.read();
@@ -78,10 +82,13 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
   const prepared = createMemo(
     () => {
       projection.revision();
+      snapshotPending();
+      snapshotModel();
       Object.values(props);
       // Snapshot capture keeps observing Pages after its navigation view closes.
       void catalog.dashboards;
       // Synchronous owners release boot snapshots and restore query state before row consumers read.
+      snapshot.synchronize();
       owner.prepareRender();
       owner.sessionData.synchronize();
       owner.pinnedSessions.synchronize();
@@ -95,6 +102,8 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
   const presentationRevision = createParkedProjection(
     () => {
       Object.values(props);
+      snapshotPending();
+      snapshotModel();
       return projection.revision();
     },
     () => props.navigationVisible,
@@ -158,7 +167,14 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       />
     </Show>
   );
-  const content = hostView.renderSidebar(Sessions, scroll);
+  const content = hostView.renderSidebar(Sessions, scroll, {
+    pending: snapshotPending,
+    saved: () => {
+      // Preparation can clear a receipt without publishing another model.
+      projection.revision();
+      return snapshotProjection.read().saved;
+    },
+  });
   createEffect(
     () => {
       prepared();
@@ -169,6 +185,7 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       untrack(() => {
         owner.sessionData.refreshPresentation();
         owner.commitRender();
+        snapshot.capture();
         people.syncRendered();
         scroll.restore();
         // The projection owns the display deadline; this mounted view owns its timer.

@@ -79,7 +79,11 @@ function createPreparationClient() {
   });
   const readOnly = isArtifactPreservingStateRead();
   const admission = nativeAdmissionStateFor();
-  const root = createPluginSourceCaptureRoot(storage.stateDir, "plugin-preparation-");
+  const root = createPluginSourceCaptureRoot(
+    storage.stateDir,
+    "plugin-preparation-",
+    storage.placement,
+  );
   let releasedRoot: Promise<void> | undefined;
   const releaseRoot = () => (releasedRoot ??= root.release());
   const { port1, port2 } = new MessageChannel();

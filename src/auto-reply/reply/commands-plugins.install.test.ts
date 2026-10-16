@@ -227,7 +227,7 @@ describe("handleCommands /plugins install", () => {
       await writeConfigFixture(home, policyConfig);
       const workspaceDir = await workspaceHarness.createWorkspace();
       const params = buildPluginsParams(
-        "/plugins install @acme/policy-plugin@1.0.0 --force --accept-capabilities",
+        "/plugins install npm:@acme/policy-plugin@1.0.0 --force --accept-capabilities",
         workspaceDir,
         { cfg: policyConfig },
       );
@@ -645,7 +645,7 @@ describe("handleCommands /plugins install", () => {
 
         expect(result?.shouldContinue).toBe(false);
         expect(result?.reply?.text).toContain(
-          "Usage: /plugins install <path|archive|npm-spec|npm-pack:path|git:repo|clawhub:pkg> [--force] [--accept-capabilities]",
+          "Usage: /plugins install <package|npm:package|path|archive|npm-pack:path|git:repo|clawhub:pkg> [--force] [--accept-capabilities]",
         );
         expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
         expect(persistPluginInstallMock).not.toHaveBeenCalled();

@@ -58,8 +58,8 @@ import {
   captureSidebarSnapshotModel,
   isSidebarSnapshotSettled,
 } from "./sidebar-snapshot-capture.ts";
-import { SidebarSnapshotController } from "./sidebar-snapshot-controller.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
+import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
 import { Icon } from "./solid/icon.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 import { SessionTitlePlaceholder } from "./solid/session-title-placeholder.tsx";
@@ -74,7 +74,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   override readonly sidebarMenus = new SidebarMenusController(this);
   readonly people = new SidebarPeoplePreferences(() => this.requestUpdate());
   peopleView?: ReturnType<typeof createSidebarPeople>;
-  private readonly sidebarSnapshotController = new SidebarSnapshotController(this);
+  // A connected host retains its pending boot read when Solid recreates the view.
+  readonly snapshot = createSidebarSnapshot(this);
 
   restoreSidebarSnapshot(model: SidebarSnapshotModel): void {
     this.sidebarSnapshot = model;
@@ -202,33 +203,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         (submissions) => submissions.subscribeCreate(() => this.requestUpdate()),
       )
       .effect(
-        () => this.sidebarSnapshotController,
-        (snapshot) => {
-          snapshot.connect();
-          return () => snapshot.disconnect();
-        },
-      )
-      .watch(
-        () => this.sidebarSnapshotController,
-        (snapshot, notify) => {
-          let pending = snapshot.pending;
-          let model = this.sidebarSnapshot;
-          return snapshot.subscribe(() => {
-            if (pending !== snapshot.pending || model !== this.sidebarSnapshot) {
-              pending = snapshot.pending;
-              model = this.sidebarSnapshot;
-              notify();
-            } else {
-              // Persistence completion changes only the capture receipt, not the shell.
-              this.querySelector("aside.sidebar")?.setAttribute(
-                "data-snapshot-saved",
-                String(snapshot.saved),
-              );
-            }
-          });
-        },
-      )
-      .effect(
         () => this.context?.gateway,
         (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
       )
@@ -289,11 +263,11 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.narration?.disconnect();
     this.catalogRendererImport.dispose();
     super.disconnectedCallback();
+    this.snapshot.disconnect();
   }
 
   protected override willUpdate() {
     super.willUpdate();
-    this.sidebarSnapshotController.synchronize();
     if (this.context?.plugins.registryStatus === "complete") {
       this.sidebarPluginSnapshot = null;
     }
@@ -314,7 +288,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   override updated() {
     super.updated();
-    this.sidebarSnapshotController.capture();
     const input = this.narrationSyncInput();
     if (!this.narration) {
       if (input.enabled) {
@@ -375,6 +348,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   override connectedCallback() {
     this.sessionData.connect();
+    this.snapshot.connect();
     super.connectedCallback();
     window.addEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
     this.hiddenSessionCatalogsChanged();
@@ -558,6 +532,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   renderSidebar(
     Sessions: () => JSX.Element,
     scroll: ReturnType<typeof createSidebarScroll>,
+    snapshot: { pending(): boolean; saved(): boolean },
   ): JSX.Element {
     const SidebarFrame = () => {
       const scrollRef = scroll.createRef();
@@ -570,7 +545,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         <aside
           class="sidebar sidebar--rail"
           data-snapshot-state={this.sidebarSnapshot ? "cached" : "live"}
-          data-snapshot-saved={String(this.sidebarSnapshotController.saved)}
+          data-snapshot-saved={String(snapshot.saved())}
           onContextMenu={(event) => {
             if (
               !(event.target instanceof Element) ||
@@ -652,7 +627,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       );
     };
     return (
-      <Show when={!this.sidebarSnapshotController.pending}>
+      <Show when={!snapshot.pending()}>
         <SidebarFrame />
       </Show>
     );

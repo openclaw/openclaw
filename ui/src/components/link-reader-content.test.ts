@@ -508,7 +508,7 @@ describe("link reader document content", () => {
     expect(container.querySelector("#note-n1")?.textContent).toContain("A note");
     expect(container.querySelector<HTMLDetailsElement>(".lr-file")?.open).toBe(true);
     expect(container.textContent).toContain("Renamed from src/old.ts");
-    expect(container.textContent).toContain("This view is incomplete");
+    expect(container.textContent).not.toContain("This view is incomplete");
     expect(container.textContent).toContain("Some comments could not be shown");
     expect(container.textContent).toContain("Some files could not be shown");
     expect(container.textContent).toContain("No text diff available");

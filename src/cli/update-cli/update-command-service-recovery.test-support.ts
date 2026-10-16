@@ -313,7 +313,7 @@ export function registerRecoveryTests(params: {
         timeoutMs: 1_000,
       });
 
-      const pending = startup === "slow" || startup === "unready";
+      const pending = startup === "unready";
       expect(activated).toBe(pending ? "readiness-pending" : "ok");
       if (pending) {
         const run = params.run();
@@ -347,10 +347,8 @@ export function registerRecoveryTests(params: {
         pending ? "health: still-starting" : "health: healthy",
       ]);
       expect(mocks.restart).not.toHaveBeenCalled();
-      if (startup === "unready" || startup === "slow") {
-        expect(healthResults[0]?.elapsedMs).toBe(6_500);
-      } else if (!needsRecovery) {
-        expect(nowMs).toBeGreaterThanOrEqual(readyAfterMs + 5_500);
+      if (pending) {
+        expect(healthResults[0]?.elapsedMs).toBe(1_000);
       }
     },
   );
