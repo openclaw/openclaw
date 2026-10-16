@@ -1,4 +1,3 @@
-// Scenario-owned proof for composed preview App SDK Gateway contracts.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -182,15 +181,10 @@ it("proves composed SDK event, run, artifact, environment, and schema contracts"
     const realEvents = await withTimeout(eventsPromise, 2_000, {
       message: "timed out waiting for real Gateway SDK events",
     });
-    expect(realEvents.map((event) => event.type)).toEqual([
-      "run.started",
-      "assistant.delta",
-      "run.completed",
-    ]);
-    expect(realEvents.map((event) => event.sessionKey)).toEqual([
-      sessionKey,
-      sessionKey,
-      sessionKey,
+    expect(realEvents).toMatchObject([
+      { type: "run.started", sessionKey },
+      { type: "assistant.delta", sessionKey },
+      { type: "run.completed", sessionKey },
     ]);
     await expect(run.wait({ timeoutMs: 2_000 })).resolves.toMatchObject({
       runId,

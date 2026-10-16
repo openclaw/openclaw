@@ -38,6 +38,13 @@ const instruction = "WORKTREE_PROMPT_MARKER: preserve this committed project ins
 const fileContents = "WORKTREE_TOOL_MARKER: the complete checkout is ready.\n";
 const userMessage = "Read src/remaining.txt and report its marker.";
 const partial = "I can start while the workspace finishes.";
+const assistantMessage = {
+  type: "message",
+  id: "msg_readiness",
+  role: "assistant",
+  status: "completed",
+  content: [{ type: "output_text", text: partial, annotations: [] }],
+};
 
 function writeEvent(response: ServerResponse, type: string, fields: Record<string, unknown>) {
   response.write(`data: ${JSON.stringify({ type: `response.${type}`, ...fields })}\n\n`);
@@ -48,13 +55,6 @@ function finishText(response: ServerResponse, text: string, id: string) {
 }
 
 function finishWithTool(response: ServerResponse, name: string, args: Record<string, unknown>) {
-  const message = {
-    type: "message",
-    id: "msg_readiness",
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text: partial, annotations: [] }],
-  };
   const item = {
     type: "function_call",
     id: "fc_read_remaining",
@@ -63,35 +63,38 @@ function finishWithTool(response: ServerResponse, name: string, args: Record<str
     arguments: JSON.stringify(args),
     status: "completed",
   };
-  const event = (type: string, fields: Record<string, unknown>) =>
-    writeEvent(response, type, fields);
-  event("output_text.done", {
-    item_id: message.id,
-    output_index: 0,
-    content_index: 0,
-    text: partial,
-  });
-  event("output_item.done", { output_index: 0, item: message });
-  event("output_item.added", { output_index: 1, item: { ...item, arguments: "" } });
-  event("function_call_arguments.done", {
+  writeTextEvent(response, "done", { text: partial });
+  writeEvent(response, "output_item.done", { output_index: 0, item: assistantMessage });
+  writeEvent(response, "output_item.added", { output_index: 1, item: { ...item, arguments: "" } });
+  writeEvent(response, "function_call_arguments.done", {
     item_id: item.id,
     output_index: 1,
     arguments: item.arguments,
   });
-  event("output_item.done", { output_index: 1, item });
-  event("completed", {
+  writeEvent(response, "output_item.done", { output_index: 1, item });
+  writeEvent(response, "completed", {
     response: {
       id: "resp_read_remaining",
       status: "completed",
-      output: [message, item],
+      output: [assistantMessage, item],
       usage: { input_tokens: 20, output_tokens: 8, total_tokens: 28 },
     },
   });
   response.end("data: [DONE]\n\n");
 }
 
+function writeTextEvent(response: ServerResponse, phase: string, fields: Record<string, unknown>) {
+  writeEvent(response, `output_text.${phase}`, {
+    item_id: assistantMessage.id,
+    output_index: 0,
+    content_index: 0,
+    ...fields,
+  });
+}
+
 async function writeRecordingChannel(root: string, captureUrl: string) {
   const id = "readiness-chat";
+  const schema = { type: "object", additionalProperties: false };
   await fs.mkdir(root, { recursive: true });
   const writeJson = (file: string, value: unknown) =>
     fs.writeFile(path.join(root, file), JSON.stringify(value));
@@ -105,15 +108,9 @@ async function writeRecordingChannel(root: string, captureUrl: string) {
     channels: [id],
     activation: { onStartup: true },
     channelConfigs: {
-      [id]: {
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          properties: { enabled: { type: "boolean" } },
-        },
-      },
+      [id]: { schema: { ...schema, properties: { enabled: { type: "boolean" } } } },
     },
-    configSchema: { type: "object", additionalProperties: false },
+    configSchema: schema,
   });
   await fs.writeFile(
     path.join(root, "index.cjs"),
@@ -373,6 +370,10 @@ it(
         expect(await client.request("agent.wait", { runId, timeoutMs: 60_000 })).toMatchObject({
           status,
         });
+      const expectNoEffects = async (name: string, canary: string) => {
+        expect(deliveries.filter((delivery) => delivery.to === name)).toEqual([]);
+        await expect(fs.access(canary)).rejects.toMatchObject({ code: "ENOENT" });
+      };
       const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
       const startCheckout = async (
         name: string,
@@ -413,20 +414,9 @@ it(
       initial.response.writeHead(200, { "content-type": "text/event-stream" });
       writeEvent(initial.response, "output_item.added", {
         output_index: 0,
-        item: {
-          type: "message",
-          id: "msg_readiness",
-          role: "assistant",
-          content: [],
-          status: "in_progress",
-        },
+        item: { ...assistantMessage, content: [], status: "in_progress" },
       });
-      writeEvent(initial.response, "output_text.delta", {
-        item_id: "msg_readiness",
-        output_index: 0,
-        content_index: 0,
-        delta: partial,
-      });
+      writeTextEvent(initial.response, "delta", { delta: partial });
       await wait(firstDelta.promise);
       nextCall = createDeferred<ProviderCall>();
       finishWithTool(initial.response, "read", { path: "src/remaining.txt" });
@@ -501,8 +491,7 @@ it(
               `${name}: tool finished without waiting for checkout`,
             ),
           );
-          expect(deliveries.filter((delivery) => delivery.to === name)).toEqual([]);
-          await expect(fs.access(canary)).rejects.toMatchObject({ code: "ENOENT" });
+          await expectNoEffects(name, canary);
           const runEnded = waitForEmbeddedAgentRunEnd(started.sessionId, null);
           if (revoked) {
             expect(
@@ -528,8 +517,7 @@ it(
           expect(await wait(runEnded)).toBe(true);
           await expectRun(started.runId, revoked ? "error" : "ok");
           if (revoked) {
-            await expect(fs.access(canary)).rejects.toMatchObject({ code: "ENOENT" });
-            expect(deliveries.filter((delivery) => delivery.to === name)).toEqual([]);
+            await expectNoEffects(name, canary);
           }
         }
       }

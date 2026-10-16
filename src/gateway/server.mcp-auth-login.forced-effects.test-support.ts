@@ -381,68 +381,59 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       { lifetime: 30, withdraw: false },
       { lifetime: 0, withdraw: false },
       { lifetime: 0, withdraw: true },
-    ])(
-      "refresh server_error, lifetime=$lifetime, revoke=$withdraw",
-      async ({ lifetime, withdraw }) => {
-        await seed(lifetime);
-        const before = await stored();
-        expect(before.pendingAuthorizationChallenge).toBeUndefined();
-        let requestParams: URLSearchParams | undefined;
-        let responseBoundary = 0;
-        effects.endpoint = async (request, response) => {
-          if (request.url !== "/token") {
-            return false;
-          }
-          requestParams = new URLSearchParams(await text(request));
-          return respond(
-            response,
-            { error: "server_error", error_description: "private exchange detail" },
-            500,
-          );
-        };
-        observeFetch({
-          response: (pathname) => {
-            if (pathname === "/token") {
-              responseBoundary++;
-              if (withdraw) {
-                revoke();
-              }
+    ])("refresh failure: $lifetime seconds, revoke=$withdraw", async ({ lifetime, withdraw }) => {
+      await seed(lifetime);
+      const before = await stored();
+      expect(before.pendingAuthorizationChallenge).toBeUndefined();
+      let requestParams: URLSearchParams | undefined;
+      let responseBoundary = 0;
+      effects.endpoint = async (request, response) => {
+        if (request.url !== "/token") {
+          return false;
+        }
+        requestParams = new URLSearchParams(await text(request));
+        return respond(
+          response,
+          { error: "server_error", error_description: "private exchange detail" },
+          500,
+        );
+      };
+      observeFetch({
+        response: (pathname) => {
+          if (pathname === "/token") {
+            responseBoundary++;
+            if (withdraw) {
+              revoke();
             }
-          },
-        });
-        const beforeRequests = requests.length;
-        if (lifetime === 0 && !withdraw) {
-          const started = await begin();
-          expect(await pending(started.state)).toBe(identity().storeKey);
-          expect((await stored()).lastAuthorizationUrl).toBeDefined();
-        } else {
-          await finishError(await start());
-          expect(await stored()).toEqual(before);
-        }
-        expect(responseBoundary).toBe(1);
-        expect(
-          ["grant_type", "refresh_token", "client_id"].map((key) => requestParams?.get(key)),
-        ).toEqual([
-          "refresh_token",
-          before.tokens?.refresh_token,
-          before.clientInformation?.client_id,
-        ]);
-        expect(requests.slice(beforeRequests)).toEqual(["/token"]);
-        const current = await stored();
-        expect([
-          current.tokens,
-          current.clientInformation,
-          current.tokensAuthorizationServerUrl,
-        ]).toEqual([before.tokens, before.clientInformation, before.tokensAuthorizationServerUrl]);
-        if (lifetime > 0) {
-          expect(expectDefined(before.tokenExpiresAt, "seed expiry")).toBeGreaterThan(Date.now());
-        } else {
-          expect(expectDefined(before.tokenExpiresAt, "seed expiry")).toBeLessThanOrEqual(
-            Date.now(),
-          );
-        }
-      },
-    );
+          }
+        },
+      });
+      const beforeRequests = requests.length;
+      if (lifetime === 0 && !withdraw) {
+        const started = await begin();
+        expect(await pending(started.state)).toBe(identity().storeKey);
+        expect((await stored()).lastAuthorizationUrl).toBeDefined();
+      } else {
+        await finishError(await start());
+        expect(await stored()).toEqual(before);
+      }
+      expect(responseBoundary).toBe(1);
+      expect(requestParams?.get("grant_type")).toBe("refresh_token");
+      expect(requestParams?.get("refresh_token")).toBe(before.tokens?.refresh_token);
+      expect(requestParams?.get("client_id")).toBe(before.clientInformation?.client_id);
+      expect(requests.slice(beforeRequests)).toEqual(["/token"]);
+      const current = await stored();
+      expect([
+        current.tokens,
+        current.clientInformation,
+        current.tokensAuthorizationServerUrl,
+      ]).toEqual([before.tokens, before.clientInformation, before.tokensAuthorizationServerUrl]);
+      if (lifetime > 0) {
+        expect(expectDefined(before.tokenExpiresAt, "seed expiry")).toBeGreaterThan(Date.now());
+      } else {
+        expect(expectDefined(before.tokenExpiresAt, "seed expiry")).toBeLessThanOrEqual(Date.now());
+      }
+    });
 
     registerMcpAuthCommitEffects({
       identity,
@@ -508,86 +499,83 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       expect(requests).toHaveLength(beforeRequests);
     });
 
-    it.each([false, true])(
-      "fences pending insertion after URL publication, newer CLI=%s",
-      async (newerCli) => {
-        const { entered, release } = holdEffect();
-        let state: string | undefined;
-        const { entered: cleanupEntered, release: releaseCleanup } = holdEffect();
-        if (newerCli) {
-          const cancel = oauthCoordinator.cancelMcpOAuthAuthorization;
-          const cleanup = vi
-            .spyOn(oauthCoordinator, "cancelMcpOAuthAuthorization")
-            .mockImplementation(async (...args) => {
-              cleanupEntered.resolve();
-              await releaseCleanup.promise;
-              return await cancel(...args);
-            });
-          restoreEffects.push(() => cleanup.mockRestore());
-        }
-        observeProvider((provider) => {
-          const redirect = provider.redirectToAuthorization.bind(provider);
-          vi.spyOn(provider, "redirectToAuthorization").mockImplementation(async (url) => {
-            await redirect(url);
-            state = expectDefined(url.searchParams.get("state"), "SDK authorization state");
-            entered.resolve();
-            await release.promise;
-          });
-        });
-        const publishedPending: string[] = [];
-        const insert = oauthStore.writeMcpOAuthPendingAuthorization;
-        const spy = vi
-          .spyOn(oauthStore, "writeMcpOAuthPendingAuthorization")
+    it.each([false, true])("fences pending insertion, newer CLI=%s", async (newerCli) => {
+      const { entered, release } = holdEffect();
+      let state: string | undefined;
+      const { entered: cleanupEntered, release: releaseCleanup } = holdEffect();
+      if (newerCli) {
+        const cancel = oauthCoordinator.cancelMcpOAuthAuthorization;
+        const cleanup = vi
+          .spyOn(oauthCoordinator, "cancelMcpOAuthAuthorization")
           .mockImplementation(async (...args) => {
-            await insert(...args);
-            publishedPending.push(args[1]);
+            cleanupEntered.resolve();
+            await releaseCleanup.promise;
+            return await cancel(...args);
           });
-        restoreEffects.push(() => spy.mockRestore());
-        const sessionId = await start();
-        await waitForEffect(entered.promise, "publication");
-        const published = await stored();
-        const rejectedState = expectDefined(state, "published state");
-        expect(
-          new URL(expectDefined(published.lastAuthorizationUrl, "published URL")).searchParams.get(
-            "state",
-          ),
-        ).toBe(rejectedState);
-        expect(published.codeVerifier).toHaveLength(43);
-        expect(await pending(rejectedState)).toBeUndefined();
-        const beforeRequests = requests.length;
-        revoke();
-        release.resolve();
-        let replacement: Awaited<ReturnType<typeof stored>> | undefined;
-        let replacementState: string | undefined;
-        if (newerCli) {
-          await waitForEffect(cleanupEntered.promise, "cleanup");
-          const resolved = resolveMcpTransportConfig("docs", config);
-          if (resolved?.kind !== "http") {
-            throw new Error("Fixture transport unavailable");
-          }
-          const newer = await oauthCoordinator.startMcpOAuthAuthorization(identity(), resolved, {});
-          if (newer.status !== "redirect") {
-            throw new Error("New CLI authorization was not published");
-          }
-          replacementState = newer.state;
-          replacement = await stored();
-          expect(replacementState).not.toBe(rejectedState);
-          expect(await pending(replacementState)).toBe(identity().storeKey);
+        restoreEffects.push(() => cleanup.mockRestore());
+      }
+      observeProvider((provider) => {
+        const redirect = provider.redirectToAuthorization.bind(provider);
+        vi.spyOn(provider, "redirectToAuthorization").mockImplementation(async (url) => {
+          await redirect(url);
+          state = expectDefined(url.searchParams.get("state"), "SDK authorization state");
+          entered.resolve();
+          await release.promise;
+        });
+      });
+      const publishedPending: string[] = [];
+      const insert = oauthStore.writeMcpOAuthPendingAuthorization;
+      const spy = vi
+        .spyOn(oauthStore, "writeMcpOAuthPendingAuthorization")
+        .mockImplementation(async (...args) => {
+          await insert(...args);
+          publishedPending.push(args[1]);
+        });
+      restoreEffects.push(() => spy.mockRestore());
+      const sessionId = await start();
+      await waitForEffect(entered.promise, "publication");
+      const published = await stored();
+      const rejectedState = expectDefined(state, "published state");
+      expect(
+        new URL(expectDefined(published.lastAuthorizationUrl, "published URL")).searchParams.get(
+          "state",
+        ),
+      ).toBe(rejectedState);
+      expect(published.codeVerifier).toHaveLength(43);
+      expect(await pending(rejectedState)).toBeUndefined();
+      const beforeRequests = requests.length;
+      revoke();
+      release.resolve();
+      let replacement: Awaited<ReturnType<typeof stored>> | undefined;
+      let replacementState: string | undefined;
+      if (newerCli) {
+        await waitForEffect(cleanupEntered.promise, "cleanup");
+        const resolved = resolveMcpTransportConfig("docs", config);
+        if (resolved?.kind !== "http") {
+          throw new Error("Fixture transport unavailable");
         }
-        releaseCleanup.resolve();
-        await finishError(sessionId);
-        expect(publishedPending).toEqual(replacementState ? [replacementState] : []);
-        expect(await pending(rejectedState)).toBeUndefined();
-        expect((await callback(rejectedState)).status).toBe(410);
-        if (replacementState) {
-          expect(await stored()).toEqual(expectDefined(replacement, "newer CLI store"));
-          expect(await pending(replacementState)).toBe(identity().storeKey);
-        } else {
-          expectAbsent(await stored(), "codeVerifier", "lastAuthorizationUrl");
+        const newer = await oauthCoordinator.startMcpOAuthAuthorization(identity(), resolved, {});
+        if (newer.status !== "redirect") {
+          throw new Error("New CLI authorization was not published");
         }
-        expect((await stored()).tokens).toBeUndefined();
-        expect(requests).toHaveLength(beforeRequests);
-      },
-    );
+        replacementState = newer.state;
+        replacement = await stored();
+        expect(replacementState).not.toBe(rejectedState);
+        expect(await pending(replacementState)).toBe(identity().storeKey);
+      }
+      releaseCleanup.resolve();
+      await finishError(sessionId);
+      expect(publishedPending).toEqual(replacementState ? [replacementState] : []);
+      expect(await pending(rejectedState)).toBeUndefined();
+      expect((await callback(rejectedState)).status).toBe(410);
+      if (replacementState) {
+        expect(await stored()).toEqual(expectDefined(replacement, "newer CLI store"));
+        expect(await pending(replacementState)).toBe(identity().storeKey);
+      } else {
+        expectAbsent(await stored(), "codeVerifier", "lastAuthorizationUrl");
+      }
+      expect((await stored()).tokens).toBeUndefined();
+      expect(requests).toHaveLength(beforeRequests);
+    });
   });
 }

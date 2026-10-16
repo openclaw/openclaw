@@ -19,6 +19,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { captureEnv } from "../test-utils/env.js";
+import { buildCodexHarnessAppServerArgs } from "./gateway-codex-harness.live-helpers.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
 type ProviderRequest = { body: string; threadId: string | string[] | undefined };
@@ -31,28 +32,22 @@ const SHUTDOWN_FAILURE_DETAIL =
 
 const cases: Array<{
   name: string;
-  failFirst: boolean;
+  healthy?: boolean;
   activeSibling?: boolean;
   idleSibling?: "incognito" | "persistent";
   shutdown?: "delayed" | "cancelled" | "unconfirmed";
 }> = [
   {
     name: "recovers on the same client while an active sibling continues",
-    failFirst: true,
     activeSibling: true,
   },
-  { name: "reloads a healthy thread", failFirst: false },
-  { name: "preserves an idle Incognito sibling", failFirst: true, idleSibling: "incognito" },
-  { name: "preserves an idle persistent sibling", failFirst: true, idleSibling: "persistent" },
-  { name: "waits for physical exit before recovery", failFirst: true, shutdown: "delayed" },
-  {
-    name: "cancels during physical exit without reacquisition",
-    failFirst: true,
-    shutdown: "cancelled",
-  },
+  { name: "reloads a healthy thread", healthy: true },
+  { name: "preserves an idle Incognito sibling", idleSibling: "incognito" },
+  { name: "preserves an idle persistent sibling", idleSibling: "persistent" },
+  { name: "waits for physical exit before recovery", shutdown: "delayed" },
+  { name: "cancels during physical exit without reacquisition", shutdown: "cancelled" },
   {
     name: "preserves its binding when physical exit is unconfirmed",
-    failFirst: true,
     shutdown: "unconfirmed",
   },
 ];
@@ -60,7 +55,8 @@ const cases: Array<{
 it.each(cases)(
   "chat.send $name",
   { timeout: 180_000 },
-  async ({ failFirst, activeSibling, idleSibling, shutdown }) => {
+  async ({ healthy, activeSibling, idleSibling, shutdown }) => {
+    const failFirst = !healthy;
     const dirs = useAutoCleanupTempDirTracker(onTestFinished);
     const root = await fs.realpath(dirs.make("gateway-native-recovery-"));
     const workspace = path.join(root, "workspace");
@@ -263,14 +259,12 @@ module.exports = {
             config: {
               sessionCatalog: { enabled: false },
               appServer: {
-                args: ["app-server", "--listen", "stdio://"].concat(
-                  [
-                    `openai_base_url="${baseUrl}"`,
-                    "analytics.enabled=false",
-                    "feedback.enabled=false",
-                    "features.shell_snapshot=false",
-                  ].flatMap((setting) => ["-c", setting]),
-                ),
+                args: buildCodexHarnessAppServerArgs([
+                  `openai_base_url="${baseUrl}"`,
+                  "analytics.enabled=false",
+                  "feedback.enabled=false",
+                  "features.shell_snapshot=false",
+                ]),
               },
             },
           },
@@ -483,10 +477,7 @@ module.exports = {
     }
     expect(await wait(continued.runId)).toMatchObject({ status: "ok" });
     const recovered = await ready(continued.runId);
-    expect(recovered).toMatchObject({
-      threadId: previous.threadId,
-      action: "resumed",
-    });
+    expect(recovered).toMatchObject({ threadId: previous.threadId, action: "resumed" });
     expect(recovered.clientId === previous.clientId).toBe(!shutdown);
     expect(primaryRequests).toHaveLength(2);
     expect(primaryRequests[1]).toMatchObject({

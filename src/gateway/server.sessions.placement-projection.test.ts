@@ -114,16 +114,13 @@ test.each([
           workerHost: { enabled: true, capacity: { total: 1, available: 1 } },
         },
       });
-      await createSessionStoreDir();
-      await writeSessionStore({
-        entries: {
-          "agent:main:repository": {
-            sessionId: "repository-session",
-            updatedAt: 200,
-            repositoryWorkspaceId: "repository-workspace",
-            providerOverride: "repository-provider",
-            modelOverride: "repository-model",
-          },
+      await seedSessionRows({
+        "agent:main:repository": {
+          sessionId: "repository-session",
+          updatedAt: 200,
+          repositoryWorkspaceId: "repository-workspace",
+          providerOverride: "repository-provider",
+          modelOverride: "repository-model",
         },
       });
       const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>("sessions.list", {});
@@ -218,14 +215,15 @@ async function describeSession(
   return result.payload?.session;
 }
 
-async function seedSessionRows(): Promise<void> {
-  await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      main: { sessionId: "sess-main", updatedAt: 200 },
-      "agent:main:other": { sessionId: "sess-other", updatedAt: 100 },
-    },
-  });
+async function seedSessionRows(
+  entries: Parameters<typeof writeSessionStore>[0]["entries"] = {
+    main: { sessionId: "sess-main", updatedAt: 200 },
+    "agent:main:other": { sessionId: "sess-other", updatedAt: 100 },
+  },
+) {
+  const directory = await createSessionStoreDir();
+  await writeSessionStore({ entries });
+  return directory;
 }
 
 function placementContext(
@@ -407,8 +405,7 @@ function seedFailedPlacementWithRetainedResult(database: OpenClawStateDatabase, 
     ({ db }) => {
       db.prepare(`UPDATE worker_session_placements SET turn_claim_owner = NULL,
         turn_claim_id = NULL, turn_claim_run_id = NULL, turn_claim_generation = NULL,
-        turn_claim_owner_epoch = NULL WHERE session_id = ?`).run(sessionId);
-      db.prepare(`UPDATE worker_session_placements SET state = 'failed',
+        turn_claim_owner_epoch = NULL, state = 'failed',
         transition_generation = transition_generation + 3,
         recovery_error = 'previous worker failure', terminal_reason = 'previous worker failure',
         terminal_at_ms = 1 WHERE session_id = ?`).run(sessionId);
@@ -423,14 +420,13 @@ test.each([
 ] as const)(
   "sessions.describe waits for retained $recovery before offering retry on send",
   async ({ recovery, executionMode }) => {
-    const { dir } = await createSessionStoreDir();
     const identity = {
       sessionId: "sess-retained-recovery",
       sessionKey: "agent:main:retained-recovery",
       agentId: "main",
     };
-    await writeSessionStore({
-      entries: { [identity.sessionKey]: { sessionId: identity.sessionId, updatedAt: 200 } },
+    const { dir } = await seedSessionRows({
+      [identity.sessionKey]: { sessionId: identity.sessionId, updatedAt: 200 },
     });
     const database = openOpenClawStateDatabase({ path: path.join(dir, "placements.sqlite") });
     const placements = createWorkerSessionPlacementStore({ database });
@@ -438,12 +434,12 @@ test.each([
       ...identity,
       executionMode,
     });
-    const journalOwner = {
+    const transitionOwner = {
       sessionId: identity.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
-      placementGeneration: active.generation,
     };
+    const journalOwner = { ...transitionOwner, placementGeneration: active.generation };
     if (recovery === "unstaged result") {
       const claim = await placements.claimTurn({
         ...identity,
@@ -466,11 +462,6 @@ test.each([
         basePackSha256: createHash("sha256").update(basePack).digest("hex"),
         basePack,
       });
-      const transitionOwner = {
-        sessionId: identity.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      };
       const draining = await placements.startDrain({
         ...transitionOwner,
         expectedGeneration: active.generation,
