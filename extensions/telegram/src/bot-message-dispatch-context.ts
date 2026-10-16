@@ -150,7 +150,6 @@ export async function resolveDispatchTelegramContext(params: {
       }),
       telegramCfg,
       opts: { botInfo: params.context.primaryCtx.me },
-      telegramDeps: { resolveStorePath },
     });
     const ambientWatermark = params.context.ctxPayload.AmbientTranscriptPreviousMessageId
       ? {

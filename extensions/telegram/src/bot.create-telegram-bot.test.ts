@@ -71,7 +71,7 @@ const {
 type BuildModelsProviderDataMock = ReturnType<
   typeof vi.fn<NonNullable<typeof telegramBotDepsForTest.buildModelsProviderData>>
 >;
-const { defaultTelegramNativeCommandDeps } = await import("./bot-native-command-deps.runtime.js");
+const providerAuth = await import("openclaw/plugin-sdk/provider-auth-login-flow-runtime");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
 const {
@@ -346,7 +346,6 @@ describe("createTelegramBot", () => {
       createTelegramBotBase({
         botInfo: telegramBotInfoForTest,
         ...opts,
-        telegramDeps: telegramBotDepsForTest,
       });
     pluginStateTestRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
   });
@@ -1812,7 +1811,7 @@ describe("createTelegramBot", () => {
 
   it("lets an owner start Codex login from a pairing-policy DM callback", async () => {
     const runModelsAuthLoginFlow = vi
-      .spyOn(defaultTelegramNativeCommandDeps, "runModelsAuthLoginFlow")
+      .fn<typeof providerAuth.runModelsAuthLoginFlow>()
       .mockImplementation(async (params) => {
         await params.prompter.deviceCode?.({
           title: "OpenAI Codex device code",
@@ -1826,6 +1825,12 @@ describe("createTelegramBot", () => {
           profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
         };
       });
+    const runProviderChannelLoginFlow = providerAuth.runProviderChannelLoginFlow;
+    const providerLogin = vi
+      .spyOn(providerAuth, "runProviderChannelLoginFlow")
+      .mockImplementation((params) =>
+        runProviderChannelLoginFlow({ ...params, runLoginFlow: runModelsAuthLoginFlow }),
+      );
     loadConfig.mockReturnValue({
       messages: { inbound: { debounceMs: 0 } },
       commands: { native: true, ownerAllowFrom: ["9"] },
@@ -1855,7 +1860,7 @@ describe("createTelegramBot", () => {
         expect.objectContaining({ parse_mode: "HTML" }),
       );
     } finally {
-      runModelsAuthLoginFlow.mockRestore();
+      providerLogin.mockRestore();
     }
   });
 

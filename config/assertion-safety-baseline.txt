@@ -817,8 +817,7 @@ extensions/telegram/src/action-runtime.ts	1
 extensions/telegram/src/api-fetch.ts	1
 extensions/telegram/src/approval-handler.runtime.ts	2
 extensions/telegram/src/bot-core.ts	1
-extensions/telegram/src/bot-deps.ts	1
-extensions/telegram/src/bot-handlers.callback-router-controls.ts	2
+extensions/telegram/src/bot-handlers.callback-router-controls.ts	1
 extensions/telegram/src/bot-handlers.callback-router.ts	1
 extensions/telegram/src/bot-handlers.inbound-authorization.ts	1
 extensions/telegram/src/bot-handlers.inbound-media.ts	2
