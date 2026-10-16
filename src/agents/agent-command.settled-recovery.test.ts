@@ -29,6 +29,8 @@ it.each(["recovered", "preparation-failure", "later-failure"] as const)(
       typeof import("./command/attempt-execution.js")
     >("./command/attempt-execution.js");
     state.runAgentAttemptMock.mockImplementation(runAgentAttempt);
+    assert.isDefined(state.cfg?.agents?.defaults);
+    state.cfg.agents.defaults.model = { primary: "openai/gpt-5.5" };
     const sessionId = "command-recovered-session";
     const sessionKey = "agent:main:recovered-command";
     const runId = `command-${outcome}`;
