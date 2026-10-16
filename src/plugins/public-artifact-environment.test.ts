@@ -115,17 +115,15 @@ function resolution(fixture: ReturnType<typeof environment>, allow = [PLUGIN_ID]
 
 type Resolution = ReturnType<typeof resolution>;
 const setupResolvers = [
-  {
-    name: "web search setup",
-    artifact: "web-search-contract-api.js",
-    resolve: (params: Resolution) => resolvePluginWebSearchProviders({ ...params, mode: "setup" }),
-  },
-  {
-    name: "web fetch setup",
-    artifact: "web-fetch-contract-api.js",
-    resolve: (params: Resolution) => resolvePluginWebFetchProviders({ ...params, mode: "setup" }),
-  },
-];
+  [
+    "web-search-contract-api.js",
+    (params: Resolution) => resolvePluginWebSearchProviders({ ...params, mode: "setup" }),
+  ],
+  [
+    "web-fetch-contract-api.js",
+    (params: Resolution) => resolvePluginWebFetchProviders({ ...params, mode: "setup" }),
+  ],
+] as const;
 
 describe("public artifact environment ownership", () => {
   it.each(["missing", "nonbundled"] as const)(
@@ -154,27 +152,11 @@ describe("public artifact environment ownership", () => {
 
   it.each([
     ...setupResolvers,
-    {
-      name: "web search runtime descriptors",
-      artifact: "web-search-contract-api.js",
-      resolve: resolveRuntimeWebSearchProviders,
-    },
-    {
-      name: "web fetch runtime",
-      artifact: "web-fetch-provider.js",
-      resolve: resolveRuntimeWebFetchProviders,
-    },
-    {
-      name: "document extractors",
-      artifact: "document-extractor.js",
-      resolve: resolvePluginDocumentExtractors,
-    },
-    {
-      name: "web content extractors",
-      artifact: "web-content-extractor.js",
-      resolve: resolvePluginWebContentExtractors,
-    },
-  ])("loads and reuses each caller's artifact for $name", async ({ resolve, artifact }) => {
+    ["web-search-contract-api.js", resolveRuntimeWebSearchProviders],
+    ["web-fetch-provider.js", resolveRuntimeWebFetchProviders],
+    ["document-extractor.js", resolvePluginDocumentExtractors],
+    ["web-content-extractor.js", resolvePluginWebContentExtractors],
+  ] as const)("loads and reuses each caller's %s artifact [%#]", async (artifact, resolve) => {
     const ambient = environment("ambient");
     const caller = environment("caller");
     useProcessEnvironment(ambient);
@@ -192,7 +174,7 @@ describe("public artifact environment ownership", () => {
     expect(caller.evaluations()).toEqual([artifact]);
   });
 
-  describe.each(setupResolvers)("$name compatibility", ({ resolve }) => {
+  describe.each(setupResolvers)("%s compatibility", (_artifact, resolve) => {
     it.each(["compat", "allowlist"] as const)(
       "uses the caller's %s policy instead of the opposite process policy",
       async (mode) => {
