@@ -345,7 +345,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --custom-image-input
 ```
 
-`--custom-api-key` is optional; if omitted, onboarding checks `CUSTOM_API_KEY` in env. OpenClaw marks common vision model IDs (GPT-4o/4.1/5.x, Claude 3/4, Gemini, Qwen-VL, LLaVA, Pixtral, and similar) as image-capable automatically. Pass `--custom-image-input` for unknown custom vision IDs, or `--custom-text-input` to force text-only metadata. Use `--custom-compatibility openai-responses` for OpenAI-compatible endpoints that support `/v1/responses` but not `/v1/chat/completions`; valid values are `openai` (default), `openai-responses`, `anthropic`.
+`--custom-api-key` is optional; if omitted, onboarding checks `CUSTOM_API_KEY` in env. For an endpoint that does not enforce authentication, pass `--custom-no-auth` instead. This persists `auth: "none"` and skips credential lookup, including `CUSTOM_API_KEY`. Do not combine it with `--custom-api-key`. Explicit no-auth requires the effective `openai-completions` adapter; Responses and Azure OpenAI routes are rejected before reset or persistence. OpenClaw marks common vision model IDs (GPT-4o/4.1/5.x, Claude 3/4, Gemini, Qwen-VL, LLaVA, Pixtral, and similar) as image-capable automatically. Pass `--custom-image-input` for unknown custom vision IDs, or `--custom-text-input` to force text-only metadata. Use `--custom-compatibility openai-responses` for OpenAI-compatible endpoints that support `/v1/responses` but not `/v1/chat/completions`; valid values are `openai` (default), `openai-responses`, `anthropic`.
 
 LM Studio also has a provider-specific key flag:
 

@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   bindSqliteWorkerDatabase,
   ensureOpenClawAgentStandingIntentsSchema,
@@ -6,6 +6,7 @@ import {
   withSqlitePostCommitPublications,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { requireMemorySearchDatabase } from "./memory-search-database.js";
 import {
   cancelStandingIntentInDatabase,
   createStandingIntentInDatabase,
@@ -21,9 +22,9 @@ import type { StandingIntentWorkerOperations } from "./standing-intents-model.js
 /** The canonical agent executor retains and closes this connection. */
 export function bindSqliteWorkerBackend(
   _input: undefined,
-  context: { database: DatabaseSync; admit(stage: "transaction" | "commit"): void },
+  context: { database: EngineConnection; admit(stage: "transaction" | "commit"): void },
 ): SqliteWorkerBackend<StandingIntentWorkerOperations> {
-  const db = context.database;
+  const db = requireMemorySearchDatabase(context.database);
   const transact = <T>(run: () => T): T => {
     try {
       return runSqliteImmediateTransactionSync(

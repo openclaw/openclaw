@@ -60,6 +60,7 @@ import {
   isDebugProxyCaptureEnvEnabled,
   isGatewayRunFastPathArgv,
   isRemoteAgentDispatchInvocation,
+  resolveBareRootLaunchPolicy,
   resolveMissingPluginCommandMessage,
   shouldHandleBareRoot,
   shouldBootstrapCliProxyBeforeFastPath,
@@ -68,6 +69,7 @@ import {
   shouldStartProxyForCli,
   shouldUseRootHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
+  TUI_REQUIRES_TTY,
 } from "./run-main-policy.js";
 import { tryRunUpdateAdmissionBeforeStartup } from "./run-main-update-admission.js";
 import type {
@@ -89,8 +91,6 @@ import {
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 const UNKNOWN_COMMAND_DISPLAY_LIMIT = 128;
-const TUI_REQUIRES_TTY =
-  "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.";
 
 function requireInteractiveTty(message: string): boolean {
   if (process.stdin.isTTY && process.stdout.isTTY) {
@@ -1118,16 +1118,13 @@ async function runCliWithPreparedOutputMode(
       : null;
 
     if (bareRootLaunchTarget) {
-      const ttyMessage =
-        bareRootLaunchTarget.kind === "remote-gateway-inference"
-          ? "Remote Gateway inference setup needs an interactive TTY. Re-run `openclaw` in a terminal connected to this Gateway."
-          : bareRootLaunchTarget.kind === "onboarding"
-            ? bareRootLaunchTarget.classic
-              ? "OpenClaw config is invalid. Run `openclaw doctor --fix` before onboarding."
-              : "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation."
-            : TUI_REQUIRES_TTY;
-      if (!requireInteractiveTty(ttyMessage)) {
+      const launchPolicy = resolveBareRootLaunchPolicy(bareRootLaunchTarget);
+      if (!requireInteractiveTty(launchPolicy.ttyMessage)) {
         return;
+      }
+      if (launchPolicy.startProxy) {
+        const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
+        await replaceStartedProxy(config?.proxy ?? undefined);
       }
       if (bareRootLaunchTarget.kind === "remote-gateway-inference") {
         const { runRemoteGatewayInferenceOnboarding } =

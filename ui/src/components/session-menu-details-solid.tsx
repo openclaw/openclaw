@@ -18,10 +18,7 @@ export function useSessionMenuDetails(
   disabled: (kind: SessionManagementActionKind) => boolean,
   revision: () => number,
 ) {
-  const ownerSnapshot = createMemo(() => {
-    revision();
-    return actions.ownerMenu.snapshot;
-  });
+  const ownerSnapshot = actions.ownerMenu.snapshot;
   const ownerStatus = (): MenuEntry[] => {
     const status = ownerSnapshot();
     if (!status.connected) {

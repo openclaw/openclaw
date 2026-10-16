@@ -112,6 +112,48 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
   };
 }
 
+it("keeps a diagnostic-only internal failure out of live and reloaded retry banners", async () => {
+  const user = textMessage("user", "Publish the fix", { id: "request", seq: 1, runId: "user-run" });
+  const answer = textMessage("assistant", "The fix is published.", {
+    id: "answer",
+    seq: 2,
+    runId: "user-run",
+  });
+  const errorMessage = "No answer was returned. Ask again if you still need one.";
+  const state = createState({ chatMessages: [user, answer] });
+  receive(state, "error", { runId: "internal-run", errorMessage, suppressErrorNotice: true });
+  expect(state.chatRunError).toBeNull();
+  expect(getChatSessionProjection(state).runs["internal-run"]).toMatchObject({ status: "error" });
+  expect(getChatSessionProjection(state).runs["internal-run"]?.errorMessage).toBeUndefined();
+  expect(state.chatMessages).toEqual([user, answer]);
+  const sessionInfo = {
+    key: "main",
+    kind: "direct",
+    sessionId: "session",
+    updatedAt: 3,
+    status: "failed",
+    lastRunId: "internal-run",
+    lastRunError: errorMessage,
+    suppressErrorNotice: true,
+    hasActiveRun: false,
+  } as const;
+  const reloaded = createHistoryState(
+    vi.fn(async () => ({ messages: [user, answer], sessionInfo })),
+  );
+  await loadChatHistory(reloaded);
+  expect(reloaded.chatRunError?.summary).toBeUndefined();
+  expect(reloaded.chatMessages).toEqual([user, answer]);
+  expect(getChatSessionProjection(reloaded).runs["internal-run"]).toMatchObject({
+    status: "error",
+  });
+  expect(getChatSessionProjection(reloaded).runs["internal-run"]?.errorMessage).toBeUndefined();
+  const attached = createStateWithRunningSession({ chatRunId: "internal-run" });
+  attached.sessionsResult = { ...attached.sessionsResult, sessions: [sessionInfo] };
+  reconcileChatRunAfterSessionStatePublication(attached);
+  expect(attached.chatRunError?.summary).toBeUndefined();
+  expect(attached.chatRunId).toBeNull();
+});
+
 it.each([true, false])(
   "keeps identical injected notes separate without adopting a run (persisted first=%s)",
   (persistedFirst) => {

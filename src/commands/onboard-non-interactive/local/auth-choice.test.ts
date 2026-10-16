@@ -223,6 +223,29 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(apiKeyParams?.secretInputMode).toBe("ref");
   });
 
+  it("skips credential resolution when custom no-auth is selected", async () => {
+    resolveNonInteractiveApiKey.mockResolvedValueOnce({
+      key: "ambient-env-key-must-be-ignored",
+      source: "env",
+      envVarName: "CUSTOM_API_KEY",
+    });
+
+    const result = await applyChoice({
+      nextConfig,
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "local-large",
+        customNoAuth: true,
+      },
+    });
+
+    expect(result?.models?.providers?.["custom-models-custom-local"]).toMatchObject({
+      auth: "none",
+    });
+    expect(result?.models?.providers?.["custom-models-custom-local"]?.apiKey).toBeUndefined();
+    expect(resolveNonInteractiveApiKey).not.toHaveBeenCalled();
+  });
+
   it("never commits an existing profile key as plaintext during custom secret-ref onboarding", async () => {
     const profileKey = "fixture-custom-profile-secret";
     resolveNonInteractiveApiKey.mockResolvedValueOnce({ key: profileKey, source: "profile" });

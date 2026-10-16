@@ -61,7 +61,7 @@ export type SqliteWorkerBackend<Operations extends SqliteWorkerOperations> = {
 export type SqliteWorkerCloseReceipt = {
   identity: DatabasePathIdentity;
   incarnation: string;
-  checkpoint: SqliteWalCheckpointSnapshot;
+  checkpoint?: SqliteWalCheckpointSnapshot;
 };
 
 // Source fixtures and compiled backends can load separate copies in the same Worker.

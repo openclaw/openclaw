@@ -1,3 +1,4 @@
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { registerSqliteWalWorkerMaintenance } from "../infra/sqlite-wal-write-admission.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
@@ -11,6 +12,9 @@ export function registerOpenClawAgentWalMaintenance(
   database: OpenClawAgentDatabase,
   env: NodeJS.ProcessEnv,
 ): void {
+  if (isPostgresSqlConnection(database.db)) {
+    return;
+  }
   const options = { agentId: database.agentId, path: database.path, env };
   const identity = readOpenClawAgentDatabaseIdentity(database);
   const expectedIdentity = {

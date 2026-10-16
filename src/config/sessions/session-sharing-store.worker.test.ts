@@ -42,6 +42,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import * as agentWorkers from "../../state/openclaw-agent-worker-store.js";
 import { emitUserProfilesChanged } from "../../state/user-profile-events.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import {
@@ -454,7 +455,11 @@ it("prepares admitted category keys in one statement and observes committed repl
       databasePath: database.path,
       admit: () => {},
     });
-    const statements = trackSqliteStatementExecutions(database.db, ["all"], () => "all");
+    const statements = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["all"],
+      () => "all",
+    );
     const transactions = vi.spyOn(database.db, "exec");
     try {
       const command = { type: "category.prepare" as const, input: { scope, from: "Work" } };
@@ -579,7 +584,9 @@ it.each([
       const cachesAtPublication: Array<ReturnType<typeof readCommittedSessionEntryCache>> = [];
       const stop = sessionChanges.subscribeFacts((change) => {
         changes.push(change);
-        cachesAtPublication.push(readCommittedSessionEntryCache(database.db));
+        cachesAtPublication.push(
+          readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db)),
+        );
         projection.invalidate(change);
       });
       const cfg = { agents: { entries: { main: {} } }, session: { store: database.path } };
@@ -702,9 +709,11 @@ it.each([
         ).rejects.toThrow("manager already revoked");
         expect(changes).toEqual([]);
         expect(projection.membership(database.path, scope.sessionKey)).toEqual(["guest"]);
-        expect(readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey)?.category).toBe(
-          " Work ",
-        );
+        expect(
+          readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))?.get(
+            scope.sessionKey,
+          )?.category,
+        ).toBe(" Work ");
         if (receipt !== "valid") {
           const outcome = await run().then(
             () => undefined,

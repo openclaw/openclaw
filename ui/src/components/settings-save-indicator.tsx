@@ -42,22 +42,19 @@ function Claw(props: { saved?: boolean }) {
 }
 
 function SaveIndicatorContent(input: { props?: SettingsSaveIndicatorProps }) {
-  const [savedVisible, setSavedVisible] = createSignal(false, { ownedWrite: true });
-  // Unrelated shell props refreshes must not clean up the saved-state timer.
-  createEffect(
-    createMemo(() => input.props?.status),
-    (status, previous) => {
-      if (previous === "saving" && status === "saved") {
-        setSavedVisible(true);
-        const timer = globalThis.setTimeout(() => setSavedVisible(false), SAVED_VISIBLE_MS);
-        return () => globalThis.clearTimeout(timer);
-      }
-      if (status !== "saved") {
-        setSavedVisible(false);
-      }
-      return undefined;
-    },
+  const status = createMemo(() => input.props?.status);
+  // Only a saving → saved transition starts a fresh display window.
+  type SaveState = SettingsSaveIndicatorProps["status"] | "saved-visible" | undefined;
+  const [saved, setSaved] = createSignal<SaveState>((previous) =>
+    previous === "saving" && status() === "saved" ? "saved-visible" : status(),
   );
+  createEffect(saved, (current) => {
+    if (current === "saved-visible") {
+      const timer = globalThis.setTimeout(() => setSaved("saved"), SAVED_VISIBLE_MS);
+      return () => globalThis.clearTimeout(timer);
+    }
+    return undefined;
+  });
   const state = createMemo(() => {
     const props = input.props;
     if (!props) {
@@ -69,10 +66,7 @@ function SaveIndicatorContent(input: { props?: SettingsSaveIndicatorProps }) {
     if (["saving", "recovery", "rejected", "error", "paused", "conflict"].includes(props.status)) {
       return props.status;
     }
-    if (savedVisible()) {
-      return "saved";
-    }
-    return props.needsApply ? "apply" : undefined;
+    return saved() === "saved-visible" ? "saved" : props.needsApply ? "apply" : undefined;
   });
   const title = () =>
     state() === "error" ? input.props?.lastError?.trim() || undefined : undefined;

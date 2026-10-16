@@ -1,6 +1,6 @@
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { LazyCustomElementRequestController } from "../../app/lazy-custom-element.ts";
+import { createLazyCustomElementRequests } from "../../app/lazy-custom-element.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
@@ -47,14 +47,28 @@ export type PageHost = SolidBridgeElement<
   { data: NewSessionRouteData | undefined },
   {
     focusComposer(): void;
-    requestUpdate(): void;
   }
 >;
 
 export class NewSessionPageOwner {
   private readonly listeners = new Set<() => void>();
   isConnected = false;
+  private pendingChange = false;
   readonly changed = () => {
+    if (!this.pendingChange && this.isConnected) {
+      this.pendingChange = true;
+      // Reconcile before Solid's queued render reads this mutable snapshot.
+      queueMicrotask(() => {
+        try {
+          if (this.isConnected) {
+            this.synchronize();
+            this.titlePreparation?.synchronize();
+          }
+        } finally {
+          this.pendingChange = false;
+        }
+      });
+    }
     for (const listener of this.listeners) {
       listener();
     }
@@ -63,18 +77,9 @@ export class NewSessionPageOwner {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
-  get updateComplete() {
-    return this.host.updateComplete;
-  }
   context?: ApplicationContext;
   get data() {
     return this.host.data;
-  }
-  get ownerDocument() {
-    return this.host.ownerDocument;
-  }
-  querySelector(selector: string) {
-    return this.host.querySelector(selector);
   }
 
   retainedForHandoff: object | null = null;
@@ -91,9 +96,7 @@ export class NewSessionPageOwner {
     ownerKey: string;
     agentId: string;
   } | null = null;
-  readonly attachmentPanelLoader = new LazyCustomElementRequestController({
-    requestUpdate: this.changed,
-  });
+  readonly attachmentPanelLoader = createLazyCustomElementRequests();
   readonly closeAttachmentPanel = () => {
     if (this.attachmentPanel) {
       this.attachmentPanel = null;
@@ -126,13 +129,14 @@ export class NewSessionPageOwner {
   };
 
   constructor(readonly host: PageHost) {
+    this.attachmentPanelLoader.subscribe(this.changed);
     this.draft = new NewSessionDraft(
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {
-        requestUpdate: this.changed,
-        querySelector: (selector) => this.querySelector(selector),
-        activeElement: () => this.ownerDocument.activeElement,
-        body: () => this.ownerDocument.body,
+        changed: this.changed,
+        querySelector: (selector) => this.host.querySelector(selector),
+        activeElement: () => this.host.ownerDocument.activeElement,
+        body: () => this.host.ownerDocument.body,
         onInvalidate: () => {
           this.closeAttachmentPanel();
           this.connectMachine?.close();
@@ -145,7 +149,7 @@ export class NewSessionPageOwner {
           closeSessionMenus(this.host);
         },
         takePreparedTitle: () => this.titlePreparation?.takePreparedTitle(),
-        updateComplete: () => this.updateComplete,
+        updateComplete: () => this.host.updateComplete,
         retainForHandoff: () => {
           if (!this.data || !this.isConnected) {
             return undefined;
@@ -189,7 +193,7 @@ export class NewSessionPageOwner {
       onMessage: (message) => this.setMessageFromUser(message),
       onError: (message) => this.submission.setError(message),
       onSubmit: () => void this.submission.submit(),
-      requestUpdate: this.changed,
+      onChange: this.changed,
     });
   }
 
@@ -197,7 +201,7 @@ export class NewSessionPageOwner {
     const context = this.context;
     const owner = this.routeOwnerKey();
     const previousFocus = document.activeElement;
-    void this.updateComplete.then(() => {
+    void this.host.updateComplete.then(() => {
       if (
         this.isConnected &&
         !this.retainedForHandoff &&
@@ -220,6 +224,7 @@ export class NewSessionPageOwner {
     this.draft.connect();
     this.submission.draftPersistence.connect();
     this.critterImport.schedule();
+    this.changed();
   }
 
   disconnect() {
@@ -262,9 +267,7 @@ export class NewSessionPageOwner {
       attachmentPanelElement,
       this.attachmentPanel !== null,
     );
-  }
 
-  updated() {
     if (this.connectMachine.open && !this.place.isAdmin()) {
       this.connectMachine.close();
     }
@@ -291,7 +294,7 @@ export class NewSessionPageOwner {
       this.openedFor = openKey;
       this.openedGroupDefaults = groupDefaults;
       this.openedAgentId = resolvedAgentId;
-      this.place.setAgentsHydrated(agentsReady);
+      this.place.agentsHydrated = agentsReady;
       this.resetDraft();
       this.messageOwnerKey = restoreDraft(
         this.context,
@@ -309,7 +312,7 @@ export class NewSessionPageOwner {
     }
     if (this.openedAgentId !== resolvedAgentId) {
       this.openedAgentId = resolvedAgentId;
-      this.place.setAgentsHydrated(false);
+      this.place.agentsHydrated = false;
     }
     this.draft.synchronizeSelections();
     activateDraft(this.submission, openKey);
@@ -382,7 +385,7 @@ export class NewSessionPageOwner {
       ...capabilities.composerProps(context, gateway, place.agentId),
       modelControl: place.modelControl,
       requiresModifier: preferences?.chatSendShortcut === "modifier-enter",
-      requestUpdate: this.changed,
+      onChange: this.changed,
       get submitting() {
         return submission.submitting;
       },

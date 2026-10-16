@@ -3,11 +3,12 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { assertSqliteSchemaContains } from "../../infra/sqlite-schema-contract.test-support.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
-import { assertOpenClawAgentSchemaContains } from "../../state/openclaw-agent-db-schema-helpers.js";
+import { AGENT_SCHEMA_COMPATIBILITY } from "../../state/openclaw-agent-db-schema-compatibility.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -17,6 +18,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
@@ -481,7 +483,12 @@ describe("session reaction store", () => {
       count: 0,
     });
     expect(() =>
-      assertOpenClawAgentSchemaContains(database.db, database.path, previousSchema),
+      assertSqliteSchemaContains(
+        requireNativeSqliteDatabase(database.db),
+        database.path,
+        previousSchema,
+        AGENT_SCHEMA_COMPATIBILITY,
+      ),
     ).not.toThrow();
   });
 });

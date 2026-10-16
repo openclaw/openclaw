@@ -187,6 +187,7 @@ export function applyHistoryRun(params: {
             : sessionInfo.status === "timeout"
               ? "timeout"
               : "error",
+        suppressErrorNotice: sessionInfo.suppressErrorNotice,
         errorMessage:
           sessionInfo.status === "failed" || sessionInfo.status === "timeout"
             ? (failureMessage ?? sessionInfo.lastRunError)

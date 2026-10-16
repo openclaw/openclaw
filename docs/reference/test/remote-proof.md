@@ -332,13 +332,14 @@ The sync root admits at most 32 mirror slots. Allocation evicts the least
 recently used idle mirror; active, corrupt-ownership, or interrupted slots remain
 protected and count toward the limit. If no slot can be safely reclaimed, the run
 uses ordinary fresh staging. `staging inspect` identifies idle mirrors, and
-`staging recover <id>` can remove one under its exclusive lock. Automatic abandoned
-staging recovery leaves idle mirrors available for reuse. Interrupted commands
-retain the existing witness, claim, and diagnostic recovery requirements.
+`staging recover <id>` can remove one under its exclusive lock. Idle mirrors remain
+available for reuse until ordinary allocation eviction or explicit recovery.
+Interrupted commands retain the existing witness, claim, and diagnostic recovery
+requirements.
 An eviction records disposal before deleting bytes and keeps its slot reserved
 until deletion finishes. If interrupted, `staging inspect` reports the recorded
-disposal as a recovery candidate; automatic recovery or `staging recover <id>`
-can resume it after acquiring the exclusive slot lock. Replaced directories and
+disposal as a recovery candidate; `staging recover <id>` can resume it after
+acquiring the exclusive slot lock. Replaced directories and
 unknown metadata remain protected. Concurrent allocators recheck capacity after
 deletion; a slot being disposed still counts toward the 32-slot limit.
 A separate disposal receipt survives the final directory and lock removal, so
@@ -419,7 +420,7 @@ seed preparation, remain held because parent-command completion does not certify
 those helpers. Their ordinary execution is unchanged. Earlier experimental
 receipt versions also remain protected.
 Explicit recovery can retry pending diagnostic preservation after a destination
-problem is repaired. Automatic recovery leaves artifact or claim failures held.
+problem is repaired. Artifact or claim failures remain held until resolved.
 Missing or changed saved outputs prevent removal; recovery never recreates a
 vanished original repository to invent a preservation destination.
 
@@ -435,8 +436,7 @@ Witness verification proves that the selected ref's objects are present and conn
 On Git 2.50+, it skips unrelated reference-database checks, so stray files such as
 Finder `.DS_Store` under `.git/refs` do not block recovery. Explicit `staging recover`
 scales its work budget with witness object storage: 120 seconds plus 30 seconds per
-GiB, at most 30 minutes. Automatic recovery after a wrapper command keeps the
-120-second bound.
+GiB, at most 30 minutes.
 Failure reasons distinguish an exhausted budget, reference-database errors, and
 missing or unconnected objects.
 
@@ -496,18 +496,19 @@ revalidates receipt, identities, and producer-absence evidence after awaited wor
 Per-ID `staging inspect <id>` also previews ordinary recovery; idle mirrors and
 completed disposal records retain their separate slot-locked workflow.
 
-Source-transfer commands inspect at most 64 bounded headers with a 250-ms soft
-discovery budget after the initial volume lookup. This scan does not hash payloads, search Git history, or query a
-provider. A temporary cursor advances subsequent scans past protected entries;
-`staging inspect --after <nextCursor>` also pages the local report. After successful
-normal completion the wrapper attempts at most one discovered candidate. Help,
-listing, version output, and cancellation do not start old-stage recovery, and a
-recovery failure does not change the completed command's result. Inspection reports
-incomplete scans and elapsed time; bulk verification is separately bounded and can
-take longer. Unsupported filesystem durability, including native Windows directory
-flushes, prevents orphan recovery while preserving ordinary operation. Normal
-cleanup still removes its own successful or dirty-source staging without requiring
-an independent recovery witness.
+`staging inspect` reads at most 64 bounded headers with a 250-ms soft budget after
+the initial volume lookup. This scan does not hash payloads, search Git history, or
+query a provider. Use `staging inspect --after <nextCursor>` to page the local report
+with its returned cursor. Inspection reports incomplete scans and elapsed time;
+per-ID recovery verification is separately bounded and can take longer.
+
+Use `staging inspect` to find retained staging, then `staging recover <id>` for one
+selected candidate. Ordinary commands do not scan or recover unrelated abandoned
+staging. Mirror allocation retains slot-locked eviction, including resuming
+eligible recorded disposals. Ordinary commands clean up their own successful or
+dirty-source staging without an independent recovery witness. Unsupported
+filesystem durability, including native Windows directory flushes, prevents orphan
+recovery while preserving ordinary operation.
 
 These are local artifacts, not published or fully sanitized proof. Blacksmith's
 native failure bundle contains captured stdout/stderr and diagnostic metadata;

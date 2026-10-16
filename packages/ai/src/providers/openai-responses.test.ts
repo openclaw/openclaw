@@ -111,32 +111,25 @@ describe("OpenAI Responses provider", () => {
     },
   );
 
-  it.each(["long"] as const)(
-    "identifies OpenCode conversations with %s cache retention",
-    async (cacheRetention) => {
-      await streamOpenAIResponses(model({ baseUrl: "https://opencode.ai/zen/v1" }), context, {
-        apiKey: "test",
-        sessionId: "conversation-123",
-        cacheRetention,
-      }).result();
-      expect(openAiMockState.configs[0]).toMatchObject({
-        defaultHeaders: { "x-opencode-session": "conversation-123" },
-      });
-    },
-  );
+  it("identifies OpenCode conversations with long cache retention", async () => {
+    await streamOpenAIResponses(model({ baseUrl: "https://opencode.ai/zen/v1" }), context, {
+      apiKey: "test",
+      sessionId: "conversation-123",
+      cacheRetention: "long",
+    }).result();
+    expect(openAiMockState.configs[0]).toMatchObject({
+      defaultHeaders: { "x-opencode-session": "conversation-123" },
+    });
+  });
 
-  it.each(["priority"] as const)(
-    "sends service tier %s from simple completions",
-    async (serviceTier) => {
-      await streamSimpleOpenAIResponses(model(), context, { apiKey: "test", serviceTier }).result();
-      expect(openAiMockState.params).toHaveLength(1);
-      if (serviceTier) {
-        expect(openAiMockState.params[0]).toMatchObject({ service_tier: serviceTier });
-      } else {
-        expect(openAiMockState.params[0]).not.toHaveProperty("service_tier");
-      }
-    },
-  );
+  it("sends priority service tier from simple completions", async () => {
+    await streamSimpleOpenAIResponses(model(), context, {
+      apiKey: "test",
+      serviceTier: "priority",
+    }).result();
+    expect(openAiMockState.params).toHaveLength(1);
+    expect(openAiMockState.params[0]).toMatchObject({ service_tier: "priority" });
+  });
 
   it("routes the SDK fetch through the host guard without changing the request or response", async () => {
     const hostResponse = new Response("synthetic rejection", { status: 500 });

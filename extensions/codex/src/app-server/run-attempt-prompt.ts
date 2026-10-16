@@ -37,6 +37,7 @@ import {
   codexDynamicToolsFingerprint,
   codexLegacyDynamicToolsFingerprint,
 } from "./thread-fingerprints.js";
+import { resolveCodexProjectionStartupBinding } from "./thread-restricted-resume.js";
 import { hasCodexMirrorOrigin } from "./transcript-mirror-attestation.js";
 import {
   buildCodexHistoryProvenancePrefix,
@@ -194,6 +195,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     promptState.promptContextRange = projection.promptContextRange;
     promptState.noEngineContinuityProjectionApplied = true;
   };
+  let preparedBootstrapProjection:
+    | (() => ReturnType<typeof projectContextEngineAssemblyForCodex>)
+    | undefined;
+  let contextEngineBootstrapPromptApplied = false;
   const applyActiveContextEngineProjection = async (
     decisionStartupBinding: typeof mutable.startupBinding,
   ) => {
@@ -263,23 +268,29 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
               legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
             })
           : { project: true, reason: "per-turn-projection" };
-      const projection = await projectContextEngineAssemblyForCodex({
-        assembledMessages: [...assembled.messages, ...(params.continuation?.messages ?? [])],
-        prompt: params.prompt,
-        systemPromptAddition: assembled.systemPromptAddition,
-        maxRenderedContextChars: codexContextProjectionMaxChars,
-        toolPayloadMode:
-          contextEngineProjection ||
-          params.continuation ||
-          params.pluginRuntimeRefreshMessages ||
-          preserveForkedToolResults
-            ? "preserve"
-            : "elide",
-        ...(projectionDecision.project ? { prepareFileContext } : {}),
-        currentUserTurnIdempotencyKey,
-        currentUserMessage: admittedMessage,
-      });
+      const renderProjection = (includeAttachments: boolean) =>
+        projectContextEngineAssemblyForCodex({
+          assembledMessages: [...assembled.messages, ...(params.continuation?.messages ?? [])],
+          prompt: params.prompt,
+          systemPromptAddition: assembled.systemPromptAddition,
+          maxRenderedContextChars: codexContextProjectionMaxChars,
+          toolPayloadMode:
+            contextEngineProjection ||
+            params.continuation ||
+            params.pluginRuntimeRefreshMessages ||
+            preserveForkedToolResults
+              ? "preserve"
+              : "elide",
+          ...(includeAttachments ? { prepareFileContext } : {}),
+          currentUserTurnIdempotencyKey,
+          currentUserMessage: admittedMessage,
+        });
+      const projection = await renderProjection(projectionDecision.project);
       assertProjectionCurrent();
+      preparedBootstrapProjection = contextEngineProjection
+        ? () => renderProjection(true)
+        : undefined;
+      contextEngineBootstrapPromptApplied = projectionDecision.project;
       contextImageGroups = projectionDecision.project ? (projection.imageGroups ?? []) : [];
       embeddedAgentLog.info("codex app-server context-engine projection decision", {
         sessionId: params.sessionId,
@@ -324,7 +335,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   };
   if (activeContextEngine) {
     await applyActiveContextEngineProjection(
-      runtime.nativeToolSurfaceEnabled ? mutable.startupBinding : undefined,
+      resolveCodexProjectionStartupBinding({
+        params,
+        binding: mutable.startupBinding,
+        nativeToolSurfaceEnabled: runtime.nativeToolSurfaceEnabled,
+      }),
     );
   }
   // Refresh changes the transport prompt, but retains the admitted request's recorder.
@@ -569,7 +584,22 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
               message.content.some((part) => part.type === "text" && part.text.trim())))),
     );
     if (activeContextEngine) {
-      return false;
+      if (
+        action !== "started" ||
+        contextEngineBootstrapPromptApplied ||
+        !preparedBootstrapProjection
+      ) {
+        return false;
+      }
+      // Policy can select a successor after assembly chose native reuse. Replay that
+      // admitted snapshot, including attachments, without another engine assembly.
+      const projection = await preparedBootstrapProjection();
+      assertProjectionCurrent();
+      contextImageGroups = projection.imageGroups ?? [];
+      promptState.promptText = projection.promptText;
+      promptState.promptContextRange = projection.promptContextRange;
+      contextEngineBootstrapPromptApplied = true;
+      return true;
     }
     if (params.continuation) {
       await applyContinuityProjection(action === "started" ? historyState.messages : []);

@@ -27,6 +27,7 @@ import {
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
+import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { isSessionTitlePending, resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import {
@@ -34,8 +35,6 @@ import {
   resolveUiSessionNavigationParentKey,
 } from "../../../lib/sessions/session-key.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
-import type { PresentationValue } from "../../../lit/presentation-binding.ts";
-import { usePanePresentation } from "../chat-pane-embedded-view.tsx";
 import {
   PaneDetails,
   PaneHeaderPresence,
@@ -43,6 +42,7 @@ import {
   PaneSubagentStop,
   type PaneDetailsProps,
 } from "../chat-pane-header-view.tsx";
+import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { ChatPaneLayoutMenu, type ChatPaneLayoutMenuProps } from "./chat-header-panel-actions.tsx";
 import { ChatPanePlacement } from "./chat-pane-placement.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";

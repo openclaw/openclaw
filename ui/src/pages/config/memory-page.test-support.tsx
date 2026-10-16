@@ -361,6 +361,7 @@ export function createMemoryPage(params: {
     refresh: runtimeConfig.refresh,
     runExternalMutation: runtimeConfig.runExternalMutation,
     lookupSchemaPath: runtimeConfig.lookupSchemaPath,
+    runtimeConfig,
   };
 }
 

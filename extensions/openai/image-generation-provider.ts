@@ -280,11 +280,7 @@ function resolveOpenAIImageRequestSize(
   };
 }
 
-function shouldAllowPrivateImageEndpoint(req: {
-  provider: string;
-  model: string;
-  cfg: OpenClawConfig | undefined;
-}) {
+function shouldAllowPrivateImageEndpoint(req: OpenAIImageRequest) {
   if (req.provider === MOCK_OPENAI_PROVIDER_ID) {
     return true;
   }
@@ -886,7 +882,9 @@ export function buildOpenAIImageGenerationProvider(
           maxDownloads: OPENAI_MAX_IMAGE_RESULTS,
           maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "image"),
           defaultMimeType: resolveOutputMime(req.outputFormat).mimeType,
-          allowPrivateNetwork,
+          allowPrivateNetwork:
+            isPrivateNetworkOptInEnabled(req.cfg?.browser?.ssrfPolicy) ||
+            openAIProviderConfig?.request?.allowPrivateNetwork === true,
           ssrfPolicy: req.ssrfPolicy,
           dispatcherPolicy,
         });

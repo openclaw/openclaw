@@ -1,11 +1,11 @@
 import { Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import type { PresentationValue } from "../../lib/presentation.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { PresentationValue } from "../../lit/presentation-binding.ts";
 import { LitContent } from "../../lit/solid-content.tsx";
-import { usePanePresentation } from "./chat-pane-embedded-view.tsx";
 import { PaneDetails, PaneSubagentStop, type PaneDetailsProps } from "./chat-pane-header-view.tsx";
+import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { renderChatTopbarNotices } from "./chat-view-notices.tsx";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
 import { PaneHeaderView, type ChatPaneHeaderPresentation } from "./components/chat-pane-header.tsx";

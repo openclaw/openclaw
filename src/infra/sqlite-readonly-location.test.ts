@@ -324,7 +324,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
         measuredBeforeCleanup = fs.readdirSync(path.join(cacheRoot, "openclaw")).length > 0;
         return statfs(...args);
       });
-      vi.spyOn(fs, "writeSync").mockImplementationOnce(() => {
+      const sync = vi.spyOn(fs, "fsyncSync").mockImplementationOnce(() => {
         throw quotaError;
       });
 
@@ -336,6 +336,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
           }),
         );
       });
+      expect(sync).toHaveBeenCalledOnce();
       expect(measuredBeforeCleanup).toBe(true);
       expect(readFamily(databasePath)).toEqual(before);
       expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);

@@ -10,6 +10,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -98,8 +99,10 @@ describe("SQLite transcript watermark queries", () => {
     const target = scope("first");
     const database = openOpenClawAgentDatabase(target);
     const resolved = resolveSqliteTranscriptReadScope(target);
-    const queries = trackSqliteStatementExecutions(database.db, ["reads"], (sql) =>
-      sql.toLowerCase().startsWith("select") ? "reads" : null,
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["reads"],
+      (sql) => (sql.toLowerCase().startsWith("select") ? "reads" : null),
     );
     try {
       runSqliteReadOperationSync(database.db, () =>
@@ -179,10 +182,13 @@ describe("SQLite transcript watermark queries", () => {
         storage: "file",
       }),
     );
-    const queries = trackSqliteStatementExecutions(database.db, ["watermarks"], (sql) =>
-      isHotWatermarkQuery(sql) || sql.includes('from "session_transcript_cold_archives"')
-        ? "watermarks"
-        : null,
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["watermarks"],
+      (sql) =>
+        isHotWatermarkQuery(sql) || sql.includes('from "session_transcript_cold_archives"')
+          ? "watermarks"
+          : null,
     );
     try {
       for (const [sessionId, expected] of [
@@ -217,8 +223,10 @@ describe("SQLite transcript watermark queries", () => {
     const isVersionQuery = (sql: string) =>
       sql.includes('from "transcript_rewrite_watermarks"') ||
       (sql.includes('from "transcript_events"') && !sql.includes("event_json"));
-    const queries = trackSqliteStatementExecutions(database.db, ["watermarks"], (sql) =>
-      isVersionQuery(sql) ? "watermarks" : null,
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["watermarks"],
+      (sql) => (isVersionQuery(sql) ? "watermarks" : null),
     );
     const compile = vi.spyOn(getNodeSqliteKysely(database.db).getExecutor(), "compileQuery");
     try {
@@ -325,12 +333,15 @@ describe("SQLite transcript watermark queries", () => {
     const database = openOpenClawAgentDatabase(target);
     const before = readSessionTranscriptWatermark(target);
     const peer = new (requireNodeSqlite().DatabaseSync)(database.path);
-    const queries = trackSqliteStatementExecutions(database.db, ["watermarks"], (sql) =>
-      /\b(?:transcript_events|transcript_rewrite_watermarks|session_transcript_cold_archives)\b/.test(
-        sql,
-      )
-        ? "watermarks"
-        : null,
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["watermarks"],
+      (sql) =>
+        /\b(?:transcript_events|transcript_rewrite_watermarks|session_transcript_cold_archives)\b/.test(
+          sql,
+        )
+          ? "watermarks"
+          : null,
     );
     const read = () => {
       const executions = queries.counts.watermarks;

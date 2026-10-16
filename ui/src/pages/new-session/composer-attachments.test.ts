@@ -45,7 +45,7 @@ it.each(["owner", "tile"] as const)(
       message: "Keep this draft",
       modelControl,
       requiresModifier: false,
-      requestUpdate: redraw,
+      onChange: redraw,
       submitting: false,
       textareaController,
       onInput: () => {},

@@ -33,6 +33,7 @@ import type { MemoryLimitParams } from "./lib/process-memory.mts";
 import { resolveRunNodeInputSignature } from "./lib/run-node-input-state.mts";
 import { preflightInstalledSourceArtifacts } from "./lib/source-update-artifact-preflight.mts";
 import { TSDOWN_PACKAGE_CONFIG_GROUP } from "./lib/tsdown-config-groups.mts";
+import { resolveTsdownDeclarationGeneratorInputs } from "./lib/tsdown-declaration-generator-inputs.mts";
 import {
   TSDOWN_PACKAGE_OUTPUT_ROOTS,
   tsdownPackageOutputRoot,
@@ -40,7 +41,6 @@ import {
 import {
   TSDOWN_MAX_OLD_SPACE_MB_ENV,
   TSDOWN_DECLARATION_EXTENSIONS,
-  TSDOWN_DECLARATION_TOOL_INPUTS,
   TSDOWN_PACKAGES_CACHE_INPUT,
   listTsdownOutputRoots,
   resolveTsdownBuildPlan,
@@ -82,7 +82,12 @@ const declarationStep = (
 ): BuildAllStep => ({
   ...tsxStep(label, "scripts/tsdown-build.mts", "--config", config, ...args),
   cache: {
-    inputs: [...TSDOWN_DECLARATION_TOOL_INPUTS, config, TSDOWN_PACKAGES_CACHE_INPUT],
+    inputs: (root) => [
+      ...resolveTsdownDeclarationGeneratorInputs(root, "scripts/tsdown-build.mts", config),
+      "scripts/build-all.mts",
+      "tsconfig.packages.json",
+      TSDOWN_PACKAGES_CACHE_INPUT,
+    ],
     outputs: roots.map((root) => ({ path: root, extensions: TSDOWN_DECLARATION_EXTENSIONS })),
     restore: "always",
     runOnHit: { env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" } },

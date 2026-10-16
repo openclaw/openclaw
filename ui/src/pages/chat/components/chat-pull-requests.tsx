@@ -10,6 +10,7 @@ import { SessionGitDiff } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import "../../../components/tooltip.ts";
+import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
   orderSessionPullRequests,
@@ -17,10 +18,6 @@ import {
 } from "../../../lib/session-pull-request-presentation.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
-import {
-  PRESENTATION_CHANGED_EVENT,
-  type PresentationValue,
-} from "../../../lit/presentation-binding.ts";
 import { GitHubPublicationAction, GitHubPublicationDetails } from "./chat-github-publication.tsx";
 import { ChatPullRequestChecks } from "./chat-pull-request-checks.tsx";
 import { chatPullRequestId } from "./chat-pull-requests.ts";

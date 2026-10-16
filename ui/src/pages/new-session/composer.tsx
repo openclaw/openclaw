@@ -81,7 +81,7 @@ export type NewSessionComposerOptions = {
   modelControl: NewSessionModelControl;
   permissionControl?: JSX.Element;
   requiresModifier: boolean;
-  requestUpdate: () => void;
+  onChange: () => void;
   submitDisabledReason?: string;
   blockedSubmitNotice?: string;
   dictationActive?: boolean;
@@ -172,27 +172,23 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
       return;
     }
     if (
-      options.textareaController.emojiMenu.handleKeydown(
-        event,
-        "new-session",
-        options.requestUpdate,
-      ) ||
+      options.textareaController.emojiMenu.handleKeydown(event, "new-session", options.onChange) ||
       options.textareaController.mentionMenu.handleKeydown(
         event,
         mentionMenuHost,
-        options.requestUpdate,
+        options.onChange,
       ) ||
       handleSkillMenuKeydown(
         event,
         options.textareaController.skillMenuState,
         skillMenuHost,
-        options.requestUpdate,
+        options.onChange,
       ) ||
       handleSlashMenuKeydown(
         event,
         options.textareaController.slashMenuState,
         slashMenuHost,
-        options.requestUpdate,
+        options.onChange,
       )
     ) {
       return;
@@ -228,7 +224,7 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
   const updateEmojiMenu = (target: HTMLTextAreaElement) => {
     emojiMenu.update(
       target,
-      options.requestUpdate,
+      options.onChange,
       !composerLocked &&
         !options.nativeTerminal &&
         !options.textareaController.composing &&
@@ -242,20 +238,20 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
       emojiMenu.close();
       return;
     }
-    updateSlashMenu(target.value, slashMenuState, slashMenuHost, options.requestUpdate);
+    updateSlashMenu(target.value, slashMenuState, slashMenuHost, options.onChange);
     updateSkillMenu(
       target.value,
       target.selectionStart,
       skillMenuState,
       skillMenuHost,
-      options.requestUpdate,
+      options.onChange,
     );
     if (event?.inputType === "insertFromPaste" || event?.inputType === "insertFromDrop") {
       mentionMenu.close();
     } else {
       mentionMenu.update(
         target,
-        options.requestUpdate,
+        options.onChange,
         !event
           ? "selection"
           : event.inputType === "insertText" && event.data?.includes("@") === true
@@ -269,7 +265,7 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
     const target = event.currentTarget;
     if (target instanceof HTMLTextAreaElement) {
       if (event.type === "keyup") {
-        mentionMenu.update(target, options.requestUpdate);
+        mentionMenu.update(target, options.onChange);
         updateEmojiMenu(target);
       } else {
         updateMenus(target);
@@ -407,6 +403,7 @@ function createComposerPlaceholder(options: () => NewSessionComposerOptions) {
     (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
   const [frame, setFrame] = createSignal({ target: "", text: "" });
   let entered = false;
+  // Restart the browser animation only when its text changes; typing cancels pending frames.
   createEffect(
     () => [target(), hasMessage()] as const,
     ([text, hasText]) => {
@@ -490,7 +487,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
           props.options.textareaController.emojiMenu.dismiss(
             props.options.textareaController.getTextarea(),
           );
-          props.options.requestUpdate();
+          props.options.onChange();
         }}
       >
         <openclaw-lobster-pet
@@ -528,7 +525,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
           args={[
             props.options.textareaController.mentionMenu,
             frame().mentionMenuHost,
-            props.options.requestUpdate,
+            props.options.onChange,
           ]}
         />
         <EmojiMenu
@@ -536,7 +533,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
             props.options.textareaController.emojiMenu,
             "new-session",
             props.options.textareaController.getTextarea(),
-            props.options.requestUpdate,
+            props.options.onChange,
           ]}
         />
         <Show when={!props.options.nativeTerminal}>
@@ -559,7 +556,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                   props.options.textareaController.slashMenuState,
                   frame().slashMenuHost,
                   props.options.message,
-                  props.options.requestUpdate,
+                  props.options.onChange,
                 ]}
               />
             </Show>
@@ -568,7 +565,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                 args={[
                   props.options.textareaController.skillMenuState,
                   frame().skillMenuHost,
-                  props.options.requestUpdate,
+                  props.options.onChange,
                 ]}
               />
             </Show>
@@ -621,7 +618,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                 };
                 props.options.textareaController.emojiMenu.complete(
                   event,
-                  props.options.requestUpdate,
+                  props.options.onChange,
                   !frame().composerLocked &&
                     !props.options.nativeTerminal &&
                     !props.options.textareaController.composing,
@@ -643,7 +640,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                 props.options.textareaController.composing = false;
                 props.options.textareaController.emojiMenu.close();
                 if (emojiWasOpen) {
-                  props.options.requestUpdate();
+                  props.options.onChange();
                 }
               }}
               onCompositionEnd={(event) => {
@@ -656,7 +653,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                 props.options.textareaController.composing = true;
                 props.options.textareaController.emojiMenu.close();
                 props.options.textareaController.mentionMenu.close();
-                props.options.requestUpdate();
+                props.options.onChange();
               }}
               onPaste={(event) => {
                 if (props.options.nativeTerminal && event.clipboardData?.files.length) {

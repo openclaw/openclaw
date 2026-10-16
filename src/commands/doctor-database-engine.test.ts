@@ -16,7 +16,9 @@ describe("Doctor database engines", () => {
   it("reports default SQLite store families without an experimental warning", () => {
     noteDatabaseEngines({});
     expect(note).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("Shared state: sqlite\nAgent data: sqlite\nWorkboard: sqlite"),
+      expect.stringContaining(
+        "Shared state: default=sqlite, override=inherit, effective=sqlite (configured)",
+      ),
       "Database engines",
     );
     expect(vi.mocked(note).mock.calls[0]?.[0]).not.toContain("experimental");
@@ -27,11 +29,18 @@ describe("Doctor database engines", () => {
     const cfg = { database: { engine: "postgres" as const } };
     noteDatabaseEngines(cfg);
     expect(note).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("Shared state: postgres\nAgent data: sqlite\nWorkboard: postgres"),
+      expect.stringContaining(
+        "Shared state: default=postgres, override=inherit, effective=postgres (configured)",
+      ),
       "Database engines",
     );
     const output = String(vi.mocked(note).mock.calls[0]?.[0]);
-    expect(output).toContain("Logbook: postgres");
+    expect(output).toContain(
+      "Agent data: default=postgres, override=inherit, effective=postgres (configured)",
+    );
+    expect(output).toContain(
+      "Logbook: default=postgres, override=inherit, effective=postgres (configured)",
+    );
     expect(output.match(/experimental/g)).toHaveLength(1);
     expect(output).toContain("Stores without a registered PostgreSQL schema remain on SQLite");
     expect(collectDatabaseEngineHealthFindings(cfg)).toEqual([
@@ -41,5 +50,30 @@ describe("Doctor database engines", () => {
         fixHint: expect.stringContaining("/reference/database-engines"),
       }),
     ]);
+  });
+
+  it("reports mixed overrides and warns even with a SQLite default", () => {
+    const cfg = {
+      database: {
+        engine: "sqlite" as const,
+        families: {
+          state: { engine: "postgres" as const },
+          agent: { engine: "sqlite" as const },
+          workboard: { engine: "postgres" as const },
+        },
+      },
+    };
+    noteDatabaseEngines(cfg);
+    const output = String(vi.mocked(note).mock.calls[0]?.[0]);
+    expect(output).toContain(
+      "Workboard: default=sqlite, override=postgres, effective=postgres (configured)",
+    );
+    expect(output).toContain(
+      "Agent data: default=sqlite, override=sqlite, effective=sqlite (configured)",
+    );
+    expect(output).toContain(
+      "Database quarantine: default=sqlite, override=fixed local, effective=sqlite (configured)",
+    );
+    expect(collectDatabaseEngineHealthFindings(cfg)).toHaveLength(1);
   });
 });

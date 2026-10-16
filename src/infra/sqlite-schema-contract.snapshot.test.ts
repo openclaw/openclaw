@@ -3,10 +3,8 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "./kysely-sync-cache-state.js";
-import {
-  collectSqliteSchemaIssues,
-  createSqliteTableContractReader,
-} from "./sqlite-schema-contract.js";
+import { createSqliteTableContractReader } from "./sqlite-schema-contract.js";
+import { collectSqliteSchemaIssues } from "./sqlite-schema-contract.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

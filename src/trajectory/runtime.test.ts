@@ -1,4 +1,3 @@
-// Trajectory runtime tests cover event recording and runtime file handling.
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -25,6 +24,8 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+// Trajectory runtime tests cover event recording and runtime file handling.
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { TRAJECTORY_RUNTIME_EVENT_MAX_BYTES } from "./paths.js";
 import * as runtimeStoreWriter from "./runtime-store-writer.js";
 import {
@@ -155,8 +156,10 @@ describe("trajectory runtime", () => {
     const database = openOpenClawAgentDatabase(
       toDatabaseOptions(resolveSqliteReadScope({ sessionKey, storePath })),
     );
-    const statements = trackSqliteStatementExecutions(database.db, ["trajectory"], (sql) =>
-      sql.includes("trajectory_runtime_events") ? "trajectory" : null,
+    const statements = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["trajectory"],
+      (sql) => (sql.includes("trajectory_runtime_events") ? "trajectory" : null),
     );
     try {
       await runtimeRecorder.flush();

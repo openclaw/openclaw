@@ -10,7 +10,9 @@ import {
   pendingPromotion,
 } from "../../scripts/generate-postgres-schema.mts";
 import { catalog as readCatalog, portTables } from "../../scripts/lib/postgres-schema-catalog.mts";
+import { generateSqliteSchemaCatalogs } from "../../scripts/lib/sqlite-schema-generation.mts";
 import { listOpenClawStateFeatureSchemas } from "../../src/state/openclaw-state-feature-schema.js";
+import type statePortMetadata from "../../src/state/postgres-schema.generated/state-port.json";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -36,6 +38,23 @@ function verifiedFixture(sql: string, verify: (db: DatabaseSync) => void) {
 }
 
 describe("PostgreSQL schema generation", () => {
+  it("generates state port metadata from every canonical table and optional fragment", async () => {
+    const { files, report } = await generatePostgresSchemas(root);
+    const metadata: typeof statePortMetadata = JSON.parse(files["state-port.json"]!);
+    const schemas = [metadata, ...metadata.fragments];
+    expect(
+      schemas.flatMap((schema) => schema.tables.map((table) => table.name)).toSorted(),
+    ).toEqual(report.catalogs.state!.tables.map((table) => table.name).toSorted());
+    expect(
+      metadata.fragments.find((fragment) => fragment.id === "agent_deletion_journal"),
+    ).toBeDefined();
+    expect(Buffer.byteLength(files["state-port.json"]!)).toBeLessThan(60_000);
+    expect(schemas.some((schema) => "sqlite" in schema || "objects" in schema)).toBe(false);
+    expect(schemas.flatMap((schema) => schema.tables).some((table) => "columns" in table)).toBe(
+      false,
+    );
+  });
+
   it("preserves all agent relational objects and declares search separately", async () => {
     const { files, report } = await generatePostgresSchemas(root);
     const agent = report.catalogs.agent!;
@@ -176,7 +195,9 @@ describe("PostgreSQL schema generation", () => {
     for (const file of [
       "state.postgres.sql",
       "state-v23-v24.postgres.sql",
+      "state-v24-v25.postgres.sql",
       "agent.postgres.sql",
+      "agent-search.postgres.sql",
       ...report.fragments.map((item) => item.file),
     ]) {
       expect(files[file], file).not.toMatch(/^(?:BEGIN;|COMMIT;|SET |CREATE SCHEMA )/m);
@@ -197,13 +218,25 @@ describe("PostgreSQL schema generation", () => {
     expect((await generatePostgresSchemas(root)).files).toEqual(generated.files);
     expect(Object.keys(generated.files).toSorted()).toEqual(
       [
+        "agent-runtime.ts",
         "agent.postgres.sql",
+        "agent-search-runtime.ts",
+        "agent-search.postgres.sql",
         ...generated.report.fragments.map((fragment) => fragment.file),
         "manifest.json",
         "portability-report.md",
         "state.postgres.sql",
         "state-v23-v24.postgres.sql",
+        "state-v24-v25.postgres.sql",
         "runtime.ts",
+        "sqlite-catalogs.ts",
+        "sqlite-state-catalogs.ts",
+        "sqlite-state-catalogs.json",
+        "sqlite-agent-catalogs.ts",
+        "sqlite-agent-catalogs.json",
+        "sqlite-daemon-catalogs.ts",
+        "sqlite-daemon-catalogs.json",
+        "state-port.json",
       ].toSorted(),
     );
     expect(
@@ -309,6 +342,30 @@ describe("PostgreSQL schema generation", () => {
         db.close();
       }
     }
+  });
+
+  it("generates computed fragments after their owner prepares native SQLite capabilities", async () => {
+    const fragments = [3, 8].map((dimensions) => ({
+      id: `memory-vector-${dimensions}`,
+      store: "memory",
+      sql: `CREATE TABLE memory_vector_${dimensions} (embedding BLOB CHECK (length(embedding) = vector_dimensions())) STRICT;`,
+      prepare: (db: DatabaseSync) => {
+        db.function("vector_dimensions", { deterministic: true }, () => dimensions);
+      },
+    }));
+    const first = fragments[0]!;
+    await expect(
+      generateSqliteSchemaCatalogs([{ id: first.id, store: first.store, sql: first.sql }], root),
+    ).rejects.toMatchObject({ cause: { message: expect.stringContaining("no such function") } });
+
+    const files = await generateSqliteSchemaCatalogs(fragments, root);
+    expect(JSON.parse(files["sqlite-memory-catalogs.json"]!)).toMatchObject({
+      tables: [3, 8].map((dimensions) => ({
+        name: `memory_vector_${dimensions}`,
+        sql: `CREATE TABLE memory_vector_${dimensions} (embedding BLOB CHECK (length(embedding) = vector_dimensions())) STRICT`,
+        columns: [{ name: "embedding", type: "BLOB" }],
+      })),
+    });
   });
 
   it("preserves mapped types, keys, defaults, index ordering, and foreign-key timing", async () => {

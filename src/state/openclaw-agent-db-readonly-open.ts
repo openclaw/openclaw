@@ -3,7 +3,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isDeletedAgentDatabasePath } from "../infra/agent-database-readers.js";
+import { assertEngineStoreExecutionAllowed } from "../infra/database-engine/admission-scope.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
+import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
 import {
   admitSqliteSchema,
@@ -18,6 +21,7 @@ import { loadOpenClawAgentCanonicalValidationReceipt } from "./openclaw-agent-ca
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import { hasPendingAgentStartupColumns } from "./openclaw-agent-db-additive-columns.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
+import { agentEngineInput, openAgentEngineStore } from "./openclaw-agent-db-engine.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
   classifyOpenClawAgentDatabaseReadError,
@@ -44,7 +48,7 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js
 
 export type OpenClawAgentReadOnlyDatabase = {
   agentId: string;
-  db: DatabaseSync;
+  db: EngineConnection;
   path: string;
 };
 
@@ -135,6 +139,10 @@ export function openOpenClawAgentDatabaseReadOnly(
   options: OpenClawAgentDatabaseOptions,
   behavior: { allowExtension?: boolean; lifecycle?: "agent" } = {},
 ): OpenClawAgentDatabaseReadOnlyOpenResult {
+  const engineInput = agentEngineInput();
+  if (engineInput) {
+    assertEngineStoreExecutionAllowed();
+  }
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
   if (isIncognitoOpenClawAgentSqlitePath(pathname, { agentId, env: options.env })) {
@@ -158,19 +166,27 @@ export function openOpenClawAgentDatabaseReadOnly(
   // is set, so a later PRAGMA leaves every earlier statement unprotected.
   let db: DatabaseSync;
   try {
-    db = openSqliteReadOnlyDatabase(pathname, {
-      timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-      ...(behavior.allowExtension ? { allowExtension: true } : {}),
-    });
+    db = engineInput
+      ? openNodeSqliteDatabase(resolveExistingSqliteFileUri(pathname), {
+          timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        })
+      : openSqliteReadOnlyDatabase(pathname, {
+          timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          ...(behavior.allowExtension ? { allowExtension: true } : {}),
+        });
   } catch (error) {
     recordOpenClawAgentDatabaseReadOpenFailure(error);
     throw error;
   }
   let closed = false;
+  let selected: EngineConnection = db;
   let unregister: (() => void) | undefined;
   const close = () => {
     if (closed) {
       return;
+    }
+    if (selected !== db && selected.isOpen) {
+      selected.close();
     }
     if (db.isOpen) {
       db.close();
@@ -180,6 +196,23 @@ export function openOpenClawAgentDatabaseReadOnly(
     unregister = undefined;
   };
   try {
+    if (engineInput) {
+      selected = openAgentEngineStore(db, agentId, pathname, true, (connection, error) => {
+        selected = connection;
+        throw error;
+      });
+      registerOpenClawAgentDatabaseIdentity(selected);
+      const database = { agentId, db: selected, path: pathname, close };
+      if (behavior.lifecycle === "agent") {
+        unregister = registerOpenClawAgentDatabaseSyncResource({
+          agentId,
+          path: pathname,
+          revoke: close,
+          close,
+        });
+      }
+      return { found: true, database };
+    }
     enableNodeSqliteKyselyStatementCache(db);
     registerOpenClawAgentDatabaseIdentity(db);
     const privatePath = isArtifactPreservingStateRead("agent", pathname)

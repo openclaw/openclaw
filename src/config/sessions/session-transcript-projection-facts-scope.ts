@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
@@ -14,7 +14,7 @@ export function withSessionTranscriptProjectionReceipt<T>(
   return projectionReceipts.run(receipt, read);
 }
 
-function readCurrentReceipt(database: { db: DatabaseSync; path: string }, sessionId: string) {
+function readCurrentReceipt(database: { db: EngineConnection; path: string }, sessionId: string) {
   const receipt = projectionReceipts.getStore();
   if (
     !receipt ||
@@ -29,7 +29,7 @@ function readCurrentReceipt(database: { db: DatabaseSync; path: string }, sessio
 }
 
 export function readSessionTranscriptProjectionReceipt(
-  database: { db: DatabaseSync; path: string },
+  database: { db: EngineConnection; path: string },
   sessionId: string,
 ) {
   const receipt = readCurrentReceipt(database, sessionId);
@@ -38,7 +38,7 @@ export function readSessionTranscriptProjectionReceipt(
 
 /** Accounting needs row validity, already established by the complete actor postimage. */
 export function hasSessionTranscriptEntryReceipt(
-  database: { db: DatabaseSync; path: string },
+  database: { db: EngineConnection; path: string },
   sessionId: string,
   sessionKey: string,
 ): boolean {

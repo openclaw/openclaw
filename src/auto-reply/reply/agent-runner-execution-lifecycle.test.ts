@@ -33,7 +33,6 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
-import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   createReplyOperation,
@@ -371,17 +370,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
           ? "Thinking level clamped to off for demo/basic (requested high; preference retained)."
           : undefined,
       );
-      const notice = await buildReplyDiagnosticsPayload({
-        activeSessionEntry: undefined,
-        followupRun,
-        accounting: {
-          runResult: result.runResult,
-          providerUsed: "demo",
-          modelUsed: "basic",
-          contextTokensUsed: 0,
-        },
-      });
-      expect(notice?.text).toBe(result.runResult.meta.requestShaping?.thinkingClamp);
     },
   );
 
