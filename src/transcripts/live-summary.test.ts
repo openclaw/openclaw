@@ -21,7 +21,7 @@ import { clearTranscriptCapturesForTest } from "./capture.test-support.js";
 import { getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import type { TranscriptStartRequest } from "./provider-types.js";
 import { TranscriptsStore } from "./store.js";
-import { summarizeTranscripts } from "./summary.js";
+import { summarizeTranscripts, type TranscriptsSummary } from "./summary.js";
 
 const { complete, select, loadRuntime } = vi.hoisted(() => ({
   complete: vi.fn(),
@@ -48,8 +48,16 @@ function holdCompletion() {
     return pending.promise;
   });
   pendingCompletions.add(() => pending.resolve(modelNotes()));
-  return { ...pending, entered: entered.promise };
+  return { entered: entered.promise, resolve: () => pending.resolve(modelNotes()) };
 }
+async function pendingInterval() {
+  const pending = holdCompletion();
+  await vi.advanceTimersByTimeAsync(fiveMinutes);
+  await pending.entered;
+  return pending;
+}
+const inference = (index = 0) => complete.mock.calls[index]![0];
+const expectCalls = (count: number) => expect(complete).toHaveBeenCalledTimes(count);
 function trackSummaryUpdates() {
   return vi.spyOn(gatewayWorkAdmission, "runWithGatewayDetachedWorkAdmission");
 }
@@ -64,12 +72,7 @@ async function advanceSummaryInterval(updates: ReturnType<typeof trackSummaryUpd
 }
 const cfg = { agents: { defaults: { utilityModel: "test/utility", model: "test/primary" } } };
 const modelNotes = () => ({
-  text: JSON.stringify({
-    overview: "The team chose a simpler design.",
-    decisions: ["Simplify the design"],
-    actionItems: [],
-    risks: [],
-  }),
+  text: JSON.stringify({ overview: "Notes", decisions: [], actionItems: [], risks: [] }),
   provider: "test",
   model: "utility",
 });
@@ -129,6 +132,7 @@ async function capture(initialText?: string, stateDir = tempDirs.make("transcrip
     startTranscripts({ ctx, store, rawParams: { providerId: "notes", sessionId: "meeting" } }),
   );
   const speak = (text: string) => source.onUtterance({ text });
+  const saved = async () => (await store.readSummary(source.session)).summary;
   if (initialText) {
     await speak(initialText);
   }
@@ -139,7 +143,13 @@ async function capture(initialText?: string, stateDir = tempDirs.make("transcrip
     stop,
     stopStarted: stopStarted.promise,
     speak,
-    saved: async () => (await store.readSummary(source.session)).summary,
+    saved,
+    async expectSummary(expected: Partial<TranscriptsSummary>, calls?: number) {
+      expect(await saved()).toMatchObject(expected);
+      if (calls !== undefined) {
+        expectCalls(calls);
+      }
+    },
     session: () => store.readSession("meeting"),
     advance: () => advanceSummaryInterval(updates),
     settle: () => settleSummaryUpdates(updates),
@@ -186,9 +196,9 @@ describe("live meeting summaries", () => {
           await fixture.execute("shutdown", "stop");
         }
         expect(loadRuntime).toHaveBeenCalledTimes(runtimeLoadsBeforeShutdown);
-        expect(complete).not.toHaveBeenCalled();
+        expectCalls(0);
         expect(fixture.stop).toHaveBeenCalledOnce();
-        expect(await fixture.saved()).toMatchObject({
+        await fixture.expectSummary({
           source: "heuristic",
           transcript: ["Accepted speech before shutdown"],
         });
@@ -201,7 +211,7 @@ describe("live meeting summaries", () => {
     },
   );
 
-  it("does not regenerate final notes when a stale local owner observes a durable stop", async () => {
+  it("does not regenerate final notes after a durable stop", async () => {
     const fixture = await capture("Saved speech");
     const stopped = { ...fixture.source.session, stoppedAt: new Date().toISOString() };
     await fixture.store.writeSession(stopped);
@@ -212,7 +222,7 @@ describe("live meeting summaries", () => {
     await fixture.store.writeSummary(final, stopped);
     await fixture.advance();
     await fixture.execute("manual", "summarize");
-    expect(complete).not.toHaveBeenCalled();
+    expectCalls(0);
     expect(await fixture.saved()).toEqual(final);
   });
   it("retires failed snapshot initialization and permits capture retry", async () => {
@@ -226,11 +236,10 @@ describe("live meeting summaries", () => {
     expect((await store.readSession("meeting"))?.stoppedAt).toBeTruthy();
     const fixture = await capture("Recovered capture", stateDir);
     await fixture.advance();
-    expect(await fixture.saved()).toMatchObject({ source: "model", utteranceCount: 1 });
-    expect(complete).toHaveBeenCalledOnce();
+    await fixture.expectSummary({ source: "model", utteranceCount: 1 }, 1);
   });
 
-  it("stops input while a periodic snapshot is pending and admits only final inference", async () => {
+  it("stops pending snapshot input before final inference", async () => {
     const fixture = await capture("Saved speech");
     const snapshot = await fixture.store.readSummarySnapshot(fixture.source.session, 2_000);
     const read = createDeferred<typeof snapshot>();
@@ -243,81 +252,73 @@ describe("live meeting summaries", () => {
     const stopped = fixture.execute("stop", "stop");
     await fixture.stopStarted;
     expect(fixture.stop).toHaveBeenCalledOnce();
-    expect(complete).not.toHaveBeenCalled();
+    expectCalls(0);
     read.resolve(snapshot);
     await stopped;
-    expect(complete).toHaveBeenCalledOnce();
-    expect(await fixture.saved()).toMatchObject({ source: "model", transcript: ["Saved speech"] });
+    await fixture.expectSummary({ source: "model", transcript: ["Saved speech"] }, 1);
   });
 
-  it("publishes speech after its starting caller closes and skips unchanged intervals", async () => {
+  it("outlives its caller and skips unchanged intervals", async () => {
     const caller = new AsyncWorkScope();
     const fixture = await caller.track(() => capture());
     await caller.drain();
     await fixture.advance();
-    expect(complete).not.toHaveBeenCalled();
+    expectCalls(0);
     await fixture.speak("First decision");
     await vi.advanceTimersByTimeAsync(fiveMinutes - 1);
-    expect(complete).not.toHaveBeenCalled();
+    expectCalls(0);
     const pending = holdCompletion();
     await vi.advanceTimersByTimeAsync(1);
     await pending.entered;
-    expect(complete).toHaveBeenCalledOnce();
+    expectCalls(1);
     await fixture.speak("Later decision");
-    pending.resolve(modelNotes());
+    pending.resolve();
     await fixture.settle();
-    expect(await fixture.saved()).toMatchObject({
+    await fixture.expectSummary({
       source: "model",
       utteranceCount: 1,
       transcript: ["First decision"],
     });
     expect(fixture.ctx.logger.warn).not.toHaveBeenCalled();
-    expect(complete.mock.calls[0]![0]).toMatchObject({
+    expect(inference()).toMatchObject({
       provider: "test",
       model: "utility",
       agentId: "main",
     });
     await fixture.advance();
-    expect(await fixture.saved()).toMatchObject({
+    await fixture.expectSummary({
       utteranceCount: 2,
       transcript: ["First decision", "Later decision"],
     });
     await fixture.advance();
-    expect(complete).toHaveBeenCalledTimes(2);
+    expectCalls(2);
   });
 
-  it("settles cancelled interim inference before finalizing all speech on provider stop", async () => {
+  it("settles cancelled interim inference before finalizing provider stop", async () => {
     const fixture = await capture("Before summary");
-    const pending = holdCompletion();
-    await vi.advanceTimersByTimeAsync(fiveMinutes);
-    await pending.entered;
-    expect(complete).toHaveBeenCalledOnce();
+    const pending = await pendingInterval();
+    expectCalls(1);
     await fixture.speak("Final speech");
     const aborted = new Promise<void>((resolve) => {
-      complete.mock.calls[0]![0].abortSignal.addEventListener("abort", () => resolve(), {
-        once: true,
-      });
+      inference().abortSignal.addEventListener("abort", () => resolve(), { once: true });
     });
     const stopped = fixture.execute("stop", "stop");
     await aborted;
-    expect(complete.mock.calls[0]![0].abortSignal.aborted).toBe(true);
-    expect(complete).toHaveBeenCalledOnce();
+    expect(inference().abortSignal.aborted).toBe(true);
+    expectCalls(1);
     expect(fixture.stop).toHaveBeenCalledOnce();
     expect(await fixture.saved()).toBeUndefined();
-    pending.resolve(modelNotes());
+    pending.resolve();
     await stopped;
-    expect(complete).toHaveBeenCalledTimes(2);
-    expect(await fixture.saved()).toMatchObject({ transcript: ["Before summary", "Final speech"] });
+    await fixture.expectSummary({ transcript: ["Before summary", "Final speech"] }, 2);
     expect(activeSessions.size).toBe(0);
     await vi.advanceTimersByTimeAsync(fiveMinutes * 2);
-    expect(complete).toHaveBeenCalledTimes(2);
+    expectCalls(2);
   });
 
-  it("retains an accepted append failure while terminal summary shutdown is pending", async () => {
+  it("retains accepted append failures during terminal shutdown", async () => {
     const fixture = await capture("Saved speech");
-    const pending = holdCompletion();
-    await vi.advanceTimersByTimeAsync(fiveMinutes);
-    await pending.entered;
+    const pending = await pendingInterval();
     const appendEntered = createDeferred();
     const releaseAppend = createDeferred();
     const appendFailure = new Error("Accepted speech could not be saved");
@@ -326,8 +327,7 @@ describe("live meeting summaries", () => {
       await releaseAppend.promise;
       throw appendFailure;
     });
-    const accepted = Promise.resolve(fixture.speak("Rejected speech"));
-    const acceptedOutcome = accepted.then(
+    const acceptedOutcome = Promise.resolve(fixture.speak("Rejected speech")).then(
       () => undefined,
       (error: unknown) => error,
     );
@@ -341,13 +341,13 @@ describe("live meeting summaries", () => {
       },
     );
     try {
-      expect(complete.mock.calls[0]![0].abortSignal.aborted).toBe(true);
+      expect(inference().abortSignal.aborted).toBe(true);
       releaseAppend.resolve();
       expect(await acceptedOutcome).toBe(appendFailure);
       expect(terminalSettled).not.toHaveBeenCalled();
     } finally {
       releaseAppend.resolve();
-      pending.resolve(modelNotes());
+      pending.resolve();
       await Promise.all([acceptedOutcome, terminalOutcome]);
     }
     expect(await terminalOutcome).toBe(appendFailure);
@@ -355,16 +355,15 @@ describe("live meeting summaries", () => {
     expect(await fixture.saved()).toBeUndefined();
     await fixture.execute("retry-stop", "stop");
     expect(fixture.stop).not.toHaveBeenCalled();
-    expect(await fixture.saved()).toMatchObject({ transcript: ["Saved speech"] });
+    await fixture.expectSummary({ transcript: ["Saved speech"] });
     expect(activeSessions.size).toBe(0);
   });
 
   it.each(["summary", "session"] as const)(
-    "preserves a newer %s write and serializes subsequent manual and periodic summaries",
+    "keeps newer %s writes and serializes manual and periodic summaries",
     async (changed) => {
-      const fixture = await capture();
+      const fixture = await capture("Opening speech");
       const utterance = { text: "Opening speech" };
-      await fixture.source.onUtterance(utterance);
       const external = {
         ...summarizeTranscripts({ session: fixture.source.session, utterances: [utterance] }),
         overview: "Operator-edited notes",
@@ -372,10 +371,8 @@ describe("live meeting summaries", () => {
       if (changed === "session") {
         await fixture.store.writeSummary(external, fixture.source.session);
       }
-      const pending = holdCompletion();
-      await vi.advanceTimersByTimeAsync(fiveMinutes);
-      await pending.entered;
-      expect(complete).toHaveBeenCalledOnce();
+      const pending = await pendingInterval();
+      expectCalls(1);
       try {
         if (changed === "summary") {
           await fixture.store.writeSummary(external, fixture.source.session);
@@ -386,7 +383,7 @@ describe("live meeting summaries", () => {
           });
         }
       } finally {
-        pending.resolve(modelNotes());
+        pending.resolve();
         await fixture.settle();
       }
       expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
@@ -394,24 +391,21 @@ describe("live meeting summaries", () => {
       expect(fixture.ctx.logger.warn).not.toHaveBeenCalled();
       await fixture.advance();
       expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
-      expect(complete).toHaveBeenCalledOnce();
+      expectCalls(1);
       expect((await fixture.saved())?.overview).toBe("Operator-edited notes");
 
-      const next = holdCompletion();
       await fixture.speak("New speech");
-      await vi.advanceTimersByTimeAsync(fiveMinutes);
-      await next.entered;
-      expect(complete).toHaveBeenCalledTimes(2);
+      const next = await pendingInterval();
+      expectCalls(2);
       const manual = fixture.execute("manual", "summarize");
       await vi.advanceTimersByTimeAsync(0);
-      expect(complete).toHaveBeenCalledTimes(2);
+      expectCalls(2);
       await fixture.speak("Speech while the manual summary is queued");
-      next.resolve(modelNotes());
+      next.resolve();
       await manual;
-      expect(complete).toHaveBeenCalledTimes(3);
-      expect(await fixture.saved()).toMatchObject({ utteranceCount: 3 });
+      await fixture.expectSummary({ utteranceCount: 3 }, 3);
       await fixture.advance();
-      expect(complete).toHaveBeenCalledTimes(3);
+      expectCalls(3);
     },
   );
 
@@ -424,14 +418,14 @@ describe("live meeting summaries", () => {
     expect((await fixture.saved())?.utteranceCount).toBe(2_000);
     await fixture.speak("Newest speech");
     await fixture.advance();
-    expect(complete).toHaveBeenCalledTimes(2);
+    expectCalls(2);
     expect((await fixture.saved())?.transcript.at(-1)).toBe("Newest speech");
     await fixture.advance();
-    expect(complete).toHaveBeenCalledTimes(2);
+    expectCalls(2);
   });
 
   it.each([false, true])(
-    "shares utility summaries and finalization with browser meeting capture (restored: %s)",
+    "summarizes and finalizes browser meetings (restored: %s)",
     async (restored) => {
       const updates = trackSummaryUpdates();
       const stateDir = tempDirs.make("browser-live-notes-");
@@ -480,8 +474,8 @@ describe("live meeting summaries", () => {
           ]);
         }
         await advanceSummaryInterval(updates);
-        expect(complete).toHaveBeenCalledOnce();
-        expect(complete.mock.calls[0]![0]).toMatchObject({ model: "utility", agentId: "research" });
+        expectCalls(1);
+        expect(inference()).toMatchObject({ model: "utility", agentId: "research" });
         expect((await store.readSummary(descriptor.session)).summary?.source).toBe("model");
         if (restored) {
           expect((await store.readSummary(descriptor.session)).summary?.transcript).toEqual([
@@ -491,7 +485,7 @@ describe("live meeting summaries", () => {
         }
         await expectLibraryState(store, descriptor.selector, true, true);
         await bridge.stop(session, async () => {});
-        expect(complete).toHaveBeenCalledTimes(2);
+        expectCalls(2);
         expect((await store.readSession(session.id))?.stoppedAt).toBeTruthy();
         await expectLibraryState(store, descriptor.selector, false);
       } finally {

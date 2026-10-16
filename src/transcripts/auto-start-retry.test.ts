@@ -84,20 +84,6 @@ describe("configured transcript failed-start custody", () => {
     },
   );
 
-  it("discards a new empty failed startup when shutdown abandons its retry", async () => {
-    const { f, service, start } = retryFixture({ realTimers: true });
-    try {
-      await service.start().settled;
-      expect(start).toHaveBeenCalledOnce();
-      expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
-      expect(await f.store.listSessionEntries()).toHaveLength(1);
-      await service.stop();
-      expect(await f.store.listSessionEntries()).toEqual([]);
-    } finally {
-      await service.stop();
-    }
-  });
-
   it.each(["stop", "retry"] as const)(
     "preserves a rewrite during pending provider startup before %s",
     async (action) => {
@@ -133,7 +119,10 @@ describe("configured transcript failed-start custody", () => {
       const { f, service, start } = retryFixture({ title: "Meeting \ud800" });
       try {
         await service.start().settled;
-        expect((await f.store.listSessionEntries())[0]?.session.title).toBe("Meeting \ufffd");
+        expect(await f.store.listSessionEntries()).toMatchObject([
+          { session: { title: "Meeting \ufffd" } },
+        ]);
+        expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
         await stopAfterAction(service, action);
         expect(start).toHaveBeenCalledTimes(action === "retry" ? 2 : 1);
         expect(await f.store.listSessionEntries()).toEqual([]);
@@ -298,36 +287,25 @@ describe("configured transcript failed-start custody", () => {
     },
   );
 
-  it.each(["operator-stop", "rewritten"] as const)(
-    "preserves a failed candidate after %s takes ownership",
-    async (change) => {
-      const { f, service } = retryFixture({ realTimers: true });
-      try {
-        await service.start().settled;
-        const { session } = (await f.store.listSessionEntries())[0]!;
-        if (change === "operator-stop") {
-          // Revoke through the operator entry point without notes or exports masking
-          // the authority check that must preserve this otherwise empty candidate.
-          vi.spyOn(TranscriptsStore.prototype, "writeSummary").mockRejectedValueOnce(
-            new Error("notes temporarily unavailable"),
-          );
-          await expect(
-            f.tool.execute("stop", {
-              action: "stop",
-              selector: transcriptSessionSelector(session),
-            }),
-          ).rejects.toThrow("notes temporarily unavailable");
-          expect(await f.store.readSummary(session)).toEqual({});
-        } else {
-          await f.store.writeSession({ ...session, title: "Operator-owned meeting" });
-        }
-        const preserved = await f.store.readSession(session.sessionId);
-        await service.stop();
-        expect(await f.store.listSessionEntries()).toHaveLength(1);
-        expect(await f.store.readSession(session.sessionId)).toEqual(preserved);
-      } finally {
-        await service.stop();
-      }
-    },
-  );
+  it("preserves a failed candidate after operator-stop takes ownership", async () => {
+    const { f, service } = retryFixture({ realTimers: true });
+    try {
+      await service.start().settled;
+      const { session } = (await f.store.listSessionEntries())[0]!;
+      // A failed notes write must not undo the operator's revocation of retry custody.
+      vi.spyOn(TranscriptsStore.prototype, "writeSummary").mockRejectedValueOnce(
+        new Error("notes temporarily unavailable"),
+      );
+      await expect(
+        f.tool.execute("stop", { action: "stop", selector: transcriptSessionSelector(session) }),
+      ).rejects.toThrow("notes temporarily unavailable");
+      expect(await f.store.readSummary(session)).toEqual({});
+      const preserved = await f.store.readSession(session.sessionId);
+      await service.stop();
+      expect(await f.store.listSessionEntries()).toHaveLength(1);
+      expect(await f.store.readSession(session.sessionId)).toEqual(preserved);
+    } finally {
+      await service.stop();
+    }
+  });
 });

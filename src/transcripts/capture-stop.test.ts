@@ -8,7 +8,6 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { bindPluginRegistryResourceOwner } from "../plugins/registry-lifecycle.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
@@ -52,6 +51,39 @@ function captureTools(stateDir: string, options: Parameters<typeof createTranscr
 }
 const expectDisabled = (tool: Pick<ReturnType<typeof captureTools>, "start">) =>
   expect(tool.start(room)).rejects.toThrow("transcripts are disabled");
+
+type StopFailure = "returned" | "thrown";
+function retryingProvider(id: string, error: string, failure: StopFailure, reportStopped = false) {
+  const requests: Start[] = [];
+  const registered = createDeferred();
+  const state = { subscribed: false, failing: true };
+  const stop = vi.fn<NonNullable<Provider["stop"]>>(async ({ sessionId }) => {
+    if (state.failing) {
+      if (failure === "thrown") {
+        throw new Error(error);
+      }
+      return { ok: false, error };
+    }
+    state.subscribed = false;
+    if (reportStopped) {
+      await requests[0]!.onStatus?.({ active: false, sessionId });
+    }
+    return { ok: true, sessionId };
+  });
+  const provider: Provider = {
+    id,
+    name: id,
+    sourceKinds: ["live-caption"],
+    stop,
+    async start(request) {
+      requests.push(request);
+      state.subscribed = true;
+      registered.resolve();
+      return { ok: true, session: request.session };
+    },
+  };
+  return { provider, requests, registered, state, stop };
+}
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
@@ -60,6 +92,7 @@ afterEach(async () => {
 });
 
 describe("transcript provider cleanup custody", () => {
+  const fixture = useTranscriptStatusFixture();
   it.each([
     { owner: "service", failure: "returned", registryChange: "none" },
     { owner: "manual-service", failure: "returned", registryChange: "none" },
@@ -68,113 +101,80 @@ describe("transcript provider cleanup custody", () => {
   ] as const)(
     "retains $owner cleanup after a $failure failure with provider $registryChange",
     async ({ owner, failure, registryChange }) => {
-      const stateDir = tempDirs.make("transcript-stop-custody-");
-      const requests: Start[] = [];
-      const registered = createDeferred();
-      let subscribed = false;
-      let failing = true;
-      const stop = vi.fn<NonNullable<Provider["stop"]>>(async ({ sessionId }) => {
-        if (failing) {
-          if (failure === "thrown") {
-            throw new Error("cleanup unavailable");
-          }
-          return { ok: false, error: "cleanup unavailable" };
-        }
-        subscribed = false;
-        return { ok: true, sessionId };
+      const { provider, requests, registered, state, stop } = retryingProvider(
+        "cleanup-capture",
+        "cleanup unavailable",
+        failure,
+      );
+      const f = fixture({
+        plugins: { enabled: true },
+        transcripts: { autoStart: [{ providerId: provider.id, sessionId: "notes" }] },
       });
-      const provider: Provider = {
-        id: "cleanup-capture",
-        name: "Cleanup capture",
-        sourceKinds: ["live-caption"],
-        start: async (request) => {
-          requests.push(request);
-          subscribed = true;
-          registered.resolve();
-          return { ok: true, session: request.session };
-        },
-        stop,
-      };
-      const registry = createEmptyPluginRegistry();
-      const providers = registry.transcriptSourceProviders;
-      const registration = { pluginId: provider.id, provider, source: import.meta.url };
-      providers.push(registration);
-      const ctx = {
-        stateDir,
-        agentId: "main",
-        config: {
-          plugins: { enabled: true },
-          transcripts: { autoStart: [{ providerId: provider.id, sessionId: "notes" }] },
-        },
-        logger: { warn: vi.fn() },
-        caller: { kind: "operator" as const, source: "local" as const },
-      };
-      const tool = captureTools(stateDir, ctx);
-      const service = createTranscriptsAutoStartService(ctx);
-      const { store } = tool;
+      f.setProviders([provider]);
+      const { ctx, store } = f;
+      const tool = captureActions(f.tool);
+      const service = createTranscriptsAutoStartService({
+        ...ctx,
+        caller: { kind: "operator", source: "local" },
+      });
       const replacementStop = vi.fn(stopSuccessfully);
-      await withRegistry(registry, async () => {
-        try {
-          if (owner !== "tool") {
-            service.start();
-            await registered.promise;
-            await vi.waitFor(async () =>
-              expect(await tool.status()).toMatchObject({ active: [{ sessionId: "notes" }] }),
-            );
-          } else {
-            await tool.start({ providerId: provider.id, sessionId: "notes" });
-          }
-          const request = requests[0]!;
-          await request.onUtterance({ text: "Saved before stop" });
-          if (owner === "service") {
-            await service.stop();
-            expect
-              .soft(ctx.logger.warn)
-              .toHaveBeenCalledWith(expect.stringMatching(/stop failed.*cleanup unavailable/));
-          } else {
-            await expect.soft(tool.stop("notes")).rejects.toThrow("cleanup unavailable");
-          }
-          expect.soft(subscribed).toBe(true);
-          await expect.soft(tool.status()).resolves.toMatchObject({
-            active: [{ sessionId: "notes", cleanupPending: true }],
-            pendingFinalization: [],
-          });
-          expect.soft((await store.readSession("notes"))?.stoppedAt).toBeUndefined();
-          await request.onUtterance({ text: "Too late after failed stop" });
-          expect
-            .soft((await store.readUtterancesForSession(request.session)).map((line) => line.text))
-            .toEqual(["Saved before stop"]);
-          if (registryChange === "removed") {
-            ctx.config.plugins.enabled = false;
-            providers.splice(0);
-          } else if (registryChange === "replaced") {
-            providers[0] = {
-              ...registration,
-              provider: { ...provider, stop: replacementStop },
-            };
-          }
-          failing = false;
-          await (owner !== "tool" ? service.stop() : tool.stop("notes"));
-          expect.soft(stop).toHaveBeenCalledTimes(2);
-          expect.soft(replacementStop).not.toHaveBeenCalled();
-          expect.soft(subscribed).toBe(false);
-          await expect(tool.status()).resolves.toMatchObject({
-            active: [],
-            pendingFinalization: [],
-          });
-          expect((await store.readSummary(request.session)).summary?.transcript).toEqual([
-            "Saved before stop",
-          ]);
-        } finally {
-          failing = false;
-          ctx.config.plugins.enabled = true;
-          providers.splice(0, providers.length, registration);
-          await service.stop();
-          if (requests.length) {
-            await tool.stop("notes");
-          }
+      try {
+        if (owner !== "tool") {
+          service.start();
+          await registered.promise;
+          await vi.waitFor(async () =>
+            expect(await tool.status()).toMatchObject({ active: [{ sessionId: "notes" }] }),
+          );
+        } else {
+          await tool.start({ providerId: provider.id, sessionId: "notes" });
         }
-      });
+        const request = requests[0]!;
+        await request.onUtterance({ text: "Saved before stop" });
+        if (owner === "service") {
+          await service.stop();
+          expect
+            .soft(ctx.logger.warn)
+            .toHaveBeenCalledWith(expect.stringMatching(/stop failed.*cleanup unavailable/));
+        } else {
+          await expect.soft(tool.stop("notes")).rejects.toThrow("cleanup unavailable");
+        }
+        expect.soft(state.subscribed).toBe(true);
+        await expect.soft(tool.status()).resolves.toMatchObject({
+          active: [{ sessionId: "notes", cleanupPending: true }],
+          pendingFinalization: [],
+        });
+        expect.soft((await store.readSession("notes"))?.stoppedAt).toBeUndefined();
+        await request.onUtterance({ text: "Too late after failed stop" });
+        expect
+          .soft((await store.readUtterancesForSession(request.session)).map((line) => line.text))
+          .toEqual(["Saved before stop"]);
+        if (registryChange === "removed") {
+          ctx.config.plugins!.enabled = false;
+          f.setProviders([]);
+        } else if (registryChange === "replaced") {
+          f.setProviders([{ ...provider, stop: replacementStop }]);
+        }
+        state.failing = false;
+        await (owner !== "tool" ? service.stop() : tool.stop("notes"));
+        expect.soft(stop).toHaveBeenCalledTimes(2);
+        expect.soft(replacementStop).not.toHaveBeenCalled();
+        expect.soft(state.subscribed).toBe(false);
+        await expect(tool.status()).resolves.toMatchObject({
+          active: [],
+          pendingFinalization: [],
+        });
+        expect((await store.readSummary(request.session)).summary?.transcript).toEqual([
+          "Saved before stop",
+        ]);
+      } finally {
+        state.failing = false;
+        ctx.config.plugins!.enabled = true;
+        f.setProviders([provider]);
+        await service.stop();
+        if (requests.length) {
+          await tool.stop("notes");
+        }
+      }
     },
   );
 });
@@ -360,53 +360,36 @@ it.each(["inspection", "prepared"] as const)(
   async (source) => {
     const stateDir = tempDirs.make("transcript-source-retention-");
     const owner = createTestPluginRegistry();
-    const record = createPluginRecord({
-      id: "retained-captions",
-      source: import.meta.url,
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
-    owner.registry.plugins.push(record);
-    const api = owner.createApi(record, { config: {} });
-    const instance = getPluginInstance(record)!;
+    const register = (provider: Provider) => {
+      const record = createPluginRecord({
+        id: provider.id,
+        source: import.meta.url,
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      });
+      owner.registry.plugins.push(record);
+      owner.createApi(record, { config: {} }).registerTranscriptSourceProvider(provider);
+      return getPluginInstance(record)!;
+    };
+    const { provider, requests, state, stop } = retryingProvider(
+      "retained-captions",
+      "caption transport stop failed",
+      "thrown",
+      true,
+    );
+    const instance = register(provider);
     const disposed = vi.fn();
     instance.lifecycle.onDispose(disposed);
-    let request: Start | undefined;
-    let failStop = true;
-    const stop = vi.fn<NonNullable<Provider["stop"]>>(async ({ sessionId }) => {
-      if (failStop) {
-        throw new Error("caption transport stop failed");
-      }
-      await request!.onStatus?.({ active: false, sessionId });
-      return { ok: true, sessionId };
-    });
-    api.registerTranscriptSourceProvider({
-      id: record.id,
-      name: "Retained captions",
-      sourceKinds: ["live-caption"],
-      async start(start) {
-        request = start;
-        return { ok: true, session: start.session };
-      },
-      stop,
-    });
-    const siblingRecord = createPluginRecord({
-      ...record,
+    const sibling = register({
       id: "unrelated-captions",
-      configSchema: false,
-    });
-    owner.registry.plugins.push(siblingRecord);
-    owner.createApi(siblingRecord, { config: {} }).registerTranscriptSourceProvider({
-      id: siblingRecord.id,
       name: "Unrelated captions",
       sourceKinds: ["live-caption"],
-      aliases: [record.id],
+      aliases: [provider.id],
       async start() {
         throw new Error("The unrelated source must not start");
       },
     });
-    const sibling = getPluginInstance(siblingRecord)!;
     let releaseRegistry: () => void | Promise<void>;
     const registry =
       source === "prepared"
@@ -439,29 +422,30 @@ it.each(["inspection", "prepared"] as const)(
     let disabled: ReturnType<typeof prepareDisable> | undefined;
     try {
       await withRegistry(registry, () =>
-        agent.run(() => tool.start({ providerId: record.id, sessionId: "retained-capture" })),
+        agent.run(() => tool.start({ providerId: provider.id, sessionId: "retained-capture" })),
       );
+      const request = requests[0]!;
       agent.release();
       await releaseRegistry();
       expect(disposed).not.toHaveBeenCalled();
       expect(sibling.retainedWorkCount).toBe(0);
       expect(instance.retainedWorkCount).toBeGreaterThan(0);
-      await request!.onUtterance({ text: "Speech after the agent turn finished" });
+      await request.onUtterance({ text: "Speech after the agent turn finished" });
       disabled = prepareDisable(stateDir);
       await expect(disabled.drain()).rejects.toThrow("Transcript capture policy drainage failed");
       expect(disposed).not.toHaveBeenCalled();
       expect(instance.retainedWorkCount).toBeGreaterThan(0);
-      failStop = false;
+      state.failing = false;
       await disabled.drain();
       expect(stop).toHaveBeenCalledTimes(2);
       expect(disposed).toHaveBeenCalledOnce();
       expect(instance.retainedWorkCount).toBe(0);
-      expect(await store.readSummary(request!.session)).toMatchObject({
+      expect(await store.readSummary(request.session)).toMatchObject({
         summary: { transcript: ["Speech after the agent turn finished"] },
       });
       expect((await store.readSession("retained-capture"))?.stoppedAt).toEqual(expect.any(String));
     } finally {
-      failStop = false;
+      state.failing = false;
       agent.release();
       disabled ??= prepareDisable(stateDir);
       await disabled.drain();

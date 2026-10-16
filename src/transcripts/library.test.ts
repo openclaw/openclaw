@@ -65,6 +65,13 @@ function contents(exported: { data: string }) {
   return Buffer.from(exported.data, "base64").toString("utf8");
 }
 
+function jsonLines(exported: { data: string }): Record<string, unknown>[] {
+  return contents(exported)
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
 describe("transcript library SQLite reads", () => {
   it("retains meeting chronology when reopened in another process timezone", async ({ signal }) => {
     const stateDir = tempDirs.make("transcript-library-timezone-");
@@ -106,12 +113,7 @@ describe("transcript library SQLite reads", () => {
     } while (cursor);
     expect(visible).toEqual(texts.slice(3));
     const exported = await download(transcriptSessionSelector(target), "jsonl");
-    expect(
-      contents(exported)
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line).text),
-    ).toEqual(texts.slice(3));
+    expect(jsonLines(exported).map((line) => line.text)).toEqual(texts.slice(3));
     expect(
       (await store.readUtterancesForSession(target)).map((utterance) => utterance.text),
     ).toEqual(texts);
@@ -134,23 +136,18 @@ describe("transcript library SQLite reads", () => {
     for (const row of ordered.toReversed()) {
       await store.writeSession(row);
     }
-    const seen: Array<{ sessionId: string; startedAt: string; selector: string }> = [];
     let cursor: string | undefined;
-    for (let index = 0; index < ordered.length; index++) {
+    for (const [index, expected] of ordered.entries()) {
       const page = await list({ limit: 1, cursor });
       expect(page.sessions).toHaveLength(1);
-      const { sessionId, startedAt, selector } = page.sessions[0]!;
-      seen.push({ sessionId, startedAt, selector });
+      expect(page.sessions[0]).toMatchObject({
+        sessionId: expected.sessionId,
+        startedAt: expected.startedAt,
+        selector: transcriptSessionSelector(expected),
+      });
       expect(page.nextCursor).toEqual(index === ordered.length - 1 ? null : expect.any(String));
       cursor = page.nextCursor ?? undefined;
     }
-    expect(seen).toEqual(
-      ordered.map((row) => ({
-        sessionId: row.sessionId,
-        startedAt: row.startedAt,
-        selector: transcriptSessionSelector(row),
-      })),
-    );
     expect(
       (
         await list({
@@ -446,12 +443,9 @@ describe("transcript library SQLite reads", () => {
       expect(markdown.filename).toMatch(/^transcript-2026-08-20-[a-f0-9]{12}\.md$/);
       expect(markdown.sizeBytes).toBe(Buffer.byteLength(text));
       const jsonl = await download(selector, "jsonl");
-      expect(
-        contents(jsonl)
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line)),
-      ).toEqual((await get(selector, { includeUtterances: true, limit: 50 })).utterances);
+      expect(jsonLines(jsonl)).toEqual(
+        (await get(selector, { includeUtterances: true, limit: 50 })).utterances,
+      );
       expect(contents(jsonl)).not.toContain("provider-only");
       expect((await store.readUtterancesForSession(target))[0]?.metadata).toEqual({
         recordingPath: "/private/provider/audio.wav",

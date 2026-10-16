@@ -89,6 +89,10 @@ function seedExportBookkeeping(db: EngineConnection) {
   );
 }
 
+function queryObservation(sql: string) {
+  return { sql, executions: 0, rows: 0, bytes: 0, maxRowBytes: 0, closed: false };
+}
+
 function observeArchiveReads(
   store: ReturnType<typeof createTranscriptLibraryStoreFixture>["store"],
   connection: EngineConnection,
@@ -128,14 +132,7 @@ function observeArchiveReads(
     localRead(readTranscriptSummarySnapshot),
   );
   clearNodeSqliteKyselyCacheForDatabase(database);
-  const queries: Array<{
-    sql: string;
-    executions: number;
-    rows: number;
-    bytes: number;
-    maxRowBytes: number;
-    closed: boolean;
-  }> = [];
+  const queries: ReturnType<typeof queryObservation>[] = [];
   const location = database.location();
   const prototype = requireNodeSqlite().DatabaseSync.prototype;
   // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted native database receiver.
@@ -150,7 +147,7 @@ function observeArchiveReads(
     ) {
       return statement;
     }
-    const record = { sql, executions: 0, rows: 0, bytes: 0, maxRowBytes: 0, closed: false };
+    const record = queryObservation(sql);
     queries.push(record);
     const observeRow = (row: Record<string, unknown>) => {
       const bytes = Object.values(row).reduce<number>(

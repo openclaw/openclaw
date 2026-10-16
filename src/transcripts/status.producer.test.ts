@@ -18,7 +18,7 @@ import type {
   TranscriptSessionDescriptor,
   TranscriptStartRequest,
 } from "./provider-types.js";
-import { readTranscriptLibraryStatus } from "./status.js";
+import { readTranscriptLibraryStatus as readStatus } from "./status.js";
 import {
   transcriptStatusRoom as room,
   useTranscriptStatusFixture,
@@ -27,6 +27,9 @@ import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
 
 const fixture = useTranscriptStatusFixture();
 type Fixture = ReturnType<typeof fixture>;
+async function readSource(f: Fixture, index = 0) {
+  return (await f.read()).configuredSources[index];
+}
 const unknownSource = { state: "unknown", activeSelectors: [] };
 const inactiveSource = { state: "not-active", activeSelectors: [] };
 
@@ -143,7 +146,7 @@ describe("configured transcript source provenance", () => {
     );
     try {
       await service.start().settled;
-      expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
+      expect((await readSource(f))?.startDiagnostic).toBe("retrying");
       expect(await f.store.listSessionEntries()).toHaveLength(0);
       for (const [index, title] of titles.entries()) {
         publish({ ...current, logging: { level: index === 0 ? "debug" : "warn" } });
@@ -201,7 +204,7 @@ describe("configured transcript source provenance", () => {
     const service = createTranscriptsAutoStartService(f.ctx, () => current);
     try {
       await service.start().settled;
-      expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
+      expect((await readSource(f))?.startDiagnostic).toBe("retrying");
       current = {
         transcripts: {
           autoStart: [{ ...source, providerOptions: { mode: "other" }, title: "Ineligible" }],
@@ -257,7 +260,7 @@ describe("configured transcript source provenance", () => {
       try {
         await service.start().settled;
         const request = await entered.promise;
-        expect((await f.read()).configuredSources[0]).toMatchObject({
+        expect(await readSource(f)).toMatchObject({
           startDiagnostic: "retrying",
           state: "unknown",
         });
@@ -290,7 +293,7 @@ describe("configured transcript source provenance", () => {
           failures < 12 ? running : before,
         );
         expect(await f.store.listSessionEntries()).toHaveLength(1);
-        const configured = (await f.read()).configuredSources[0];
+        const configured = await readSource(f);
         expect(configured?.state).toBe(failures < 12 ? "armed" : "not-active");
         if (failures < 12) {
           expect(configured).not.toHaveProperty("startDiagnostic");
@@ -347,15 +350,11 @@ describe("configured transcript source provenance", () => {
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
         await service.start().settled;
-        expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe(
-          "admitted-start-failed",
-        );
+        expect((await readSource(f))?.startDiagnostic).toBe("admitted-start-failed");
         await vi.advanceTimersByTimeAsync(65_000);
         expect.soft(start).toHaveBeenCalledOnce();
         expect.soft(await f.store.listSessionEntries()).toHaveLength(1);
-        expect
-          .soft((await f.read()).configuredSources[0]?.startDiagnostic)
-          .toBe("admitted-start-failed");
+        expect.soft((await readSource(f))?.startDiagnostic).toBe("admitted-start-failed");
         const request = start.mock.calls.at(-1)![0];
         const session = request.session;
         await request.onUtterance({ text: "Late failed-start note", final: true });
@@ -374,8 +373,7 @@ describe("configured transcript source provenance", () => {
         try {
           await other.start().settled;
           expect(
-            (await readTranscriptLibraryStatus(f.store, otherConfig)).configuredSources[0]
-              ?.startDiagnostic,
+            (await readStatus(f.store, otherConfig)).configuredSources[0]?.startDiagnostic,
           ).toBe("id-conflict");
         } finally {
           await other.stop();
@@ -427,7 +425,7 @@ describe("configured transcript source provenance", () => {
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
         await service.start().settled;
-        expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
+        expect((await readSource(f))?.startDiagnostic).toBe("retrying");
         if (pending) {
           await vi.advanceTimersByTimeAsync(5_000);
           await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2), { interval: 0 });
@@ -454,9 +452,9 @@ describe("configured transcript source provenance", () => {
         }
         expect((await f.read()).active).toEqual([]);
         if (mode === "manual") {
-          expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("id-conflict");
+          expect((await readSource(f))?.startDiagnostic).toBe("id-conflict");
         } else {
-          expect((await f.read()).configuredSources[0]).not.toHaveProperty("startDiagnostic");
+          expect(await readSource(f)).not.toHaveProperty("startDiagnostic");
         }
         expect(await f.store.readSession(session.sessionId)).toEqual(stoppedSession);
         expect(await f.store.listSessionEntries()).toHaveLength(mode === "queued" ? 0 : 1);
@@ -495,7 +493,7 @@ describe("configured transcript source provenance", () => {
       });
       await entered.promise;
       expect(settled).toBe(false);
-      expect((await f.read()).configuredSources[0]).toMatchObject({
+      expect(await readSource(f)).toMatchObject({
         state: "unknown",
         startDiagnostic: "starting",
       });
@@ -517,7 +515,7 @@ describe("configured transcript source provenance", () => {
       f.setProviders([f.provider, delayedProvider]);
       await vi.advanceTimersByTimeAsync(5_000);
       await vi.waitFor(() => expect(startDiagnostic(f, 1)).toBe("id-conflict"));
-      expect.soft((await f.read()).configuredSources[1]).toMatchObject({
+      expect.soft(await readSource(f, 1)).toMatchObject({
         state: "not-active",
         startDiagnostic: "id-conflict",
         activeSelectors: [],
@@ -556,16 +554,16 @@ describe("configured transcript source provenance", () => {
       expect(pending.abortSignal?.aborted).toBe(true);
       await f.start({ ...room, sessionId: "manual" });
       await replacement.start().settled;
-      expect(
-        (await readTranscriptLibraryStatus(f.store, config)).configuredSources[0]?.startDiagnostic,
-      ).toBe("id-conflict");
+      expect((await readStatus(f.store, config)).configuredSources[0]?.startDiagnostic).toBe(
+        "id-conflict",
+      );
       gate.resolve();
       await starting;
       await stopping;
       await old.stop();
-      expect(
-        (await readTranscriptLibraryStatus(f.store, config)).configuredSources[0]?.startDiagnostic,
-      ).toBe("id-conflict");
+      expect((await readStatus(f.store, config)).configuredSources[0]?.startDiagnostic).toBe(
+        "id-conflict",
+      );
       await pending.onUtterance({ text: "stale pending note" });
       await expect(f.store.readUtterancesForSession(pending.session)).resolves.toEqual([]);
       expect((await f.read()).active.map((s) => s.sessionId)).toEqual(["manual"]);
@@ -578,18 +576,6 @@ describe("configured transcript source provenance", () => {
       await f.tool.execute("stop", { action: "stop", sessionId: "manual" });
     }
   });
-  it("does not let an explicit configured URL capture arm an omitted locator", async () => {
-    const source = { ...room, meetingUrl: "https://example.test/room" };
-    const configured = { ...source, meetingUrl: undefined };
-    const f = fixture({ transcripts: { autoStart: [configured] } });
-    const sessionId = "configured";
-    await f.start({ ...source, sessionId }, true);
-    const result = await f.read();
-    expect(result.configuredSources[0]).toMatchObject(inactiveSource);
-    expect(result.active).toMatchObject([{ sessionId, activeSubscription: true }]);
-    await f.tool.execute("stop", { action: "stop", sessionId });
-  });
-
   it("requires complete manual identity and preserves exact explicit matching", async () => {
     const f = fixture();
     for (const configuredLifecycle of [undefined, true] as const) {
@@ -601,7 +587,7 @@ describe("configured transcript source provenance", () => {
         activeSelectors: [exact.active[0]!.selector],
       });
       for (const key of ["accountId", "guildId", "channelId"] as const) {
-        const other = await readTranscriptLibraryStatus(f.store, {
+        const other = await readStatus(f.store, {
           transcripts: { autoStart: [{ ...room, [key]: "other" }] },
         });
         expect(other.configuredSources[0]).toMatchObject(inactiveSource);
@@ -614,7 +600,7 @@ describe("configured transcript source provenance", () => {
       guildId: undefined,
       sessionId: "manual-default",
     });
-    const result = await readTranscriptLibraryStatus(f.store, {
+    const result = await readStatus(f.store, {
       transcripts: { autoStart: [{ ...room, accountId: undefined }] },
     });
     expect(result.configuredSources[0]).toMatchObject(unknownSource);
@@ -653,14 +639,20 @@ describe("configured transcript source provenance", () => {
     url.password = "synthetic-password";
     const source = { ...room, meetingUrl: url.href };
     const f = fixture({
-      transcripts: { autoStart: [source, { ...source, meetingUrl: "https://example.test/room" }] },
+      transcripts: {
+        autoStart: [
+          source,
+          { ...source, meetingUrl: "https://example.test/room" },
+          { ...source, meetingUrl: undefined },
+        ],
+      },
     });
     await f.start({ ...source, sessionId: "url", privateMarker: "not-source-intent" }, true);
     const result = await f.read();
     expect(
       result.configuredSources.map(({ state, activeSelectors }) => ({ state, activeSelectors })),
-    ).toEqual([unknownSource, unknownSource]);
-    expect(result.active[0]?.activeSubscription).toBe(true);
+    ).toEqual([unknownSource, unknownSource, inactiveSource]);
+    expect(result.active).toMatchObject([{ sessionId: "url", activeSubscription: true }]);
     const snapshot = readTranscriptCaptureSnapshot();
     expect(snapshot[0]).toHaveProperty("configuredSource.meetingUrl", true);
     const retained = JSON.stringify([snapshot, await f.store.readSession("url"), result]);
@@ -692,7 +684,7 @@ describe("configured transcript source provenance", () => {
       "configuredSource.accountId",
       undefined,
     );
-    expect((await f.read()).configuredSources[0]).toMatchObject(unknownSource);
+    expect(await readSource(f)).toMatchObject(unknownSource);
     const stopGate = createDeferred();
     const stopping = createDeferred();
     f.provider.stop = async ({ sessionId }) => {
@@ -714,7 +706,7 @@ describe("configured transcript source provenance", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(Date.parse(retainedSession!.startedAt) + 86_400_000));
     await f.start({ ...room, sessionId: "retained" });
-    expect((await f.read()).configuredSources[0]).toMatchObject(unknownSource);
+    expect(await readSource(f)).toMatchObject(unknownSource);
   });
 });
 
@@ -795,9 +787,7 @@ describe("configured transcript occupancy diagnostics", () => {
         await startCalled.promise;
         expect(start).toHaveBeenCalledOnce();
         await vi.waitFor(async () =>
-          expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe(
-            failed ? "retrying" : "starting",
-          ),
+          expect((await readSource(f))?.startDiagnostic).toBe(failed ? "retrying" : "starting"),
         );
         const occupancy = watch.mock.calls[0]![0];
         occupancy.onEmpty();
@@ -816,11 +806,9 @@ describe("configured transcript occupancy diagnostics", () => {
         }
         gate.resolve();
         await vi.waitFor(async () =>
-          expect((await f.read()).configuredSources[0]?.state).toBe(
-            mode === "reoccupied" ? "armed" : "not-active",
-          ),
+          expect((await readSource(f))?.state).toBe(mode === "reoccupied" ? "armed" : "not-active"),
         );
-        expect((await f.read()).configuredSources[0]).not.toHaveProperty("startDiagnostic");
+        expect(await readSource(f)).not.toHaveProperty("startDiagnostic");
         await vi.advanceTimersByTimeAsync(65_000);
         expect(start).toHaveBeenCalledTimes(mode === "reoccupied" ? 2 : 1);
         expect((await f.read()).active).toHaveLength(mode === "reoccupied" ? 1 : 0);
