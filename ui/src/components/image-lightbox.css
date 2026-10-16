@@ -357,11 +357,6 @@ openclaw-image-lightbox {
   }
 
   @media (prefers-reduced-motion: reduce) {
-    openclaw-modal-dialog {
-      --show-duration: 0ms;
-      --hide-duration: 0ms;
-    }
-
     .actions .action,
     .lightbox-footer .action,
     .navigation {

@@ -19,10 +19,6 @@
   transform-origin: bottom;
 }
 
-.chat-controls__inline-select[open] > .chat-picker-overlay[data-placement^="bottom"] {
-  transform-origin: top;
-}
-
 .chat-picker-overlay {
   /* Try the full panel before shrinking it to the preferred side's remaining space. */
   max-height: min(var(--oc-overlay-max-height, 420px), calc(100dvh - 16px));

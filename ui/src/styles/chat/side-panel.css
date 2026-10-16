@@ -14,8 +14,6 @@
 }
 
 .side-panel__header .tabstrip {
-  --track-width: 0;
-
   display: flex;
   min-width: 0;
   flex: 0 1 auto;
