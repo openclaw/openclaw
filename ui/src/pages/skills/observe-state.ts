@@ -27,7 +27,7 @@ export function observeSkillState<T extends object>(initial: T) {
     state,
     read: projection.read,
     dispose: projection.dispose,
-    edit(change: (value: T) => void) {
+    edit(this: void, change: (value: T) => void) {
       change(state);
       notify();
     },
