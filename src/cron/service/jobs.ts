@@ -6,12 +6,16 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
-import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { resolveCronDeliveryMode } from "../delivery-defaults.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { normalizeCronScriptPayload } from "../script-payload.js";
+import { createCronSourceIdentity } from "../source-schedule.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../stagger.js";
-import { createCronStreamSourceIdentity } from "../stream-schedule.js";
+import {
+  assertCanonicalCronDeliveryMode,
+  hasCanonicalCronDeliveryMode,
+} from "../store/delivery-codec.js";
 import { applyDefaultCronToolsAllow, cronJobUsesToolRuntime } from "../tools-allow.js";
 import type {
   CronDelivery,
@@ -42,13 +46,12 @@ import {
   assertMainSessionAgentId,
   assertPacingSupport,
   assertScriptPayloadSupport,
-  assertStreamScheduleSupport,
+  assertExternalSourceScheduleSupport,
   assertSupportedJobSpec,
   assertTriggerSupport,
 } from "./jobs-validation.js";
 import { normalizeOptionalAgentId, normalizeRequiredName } from "./normalize.js";
 import { mergeCronPayload } from "./payload-merge.js";
-import type { CronServiceState } from "./state.js";
 
 type DeliveryValidationOptions = { configuredChannels?: readonly string[] };
 
@@ -119,22 +122,14 @@ function normalizeJobSchedule(
   return normalizeStreamScheduleBounds(input);
 }
 
-type JobValidationContext =
-  | { kind: "create"; cronConfig?: CronConfig; defaultAgentId?: string; nowMs: number }
-  | {
-      kind: "patch";
-      patch: CronJobPatch;
-      defaultAgentId?: string;
-      nowMs?: number;
-      cronConfig?: CronConfig;
-    }
-  | {
-      kind: "declarative";
-      input: CronJobCreate;
-      defaultAgentId?: string;
-      nowMs: number;
-      cronConfig?: CronConfig;
-    };
+type JobValidationContext = {
+  cronConfig?: CronConfig;
+  defaultAgentId?: string;
+} & (
+  | { kind: "create"; nowMs: number }
+  | { kind: "patch"; patch: CronJobPatch; nowMs?: number }
+  | { kind: "declarative"; input: CronJobCreate; nowMs: number }
+);
 
 function validateFullJob(
   job: CronStoredJob,
@@ -154,10 +149,11 @@ function validateFullJob(
       : context.kind === "patch"
         ? context.patch.payload?.kind === "script"
         : context.input.payload.kind === "script";
-  const streamTouched =
+  const sourceTouched =
     context.kind !== "patch" ||
     context.patch.enabled === true ||
-    context.patch.schedule?.kind === "stream";
+    context.patch.schedule?.kind === "stream" ||
+    context.patch.schedule?.kind === "event";
   const validateCapabilities = () => {
     assertTriggerSupport(job, {
       cronConfig,
@@ -168,7 +164,7 @@ function validateFullJob(
       requireEnabled: scriptTouched,
       ...(context.kind === "patch" ? { validateSyntax: context.patch.payload !== undefined } : {}),
     });
-    assertStreamScheduleSupport(job, { cronConfig, requireEnabled: streamTouched });
+    assertExternalSourceScheduleSupport(job, { cronConfig, requireEnabled: sourceTouched });
   };
   if (context.kind === "declarative") {
     validateCapabilities();
@@ -195,12 +191,12 @@ function validateFullJob(
     context.patch.schedule !== undefined ||
     context.patch.enabled === true;
   if (context.nowMs !== undefined && scheduleTouched) {
-    assertTimeScheduleSatisfiable(job, context.nowMs, computeJobNextRunAtMs);
+    assertTimeScheduleSatisfiable(job, context.nowMs);
   }
 }
 /** Creates a normalized cron job row from public add input and computes its initial schedule. */
 export function createJob(
-  state: CronServiceState,
+  state: { deps: { nowMs: () => number; cronConfig?: CronConfig; defaultAgentId?: string } },
   input: CronJobCreate,
   opts?: DeliveryValidationOptions & {
     scheduledToolPolicy?: CronScheduledToolPolicy;
@@ -229,6 +225,8 @@ export function createJob(
   delete initialState.scheduleActivatedAtMs;
   delete initialState.runningScheduleChangeId;
   delete initialState.autoDisabled;
+  delete initialState.sourceIdentity;
+  delete initialState.streamSourceIdentity;
   assertCronJobStateTimestamps(initialState);
   const job: CronStoredJob = {
     id,
@@ -265,8 +263,10 @@ export function createJob(
     state: {
       ...initialState,
       ...(schedule.kind === "stream"
-        ? { streamSourceIdentity: createCronStreamSourceIdentity() }
-        : {}),
+        ? { streamSourceIdentity: createCronSourceIdentity() }
+        : schedule.kind === "event"
+          ? { sourceIdentity: createCronSourceIdentity() }
+          : {}),
     },
   };
   // New trusted jobs are explicit by construction. Agent-runtime callers are
@@ -307,6 +307,9 @@ export function applyJobPatch(
     toolsAllowExecTarget?: CronToolsAllowExecTarget;
   } & DeliveryValidationOptions,
 ) {
+  if (!hasCanonicalCronDeliveryMode(job.delivery)) {
+    assertCanonicalCronDeliveryMode(patch.delivery ?? job.delivery);
+  }
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
   const explicitlyClearsToolsAllow = patch.payload?.toolsAllow === null;
   const previousScheduleKind = job.schedule.kind;
@@ -387,7 +390,7 @@ export function applyJobPatch(
     toolsAllowExecTarget: opts?.toolsAllowExecTarget,
   });
   if (patch.delivery) {
-    const implicitMode = resolveCronDeliveryPlan(job).mode;
+    const implicitMode = patch.delivery.mode ?? resolveCronDeliveryMode(job);
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery, implicitMode);
   }
   if ("failureAlert" in patch) {
@@ -421,6 +424,8 @@ export function applyJobPatch(
     delete statePatch.scheduleActivatedAtMs;
     delete statePatch.runningScheduleChangeId;
     delete statePatch.autoDisabled;
+    delete statePatch.sourceIdentity;
+    delete statePatch.streamSourceIdentity;
     assertCronJobStateTimestamps(statePatch);
     job.state = { ...job.state, ...statePatch };
   }
@@ -428,10 +433,10 @@ export function applyJobPatch(
     resetJobFailureState(job);
   }
   if ("agentId" in patch) {
-    job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
+    job.agentId = normalizeOptionalAgentId(patch.agentId);
   }
   if ("sessionKey" in patch) {
-    job.sessionKey = normalizeOptionalString((patch as { sessionKey?: unknown }).sessionKey);
+    job.sessionKey = normalizeOptionalString(patch.sessionKey);
   }
   if (previousScheduleKind === "stream" && job.schedule.kind !== "stream") {
     job.state.streamStatus = undefined;
@@ -471,6 +476,9 @@ export function applyDeclarativeJobSpec(
     toolsAllowExecTarget?: CronToolsAllowExecTarget;
   } & DeliveryValidationOptions,
 ) {
+  if (!hasCanonicalCronDeliveryMode(job.delivery)) {
+    assertCanonicalCronDeliveryMode(input.delivery ?? job.delivery);
+  }
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
   const explicitlyDeclaresToolsAllow = input.payload.toolsAllow !== undefined;
   const previousToolsAllow = job.payload.toolsAllow;
@@ -563,7 +571,7 @@ function mergeCronDelivery(
 ): CronDelivery | undefined {
   const hasCompletionDestinationPatch = "completionDestination" in patch;
   const next: CronDelivery = {
-    mode: existing?.mode ?? implicitMode,
+    mode: existing ? existing.mode : implicitMode,
     channel: existing?.channel,
     to: existing?.to,
     threadId: existing?.threadId,
@@ -575,7 +583,7 @@ function mergeCronDelivery(
 
   if (typeof patch.mode === "string") {
     const previousMode = next.mode;
-    next.mode = (patch.mode as string) === "deliver" ? "announce" : patch.mode;
+    next.mode = patch.mode;
     if (previousMode !== next.mode && (previousMode === "webhook" || next.mode === "webhook")) {
       // `to` has different meaning for channel targets and webhook URLs; clear
       // it when crossing that boundary so stale destinations do not leak.
@@ -624,34 +632,23 @@ function mergeCronDelivery(
       const patchFd = patch.failureDestination;
       const nextFd: typeof next.failureDestination = {};
       if (existingFd) {
-        if (Object.hasOwn(existingFd, "channel")) {
-          nextFd.channel = existingFd.channel;
-        }
-        if (Object.hasOwn(existingFd, "to")) {
-          nextFd.to = existingFd.to;
-        }
-        if (Object.hasOwn(existingFd, "accountId")) {
-          nextFd.accountId = existingFd.accountId;
+        for (const field of ["channel", "to", "accountId"] as const) {
+          if (Object.hasOwn(existingFd, field)) {
+            nextFd[field] = existingFd[field];
+          }
         }
         if (Object.hasOwn(existingFd, "mode")) {
           nextFd.mode = existingFd.mode;
         }
       }
       if (patchFd) {
-        if ("channel" in patchFd) {
-          const channel = normalizeOptionalString(patchFd.channel) ?? "";
-          nextFd.channel = channel ? channel : undefined;
-        }
-        if ("to" in patchFd) {
-          const to = normalizeOptionalString(patchFd.to) ?? "";
-          nextFd.to = to ? to : undefined;
-        }
-        if ("accountId" in patchFd) {
-          const accountId = normalizeOptionalString(patchFd.accountId) ?? "";
-          nextFd.accountId = accountId ? accountId : undefined;
+        for (const field of ["channel", "to", "accountId"] as const) {
+          if (field in patchFd) {
+            nextFd[field] = normalizeOptionalString(patchFd[field]);
+          }
         }
         if ("mode" in patchFd) {
-          const mode = normalizeOptionalString(patchFd.mode) ?? "";
+          const mode = normalizeOptionalString(patchFd.mode);
           nextFd.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
         }
       }
@@ -720,18 +717,12 @@ function mergeCronFailureAlert(
       typeof patch.includeSkipped === "boolean" ? patch.includeSkipped : undefined;
   }
   if ("mode" in patch) {
-    const mode = normalizeOptionalString(patch.mode) ?? "";
+    const mode = normalizeOptionalString(patch.mode);
     next.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
   }
   if ("accountId" in patch) {
-    const accountId = normalizeOptionalString(patch.accountId) ?? "";
-    next.accountId = accountId ? accountId : undefined;
+    next.accountId = normalizeOptionalString(patch.accountId);
   }
 
   return next;
 }
-
-/**
- * Covers both durable reservations and the process marker that survives mutable job state.
- * Every timer/manual admission path must use this or disable/re-enable can duplicate a run.
- */

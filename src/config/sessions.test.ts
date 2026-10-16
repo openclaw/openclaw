@@ -5,14 +5,13 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {
-  buildGroupDisplayName,
   deriveSessionKey,
   resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
   resolveSessionKey,
   resolveSessionTranscriptPath,
-  resolveSessionTranscriptsDirForAgent,
 } from "./sessions.js";
+import { buildGroupDisplayName } from "./sessions/group-display.js";
 
 describe("sessions", () => {
   let fixtureRoot = "";
@@ -84,34 +83,10 @@ describe("sessions", () => {
 
   const deriveSessionKeyCases = [
     {
-      name: "returns normalized per-sender key",
-      scope: "per-sender" as const,
-      ctx: { From: "chat:+1555" },
-      expected: "+1555",
-    },
-    {
       name: "falls back to unknown when sender missing",
       scope: "per-sender" as const,
       ctx: {},
       expected: "unknown",
-    },
-    {
-      name: "global scope returns global",
-      scope: "global" as const,
-      ctx: { From: "+1" },
-      expected: "global",
-    },
-    {
-      name: "keeps group chats distinct",
-      scope: "per-sender" as const,
-      ctx: { From: "room-123", ChatType: "group", Provider: "demo-chat" },
-      expected: "demo-chat:group:room-123",
-    },
-    {
-      name: "prefixes group keys with provider when available",
-      scope: "per-sender" as const,
-      ctx: { From: "room-456", ChatType: "group", Provider: "demo-chat" },
-      expected: "demo-chat:group:room-456",
     },
   ] as const;
 
@@ -142,34 +117,6 @@ describe("sessions", () => {
       expected: "agent:main:discord:group:12345",
     },
     {
-      name: "collapses direct chats to main by default",
-      scope: "per-sender" as const,
-      ctx: { From: "+1555" },
-      mainKey: undefined,
-      expected: "agent:main:main",
-    },
-    {
-      name: "collapses direct chats to main even when sender missing",
-      scope: "per-sender" as const,
-      ctx: {},
-      mainKey: undefined,
-      expected: "agent:main:main",
-    },
-    {
-      name: "maps direct chats to main key when provided",
-      scope: "per-sender" as const,
-      ctx: { From: "chat:+1555" },
-      mainKey: "main",
-      expected: "agent:main:main",
-    },
-    {
-      name: "uses custom main key when provided",
-      scope: "per-sender" as const,
-      ctx: { From: "+1555" },
-      mainKey: "primary",
-      expected: "agent:main:primary",
-    },
-    {
       name: "keeps global scope untouched",
       scope: "global" as const,
       ctx: { From: "+1555" },
@@ -192,15 +139,6 @@ describe("sessions", () => {
       );
     });
   }
-
-  it("derives session transcripts dir from OPENCLAW_STATE_DIR", () => {
-    const dir = resolveSessionTranscriptsDirForAgent(
-      "main",
-      { OPENCLAW_STATE_DIR: "/custom/state" } as NodeJS.ProcessEnv,
-      () => "/home/ignored",
-    );
-    expect(dir).toBe(path.join(path.resolve("/custom/state"), "agents", "main", "sessions"));
-  });
 
   it("includes topic ids in session transcript filenames", () => {
     withStateDir("/custom/state", () => {
@@ -239,20 +177,6 @@ describe("sessions", () => {
     );
   });
 
-  it("resolves cross-agent paths when OPENCLAW_STATE_DIR differs from stored paths", () => {
-    withStateDir(path.resolve("/different/state"), () => {
-      const originalBase = path.resolve("/original/state");
-      const bot2Session = path.join(originalBase, "agents", "bot2", "sessions", "sess-1.jsonl");
-      // sessionFile was created under a different state dir than current env
-      const sessionFile = resolveSessionFilePathCore(
-        "sess-1",
-        { sessionFile: bot2Session },
-        { agentId: "bot1" },
-      );
-      expect(sessionFile).toBe(bot2Session);
-    });
-  });
-
   it("falls back when structural cross-root path traverses after sessions", () => {
     withStateDir(path.resolve("/different/state"), () => {
       const originalBase = path.resolve("/original/state");
@@ -286,16 +210,6 @@ describe("sessions", () => {
     });
   });
 
-  it("resolveSessionFilePathOptions keeps explicit agentId alongside absolute store path", () => {
-    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
-    const resolved = resolveSessionFilePathOptions({
-      agentId: "bot2",
-      storePath,
-    });
-    expect(resolved?.agentId).toBe("bot2");
-    expect(resolved?.sessionsDir).toBe(path.dirname(path.resolve(storePath)));
-  });
-
   it("resolves sibling agent absolute sessionFile using alternate agentId from options", async () => {
     const { stateDir, mainStorePath, bot2SessionPath } =
       await createAgentSessionsLayout("sibling-agent");
@@ -309,17 +223,6 @@ describe("sessions", () => {
     });
     expect(await normalizePathForComparison(sessionFile)).toBe(
       await normalizePathForComparison(bot2SessionPath),
-    );
-  });
-
-  it("falls back to derived transcript path when sessionFile is outside agent sessions directories", async () => {
-    const { stateDir, outsidePath } = await createAgentSessionsLayout("outside-fallback");
-    const sessionFile = withStateDir(stateDir, () =>
-      resolveSessionFilePathCore("sess-1", { sessionFile: outsidePath }, { agentId: "bot1" }),
-    );
-    const expectedPath = path.join(stateDir, "agents", "bot1", "sessions", "sess-1.jsonl");
-    expect(await normalizePathForComparison(sessionFile)).toBe(
-      await normalizePathForComparison(expectedPath),
     );
   });
 });

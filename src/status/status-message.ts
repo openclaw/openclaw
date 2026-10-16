@@ -1,6 +1,8 @@
-// Status message helpers read and format stored status messages.
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   type FastMode,
   normalizeLowercaseStringOrEmpty,
@@ -10,10 +12,9 @@ import {
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
-import { resolveModelAuthMode } from "../agents/model-auth.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import {
   areRuntimeModelRefsEquivalent,
@@ -23,6 +24,7 @@ import { buildModelAliasIndex, resolveModelRefFromString } from "../agents/model
 import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
+import { formatCompactionStatus } from "../auto-reply/reply/compaction-notice.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -32,7 +34,6 @@ import type {
 } from "../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
-  resolveMainSessionKey,
   resolveFreshSessionTotalTokens,
   resolveProjectedSessionContextTokens,
   resolveProjectedSessionContextBudgetStatus,
@@ -41,14 +42,14 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
-import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
+import { resolveTimestamp } from "../config/sessions/lifecycle-timestamps.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasSessionAutoModelFallbackProvenance,
   hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-usage.js";
+import type { SessionTranscriptUsageSnapshot } from "../gateway/session-transcript-derived-readers.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import type {
@@ -61,9 +62,9 @@ import {
   summarizeDecisionReason,
 } from "../media-understanding/runner.entries.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
+import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import {
   estimateAggregateUsageCost,
@@ -74,6 +75,8 @@ import {
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import { formatModelEndpointUrl } from "./status-model-endpoint.js";
+import { formatTokensPairValue, formatCacheHitValue } from "./status-usage-format.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
@@ -91,6 +94,7 @@ type QueueStatus = {
 
 type StatusArgs = {
   config: OpenClawConfig;
+  preparedTtsPreferences?: PreparedTtsPreferences;
   modelRefs: ReturnType<typeof resolveSelectedAndActiveModel>;
   agent: AgentConfig;
   agentId?: string;
@@ -101,18 +105,21 @@ type StatusArgs = {
   runtimeContextProvider?: string;
   runtimeContextTokens?: number;
   sessionEntry?: SessionEntry;
+  preparedSandboxRuntime?: ReturnType<typeof resolveSandboxRuntimeStatus>;
   sessionKey?: string;
   parentSessionKey?: string;
   sessionScope?: SessionScope;
-  sessionStorePath?: string;
+  sessionStartedAt?: number;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
+  requestedThink?: ThinkLevel;
   resolvedFast?: FastMode;
   resolvedHarness?: string;
   resolvedVerbose?: VerboseLevel;
   resolvedReasoning?: ReasoningLevel;
   resolvedElevated?: ElevatedLevel;
   modelAuth?: string;
+  selectedEndpoint?: string;
   activeModelAuth?: string;
   activeModel?: { modelProvider: string; model: string };
   usageLine?: string;
@@ -121,44 +128,21 @@ type StatusArgs = {
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
-  taskLine?: string;
   pluginHealthLine?: string;
   channelFeatureLine?: string;
-  includeTranscriptUsage?: boolean;
+  transcriptUsage?: SessionTranscriptUsageSnapshot | null;
   now?: number;
 };
 
-type NormalizedAuthMode =
-  | "api-key"
-  | "oauth"
-  | "token"
-  | "aws-sdk"
-  | "native"
-  | "mixed"
-  | "unknown";
-
-function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
+function normalizeAuthMode(value?: string) {
   const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return undefined;
   }
-  if (normalized === "api-key" || normalized.startsWith("api-key ")) {
-    return "api-key";
-  }
-  if (normalized === "oauth" || normalized.startsWith("oauth ")) {
-    return "oauth";
-  }
-  if (normalized === "token" || normalized.startsWith("token ")) {
-    return "token";
-  }
-  if (normalized === "aws-sdk" || normalized.startsWith("aws-sdk ")) {
-    return "aws-sdk";
-  }
-  if (normalized === "native" || normalized.startsWith("native ")) {
-    return "native";
-  }
-  if (normalized === "mixed" || normalized.startsWith("mixed ")) {
-    return "mixed";
+  for (const mode of ["api-key", "oauth", "token", "aws-sdk", "native", "mixed"] as const) {
+    if (normalized === mode || normalized.startsWith(`${mode} `)) {
+      return mode;
+    }
   }
   if (normalized === "unknown") {
     return "unknown";
@@ -188,51 +172,42 @@ function resolveConfiguredTextVerbosity(params: {
 }
 
 function resolveExecutionLabel(
-  args: Pick<StatusArgs, "config" | "agent" | "agentId" | "sessionKey" | "sessionScope">,
+  args: Pick<
+    StatusArgs,
+    "config" | "agent" | "agentId" | "sessionKey" | "sessionEntry" | "preparedSandboxRuntime"
+  >,
 ): string {
   const sessionKey = args.sessionKey?.trim();
-  if (args.config && sessionKey) {
-    const runtimeStatus = resolveSandboxRuntimeStatus({
-      cfg: args.config,
-      sessionKey,
-      agentId: args.agentId,
-    });
+  if (sessionKey) {
+    if (args.preparedSandboxRuntime === undefined && args.sessionEntry === undefined) {
+      return "unknown";
+    }
+    const runtimeStatus =
+      args.preparedSandboxRuntime ??
+      resolveSandboxRuntimeStatus({
+        cfg: args.config,
+        sessionKey,
+        agentId: args.agentId,
+        preparedSessionEntry: args.sessionEntry,
+      });
     const sandboxMode = runtimeStatus.mode ?? "off";
     if (sandboxMode === "off") {
       return "direct";
     }
-    const runtime = runtimeStatus.sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
+    const runtime = runtimeStatus.sandboxed ? "docker" : "direct";
     return `${runtime}/${sandboxMode}`;
   }
 
   const sandboxMode = args.agent?.sandbox?.mode ?? "off";
-  if (sandboxMode === "off") {
-    return "direct";
-  }
-  const sandboxed = (() => {
-    if (!sessionKey) {
-      return false;
-    }
-    if (sandboxMode === "all") {
-      return true;
-    }
-    const sessionScope = args.sessionScope ?? "per-sender";
-    const mainKey = resolveMainSessionKey({
-      session: { scope: sessionScope },
-    });
-    return sessionKey !== mainKey.trim();
-  })();
-  const runtime = sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
-  return `${runtime}/${sandboxMode}`;
+  return sandboxMode === "off" ? "direct" : `unknown/${sandboxMode}`;
 }
 
 const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
-  const ctx = contextTokens ?? null;
-  const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
+  const ctxLabel = contextTokens ? formatTokenCount(contextTokens) : "?";
   if (total == null) {
     return `?/${ctxLabel}`;
   }
-  const pct = ctx ? Math.min(999, Math.round((total / ctx) * 100)) : null;
+  const pct = contextTokens ? Math.min(999, Math.round((total / contextTokens) * 100)) : null;
   const totalLabel = formatTokenCount(total);
   return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
 };
@@ -244,23 +219,12 @@ const formatEstimatedContextBudgetTokens = (
   if (!status || status.source !== "pre-prompt-estimate") {
     return null;
   }
-  const estimatedPromptTokens =
-    typeof status.estimatedPromptTokens === "number" &&
-    Number.isFinite(status.estimatedPromptTokens) &&
-    status.estimatedPromptTokens >= 0
-      ? Math.floor(status.estimatedPromptTokens)
-      : undefined;
-  if (estimatedPromptTokens === undefined) {
+  const estimate = asNonNegativeFiniteNumber(status.estimatedPromptTokens);
+  if (estimate === undefined) {
     return null;
   }
-  const ctx =
-    typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0
-      ? contextTokens
-      : typeof status.contextTokenBudget === "number" &&
-          Number.isFinite(status.contextTokenBudget) &&
-          status.contextTokenBudget > 0
-        ? status.contextTokenBudget
-        : undefined;
+  const estimatedPromptTokens = Math.floor(estimate);
+  const ctx = asPositiveFiniteNumber(contextTokens);
   const pct = ctx ? Math.min(999, Math.round((estimatedPromptTokens / ctx) * 100)) : null;
   const totalLabel = formatTokenCount(estimatedPromptTokens);
   const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
@@ -299,109 +263,33 @@ const formatQueueDetails = (queue?: QueueStatus) => {
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
 };
 
-const readUsageFromSessionLog = (
-  sessionId?: string,
-  sessionEntry?: SessionEntry,
-  agentId?: string,
-  sessionKey?: string,
-  storePath?: string,
-):
-  | {
-      input: number;
-      output: number;
-      cacheRead?: number;
-      cacheWrite?: number;
-      promptTokens: number;
-      total: number;
-      totalTokensFresh: boolean;
-      model?: string;
-    }
-  | undefined => {
-  // Transcripts are stored at the session file path (fallback: ~/.openclaw/sessions/<SessionId>.jsonl)
-  if (!sessionId) {
+const formatTranscriptUsage = (snapshot: SessionTranscriptUsageSnapshot) => {
+  const input = snapshot.inputTokens ?? 0;
+  const output = snapshot.outputTokens ?? 0;
+  const cacheRead = snapshot.cacheRead;
+  const cacheWrite = snapshot.cacheWrite;
+  const promptTokens = snapshot.totalTokens ?? input + (cacheRead ?? 0) + (cacheWrite ?? 0);
+  const total = promptTokens + output;
+  if (promptTokens === 0 && total === 0 && !snapshot.usageReport) {
     return undefined;
   }
-  try {
-    const resolvedAgentId =
-      agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
-    const snapshot = readRecentSessionUsageFromTranscript(
-      {
-        agentId: resolvedAgentId,
-        sessionEntry,
-        sessionId,
-        sessionKey,
-        storePath,
-      },
-      256 * 1024,
-    );
-    if (!snapshot) {
-      return undefined;
-    }
+  const model = snapshot.modelProvider
+    ? snapshot.model
+      ? `${snapshot.modelProvider}/${snapshot.model}`
+      : snapshot.modelProvider
+    : snapshot.model;
 
-    const input = snapshot.inputTokens ?? 0;
-    const output = snapshot.outputTokens ?? 0;
-    const cacheRead = snapshot.cacheRead;
-    const cacheWrite = snapshot.cacheWrite;
-    const promptTokens = snapshot.totalTokens ?? input + (cacheRead ?? 0) + (cacheWrite ?? 0);
-    const total = promptTokens + output;
-    if (promptTokens === 0 && total === 0) {
-      return undefined;
-    }
-    const model = snapshot.modelProvider
-      ? snapshot.model
-        ? `${snapshot.modelProvider}/${snapshot.model}`
-        : snapshot.modelProvider
-      : snapshot.model;
-
-    return {
-      input,
-      output,
-      cacheRead,
-      cacheWrite,
-      promptTokens,
-      total,
-      totalTokensFresh: snapshot.totalTokensFresh === true,
-      model,
-    };
-  } catch {
-    return undefined;
-  }
-};
-
-const formatTokensPairValue = (input?: number | null, output?: number | null) => {
-  if (input == null && output == null) {
-    return null;
-  }
-  const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
-  const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
-  return `${inputLabel} in / ${outputLabel} out`;
-};
-
-const formatCacheHitValue = (
-  input?: number | null,
-  cacheRead?: number | null,
-  cacheWrite?: number | null,
-) => {
-  if (
-    (typeof cacheRead !== "number" || cacheRead < 0) &&
-    (typeof cacheWrite !== "number" || cacheWrite < 0)
-  ) {
-    return null;
-  }
-
-  const cachedLabel = typeof cacheRead === "number" ? formatTokenCount(cacheRead) : "0";
-  const newLabel = typeof cacheWrite === "number" ? formatTokenCount(cacheWrite) : "0";
-
-  const totalInput =
-    (typeof cacheRead === "number" ? cacheRead : 0) +
-    (typeof cacheWrite === "number" ? cacheWrite : 0) +
-    (typeof input === "number" ? input : 0);
-  const hitRate =
-    totalInput > 0 && typeof cacheRead === "number"
-      ? Math.round((cacheRead / totalInput) * 100)
-      : 0;
-
-  return `${hitRate}% hit · ${cachedLabel} cached, ${newLabel} new`;
+  return {
+    usageReport: snapshot.usageReport,
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    promptTokens,
+    total,
+    totalTokensFresh: snapshot.totalTokensFresh === true,
+    model,
+  };
 };
 
 const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandingDecision>) => {
@@ -439,15 +327,13 @@ const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandi
       if (decision.outcome === "scope-deny") {
         return `${decision.capability} denied`;
       }
-      if (decision.outcome === "skipped") {
-        const reason = findDecisionReason(decision);
+      if (decision.outcome === "skipped" || decision.outcome === "failed") {
+        const reason = findDecisionReason(
+          decision,
+          decision.outcome === "failed" ? "failed" : undefined,
+        );
         const shortReason = summarizeDecisionReason(reason);
-        return `${decision.capability} skipped${shortReason ? ` (${shortReason})` : ""}`;
-      }
-      if (decision.outcome === "failed") {
-        const reason = findDecisionReason(decision, "failed");
-        const shortReason = summarizeDecisionReason(reason);
-        return `${decision.capability} failed${shortReason ? ` (${shortReason})` : ""}`;
+        return `${decision.capability} ${decision.outcome}${shortReason ? ` (${shortReason})` : ""}`;
       }
       return null;
     })
@@ -465,12 +351,14 @@ const formatVoiceModeLine = (
   config?: OpenClawConfig,
   sessionEntry?: SessionEntry,
   agentId?: string,
+  preparedTtsPreferences?: PreparedTtsPreferences,
 ): string | null => {
   if (!config) {
     return null;
   }
   const snapshot = resolveStatusTtsSnapshot({
     cfg: config,
+    preparedTtsPreferences,
     sessionAuto: sessionEntry?.ttsAuto,
     agentId,
   });
@@ -557,13 +445,9 @@ function resolveChannelModelNote(params: {
   return "channel override";
 }
 
-export type StatusMessageParts = {
-  text: string;
-  /** Structured mirror of the text body for channels with native table rendering. */
-  presentation: MessagePresentation;
-};
+export type StatusMessageParts = ReturnType<typeof buildStatusMessageParts>;
 
-export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
+export function buildStatusMessageParts(args: StatusArgs) {
   const now = args.now ?? Date.now();
   // Derive the live wall clock here so both /status and session_status expose
   // the same configured timezone without duplicating formatting at each caller.
@@ -602,24 +486,18 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     const fallbackMatchesRuntimeModel =
       initialFallbackState.active &&
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
-        normalizeLowercaseStringOrEmpty(
-          normalizeOptionalString(entry?.fallbackNotice?.activeModel ?? "") ?? "",
-        );
+        normalizeLowercaseStringOrEmpty(entry?.fallbackNotice?.activeModel);
     const runtimeMatchesSelectedModel =
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
       normalizeLowercaseStringOrEmpty(modelRefs.selected.label || "unknown");
-    // Legacy fallback sessions can persist provider-qualified runtime ids
-    // without a separate modelProvider field. Preserve provider-aware lookup
-    // when the stored slash id is the selected model or the active fallback
-    // target; otherwise keep the raw model-only lookup for OpenRouter-style
-    // slash ids.
-    if (
-      (fallbackMatchesRuntimeModel || runtimeMatchesSelectedModel) &&
-      embeddedProvider === normalizeLowercaseStringOrEmpty(activeProvider)
+    // A slash can be part of a provider-local model ID. Prefer its current
+    // catalog identity before interpreting a legacy provider-qualified ID.
+    if (findModelInCatalog(args.thinkingCatalog ?? [], activeProvider, runtimeModelRaw)) {
+      contextLookupModel = runtimeModelRaw;
+    } else if (
+      (!fallbackMatchesRuntimeModel && !runtimeMatchesSelectedModel) ||
+      embeddedProvider !== normalizeLowercaseStringOrEmpty(activeProvider)
     ) {
-      contextLookupProvider = activeProvider;
-      contextLookupModel = activeModel;
-    } else {
       contextLookupProvider = undefined;
       contextLookupModel = runtimeModelRaw;
     }
@@ -629,6 +507,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   let outputTokens = entry?.outputTokens;
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
+  let usageReport = entry?.usageReport;
   const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
   const allowTranscriptContextUsage =
     entry?.totalTokensFresh !== false && freshTotalTokens === undefined;
@@ -636,29 +515,28 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
 
   // Explicitly stale session/cache usage can still hydrate Tokens/Cache lines
   // but must not become Context.
-  if (args.includeTranscriptUsage) {
-    const logUsage = readUsageFromSessionLog(
-      entry?.sessionId,
-      entry,
-      args.agentId,
-      args.sessionKey,
-      args.sessionStorePath,
-    );
+  if (args.transcriptUsage) {
+    const logUsage = formatTranscriptUsage(args.transcriptUsage);
     if (logUsage) {
-      const candidate = logUsage.totalTokensFresh
-        ? logUsage.promptTokens || logUsage.total
-        : undefined;
+      usageReport ??= logUsage.usageReport;
+      const candidate =
+        logUsage.totalTokensFresh && logUsage.usageReport?.state !== "unavailable"
+          ? logUsage.promptTokens || logUsage.total
+          : undefined;
       if (
         allowTranscriptContextUsage &&
         candidate !== undefined &&
-        candidate > 0 &&
-        (!totalTokens || totalTokens === 0 || candidate > totalTokens)
+        candidate >= 0 &&
+        (!totalTokens || candidate > totalTokens)
       ) {
         totalTokens = candidate;
       }
       if (!entry?.model && !args.activeModel && logUsage.model) {
         const slashIndex = logUsage.model.indexOf("/");
-        if (slashIndex > 0) {
+        if (
+          slashIndex > 0 &&
+          !findModelInCatalog(args.thinkingCatalog ?? [], activeProvider, logUsage.model)
+        ) {
           const provider = logUsage.model.slice(0, slashIndex).trim();
           const model = logUsage.model.slice(slashIndex + 1).trim();
           if (provider && model) {
@@ -671,26 +549,30 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
           }
         } else {
           activeModel = logUsage.model;
-          // Bare transcript model IDs should keep provider-aware lookup when the
-          // active provider is already known so shared model names still resolve
-          // to the correct provider-specific window.
+          // Bare IDs and catalog-owned slash IDs retain the known provider.
           contextLookupProvider = activeProvider;
           contextLookupModel = logUsage.model;
         }
       }
-      if (!inputTokens || inputTokens === 0) {
-        inputTokens = logUsage.input;
-      }
-      if (!outputTokens || outputTokens === 0) {
-        outputTokens = logUsage.output;
-      }
-      if (typeof cacheRead !== "number" || cacheRead <= 0) {
-        cacheRead = logUsage.cacheRead ?? cacheRead;
-      }
-      if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
-        cacheWrite = logUsage.cacheWrite ?? cacheWrite;
+      if (entry?.usageReport?.state !== "available") {
+        if (!inputTokens) {
+          inputTokens = logUsage.input;
+        }
+        if (!outputTokens) {
+          outputTokens = logUsage.output;
+        }
+        if (typeof cacheRead !== "number" || cacheRead <= 0) {
+          cacheRead = logUsage.cacheRead ?? cacheRead;
+        }
+        if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
+          cacheWrite = logUsage.cacheWrite ?? cacheWrite;
+        }
       }
     }
+  }
+
+  if (usageReport?.state === "unavailable") {
+    inputTokens = outputTokens = cacheRead = cacheWrite = undefined;
   }
 
   const activeModelLabel = buildModelCatalogRef(activeProvider, activeModel) || "unknown";
@@ -710,6 +592,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     modelContextWindow: args.selectedContextWindow,
     modelContextTokens: args.selectedContextTokens,
     allowAsyncLoad: false,
+    allowCacheLookup: false,
   });
   const activeCatalogEntry = contextLookupProvider
     ? findModelInCatalog(args.thinkingCatalog ?? [], contextLookupProvider, contextLookupModel)
@@ -737,6 +620,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
         ? args.runtimeContextTokens
         : undefined),
     allowAsyncLoad: false,
+    allowCacheLookup: false,
   });
   const channelModelNote = resolveChannelModelNote({
     config: args.config,
@@ -769,9 +653,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     entry?.modelSelectionLocked !== true &&
     runtimeDiffersFromSelected &&
     !runtimeSnapshotHasFallbackProvenance;
-  const contextTokens = useSelectedContext
-    ? (selectedContextTokens ?? DEFAULT_CONTEXT_TOKENS)
-    : (projectedActiveContextTokens ?? DEFAULT_CONTEXT_TOKENS);
+  const contextTokens = useSelectedContext ? selectedContextTokens : projectedActiveContextTokens;
 
   const thinkLevel =
     args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";
@@ -780,8 +662,8 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
   const fastModeState = resolveFastModeState({
     cfg: args.config,
-    provider: activeProvider,
-    model: activeModel,
+    provider: selectedLookupProvider,
+    model: selectedLookupModel,
     agentId: args.agentId,
     sessionEntry: args.sessionEntry,
   });
@@ -796,7 +678,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     args.agent?.elevatedDefault ??
     "on";
 
-  const execution = { label: resolveExecutionLabel(args) };
+  const execution = resolveExecutionLabel(args);
   const agentRuntimeLabel = resolveAgentRuntimeLabel({
     config: args.config,
     sessionEntry: args.sessionEntry,
@@ -805,12 +687,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   });
 
   const updatedAt = entry?.updatedAt;
-  const sessionStartedAt = resolveSessionLifecycleTimestamps({
-    entry,
-    agentId: args.agentId,
-    sessionKey: args.sessionKey,
-    storePath: args.sessionStorePath,
-  }).sessionStartedAt;
+  const sessionStartedAt = resolveTimestamp(args.sessionStartedAt ?? entry?.sessionStartedAt);
   const sessionDuration =
     typeof sessionStartedAt === "number"
       ? formatDurationCompact(now - sessionStartedAt, { spaced: true })
@@ -841,7 +718,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       })
     : entry?.contextBudgetStatus;
   const contextUsageLabel =
-    totalTokens == null || totalTokens === 0
+    totalTokens == null || (totalTokens === 0 && usageReport?.state !== "available")
       ? (formatEstimatedContextBudgetTokens(contextBudgetStatus, contextTokens) ??
         formatTokens(totalTokens, contextTokens ?? null))
       : formatTokens(totalTokens, contextTokens ?? null);
@@ -855,10 +732,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const pluginStatusLines = verboseLevel !== "off" ? resolveSessionPluginStatusLines(entry) : [];
   const pluginTraceLines =
     traceLevel === "on" || traceLevel === "raw" ? resolveSessionPluginTraceLines(entry) : [];
-  const pluginStatusLine =
-    pluginStatusLines.length > 0 || pluginTraceLines.length > 0
-      ? [...pluginStatusLines, ...pluginTraceLines].join(" · ")
-      : null;
+  const pluginStatusLine = [...pluginStatusLines, ...pluginTraceLines].join(" · ") || null;
   const elevatedLabel =
     elevatedLevel && elevatedLevel !== "off"
       ? elevatedLevel === "on"
@@ -879,7 +753,9 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   // Mode switches are individually tiny; one shared line keeps them scannable
   // in both the plain body and the presentation table.
   const modesValue = [
-    `think ${thinkLevel}`,
+    args.requestedThink && args.requestedThink !== thinkLevel
+      ? `think ${thinkLevel} (requested ${args.requestedThink}; clamped)`
+      : `think ${thinkLevel}`,
     `fast ${fastModeValue}`,
     textVerbosity ? `text ${textVerbosity}` : null,
     reasoningLevel !== "off" ? `reasoning ${reasoningLevel}` : null,
@@ -889,14 +765,12 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     .join(" · ");
 
   const selectedModelLabel = modelRefs.selected.label || "unknown";
-  const selectedAuthMode =
-    normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedLookupProvider, args.config);
+  const selectedAuthMode = normalizeAuthMode(args.modelAuth);
   const rawSelectedAuthLabelValue =
     selectedAuthMode && selectedAuthMode !== "unknown"
       ? (args.modelAuth ?? selectedAuthMode)
       : undefined;
-  const activeAuthMode =
-    normalizeAuthMode(args.activeModelAuth) ?? resolveModelAuthMode(activeProvider, args.config);
+  const activeAuthMode = normalizeAuthMode(args.activeModelAuth);
   const activeAuthLabelValue =
     activeAuthMode && activeAuthMode !== "unknown"
       ? (args.activeModelAuth ?? activeAuthMode)
@@ -930,18 +804,20 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       })
     : undefined;
   const cost =
-    asNonNegativeFiniteNumber(entry?.estimatedCostUsd) ??
-    (hasUsage
-      ? estimateAggregateUsageCost({
-          usage: {
-            input: inputTokens ?? undefined,
-            output: outputTokens ?? undefined,
-            cacheRead: cacheRead ?? undefined,
-            cacheWrite: cacheWrite ?? undefined,
-          },
-          cost: costConfig,
-        })
-      : undefined);
+    usageReport?.state === "unavailable"
+      ? undefined
+      : (asNonNegativeFiniteNumber(entry?.estimatedCostUsd) ??
+        (hasUsage
+          ? estimateAggregateUsageCost({
+              usage: {
+                input: inputTokens ?? undefined,
+                output: outputTokens ?? undefined,
+                cacheRead: cacheRead ?? undefined,
+                cacheWrite: cacheWrite ?? undefined,
+              },
+              cost: costConfig,
+            })
+          : undefined));
   const costLabel = formatUsd(cost);
 
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
@@ -963,12 +839,11 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   // A user-driven live switch that no completed turn has applied yet: surface
   // it so /status does not imply the new selection is already running.
   const liveSwitchNote = entry?.liveModelSwitchPending ? " · ⏳ live switch pending" : "";
-  // Auth gets its own line below; keeping it inline here duplicated the value.
-  const modelLines = [
-    `🧠 Model: ${selectedModelLabel}${modelNote}${overrideLabel}${liveSwitchNote}`,
-  ];
+  const modelValue = `${selectedModelLabel}${modelNote}${overrideLabel}${liveSwitchNote}`;
 
-  // Show configured fallback models (from agent model config)
+  const selectedEndpoint = args.selectedEndpoint
+    ? formatModelEndpointUrl(args.selectedEndpoint)
+    : undefined;
   const configuredFallbacks = (() => {
     const modelConfig = args.agent?.model;
     if (typeof modelConfig === "object" && modelConfig && Array.isArray(modelConfig.fallbacks)) {
@@ -989,37 +864,37 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const fallbackLine = fallbackValue ? `↪️ Fallback: ${fallbackValue}` : null;
   const commit = resolveRuntimeServiceCommit();
   const versionLine = `🦞 OpenClaw ${VERSION}${commit ? ` (${commit})` : ""}`;
-  const tokensValue = formatTokensPairValue(inputTokens, outputTokens);
+  const tokensValue =
+    usageReport?.state === "unavailable"
+      ? "unavailable (incomplete response)"
+      : formatTokensPairValue(inputTokens, outputTokens);
   const usagePair = tokensValue ? `🧮 Tokens: ${tokensValue}` : null;
   const cacheValue = formatCacheHitValue(inputTokens, cacheRead, cacheWrite);
   const cacheLine = cacheValue ? `🗄️ Cache: ${cacheValue}` : null;
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;
-  // Depth 0 is the boring default; the queue row keeps details only when the
-  // queue is non-empty or the session carries queue overrides.
+  // Show queue details only for a nonempty queue or explicit overrides.
   const queueHasSignal = (args.queue?.depth ?? 0) > 0 || args.queue?.showDetails === true;
-  const compactionCount = entry?.compactionCount ?? 0;
+  const compactionValue = formatCompactionStatus(entry);
   const contextPct =
-    typeof totalTokens === "number" && totalTokens > 0 && contextTokens > 0
+    typeof totalTokens === "number" && totalTokens > 0 && contextTokens != null && contextTokens > 0
       ? Math.min(999, Math.round((totalTokens / contextTokens) * 100))
       : null;
+  const filled = Math.min(10, Math.max(0, Math.round((contextPct ?? 0) / 10)));
   const contextMeter =
-    contextPct !== null
-      ? (() => {
-          const filled = Math.min(10, Math.max(0, Math.round(contextPct / 10)));
-          return `${"▰".repeat(filled)}${"▱".repeat(10 - filled)} `;
-        })()
-      : "";
+    contextPct === null ? "" : `${"▰".repeat(filled)}${"▱".repeat(10 - filled)} `;
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
-  const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry, args.agentId);
+  const voiceLine = formatVoiceModeLine(
+    args.config,
+    args.sessionEntry,
+    args.agentId,
+    args.preparedTtsPreferences,
+  );
 
-  // One fact per line: chat clients wrap long lines mid-fact, so joining
-  // several facts with separators reads as a wall rather than a summary.
-  // Grouped sections with blank lines between them: a flat list of ~15 facts
-  // reads as a wall, and chat clients give no other visual grouping.
   const text = [
     [versionLine, timeLine, uptimeLine],
     [
-      ...modelLines,
+      `🧠 Model: ${modelValue}`,
+      `🌐 Endpoint: ${selectedEndpoint ?? "unknown"}`,
       selectedAuthLabelValue ? `🔑 Auth: ${selectedAuthLabelValue}` : null,
       configuredFallbacksLine,
       fallbackLine,
@@ -1029,13 +904,13 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       costLine,
       cacheLine,
       `📚 Context: ${contextUsageLabel}`,
-      compactionCount > 0 ? `🧹 Compactions: ${compactionCount}` : null,
+      compactionValue ? `🧹 Compactions: ${compactionValue}` : null,
       mediaLine,
       args.usageLine,
     ],
-    [`🧵 Session: ${sessionValue}`, args.subagentsLine, args.taskLine],
+    [`🧵 Session: ${sessionValue}`, args.subagentsLine],
     [
-      `⚙️ Execution: ${execution.label}`,
+      `⚙️ Execution: ${execution}`,
       `🤖 Runtime: ${agentRuntimeLabel}`,
       modesValue ? `🎛️ Modes: ${modesValue}` : null,
       groupActivationValue ? `👥 Activation: ${groupActivationValue}` : null,
@@ -1059,7 +934,8 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       statusRows.push([label, cell]);
     }
   };
-  pushStatusRow("🧠 Model", `${selectedModelLabel}${modelNote}${overrideLabel}${liveSwitchNote}`);
+  pushStatusRow("🧠 Model", modelValue);
+  pushStatusRow("🌐 Endpoint", selectedEndpoint ?? "unknown");
   pushStatusRow("🔑 Auth", selectedAuthLabelValue);
   pushStatusRow("🔄 Fallbacks", configuredFallbacks?.join(", "));
   pushStatusRow("↪️ Fallback", fallbackValue);
@@ -1067,9 +943,9 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   pushStatusRow("💵 Cost", costLabel);
   pushStatusRow("🗄️ Cache", cacheValue);
   pushStatusRow("📚 Context", `${contextMeter}${contextUsageLabel}`);
-  pushStatusRow("🧹 Compactions", compactionCount > 0 ? compactionCount : null);
+  pushStatusRow("🧹 Compactions", compactionValue);
   pushStatusRow("🧵 Session", sessionValue);
-  pushStatusRow("⚙️ Execution", execution.label);
+  pushStatusRow("⚙️ Execution", execution);
   pushStatusRow("Runtime", agentRuntimeLabel);
   pushStatusRow("🎛️ Modes", modesValue);
   pushStatusRow("👥 Activation", groupActivationValue);
@@ -1111,7 +987,6 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       ...contextBlock(mediaLine),
       ...contextBlock(args.usageLine),
       ...contextBlock(args.subagentsLine),
-      ...contextBlock(args.taskLine),
       ...contextBlock(args.pluginHealthLine),
       ...contextBlock(pluginStatusLine ? `🧩 ${pluginStatusLine}` : null),
       ...contextBlock(voiceLine),

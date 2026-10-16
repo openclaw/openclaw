@@ -1,18 +1,26 @@
 import { execFileSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { setTimeout as waitForReaper } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { expect, it, type TestContext } from "vitest";
+import { afterAll, expect, it, vi, type TestContext } from "vitest";
 import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
-import {
-  isProcessAlive,
-  waitForDead,
-  waitForFile,
-  waitForFixtureFile,
-} from "../helpers/process-wait.js";
+import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
 import { fixturePreloadArgs } from "./fixtures/ci-fixture-runtime.cjs";
+
+// Preparation belongs to collection, before the unchanged per-scenario shutdown deadline.
+const fixtureWorkers = createVitestWorkerRun();
+afterAll(() => fixtureWorkers.dispose());
+try {
+  await fixtureWorkers.prepare();
+} catch (error) {
+  await fixtureWorkers.dispose();
+  throw error;
+}
 
 const fixture = fileURLToPath(new URL("../fixtures/vitest-fork-shutdown.mjs", import.meta.url));
 // Outside the enclosing Vitest TMPDIR: its owner must not erase retained writers.
@@ -20,6 +28,30 @@ const fixtureRoots = fileURLToPath(
   new URL("../../.artifacts/vitest-fork-shutdown/", import.meta.url),
 );
 fs.mkdirSync(fixtureRoots, { recursive: true });
+
+function observeReadyLine(child: ChildProcess, line: string, ready: () => void) {
+  let output = "";
+  const observe = (chunk: Buffer) => {
+    output += chunk.toString();
+    if (output.includes(line)) {
+      child.stdout!.off("data", observe);
+      ready();
+    }
+  };
+  child.stdout!.on("data", observe);
+}
+
+async function waitForFixtureProcessesDead(pids: number[], signal: AbortSignal) {
+  // Group completion can precede Darwin's foreign-zombie reap. The harness
+  // has no child handles for those PIDs; only the owning test bounds observation.
+  try {
+    while (pids.some(isProcessAlive)) {
+      await waitForReaper(5, undefined, { signal });
+    }
+  } catch (cause) {
+    throw new Error(`process still alive: ${pids.filter(isProcessAlive).join(", ")}`, { cause });
+  }
+}
 
 function runJoinedShutdownTest(context: TestContext, body: () => Promise<void>) {
   // Register before the body starts: outer cancellation must join every continuation and finally.
@@ -48,7 +80,9 @@ async function runFixture(
 ) {
   try {
     const result = await runVitestShutdownCommand({
-      args: [...nodeArgs, fixture, root, JSON.stringify(options)],
+      nodeArgs,
+      args: [fixture, root, JSON.stringify(options)],
+      workerRun: options.setup === "shared" ? fixtureWorkers : undefined,
       timeoutMs: 20_000,
       ...commandOptions,
     });
@@ -216,24 +250,62 @@ installVitestShutdownCancellation({root:${JSON.stringify(root)},preload:import.m
 `,
       );
       let child!: ChildProcess;
-      const invocation = runFixture(
-        root,
-        { scenario: "slow-exit", setup: "shared", fail: false },
-        fixturePreloadArgs(preload),
-        {
-          onReady(owned) {
-            child = owned;
+      const workerReady = createDeferred();
+      let fireDeadline: (() => void) | undefined;
+      const schedule = globalThis.setTimeout;
+      // Capture only this command's deadline; readiness and native cleanup keep real timers.
+      const deadlineSpy =
+        mode === "timeout"
+          ? vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, ms, ...args) => {
+              if (ms !== 20_000 || fireDeadline) {
+                return schedule(callback, ms, ...args);
+              }
+              let pending = true;
+              const fire = () => {
+                if (!pending) {
+                  return;
+                }
+                pending = false;
+                clearTimeout(timer);
+                callback(...args);
+              };
+              // Keep the original deadline as a failsafe if readiness never arrives.
+              const timer = schedule(fire, ms);
+              fireDeadline = fire;
+              return timer;
+            })
+          : undefined;
+      let invocation: ReturnType<typeof runFixture>;
+      try {
+        invocation = runFixture(
+          root,
+          { scenario: "slow-exit", setup: "shared", fail: false },
+          fixturePreloadArgs(preload),
+          {
+            onReady(owned) {
+              child = owned;
+              observeReadyLine(child, "shutdown-worker-ready\n", () => workerReady.resolve());
+            },
+            signal: context.signal,
           },
-          signal: context.signal,
-        },
-      );
+        );
+      } finally {
+        deadlineSpy?.mockRestore();
+      }
       const outcome = invocation.then(
         (result) => ({ result, error: undefined }),
         (error: unknown) => ({ result: undefined, error }),
       );
       const pids: number[] = [];
       try {
-        await waitForFixtureFile(path.join(root, "worker.pid"), invocation);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            workerReady.promise,
+            invocation,
+            `Child exited before writing ${path.join(root, "worker.pid")}`,
+          ),
+          context.signal,
+        );
         const shim = Number(fs.readFileSync(path.join(root, "shim.pid"), "utf8"));
         const worker = Number(fs.readFileSync(path.join(root, "worker.pid"), "utf8"));
         context.signal.throwIfAborted();
@@ -272,9 +344,16 @@ installVitestShutdownCancellation({root:${JSON.stringify(root)},preload:import.m
         pids.splice(0, pids.length, ...owned);
         if (mode === "signal") {
           child.kill("SIGTERM");
+        } else {
+          expect(
+            fireDeadline,
+            "managed command deadline must be armed before readiness",
+          ).toBeTypeOf("function");
+          fireDeadline!();
         }
-        const result = await outcome;
-        await waitForFile(path.join(root, "term-received"), 1_000);
+        const result = await withinTest(outcome, context.signal);
+        // The fixture writes this synchronously in its TERM handler, before exit.
+        expect(fs.existsSync(path.join(root, "term-received"))).toBe(true);
         console.log(
           JSON.stringify({
             mode,
@@ -308,9 +387,7 @@ installVitestShutdownCancellation({root:${JSON.stringify(root)},preload:import.m
           child.kill("SIGTERM");
         }
         await outcome;
-        for (const pid of pids) {
-          await waitForDead(pid, 5_000);
-        }
+        await waitForFixtureProcessesDead(pids, context.signal);
       }
     }),
 );
@@ -333,8 +410,10 @@ process.on("SIGTERM", () => {
 setInterval(() => {}, 1000);
 fs.writeFileSync(process.argv[1] + ".tmp", String(process.pid));
 fs.renameSync(process.argv[1] + ".tmp", process.argv[1]);
+process.stdout.write("descendant-ready\\n");
 `;
       const controller = new AbortController();
+      const descendantReady = createDeferred();
       let child!: ChildProcess;
       const invocation = runVitestShutdownCommand({
         args: [
@@ -356,6 +435,7 @@ spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}, process.argv
         signal: AbortSignal.any([context.signal, controller.signal]),
         onReady(owned) {
           child = owned;
+          observeReadyLine(child, "descendant-ready\n", () => descendantReady.resolve());
         },
       });
       const outcome = invocation.then(
@@ -363,7 +443,14 @@ spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}, process.argv
         (error: unknown) => ({ result: undefined, error }),
       );
       try {
-        await waitForFixtureFile(descendantPidPath, invocation);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            descendantReady.promise,
+            invocation,
+            `Child exited before writing ${descendantPidPath}`,
+          ),
+          context.signal,
+        );
         const descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
         if (!Number.isSafeInteger(descendantPid) || descendantPid <= 0) {
           throw new Error("Invalid descendant PID receipt");
@@ -391,7 +478,7 @@ spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}, process.argv
         expect(inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" })).toBe("live");
 
         controller.abort();
-        const result = await outcome;
+        const result = await withinTest(outcome, context.signal);
         expect(result.error).toMatchObject({ code: "ABORT_ERR" });
         for (const role of ["leader", "descendant"]) {
           expect(result.error).toMatchObject({

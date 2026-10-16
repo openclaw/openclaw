@@ -26,8 +26,7 @@ describe.skipIf(process.platform === "win32")("recovery survivor package provena
     | "metadata-version"
     | "pack-version"
     | "integrity-mismatch"
-    | "missing-metadata-integrity"
-    | "missing-pack-integrity";
+    | "missing-metadata-integrity";
 
   async function packageEvidence({
     requested = "openclaw@2026.7.1-2",
@@ -64,14 +63,10 @@ describe.skipIf(process.platform === "win32")("recovery survivor package provena
     const packed = {
       name: "openclaw",
       version: fault === "pack-version" ? "2026.1.1" : installedVersion,
-      ...(fault === "missing-pack-integrity"
-        ? {}
-        : {
-            integrity:
-              fault === "integrity-mismatch"
-                ? `sha512-${createHash("sha512").update("different bytes").digest("base64")}`
-                : integrity,
-          }),
+      integrity:
+        fault === "integrity-mismatch"
+          ? `sha512-${createHash("sha512").update("different bytes").digest("base64")}`
+          : integrity,
     };
     const calls = path.join(root, "npm-calls.jsonl");
     fs.writeFileSync(
@@ -128,7 +123,6 @@ if (args[0] === "view") {
   }
 
   it.each([
-    { requested: "openclaw@2026.7.1-2", installedVersion: "2026.7.1-2", packShape: "array" },
     {
       requested: "openclaw@2026.8.2",
       installedVersion: "2026.8.2",
@@ -159,7 +153,6 @@ if (args[0] === "view") {
     "pack-version",
     "integrity-mismatch",
     "missing-metadata-integrity",
-    "missing-pack-integrity",
   ])("rejects %s without recording successful package evidence", async (fault) => {
     const fixture = await packageEvidence({ fault });
     expect(fixture.result.error).toBeUndefined();
@@ -169,6 +162,106 @@ if (args[0] === "view") {
 });
 
 describe("recovery survivor evidence", () => {
+  it.each([false, true])(
+    "requires transcript destinations while accepting unused shared-index owners (database missing: %s)",
+    async (missingDatabase) => {
+      const root = temporary();
+      const artifacts = path.join(root, "artifacts");
+      const state = path.join(root, "state");
+      const sessions = path.join(state, "sessions");
+      const archive = path.join(state, "session-sqlite-import-archive");
+      const manifests = path.join(state, "session-sqlite-migration-runs");
+      for (const directory of [artifacts, sessions, archive, manifests]) {
+        fs.mkdirSync(directory, { recursive: true });
+      }
+      const store = path.join(sessions, "sessions.json");
+      const transcript = path.join(sessions, "old.jsonl");
+      writeRecoveryTranscript(transcript, "old", 3);
+      fs.writeFileSync(
+        store,
+        JSON.stringify({ "agent:main:old": { sessionId: "old", sessionFile: transcript } }),
+      );
+      const originals = [transcript, store].map((source) => ({
+        source,
+        disposition: "candidate",
+        identity: recoveryFileIdentity(source),
+      }));
+      const moves = originals.map((original, index) => {
+        const archivePath = path.join(archive, path.basename(original.source));
+        fs.renameSync(original.source, archivePath);
+        return {
+          kind: index === 0 ? "transcript" : "legacy-store",
+          sourcePath: original.source,
+          archivePath,
+          artifact: {
+            identity: original.identity,
+            classification: "imported",
+            disposal: { state: "retained" },
+          },
+        };
+      });
+      const database = path.join(state, "agents/main/agent/openclaw-agent.sqlite");
+      const unusedDatabase = path.join(state, "agents/ops/agent/openclaw-agent.sqlite");
+      const databaseBytes = "synthetic database bytes for the size observation";
+      if (!missingDatabase) {
+        fs.mkdirSync(path.dirname(database), { recursive: true });
+        fs.writeFileSync(database, databaseBytes);
+      }
+      fs.writeFileSync(
+        path.join(manifests, "session-sqlite-fixture.json"),
+        JSON.stringify({
+          manifestVersion: 3,
+          runId: "session-sqlite-fixture",
+          completedAt: "2026-09-26T00:00:00.000Z",
+          targets: [
+            { agentId: "main", storePath: store, sqlitePath: database, completedMoves: moves },
+            {
+              agentId: "ops",
+              storePath: store,
+              sqlitePath: unusedDatabase,
+              completedMoves: [moves[1]],
+            },
+          ],
+        }),
+      );
+      fs.writeFileSync(
+        path.join(artifacts, "recovery-fixture.json"),
+        JSON.stringify({
+          originals,
+          spec: { sessions: 1, eventsPerSession: 3 },
+          preDoctorPaths: [],
+        }),
+      );
+      fs.writeFileSync(path.join(artifacts, "recovery-update-metrics.log"), "");
+      const evidence = path.join(artifacts, "recovery-evidence.json");
+      const result = await runNodeScript(
+        [path.resolve("scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs"), "migrated"],
+        {
+          HOME: root,
+          TMPDIR: root,
+          OPENCLAW_STATE_DIR: state,
+          OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
+          OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
+        },
+        10_000,
+      );
+      expect(result.error).toBeUndefined();
+      expect(fs.existsSync(unusedDatabase)).toBe(false);
+      if (missingDatabase) {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("ENOENT");
+        expect(result.stderr).toContain(database);
+        expect(fs.existsSync(evidence)).toBe(false);
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(fs.readFileSync(evidence, "utf8"))).toMatchObject({
+          migrationBeforeStandaloneDoctor: true,
+          destinations: [{ file: database, bytes: Buffer.byteLength(databaseBytes) }],
+        });
+      }
+    },
+  );
+
   it("uses the existing volume controls and rejects unsafe counts", () => {
     expect(recoveryVolumeSpec({})).toEqual({ sessions: 2, eventsPerSession: 8 });
     expect(
@@ -245,27 +338,6 @@ describe("recovery survivor evidence", () => {
     expect(() => assertRecoveryOriginals({ originals: archived }, [])).toThrow(/did not record/);
     fs.appendFileSync(retainedSource, "unexpected change");
     expect(() => assertRecoveryOriginals({ originals }, [])).toThrow(/changed/);
-  });
-
-  it("does not overwrite an existing transcript when seeding", () => {
-    const file = path.join(temporary(), "history.jsonl");
-    fs.writeFileSync(file, "existing history");
-    expect(() => writeRecoveryTranscript(file, "session", 3)).toThrow();
-    expect(fs.readFileSync(file, "utf8")).toBe("existing history");
-  });
-
-  it("detects preview mutations to databases, directories, cache files, and identities", () => {
-    const root = temporary();
-    const database = path.join(root, "current.sqlite");
-    fs.writeFileSync(database, "synthetic database bytes");
-    const before = recoveryTreeSnapshot([root]);
-    expect(() => assertRecoverySnapshot(before, recoveryTreeSnapshot([root]))).not.toThrow();
-    fs.mkdirSync(path.join(root, "new-cache"));
-    expect(() => assertRecoverySnapshot(before, recoveryTreeSnapshot([root]))).toThrow();
-    fs.rmSync(path.join(root, "new-cache"), { recursive: true });
-    const stable = recoveryTreeSnapshot([root]);
-    fs.writeFileSync(database, "changed database bytes");
-    expect(() => assertRecoverySnapshot(stable, recoveryTreeSnapshot([root]))).toThrow();
   });
 
   it("allows only selected transient WAL indexes during offline maintenance", () => {

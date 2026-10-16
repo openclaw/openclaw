@@ -1,10 +1,6 @@
-// Gateway Talk relay session lifecycle helpers.
-// Enforces TTL and connection ownership for process-local relay sessions.
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+const MAX_RELAY_SESSIONS_PER_CONN = 2;
+const MAX_RELAY_SESSIONS_GLOBAL = 64;
 
-/**
- * Shared TTL and connection-ownership checks for Talk relay session maps.
- */
 type TalkRelayLifecycleSession = {
   connId: string;
   expiresAtMs: number;
@@ -14,32 +10,33 @@ type CloseTalkRelaySession<TSession extends TalkRelayLifecycleSession> = (
   session: TSession,
 ) => void;
 
-function isExpiredTalkRelaySession(
-  session: TalkRelayLifecycleSession,
-  validNowMs: number,
-): boolean {
-  const expiresAtMs = asDateTimestampMs(session.expiresAtMs);
-  return expiresAtMs === undefined || validNowMs > expiresAtMs;
+export function assertTalkRelaySessionCapacity(
+  sessions: readonly Pick<TalkRelayLifecycleSession, "connId">[],
+  connId: string,
+  label: "realtime relay" | "transcription Talk",
+): void {
+  if (sessions.length >= MAX_RELAY_SESSIONS_GLOBAL) {
+    throw new Error(`Too many active ${label} sessions`);
+  }
+  if (
+    sessions.filter((session) => session.connId === connId).length >= MAX_RELAY_SESSIONS_PER_CONN
+  ) {
+    throw new Error(`Too many active ${label} sessions for this connection`);
+  }
 }
 
-/** Closes every expired relay session in the provided process-local map. */
 export function closeExpiredTalkRelaySessions<TSession extends TalkRelayLifecycleSession>(params: {
   sessions: Iterable<TSession>;
   closeSession: CloseTalkRelaySession<TSession>;
-  nowMs?: number;
 }): void {
-  const validNowMs = asDateTimestampMs(params.nowMs ?? Date.now());
-  if (validNowMs === undefined) {
-    return;
-  }
+  const now = Date.now();
   for (const session of params.sessions) {
-    if (isExpiredTalkRelaySession(session, validNowMs)) {
+    if (now > session.expiresAtMs) {
       params.closeSession(session);
     }
   }
 }
 
-/** Closes every relay session owned by a disconnected gateway connection. */
 export async function closeTalkRelaySessionsForConnection<
   TSession extends TalkRelayLifecycleSession,
 >(params: {
@@ -83,8 +80,7 @@ export function requireActiveTalkRelaySession<TSession extends TalkRelayLifecycl
   if (!session || session.connId !== params.connId) {
     throw new Error(params.unknownSessionMessage);
   }
-  const nowMs = asDateTimestampMs(Date.now());
-  if (nowMs === undefined || isExpiredTalkRelaySession(session, nowMs)) {
+  if (Date.now() > session.expiresAtMs) {
     params.closeSession(session);
     throw new Error(params.unknownSessionMessage);
   }

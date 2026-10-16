@@ -111,9 +111,6 @@ export async function publishStagedDeclarations(
   // Invocation-written stages never pass through the source-copy sanitizer above.
   // Normalize every staged declaration before closure checks and publication.
   for (const file of files) {
-    if (!file.endsWith(".d.ts") && !file.endsWith(".d.mts") && !file.endsWith(".d.cts")) {
-      continue;
-    }
     const absolute = path.join(staging, file);
     const current = fs.readFileSync(absolute, "utf8");
     const sanitized = sanitizeBundlerHelperDtsExports(current, parser).sourceText;

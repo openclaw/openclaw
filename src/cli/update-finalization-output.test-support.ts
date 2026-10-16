@@ -6,7 +6,9 @@ import path from "node:path";
 import { mock } from "node:test";
 import { pathToFileURL } from "node:url";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
+import { finalizationFixtureClockUrl as fixtureClockUrl } from "./update-finalization-clock.test-support.js";
 
+await import(fixtureClockUrl);
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
 // Keep real install discovery inside the fixture; only the completion case has a CLI binary.
@@ -16,7 +18,7 @@ await fs.writeFile(
 );
 const [runtimeProcessEntrypointsJson, scenario, ...args] = process.argv.slice(2);
 const borrowed = scenario?.startsWith("borrowed-");
-const repairDeadline = scenario === "repair-deadline";
+const repairDeadline = scenario?.startsWith("repair-deadline");
 const blockedChildSource = `
 const fs = require('node:fs');
 process.title = 'node fixture-private-argument';
@@ -41,15 +43,12 @@ const sourceUrl = (relative: string) =>
     import.meta.url.endsWith(".js") ? relative.replace(/\.ts$/u, ".js") : relative,
     import.meta.url,
   ).href;
-const recoveryClockOwners = new Set([
-  sourceUrl("./daemon-cli/restart-health.ts"),
-  sourceUrl("./daemon-cli/restart-health-probe.ts"),
-]);
+const doctorDeadline = scenario === "doctor-hang" || scenario === "doctor-progress";
 // Keep native/HTTP observations and their full budgets; only recovery polling advances time.
 const recoveryClockUrl = `data:text/javascript,${encodeURIComponent(`
 const realMonotonicNow = performance.now.bind(performance);
 const realWallNow = Date.now;
-let elapsed = 0;
+export let elapsed = 0;
 Object.defineProperty(performance, 'now', { value: () => realMonotonicNow() + elapsed });
 Date.now = () => realWallNow() + Math.floor(elapsed);
 export async function sleep(ms, signal) {
@@ -60,13 +59,29 @@ export async function sleep(ms, signal) {
   signal?.throwIfAborted();
 }
 `)}`;
+// Exhaust the recovery budget in its first interval, so real reads cannot race
+// a nearly spent fake deadline. HTTP probe sleeps must keep their own increments.
+const recoveryIntervalClockUrl = `data:text/javascript,${encodeURIComponent(`
+import { sleep as advance } from ${JSON.stringify(recoveryClockUrl)};
+export const sleep = (ms, signal) => advance(ms + 3_600_000, signal);
+`)}`;
+const recoveryClockUrls = new Map([
+  [sourceUrl("./daemon-cli/restart-health.ts"), recoveryIntervalClockUrl],
+  [sourceUrl("./daemon-cli/restart-health-probe.ts"), recoveryClockUrl],
+]);
 const doctorSource = `
-import { intro, note, outro } from ${JSON.stringify(pathToFileURL(require.resolve("@clack/prompts")).href)};
 export async function doctorCommand() {
   if (process.argv.includes('--lint')) {
     console.log(JSON.stringify({ ok: true, checksRun: 1, checksSkipped: 0, findings: [] }));
     return;
   }
+  const [{ intro, note, outro }, { retainUpdateDoctorProcesses }, { withCommandProcessScope }] = await Promise.all([
+    import(${JSON.stringify(pathToFileURL(require.resolve("@clack/prompts")).href)}),
+    import(${JSON.stringify(sourceUrl("../infra/update-doctor-process-custody.ts"))}),
+    import(${JSON.stringify(sourceUrl("../process/exec-spawn.ts"))}),
+  ]);
+  using custody = await retainUpdateDoctorProcesses();
+  const run = async () => {
   if (process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION !== '0') {
     throw new Error('Update Doctor unexpectedly allowed gateway activation');
   }
@@ -82,7 +97,7 @@ export async function doctorCommand() {
   console.log('STEP completed fixture-schema');
   console.error('STEP active fixture-validation');
   process.on('SIGTERM', () => {});
-  ${scenario === "doctor-progress" ? "setInterval(() => console.error('PROGRESS fixture-validation'), 40);" : ""}
+  ${scenario === "doctor-progress" ? "console.error('PROGRESS fixture-validation');" : ""}
   setTimeout(() => process.exit(0), 8_000);
   await new Promise(() => {});
   `
@@ -96,6 +111,8 @@ export async function doctorCommand() {
         JSON.stringify({status:'ok', warnings:['Optional probe failed; run openclaw doctor after updating.']}));`
       : ""
   }
+  };
+  return await (custody ? withCommandProcessScope(run, undefined, custody) : run());
 }
 `;
 const installedEntry = path.join(root, "installed-cli.mjs");
@@ -144,6 +161,16 @@ export const readConfigFileSnapshot = async () => ({ valid: true, config, source
 export const assertConfigWriteAllowedInCurrentMode = () => {};
 `;
 const stubs = new Map<string, string>([
+  // Synthetic services must not borrow the operator's shared lifecycle lock directory.
+  [
+    sourceUrl("../infra/tmp-openclaw-dir.ts"),
+    `export * from ${JSON.stringify(`${sourceUrl("../infra/tmp-openclaw-dir.ts")}?fixture-original`)};
+import { resolvePreferredOpenClawTmpDir as resolveOriginal } from ${JSON.stringify(`${sourceUrl("../infra/tmp-openclaw-dir.ts")}?fixture-original`)};
+export const resolvePreferredOpenClawTmpDir = (options = {}) => resolveOriginal({
+  ...options, preferredDir: ${JSON.stringify(path.join(root, "runtime"))},
+  tmpdir: () => ${JSON.stringify(root)},
+});`,
+  ],
   // Forward prepared locations, not currentModuleUrl as an import: builds may
   // place that URL in a shared chunk. Workers still execute their real compiled code.
   [
@@ -173,13 +200,16 @@ export const createUpdateConfigSnapshot = async () => {
   await child;
 };`
         : scenario === "borrowed-phase"
-          ? "export const createUpdateConfigSnapshot = async () => { await new Promise(resolve => setTimeout(resolve, 1_200)); };"
+          ? `import { advanceFinalizationFixtureClock } from ${JSON.stringify(fixtureClockUrl)};
+export const createUpdateConfigSnapshot = async () => { advanceFinalizationFixtureClock(1_200); };`
           : "export const createUpdateConfigSnapshot = async () => {};"),
   ],
   [
     sourceUrl("./update-cli/update-command-config.ts"),
     `
 import { readConfigFileSnapshot } from ${JSON.stringify(sourceUrl("../config/config.ts"))};
+export const readUpdateConfigFileSnapshot = readConfigFileSnapshot;
+export const capturePreUpdateSourceConfig = ({sourceConfig, parsed}) => ({ sourceConfig, authoredConfig: parsed });
 export const readPostCorePreUpdateSourceConfig = async () => {
   ${scenario === "phase-hang" ? "await new Promise(resolve => setTimeout(resolve, 1_200));" : ""}
   return undefined;
@@ -200,7 +230,8 @@ export const preparePostCorePluginConfig = async () => ({
   ],
   [
     sourceUrl("../daemon/gateway-entrypoint.ts"),
-    `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
+    `export * from ${JSON.stringify(`${sourceUrl("../daemon/gateway-entrypoint.ts")}?fixture-original`)};\n` +
+      `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
   ],
 ]);
 const blockedPhase = repairDeadline
@@ -212,13 +243,14 @@ const blockedPhase = repairDeadline
       : scenario === "completion-hang"
         ? "completionCache"
         : undefined;
-if (blockedPhase) {
+if (blockedPhase || scenario === "borrowed-phase") {
   const lifecycleUrl = sourceUrl("./update-cli/update-finalization-lifecycle.ts");
   // Keep real phase ownership; only the deliberately blocked phase gets a short budget.
   stubs.set(
     lifecycleUrl,
     `import { once } from 'node:events';
 import { UpdateFinalizationLifecycle as RealLifecycle } from ${JSON.stringify(`${lifecycleUrl}?fixture-original`)};
+import { startFinalizationFixtureClock, restoreFinalizationFixtureClock } from ${JSON.stringify(fixtureClockUrl)};
 export class UpdateFinalizationLifecycle extends RealLifecycle {
   budget(phase) { return phase === ${JSON.stringify(blockedPhase)} ? 1_000 : super.budget(phase); }
   ${
@@ -236,8 +268,41 @@ export class UpdateFinalizationLifecycle extends RealLifecycle {
       },
     });
   }`
-      : ""
+      : doctorDeadline || scenario === "borrowed-phase"
+        ? `async run(phase, operation, outcome, custody) {
+    if (phase !== 'doctor' && !(phase === 'configSnapshot' && ${scenario === "borrowed-phase"})) return super.run(phase, operation, outcome, custody);
+    startFinalizationFixtureClock();
+    try { return await super.run(phase, operation, outcome, custody); }
+    finally { restoreFinalizationFixtureClock(); }
+  }`
+        : ""
   }
+}`,
+  );
+}
+if (doctorDeadline || scenario === "borrowed-phase") {
+  const outputUrl = sourceUrl("./update-cli/update-finalization-output.ts");
+  stubs.set(
+    outputUrl,
+    `export * from ${JSON.stringify(`${outputUrl}?fixture-original`)};
+import { captureUpdateFinalizationDoctorOutput as capture } from ${JSON.stringify(`${outputUrl}?fixture-original`)};
+import { advanceFinalizationFixtureClock, restoreFinalizationFixtureClock } from ${JSON.stringify(fixtureClockUrl)};
+export function captureUpdateFinalizationDoctorOutput(phase) {
+  const append = capture(phase);
+  const output = { stdout: '', stderr: '' };
+  let ready = false;
+  return append && ((chunk, stream) => {
+    append(chunk, stream);
+    output[stream] += chunk.toString();
+    if (!ready && ${
+      doctorDeadline
+        ? `output.stdout.includes('STEP completed fixture-schema') && output.stderr.includes(${JSON.stringify(scenario === "doctor-progress" ? "PROGRESS fixture-validation" : "STEP active fixture-validation")})`
+        : "output.stdout.includes('Doctor complete.')"
+    }) {
+      ready = true;
+      ${doctorDeadline ? "advanceFinalizationFixtureClock(1_000);" : "restoreFinalizationFixtureClock();"}
+    }
+  });
 }`,
   );
 }
@@ -254,21 +319,72 @@ export async function runInteractiveUpdateFailureAction({ runtime }) {
 }`,
   );
 }
+if (scenario === "doctor-error") {
+  // Model a loaded runner's next port read without a real delay. Recovery must
+  // exhaust this fixture's polling budget in the interval, before another read.
+  const portsUrl = sourceUrl("../infra/ports-inspect.ts");
+  stubs.set(
+    portsUrl,
+    `export * from ${JSON.stringify(`${portsUrl}?fixture-original`)};
+import { inspectPortUsage as inspectOriginal } from ${JSON.stringify(`${portsUrl}?fixture-original`)};
+import { elapsed, sleep } from ${JSON.stringify(recoveryClockUrl)};
+export async function inspectPortUsage(port, options) {
+  const usage = await inspectOriginal(port, options);
+  if (elapsed > 0) await sleep(3_600_000, options?.signal);
+  return usage;
+}`,
+  );
+  // The timeout-report case owns an uninspectable service, not the host's manager.
+  // Admit that fixture identity while leaving recovery inspection, HTTP probes,
+  // polling, and failure recording real; no service mutation is permitted.
+  const pathsUrl = sourceUrl("../config/paths.ts");
+  stubs.set(
+    pathsUrl,
+    `export * from ${JSON.stringify(`${pathsUrl}?fixture-original`)};
+export const isDefaultInstallIdentity = () => true;`,
+  );
+  const serviceUrl = sourceUrl("../daemon/service.ts");
+  stubs.set(
+    serviceUrl,
+    `export * from ${JSON.stringify(`${serviceUrl}?fixture-original`)};
+const refuseMutation = async () => { throw new Error('Output fixture cannot mutate a Gateway service'); };
+const service = {
+  label: 'Fixture service', loadedText: 'loaded', notLoadedText: 'not loaded',
+  isLoaded: async () => { throw new Error('Fixture service status unavailable'); },
+  readCommand: async () => null,
+  readRuntime: async () => ({ status: 'unknown' }),
+  stage: refuseMutation, install: refuseMutation, uninstall: refuseMutation,
+  start: refuseMutation, stop: refuseMutation, restart: refuseMutation,
+};
+export const resolveGatewayService = () => service;`,
+  );
+}
 if (repairDeadline) {
   const { prepareRepairDeadlineFixture } =
     await import("./update-finalization-repair.test-support.js");
-  await prepareRepairDeadlineFixture(stubs, sourceUrl, root, installedEntry);
+  await prepareRepairDeadlineFixture(
+    stubs,
+    sourceUrl,
+    root,
+    installedEntry,
+    scenario === "repair-deadline-starting"
+      ? "starting"
+      : scenario === "repair-deadline-failed"
+        ? "failed"
+        : "ready",
+  );
 }
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier.startsWith(".") || specifier.startsWith("file:")) {
       const resolved = new URL(specifier, context.parentURL).href;
       const url = import.meta.url.endsWith(".js") ? resolved : resolved.replace(/\.js$/u, ".ts");
+      const recoverySleepUrl = recoveryClockUrls.get(context.parentURL ?? "");
       if (
         [sourceUrl("../utils.ts"), sourceUrl("../utils/sleep.ts")].includes(url) &&
-        recoveryClockOwners.has(context.parentURL ?? "")
+        recoverySleepUrl
       ) {
-        return { url: recoveryClockUrl, shortCircuit: true };
+        return { url: recoverySleepUrl, shortCircuit: true };
       }
       const source = stubs.get(url);
       if (source !== undefined) {
@@ -319,11 +435,15 @@ const run = () =>
             stdio: ["pipe", "ignore", "ignore"],
           },
         );
+        // The fixture owns this child, not the completed update operation. Release
+        // it only after the parent has observed the real stall diagnostic.
+        process.stdin.once("end", () => child.stdin.end());
+        process.stdin.resume();
         await runCliDisposer(
           "fixture-stdin-child",
           () =>
             new Promise<void>((resolve) => {
-              child.once("exit", () => resolve());
+              child.once("close", () => resolve());
             }),
         );
       }

@@ -1,5 +1,10 @@
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
-import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asPositiveSafeInteger,
+  isRecord,
+  normalizeOptionalString as nonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   type CrabboxMachineShape,
@@ -7,7 +12,6 @@ import {
   CRABBOX_ENROLLABLE_TARGETS,
   CRABBOX_OS_LABELS,
   listCrabboxMachineOptions,
-  nonEmptyString,
   parseCrabboxProfile,
 } from "./crabbox-worker-profile.js";
 import { CRABBOX_MACHINE_CATALOG_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
@@ -78,9 +82,9 @@ function parseCrabboxMachineShapes(stdout: string): CrabboxMachineShapes {
   );
 }
 
-export function createCrabboxMachineOptionsResolver(
+export function createCrabboxMachineCatalogResolver(
   dependencies: CrabboxMachineOptionsResolverDependencies,
-): Required<Pick<WorkerProvider, "listMachineOptions" | "listOperatingSystems">> {
+) {
   const machineShapesByBinary = new Map<string, Promise<CrabboxMachineShapes>>();
   const loadMachineShapes = async (binary: string): Promise<CrabboxMachineShapes> => {
     // The full provider matrix exceeds the lifecycle command's 64 KiB log cap.
@@ -98,23 +102,30 @@ export function createCrabboxMachineOptionsResolver(
     return parseCrabboxMachineShapes(result.stdout);
   };
 
-  const resolveCatalog = async (profile: WorkerProfile) => {
-    const parsed = parseCrabboxProfile(profile);
-    const binary = await dependencies.resolveBinary(parsed.binary);
+  return async (provider: string, explicitBinary?: string): Promise<CrabboxCatalog | undefined> => {
+    const binary = await dependencies.resolveBinary(explicitBinary);
     // Cache successful metadata per binary; different builds may advertise different sizes.
     // One rejection handler per load runs after insertion, including synchronous runner throws.
     let shapes = machineShapesByBinary.get(binary);
     if (!shapes) {
       shapes = loadMachineShapes(binary).catch((error: unknown) => {
         machineShapesByBinary.delete(binary);
-        dependencies.warn(
-          `Crabbox machine shapes unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        dependencies.warn(`Crabbox machine shapes unavailable: ${coerceErrorMessage(error)}`);
         return new Map();
       });
       machineShapesByBinary.set(binary, shapes);
     }
-    const catalog = (await shapes).get(parsed.provider);
+    return (await shapes).get(provider);
+  };
+}
+
+export function createCrabboxMachineOptionsResolver(
+  dependencies: CrabboxMachineOptionsResolverDependencies,
+): Required<Pick<WorkerProvider, "listMachineOptions" | "listOperatingSystems">> {
+  const resolveMachineCatalog = createCrabboxMachineCatalogResolver(dependencies);
+  const resolveCatalog = async (profile: WorkerProfile) => {
+    const parsed = parseCrabboxProfile(profile);
+    const catalog = await resolveMachineCatalog(parsed.provider, parsed.binary);
     return { parsed, catalog };
   };
   return {

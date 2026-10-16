@@ -151,6 +151,26 @@ async function startAuthInspectingProxy(targetBaseUrl: string) {
   };
 }
 
+function generationCredentialRef(generation: Generation) {
+  // Keep config authoritative: literal credentials can migrate into sticky auth profiles.
+  return { source: "env" as const, provider: "default", id: `QA_WORKER_SOURCE_${generation}` };
+}
+
+async function waitForConfigPublication(gateway: WireGateway, previousHash: string | undefined) {
+  await waitFor("worker generation config publication", async () => {
+    const current = (await gateway.call("config.get", {})) as {
+      hash?: string;
+      appliedConfigHash?: string;
+      configRevisionHash?: string;
+    };
+    return current.hash !== previousHash &&
+      current.appliedConfigHash !== undefined &&
+      current.appliedConfigHash === current.configRevisionHash
+      ? current
+      : undefined;
+  });
+}
+
 function buildGenerationConfig(params: {
   config: OpenClawConfig;
   generation: Generation;
@@ -192,7 +212,7 @@ function buildGenerationConfig(params: {
         [PROVIDER_ID]: {
           ...providerConfig,
           api: "openai-responses",
-          apiKey: `${SOURCE_CREDENTIAL_PREFIX}-${generation}`,
+          apiKey: generationCredentialRef(generation),
           baseUrl: mockProviderBaseUrl,
           request: { ...providerConfig?.request, allowPrivateNetwork: true },
           models: [
@@ -236,6 +256,7 @@ async function hotPublishGeneration(params: {
   generation: Exclude<Generation, "A">;
 }): Promise<{ pidBefore: number; pidAfter: number }> {
   const before = (await params.gateway.call("system.info", {})) as { pid?: number };
+  const previous = (await params.gateway.call("config.get", {})) as { hash?: string };
   const config = JSON.parse(await fs.readFile(params.gateway.configPath, "utf8")) as OpenClawConfig;
   const pluginEntry = config.plugins?.entries?.[PLUGIN_ID];
   const providerConfig = config.models?.providers?.[PROVIDER_ID];
@@ -260,12 +281,13 @@ async function hotPublishGeneration(params: {
         ...config.models?.providers,
         [PROVIDER_ID]: {
           ...providerConfig,
-          apiKey: `${SOURCE_CREDENTIAL_PREFIX}-${params.generation}`,
+          apiKey: generationCredentialRef(params.generation),
         },
       },
     },
   };
   await fs.writeFile(params.gateway.configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  await waitForConfigPublication(params.gateway, previous.hash);
   await waitFor(`generation ${params.generation} provider registration`, async () => {
     const registrations = (await readTrace(params.tracePath)).filter(
       (event) => event.event === "registered" && event.generation === params.generation,
@@ -300,23 +322,13 @@ async function hotPublishChannelCredential(params: {
         ...config.models?.providers,
         [PROVIDER_ID]: {
           ...providerConfig,
-          apiKey: `${SOURCE_CREDENTIAL_PREFIX}-${params.generation}`,
+          apiKey: generationCredentialRef(params.generation),
         },
       },
     },
   };
   await fs.writeFile(params.gateway.configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-  await waitFor(`generation ${params.generation} credential publication`, async () => {
-    const current = (await params.gateway.call("config.get", {})) as {
-      hash?: string;
-      appliedConfigHash?: string;
-      configRevisionHash?: string;
-    };
-    return current.hash !== previous.hash &&
-      current.appliedConfigHash === current.configRevisionHash
-      ? current
-      : undefined;
-  });
+  await waitForConfigPublication(params.gateway, previous.hash);
   const after = (await params.gateway.call("system.info", {})) as { pid?: number };
   if (!Number.isSafeInteger(before.pid) || after.pid !== before.pid) {
     throw new Error(`credential hot publish replaced the Gateway: ${before.pid} -> ${after.pid}`);
@@ -468,6 +480,12 @@ async function runProof(options: ProducerOptions) {
         cwd: options.repoRoot,
         usePackagedPlugins: true,
       },
+      runtimeEnvPatch: Object.fromEntries(
+        (["A", "B", "C", "D"] as const).map((generation) => [
+          generationCredentialRef(generation).id,
+          `${SOURCE_CREDENTIAL_PREFIX}-${generation}`,
+        ]),
+      ),
       providerBaseUrl: `${authProxy.baseUrl}/v1`,
       mockSessionObserverUrl: mock.sessionObserverUrl,
       providerMode: "mock-openai",

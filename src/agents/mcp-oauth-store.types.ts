@@ -3,27 +3,6 @@ import type {
   OAuthClientInformationMixed,
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
-import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease-store.js";
-import type { McpOAuthReadOperations } from "./mcp-oauth-store.kernel.js";
-
-/** Select this feature's commands from the typed shared-state wire contract. */
-export function isMcpOAuthWorkerCommand(command: {
-  type: string;
-}): command is SqliteWorkerCommand<McpOAuthReadOperations & McpOAuthWriteOperations> {
-  switch (command.type) {
-    case "mcpOAuth.read":
-    case "mcpOAuth.mutate":
-    case "mcpOAuth.consumePending":
-    case "mcpOAuth.writePending":
-    case "mcpOAuth.deletePending":
-    case "mcpOAuth.clear":
-    case "mcpOAuth.clearPendingPrefix":
-      return true;
-    default:
-      return false;
-  }
-}
 
 type McpOAuthAuthorizationChallenge = {
   resourceMetadataUrl?: string;
@@ -32,6 +11,8 @@ type McpOAuthAuthorizationChallenge = {
 };
 
 export type McpOAuthStore = {
+  /** Non-secret authorization incarnation; token refresh preserves it, reauthorization does not. */
+  authorizationId?: string;
   /** Provenance for token-less rows that Doctor must interpret during legacy import. */
   credentialState?: "uninitialized" | "cleared";
   clientInformation?: OAuthClientInformationMixed;
@@ -47,7 +28,13 @@ export type McpOAuthStore = {
 
 export type McpOAuthMutation =
   | { kind: "clientInformation"; clientInformation: OAuthClientInformationMixed }
-  | { kind: "tokens"; tokens: OAuthTokens; tokenExpiresAt: number | undefined }
+  | {
+      kind: "tokens";
+      tokens: OAuthTokens;
+      tokenExpiresAt: number | undefined;
+      replaceAuthorization?: boolean;
+    }
+  | { kind: "ensureAuthorization" }
   | {
       kind: "authorizationRedirect";
       authorizationUrl: string;
@@ -69,16 +56,3 @@ export type McpOAuthMutation =
       rejectedAccessToken?: string;
     }
   | { kind: "completeAuthorization" };
-
-type McpOAuthOwnedStore = { storeKey: string; identity: OpenClawStateLeaseIdentity };
-export type McpOAuthWriteOperations = {
-  "mcpOAuth.mutate": {
-    input: McpOAuthOwnedStore & { mutation: McpOAuthMutation };
-    output: { store: McpOAuthStore; applied: boolean };
-  };
-  "mcpOAuth.consumePending": { input: McpOAuthOwnedStore & { state: string }; output: boolean };
-  "mcpOAuth.writePending": { input: McpOAuthOwnedStore & { state: string }; output: void };
-  "mcpOAuth.deletePending": { input: McpOAuthOwnedStore; output: void };
-  "mcpOAuth.clear": { input: McpOAuthOwnedStore; output: void };
-  "mcpOAuth.clearPendingPrefix": { input: string; output: void };
-};

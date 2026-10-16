@@ -11,7 +11,17 @@ import type { TerminalUploadPathStyle } from "../../packages/gateway-protocol/sr
 import { listAgentIds, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type {
+  SessionUpstreamJsonValue,
+  SessionUpstreamKind,
+} from "./session-catalog-upstream.types.js";
+
+export type {
+  SessionUpstreamJsonValue,
+  SessionUpstreamKind,
+} from "./session-catalog-upstream.types.js";
 
 export type SessionCatalogListProviderParams = {
   /** Gateway always supplies this; optional only for pre-existing external provider types. */
@@ -110,22 +120,15 @@ export interface SessionCatalogEntrySummary {
 
 /** Shared, logically frozen store state for one request; copy locally before mutating. */
 export type SessionCatalogEntrySnapshot = {
+  /** Opaque immutable-entry revision, including config and selection scope. Cache only derived
+   * facts by this token; release entry references when the list closes. Not live authority. */
+  revision?: object;
   entriesForAgent: (agentId: string) => readonly SessionCatalogEntrySummary[];
   /** Request-wide flatten; optional for compatibility with pre-flatten plugin hosts. */
   entriesForCatalog?: () => SessionCatalogAgentEntry[];
 };
 
 type SessionCatalogAgentEntry = SessionCatalogEntrySummary & { agentId: string };
-
-export type SessionUpstreamJsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | SessionUpstreamJsonValue[]
-  | { [key: string]: SessionUpstreamJsonValue };
-
-export type SessionUpstreamKind = "claude-cli" | "codex-app-server" | "opencode-cli" | "pi-cli";
 
 export type SessionUpstreamProbe = {
   sessionKey: string;
@@ -176,16 +179,6 @@ export type SessionCatalogContinueProviderResult = {
   };
 };
 
-type SessionCatalogGatewayCopy = {
-  displayName?: string;
-  preferredModel?: string;
-};
-
-type SessionCatalogCreateParams = {
-  /** Agent whose model/runtime policy must authorize the catalog target. */
-  agentId?: string;
-};
-
 export type SessionCatalogProvider = {
   id: string;
   label: string;
@@ -196,9 +189,10 @@ export type SessionCatalogProvider = {
   /** Declares that every HOME-sensitive action honors the host isolation policy. */
   supportsProcessHomeIsolation?: true;
   /** Config-derived target; the Gateway memoizes it for one runtime-config object identity. */
-  resolveCreateSession?: (
-    params: SessionCatalogCreateParams,
-  ) => SessionCatalogCreateTarget | undefined;
+  resolveCreateSession?: (params: {
+    /** Agent whose model/runtime policy must authorize the catalog target. */
+    agentId?: string;
+  }) => SessionCatalogCreateTarget | undefined;
   list: (params: SessionCatalogListProviderParams) => Promise<SessionCatalogHost[]>;
   /** Optional inert factory; each settled step leaves no foreground work running. */
   createListOperation?: (params: SessionCatalogListProviderParams) => {
@@ -214,7 +208,7 @@ export type SessionCatalogProvider = {
   /** Copy catalog history into a new ordinary Gateway-owned session. */
   copyToGatewaySession?: (
     params: SessionCatalogContinueProviderParams,
-  ) => Promise<SessionCatalogGatewayCopy>;
+  ) => Promise<{ displayName?: string; preferredModel?: string }>;
   checkUpstreamActivity?: (
     probes: SessionUpstreamProbe[],
     policy?: { allowProcessHomeFallback?: boolean },
@@ -232,9 +226,6 @@ export type SessionCatalogProvider = {
     request: SessionCatalogStartTerminalProviderParams,
   ) => Promise<SessionCatalogTerminalPlan>;
 };
-
-type SessionCatalogAdoptedSource = { hostId: string; threadId: string };
-type SessionCatalogEntry = SessionCatalogEntrySummary["entry"];
 
 export function listSessionCatalogEntries(params: {
   agentId?: string;
@@ -288,7 +279,7 @@ export function listAdoptedSessionCatalogSessions(params: {
   pluginId: string;
   runtime: PluginRuntime;
   sessionEntries?: SessionCatalogEntrySnapshot;
-  sourceFromEntry: (entry: SessionCatalogEntry) => SessionCatalogAdoptedSource | undefined;
+  sourceFromEntry: (entry: SessionEntry) => { hostId: string; threadId: string } | undefined;
 }): Map<string, string> {
   const adopted = new Map<string, string>();
   for (const { sessionKey, entry } of listSessionCatalogEntries(params)) {
@@ -300,10 +291,7 @@ export function listAdoptedSessionCatalogSessions(params: {
   return adopted;
 }
 
-// `complete` is intentionally required, not optional-with-fallback: adoption and its
-// upstream baseline must share one single-flight operation, or concurrent continues
-// race to baseline the same thread. This helper shipped in no release tag yet
-// (added #113718), so no external plugin can depend on the older 3-field shape.
+// Adoption and its upstream baseline share one single-flight operation.
 export function createSessionCatalogAdoptionCoordinator<TResult extends { sessionKey: string }>() {
   const operations = new Map<string, Promise<TResult>>();
   return async (params: {
@@ -312,33 +300,24 @@ export function createSessionCatalogAdoptionCoordinator<TResult extends { sessio
     create: () => Promise<{ sessionKey: string }>;
     complete: (continued: { sessionKey: string }) => Promise<TResult>;
   }): Promise<TResult> => {
-    const pending = operations.get(params.sourceKey);
-    if (pending) {
-      return await pending;
-    }
-    const operation = (async () => {
-      const existing = await params.findExisting();
-      if (existing) {
-        // The gateway's same-source link upsert preserves its active marker. Re-running
-        // completion only supplies a new baseline after that link was removed.
-        return await params.complete({ sessionKey: existing });
-      }
-      const continued = await params.create().catch(async (error: unknown) => {
-        const raced = await params.findExisting();
-        if (raced) {
-          return { sessionKey: raced };
-        }
-        throw error;
-      });
-      return await params.complete(continued);
-    })();
-    operations.set(params.sourceKey, operation);
-    try {
-      return await operation;
-    } finally {
-      if (operations.get(params.sourceKey) === operation) {
-        operations.delete(params.sourceKey);
-      }
-    }
+    return await getOrCreatePromise(
+      operations,
+      params.sourceKey,
+      async () => {
+        const existing = await params.findExisting();
+        // Completion preserves an existing link's marker, or supplies a baseline after removal.
+        const continued = existing
+          ? { sessionKey: existing }
+          : await params.create().catch(async (error: unknown) => {
+              const raced = await params.findExisting();
+              if (raced) {
+                return { sessionKey: raced };
+              }
+              throw error;
+            });
+        return await params.complete(continued);
+      },
+      { evictOnSettled: true },
+    );
   };
 }

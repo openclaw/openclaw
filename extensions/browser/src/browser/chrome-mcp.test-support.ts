@@ -1,13 +1,66 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, vi } from "vitest";
-import type { ChromeMcpSession } from "./chrome-mcp-contracts.js";
-import { resetChromeMcpSessionsForTest } from "./chrome-mcp-session.js";
+import * as chromeMcpConnect from "./chrome-mcp-connect.js";
+import type {
+  ChromeMcpSession,
+  NormalizedChromeMcpProfileOptions,
+} from "./chrome-mcp-contracts.js";
+import { closeChromeMcpSession } from "./chrome-mcp-session.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
+
+const { resetChromeMcpProcessMocks } = await vi.hoisted(
+  () => import("./chrome-mcp-process.test-support.js"),
+);
+
+export type ChromeMcpSessionFactory = (
+  profileName: string,
+  options?: NormalizedChromeMcpProfileOptions,
+) => ChromeMcpSession;
+
+const ownedProfiles = new Set<string>();
+
+export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFactory | null): void {
+  if (!factory) {
+    if (vi.isMockFunction(chromeMcpConnect.createChromeMcpSession)) {
+      vi.mocked(chromeMcpConnect.createChromeMcpSession).mockRestore();
+    }
+    return;
+  }
+  vi.spyOn(chromeMcpConnect, "createChromeMcpSession").mockImplementation(
+    (_owner, profileName, options) => {
+      ownedProfiles.add(profileName);
+      return factory(profileName, options);
+    },
+  );
+}
+
+export async function resetChromeMcpSessionsForTest(): Promise<void> {
+  await Promise.all([...ownedProfiles].map((profileName) => closeChromeMcpSession(profileName)));
+  ownedProfiles.clear();
+  setChromeMcpSessionFactoryForTest(null);
+}
+
+export function waitForChromeMcpState<T>(assertion: () => T | Promise<T>): Promise<T> {
+  return vi.waitFor(assertion, { interval: 1 });
+}
 
 export type ToolCall = {
   name: string;
   arguments?: Record<string, unknown>;
 };
+
+export type ToolCallMock = {
+  mock: {
+    calls: Array<[ToolCall, unknown?, { signal?: AbortSignal; timeout?: number }?]>;
+  };
+};
+
+export function fakeListPagesResult() {
+  return {
+    content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
+  };
+}
+
 export type SessionPage = { id: number; url: string; selected?: boolean };
 
 export function createPageSession(params: {
@@ -52,16 +105,19 @@ export function installChromeMcpSessionTestHooks() {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await resetChromeMcpSessionsForTest();
+    resetChromeMcpProcessMocks();
+    vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 }
 
 export const FAKE_TARGET_1 = "chrome-mcp:000000000001:1";
-export const FAKE_TARGET_2 = "chrome-mcp:000000000001:2";
+const FAKE_TARGET_2 = "chrome-mcp:000000000001:2";
 const FAKE_TARGET_3 = "chrome-mcp:000000000001:3";
-export const FAKE_REF = "mcp-ref:000000000001:1";
+const FAKE_REF = "mcp-ref:000000000001:1";
 
 export function createFakeSession(screenshotError?: string): ChromeMcpSession {
   let currentUrl =

@@ -1,6 +1,5 @@
 import { buildChannelOutboundSessionRoute } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Irc helper module supports normalize behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

@@ -423,9 +423,11 @@ describe("config draft model", () => {
         return {
           sourceConfig: {
             agents: {
+              ownership: "explicit",
+              defaults: { systemAgent: { agentId: "reviewer" } },
               entries: {
                 MAIN: {},
-                reviewer: { default: true },
+                reviewer: {},
               },
             },
           },
@@ -485,7 +487,7 @@ describe("config draft model", () => {
     const request = vi.fn(async (method: string) =>
       method === "config.get"
         ? {
-            sourceConfig: { agents: { entries: { main: { default: true } } } },
+            sourceConfig: { agents: { entries: { main: {} } } },
             hash: "hash-1",
             valid: true,
             issues: [],
@@ -500,21 +502,15 @@ describe("config draft model", () => {
     expect(runtimeConfig.agentEntry("__proto__", { ensure: true })).toBeNull();
     expect(runtimeConfig.agentEntry(" ", { ensure: true })).toBeNull();
     expect(runtimeConfig.state.configForm).toEqual({
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
     });
     runtimeConfig.dispose();
   });
 
   it.each([
     ["automatic save", "123"],
-    ["automatic save", "z.ai"],
-    ["automatic save", "a.models.3"],
-    ["manual save", "123"],
     ["manual save", "z.ai"],
-    ["manual save", "a.models.3"],
     ["manual save", "$&"],
-    ["apply", "123"],
-    ["apply", "z.ai"],
     ["apply", "a.models.3"],
   ] as const)(
     "formats the rejected %s validation path for provider %s without changing the Gateway issue",

@@ -1,3 +1,4 @@
+import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { registerSubagentRun } from "./subagents/registry/subagent-registry.js";
 import type { SubagentRegistrationScope } from "./subagents/registry/subagent-registry.types.js";
@@ -6,6 +7,7 @@ type SpawnPipelinePhase = "initialize" | "dispatch" | "register";
 
 export type SpawnBackendAdapter<TState> = {
   initialize(): Promise<TState>;
+  retainRegistrationScope?(scope: SubagentRegistrationScope): void;
   dispatchTurn(state: TState): Promise<{ runId: string }>;
   cleanupOnFailure(params: {
     phase: SpawnPipelinePhase;
@@ -72,20 +74,21 @@ export async function runSpawnPipeline<TState>(
       ({ runId } = await params.adapter.dispatchTurn(state));
       phase = "register";
       params.assertActive?.();
-      // Running and optional registration keep their synchronous handoff.
       registration = params.buildRegistration(state, runId);
-      const completion = registration.queued
-        ? registerSubagentRun(registration, {
+      await registerSubagentRun(
+        registration,
+        withExecRequestOwners(
+          {
             assertCurrent: params.assertActive,
             retainOwnership: (scope) => {
               registrationScope = scope;
+              params.adapter.retainRegistrationScope?.(scope);
             },
-          })
-        : registerSubagentRun(registration);
-      if (completion) {
-        await completion;
-      }
-      // Required queued registrations await here; ordinary child admission stays synchronous.
+          },
+          readExecRequestOwners(params),
+        ),
+      );
+      // Release launch admission only after any authority preparation and registry acknowledgement.
       params.admissionReservation?.release();
     } catch (error) {
       await params.adapter.cleanupOnFailure({

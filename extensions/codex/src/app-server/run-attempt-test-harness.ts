@@ -12,8 +12,10 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent
 import { setHostToolFactoryForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { clearInternalHooks, resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import * as nodeSelectionRuntime from "openclaw/plugin-sdk/node-selection-runtime";
 import { clearPluginCommands } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createAgentHarnessHostCapabilitiesForTest,
@@ -22,12 +24,17 @@ import {
   getActivePluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { drainSessionDiskBudgetWorkers } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { CodexAppServerClient } from "./client.js";
 import {
+  createCodexRequestRecorder,
   createFakeCodexAppServerClient,
   threadStartResult as createThreadStartResult,
   turnStartResult,
@@ -59,6 +66,7 @@ import {
   adaptCodexTestClientFactory,
   createCodexTestModel,
   createCodexTestToolTerminalObserver,
+  stubCodexInferenceTransportEnv,
   useAutoCleanupTempDirTracker,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
@@ -72,7 +80,10 @@ export {
 } from "./run-attempt-hook-test-support.js";
 
 const execApprovalsRuntimeMocks = vi.hoisted(() => ({
-  loadExecApprovals: vi.fn<() => ExecApprovalsFile>(() => ({ version: 1, agents: {} })),
+  loadExecApprovalsReadOnlyAsync: vi.fn<() => Promise<ExecApprovalsFile>>(async () => ({
+    version: 1,
+    agents: {},
+  })),
 }));
 
 function createHarnessHostCapabilities(
@@ -108,7 +119,7 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
     await importOriginal<typeof import("openclaw/plugin-sdk/exec-approvals-runtime")>();
   return {
     ...actual,
-    loadExecApprovals: execApprovalsRuntimeMocks.loadExecApprovals,
+    loadExecApprovalsReadOnlyAsync: execApprovalsRuntimeMocks.loadExecApprovalsReadOnlyAsync,
   };
 });
 
@@ -116,7 +127,6 @@ export let tempDir: string;
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
 const multiplexedTestClients = new WeakSet<CodexAppServerClient>();
 export const fastWait = { interval: 1, timeout: 5_000 } as const;
-const appServerHarnessWait = { interval: 1, timeout: 120_000 } as const;
 const activeAppServerAttemptsForTest = new Set<{
   abortController?: AbortController;
   promise: Promise<unknown>;
@@ -201,6 +211,7 @@ export function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: RunCodexAppServerAttemptOptions = {},
 ) {
+  const turnAccepted = createDeferred<void>();
   registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
   const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
   const abortController = params.abortSignal ? undefined : new AbortController();
@@ -213,18 +224,40 @@ export function runCodexAppServerAttempt(
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   };
+  const onExecutionPhase = trackedParams.onExecutionPhase;
+  const observeExecutionPhase: NonNullable<EmbeddedRunAttemptParams["onExecutionPhase"]> = (
+    event,
+  ) => {
+    onExecutionPhase?.call(trackedParams, event);
+    if (event.phase === "turn_accepted") {
+      turnAccepted.resolve();
+    }
+  };
+  trackedParams.onExecutionPhase = observeExecutionPhase;
   const promise = runCodexAppServerAttemptImpl(trackedParams, {
     ...options,
     startupTimeoutFloorMs: options.startupTimeoutFloorMs ?? 30_000,
     bindingStore: options.bindingStore ?? testCodexAppServerBindingStore,
     ...(clientFactory ? { clientFactory } : {}),
   }).finally(() => {
+    if (trackedParams.onExecutionPhase === observeExecutionPhase) {
+      trackedParams.onExecutionPhase = onExecutionPhase;
+    }
     activeAppServerAttemptsForTest.delete(entry);
   });
   entry.promise = promise;
   activeAppServerAttemptsForTest.add(entry);
   promise.catch(() => undefined);
-  return promise;
+  return Object.assign(promise, {
+    // Observing turn/start only proves dispatch; lifecycle actions need acceptance.
+    waitForTurnAccepted: () =>
+      Promise.race([
+        turnAccepted.promise,
+        promise.then(() => {
+          throw new Error("Codex attempt settled before turn acceptance");
+        }),
+      ]),
+  });
 }
 
 async function drainActiveAppServerAttemptsForTest(): Promise<boolean> {
@@ -272,6 +305,10 @@ async function drainActiveAppServerAttemptsForTest(): Promise<boolean> {
   }
 }
 
+function createRunAttemptTestConfig(): NonNullable<EmbeddedRunAttemptParams["config"]> {
+  return { tools: { web: { search: { enabled: false } } } };
+}
+
 export function createParams(
   sessionFile: string,
   workspaceDir: string,
@@ -308,7 +345,7 @@ export function createParams(
     },
     thinkLevel: "medium",
     disableTools: false,
-    config: { tools: { web: { search: { enabled: false } } } },
+    config: createRunAttemptTestConfig(),
     timeoutMs: 5_000,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
@@ -414,42 +451,14 @@ export function getMockRuntimeIdentity() {
   return { serverVersion: CODEX_APP_SERVER_VERSION };
 }
 
-export { mockClientRuntimeMethods, turnStartResult } from "./codex-app-server.test-fixtures.js";
+export {
+  mockClientRuntimeMethods,
+  rateLimitsUpdated,
+  turnStartResult,
+} from "./codex-app-server.test-fixtures.js";
 
 export function threadStartResult(threadId = "thread-1", options: { cwd?: string } = {}) {
-  const cwd = options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test";
-  return createThreadStartResult(threadId, cwd);
-}
-
-export function createThreadStartRequest(threadId = "thread-1") {
-  const responses: Record<string, unknown> = {
-    "configRequirements/read": { requirements: null },
-    "config/read": { config: {}, origins: {}, layers: [] },
-    "thread/start": threadStartResult(threadId),
-  };
-  return vi.fn(async (method: string, _params?: unknown) => {
-    if (!Object.hasOwn(responses, method)) {
-      throw new Error(`unexpected method: ${method}`);
-    }
-    return responses[method];
-  });
-}
-
-export function rateLimitsUpdated(resetsAt: number): CodexServerNotification {
-  return {
-    method: "account/rateLimits/updated",
-    params: {
-      rateLimits: {
-        limitId: "codex",
-        limitName: "Codex",
-        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt },
-        secondary: null,
-        credits: null,
-        planType: "plus",
-        rateLimitReachedType: "rate_limit_reached",
-      },
-    },
-  };
+  return createThreadStartResult(threadId, options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test");
 }
 
 export function createAppServerHarness(
@@ -459,7 +468,7 @@ export function createAppServerHarness(
     options?: { signal?: AbortSignal },
   ) => Promise<unknown>,
   options: {
-    persistedThreads?: string[];
+    persistedThreads?: Parameters<typeof createCodexLifecycleTurnHarness>[0]["persistedThreads"];
     onStart?: (
       authProfileId: string | undefined,
       agentDir: string | undefined,
@@ -472,7 +481,6 @@ export function createAppServerHarness(
       respond: requestImpl,
       persistedThreads: options.persistedThreads,
       agentDir: path.join(tempDir, "wire-agent"),
-      wait: appServerHarnessWait,
     });
     setCodexAppServerClientFactoryForTest(
       async (_start, auth, agentDir, _config, clientOptions) => {
@@ -482,9 +490,9 @@ export function createAppServerHarness(
     );
     return harness;
   }
-  const requests: Array<{ method: string; params: unknown }> = [];
+  const { requests, record, waitForMethod } = createCodexRequestRecorder();
   const fixture = createFakeCodexAppServerClient(async (method, params, requestOptions) => {
-    requests.push({ method, params });
+    record(method, params);
     const result = await requestImpl(
       method,
       params,
@@ -525,17 +533,14 @@ export function createAppServerHarness(
   );
 
   const waitForServerRequestHandler = async () => {
-    await vi.waitFor(() => expect(fixture.requests.size).toBeGreaterThan(0), appServerHarnessWait);
+    await fixture.requestHandlerReady;
     return fixture.handleServerRequest;
   };
 
   const sendNotification = async (notification: CodexServerNotification) => {
     // Keep dispatch synchronous once attached: terminal-then-close order is observable.
     if (fixture.notifications.size === 0) {
-      await vi.waitFor(
-        () => expect(fixture.notifications.size).toBeGreaterThan(0),
-        appServerHarnessWait,
-      );
+      await fixture.notificationHandlerReady;
     }
     await fixture.notify(notification);
   };
@@ -544,24 +549,7 @@ export function createAppServerHarness(
     client,
     request,
     requests,
-    waitForMethod: async (method: string, timeoutMs: number = appServerHarnessWait.timeout) => {
-      await vi.waitFor(
-        () => {
-          if (!requests.some((entry) => entry.method === method)) {
-            const mockMethods = request.mock.calls.map((call) => call[0]);
-            throw new Error(
-              "expected app-server method " +
-                method +
-                "; saw " +
-                requests.map((entry) => entry.method).join(", ") +
-                "; mock saw " +
-                mockMethods.join(", "),
-            );
-          }
-        },
-        { interval: 1, timeout: timeoutMs },
-      );
-    },
+    waitForMethod,
     notify: sendNotification,
     waitForServerRequestHandler,
     handleServerRequest: async (requestLocal: RpcRequest) => {
@@ -588,6 +576,9 @@ function defaultAttemptHarnessResponse(method: string) {
   }
   if (method === "config/read") {
     return { config: {}, origins: {}, layers: [] };
+  }
+  if (method === "skills/list") {
+    return { data: [] };
   }
   if (method === "turn/start") {
     return turnStartResult();
@@ -617,6 +608,7 @@ export function createStartedThreadHarness(
 export function createResumeHarness(
   threadId = "thread-existing",
   requestImpl: Parameters<typeof createAppServerHarness>[0] = async () => undefined,
+  persistedThread?: ReturnType<typeof threadStartResult> & { thread: { model?: string | null } },
 ) {
   return createAppServerHarness(
     async (method, params, requestOptions) => {
@@ -625,8 +617,6 @@ export function createResumeHarness(
         return override;
       }
       if (method === "thread/resume") {
-        // Resume must echo the requested thread; a different id is rejected as
-        // an unsafe subscription.
         const resumeParams = params as { threadId?: string; modelProvider?: string };
         return {
           ...threadStartResult(resumeParams.threadId ?? "thread-existing"),
@@ -635,7 +625,7 @@ export function createResumeHarness(
       }
       return defaultAttemptHarnessResponse(method);
     },
-    { persistedThreads: [threadId] },
+    { persistedThreads: [persistedThread ?? threadId] },
   );
 }
 
@@ -660,7 +650,9 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
   };
 }
 
-export function setupRunAttemptTestHooks(): void {
+export function setupRunAttemptTestHooks(
+  options: { isolateNativeSkillHome?: boolean; sessionOwner?: null } = {},
+): void {
   // Keep unique test roots alive while the suite reuses native database workers.
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterAll(async () => {
@@ -670,15 +662,27 @@ export function setupRunAttemptTestHooks(): void {
       cleanup();
     }),
   );
+  let nativeSkillTestHome: string | undefined;
 
-  beforeEach(async () => {
+  beforeEach(async (context) => {
+    if (!context.codexAttemptRuntime) {
+      throw new Error("Codex run-attempt tests require the shared extension runtime fixture");
+    }
     // Direct runtime tests supply the plugin root normally owned by loader registration.
     setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
+    // Protocol fixtures have no remote nodes; ambient discovery must not wait on fake timers.
+    vi.spyOn(nodeSelectionRuntime, "loadNodeExecAvailability").mockResolvedValue({
+      cacheKey: "[]",
+      isAvailable: () => false,
+    });
     // Machine-managed sandbox requirements must not leak into policy fixtures.
     vi.spyOn(codexRequirements, "readCodexRequirementsToml").mockReturnValue(undefined);
     // An uninitialized real host approvals store intentionally fails closed.
-    execApprovalsRuntimeMocks.loadExecApprovals.mockReset();
-    execApprovalsRuntimeMocks.loadExecApprovals.mockReturnValue({ version: 1, agents: {} });
+    execApprovalsRuntimeMocks.loadExecApprovalsReadOnlyAsync.mockReset();
+    execApprovalsRuntimeMocks.loadExecApprovalsReadOnlyAsync.mockResolvedValue({
+      version: 1,
+      agents: {},
+    });
     defaultCodexAppInventoryCache.clear();
     defaultCodexPluginMetadataCache.clear();
     resetCodexTestBindingStore();
@@ -691,13 +695,26 @@ export function setupRunAttemptTestHooks(): void {
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
+    stubCodexInferenceTransportEnv();
     tempDir = tempDirs.make("openclaw-codex-run-", resolvePreferredOpenClawTmpDir());
+    if (options.isolateNativeSkillHome) {
+      nativeSkillTestHome ??= tempDir;
+      vi.stubEnv("HOME", nativeSkillTestHome);
+      vi.stubEnv("CODEX_HOME", "");
+    }
+    setRuntimeConfigSnapshot(createRunAttemptTestConfig());
+    await context.codexAttemptRuntime.start();
     // createParams models an ordinary durable session; seeded native bindings
     // must have the same authoritative core owner as a real resumed conversation.
-    await seedRunSessionOwnerForTest("session-1", "agent:main:session-1");
+    if (options.sessionOwner !== null) {
+      await seedRunSessionOwnerForTest("session-1", "agent:main:session-1");
+    }
   });
 
-  afterEach(async () => {
+  afterEach(async (context) => {
+    if (!context.codexAttemptRuntime) {
+      throw new Error("Codex run-attempt tests require the shared extension runtime fixture");
+    }
     const drained = await drainActiveAppServerAttemptsForTest();
     for (const close of activeHarnessHostClosuresForTest) {
       close();
@@ -711,8 +728,10 @@ export function setupRunAttemptTestHooks(): void {
     const registry = getActivePluginRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
     const pluginCleanup = registry ? await disposePluginRegistryInstances(registry) : undefined;
+    await context.codexAttemptRuntime.stop();
     // A run beyond the drain deadline still needs the original database revocation fence.
     await cleanupRunSessionOwnersForTest({ closeDatabases: !drained });
+    clearRuntimeConfigSnapshot();
     resetCodexAppServerClientFactoryForTest();
     setManagedCodexPluginRoot(undefined);
     clearRuntimeAuthProfileStoreSnapshots();
@@ -725,6 +744,7 @@ export function setupRunAttemptTestHooks(): void {
     clearInternalHooks();
     defaultCodexAppInventoryCache.clear();
     defaultCodexPluginMetadataCache.clear();
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     if (pluginCleanup) {
       expect(pluginCleanup.failures).toEqual([]);

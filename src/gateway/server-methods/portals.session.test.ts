@@ -114,21 +114,28 @@ function fixture() {
 }
 
 describe("session-scoped attached worker portals", () => {
-  it.each(["session reset", "lost attestation"] as const)(
-    "keeps an existing global worker portal separate through %s",
-    async (retirement) => {
+  it.each([
+    { kind: "worker", retirement: "session reset" },
+    { kind: "worker", retirement: "lost attestation" },
+    { kind: "local", retirement: "session reset" },
+  ] as const)(
+    "keeps a global $kind portal and its credentials separate through $retirement",
+    async ({ kind, retirement }) => {
       const f = fixture();
       const closeGlobal = vi.fn();
       const global = await f.service.open({
         targetPort: 3000,
-        target: {
-          kind: "worker",
-          environmentId: "attached",
-          ownerEpoch: 1,
-          remotePort: 3000,
-          connect: f.connect,
-        },
-        onClose: closeGlobal,
+        target:
+          kind === "worker"
+            ? {
+                kind: "worker",
+                environmentId: "attached",
+                ownerEpoch: 1,
+                remotePort: 3000,
+                connect: f.connect,
+              }
+            : undefined,
+        onClose: kind === "worker" ? closeGlobal : undefined,
       });
       expect((await f.invoke("open", { port: 3000 }))?.[0]).toBe(true);
       const scoped = f.service.list().find((portal) => portal.id !== global.id)!;
@@ -136,6 +143,16 @@ describe("session-scoped attached worker portals", () => {
       expect(scoped.url).not.toBe(global.url);
       expect((await f.invoke("list"))?.[1]).toEqual({ portals: [scoped] });
       expect((await f.invoke("close", { id: global.id }))?.[0]).toBe(false);
+      if (kind === "local") {
+        expect(f.service.listWorkerPortals("attached", 1)).toEqual([scoped]);
+      }
+      const payload = f.broadcast.mock.calls[0]?.[1] as { portals: Record<string, unknown>[] };
+      expect(payload.portals).toHaveLength(2);
+      for (const summary of payload.portals) {
+        expect(summary).not.toHaveProperty("url");
+        expect(summary).not.toHaveProperty("tokenQuery");
+        expect(summary).not.toHaveProperty("resourceOwnerKey");
+      }
       expect((await f.invoke("open", { port: 3000 }))?.[1]).toEqual(scoped);
       expect(f.service.list()).toHaveLength(2);
       // Reuse releases only the unused new carrier, leaving both original resources owned.
@@ -152,7 +169,7 @@ describe("session-scoped attached worker portals", () => {
       expect(f.release).toHaveBeenCalledTimes(2);
       expect(closeGlobal).not.toHaveBeenCalled();
       await f.service.close(global.id);
-      expect(closeGlobal).toHaveBeenCalledOnce();
+      expect(closeGlobal).toHaveBeenCalledTimes(kind === "worker" ? 1 : 0);
     },
   );
 
@@ -172,97 +189,76 @@ describe("session-scoped attached worker portals", () => {
     expect(f.close).toHaveBeenCalledTimes(2);
   });
 
-  it("requires admission and explicit dedicated ownership, never falling back to local ports", async () => {
-    const f = fixture();
-    expect((await f.invoke("open", { port: 3000 }, false))?.[0]).toBe(false);
-    expect((await f.invoke("open", { port: 3000, environmentId: "other" }))?.[0]).toBe(false);
-    f.unqualify();
-    expect((await f.invoke("open", { port: 3000 }))?.[0]).toBe(false);
-    expect(f.environments.openNodePortal).not.toHaveBeenCalled();
-    expect(f.service.list()).toEqual([]);
-  });
+  it.each([
+    "missing admission",
+    "different environment",
+    "not dedicated",
+    "actor revoked",
+    "session reset",
+    "attachment replaced",
+  ] as const)(
+    "rejects %s before publishing a portal and releases any prepared carrier",
+    async (reason) => {
+      const f = fixture();
+      const preparing =
+        reason === "actor revoked" ||
+        reason === "session reset" ||
+        reason === "attachment replaced";
+      const entered = createDeferred();
+      const finish = createDeferred();
+      if (preparing) {
+        f.environments.openNodePortal.mockImplementationOnce(async () => {
+          entered.resolve();
+          await finish.promise;
+          return { close: f.close, connect: f.connect };
+        });
+      } else if (reason === "not dedicated") {
+        f.unqualify();
+      }
+      const opening = f.invoke(
+        "open",
+        {
+          port: 3000,
+          ...(reason === "different environment" ? { environmentId: "other" } : {}),
+        },
+        reason !== "missing admission",
+      );
+      if (preparing) {
+        await entered.promise;
+        if (reason === "actor revoked") {
+          f.revokeActor();
+        } else if (reason === "session reset") {
+          f.session.abort(new Error("session reset"));
+        } else {
+          f.replaceAttachment();
+        }
+        finish.resolve();
+      }
+      const response = await opening;
+      expect(response?.[0]).toBe(false);
+      if (reason === "session reset") {
+        expect(response?.[2]).toMatchObject({ message: "session reset" });
+      }
+      expect(f.environments.openNodePortal).toHaveBeenCalledTimes(preparing ? 1 : 0);
+      expect(f.close).toHaveBeenCalledTimes(preparing ? 1 : 0);
+      expect(f.release).toHaveBeenCalledTimes(preparing ? 1 : 0);
+      expect(f.service.list()).toEqual([]);
+      expect(f.open).not.toHaveBeenCalled();
+      expect(f.broadcast).not.toHaveBeenCalled();
+    },
+  );
 
-  it("returns credentials only for its attachment and redacts broad change events", async () => {
-    const f = fixture();
-    const unrelated = await f.service.open({ targetPort: 3000 });
-    const opened = await f.invoke("open", { port: 3000 });
-    expect(opened?.[0]).toBe(true);
-    const own = f.service.listWorkerPortals("attached", 1);
-    expect(own).toHaveLength(1);
-    expect((await f.invoke("list"))?.[1]).toEqual({ portals: own });
-    expect((await f.invoke("close", { id: unrelated.id }))?.[0]).toBe(false);
-    const payload = f.broadcast.mock.calls[0]?.[1] as { portals: Record<string, unknown>[] };
-    expect(payload.portals).toHaveLength(2);
-    for (const summary of payload.portals) {
-      expect(summary).not.toHaveProperty("url");
-      expect(summary).not.toHaveProperty("tokenQuery");
-      expect(summary).not.toHaveProperty("resourceOwnerKey");
-    }
-  });
-
-  it("releases a prepared carrier if actor authority ends during asynchronous startup", async () => {
-    const f = fixture();
-    const entered = createDeferred();
-    const finish = createDeferred();
-    f.environments.openNodePortal.mockImplementationOnce(async () => {
-      entered.resolve();
-      await finish.promise;
-      return { close: f.close, connect: f.connect };
-    });
-    const opening = f.invoke("open", { port: 3000 });
-    await entered.promise;
-    f.revokeActor();
-    finish.resolve();
-    expect((await opening)?.[0]).toBe(false);
-    expect(f.close).toHaveBeenCalledOnce();
-    expect(f.release).toHaveBeenCalledOnce();
-    expect(f.service.list()).toEqual([]);
-  });
-
-  it("keeps published bearer links after actor revocation but retires them on session reset", async () => {
+  it("retains bearer resource authority after actor revocation until attachment or session retirement", async () => {
     const f = fixture();
     expect((await f.invoke("open", { port: 3000 }))?.[0]).toBe(true);
     f.revokeActor();
     expect((await f.invoke("list"))?.[0]).toBe(false);
     expect(f.service.list()).toHaveLength(1);
     expect(f.close).not.toHaveBeenCalled();
-    f.session.abort(new Error("session reset"));
-    expect(f.service.list()).toEqual([]);
-    await f.service.closeAll();
-    expect(f.close).toHaveBeenCalledOnce();
-    expect(f.release).toHaveBeenCalledOnce();
-  });
-
-  it("checks attachment generation again after startup before publishing", async () => {
-    const f = fixture();
-    f.environments.openNodePortal.mockImplementationOnce(async () => {
-      f.replaceAttachment();
-      return { close: f.close, connect: f.connect };
-    });
-    expect((await f.invoke("open", { port: 3000 }))?.[0]).toBe(false);
-    expect(f.close).toHaveBeenCalledOnce();
-    expect(f.service.list()).toEqual([]);
-  });
-
-  it("retires an existing scoped resource when dedicated qualification becomes unknown", async () => {
-    const f = fixture();
-    const global = await f.service.open({ targetPort: 3001 });
-    expect((await f.invoke("open", { port: 3000 }))?.[0]).toBe(true);
-    f.unqualify();
-    expect(f.service.list()).toEqual([global]);
-    await f.service.closeWorkerPortals("attached", 1);
-    expect(f.close).toHaveBeenCalledOnce();
-    expect(f.release).toHaveBeenCalledOnce();
-  });
-
-  it("keeps proxy use independent of the initiating actor and rejects replaced attachments", async () => {
-    const f = fixture();
-    await f.invoke("open", { port: 3000 });
     const target = f.open.mock.calls[0]?.[0].target;
     if (target?.kind !== "worker") {
       throw new Error("missing scoped target");
     }
-    f.revokeActor();
     const stream = await target.connect();
     stream.destroy();
     expect(f.touch).toHaveBeenCalledTimes(2);
@@ -270,5 +266,10 @@ describe("session-scoped attached worker portals", () => {
     await expect(target.connect()).rejects.toThrow("attachment replaced");
     expect(f.connect).toHaveBeenCalledTimes(2);
     expect(f.touch).toHaveBeenCalledTimes(2);
+    f.session.abort(new Error("session reset"));
+    expect(f.service.list()).toEqual([]);
+    await f.service.closeAll();
+    expect(f.close).toHaveBeenCalledOnce();
+    expect(f.release).toHaveBeenCalledOnce();
   });
 });

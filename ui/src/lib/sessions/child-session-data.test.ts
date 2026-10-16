@@ -1,11 +1,12 @@
 // @vitest-environment node
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
-import { fetchChildSessionRows } from "./child-session-data.ts";
+import { childSessionListQuery, fetchChildSessionRows } from "./child-session-data.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -111,6 +112,65 @@ describe("fetchChildSessionRows", () => {
     expect(list).toHaveBeenCalledTimes(2);
     expect(list.mock.calls[1]?.[0]).toMatchObject({ offset: 100, limit: 100 });
   });
+
+  it.each([
+    { count: 1, deleted: true },
+    { count: 2, deleted: false },
+    { count: 101, deleted: true },
+  ])(
+    "completes a $count-child window during deletion (deleted: $deleted)",
+    async ({ count, deleted }) => {
+      let children = Array.from({ length: count }, (_, index) => ({
+        ...childRow(index),
+        sessionId: "child-session-" + index,
+      }));
+      const target = children[0]!;
+      const deletion = createDeferred<{ ok: true; deleted: boolean }>();
+      const offsets: number[] = [];
+      const sessions = capability((method, params) => {
+        if (method === "sessions.delete") {
+          return deletion.promise;
+        }
+        expect(method).toBe("sessions.list");
+        const query = params as { spawnedBy?: string; offset?: number; limit?: number };
+        if (!query.spawnedBy) {
+          return listResult(children, children.length, null);
+        }
+        const offset = query.offset ?? 0;
+        offsets.push(offset);
+        // Optional cursor flags are absent: advance using raw page membership.
+        const page = children.slice(offset, offset + (query.limit ?? 100));
+        return {
+          ...listResult(page, children.length, null),
+          hasMore: undefined,
+          nextOffset: undefined,
+        };
+      });
+      await sessions.refresh({ force: true });
+      const removal = sessions.delete(target.key, { expectedSessionId: target.sessionId });
+      try {
+        const rows = await fetchChildSessionRows({ sessions, parentKey, isCurrent: () => true });
+        expect(rows).toHaveLength(count - 1);
+        expect(rows?.some((row) => row.key === target.key)).toBe(false);
+        expect(offsets).toEqual(count > 100 ? [0, 100] : [0]);
+        expect(sessions.listSnapshot(childSessionListQuery(parentKey)).result).toMatchObject({
+          count: count - 1,
+          totalCount: count,
+        });
+        if (deleted) {
+          children = children.slice(1);
+        }
+        deletion.resolve({ ok: true, deleted });
+        await removal;
+        expect(
+          await fetchChildSessionRows({ sessions, parentKey, isCurrent: () => true }),
+        ).toHaveLength(deleted ? count - 1 : count);
+      } finally {
+        deletion.resolve({ ok: true, deleted: false });
+        await removal;
+      }
+    },
+  );
 
   it.each([true, false])(
     "requires a complete current window after moving pages (recovers: %s)",

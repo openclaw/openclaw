@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
@@ -11,21 +15,37 @@ import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/stor
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils-row.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { readSessionFallbackModelAsync } from "../../status/session-fallback-model.js";
+import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
+import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
 const diagnostic = { provider: "primary-fixture", model: "thinking" };
 let root: string;
 let storePath: string;
 let sequence = 0;
+const operations: ReplyOperation[] = [];
+afterEach(() => {
+  for (const operation of operations.splice(0)) {
+    operation.complete();
+  }
+  clearRuntimeConfigSnapshot();
+});
 beforeAll(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fallback-projection-"));
+  // openclaw-temp-dir: allow suite database root drains before removal
+  root = fs.mkdtempSync(
+    path.join(fs.realpathSync.native(os.tmpdir()), "openclaw-fallback-projection-"),
+  );
   storePath = path.join(root, "openclaw-agent.sqlite");
 });
 afterAll(async () => {
   await drainSessionStoreWriterQueuesForTest();
-  disposeOpenClawAgentDatabaseByPath(storePath);
+  await disposeOpenClawAgentDatabaseByPath(storePath);
+  await closeOpenClawAgentDatabasesAsync(root);
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -40,7 +60,15 @@ async function createFixture(selected = diagnostic) {
     model: selected.model,
   };
   const cfg: OpenClawConfig = { session: { store: storePath } };
+  setRuntimeConfigSnapshot(cfg);
   await replaceSessionEntry({ storePath, sessionKey }, entry);
+  const replyOperation = createReplyOperation({
+    sessionId: entry.sessionId,
+    sessionKey,
+    resetTriggered: false,
+  });
+  operations.push(replyOperation);
+  replyOperation.setPhase("running");
   const context: Parameters<typeof accountAgentTurn>[0] = {
     activeSessionEntry: entry,
     activeSessionStore: { [sessionKey]: entry },
@@ -73,6 +101,7 @@ async function createFixture(selected = diagnostic) {
     },
     runId: `fallback-run-${id}`,
     runStartedAt: Date.now(),
+    replyOperation,
     sessionCtx: {},
     sessionKey,
     shouldInjectGroupIntro: false,
@@ -88,7 +117,20 @@ async function createFixture(selected = diagnostic) {
         contextTokens: 1_000,
         ...route,
       };
-      return accountAgentTurn(context);
+      return withAgentTurnCompletion(
+        {
+          agentId: "main",
+          storePath,
+          sessionKey,
+          entry: context.activeSessionEntry,
+          operation: replyOperation,
+          publish(next) {
+            context.activeSessionEntry = next;
+            context.activeSessionStore![sessionKey] = next;
+          },
+        },
+        (completion) => accountAgentTurn({ ...context, completion }),
+      );
     },
   };
 }
@@ -98,6 +140,7 @@ it("does not persist or project a fallback for the selected model's wire identit
   const { context } = fixture;
   const entry = context.activeSessionEntry!;
   context.cfg.agents = { defaults: { model: { primary: "arcee/trinity-large-preview" } } };
+  setRuntimeConfigSnapshot(context.cfg);
   entry.fallbackNotice = {
     kind: "active",
     selectedModel: "arcee/trinity-large-preview",
@@ -140,7 +183,6 @@ it("does not persist or project a fallback for the selected model's wire identit
     buildGatewaySessionRow({
       cfg: context.cfg,
       agentId: "main",
-      skipTranscriptUsageFallback: true,
       lightweightListRow: true,
       storePath,
       store: { [context.sessionKey!]: stored },
@@ -169,6 +211,7 @@ it.each([false, true])(
     context.cfg.agents = {
       defaults: { model: { primary: `${diagnostic.provider}/${diagnostic.model}` } },
     };
+    setRuntimeConfigSnapshot(context.cfg);
     context.execution.resolved = { provider: "fallback-fixture", model: "plain" };
     context.execution.fallback.attempts = [
       {
@@ -206,32 +249,53 @@ it.each([false, true])(
       selectedModel: `${diagnostic.provider}/${diagnostic.model}`,
       activeModel: "fallback-fixture/plain",
     });
-    const project = (rowEntry: InternalSessionEntry) =>
+    const project = async (rowEntry: InternalSessionEntry) =>
       buildGatewaySessionRow({
         cfg: context.cfg,
         agentId: "main",
-        skipTranscriptUsageFallback: true,
         lightweightListRow: true,
         storePath,
         store: { [context.sessionKey!]: rowEntry },
         key: context.sessionKey!,
         entry: rowEntry,
+        terminalModel:
+          (await readSessionFallbackModelAsync({
+            config: context.cfg,
+            selectedProvider: diagnostic.provider,
+            selectedModel: diagnostic.model,
+            sessionEntry: rowEntry,
+            sessionScope: { agentId: "main", storePath, sessionKey: context.sessionKey! },
+          })) ?? null,
       });
-    expect(project(stored)).toMatchObject({
+    expect(await project(stored)).toMatchObject({
       modelProvider: diagnostic.provider,
       model: diagnostic.model,
       activeModelProvider: "fallback-fixture",
       activeModel: "plain",
     });
     for (const changed of [
-      { status: "running" as const },
       { lastRunId: "another-run" },
       { sessionId: "another-session" },
       { providerOverride: "another-provider", modelOverride: "another-model" },
     ]) {
-      const row = project({ ...stored, ...changed });
+      const row = await project({ ...stored, ...changed });
       expect(row.activeModel, JSON.stringify(changed)).toBeUndefined();
       expect(row.activeModelProvider, JSON.stringify(changed)).toBeUndefined();
+    }
+
+    const activeRunId = `${context.runId}-active`;
+    registerAgentRunContext(activeRunId, {
+      agentId: "main",
+      sessionId: entry.sessionId,
+      sessionKey: context.sessionKey,
+      projectSessionActive: true,
+    });
+    try {
+      const row = await project(stored);
+      expect(row.activeModel).toBeUndefined();
+      expect(row.activeModelProvider).toBeUndefined();
+    } finally {
+      clearAgentRunContext(activeRunId);
     }
 
     const recoveryRunId = `${context.runId}-recovery`;
@@ -255,7 +319,7 @@ it.each([false, true])(
         ],
       },
     );
-    expect(project(fixture.read()!).activeModel).toBeUndefined();
+    expect((await project(fixture.read()!)).activeModel).toBeUndefined();
     await persistSessionTranscriptTurn(
       { agentId: "main", storePath, sessionKey: context.sessionKey!, sessionId: entry.sessionId },
       {
@@ -279,7 +343,7 @@ it.each([false, true])(
     // The newer completed primary answer rejects the old notice even before accounting clears it.
     const recovered = fixture.read()!;
     expect(recovered.fallbackNotice).toEqual(stored.fallbackNotice);
-    expect(project(recovered)).toMatchObject({
+    expect(await project(recovered)).toMatchObject({
       modelProvider: diagnostic.provider,
       model: diagnostic.model,
       activeModelProvider: undefined,

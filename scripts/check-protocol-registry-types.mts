@@ -113,9 +113,12 @@ for (const exactOptionalPropertyTypes of [true, false]) {
     }
     fixture = `${lines.join("\n")}\n`;
     // These consumer assignments are checked in a fresh snapshot and never executed or emitted.
-    const proofSnapshot = session.api.updateSnapshot({ fileChanges: { changed: [fixturePath] } });
+    const proofSnapshot = session.snapshot.update({
+      fileNotifications: { changed: [fixturePath] },
+      ensurePrograms: true,
+    });
     try {
-      const proof = proofSnapshot.getProject(configFileName);
+      const proof = proofSnapshot.getConfiguredProject(configFileName);
       if (!proof) {
         throw new Error("Public ProtocolSchemas proof project was not resolved");
       }

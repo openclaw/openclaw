@@ -13,6 +13,7 @@ import {
   requireRecord,
 } from "./event-projector.test-harness.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
+import { prepareCodexServerNotification } from "./protocol-validators.js";
 import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -25,10 +26,10 @@ registerCodexEventProjectorTestLifecycle();
 // while core/src/context_manager/history.rs separately truncates its history copy.
 // Compare the next HTTP request, rather than assuming every raw event is model input.
 describe("native Codex tool response fidelity", () => {
-  it.for([24_000, 64])(
-    "preserves the native exec response with max_output_tokens=%i",
+  it(
+    "preserves the complete native exec response through the next provider request",
     { timeout: 75_000 },
-    async (maxOutputTokens, context) => {
+    async (context) => {
       const tempDirs = useAutoCleanupTempDirTracker(context.onTestFinished);
       const root = await fs.realpath(tempDirs.make("codex-output-fidelity-"));
       const native = await createCodexNativeTestState(root);
@@ -77,7 +78,7 @@ describe("native Codex tool response fidelity", () => {
                       cmd: "cat source.txt",
                       shell: "/bin/sh",
                       login: false,
-                      max_output_tokens: maxOutputTokens,
+                      max_output_tokens: 24_000,
                     }),
                   }
                 : {
@@ -267,15 +268,8 @@ describe("native Codex tool response fidelity", () => {
       expect(output).not.toBe(source);
       expect(output).toContain("Process exited with code 0\n");
       expect(output).toContain("Output:\n");
-      if (maxOutputTokens === 24_000) {
-        expect(output).toContain(source);
-        expect(output).not.toContain("truncated");
-      } else {
-        expect(output).toContain("Warning: truncated output (original token count:");
-        expect(output).toMatch(/…[0-9]+ (?:chars|tokens) truncated…/u);
-        expect(output).not.toContain(source);
-        expect(output.length).toBeLessThan(source.length);
-      }
+      expect(output).toContain(source);
+      expect(output).not.toContain("truncated");
 
       const nextInput = requireArray(requests[1]?.input, "next provider request input");
       const nextResult = requireRecord(
@@ -297,7 +291,7 @@ describe("native Codex tool response fidelity", () => {
         turn.turn.id,
       );
       for (const notification of notifications) {
-        await projector.handleNotification(notification);
+        await projector.handleNotification(prepareCodexServerNotification(notification));
       }
       const results = projector
         .buildResult(buildEmptyToolTelemetry())

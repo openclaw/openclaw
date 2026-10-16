@@ -55,26 +55,22 @@ export function restartGatewayViaSupervisor(): RestartAttempt {
   cleanStaleGatewayProcessesSync();
 
   const tried: string[] = [];
+  const run = (command: string, args: string[]) => {
+    tried.push(`${command} ${args.join(" ")}`);
+    return spawnSync(command, args, { encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
+  };
   if (process.platform === "linux") {
     const unit = normalizeSystemdUnit(
       process.env.OPENCLAW_SYSTEMD_UNIT,
       process.env.OPENCLAW_PROFILE,
     );
     const userArgs = ["--user", "restart", unit];
-    tried.push(`systemctl ${userArgs.join(" ")}`);
-    const userRestart = spawnSync("systemctl", userArgs, {
-      encoding: "utf8",
-      timeout: SPAWN_TIMEOUT_MS,
-    });
+    const userRestart = run("systemctl", userArgs);
     if (!userRestart.error && userRestart.status === 0) {
       return { ok: true, method: "systemd", tried };
     }
     const systemArgs = ["restart", unit];
-    tried.push(`systemctl ${systemArgs.join(" ")}`);
-    const systemRestart = spawnSync("systemctl", systemArgs, {
-      encoding: "utf8",
-      timeout: SPAWN_TIMEOUT_MS,
-    });
+    const systemRestart = run("systemctl", systemArgs);
     if (!systemRestart.error && systemRestart.status === 0) {
       return { ok: true, method: "systemd", tried };
     }
@@ -104,11 +100,7 @@ export function restartGatewayViaSupervisor(): RestartAttempt {
   const domain = uid !== undefined ? `gui/${uid}` : "gui/501";
   const target = `${domain}/${label}`;
   const args = ["kickstart", "-k", target];
-  tried.push(`launchctl ${args.join(" ")}`);
-  const res = spawnSync("launchctl", args, {
-    encoding: "utf8",
-    timeout: SPAWN_TIMEOUT_MS,
-  });
+  const res = run("launchctl", args);
   if (!res.error && res.status === 0) {
     return { ok: true, method: "launchctl", tried };
   }
@@ -119,11 +111,7 @@ export function restartGatewayViaSupervisor(): RestartAttempt {
   const home = process.env.HOME?.trim() || os.homedir();
   const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
   const bootstrapArgs = ["bootstrap", domain, plistPath];
-  tried.push(`launchctl ${bootstrapArgs.join(" ")}`);
-  const boot = spawnSync("launchctl", bootstrapArgs, {
-    encoding: "utf8",
-    timeout: SPAWN_TIMEOUT_MS,
-  });
+  const boot = run("launchctl", bootstrapArgs);
   if (
     boot.error ||
     (boot.status !== 0 &&
@@ -141,11 +129,7 @@ export function restartGatewayViaSupervisor(): RestartAttempt {
     return { ok: true, method: "launchctl", tried };
   }
   const retryArgs = ["kickstart", target];
-  tried.push(`launchctl ${retryArgs.join(" ")}`);
-  const retry = spawnSync("launchctl", retryArgs, {
-    encoding: "utf8",
-    timeout: SPAWN_TIMEOUT_MS,
-  });
+  const retry = run("launchctl", retryArgs);
   if (!retry.error && retry.status === 0) {
     return { ok: true, method: "launchctl", tried };
   }

@@ -11,7 +11,6 @@ const ART_SIZE = 120;
 const TAU = Math.PI * 2;
 const EYE = "#050810";
 const EYE_GLOW = "#00e5cc";
-const BLUSH = "#ff9eae";
 const HAT_AMBER = "#f2a833";
 const HAT_LIGHT = "#ffd659";
 const HAT_OUTLINE = "rgba(184, 115, 31, 0.7)";
@@ -34,47 +33,15 @@ function mascotPaths(): MascotPaths {
     return cachedPaths;
   }
 
-  const body = new Path2D();
-  body.moveTo(60, 10);
-  body.bezierCurveTo(30, 10, 15, 35, 15, 55);
-  body.bezierCurveTo(15, 75, 30, 95, 45, 100);
-  body.lineTo(45, 110);
-  body.lineTo(55, 110);
-  body.lineTo(55, 100);
-  body.bezierCurveTo(55, 100, 60, 102, 65, 100);
-  body.lineTo(65, 110);
-  body.lineTo(75, 110);
-  body.lineTo(75, 100);
-  body.bezierCurveTo(90, 95, 105, 75, 105, 55);
-  body.bezierCurveTo(105, 35, 90, 10, 60, 10);
-  body.closePath();
-
-  const leftClaw = new Path2D();
-  leftClaw.moveTo(20, 45);
-  leftClaw.bezierCurveTo(5, 40, 0, 50, 5, 60);
-  leftClaw.bezierCurveTo(10, 70, 20, 65, 25, 55);
-  leftClaw.bezierCurveTo(28, 48, 25, 45, 20, 45);
-  leftClaw.closePath();
-
-  const rightClaw = new Path2D();
-  rightClaw.moveTo(100, 45);
-  rightClaw.bezierCurveTo(115, 40, 120, 50, 115, 60);
-  rightClaw.bezierCurveTo(110, 70, 100, 65, 95, 55);
-  rightClaw.bezierCurveTo(92, 48, 95, 45, 100, 45);
-  rightClaw.closePath();
-
-  const leftAntenna = new Path2D();
-  leftAntenna.moveTo(45, 15);
-  leftAntenna.quadraticCurveTo(35, 5, 30, 8);
-
-  const rightAntenna = new Path2D();
-  rightAntenna.moveTo(75, 15);
-  rightAntenna.quadraticCurveTo(85, 5, 90, 8);
-
   cachedPaths = {
-    body: { path: body, bounds: { minX: 15, minY: 10, maxX: 105, maxY: 110 } },
+    body: {
+      path: new Path2D(
+        "M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10 Z",
+      ),
+      bounds: { minX: 15, minY: 10, maxX: 105, maxY: 110 },
+    },
     leftClaw: {
-      path: leftClaw,
+      path: new Path2D("M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45 Z"),
       bounds: {
         minX: 3.125,
         minY: 43.670_068_381_445_48,
@@ -83,7 +50,7 @@ function mascotPaths(): MascotPaths {
       },
     },
     rightClaw: {
-      path: rightClaw,
+      path: new Path2D("M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45 Z"),
       bounds: {
         minX: 93.803_061_543_300_93,
         minY: 43.670_068_381_445_48,
@@ -91,8 +58,8 @@ function mascotPaths(): MascotPaths {
         maxY: 65.450_849_718_747_38,
       },
     },
-    leftAntenna,
-    rightAntenna,
+    leftAntenna: new Path2D("M45 15 Q35 5 30 8"),
+    rightAntenna: new Path2D("M75 15 Q85 5 90 8"),
   };
   return cachedPaths;
 }
@@ -126,23 +93,6 @@ function rotated(
 function ellipsePath(center: Point, radiusX: number, radiusY: number): Path2D {
   const path = new Path2D();
   path.ellipse(center.x, center.y, radiusX, radiusY, 0, 0, TAU);
-  return path;
-}
-
-function roundedRectPath(x: number, y: number, width: number, height: number, radius: number) {
-  const path = new Path2D();
-  const right = x + width;
-  const bottom = y + height;
-  path.moveTo(x + radius, y);
-  path.lineTo(right - radius, y);
-  path.quadraticCurveTo(right, y, right, y + radius);
-  path.lineTo(right, bottom - radius);
-  path.quadraticCurveTo(right, bottom, right - radius, bottom);
-  path.lineTo(x + radius, bottom);
-  path.quadraticCurveTo(x, bottom, x, bottom - radius);
-  path.lineTo(x, y + radius);
-  path.quadraticCurveTo(x, y, x + radius, y);
-  path.closePath();
   return path;
 }
 
@@ -180,20 +130,7 @@ function drawEye(ctx: CanvasRenderingContext2D, center: Point, openness: number,
     ctx.restore();
   }
 
-  if (pose.dizzy > 0) {
-    const angle = pose.dizzyPhase * TAU + (center.x > 60 ? Math.PI : 0);
-    const dot = {
-      x: shifted.x + Math.cos(angle) * 3.4,
-      y: shifted.y + Math.sin(angle) * 2.6,
-    };
-    ctx.save();
-    ctx.globalAlpha *= pose.dizzy;
-    ctx.fillStyle = EYE_GLOW;
-    ctx.fill(ellipsePath(dot, 1.8, 1.8));
-    ctx.restore();
-  }
-
-  const glowVisibility = pose.eyeGlowOpacity * openness * (1 - pose.happyEyes) * (1 - pose.dizzy);
+  const glowVisibility = pose.eyeGlowOpacity * openness * (1 - pose.happyEyes);
   if (glowVisibility <= 0.01) {
     return;
   }
@@ -237,29 +174,14 @@ function drawMouth(ctx: CanvasRenderingContext2D, pose: MascotPose): void {
   ctx.stroke(curve);
 }
 
-function drawBlush(ctx: CanvasRenderingContext2D, pose: MascotPose): void {
-  if (pose.blush <= 0.02) {
-    return;
-  }
-  ctx.save();
-  ctx.globalAlpha *= pose.blush * 0.55;
-  ctx.fillStyle = BLUSH;
-  ctx.fill(ellipsePath({ x: 37, y: 45 }, 4.5, 2.5));
-  ctx.fill(ellipsePath({ x: 83, y: 45 }, 4.5, 2.5));
-  ctx.restore();
-}
-
 function drawHardHat(ctx: CanvasRenderingContext2D, amount: number): void {
   if (amount <= 0.01) {
     return;
   }
-  const dome = new Path2D();
-  dome.moveTo(45, 15);
-  dome.bezierCurveTo(47, 7, 54, 3, 60, 3);
-  dome.bezierCurveTo(66, 3, 73, 7, 75, 15);
-  dome.lineTo(45, 15);
-  dome.closePath();
-  const brim = roundedRectPath(41, 14, 38, 5, 2);
+  const dome = new Path2D("M45 15 C47 7 54 3 60 3 C66 3 73 7 75 15 L45 15 Z");
+  const brim = new Path2D(
+    "M43 14 L77 14 Q79 14 79 16 L79 17 Q79 19 77 19 L43 19 Q41 19 41 17 L41 16 Q41 14 43 14 Z",
+  );
 
   ctx.save();
   ctx.globalAlpha *= amount;
@@ -454,7 +376,6 @@ export function drawMascot(
   });
 
   drawHardHat(ctx, pose.hardHat);
-  drawBlush(ctx, pose);
   drawEye(ctx, { x: 45, y: 35 }, pose.leftEyeOpenness, pose);
   drawEye(ctx, { x: 75, y: 35 }, pose.rightEyeOpenness, pose);
   drawMouth(ctx, pose);

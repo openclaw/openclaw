@@ -93,6 +93,12 @@ two-minute lease expiry reopens admission automatically.
 Closing the Gateway cancels background work queued by operator reconnects without
 waiting for suspension expiry. Shutdown still waits for work already running to finish.
 
+Lifecycle operator requests take priority over unrelated queued work. Their
+authentication, live authority checks, and same-connection mutation ordering
+still apply. Hello does not wait for session membership refreshes: people remain
+visible, while pending watched-session references are omitted until a subsequent
+presence publication.
+
 The hello snapshot includes `suspension: { phase }`, and `gateway.suspension`
 events publish admission changes immediately. The phase is `accepting`,
 `preparing`, `draining`, or `prepared`; neither surface exposes suspension IDs.
@@ -108,7 +114,7 @@ The RPC contract is:
 - `gateway.suspend.prepare` — `operator.admin`; params
   `{ "requestId": "stable-host-operation-id", "terminalPolicy": "preserve", "drain": true }`
 - `gateway.suspend.status` — `operator.read`; params
-  `{ "suspensionId": "id-from-prepare" }`
+  `{ "suspensionId": "id-from-prepare", "includeLifecycle": true }`
 - `gateway.suspend.resume` — `operator.admin`; params
   `{ "suspensionId": "id-from-prepare" }`
 - `gateway.suspend.handoff` — `operator.admin`; params
@@ -151,7 +157,7 @@ and returns:
   "status": "draining",
   "suspensionId": "2c3f...",
   "expiresAtMs": 1770000000000,
-  "retryAfterMs": 20000,
+  "retryAfterMs": 5000,
   "activeCount": 2,
   "blockers": [
     { "kind": "root-request", "count": 1, "message": "1 active request" },
@@ -169,10 +175,20 @@ block readiness. Neither policy terminates or detaches terminals during
 preparation, polling, renewal, resume, or lease expiry.
 
 Poll `gateway.suspend.status` with the returned `suspensionId`, honoring
-`retryAfterMs`. While blockers remain, status returns `status: "draining"`
+`retryAfterMs`. A held drain recommends five-second polling so completed work
+does not leave new work waiting through the longer busy-preparation retry.
+While blockers remain, status returns `status: "draining"`
 together with `expiresAtMs`, `retryAfterMs`, `activeCount`, and `blockers`.
-Each status call refreshes the active-work snapshot. Once every blocker has
-finished, the same lease transitions to `{"status":"ready","expiresAtMs":...}`.
+Each status call immediately returns a fresh active-work snapshot, including
+pending protected lifecycle or final-chat writes. Polling never waits for those
+writes, cancels work, releases custody, or renews the lease. The handoff owner
+checks write custody again before authorizing a stop.
+Once every blocker has finished, the same lease transitions to
+`{"status":"ready","expiresAtMs":...}`.
+Status preserves the original response shape by default for published validators.
+Opt into lifecycle metadata with `includeLifecycle: true` to receive `ownerId`,
+the original `requestId`; draining status also includes `phase: "draining"`.
+Use an updated response validator when requesting this metadata.
 Status returns `{"status":"running"}` when no suspension is held; querying a
 different active lease returns a conflict without exposing its identifiers.
 Resume returns `{"ok":true,"status":"running","resumed":true}`; repeating it
@@ -224,10 +240,26 @@ then exits for the external controller. An ordinary stop without an arm keeps
 waiting for active work. Controllers must defer on unsupported methods or
 refused handoffs; a draining lease alone never authorizes interruption.
 
+Once shutdown commits, including an installation-replaced restart during a
+held suspension, the same owner can still poll `status: "draining"`. With
+`includeLifecycle: true`, it also receives `phase: "interrupting"`. Ownership and
+foreign-token conflicts remain stable across authenticated operator reconnects;
+node and worker connections remain fenced. The shutdown record remains available
+past the old lease expiry; this is shutdown progress, not a renewable lease or
+permission to freeze the process. Resume is refused after shutdown commits.
+The owner records `phase: "exiting"` before server teardown; RPC access ends
+when that teardown closes request admission and transports. These facts remain
+in memory until process exit or the next in-process lifecycle resets them.
+
+The running Gateway serves this contract; staging a newer installation does not
+change an older resident's responses. Request lifecycle metadata only once a
+Gateway version supporting it is running. Drivers must still verify their exact
+predecessor and handle transport closure through their lifecycle owner.
+
 A competing request ID or transient scheduler-resume failure returns retryable
 `UNAVAILABLE` with `retryAfterMs`. During scheduler recovery, prepare, status,
 and resume all return that error, the Gateway remains not-ready and
-fail-closed, and the host must not freeze or snapshot it. OpenClaw retries the
+refuses new work, and the host must not freeze or snapshot it. OpenClaw retries the
 scheduler automatically and reopens admission only after recovery succeeds. A
 mismatched resume ID returns `INVALID_REQUEST`. Prepare is subject to the
 Gateway's control-plane write limit of 30 attempts per minute; honor the
@@ -258,8 +290,8 @@ resumes; an in-flight restart makes preparation return `busy`.
 
 While draining or ready, `/healthz` remains live and `/readyz` returns `503`.
 Local or authenticated readiness responses include `gateway-draining`;
-unauthenticated remote probes receive only `{ "ready": false }`. The HTTP health
-probe, suspension methods on authenticated operator WebSocket connections, and
+unauthenticated remote checks receive only `{ "ready": false }`. The HTTP health
+check, suspension methods on authenticated operator WebSocket connections, and
 an already-enabled Admin HTTP RPC route remain available. Other unrelated RPCs
 return retryable `UNAVAILABLE`. Built-in HTTP user-work routes and ordinary
 plugin HTTP routes,
@@ -272,13 +304,12 @@ This handshake does not persist incoming messages, stop third-party channel
 transports, or control the hosting platform. The host must fence its ingress
 before preparation and remains responsible for wake, snapshot/freeze, and
 stop. `activeCount` is the aggregate tracked-work count, while `blockers`
-contains the non-zero category counts and bounded task details. This is not a
-general process-quiescence barrier. The process registry's `background-exec` entry
-is aggregate only. Durable background exec tasks also use `background-exec`
-and retain their bounded `task` metadata; other task kinds remain `task`.
-A process can contribute to both counts. This classification does not change
-`activeCount` or readiness, and adds no command text, output, operating system
-process IDs, or session or scope identifiers. Channel health, maintenance,
+contains non-zero native category counts and bounded summary messages. Categories
+include `background-exec`, `cron-run`, `agent-run`, `acp-run`, and
+`media-generation`, alongside request, queue, reply, session, and terminal work.
+Categories can overlap, so the count is not a number of unique jobs. This is not
+a general process-quiescence barrier. Blockers contain no command text, output,
+operating system process IDs, or session or scope identifiers. Channel health, maintenance,
 cache refresh, established
 plugin WebSocket sessions, and unregistered plugin-owned background work can
 remain active.
@@ -288,7 +319,8 @@ contract.
 
 <Tip>
   For host wake scheduling, keep the OpenClaw-facing part in an in-process
-  plugin and project idempotent full snapshots to the external host adapter.
+  plugin and send full snapshots to the external host adapter. Applying the same
+  snapshot again must have no additional effect.
   The hosting controller should not import the Plugin SDK or reconstruct cron
   state from event deltas. See [Safe external cron
   projection](/plugins/hooks/lifecycle#safe-external-cron-projection).
@@ -327,6 +359,5 @@ plugins loaded by OpenClaw.
 - [Agent loop](/concepts/agent-loop)
 - [Agent runtimes](/concepts/agent-runtimes)
 - [Sessions](/concepts/session)
-- [Background tasks](/automation/tasks)
 - [ACP agents](/tools/acp-agents)
 - [Plugin SDK overview](/plugins/sdk-overview)

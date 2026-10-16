@@ -50,10 +50,6 @@ export function createInMemorySessionStore(
   const onSessionRemoved = options.onSessionRemoved;
   const sessions = new Map<string, AcpSession>();
 
-  const touchSession = (session: AcpSession, nowMs: number) => {
-    session.lastTouchedAt = nowMs;
-  };
-
   const removeSession = (sessionId: string) => {
     const session = sessions.get(sessionId);
     if (!session) {
@@ -97,108 +93,92 @@ export function createInMemorySessionStore(
     return removeSession(oldestSessionId);
   };
 
-  const createSession: AcpSessionStore["createSession"] = (params) => {
-    const nowMs = now();
-    const sessionId = params.sessionId ?? randomUUID();
-    const existingSession = sessions.get(sessionId);
-    if (existingSession) {
-      existingSession.sessionKey = params.sessionKey;
-      if ("ledgerSessionId" in params) {
-        existingSession.ledgerSessionId = params.ledgerSessionId;
-      }
-      existingSession.cwd = params.cwd;
-      touchSession(existingSession, nowMs);
-      return existingSession;
-    }
-    reapIdleSessions(nowMs);
-    // Active runs are never evicted to make cancellation ownership explicit; callers must
-    // clear/cancel them before the soft cap can make room.
-    if (sessions.size >= maxSessions && !evictOldestIdleSession()) {
-      throw new Error(
-        `ACP session limit reached (max ${maxSessions}). Close idle ACP clients and retry.`,
-      );
-    }
-    const session: AcpSession = {
-      sessionId,
-      sessionKey: params.sessionKey,
-      ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
-      cwd: params.cwd,
-      createdAt: nowMs,
-      lastTouchedAt: nowMs,
-      abortController: null,
-      activeRunId: null,
-    };
-    sessions.set(sessionId, session);
-    return session;
-  };
-
-  const hasSession: AcpSessionStore["hasSession"] = (sessionId) => sessions.has(sessionId);
-
-  const getSession: AcpSessionStore["getSession"] = (sessionId) => {
-    const session = sessions.get(sessionId);
-    if (session) {
-      touchSession(session, now());
-    }
-    return session;
-  };
-
-  const setActiveRun: AcpSessionStore["setActiveRun"] = (sessionId, runId, abortController) => {
-    const session = sessions.get(sessionId);
-    if (!session) {
-      return;
-    }
-    session.activeRunId = runId;
-    session.abortController = abortController;
-    touchSession(session, now());
-  };
-
   const releaseActiveRun = (session: AcpSession) => {
     session.activeRunId = null;
     session.abortController = null;
-    touchSession(session, now());
-  };
-
-  const clearActiveRun: AcpSessionStore["clearActiveRun"] = (sessionId, expectedRunId) => {
-    const session = sessions.get(sessionId);
-    if (session && (expectedRunId === undefined || session.activeRunId === expectedRunId)) {
-      releaseActiveRun(session);
-    }
-  };
-
-  const cancelActiveRun: AcpSessionStore["cancelActiveRun"] = (sessionId, expectedRunId) => {
-    const session = sessions.get(sessionId);
-    if (
-      !session?.abortController ||
-      (expectedRunId !== undefined && session.activeRunId !== expectedRunId)
-    ) {
-      return false;
-    }
-    session.abortController.abort();
-    releaseActiveRun(session);
-    return true;
-  };
-
-  const deleteSession: AcpSessionStore["deleteSession"] = (sessionId) => removeSession(sessionId);
-
-  const dispose: InMemoryAcpSessionStore["dispose"] = () => {
-    for (const session of sessions.values()) {
-      session.abortController?.abort();
-    }
-    const removed = [...sessions.keys()];
-    sessions.clear();
-    for (const sessionId of removed) {
-      onSessionRemoved?.(sessionId);
-    }
+    session.lastTouchedAt = now();
   };
 
   return {
-    createSession,
-    hasSession,
-    getSession,
-    setActiveRun,
-    clearActiveRun,
-    cancelActiveRun,
-    deleteSession,
-    dispose,
+    createSession(params) {
+      const nowMs = now();
+      const sessionId = params.sessionId ?? randomUUID();
+      const existingSession = sessions.get(sessionId);
+      if (existingSession) {
+        existingSession.sessionKey = params.sessionKey;
+        if ("ledgerSessionId" in params) {
+          existingSession.ledgerSessionId = params.ledgerSessionId;
+        }
+        existingSession.cwd = params.cwd;
+        existingSession.lastTouchedAt = nowMs;
+        return existingSession;
+      }
+      reapIdleSessions(nowMs);
+      // Active runs are never evicted to make cancellation ownership explicit; callers must
+      // clear/cancel them before the soft cap can make room.
+      if (sessions.size >= maxSessions && !evictOldestIdleSession()) {
+        throw new Error(
+          `ACP session limit reached (max ${maxSessions}). Close idle ACP clients and retry.`,
+        );
+      }
+      const session: AcpSession = {
+        sessionId,
+        sessionKey: params.sessionKey,
+        ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
+        cwd: params.cwd,
+        createdAt: nowMs,
+        lastTouchedAt: nowMs,
+        abortController: null,
+        activeRunId: null,
+      };
+      sessions.set(sessionId, session);
+      return session;
+    },
+    hasSession: (sessionId) => sessions.has(sessionId),
+    getSession(sessionId) {
+      const session = sessions.get(sessionId);
+      if (session) {
+        session.lastTouchedAt = now();
+      }
+      return session;
+    },
+    setActiveRun(sessionId, runId, abortController) {
+      const session = sessions.get(sessionId);
+      if (!session) {
+        return;
+      }
+      session.activeRunId = runId;
+      session.abortController = abortController;
+      session.lastTouchedAt = now();
+    },
+    clearActiveRun(sessionId, expectedRunId) {
+      const session = sessions.get(sessionId);
+      if (session && (expectedRunId === undefined || session.activeRunId === expectedRunId)) {
+        releaseActiveRun(session);
+      }
+    },
+    cancelActiveRun(sessionId, expectedRunId) {
+      const session = sessions.get(sessionId);
+      if (
+        !session?.abortController ||
+        (expectedRunId !== undefined && session.activeRunId !== expectedRunId)
+      ) {
+        return false;
+      }
+      session.abortController.abort();
+      releaseActiveRun(session);
+      return true;
+    },
+    deleteSession: removeSession,
+    dispose() {
+      for (const session of sessions.values()) {
+        session.abortController?.abort();
+      }
+      const removed = [...sessions.keys()];
+      sessions.clear();
+      for (const sessionId of removed) {
+        onSessionRemoved?.(sessionId);
+      }
+    },
   };
 }

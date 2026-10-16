@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionsRecoverParams } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -15,7 +17,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
-import { isExpiredIncognitoSession } from "./chat-history-state.ts";
+import { isExpiredIncognitoSession, setChatError } from "./chat-history-state.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
 import {
@@ -24,14 +26,19 @@ import {
   NEW_SESSION_LIST_LOADING_MESSAGE,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
-import { setChatError } from "./chat-send-queue-state.ts";
-import { canCreateChatSession } from "./chat-state-route.ts";
+import { canCreateChatSession, selectedChatSessionRow } from "./chat-state-route.ts";
 import { resolveChatPaneParentSession } from "./components/chat-pane-header.ts";
 
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
   protected recoveringSession = false;
   protected creatingIncognitoSession = false;
+  private restartRecoveryFallback: {
+    key: string;
+    sessionId: string;
+    recoveryCycleId: string;
+    generation: number;
+  } | null = null;
 
   protected sessionDisabledBanner(params: {
     catalogDisabledReason: string | null | undefined;
@@ -54,6 +61,8 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       );
       return {
         kind: "composer-replacement" as const,
+        presentation: this.onBackToSubagents ? ("hidden" as const) : ("compact" as const),
+        icon: "eye" as const,
         title: t("chat.subagentViewOnly"),
         text: t("chat.subagentSessionDisabled", {
           parent: parent?.title ?? t("chat.parentSession"),
@@ -126,9 +135,18 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     const agentId =
       scopedAgentParamsForSession(state, state.sessionKey).agentId ??
       resolveAgentIdFromSessionKey(state.sessionKey);
+    const session = selectedChatSessionRow(state);
+    const fallback =
+      this.restartRecoveryFallback?.key === state.sessionKey &&
+      this.restartRecoveryFallback.sessionId === session?.sessionId &&
+      this.restartRecoveryFallback.recoveryCycleId === session?.restartRecoveryCycleId &&
+      this.restartRecoveryFallback.generation === this.connectionGeneration;
     const params = {
       ...(agentId ? { agentId } : {}),
       key: state.sessionKey,
+      mode: fallback ? ("new-session" as const) : ("in-place" as const),
+      sessionId: session?.sessionId,
+      recoveryCycleId: session?.restartRecoveryCycleId,
     };
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
       method: "sessions.recover",
@@ -137,23 +155,25 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     return {
       kind: "composer-replacement" as const,
       title: t("chat.restartRecoveryTitle"),
-      text: t("chat.restartRecoveryDisabled"),
+      text: t(fallback ? "chat.restartRecoveryNewSession" : "chat.restartRecoveryDisabled"),
       tone: "neutral" as const,
       icon: "warning" as const,
-      actionLabel: t("chat.resumeInNewSession"),
+      actionLabel: t(fallback ? "chat.resumeInNewSession" : "chat.resumeSession"),
       actionStyle: "primary" as const,
       busy: this.recoveringSession,
       busyLabel: t("chat.resumingSession"),
       disabledReason: access.allowed || this.recoveringSession ? undefined : access.reason,
       onAction: () => {
         if (access.allowed && !this.recoveringSession) {
-          void this.recoverSession();
+          void this.recoverSession(params);
         }
       },
     };
   }
 
-  protected readonly recoverSession = async (): Promise<boolean> => {
+  protected readonly recoverSession = async (
+    identity?: Pick<SessionsRecoverParams, "mode" | "sessionId" | "recoveryCycleId">,
+  ): Promise<boolean> => {
     const state = this.state;
     if (!state || !state.client || !state.connected || this.recoveringSession) {
       return false;
@@ -161,33 +181,27 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     const context = this.context;
     const sessions = context.sessions;
     const client = state.client;
-    const connectionGeneration = this.connectionGeneration;
+    const scope = { context, state, client, generation: this.connectionGeneration };
     const isCurrent = () =>
-      this.isConnected &&
-      this.state === state &&
-      this.context === context &&
-      this.context.sessions === sessions &&
-      state.client === client &&
-      state.connected &&
-      this.connectedClient === client &&
-      context.gateway.snapshot.client === client &&
-      context.gateway.snapshot.phase === "connected" &&
-      this.connectionGeneration === connectionGeneration;
+      this.isConnectionScopeCurrent(scope) && this.context.sessions === sessions;
     const sourceSessionKey = state.sessionKey;
     const agentId =
       scopedAgentParamsForSession(state, sourceSessionKey).agentId ??
       resolveAgentIdFromSessionKey(sourceSessionKey);
+    const session = selectedChatSessionRow(state);
     const params = {
       ...(agentId ? { agentId } : {}),
       key: sourceSessionKey,
+      mode: identity?.mode ?? ("in-place" as const),
+      sessionId: identity ? identity.sessionId : session?.sessionId,
+      recoveryCycleId: identity ? identity.recoveryCycleId : session?.restartRecoveryCycleId,
     };
     const access = readSessionMethodAccess(context.gateway.snapshot, {
       method: "sessions.recover",
       params,
     });
     if (!access.allowed) {
-      setChatError(state, access.reason);
-      state.requestUpdate?.();
+      setChatError(state, access.reason, true);
       return false;
     }
 
@@ -200,18 +214,34 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         return false;
       }
       if (!recovery) {
-        if (isCurrent()) {
-          setChatError(state, state.sessionsError ?? NEW_SESSION_CREATE_FAILED_MESSAGE);
-          state.requestUpdate?.();
-        }
+        setChatError(state, state.sessionsError ?? NEW_SESSION_CREATE_FAILED_MESSAGE, true);
         return false;
       }
       if (recovery.continuation.status === "rejected") {
-        setChatError(state, formatUiError(recovery.continuation.error.message));
-        state.requestUpdate?.();
+        if (
+          params.mode === "in-place" &&
+          params.sessionId &&
+          params.recoveryCycleId &&
+          recovery.key === sourceSessionKey &&
+          recovery.sessionId === params.sessionId &&
+          isRecord(recovery.continuation.error.details) &&
+          recovery.continuation.error.details.reason === "restart-safe-tools-unavailable"
+        ) {
+          this.restartRecoveryFallback = {
+            key: sourceSessionKey,
+            sessionId: params.sessionId,
+            recoveryCycleId: params.recoveryCycleId,
+            generation: this.connectionGeneration,
+          };
+        }
+        setChatError(state, formatUiError(recovery.continuation.error.message), true);
         return false;
       }
+      this.restartRecoveryFallback = null;
       const nextSessionKey = recovery.key;
+      if (areUiSessionKeysEquivalent(nextSessionKey, sourceSessionKey)) {
+        return true;
+      }
       if (this.onPaneSessionChange?.(this.paneId, nextSessionKey) === false) {
         return false;
       }
@@ -259,36 +289,20 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
           ? { requiredScope: "operator.admin" as const }
           : { params: createRequestParams, sessionScope: true }),
       });
-    const publishCreateAccessError = (reason: string) => {
-      state.lastError = reason;
-      state.chatError = reason;
-      state.requestUpdate?.();
-    };
-    const connectionGeneration = this.connectionGeneration;
+    const scope = { context, state, client, generation: this.connectionGeneration };
     const isCurrent = () =>
-      this.isConnected &&
-      this.state === state &&
-      this.context === context &&
-      this.context.sessions === sessions &&
-      state.client === client &&
-      state.connected &&
-      this.connectedClient === client &&
-      context.gateway.snapshot.client === client &&
-      context.gateway.snapshot.phase === "connected" &&
-      this.connectionGeneration === connectionGeneration;
+      this.isConnectionScopeCurrent(scope) && this.context.sessions === sessions;
     if (!canCreateChatSession(state)) {
-      setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE);
-      state.requestUpdate?.();
+      setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE, true);
       return false;
     }
     if (state.sessionsLoading) {
-      setChatError(state, NEW_SESSION_LIST_LOADING_MESSAGE);
-      state.requestUpdate?.();
+      setChatError(state, NEW_SESSION_LIST_LOADING_MESSAGE, true);
       return false;
     }
     const initialAccess = readCreateAccess();
     if (!initialAccess.allowed) {
-      publishCreateAccessError(initialAccess.reason);
+      setChatError(state, initialAccess.reason, true);
       return false;
     }
     if (
@@ -299,13 +313,12 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       return false;
     }
     if (!canCreateChatSession(state)) {
-      setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE);
-      state.requestUpdate?.();
+      setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE, true);
       return false;
     }
     const currentAccess = readCreateAccess();
     if (!currentAccess.allowed) {
-      publishCreateAccessError(currentAccess.reason);
+      setChatError(state, currentAccess.reason, true);
       return false;
     }
 
@@ -335,8 +348,8 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
               (state.sessionsLoading
                 ? NEW_SESSION_LIST_LOADING_MESSAGE
                 : NEW_SESSION_CREATE_FAILED_MESSAGE),
+            true,
           );
-          state.requestUpdate?.();
         }
         return false;
       }
@@ -350,6 +363,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
           ? { mentions: state.chatMentions.map((mention) => ({ ...mention })) }
           : {}),
         ...(state.chatGoalDraftMode ? { goalMode: state.chatGoalDraftMode } : {}),
+        ...(state.chatReplyTarget ? { replyTarget: state.chatReplyTarget } : {}),
       });
       return true;
     } finally {

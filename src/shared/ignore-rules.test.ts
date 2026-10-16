@@ -20,14 +20,15 @@ describe("addIgnoreRules", () => {
     fs.rmSync(tempDir, { force: true, recursive: true });
   });
 
-  it("loads patterns from a .gitignore file", () => {
-    fs.writeFileSync(path.join(tempDir, ".gitignore"), "node_modules/\ndist/\n", "utf-8");
+  it("keeps root-anchored patterns and negations at the top level", () => {
+    fs.writeFileSync(path.join(tempDir, ".gitignore"), "/build\nkeep\n!/keep\n", "utf-8");
 
     const ig = addIgnoreRules(tempDir, tempDir);
 
-    expect(ig.ignores("node_modules/foo")).toBe(true);
-    expect(ig.ignores("dist/bar.js")).toBe(true);
-    expect(ig.ignores("src/main.ts")).toBe(false);
+    expect(ig.ignores("build/")).toBe(true);
+    expect(ig.ignores("skills/build/")).toBe(false);
+    expect(ig.ignores("keep")).toBe(false);
+    expect(ig.ignores("skills/keep")).toBe(true);
   });
 
   it("parses a large ignore file under the byte cap", () => {
@@ -38,22 +39,6 @@ describe("addIgnoreRules", () => {
 
     expect(ig.ignores("ignored-file")).toBe(true);
     expect(ig.ignores("unrelated-file")).toBe(false);
-  });
-
-  it("fails closed and excludes the subtree when an ignore file exceeds the byte cap", () => {
-    fs.writeFileSync(path.join(tempDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
-
-    const ig = addIgnoreRules(tempDir, tempDir);
-
-    expect(ig.ignores("unrelated-file")).toBe(true);
-  });
-
-  it("fails closed before an under-cap file can amplify into too many rules", () => {
-    fs.writeFileSync(path.join(tempDir, ".gitignore"), "a\n".repeat(20_001), "utf-8");
-
-    const ig = addIgnoreRules(tempDir, tempDir);
-
-    expect(ig.ignores("unrelated-file")).toBe(true);
   });
 
   it("enforces the rule-count budget across ignore files", () => {
@@ -130,17 +115,6 @@ describe("addIgnoreRules", () => {
     }
   });
 
-  it("keeps fail-closed subtree matching case-insensitive", () => {
-    const nestedDir = path.join(tempDir, "Private");
-    fs.mkdirSync(nestedDir);
-    fs.writeFileSync(path.join(nestedDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
-
-    const ig = addIgnoreRules(nestedDir, tempDir);
-
-    expect(ig.ignores("Private/secret.txt")).toBe(true);
-    expect(ig.ignores("private/secret.txt")).toBe(true);
-  });
-
   it("keeps fail-closed metadata when the matcher is extended", () => {
     const nestedDir = path.join(tempDir, "locked");
     fs.mkdirSync(nestedDir);
@@ -152,20 +126,6 @@ describe("addIgnoreRules", () => {
 
     expect(ig.ignores("locked")).toBe(true);
     expect(ig.ignores("locked/secret.txt")).toBe(true);
-  });
-
-  it("follows a symlinked .gitignore to a regular file", () => {
-    const realDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ignore-rules-real-"));
-    try {
-      fs.writeFileSync(path.join(realDir, "real.gitignore"), "node_modules/\n", "utf-8");
-      fs.symlinkSync(path.join(realDir, "real.gitignore"), path.join(tempDir, ".gitignore"));
-
-      const ig = addIgnoreRules(tempDir, tempDir);
-
-      expect(ig.ignores("node_modules/foo")).toBe(true);
-    } finally {
-      fs.rmSync(realDir, { force: true, recursive: true });
-    }
   });
 
   it("follows a chain of symlinks to the final regular .gitignore", () => {

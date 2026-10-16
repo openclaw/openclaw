@@ -12,6 +12,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveGoogleEnvApiKey } from "./gemini-auth.js";
 import { GOOGLE_REALTIME_VOICE_METADATA } from "./realtime-voice-metadata.js";
 
 const loadGoogleRealtimeVoiceProvider = createLazyRuntimeSurface(
@@ -44,13 +45,6 @@ function resolveGoogleRealtimeProviderConfig(
           }),
         }),
   };
-}
-
-function resolveGoogleRealtimeEnvApiKey(): string | undefined {
-  return (
-    normalizeOptionalString(process.env.GEMINI_API_KEY) ??
-    normalizeOptionalString(process.env.GOOGLE_API_KEY)
-  );
 }
 
 const GOOGLE_REALTIME_LAZY_MAX_PENDING_USER_MESSAGES = 128;
@@ -96,7 +90,7 @@ function createLazyGoogleRealtimeVoiceBridge(
     if (!lifecycle.isActive()) {
       return;
     }
-    if (typeof latestMediaTimestamp === "number") {
+    if (latestMediaTimestamp !== undefined) {
       loadedBridge.setMediaTimestamp(latestMediaTimestamp);
     }
     for (const audio of pendingAudio.drain()) {
@@ -192,15 +186,23 @@ function createLazyGoogleRealtimeVoiceBridge(
 }
 
 export function createLazyGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
+  const resolveConfig: NonNullable<RealtimeVoiceProviderPlugin["resolveConfig"]> = ({
+    cfg,
+    rawConfig,
+  }) => resolveGoogleRealtimeProviderConfig(rawConfig, cfg);
+  const isConfigured: RealtimeVoiceProviderPlugin["isConfigured"] = ({ cfg, providerConfig }) =>
+    Boolean(
+      normalizeOptionalString(providerConfig.apiKey) ??
+      normalizeOptionalString(cfg?.models?.providers?.google?.apiKey) ??
+      resolveGoogleEnvApiKey(),
+    );
   return {
     ...GOOGLE_REALTIME_VOICE_METADATA,
-    resolveConfig: ({ cfg, rawConfig }) => resolveGoogleRealtimeProviderConfig(rawConfig, cfg),
-    isConfigured: ({ cfg, providerConfig }) =>
-      Boolean(
-        normalizeOptionalString(providerConfig.apiKey) ??
-        normalizeOptionalString(cfg?.models?.providers?.google?.apiKey) ??
-        resolveGoogleRealtimeEnvApiKey(),
-      ),
+    // Retained for public synchronous SDK calls through 2026-12-31.
+    resolveConfig,
+    isConfigured,
+    resolveConfigAsync: async (context) => resolveConfig(context),
+    isConfiguredAsync: async (context) => isConfigured(context),
     createBridge: createLazyGoogleRealtimeVoiceBridge,
     createBrowserSession: async (req) => {
       const provider = await loadGoogleRealtimeVoiceProvider();

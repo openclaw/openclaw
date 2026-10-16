@@ -7,6 +7,7 @@ import { removeMantisWorktree } from "./run-cleanup.runtime.js";
 import { defaultMantisCommandRunner, MantisCommandCleanupError } from "./run-command.runtime.js";
 import { captureMantisDirectoryOwnership } from "./run-directory.runtime.js";
 import { runMantisBeforeAfter } from "./run.runtime.js";
+import { successfulCommandResult } from "./run.test-support.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -92,14 +93,7 @@ it.each(["returned", "thrown", "typed"])(
     );
     roots.push(repoRoot);
     const removals: string[] = [];
-    const result = {
-      code: 0,
-      killed: false,
-      signal: null,
-      stderr: "",
-      stdout: "",
-      termination: "exit" as const,
-    };
+    const result = successfulCommandResult();
     const run = runMantisBeforeAfter({
       repoRoot,
       outputDir: ".artifacts/uncertain",
@@ -154,12 +148,7 @@ it("retains uncertain Git removal without starting another verification command"
     runner: async (_command, args) => {
       commands.push(args[1] ?? "");
       return {
-        code: 0,
-        killed: false,
-        signal: null,
-        stderr: "",
-        stdout: "",
-        termination: "exit",
+        ...successfulCommandResult(),
         cleanup: args[1] === "remove" ? "uncertain" : "normal",
       };
     },
@@ -195,14 +184,7 @@ it.each([false, true])(
           cleanupTimeouts.push(execution.timeoutMs);
           await fs.rm(execution.cwd, { recursive: true, force: true });
         }
-        return {
-          code: 0,
-          killed: false,
-          signal: null,
-          stderr: "",
-          stdout: "",
-          termination: "exit",
-        };
+        return successfulCommandResult();
       },
     });
     await expect(run).rejects.toBeInstanceOf(Error);

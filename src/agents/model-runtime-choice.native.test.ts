@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { prepareModelSelectionRuntime } from "../auto-reply/reply/model-runtime-normalization.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
-import { setPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 
 const published = vi.hoisted((): { owner?: PreparedModelRuntimeSnapshot } => ({}));
@@ -39,6 +40,55 @@ const custom: OpenClawConfig = {
   },
 };
 
+it.each(["worker", "gateway", "optional", "account"] as const)(
+  "admits an explicit keyless OpenClaw selection only for required worker inference (%s)",
+  async (inference) => {
+    const cfg: OpenClawConfig = {
+      ...custom,
+      cloudWorkers: {
+        ...(inference !== "optional" ? { requiredProfile: "node" } : {}),
+        profiles: {
+          node: {
+            provider: "device",
+            settings: {
+              device: "node-b",
+              inference: inference === "gateway" ? "gateway" : "worker",
+            },
+          },
+        },
+      },
+    };
+    const owner = createModelRuntimeChoiceOwnerFixture(cfg);
+    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+    published.owner = owner;
+    const entry: SessionEntry = {
+      sessionId: "worker-session",
+      updatedAt: 0,
+      providerOverride: "fixture",
+      modelOverride: "model",
+      agentRuntimeOverride: "openclaw",
+      ...(inference === "account"
+        ? { authProfileOverride: "fixture:missing", authProfileOverrideSource: "user" as const }
+        : {}),
+    };
+    const selection = await prepareModelSelectionRuntime({
+      cfg,
+      ...request,
+      rawRuntime: "openclaw",
+      sessionEntry: entry,
+      catalog: owner.modelCatalog.entries,
+      hydrateThinkingCatalog: false,
+    });
+    expect(selection.status).toBe(inference === "worker" ? "ready" : "rejected");
+    if (selection.status === "ready") {
+      expect(selection.runtime).toEqual({ kind: "set", runtime: "openclaw" });
+      expect(selection.validateRuntimeSelection?.()).toBeUndefined();
+    } else {
+      expect(selection.message).toContain('Runtime "openclaw" is not available');
+    }
+  },
+);
+
 it("keeps keyless host selection after an explicit runtime reset without granting explicit availability", async () => {
   for (const agentRuntimeOverride of [undefined, "claude-cli"]) {
     expect(
@@ -65,7 +115,7 @@ it("keeps keyless host selection after an explicit runtime reset without grantin
   ).toMatchObject({ kind: "unavailable" });
 });
 
-it.each(["catalog", "configured", "literal"] as const)(
+it.each(["configured", "literal"] as const)(
   "selects the exact native owner from %s facts and revokes its commit guard",
   async (source) => {
     let current = true;
@@ -104,7 +154,7 @@ it.each(["catalog", "configured", "literal"] as const)(
       pluginRegistry: registry,
       modelCatalog: { entries, routeVariants: entries },
     });
-    setPreparedModelRuntimeAuthStore(owner, { version: 1, profiles: {} });
+    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
     published.owner = owner;
     const checks: Array<() => string | undefined> = [];
     for (const [i, entry] of entries.entries()) {
@@ -113,6 +163,7 @@ it.each(["catalog", "configured", "literal"] as const)(
         cfg: config,
         model: entry.id,
         catalog: entries,
+        thinkingPolicyRequired: false,
       });
       expect(result).toMatchObject({
         status: "ready",
@@ -172,4 +223,46 @@ it("validates off-catalog host routes without granting an incompatible runtime",
   ).toMatchObject({ kind: "unavailable" });
   current = false;
   expect(choice.validate()).toContain("not available");
+});
+
+it("rejects a stale native observation without renewing it", async () => {
+  // This choice also runs inside config write locks; native discovery there needs its own decision.
+  const entry: ModelCatalogEntry = {
+    provider: "fixture",
+    id: "model",
+    name: "Model",
+    reasoning: false,
+    nativeRuntime: "native-test",
+  };
+  const registry = createEmptyPluginRegistry();
+  registry.agentHarnesses.push({
+    pluginId: "native-test",
+    source: "fixture",
+    harness: {
+      id: "native-test",
+      label: "Native test",
+      authBootstrap: "harness",
+      supports: () => ({ supported: true }),
+      // Another agent's turn retired the client that produced this observation.
+      readModelCatalogReadiness: () => undefined,
+      runAttempt: vi.fn(),
+    },
+  });
+  const reload = vi.fn(async () => ({ entries: [entry], routeVariants: [entry] }));
+  const owner = {
+    ...createModelRuntimeChoiceOwnerFixture({}, () => true, {
+      pluginRegistry: registry,
+      modelCatalog: { entries: [entry], routeVariants: [entry] },
+    }),
+    loadNativeModelCatalog: reload,
+  };
+  bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+  published.owner = owner;
+  expect(
+    await preparePublishedModelRuntimeChoice({ ...request, cfg: {}, runtimeId: "native-test" }),
+  ).toMatchObject({
+    kind: "unavailable",
+    message: expect.stringContaining("Refresh the model catalog and choose again"),
+  });
+  expect(reload).not.toHaveBeenCalled();
 });

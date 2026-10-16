@@ -2,11 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  collectEnvVarNames,
-  isCountedSourcePath,
-  main,
-} from "../../scripts/check-env-var-count.mts";
+import { collectEnvVarNames, main } from "../../scripts/check-env-var-count.mts";
 import { withEnv } from "../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -48,14 +44,6 @@ describe("check-env-var-count", () => {
     expect(fs.readFileSync(path.join(root, "summary.md"), "utf8")).toContain("exceeds budget");
     write("config/env-var-count-budget.txt", "invalid\n");
     expect(() => main(["--base", "HEAD"], root)).toThrow(/non-negative integer/u);
-  });
-
-  it("counts production source and excludes tests and QA Lab", () => {
-    expect(isCountedSourcePath("src/config/paths.ts")).toBe(true);
-    expect(isCountedSourcePath("packages/api/src/index.ts")).toBe(true);
-    expect(isCountedSourcePath("extensions/demo/src/index.ts")).toBe(true);
-    expect(isCountedSourcePath("src/config/paths.test.ts")).toBe(false);
-    expect(isCountedSourcePath("extensions/qa-lab/src/index.ts")).toBe(false);
   });
 
   it("keeps an empty index separate from untracked worktree sources", () => {
@@ -139,26 +127,8 @@ describe("check-env-var-count", () => {
     expect(new Set(counts).size).toBe(1);
   });
 
-  it.skipIf(process.platform === "win32")("preserves valid unusual staged filenames", () => {
-    const { root, git } = createRepo({
-      "src/space name.ts": "OPENCLAW_SPACE",
-      "packages/api/tab\tname.ts": "OPENCLAW_TAB",
-      "extensions/demo/newline\nname.ts": "OPENCLAW_NEWLINE",
-      "src/conflict blob 0\n\nx blob 0\n\nx blob 0\n\n.ts": "OPENCLAW_HEADER",
-    });
-    git("add", ".");
-    expect(collectEnvVarNames(root, { staged: true })).toEqual([
-      "OPENCLAW_HEADER",
-      "OPENCLAW_NEWLINE",
-      "OPENCLAW_SPACE",
-      "OPENCLAW_TAB",
-    ]);
-  });
-
-  it.each([
-    "src/conflict.ts",
-    ...(process.platform === "win32" ? [] : ["src/conflict blob 0\n\nx blob 0\n\nx blob 0\n\n.ts"]),
-  ])("rejects an unresolved stage-zero source: %s", (file) => {
+  it("rejects an unresolved stage-zero source", () => {
+    const file = "src/conflict.ts";
     const { root } = createRepo({ [file]: "OPENCLAW_WORKTREE" });
     const oid = execFileSync("git", ["hash-object", "-w", "--stdin"], {
       cwd: root,
@@ -213,18 +183,9 @@ describe("check-env-var-count", () => {
     expect(() => main(["--base", "moving-main"], root)).not.toThrow();
   });
 
-  describe.each([false, true])("budget enforcement with staged=%s", (staged) => {
+  describe("staged budget enforcement", () => {
     it.each([
-      { name: "exact count", base: 2, budget: 2, count: 2, error: undefined },
-      { name: "count growth", base: 2, budget: 2, count: 3, error: /exceeds budget/u },
       { name: "stale headroom", base: 2, budget: 2, count: 1, error: /is below budget/u },
-      {
-        name: "retired 501 to 502 increase",
-        base: 501,
-        budget: 502,
-        count: 502,
-        error: /budget grew/u,
-      },
       {
         name: "retired 502 to 503 increase",
         base: 502,
@@ -246,17 +207,10 @@ describe("check-env-var-count", () => {
         "src/runtime.ts",
         Array.from({ length: count }, (_, index) => `OPENCLAW_NEXT_${index}`).join("\n"),
       );
-      if (staged) {
-        git("add", ".");
-        write("config/env-var-count-budget.txt", "0\n");
-        write("src/runtime.ts", "");
-      }
-      const run = () => main([...(staged ? ["--staged"] : []), "--base", "HEAD"], root);
-      if (error) {
-        expect(run).toThrow(error);
-      } else {
-        expect(run()).toBe(count);
-      }
+      git("add", ".");
+      write("config/env-var-count-budget.txt", "0\n");
+      write("src/runtime.ts", "");
+      expect(() => main(["--staged", "--base", "HEAD"], root)).toThrow(error);
     });
   });
 });

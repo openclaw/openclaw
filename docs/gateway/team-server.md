@@ -5,6 +5,7 @@ read_when:
   - Connecting Cloudflare sign-in to Gateway profiles and GitHub identities
   - Operating separate collaboration and release Gateways
 title: "Deploy a team server"
+doc-schema-version: 1
 ---
 
 This guide connects the pieces of a production team deployment: a persistent
@@ -17,6 +18,33 @@ For the shorter collaboration walkthrough, see [Team setup](/start/teams).
 This guide uses `team.example.com` for collaboration and
 `release.example.com` for an optional second Gateway. Replace them with your
 own hostnames; each Gateway needs its own configuration and state.
+
+## How we build OpenClaw with OpenClaw
+
+We use [team.openclaw.ai](https://team.openclaw.ai) as a shared development
+workspace for OpenClaw itself. Maintainers and agents work through repository
+changes in the same conversations:
+
+1. **Start a repository task.** Choose the OpenClaw project in **New conversation**
+   and select **Worktree** for a [managed branch and checkout](/concepts/managed-worktrees).
+   Give the agent a concrete change and the checks that demonstrate it works.
+2. **Work together.** Teammates with access can open the session, add context,
+   and steer the next turn. [Assign an owner](/concepts/multi-user#assigning-an-owner)
+   for follow-through; creator and participant attribution remain separate.
+3. **Review the work.** Inspect the agent's results and the checkout diff, run
+   the relevant tests, and resolve review findings before landing.
+4. **Publish and follow CI.** Use **Publish PR** after checking the selected
+   [GitHub publication account](/concepts/user-model#github-connections).
+   The linked pull request and its CI details stay available in the conversation.
+
+![An OpenClaw development task on the Team server, with analysis, test results, and a published pull request](https://github.com/user-attachments/assets/b64f4d3a-3988-4f59-ac73-27552b6bdd30)
+
+The screenshot shows a live repository task, cropped to its conversation.
+See [Chat and code review](/web/control-ui/chat) for the diff, file, and PR controls.
+
+Building the next version does not replace the running server. We keep
+deployment under its own approval and lifecycle owner, with coordinated
+activation and verification. See [Keep operations recoverable](/gateway/team-server#keep-operations-recoverable).
 
 ## Before you begin
 
@@ -31,7 +59,7 @@ own hostnames; each Gateway needs its own configuration and state.
 A Gateway is one trust boundary. Roles and session ownership support
 collaboration; they do not isolate hostile users from each other. Keep untrusted
 code in sandboxes or remote workers. Use separate Gateways, OS users, or hosts
-for mutually untrusted teams. See [Multi-tenant hosting](/gateway/multi-tenant-hosting).
+for mutually untrusted teams. See [Security trust model](/gateway/security/trust-model).
 
 ## 1. Install under one service account
 
@@ -95,9 +123,6 @@ models, and channels:
     bind: "loopback",
     publicOrigin: "https://team.example.com",
     trustedProxies: ["127.0.0.1", "::1"],
-    controlUi: {
-      allowedOrigins: ["https://team.example.com"],
-    },
     auth: {
       mode: "trusted-proxy",
       password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
@@ -156,10 +181,19 @@ private origin. Do not run hostile workloads with access to this listener. See
 [Trusted-proxy auth](/gateway/trusted-proxy-auth) for header and client-address
 requirements.
 
-### Set both URL settings
+<a id="set-both-url-settings" />
 
-`allowedOrigins` permits browser connections. `publicOrigin` tells OpenClaw which
-external URL to advertise. One does not substitute for the other.
+### Set the public URL once
+
+`publicOrigin` tells OpenClaw which external URL to advertise and supplies the
+default browser-origin allowlist. For a Control UI served from that same origin,
+leave `gateway.controlUi.allowedOrigins` unset.
+
+Set an explicit `allowedOrigins` list only when you need a different browser
+policy, such as a separately hosted Control UI. An explicit list replaces the
+public-origin default; include the public origin too if both should connect.
+An explicit empty list does not inherit `publicOrigin`. Existing local and
+private-network origin rules still apply.
 
 Without `gateway.publicOrigin`, the browser can work while an agent's session
 lookup has no link-building rule and its runtime context has no session URL.
@@ -173,10 +207,18 @@ openclaw config set gateway.publicOrigin https://team.example.com --expect-curre
 ```
 
 This conditional write refuses to overwrite an existing value. With live config
-reload enabled, the public origin applies without a Gateway restart. Newly
+reload enabled, the public origin applies without a Gateway restart. When the
+allowlist is inherited, browsers using the old origin must reconnect from an
+accepted origin. An explicit allowlist remains unchanged. Newly
 prepared tool contexts receive the link rule; an already-running turn can retain
 its earlier context. Set `https://release.example.com` on the second server,
 rather than copying the first server's URL.
+
+Existing installations retain their explicit allowlists, including values saved
+by earlier setup or Doctor runs. After upgrading to a version with this default,
+remove the list with `openclaw config unset gateway.controlUi.allowedOrigins` if
+you want it to follow `publicOrigin`; check that no additional UI origin is needed
+first. Startup and Doctor leave the inherited default out of saved config.
 
 ## 3. Bootstrap administrators and assign roles
 
@@ -210,6 +252,45 @@ for narrower session-only and sandbox-required roles.
 For a release Gateway, keeping the observer default and assigning only a few
 release operators is useful. Role assignments are local to each Gateway;
 admission to the collaboration server does not grant release authority.
+
+### Invite guests
+
+To admit individual people outside the team for a limited time, use the
+[Visitor Access plugin](/plugins/reference/visitor-access), available from a
+source checkout. It manages one dedicated Access allow policy, adds each
+invited email or verified GitHub account to it, and ends Gateway access when
+the grant expires (14 days by default) or is revoked.
+
+Visitor Access requires `gateway.roles.default` to be a restricted guest role:
+
+```json5 validate=false
+// Inside gateway.roles
+default: "guest",
+definitions: {
+  guest: {
+    sessions: { others: "view" },
+    agents: ["assistant"],
+    scopes: ["operator.sessions.write"],
+    sandbox: "required",
+    accessPolicyPlugin: "visitor-access",
+    modelPolicy: {},
+  },
+},
+```
+
+Everyone who resolves to the default role needs a current visitor grant. Before
+switching the default, assign every staff member an explicit role with
+`users.setRole` or `gateway.roles.assignments.byGithubLogin`. An administrator
+then asks the agent to call `visitor_invite` with a GitHub login or email; the
+guest signs in at the normal Team URL.
+
+Guests can create sandboxed sessions on the listed agents and publish draft
+pull requests from their own sessions through the shared GitHub account. They
+cannot merge through OpenClaw. Before inviting anyone, review the paths a
+required sandbox does not contain, listed under
+[Named operator roles](/gateway/operator-scopes#named-operator-roles), and
+[Workflow and CI changes](/gateway/config-tools/github-identity#workflow-and-ci-changes)
+for publication.
 
 ## 4. Synchronize people with verified GitHub identities
 
@@ -287,7 +368,9 @@ write permission to every repository. See
 [GitHub identity for agent tools](/gateway/config-tools/github-identity).
 
 An optional `gateway.controlUi.github.token` serves GitHub lookups and project
-discovery. Keep it in a dedicated SecretRef instead of accidentally selecting a
+discovery. For Enterprise, set `gateway.controlUi.github.host` to the selected
+`gateway.github.host` so the service credential is used only for that host.
+Keep it in a dedicated SecretRef instead of accidentally selecting a
 publisher through a process-wide `GH_TOKEN` or `GITHUB_TOKEN`. Read credentials,
 publication credentials, and each person's sign-in identity have different jobs.
 
@@ -309,6 +392,17 @@ WebSocket, and transfer request. Prefer the Access service-token setup in
 A browser working while `openclaw connect` receives HTTP 302 means the machine
 request reached Access, not that node pairing succeeded. Keep machine credentials
 out of browser links and do not bypass Access for the whole Gateway.
+
+Trusted relay plugins can use [principal-bound remote ingress](/plugins/sdk-gateway-ingress)
+for a remote Control UI and MCP calls; [MCP Relay](/plugins/mcp-relay#team-gateways)
+uses it to bring a Team Gateway into ChatGPT and Codex. A Team grant belongs to the verified person
+who approves it in this Gateway's Control UI, never the shared owner or the
+loopback password. The plugin's consent flow should default to **Read + write**
+and offer **Full** within that person's current role. Full gives administrators
+admin access and does not elevate restricted roles. Both UI and RPC must share
+the same live grant; the plugin and relay own expiry and revocation. Ingress
+reconnects are tokenless and issue no reusable device token. This SDK capability
+does not itself install or configure a relay service.
 
 ## 6. Give widgets a separate sandbox origin
 
@@ -361,19 +455,21 @@ an explicit group:
 }
 ```
 
-On the receiver, advertise the reachable node endpoint before creating a join
-code. For the Access service-token topology above, use the same HTTPS hostname;
-if you operate a separate authenticated machine endpoint, use that URL instead:
+On the receiver, the `gateway.publicOrigin` configured above supplies the join
+endpoint when the loopback Gateway has no other advertised route. For the Access
+service-token topology above, use that same HTTPS hostname. If you operate a
+separate authenticated machine endpoint, set
+`plugins.entries.device-pair.config.publicUrl` to its URL instead:
 
 ```bash
-openclaw config set plugins.entries.device-pair.config.publicUrl https://team.example.com
 openclaw plugins enable session-share
 openclaw devices join-code
 ```
 
-The join-code command needs this advertised pairing endpoint on a loopback-only
-Gateway; `publicOrigin` alone is not its endpoint-discovery setting. The
-`device-pair` plugin does not need to be enabled for core join-code creation.
+Join codes retain existing Tailscale, remote, and bind-derived routes before
+falling back to `publicOrigin`. The pairing-specific `publicUrl` override takes
+precedence over discovery. The `device-pair` plugin does not need to be enabled
+for core join-code creation.
 See [Node onboarding](/nodes/node-host).
 
 On the source, run the node under the source Gateway's account, state directory,

@@ -112,8 +112,7 @@ export function collectPackageRootImports(
   onImport?: (specifier: string, start: number, kind: "static" | "runtime") => void,
 ): string[] {
   const { parse }: typeof import("@babel/parser") = require("@babel/parser");
-  // SAFETY: Babel 7 exposes its typed traversal API as the default CommonJS export.
-  const { default: traverse } = require("@babel/traverse") as typeof import("@babel/traverse");
+  const { default: traverse }: typeof import("@babel/traverse") = require("@babel/traverse");
   const file = parse(source, {
     sourceType: "unambiguous",
     allowUndeclaredExports: true,
@@ -368,11 +367,15 @@ export function collectPackageRootImports(
     if (expression.type === "CallExpression" || expression.type === "OptionalCallExpression") {
       const specifier = literal(expression.arguments[0]);
       const namespace = specifier === undefined ? undefined : namespaces.get(specifier);
-      const locations = expression.arguments.map((value) =>
-        origins(value, new Set(seen), inputScope),
-      );
+      const callees = origins(expression.callee, new Set(seen), inputScope);
+      // Only path-producing calls consume argument origins; unknown calls can contain deep DAGs.
+      const locations = callees.some((loader) =>
+        ["factory", "resolve", "realpath", "realpath-async", "join"].includes(loader),
+      )
+        ? expression.arguments.map((value) => origins(value, new Set(seen), inputScope))
+        : [];
       return union(
-        ...origins(expression.callee, new Set(seen), inputScope).map((loader): Origin[] => {
+        ...callees.map((loader): Origin[] => {
           if (loader === "factory") {
             return (locations[0] ?? ["unknown"]).map((location) =>
               location === "location"

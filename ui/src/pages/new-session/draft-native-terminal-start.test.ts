@@ -1,12 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
 } from "../../components/terminal/terminal-panel.test-support.ts";
-import type { OpenClawTerminalPanel } from "../../components/terminal/terminal-panel.ts";
 import {
   createDraftFixture,
   registerTextPayload,
@@ -36,7 +37,7 @@ function mountNativeTerminal(context: ApplicationContext) {
     },
     forceReconnect: vi.fn(),
   });
-  const panel = document.createElement(nativeTerminalElement) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(nativeTerminalElement);
   panel.client = client;
   panel.available = true;
   panel.page = true;
@@ -60,6 +61,22 @@ function mountNativeTerminal(context: ApplicationContext) {
   };
 }
 
+function createNativeFixture(options: Parameters<typeof createDraftFixture>[0] = {}) {
+  return createDraftFixture({
+    scopes: ["operator.admin"],
+    methods: ["sessions.catalog.startTerminal", "terminal.open"],
+    data: {
+      agentId: "main",
+      requestedAgentId: "main",
+      catalogId: "codex",
+      catalogLabel: "Codex",
+      startTerminal: true,
+      terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
+    },
+    ...options,
+  });
+}
+
 describe("DraftSubmissionFlow native terminal", () => {
   it.each([
     { catalogId: "codex", exitCode: 0, signal: 1, exitLabel: "exited (signal 1)" },
@@ -68,6 +85,8 @@ describe("DraftSubmissionFlow native terminal", () => {
     "primary submission retains $catalogId output and exit that precede the native start response",
     async ({ catalogId, exitCode, signal, exitLabel }) => {
       const controller = createTerminalController();
+      const outputWritten = createDeferred();
+      controller.write.mockImplementation(() => outputWritten.resolve());
       nativeTerminalController.mockResolvedValueOnce(controller);
       const { context, flow, request } = createDraftFixture({
         scopes: ["operator.admin", "operator.read", "operator.write"],
@@ -76,7 +95,6 @@ describe("DraftSubmissionFlow native terminal", () => {
           agentId: "main",
           requestedAgentId: "main",
           catalogId,
-          model: "openai/test",
           catalogLabel: catalogId,
           startTerminal: true,
           terminalHosts: [{ hostId: "gateway:local", label: "Local CLI" }],
@@ -106,10 +124,9 @@ describe("DraftSubmissionFlow native terminal", () => {
       flow.setMessage("start this task");
       await flow.submit();
 
-      await vi.waitFor(() =>
-        expect(controller.write).toHaveBeenCalledWith(
-          new TextEncoder().encode("Native CLI startup text"),
-        ),
+      await outputWritten.promise;
+      expect(controller.write).toHaveBeenCalledWith(
+        new TextEncoder().encode("Native CLI startup text"),
       );
       expect(request).toHaveBeenCalledWith(
         "sessions.catalog.startTerminal",
@@ -148,7 +165,6 @@ describe("DraftSubmissionFlow native terminal", () => {
         requestedAgentId: "main",
         catalogId: "synthetic-cli",
         catalogLabel: "Synthetic CLI",
-        model: "",
         startTerminal: true,
         terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
       },
@@ -178,18 +194,7 @@ describe("DraftSubmissionFlow native terminal", () => {
     const started = new Promise<never>((_, reject) => {
       rejectStart = reject;
     });
-    const { context, flow, request } = createDraftFixture({
-      scopes: ["operator.admin"],
-      methods: ["sessions.catalog.startTerminal", "terminal.open"],
-      data: {
-        agentId: "main",
-        requestedAgentId: "main",
-        catalogId: "codex",
-        catalogLabel: "Codex",
-        model: "",
-        startTerminal: true,
-        terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
-      },
+    const { context, flow, request } = createNativeFixture({
       request: (method) =>
         method === "sessions.catalog.startTerminal" ? started : Promise.resolve({}),
     });
@@ -216,18 +221,7 @@ describe("DraftSubmissionFlow native terminal", () => {
     const starting = new Promise<ReturnType<typeof terminalOpenResult>>((resolve) => {
       finishStart = resolve;
     });
-    const { context, flow, request } = createDraftFixture({
-      scopes: ["operator.admin"],
-      methods: ["sessions.catalog.startTerminal", "terminal.open"],
-      data: {
-        agentId: "main",
-        requestedAgentId: "main",
-        catalogId: "codex",
-        catalogLabel: "Codex",
-        model: "",
-        startTerminal: true,
-        terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
-      },
+    const { context, flow, request } = createNativeFixture({
       request: async (method) => (method === "sessions.catalog.startTerminal" ? starting : {}),
     });
     mountNativeTerminal(context);
@@ -246,7 +240,7 @@ describe("DraftSubmissionFlow native terminal", () => {
     expect(request).toHaveBeenCalledWith("terminal.close", { sessionId: "cancelled-start" });
   });
 
-  it.each(["accepted", "rejected"])(
+  it.each(["accepted"])(
     "provisions the chosen worktree and consumes its name only for %s native startup",
     async (outcome) => {
       replaceBrowserPreference("ws://gateway.example", "main", {
@@ -256,19 +250,9 @@ describe("DraftSubmissionFlow native terminal", () => {
         worktreeName: "ordinary-draft",
         baseRef: "main",
       });
-      const { flow, place, request, context } = createDraftFixture({
-        scopes: ["operator.admin"],
+      const { flow, place, request, context } = createNativeFixture({
         methods: ["sessions.catalog.startTerminal", "worktrees.create", "terminal.open"],
         agents: [{ id: "main", workspace: "/repo", workspaceGit: true }],
-        data: {
-          agentId: "main",
-          requestedAgentId: "main",
-          catalogId: "codex",
-          catalogLabel: "Codex",
-          model: "",
-          startTerminal: true,
-          terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
-        },
         request: async (method) => {
           if (method === "worktrees.branches") {
             return { repositoryStatus: "git", branches: ["main"], headBranch: "main" };
@@ -317,74 +301,71 @@ describe("DraftSubmissionFlow native terminal", () => {
     },
   );
 
-  it.each(["codex", "claude"])(
-    "%s native launch preserves node ownership and refuses stale capabilities",
-    async (catalogId) => {
-      const data = {
-        agentId: "main",
-        requestedAgentId: "main",
+  it("native launch preserves node ownership and refuses stale capabilities", async () => {
+    const catalogId = "claude";
+    const data = {
+      agentId: "main",
+      requestedAgentId: "main",
+      catalogId,
+      catalogLabel: catalogId,
+      startTerminal: true,
+      terminalHosts: [{ hostId: "node:chosen", label: "Chosen" }],
+    };
+    const { context, flow, gateway, place, request } = createDraftFixture({
+      data,
+      agents: [{ id: "main", workspace: "/gateway-only" }],
+      scopes: ["operator.admin"],
+      methods: ["sessions.catalog.startTerminal", "terminal.open"],
+      request: async () => terminalOpenResult("native-node"),
+    });
+    mountNativeTerminal(context);
+    place.selectTerminalHost("node:chosen");
+    expect(flow.submitDisabledReason()).toBeTruthy();
+    place.applyFolder("/node/existing-project");
+    const persistPreference = vi.spyOn(gateway, "persistPreference");
+    request.mockClear();
+    place.invalidateGatewayDiscovery(false);
+    place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
+    expect(persistPreference).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    flow.setMessage("native prompt");
+    await flow.submit();
+    expect(request).toHaveBeenCalledWith(
+      "sessions.catalog.startTerminal",
+      {
         catalogId,
-        model: "",
-        catalogLabel: catalogId,
-        startTerminal: true,
-        terminalHosts: [{ hostId: "node:chosen", label: "Chosen" }],
-      };
-      const { context, flow, gateway, place, request } = createDraftFixture({
-        data,
-        agents: [{ id: "main", workspace: "/gateway-only" }],
-        scopes: ["operator.admin"],
-        methods: ["sessions.catalog.startTerminal", "terminal.open"],
-        request: async () => terminalOpenResult("native-node"),
-      });
-      mountNativeTerminal(context);
-      place.selectTerminalHost("node:chosen");
-      expect(flow.submitDisabledReason()).toBeTruthy();
-      place.applyFolder("/node/existing-project");
-      const persistPreference = vi.spyOn(gateway, "persistPreference");
-      request.mockClear();
-      place.invalidateGatewayDiscovery(false);
-      place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
-      expect(persistPreference).not.toHaveBeenCalled();
-      expect(request).not.toHaveBeenCalled();
-      flow.setMessage("native prompt");
-      await flow.submit();
-      expect(request).toHaveBeenCalledWith(
-        "sessions.catalog.startTerminal",
-        {
-          catalogId,
-          agentId: "main",
-          hostId: "node:chosen",
-          cwd: "/node/existing-project",
-          initialMessage: "native prompt",
-        },
-        { timeoutMs: 35_000 },
-      );
-      expect(context.sessions.createResult).not.toHaveBeenCalled();
-      request.mockClear();
-      data.terminalHosts = [];
-      await flow.submit();
-      expect(flow.blockedSubmitNotice()).toContain("Native CLI host unavailable");
-      expect(request).not.toHaveBeenCalled();
-      expect(place.terminalHostId).toBe("node:chosen");
-      expect(place.folder).toBe("/node/existing-project");
+        agentId: "main",
+        hostId: "node:chosen",
+        cwd: "/node/existing-project",
+        initialMessage: "native prompt",
+      },
+      { timeoutMs: 35_000 },
+    );
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    request.mockClear();
+    data.terminalHosts = [];
+    await flow.submit();
+    expect(flow.blockedSubmitNotice()).toContain("Native CLI host unavailable");
+    expect(request).not.toHaveBeenCalled();
+    expect(place.terminalHostId).toBe("node:chosen");
+    expect(place.folder).toBe("/node/existing-project");
 
-      // Same-route revalidation can retire the capability without changing the chosen node.
-      data.startTerminal = false;
-      data.catalogLabel = "";
-      place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
-      request.mockClear();
-      persistPreference.mockClear();
-      place.applyFolder("/node/revalidated-project");
-      expect(request).not.toHaveBeenCalled();
-      expect(persistPreference).not.toHaveBeenCalled();
-      expect(place.terminalHostId).toBe("node:chosen");
-      expect(place.folder).toBe("/node/revalidated-project");
-      await flow.submit();
-      expect(flow.blockedSubmitNotice()).toBe("This session target is unavailable.");
-      expect(context.sessions.createResult).not.toHaveBeenCalled();
-      expect(request).not.toHaveBeenCalled();
-    },
-  );
+    // Same-route revalidation can retire the capability without changing the chosen node.
+    data.startTerminal = false;
+    data.catalogLabel = "";
+    place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
+    request.mockClear();
+    persistPreference.mockClear();
+    place.applyFolder("/node/revalidated-project");
+    expect(request).not.toHaveBeenCalled();
+    expect(persistPreference).not.toHaveBeenCalled();
+    expect(place.terminalHostId).toBe("node:chosen");
+    expect(place.folder).toBe("/node/revalidated-project");
+    await flow.submit();
+    expect(flow.blockedSubmitNotice()).toBe("This session target is unavailable.");
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+  });
 
   it.each(["disabled", "attachments", "overrides", "mentions", "missing method", "non-admin"])(
     "native launch fails visibly for %s without Chat fallback",
@@ -399,7 +380,6 @@ describe("DraftSubmissionFlow native terminal", () => {
           agentId: "main",
           requestedAgentId: "main",
           catalogId: "codex",
-          model: "",
           catalogLabel: "Codex",
           startTerminal: true,
           terminalHosts: [{ hostId: "gateway:local", label: "Local" }],

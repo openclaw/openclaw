@@ -10,9 +10,7 @@ function safeStringify(value: unknown, limit = 800): string {
           return v.toString();
         }
         if (typeof v === "function") {
-          const maybeName = (v as { name?: unknown }).name;
-          const name =
-            typeof maybeName === "string" && maybeName.length > 0 ? maybeName : "anonymous";
+          const name = typeof v.name === "string" && v.name.length > 0 ? v.name : "anonymous";
           return `[Function ${name}]`;
         }
         if (typeof v === "object" && v) {
@@ -48,12 +46,12 @@ function extractBoomDetails(err: unknown): {
   if (!output || typeof output !== "object") {
     return null;
   }
-  const payload = (output as { payload?: unknown }).payload as
+  const payload = output.payload as
     | { error?: unknown; message?: unknown; statusCode?: unknown }
     | undefined;
   const statusCode =
-    typeof (output as { statusCode?: unknown }).statusCode === "number"
-      ? ((output as { statusCode?: unknown }).statusCode as number)
+    typeof output.statusCode === "number"
+      ? output.statusCode
       : typeof payload?.statusCode === "number"
         ? payload.statusCode
         : undefined;

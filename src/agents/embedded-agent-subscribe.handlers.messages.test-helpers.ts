@@ -65,11 +65,13 @@ export function createMessageUpdateContext(
       vi.fn((text: string, options?: { final?: boolean }) =>
         partialReplyDirectiveAccumulator.consume(text, options),
       ),
+    getPartialReplySourceText: () => partialReplyDirectiveAccumulator.sourceText,
     emitReasoningStream: params.emitReasoningStream ?? vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
     flushAssistantStream: vi.fn(),
     blockChunker: new EmbeddedBlockChunker(),
-    resetAssistantMessageState: params.resetAssistantMessageState ?? vi.fn(),
+    resetAssistantMessageState:
+      params.resetAssistantMessageState ?? vi.fn(() => partialReplyDirectiveAccumulator.reset()),
     captureModelEvent: vi.fn(),
     resetPartialReplyDirectives: () => {
       partialReplyDirectiveAccumulator.reset();
@@ -149,7 +151,7 @@ export function createMessageEndContext(
   return ctx;
 }
 
-export function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
   const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`Expected ${label} to be called`);

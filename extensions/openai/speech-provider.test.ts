@@ -1,4 +1,5 @@
 // Openai tests cover speech provider plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -336,17 +337,6 @@ describe("buildOpenAISpeechProvider", () => {
     });
   });
 
-  it("warns on non-numeric OpenAI speed values", () => {
-    const provider = buildOpenAISpeechProvider();
-
-    expect(
-      provider.parseDirectiveToken?.(createSpeedDirectiveContext("speed", "fast") as never),
-    ).toEqual({
-      handled: true,
-      warnings: ['invalid OpenAI speed "fast" (0.25-4.0)'],
-    });
-  });
-
   it("warns on partial OpenAI speed values", () => {
     const provider = buildOpenAISpeechProvider();
 
@@ -422,7 +412,7 @@ describe("buildOpenAISpeechProvider", () => {
       voice: "alloy",
     };
 
-    expect(provider.isConfigured({ providerConfig, timeoutMs: 30_000 })).toBe(false);
+    expect(await provider.isConfiguredAsync?.({ providerConfig, timeoutMs: 30_000 })).toBe(false);
     await expect(
       provider.synthesize({
         text: "hello",
@@ -456,7 +446,7 @@ describe("buildOpenAISpeechProvider", () => {
       voice: "alloy",
     };
 
-    expect(provider.isConfigured({ providerConfig, timeoutMs: 30_000 })).toBe(true);
+    expect(await provider.isConfiguredAsync?.({ providerConfig, timeoutMs: 30_000 })).toBe(true);
     await provider.synthesize({
       text: "hello",
       cfg: {} as never,

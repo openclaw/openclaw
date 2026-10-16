@@ -1,10 +1,13 @@
-// Nvidia provider module implements model/runtime integration.
+import type { LookupOptions } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
 import {
-  getCachedLiveProviderModelRows,
+  fetchLiveProviderModelRows,
   readLiveModelCatalogStringField,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import {
+  buildManifestModelProviderConfig,
+  getCachedLiveCatalogValue,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -13,7 +16,12 @@ import {
   type LookupFn,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  asSafeIntegerInRange,
+  isRecord,
+  normalizeBoundedOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const NVIDIA_DEFAULT_MODEL_ID = "nvidia/nemotron-3-ultra-550b-a55b";
@@ -28,6 +36,8 @@ const FEATURED_MODEL_MAX_ID_LENGTH = 200;
 const FEATURED_MODEL_MAX_NAME_LENGTH = 200;
 const FEATURED_MODEL_MAX_CONTEXT_WINDOW = 10_000_000;
 const FEATURED_MODEL_MAX_OUTPUT_TOKENS = 1_000_000;
+const INVALID_FEATURED_MODEL_ID_CHARS = new RegExp(String.raw`[\u0000-\u0020\u007f]`);
+const INVALID_FEATURED_MODEL_NAME_CHARS = new RegExp(String.raw`[\u0000-\u001f\u007f]`);
 const FEATURED_MODEL_COST = {
   input: 0,
   output: 0,
@@ -40,30 +50,10 @@ const NVIDIA_ULTRA_DEFAULT_PARAMS = {
     force_nonempty_content: true,
   },
 } as const;
-const DEPRECATED_NVIDIA_MODEL_IDS = new Set<string>(
-  manifest.modelCatalog.providers.nvidia.models
-    .filter((model) => "status" in model && model.status === "deprecated")
-    .map((model) => model.id),
-);
-
-type NvidiaFeaturedModel = {
-  model: string;
-  "model-name": string;
-  context: number;
-  "max-output": number;
-};
-
-type DnsLookupOptions = {
-  all?: boolean;
-  family?: number;
-  hints?: number;
-  order?: "ipv4first" | "ipv6first" | "verbatim";
-  verbatim?: boolean;
-};
 
 const lookupNvidiaFeaturedModelHostname = (async (
   hostname: string,
-  options?: number | DnsLookupOptions,
+  options?: number | LookupOptions,
 ) => {
   if (typeof options === "object" && options !== null) {
     return await dnsLookup(hostname, { ...options, family: 4 });
@@ -72,24 +62,14 @@ const lookupNvidiaFeaturedModelHostname = (async (
 }) as LookupFn;
 
 export function buildNvidiaProvider(): ModelProviderConfig {
-  const provider = {
-    ...buildManifestModelProviderConfig({
-      providerId: "nvidia",
-      catalog: manifest.modelCatalog.providers.nvidia,
-    }),
+  const provider = buildManifestModelProviderConfig({
+    providerId: "nvidia",
+    catalog: manifest.modelCatalog.providers.nvidia,
+  });
+  return {
+    ...provider,
     apiKey: "NVIDIA_API_KEY",
-  };
-  return {
-    ...provider,
-    models: applyNvidiaModelDefaults(provider.models ?? []),
-  };
-}
-
-export function buildSelectableNvidiaProvider(): ModelProviderConfig {
-  const provider = buildNvidiaProvider();
-  return {
-    ...provider,
-    models: filterSelectableNvidiaModels(provider.models ?? []),
+    models: applyNvidiaModelDefaults(provider.models),
   };
 }
 
@@ -105,18 +85,28 @@ async function loadNvidiaLiveModels(
   bundledModels: ModelDefinitionConfig[],
 ): Promise<ModelDefinitionConfig[]> {
   const [inventory, featured] = await Promise.allSettled([
-    getCachedLiveProviderModelRows({
-      providerId: "nvidia",
-      endpoint: NVIDIA_MODELS_URL,
-      requireHttps: true,
-      readRows: (payload) => {
-        if (!isRecord(payload) || !Array.isArray(payload.data)) {
-          throw new Error("NVIDIA model inventory must contain data[]");
-        }
-        if (payload.data.some((row) => !readLiveModelCatalogStringField(row, "id"))) {
-          throw new Error("NVIDIA model inventory contains a row without an id");
-        }
-        return payload.data;
+    getCachedLiveCatalogValue({
+      keyParts: ["nvidia", "model-ids", NVIDIA_MODELS_URL],
+      load: async (signal) => {
+        const rows = await fetchLiveProviderModelRows({
+          providerId: "nvidia",
+          endpoint: NVIDIA_MODELS_URL,
+          requireHttps: true,
+          signal,
+          readRows: (payload) => {
+            if (!isRecord(payload) || !Array.isArray(payload.data)) {
+              throw new Error("NVIDIA model inventory must contain data[]");
+            }
+            return payload.data;
+          },
+        });
+        return rows.map((row) => {
+          const id = readLiveModelCatalogStringField(row, "id");
+          if (!id) {
+            throw new Error("NVIDIA model inventory contains a row without an id");
+          }
+          return id;
+        });
       },
     }),
     loadNvidiaFeaturedModels(),
@@ -131,9 +121,7 @@ async function loadNvidiaLiveModels(
   if (featured.status === "rejected") {
     throw featured.reason;
   }
-  const available = new Set(
-    inventory.value.map((row) => readLiveModelCatalogStringField(row, "id")),
-  );
+  const available = new Set(inventory.value);
   const known = new Map(bundledModels.map((model) => [model.id, model]));
   // /models includes embeddings and other non-chat endpoints without capabilities.
   // Only exact known chat metadata or the vendor's featured chat rows are selectable.
@@ -164,31 +152,34 @@ async function loadNvidiaLiveModels(
 }
 
 async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[]> {
-  const rows = await getCachedLiveProviderModelRows({
-    providerId: "nvidia",
-    endpoint: NVIDIA_FEATURED_MODELS_URL,
-    timeoutMs: FEATURED_MODEL_FETCH_TIMEOUT_MS,
+  return await getCachedLiveCatalogValue({
+    keyParts: ["nvidia", "featured-models", NVIDIA_FEATURED_MODELS_URL],
     ttlMs: FEATURED_MODEL_CACHE_TTL_MS,
-    requireHttps: true,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(NVIDIA_FEATURED_MODELS_URL),
-    // The featured catalog is an NVIDIA-owned CloudFront URL. Some resolvers
-    // stall for seconds on the default all-family lookup; IPv4 pinning keeps
-    // the guarded fixed-host fetch on the fast path.
-    lookupFn: lookupNvidiaFeaturedModelHostname,
-    auditContext: "nvidia-featured-model-catalog",
-    shouldCacheRows: (modelRows) => parseNvidiaFeaturedModels(modelRows) !== null,
-    readRows: (payload) => {
-      if (!isRecord(payload) || !Array.isArray(payload["featured-models"])) {
-        throw new Error("NVIDIA featured catalog must contain featured-models[]");
+    load: async (signal) => {
+      const rows = await fetchLiveProviderModelRows({
+        providerId: "nvidia",
+        endpoint: NVIDIA_FEATURED_MODELS_URL,
+        timeoutMs: FEATURED_MODEL_FETCH_TIMEOUT_MS,
+        requireHttps: true,
+        signal,
+        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(NVIDIA_FEATURED_MODELS_URL),
+        // The NVIDIA-owned CloudFront catalog can stall on all-family DNS lookup.
+        lookupFn: lookupNvidiaFeaturedModelHostname,
+        auditContext: "nvidia-featured-model-catalog",
+        readRows: (payload) => {
+          if (!isRecord(payload) || !Array.isArray(payload["featured-models"])) {
+            throw new Error("NVIDIA featured catalog must contain featured-models[]");
+          }
+          return payload["featured-models"];
+        },
+      });
+      const models = parseNvidiaFeaturedModels(rows);
+      if (!models) {
+        throw new Error("NVIDIA featured catalog contains no usable model metadata");
       }
-      return payload["featured-models"];
+      return models;
     },
   });
-  const models = parseNvidiaFeaturedModels(rows);
-  if (!models) {
-    throw new Error("NVIDIA featured catalog contains no usable model metadata");
-  }
-  return models;
 }
 
 function parseNvidiaFeaturedModels(rows: readonly unknown[]): ModelDefinitionConfig[] | null {
@@ -218,90 +209,41 @@ function applyNvidiaModelDefaults(models: ModelDefinitionConfig[]): ModelDefinit
   );
 }
 
-function filterSelectableNvidiaModels(models: ModelDefinitionConfig[]): ModelDefinitionConfig[] {
-  return models.filter((model) => !DEPRECATED_NVIDIA_MODEL_IDS.has(model.id));
-}
-
 function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {
-  if (!row || typeof row !== "object") {
-    return null;
-  }
-  const entry = row as Partial<NvidiaFeaturedModel>;
+  const entry = asOptionalObjectRecord(row);
+  const id = normalizeBoundedOptionalString(entry?.model, FEATURED_MODEL_MAX_ID_LENGTH);
+  const name = normalizeBoundedOptionalString(
+    entry?.["model-name"],
+    FEATURED_MODEL_MAX_NAME_LENGTH,
+  );
+  const contextWindow = asSafeIntegerInRange(entry?.context, {
+    min: 1,
+    max: FEATURED_MODEL_MAX_CONTEXT_WINDOW,
+  });
+  const maxTokens = asSafeIntegerInRange(entry?.["max-output"], {
+    min: 1,
+    max: FEATURED_MODEL_MAX_OUTPUT_TOKENS,
+  });
   if (
-    typeof entry.model !== "string" ||
-    typeof entry["model-name"] !== "string" ||
-    !isBoundedPositiveInteger(entry.context, FEATURED_MODEL_MAX_CONTEXT_WINDOW) ||
-    !isBoundedPositiveInteger(entry["max-output"], FEATURED_MODEL_MAX_OUTPUT_TOKENS)
+    !id ||
+    !name ||
+    !contextWindow ||
+    !maxTokens ||
+    INVALID_FEATURED_MODEL_ID_CHARS.test(id) ||
+    INVALID_FEATURED_MODEL_NAME_CHARS.test(name)
   ) {
     return null;
   }
-  const id = normalizeNvidiaFeaturedModelId(entry.model);
-  const name = normalizeFeaturedModelName(entry["model-name"]);
-  if (!id || !name) {
-    return null;
-  }
   return {
-    id,
+    id: id.includes("/") ? id : `nvidia/${id}`,
     name,
     reasoning: false,
     input: ["text"],
-    contextWindow: entry.context,
-    maxTokens: entry["max-output"],
+    contextWindow,
+    maxTokens,
     cost: { ...FEATURED_MODEL_COST },
     compat: {
       requiresStringContent: true,
     },
   };
-}
-
-function normalizeNvidiaFeaturedModelId(model: string): string {
-  const trimmed = model.trim();
-  if (
-    !trimmed ||
-    trimmed.length > FEATURED_MODEL_MAX_ID_LENGTH ||
-    hasWhitespaceOrControlCharacter(trimmed)
-  ) {
-    return "";
-  }
-  return trimmed.includes("/") ? trimmed : `nvidia/${trimmed}`;
-}
-
-function normalizeFeaturedModelName(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed || trimmed.length > FEATURED_MODEL_MAX_NAME_LENGTH || hasControlCharacter(trimmed)) {
-    return "";
-  }
-  return trimmed;
-}
-
-function isBoundedPositiveInteger(value: unknown, max: number): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= max;
-}
-
-function hasWhitespaceOrControlCharacter(value: string): boolean {
-  for (const char of value) {
-    if (isAsciiWhitespaceOrControlCharacter(char)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function hasControlCharacter(value: string): boolean {
-  for (const char of value) {
-    if (isControlCharacter(char)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function isControlCharacter(char: string): boolean {
-  const code = char.charCodeAt(0);
-  return code <= 31 || code === 127;
-}
-
-function isAsciiWhitespaceOrControlCharacter(char: string): boolean {
-  const code = char.charCodeAt(0);
-  return code <= 32 || code === 127;
 }

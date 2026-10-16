@@ -1,9 +1,9 @@
-/** Publishes gateway/SSH records through one ciao-owned advertisement lifecycle. */
 import fs from "node:fs";
 import os from "node:os";
 import type { CiaoService } from "@homebridge/ciao";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
-import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { classifyCiaoProcessError } from "./ciao.js";
 import { formatBonjourError } from "./errors.js";
 
@@ -11,7 +11,6 @@ type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
 };
 
-/** Input data used to publish OpenClaw gateway Bonjour records. */
 type GatewayBonjourAdvertiseOpts = {
   instanceName?: string;
   gatewayPort: number;
@@ -23,8 +22,6 @@ type GatewayBonjourAdvertiseOpts = {
   cliPath?: string;
   minimal?: boolean;
 };
-
-type BonjourServices = Array<{ label: string; svc: CiaoService }>;
 
 type UncaughtExceptionHandler = (error: unknown) => boolean;
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
@@ -51,38 +48,14 @@ const defaultLogger = {
   debug: (_msg: string) => {},
 };
 
-function readBonjourDisableOverride(): boolean | null {
-  const raw = process.env.OPENCLAW_DISABLE_BONJOUR;
-  const normalized = raw?.trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-  if (isTruthyEnvValue(raw)) {
-    return true;
-  }
-  switch (normalized) {
-    case "0":
-    case "false":
-    case "no":
-    case "off":
-      return false;
-    default:
-      return null;
-  }
-}
-
 function isContainerEnvironment() {
   if (process.env.FLY_MACHINE_ID?.trim() && process.env.FLY_APP_NAME?.trim()) {
     return true;
   }
 
   for (const sentinelPath of ["/.dockerenv", "/run/.containerenv", "/var/run/.containerenv"]) {
-    try {
-      if (fs.existsSync(sentinelPath)) {
-        return true;
-      }
-    } catch {
-      // ignore
+    if (fs.existsSync(sentinelPath)) {
+      return true;
     }
   }
 
@@ -103,14 +76,7 @@ function isDisabledByEnv() {
   if (process.env.VITEST) {
     return true;
   }
-  const envOverride = readBonjourDisableOverride();
-  if (envOverride !== null) {
-    return envOverride;
-  }
-  if (isContainerEnvironment()) {
-    return true;
-  }
-  return false;
+  return parseBooleanValue(process.env.OPENCLAW_DISABLE_BONJOUR) ?? isContainerEnvironment();
 }
 
 function resolveSystemMdnsHostname(): string | null {
@@ -120,12 +86,9 @@ function resolveSystemMdnsHostname(): string | null {
   } catch {
     return null;
   }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
   const firstLabel =
-    trimmed
+    raw
+      .trim()
       .replace(/\.local$/i, "")
       .split(".")[0]
       ?.trim() ?? "";
@@ -136,22 +99,11 @@ function resolveSystemMdnsHostname(): string | null {
 }
 
 const MAX_DNS_LABEL_BYTES = 63;
-const utf8Encoder = new TextEncoder();
-
 function truncateToDnsLabel(name: string, fallback = "OpenClaw"): string {
-  const encoded = utf8Encoder.encode(name);
-  if (encoded.byteLength <= MAX_DNS_LABEL_BYTES) {
+  if (Buffer.byteLength(name) <= MAX_DNS_LABEL_BYTES) {
     return name;
   }
-  for (let end = MAX_DNS_LABEL_BYTES; end > 0; end -= 1) {
-    try {
-      const decoded = new TextDecoder("utf-8", { fatal: true }).decode(encoded.subarray(0, end));
-      return decoded.replace(/-+$/, "").trim() || fallback;
-    } catch {
-      // Try the next shorter prefix until the byte slice ends on a UTF-8 boundary.
-    }
-  }
-  return fallback;
+  return truncateUtf8Prefix(name, MAX_DNS_LABEL_BYTES).replace(/-+$/, "").trim() || fallback;
 }
 
 function safeServiceName(name: string) {
@@ -168,32 +120,26 @@ function serviceSummary(label: string, svc: CiaoService): string {
   return `${label} fqdn=${svc.getFQDN()} host=${svc.getHostname()} port=${svc.getPort()} state=${svc.serviceState}`;
 }
 
-function shouldSuppressCiaoConsoleLog(args: unknown[]): boolean {
-  return args.some(
-    (arg) => typeof arg === "string" && arg.includes(CIAO_SELF_PROBE_RETRY_FRAGMENT),
-  );
-}
-
-function shouldSuppressCiaoConsoleWarn(args: unknown[]): boolean {
-  return args.some(
-    (arg) =>
-      typeof arg === "string" &&
-      arg.includes(CIAO_MDNS_SOCKET_ERROR_FRAGMENT) &&
-      arg.includes(CIAO_ENODEV_SOCKET_ERROR_FRAGMENT),
-  );
-}
-
 function installCiaoConsoleNoiseFilter(): () => void {
   const previousConsoleLog = console.log;
   const previousConsoleWarn = console.warn;
   const logWrapper = (...args: unknown[]) => {
-    if (shouldSuppressCiaoConsoleLog(args)) {
+    if (
+      args.some((arg) => typeof arg === "string" && arg.includes(CIAO_SELF_PROBE_RETRY_FRAGMENT))
+    ) {
       return;
     }
     previousConsoleLog(...args);
   };
   const warnWrapper = (...args: unknown[]) => {
-    if (shouldSuppressCiaoConsoleWarn(args)) {
+    if (
+      args.some(
+        (arg) =>
+          typeof arg === "string" &&
+          arg.includes(CIAO_MDNS_SOCKET_ERROR_FRAGMENT) &&
+          arg.includes(CIAO_ENODEV_SOCKET_ERROR_FRAGMENT),
+      )
+    ) {
       return;
     }
     previousConsoleWarn(...args);
@@ -210,7 +156,6 @@ function installCiaoConsoleNoiseFilter(): () => void {
   };
 }
 
-/** Start Bonjour advertisements for the local gateway services. */
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
   deps: BonjourAdvertiserDeps,
@@ -227,13 +172,8 @@ export async function startGatewayBonjourAdvertiser(
   let restoreConsoleLog: () => void = () => {};
   let cleanupUnhandledRejection: (() => void) | undefined;
   let cleanupUncaughtException: (() => void) | undefined;
-  let processHandlersCleaned = false;
 
   function cleanupProcessHandlers() {
-    if (processHandlersCleaned) {
-      return;
-    }
-    processHandlersCleaned = true;
     cleanupUncaughtException?.();
     cleanupUnhandledRejection?.();
   }
@@ -269,10 +209,7 @@ export async function startGatewayBonjourAdvertiser(
     const labelEnd = dotIndex === -1 ? hostnameWithoutLocal.length : dotIndex;
     const hostnameLabel = hostnameWithoutLocal.slice(0, labelEnd).trim() || "openclaw";
     const hostname = truncateToDnsLabel(hostnameLabel, "openclaw");
-    const instanceName =
-      typeof opts.instanceName === "string" && opts.instanceName.trim()
-        ? opts.instanceName.trim()
-        : `${hostname} (OpenClaw)`;
+    const instanceName = opts.instanceName?.trim() || `${hostname} (OpenClaw)`;
     const displayName = prettifyInstanceName(instanceName);
 
     const txtBase: Record<string, string> = {
@@ -290,10 +227,10 @@ export async function startGatewayBonjourAdvertiser(
     if (opts.gatewayDirectReachable) {
       txtBase.gatewayDirectReachable = "1";
     }
-    if (!opts.minimal && typeof opts.tailnetDns === "string" && opts.tailnetDns.trim()) {
+    if (!opts.minimal && opts.tailnetDns?.trim()) {
       txtBase.tailnetDns = opts.tailnetDns.trim();
     }
-    if (!opts.minimal && typeof opts.cliPath === "string" && opts.cliPath.trim()) {
+    if (!opts.minimal && opts.cliPath?.trim()) {
       txtBase.cliPath = opts.cliPath.trim();
     }
 
@@ -306,59 +243,6 @@ export async function startGatewayBonjourAdvertiser(
     }
 
     const responder = getResponder();
-
-    function createServices(): BonjourServices {
-      const services: BonjourServices = [];
-
-      const gateway = responder.createService({
-        name: safeServiceName(instanceName),
-        type: "openclaw-gw",
-        port: opts.gatewayPort,
-        domain: "local",
-        hostname,
-        txt: gatewayTxt,
-      });
-      services.push({
-        label: "gateway",
-        svc: gateway,
-      });
-
-      return services;
-    }
-
-    async function stopServices(services: BonjourServices) {
-      for (const { svc } of services) {
-        try {
-          await svc.destroy();
-        } catch {
-          /* ignore */
-        }
-      }
-      try {
-        await responder.shutdown();
-      } catch {
-        /* ignore */
-      }
-    }
-
-    function attachConflictListeners(services: BonjourServices) {
-      for (const { label, svc } of services) {
-        try {
-          svc.on("name-change", (name) => {
-            logger.warn(
-              `bonjour: ${label} name conflict resolved; newName=${JSON.stringify(name)}`,
-            );
-          });
-          svc.on("hostname-change", (nextHostname) => {
-            logger.warn(
-              `bonjour: ${label} hostname conflict resolved; newHostname=${JSON.stringify(nextHostname)}`,
-            );
-          });
-        } catch (err) {
-          logger.debug(`bonjour: failed to attach listeners for ${label}: ${String(err)}`);
-        }
-      }
-    }
 
     function handleAdvertiseFailure(
       label: string,
@@ -381,38 +265,55 @@ export async function startGatewayBonjourAdvertiser(
       );
     }
 
-    function startAdvertising(services: BonjourServices) {
-      for (const { label, svc } of services) {
-        try {
-          void svc
-            .advertise()
-            .then(() => {
-              logger.info(`bonjour: advertised ${serviceSummary(label, svc)}`);
-            })
-            .catch((err: unknown) => {
-              handleAdvertiseFailure(label, svc, err, "failed");
-            });
-        } catch (err) {
-          handleAdvertiseFailure(label, svc, err, "threw");
-        }
-      }
-    }
-
     logger.debug(
       `bonjour: starting (hostname=${hostname}, instance=${JSON.stringify(
         safeServiceName(instanceName),
       )}, gatewayPort=${opts.gatewayPort}${opts.minimal ? ", minimal=true" : `, sshPort=${opts.sshPort ?? 22}`})`,
     );
 
-    const services = createServices();
-    attachConflictListeners(services);
-    startAdvertising(services);
+    const gateway = responder.createService({
+      name: safeServiceName(instanceName),
+      type: "openclaw-gw",
+      port: opts.gatewayPort,
+      domain: "local",
+      hostname,
+      txt: gatewayTxt,
+    });
+    gateway.on("name-change", (name) => {
+      logger.warn(`bonjour: gateway name conflict resolved; newName=${JSON.stringify(name)}`);
+    });
+    gateway.on("hostname-change", (nextHostname) => {
+      logger.warn(
+        `bonjour: gateway hostname conflict resolved; newHostname=${JSON.stringify(nextHostname)}`,
+      );
+    });
+    try {
+      void gateway
+        .advertise()
+        .then(() => {
+          logger.info(`bonjour: advertised ${serviceSummary("gateway", gateway)}`);
+        })
+        .catch((err: unknown) => {
+          handleAdvertiseFailure("gateway", gateway, err, "failed");
+        });
+    } catch (err) {
+      handleAdvertiseFailure("gateway", gateway, err, "threw");
+    }
     let stopPromise: Promise<void> | null = null;
 
     return {
       stop: () => {
         stopPromise ??= (async () => {
-          await stopServices(services);
+          try {
+            await gateway.destroy();
+          } catch {
+            /* ignore */
+          }
+          try {
+            await responder.shutdown();
+          } catch {
+            /* ignore */
+          }
           restoreConsoleLog();
           cleanupProcessHandlers();
         })();

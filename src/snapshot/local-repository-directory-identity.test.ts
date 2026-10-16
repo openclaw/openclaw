@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
 import {
-  createGenericDatabase,
   createGenericSnapshot,
   readGenericValues,
   useLocalRepositoryFixtures,
@@ -12,7 +11,7 @@ import {
 } from "./local-repository.test-support.js";
 import { SNAPSHOT_SQLITE_FILENAME } from "./snapshot-provider.js";
 
-const { createTempDir, createGenericRepositoryFixture } = useLocalRepositoryFixtures(afterEach);
+const { createGenericRepositoryFixture } = useLocalRepositoryFixtures(afterEach);
 
 describe("local SQLite snapshot directory identities", () => {
   it.each(["repository", "validation", "restore"] as const)(
@@ -39,24 +38,20 @@ describe("local SQLite snapshot directory identities", () => {
       await withRestoredSpies([identitySpy], async () => {
         const created =
           snapshot ?? (await createGenericSnapshot(provider, sourcePath, "large-directory-id"));
-        if (operation === "restore") {
-          await expect(provider.restoreFresh(created.ref, restorePath)).resolves.toEqual({
-            ok: true,
-            manifest: created.manifest,
-          });
-          expect(readGenericValues(restorePath)).toEqual([{ value: "one" }]);
-          await expect(fs.readdir(directoryPath)).resolves.toEqual(["source.sqlite"]);
-        } else {
-          await expect(provider.verify(created.ref)).resolves.toEqual({
-            ok: true,
-            manifest: created.manifest,
-          });
-          expect(readGenericValues(path.join(created.ref.path, SNAPSHOT_SQLITE_FILENAME))).toEqual([
-            { value: "one" },
-          ]);
-          if (operation === "validation") {
-            await expect(fs.readdir(validationRootPath)).resolves.toEqual([]);
-          }
+        await expect(
+          operation === "restore"
+            ? provider.restoreFresh(created.ref, restorePath)
+            : provider.verify(created.ref),
+        ).resolves.toEqual({ ok: true, manifest: created.manifest });
+        const databasePath =
+          operation === "restore"
+            ? restorePath
+            : path.join(created.ref.path, SNAPSHOT_SQLITE_FILENAME);
+        expect(readGenericValues(databasePath)).toEqual([{ value: "one" }]);
+        if (operation !== "repository") {
+          await expect(fs.readdir(directoryPath)).resolves.toEqual(
+            operation === "restore" ? ["source.sqlite"] : [],
+          );
         }
       });
     },
@@ -65,14 +60,11 @@ describe("local SQLite snapshot directory identities", () => {
   it.runIf(process.platform !== "win32")(
     "accepts protected symlinked ancestors through their canonical path",
     async () => {
-      const tempDir = await createTempDir();
-      const sourcePath = path.join(tempDir, "source.sqlite");
-      const repositoryPath = path.join(tempDir, "snapshots");
+      const { tempDir, sourcePath, repositoryPath } = await createGenericRepositoryFixture();
       const realSharedPath = path.join(tempDir, "real-shared");
       const aliasSharedPath = path.join(tempDir, "alias-shared");
       const validationRootPath = path.join(aliasSharedPath, "validation");
       const restorePath = path.join(aliasSharedPath, "restore", "source.sqlite");
-      createGenericDatabase(sourcePath, { values: ["canonical-staging"] });
       await fs.mkdir(path.join(realSharedPath, "validation"), { recursive: true, mode: 0o700 });
       await fs.chmod(path.join(realSharedPath, "validation"), 0o700);
       await fs.symlink(realSharedPath, aliasSharedPath, "dir");
@@ -86,7 +78,7 @@ describe("local SQLite snapshot directory identities", () => {
       await expect(provider.restoreFresh(snapshot.ref, restorePath)).resolves.toMatchObject({
         ok: true,
       });
-      expect(readGenericValues(restorePath)).toEqual([{ value: "canonical-staging" }]);
+      expect(readGenericValues(restorePath)).toEqual([{ value: "one" }]);
 
       const otherSharedPath = path.join(tempDir, "other-shared");
       await fs.mkdir(path.join(otherSharedPath, "validation"), { recursive: true, mode: 0o700 });

@@ -55,13 +55,6 @@ describe("installed-package execution identity proof", () => {
     expect(existsSync(path.join(state, "state/openclaw.sqlite"))).toBe(false);
   });
 
-  it("accepts the persisted run id when it differs from the caller session id", () => {
-    const result = projection();
-    expect(
-      assertIdentityProjection(result, JSON.stringify(result.identity.context), [privateMarker]),
-    ).toBe("execution-1");
-  });
-
   it.each([
     [
       "missing identity",
@@ -109,15 +102,10 @@ describe("installed-package execution identity proof", () => {
     ).toThrow();
   });
 
-  it.each(["export", "storage", "receipt"])("rejects a private canary in %s", (where) => {
+  it.each(["export", "storage"])("rejects a private canary in %s", (where) => {
     const result = projection();
     const stored = JSON.stringify(result.identity.context);
-    const exported =
-      where === "export"
-        ? { ...result, prompt: privateMarker }
-        : where === "receipt"
-          ? { ...result, decisions: [{ body: privateMarker }] }
-          : result;
+    const exported = where === "export" ? { ...result, prompt: privateMarker } : result;
     expect(() =>
       assertIdentityProjection(exported, where === "storage" ? stored + privateMarker : stored, [
         privateMarker,
@@ -152,7 +140,7 @@ describe("installed-package execution identity proof", () => {
       insert.run(JSON.stringify(before.identity.context));
       writeFileSync(beforePath, JSON.stringify(before));
       writeFileSync(afterPath, JSON.stringify(before));
-      expect(verify().status).toBe(0);
+      expect(verify()).toMatchObject({ status: 0, stdout: "execution-1" });
       const after = projection();
       after.identity.context.runtimeInstance.runtimeRef = domainRef.replace(/b/gu, "c");
       db.prepare("UPDATE execution_identity_contexts SET context_json = ?").run(

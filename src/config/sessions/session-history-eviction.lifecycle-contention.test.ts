@@ -3,8 +3,13 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
-import { acquireStateDatabaseCoordinator } from "../../infra/state-database-coordinator.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { stateNativeProcessEntrypoints } from "../../state/native-process-runtime.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
@@ -21,7 +26,9 @@ afterEach(async () => {
   await state?.cleanup();
 });
 
-it("resumes history eviction after foreign lifecycle custody refuses operation and cleanup", async () => {
+it("resumes history eviction after foreign state maintenance refuses admission", async ({
+  signal,
+}) => {
   state = await createOpenClawTestState({ prefix: "history-lifecycle-", layout: "state-only" });
   const tempDir = state.sessionsDir();
   fs.mkdirSync(tempDir, { recursive: true });
@@ -35,7 +42,6 @@ it("resumes history eviction after foreign lifecycle custody refuses operation a
     updatedAt: 1,
   });
   fixture.settlePhysicalUsage();
-  const agent = fixture.database();
   const shared = openOpenClawStateDatabase({ env: state.env });
   const before = await measureSessionPhysicalDiskUsage(storePath);
   const enforce = () =>
@@ -45,54 +51,53 @@ it("resumes history eviction after foreign lifecycle custody refuses operation a
       mode: "enforce",
       maintenance: { maxDiskBytes: before.totalBytes - 1, highWaterBytes: before.totalBytes - 1 },
     });
-  const coordinator = acquireStateDatabaseCoordinator({ databasePath: shared.path });
-  const coordinatorPath = coordinator.path;
-  coordinator.release();
+  const ownerUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.gatewayStateOwner);
   const child = spawn(
     process.execPath,
     [
+      ...resolveRuntimeWorkerArgv(ownerUrl).slice(0, -1),
       "--input-type=module",
       "--eval",
       `
-        import { DatabaseSync } from 'node:sqlite';
-        const db = new DatabaseSync(process.argv[1]);
-        db.exec('PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE');
+        import { acquireGatewayStateOwner } from ${JSON.stringify(ownerUrl.href)};
+        const owner = acquireGatewayStateOwner({ databasePath: process.argv[1] });
         process.send({ ready: true });
         process.once('message', () => {
-          db.exec('ROLLBACK');
-          db.close();
+          owner.release();
           process.disconnect();
         });
       `,
-      coordinatorPath,
+      shared.path,
     ],
     { stdio: ["ignore", "ignore", "pipe", "ipc"] },
   );
+  const closed = new Promise<void>((resolve) => {
+    child.once("close", () => resolve());
+  });
   try {
-    const [ready] = await once(child, "message", { signal: AbortSignal.timeout(10_000) });
+    const [ready] = await withinTest(
+      awaitGateBeforeSettlement(
+        once(child, "message", { signal }),
+        closed,
+        "Foreign state owner exited before IPC readiness",
+      ),
+      signal,
+    );
     expect(ready).toEqual({ ready: true });
-    expect(shared.walMaintenance.checkpoint()).toBe(false);
-    expect(shared.walMaintenance.health?.error).toContain("state-lifecycle");
-    expect(agent.walMaintenance.checkpoint()).toBe(true);
-    // Both admission and native cleanup must actually fail before testing recovery.
-    await expect(enforce()).rejects.toMatchObject({
-      errors: [
-        expect.objectContaining({ name: "StateDatabaseCoordinatorContentionError" }),
-        expect.objectContaining({ name: "StateDatabaseCoordinatorContentionError" }),
-      ],
-    });
+    await expect(enforce()).rejects.toThrow("offline maintenance");
   } finally {
     if (child.connected) {
       child.send({ release: true });
     }
     try {
-      if (child.exitCode === null) {
-        await once(child, "close", { signal: AbortSignal.timeout(5_000) });
-      }
+      await withinTest(closed, signal);
     } finally {
+      // Retain TERM/KILL escalation only for failed or aborted ownership handshakes.
       await stopChildProcess(child, 5_000);
     }
   }
+  expect(fixture.sessionExists("old-history")).toBe(true);
+  expect(fixture.sessionExists("live-history")).toBe(true);
   const result = await enforce();
   expect(result?.deferredReason).toBeUndefined();
   expect(result?.removedEntries).toBe(1);

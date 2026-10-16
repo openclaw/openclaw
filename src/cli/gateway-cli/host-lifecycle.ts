@@ -6,14 +6,19 @@ import {
 } from "../../daemon/hosted-stop.js";
 import type { GatewayHostLifecycle } from "../../gateway/server-public.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { disarmGatewaySuspendHandoff } from "../../infra/gateway-suspend-coordinator.js";
+import {
+  disarmGatewaySuspendHandoff,
+  type GatewaySuspendHandoffOwner,
+} from "../../infra/gateway-suspend-coordinator.js";
 import { scheduleSafeGatewayRestart } from "../../infra/restart-coordinator.js";
+import { runOutsideGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 
 /** The run loop retains this owner; kernels receive only its request capability. */
 export function createGatewayHostLifecycle(params: {
   isCurrent: () => boolean;
   isServing: () => boolean;
   acceptStop: () => void;
+  commitExternalStop?: () => void;
   processOwner: GatewayProcessOwner;
   getShutdownBudget?: GatewayHostLifecycle["getShutdownBudget"];
 }) {
@@ -25,9 +30,18 @@ export function createGatewayHostLifecycle(params: {
   let preparationFinished: Promise<void> | undefined;
   let execution: ReturnType<HostedGatewayStop["execute"]> | undefined;
   let retirement: Promise<void> | undefined;
-  const externalRestart = {
+  const externalRestart: GatewaySuspendHandoffOwner = {
     isCurrent: () => state === "serving" && params.isCurrent() && params.isServing(),
   };
+  const commitExternalStop = params.commitExternalStop;
+  if (commitExternalStop) {
+    externalRestart.commitStop = () => {
+      if (!externalRestart.isCurrent()) {
+        throw new Error("Gateway host cannot commit stop for a retired or non-serving iteration.");
+      }
+      runOutsideGatewayRootWorkAdmission(commitExternalStop);
+    };
+  }
   const assertCurrent = () => {
     if (state === "retired" || !params.isCurrent()) {
       throw new Error(
@@ -105,7 +119,7 @@ export function createGatewayHostLifecycle(params: {
         // authority ends at close; only this private continuation crosses teardown.
         stop = prepared;
         state = "accepted";
-        params.acceptStop();
+        runOutsideGatewayRootWorkAdmission(params.acceptStop);
         return ok({ outcome: "scheduled" });
       } catch (error) {
         await prepared?.dispose();

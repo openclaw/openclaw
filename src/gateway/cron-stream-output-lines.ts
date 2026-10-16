@@ -15,58 +15,91 @@ export type BufferedOutput = {
   precededByDrop: DroppedTail;
 };
 
-export function* remainingCronStreamLines(params: {
+type LineState = {
   partialLines: Record<StreamOutputChannel, string>;
   discardUntilNewline: Record<StreamOutputChannel, boolean>;
-  droppedChunkTail: Record<StreamOutputChannel, DroppedTail>;
-  bufferedOutput: BufferedOutput[];
-  maxLineBytes: number;
-  includeTruncated: boolean;
-}): Generator<string> {
+};
+
+type StreamLine = {
+  line: string;
+  truncated: boolean;
+  replay?: { rawLine: string; remaining: string };
+};
+
+export function* readCronStreamChunk(
+  state: LineState,
+  entry: BufferedOutput,
+  maxLineBytes: number,
+): Generator<StreamLine> {
+  const { channel } = entry;
+  if (entry.precededByDrop) {
+    // Never synthesize a line across a gap. A clean drop already ended its line.
+    state.partialLines[channel] = "";
+    state.discardUntilNewline[channel] = entry.precededByDrop === "midline";
+  }
+  let text = state.partialLines[channel] + entry.chunk;
+  state.partialLines[channel] = "";
+  for (;;) {
+    const newline = text.indexOf("\n");
+    if (newline < 0) {
+      break;
+    }
+    const rawLine = text.slice(0, newline);
+    text = text.slice(newline + 1);
+    if (state.discardUntilNewline[channel]) {
+      state.discardUntilNewline[channel] = false;
+      continue;
+    }
+    const truncated = Buffer.byteLength(rawLine, "utf8") > maxLineBytes;
+    const line = truncated ? truncateUtf8Prefix(rawLine, maxLineBytes) : rawLine;
+    yield {
+      line: line.endsWith("\r") ? line.slice(0, -1) : line,
+      truncated,
+      replay: { rawLine, remaining: text },
+    };
+  }
+  if (state.discardUntilNewline[channel]) {
+    return;
+  }
+  // Finish this chunk before applying the next chunk's dropped-gap boundary.
+  if (entry.truncatedTail || Buffer.byteLength(text, "utf8") > maxLineBytes) {
+    const line = truncateUtf8Prefix(text, maxLineBytes);
+    if (line) {
+      yield { line: line.endsWith("\r") ? line.slice(0, -1) : line, truncated: true };
+    }
+    state.discardUntilNewline[channel] = entry.truncatedTail
+      ? entry.truncatedTailContinuesLine
+      : true;
+    return;
+  }
+  state.partialLines[channel] = text;
+}
+
+export function* remainingCronStreamLines(
+  params: LineState & {
+    droppedChunkTail: Record<StreamOutputChannel, DroppedTail>;
+    bufferedOutput: BufferedOutput[];
+    maxLineBytes: number;
+    includeTruncated: boolean;
+  },
+): Generator<string> {
+  const state = {
+    partialLines: { ...params.partialLines },
+    discardUntilNewline: { ...params.discardUntilNewline },
+  };
   for (const channel of ["stdout", "stderr"] as const) {
-    let text = params.partialLines[channel];
-    let discardUntilNewline = params.discardUntilNewline[channel];
     for (const entry of params.bufferedOutput) {
       if (entry.channel !== channel) {
         continue;
       }
-      if (entry.precededByDrop) {
-        text = "";
-        discardUntilNewline = entry.precededByDrop === "midline";
-      }
-      text += entry.chunk;
-      for (;;) {
-        const newline = text.indexOf("\n");
-        if (newline < 0) {
-          break;
+      for (const { line, truncated } of readCronStreamChunk(state, entry, params.maxLineBytes)) {
+        if (params.includeTruncated || !truncated) {
+          yield line;
         }
-        const rawLine = text.slice(0, newline);
-        text = text.slice(newline + 1);
-        if (discardUntilNewline) {
-          discardUntilNewline = false;
-          continue;
-        }
-        const overCap = Buffer.byteLength(rawLine, "utf8") > params.maxLineBytes;
-        if (params.includeTruncated || !overCap) {
-          const line = overCap ? truncateUtf8Prefix(rawLine, params.maxLineBytes) : rawLine;
-          yield line.endsWith("\r") ? line.slice(0, -1) : line;
-        }
-      }
-      if (discardUntilNewline) {
-        text = "";
-        continue;
-      }
-      // Finish this chunk before applying the next chunk's dropped-gap boundary.
-      if (entry.truncatedTail || Buffer.byteLength(text, "utf8") > params.maxLineBytes) {
-        if (params.includeTruncated && text) {
-          const line = truncateUtf8Prefix(text, params.maxLineBytes);
-          yield line.endsWith("\r") ? line.slice(0, -1) : line;
-        }
-        text = "";
-        discardUntilNewline = entry.truncatedTail ? entry.truncatedTailContinuesLine : true;
       }
     }
-    if (discardUntilNewline || !text) {
+    const text = state.partialLines[channel];
+    if (state.discardUntilNewline[channel] || !text) {
       continue;
     }
     // A dropped continuation leaves the final line indeterminate in both modes.

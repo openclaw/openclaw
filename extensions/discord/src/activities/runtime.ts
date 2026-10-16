@@ -39,7 +39,7 @@ export class DiscordActivitiesRuntime {
   }
 
   resolveAccount(
-    accountId: string,
+    accountId: string | null | undefined,
     cfg = this.currentConfig(),
   ): ResolvedDiscordActivityAccount | null {
     const account = resolveDiscordAccount({ cfg, accountId });
@@ -87,10 +87,6 @@ export class DiscordActivitiesRuntime {
     return listDiscordAccountIds(cfg).some(
       (accountId) => this.resolveAccount(accountId, cfg) !== null,
     );
-  }
-
-  isAccountEnabled(accountId: string, cfg = this.currentConfig()): boolean {
-    return this.resolveAccount(accountId, cfg) !== null;
   }
 }
 

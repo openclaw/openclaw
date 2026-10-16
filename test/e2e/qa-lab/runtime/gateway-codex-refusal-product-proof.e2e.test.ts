@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, onTestFailed } from "vitest";
+import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { loadBundledPluginFacade } from "../../../../src/test-utils/bundled-plugin-public-surface.js";
 import { connectGatewayStatusClient } from "../../../helpers/gateway-e2e-harness.js";
@@ -50,29 +51,27 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
       firstStatus: "error",
       firstTurnStartCount: 1,
       totalTurnStartCount: 2,
-      visibleReplies: [
-        "The provider refused this request (category: bio). Revise the request and try again.",
-        LATER_TURN_TEXT,
-      ],
+      visibleReplies: [LATER_TURN_TEXT],
+      terminalFailureSummary:
+        "Your request couldn't be completed: The provider refused this request (category: bio). Revise the request and try again.",
     },
     {
       failureKind: "cyber",
       firstStatus: "error",
       firstTurnStartCount: 1,
       totalTurnStartCount: 2,
-      visibleReplies: [
-        "The provider refused this request (category: cyber). Revise the request and try again.",
-        LATER_TURN_TEXT,
-      ],
+      visibleReplies: [LATER_TURN_TEXT],
+      terminalFailureSummary:
+        "Your request couldn't be completed: The provider refused this request (category: cyber). Revise the request and try again.",
     },
     {
       failureKind: "misalignment",
       firstStatus: "error",
       firstTurnStartCount: 1,
       totalTurnStartCount: 1,
-      visibleReplies: [
-        "Chat stopped as a precaution. Review the findings in chat before continuing.",
-      ],
+      visibleReplies: [],
+      terminalFailureSummary:
+        "Your request couldn't be completed: Chat stopped as a precaution. Review the findings in chat before continuing.",
     },
     {
       failureKind: "retryable",
@@ -80,6 +79,7 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
       firstTurnStartCount: 2,
       totalTurnStartCount: 3,
       visibleReplies: [LATER_TURN_TEXT, LATER_TURN_TEXT],
+      terminalFailureSummary: undefined,
     },
   ])(
     "$failureKind preserves terminal, review, and retry behavior on the same native thread",
@@ -97,6 +97,8 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
           OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
           OPENCLAW_QA_CODEX_FAILURE_KIND: scenario.failureKind,
           OPENCLAW_SKIP_PROVIDERS: undefined,
+          // Native task admission needs the configured owner published by full Gateway startup.
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         },
         config: {
           plugins: {
@@ -170,10 +172,12 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
             { timeoutMs: 65_000 },
           );
           console.log(`[gateway Codex terminal] ${JSON.stringify({ message, terminal })}`);
-          return terminal.status;
+          return { runId: started.runId, status: terminal.status };
         };
 
-        const firstStatus = await send("Exercise the harmless synthetic protocol failure.");
+        const { runId: firstRunId, status: firstStatus } = await send(
+          "Exercise the harmless synthetic protocol failure.",
+        );
         const firstEntries = (await fs.readFile(requestLog, "utf8"))
           .trim()
           .split("\n")
@@ -202,7 +206,7 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
           );
           expect(paused.session.providerReview).toMatchObject({ canContinue: false });
         } else {
-          laterStatus = await send("Complete this ordinary later turn.");
+          laterStatus = (await send("Complete this ordinary later turn.")).status;
         }
         const history = await client.request<{
           messages?: Array<{ role?: unknown; content?: unknown }>;
@@ -225,6 +229,7 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
           ).length,
           firstStatus,
           visibleReplies: assistantTexts,
+          failureNotices: (history.messages ?? []).map(readRunFailureNotice).filter(Boolean),
           laterStatus,
           totalTurnStartCount: allTurnStarts.length,
           threadStartCount: allEntries.filter((entry) => entry.method === "thread/start").length,
@@ -239,6 +244,9 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
           compactionRequestCount: 0,
           firstStatus: scenario.firstStatus,
           visibleReplies: scenario.visibleReplies,
+          failureNotices: scenario.terminalFailureSummary
+            ? [{ runId: firstRunId, summary: scenario.terminalFailureSummary }]
+            : [],
           laterStatus: scenario.failureKind === "misalignment" ? "blocked" : "ok",
           totalTurnStartCount: scenario.totalTurnStartCount,
           threadStartCount: 1,

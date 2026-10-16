@@ -4,6 +4,27 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 
+type BuildContextParams = Parameters<
+  ReturnType<typeof createPluginRuntimeMock>["channel"]["inbound"]["buildContext"]
+>[0];
+
+function buildGroupContext(params: Pick<BuildContextParams, "supplemental" | "extra">) {
+  return createPluginRuntimeMock().channel.inbound.buildContext({
+    channel: "test",
+    from: "test:user:u1",
+    sender: { id: "u1" },
+    conversation: {
+      kind: "group",
+      id: "room-1",
+      routePeer: { kind: "group", id: "room-1" },
+    },
+    route: { agentId: "main", routeSessionKey: "agent:main:test:group:room-1" },
+    reply: { to: "test:room:room-1", originatingTo: "test:room:room-1" },
+    message: { rawBody: "hello", envelopeFrom: "User One" },
+    ...params,
+  });
+}
+
 describe("createPluginRuntimeMock", () => {
   it.each(["inbound", "turn"] as const)("reflects %s overrides through both aliases", (surface) => {
     const overrides = createPluginRuntimeMock().channel.inbound;
@@ -89,7 +110,7 @@ describe("createPluginRuntimeMock", () => {
     unsubscribe();
   });
 
-  it.each(["inbound", "turn"] as const)("runs channel events through %s", async (surface) => {
+  it("runs channel events through the inbound runtime", async () => {
     const channel = "test";
 
     const input = vi.fn((raw: { id: string }) => ({
@@ -134,7 +155,7 @@ describe("createPluginRuntimeMock", () => {
       delivery: { deliver: vi.fn(async () => undefined) },
     }));
 
-    const result = await runtime.channel[surface].run({
+    const result = await runtime.channel.inbound.run({
       channel,
       raw: { id: "m1" },
       adapter: {
@@ -165,56 +186,53 @@ describe("createPluginRuntimeMock", () => {
     );
   });
 
-  it.each(["inbound", "turn"] as const)(
-    "%s dispatch uses merged channel overrides",
-    async (surface) => {
-      const resolveStorePath = vi.fn(() => "/tmp/override-sessions.json");
-      const recordInboundSession = vi.fn(async () => undefined);
-      const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => ({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      }));
-      const runtime = createPluginRuntimeMock({
-        channel: {
-          session: { resolveStorePath, recordInboundSession },
-          reply: { dispatchReplyWithBufferedBlockDispatcher },
-        },
-      });
+  it("dispatch uses merged channel overrides", async () => {
+    const resolveStorePath = vi.fn(() => "/tmp/override-sessions.json");
+    const recordInboundSession = vi.fn(async () => undefined);
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    }));
+    const runtime = createPluginRuntimeMock({
+      channel: {
+        session: { resolveStorePath, recordInboundSession },
+        reply: { dispatchReplyWithBufferedBlockDispatcher },
+      },
+    });
 
-      await runtime.channel[surface].dispatch({
-        cfg: {},
-        channel: "test",
-        route: {
-          agentId: "main",
-          sessionKey: "agent:main:test:direct:u1",
-        },
-        ctxPayload: {
-          Body: "hello",
-          CommandAuthorized: false,
-          SessionKey: "agent:main:test:direct:u1",
-        },
-        replyPipeline: {},
-        delivery: { deliver: vi.fn(async () => undefined) },
-      });
+    await runtime.channel.inbound.dispatch({
+      cfg: {},
+      channel: "test",
+      route: {
+        agentId: "main",
+        sessionKey: "agent:main:test:direct:u1",
+      },
+      ctxPayload: {
+        Body: "hello",
+        CommandAuthorized: false,
+        SessionKey: "agent:main:test:direct:u1",
+      },
+      replyPipeline: {},
+      delivery: { deliver: vi.fn(async () => undefined) },
+    });
 
-      expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "main" });
-      expect(recordInboundSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          storePath: "/tmp/override-sessions.json",
-          sessionKey: "agent:main:test:direct:u1",
+    expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "main" });
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/tmp/override-sessions.json",
+        sessionKey: "agent:main:test:direct:u1",
+      }),
+    );
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatcherOptions: expect.objectContaining({
+          responsePrefixContextProvider: expect.any(Function),
         }),
-      );
-      expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
-      expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
-        expect.objectContaining({
-          dispatcherOptions: expect.objectContaining({
-            responsePrefixContextProvider: expect.any(Function),
-          }),
-          replyOptions: expect.objectContaining({ onModelSelected: expect.any(Function) }),
-        }),
-      );
-    },
-  );
+        replyOptions: expect.objectContaining({ onModelSelected: expect.any(Function) }),
+      }),
+    );
+  });
 
   it("rejects prepared turns whose dispatch does not own top-level adoption", async () => {
     const recordInboundSession = vi.fn(async () => undefined);
@@ -373,29 +391,7 @@ describe("createPluginRuntimeMock", () => {
   });
 
   it("routes untrusted group prompt facts into untrusted structured context", () => {
-    const runtime = createPluginRuntimeMock();
-
-    const ctx = runtime.channel.inbound.buildContext({
-      channel: "test",
-      from: "test:user:u1",
-      sender: { id: "u1" },
-      conversation: {
-        kind: "group",
-        id: "room-1",
-        routePeer: { kind: "group", id: "room-1" },
-      },
-      route: {
-        agentId: "main",
-        routeSessionKey: "agent:main:test:group:room-1",
-      },
-      reply: {
-        to: "test:room:room-1",
-        originatingTo: "test:room:room-1",
-      },
-      message: {
-        rawBody: "hello",
-        envelopeFrom: "User One",
-      },
+    const ctx = buildGroupContext({
       supplemental: {
         channelStructuredContext: [
           {
@@ -438,29 +434,7 @@ describe("createPluginRuntimeMock", () => {
   });
 
   it("preserves deprecated structured context beside group prompt facts", () => {
-    const runtime = createPluginRuntimeMock();
-
-    const ctx = runtime.channel.inbound.buildContext({
-      channel: "test",
-      from: "test:user:u1",
-      sender: { id: "u1" },
-      conversation: {
-        kind: "group",
-        id: "room-1",
-        routePeer: { kind: "group", id: "room-1" },
-      },
-      route: {
-        agentId: "main",
-        routeSessionKey: "agent:main:test:group:room-1",
-      },
-      reply: {
-        to: "test:room:room-1",
-        originatingTo: "test:room:room-1",
-      },
-      message: {
-        rawBody: "hello",
-        envelopeFrom: "User One",
-      },
+    const ctx = buildGroupContext({
       supplemental: {
         untrustedGroupSystemPrompt: "room guidance",
       },
@@ -489,29 +463,7 @@ describe("createPluginRuntimeMock", () => {
   });
 
   it("keeps explicitly empty channel structured context ahead of the deprecated alias", () => {
-    const runtime = createPluginRuntimeMock();
-
-    const ctx = runtime.channel.inbound.buildContext({
-      channel: "test",
-      from: "test:user:u1",
-      sender: { id: "u1" },
-      conversation: {
-        kind: "group",
-        id: "room-1",
-        routePeer: { kind: "group", id: "room-1" },
-      },
-      route: {
-        agentId: "main",
-        routeSessionKey: "agent:main:test:group:room-1",
-      },
-      reply: {
-        to: "test:room:room-1",
-        originatingTo: "test:room:room-1",
-      },
-      message: {
-        rawBody: "hello",
-        envelopeFrom: "User One",
-      },
+    const ctx = buildGroupContext({
       extra: {
         ChannelStructuredContext: [],
         UntrustedStructuredContext: [{ label: "stale", payload: {} }],

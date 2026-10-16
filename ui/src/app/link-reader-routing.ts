@@ -35,9 +35,16 @@ export function availableLinkPreviewReaders(
 }
 
 /** Register before native routing so plugin-supported links have one destination on every host. */
-export function startLinkReaderRouting(snapshot: () => ApplicationGatewaySnapshot) {
+export function startLinkReaderRouting(
+  snapshot: () => ApplicationGatewaySnapshot,
+  options: { shouldOpenExternally?: () => boolean } = {},
+) {
   const handleClick = (event: MouseEvent) => {
-    if (!shouldHandleNavigationClick(event) || snapshot().phase !== "connected") {
+    if (
+      options.shouldOpenExternally?.() ||
+      !shouldHandleNavigationClick(event) ||
+      snapshot().phase !== "connected"
+    ) {
       return;
     }
     const path = event.composedPath();

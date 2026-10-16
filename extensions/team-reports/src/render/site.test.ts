@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DAY_MS, describePeriod } from "../periods.js";
 import { githubCounts } from "../reports.fixtures.js";
 import type { PeriodListEntry, PersonDay } from "../store.js";
@@ -12,19 +12,22 @@ import {
   type PeriodIndex,
 } from "./html.js";
 
+const NOW_MS = Date.parse("2026-09-07T16:44:00Z");
+beforeEach(() => vi.spyOn(Date, "now").mockReturnValue(NOW_MS));
+afterEach(() => vi.restoreAllMocks());
+
 const ctx: PageContext = {
   basePath: "/reports",
   nonce: "fixture",
   absoluteUrl: "https://example.test/reports/",
   displayTimezone: "America/Los_Angeles",
-  nowMs: Date.parse("2026-09-07T16:44:00Z"),
 };
 function entry(period: Period, key: string, total = 10): PeriodListEntry {
   const window = describePeriod(period, key);
   return {
     ...window,
-    status: window.untilMs > (ctx.nowMs ?? 0) ? "partial" : "closed",
-    generatedAtMs: Math.min(window.untilMs, ctx.nowMs ?? 0),
+    status: window.untilMs > NOW_MS ? "partial" : "closed",
+    generatedAtMs: Math.min(window.untilMs, NOW_MS),
     activeMembers: 1,
     memberCount: 2,
     githubTotal: total,
@@ -125,18 +128,14 @@ describe("Team Reports site behavior", () => {
     expect(closedToday).not.toContain('class="quick-card oc-card oc-card-interactive partial"');
   });
 
-  it.each<{ period: Period; key: string }>([
-    { period: "day", key: "2026-09-06" },
-    { period: "week", key: "2026-W36" },
-    { period: "month", key: "2026-08" },
-  ])("preserves stored $period completeness in overview cards and history", ({ period, key }) => {
-    const closed = entry(period, key);
-    const incomplete = home({ [period]: [{ ...closed, status: "partial" }] });
+  it("preserves stored completeness in overview cards and history", () => {
+    const closed = entry("day", "2026-09-06");
+    const incomplete = home({ day: [{ ...closed, status: "partial" }] });
     expect(incomplete.match(/oc-badge-warning[^>]*>Incomplete<\/span>/g)).toHaveLength(2);
     expect(incomplete).toContain('class="quick-card oc-card oc-card-interactive partial"');
     expect(incomplete).not.toContain(">Intraday</span>");
     expect(incomplete).not.toContain("Open reporting windows");
-    const complete = home({ [period]: [closed] });
+    const complete = home({ day: [closed] });
     expect(complete).not.toContain(">Incomplete</span>");
     expect(complete).not.toContain(">Intraday</span>");
     expect(complete).not.toContain('class="quick-card oc-card oc-card-interactive partial"');

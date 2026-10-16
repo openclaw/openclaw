@@ -57,10 +57,9 @@ it.each([
         });
         return params.useStateDbOnly
           ? projectCodexCatalogDeltaPage(response, {
-              sanitize: terminalText.sanitizeTerminalText,
               getRow: (id) => index.get(id),
             })
-          : projectCodexCatalogPage(response, { sanitize: terminalText.sanitizeTerminalText });
+          : projectCodexCatalogPage(response);
       },
     });
     try {
@@ -77,6 +76,8 @@ it.each([
       await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
       const sanitize = vi.spyOn(terminalText, "sanitizeTerminalText");
       await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(requests).toHaveLength(2);
+      await index.list({});
       await vi.waitFor(() => expect(requests).toHaveLength(3));
       expect((await index.list({})).sessions[0]?.fallbackName).toBe(after || undefined);
       expect(sanitize).not.toHaveBeenCalled();

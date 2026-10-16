@@ -18,6 +18,12 @@ export const enum CommandLane {
 }
 
 export const SUBAGENT_LANE_PREFIX = `${CommandLane.Subagent}:`;
+export const SWARM_LANE_PREFIX = `${SUBAGENT_LANE_PREFIX}swarm:`;
+
+export type CommandLaneConfiguration = {
+  readonly lane: string;
+  readonly maxConcurrent: number;
+};
 
 // Keep the exported diagnostics inventory closed so per-session lanes cannot
 // turn a saturation snapshot into an unbounded payload.

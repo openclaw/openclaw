@@ -3,14 +3,8 @@ import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 
-/**
- * Drops a delivery topic that the incoming patch has orphaned.
- *
- * A topic only means anything for the exact route it was authored against, so
- * changing any part of that route -- the mode, the channel, the sending
- * account, the agent, or the recipient itself -- invalidates it unless the
- * same patch supplies a replacement.
- */
+// Topics belong to an exact delivery route; retain one only when that route survives
+// or the same patch supplies a replacement.
 export function invalidateStaleDeliveryRoute(
   current: CronFormState,
   patch: Partial<CronFormState>,
@@ -26,14 +20,7 @@ export function invalidateStaleDeliveryRoute(
     : patch;
 }
 
-/**
- * Reports whether a form change invalidates the cached directory itself.
- *
- * Only the fields the `conversations.list` request is keyed on qualify. The
- * sending account is applied to the cached rows locally, so editing it must
- * never re-read the Gateway -- otherwise every keystroke in the Account ID
- * field launches another directory discovery across configured accounts.
- */
+// Account filtering is local: only request-key changes rediscover the directory.
 export function requiresDirectoryReload(current: CronFormState, next: CronFormState): boolean {
   return (
     next.deliveryMode !== current.deliveryMode ||
@@ -73,38 +60,19 @@ export type DeliveryConversationsHost = {
   notify: (cronState: CronState) => void;
 };
 
-/**
- * Owns the Automations editor's recipient directory: the cached conversations,
- * the published error, and the request generation. This state is page-owned
- * rather than CronState-owned, so a continuation that outlived the editor it
- * started in must prove ownership before clearing the cache or reading again.
- *
- * The directory is a bounded read, so it is only ever a source of **target**
- * suggestions. Account and topic routing stay operator-authored; nothing here
- * infers them.
- */
+// The editor owns this bounded target directory; account and topic routing stay
+// operator-authored. Deferred completions must prove the editor still owns it.
 export class DeliveryConversationsController {
   conversations: ConversationListItem[] = [];
   error: string | null = null;
   private requestId = 0;
-  /**
-   * Identifies the editor session that owns the cache. A continuation captures
-   * it before awaiting and presents it back, which is the only way to tell "my
-   * editor exited" from "a replacement editor owns discovery now": the page,
-   * the connection, and the admin scope all survive an editor swap.
-   */
+  // Page, connection, and admin scope can survive an editor swap.
   private editorGeneration = 0;
-  /**
-   * The route the cache was last read against. Keeping it here rather than in
-   * the caller is what lets a continuation ask whether the editor still targets
-   * the channel and agent the cached rows describe, without having to snapshot
-   * the form itself before every await.
-   */
+  // Compare the published route with the current form after a save.
   private readRoute: DirectoryRoute | null = null;
 
   constructor(private readonly host: DeliveryConversationsHost) {}
 
-  /** Retire every in-flight read and drop the cached suggestions and error. */
   clear(cronState: CronState = this.host.currentCronState()) {
     this.requestId += 1;
     this.conversations = [];
@@ -113,29 +81,20 @@ export class DeliveryConversationsController {
     this.host.notify(cronState);
   }
 
-  /** The generation a deferred continuation must present back to own the cache. */
   get generation(): number {
     return this.editorGeneration;
   }
 
-  /** An editor session ended: retire its directory and stop answering for it. */
   retireEditor(cronState: CronState = this.host.currentCronState()) {
     this.editorGeneration += 1;
     this.clear(cronState);
   }
 
-  /** An editor session began: it owns discovery from here, so read for it. */
   openEditor() {
     this.editorGeneration += 1;
     void this.load();
   }
 
-  /**
-   * Retire the directory for a continuation whose own editor confirmed its
-   * exit. A continuation that no longer owns the cache — replaced page,
-   * dropped connection, lost admin access, or a replacement editor — leaves it
-   * alone rather than retiring someone else's in-flight read.
-   */
   retireExitedEditor(
     cronState: CronState,
     connectionScope: GatewayConnectionScope | null,
@@ -146,48 +105,8 @@ export class DeliveryConversationsController {
     }
   }
 
-  /**
-   * Resettle the directory after a save. A save that still owns discovery
-   * drops the cache it read against, then reads again only when its editor
-   * stayed open; a create hands off to the overview instead.
-   */
+  // Saving an edit reloads its directory; creating a job returns to overview.
   afterSave(
-    cronState: CronState,
-    connectionScope: GatewayConnectionScope | null,
-    editorGeneration: number,
-    stillEditing: boolean,
-  ) {
-    this.resettle(cronState, connectionScope, editorGeneration, stillEditing);
-  }
-
-  /**
-   * Resettle the directory when a rejected save replaced the editor's route.
-   *
-   * Revision-conflict recovery loads the authoritative definition into the
-   * editor and still reports `saved: false`, so the post-save resettle above
-   * never runs for it. If that definition moved the route the cache was read
-   * against, the cached rows describe a channel or agent the editor no longer
-   * targets -- the sending account is applied locally, so an unchanged account
-   * does not hide them -- and a read still outstanding for the old route would
-   * publish onto the new one. Retiring both and reading the recovered route is
-   * the only outcome that leaves no stale target selectable.
-   *
-   * A rejected save that did not move the route (a field error, a refused
-   * request) leaves the cache alone, so retrying a save never re-reads the
-   * Gateway for a directory that still answers.
-   */
-  reconcileRoute(
-    cronState: CronState,
-    connectionScope: GatewayConnectionScope | null,
-    editorGeneration: number,
-  ) {
-    if (sameDirectoryRoute(this.readRoute, readDirectoryRoute(cronState))) {
-      return;
-    }
-    this.resettle(cronState, connectionScope, editorGeneration, Boolean(cronState.cronEditingJob));
-  }
-
-  private resettle(
     cronState: CronState,
     connectionScope: GatewayConnectionScope | null,
     editorGeneration: number,
@@ -204,10 +123,19 @@ export class DeliveryConversationsController {
     }
   }
 
-  /**
-   * A continuation owns the directory only while its page, its connection, its
-   * admin access, and the editor session it started in all survive.
-   */
+  // Revision-conflict recovery may replace the route despite `saved: false`.
+  // Retire its stale suggestions and pending read, but keep unchanged routes quiet.
+  reconcileRoute(
+    cronState: CronState,
+    connectionScope: GatewayConnectionScope | null,
+    editorGeneration: number,
+  ) {
+    if (sameDirectoryRoute(this.readRoute, readDirectoryRoute(cronState))) {
+      return;
+    }
+    this.afterSave(cronState, connectionScope, editorGeneration, Boolean(cronState.cronEditingJob));
+  }
+
   ownedBy(
     cronState: CronState,
     connectionScope: GatewayConnectionScope | null,

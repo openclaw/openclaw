@@ -1,4 +1,3 @@
-// Provider catalog helpers normalize, hash, and expose model catalogs for provider plugins.
 import { createHash } from "node:crypto";
 import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import {
@@ -9,14 +8,19 @@ import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-s
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { recordLiveCatalogExpiry } from "../plugins/provider-catalog-expiry.js";
+import {
+  consumeLiveCatalogRefresh,
+  recordLiveCatalogExpiry,
+} from "../plugins/provider-catalog-expiry.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
 export { normalizeOpenRouterModelReasoning } from "@openclaw/model-catalog-core/model-catalog-normalize";
 
 export type {
   ProviderCatalogContext,
+  ProviderConfiguredModelRef,
   ProviderCatalogOutcome,
   ProviderCatalogResult,
 } from "../plugins/types.js";
@@ -26,13 +30,11 @@ export { resolveMergedModelProviderConfig } from "../config/model-provider-confi
 export {
   buildManifestModelProviderConfig,
   buildManifestProviderCatalogFamily,
-  buildPairedProviderApiKeyCatalog,
   buildSingleProviderApiKeyCatalog,
   findCatalogTemplate,
   readManifestProviderDefaultModelRef,
   resolveFirstProviderCatalogAuth,
   type ManifestProviderCatalogEntry,
-  type ManifestProviderCatalogSurface,
 } from "../plugins/provider-catalog.js";
 
 /**
@@ -56,10 +58,20 @@ export type ConfiguredProviderCatalogEntry = {
 type LiveCatalogCacheEntry<T> = {
   expiresAt: number;
   value: Promise<T>;
+  settled: boolean;
+  retained: boolean;
 };
 
 const LIVE_CATALOG_CACHE_MAX_ENTRIES = 100;
-const liveCatalogCache = new Map<string, LiveCatalogCacheEntry<unknown>>();
+const liveCatalogCache = new Map<string, unknown>();
+
+async function consumeLiveCatalog<T>(entry: LiveCatalogCacheEntry<T>, signal?: AbortSignal) {
+  const value = await racePromiseWithAbortSignal(entry.value, signal, (aborted) => aborted.reason);
+  if (entry.retained) {
+    recordLiveCatalogExpiry(entry.expiresAt);
+  }
+  return value;
+}
 
 function buildLiveCatalogCacheKey(parts: readonly unknown[]): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
@@ -72,7 +84,9 @@ export async function getCachedLiveCatalogValue<T>(params: {
   /** Stable JSON-serializable values that identify one provider/config catalog load. */
   keyParts: readonly unknown[];
   /** Loader for the live catalog value when no fresh cache entry exists. */
-  load: () => Promise<T>;
+  load: (signal?: AbortSignal) => Promise<T>;
+  /** Cancels this consumer; admitted metadata loads finish within their own deadline. */
+  signal?: AbortSignal;
   /** Optional predicate for values that are healthy enough to retain. */
   shouldCache?: (value: T) => boolean;
   /** Successful-value cache lifetime in milliseconds; defaults to a short discovery TTL. */
@@ -80,53 +94,58 @@ export async function getCachedLiveCatalogValue<T>(params: {
   /** Test hook for deterministic cache expiry. */
   now?: () => number;
 }): Promise<T> {
+  params.signal?.throwIfAborted();
   const rawNow = params.now?.() ?? Date.now();
   const ttlMs = params.ttlMs ?? 30_000;
   const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
   // Uncached callers must neither reuse nor disturb an existing entry.
   if (expiresAt === undefined) {
-    return await params.load();
+    return await params.load(params.signal);
   }
   const key = buildLiveCatalogCacheKey(params.keyParts);
+  const refresh = consumeLiveCatalogRefresh(key);
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
   if (existing) {
-    if (isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })) {
-      const value = await existing.value;
-      recordLiveCatalogExpiry(existing.expiresAt);
-      return value;
+    if (
+      (!refresh || !existing.settled) &&
+      isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })
+    ) {
+      return await consumeLiveCatalog(existing, params.signal);
     }
     liveCatalogCache.delete(key);
   }
-  const entry = { expiresAt, value: params.load() };
-  // Auth-scoped live provider catalogs can vary by token; keep this
-  // process-local cache bounded so discovery cannot grow without limit.
+  const entry: LiveCatalogCacheEntry<T> = {
+    expiresAt,
+    settled: false,
+    retained: false,
+    // Read-only metadata may finish and warm the cache after every observer cancels.
+    value: params.load(),
+  };
+  entry.value = entry.value
+    .then((resolved) => {
+      if (params.shouldCache?.(resolved) ?? true) {
+        // A slow success gets a complete TTL without reviving an evicted entry.
+        const completedExpiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, {
+          nowMs: params.now?.() ?? Date.now(),
+        });
+        if (completedExpiresAt !== undefined) {
+          entry.expiresAt = completedExpiresAt;
+          entry.retained = true;
+        }
+      }
+      return resolved;
+    })
+    .finally(() => {
+      entry.settled = true;
+      if (!entry.retained && liveCatalogCache.get(key) === entry) {
+        liveCatalogCache.delete(key);
+      }
+    });
+  // Auth-scoped catalogs vary by token. Bound retained entries without rejecting
+  // new catalogs or canceling consumers of an evicted load.
   pruneMapToMaxSize(liveCatalogCache, LIVE_CATALOG_CACHE_MAX_ENTRIES - 1);
   liveCatalogCache.set(key, entry);
-  let retain = false;
-  try {
-    const resolved = await entry.value;
-    retain = params.shouldCache?.(resolved) ?? true;
-    if (retain) {
-      // Keep the initial deadline for stalled in-flight work, but do not publish
-      // a successful slow discovery with an already-expired cache lifetime.
-      const completedExpiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, {
-        nowMs: params.now?.() ?? Date.now(),
-      });
-      if (completedExpiresAt === undefined) {
-        retain = false;
-      } else {
-        entry.expiresAt = completedExpiresAt;
-        recordLiveCatalogExpiry(completedExpiresAt);
-      }
-    }
-    return resolved;
-  } finally {
-    // Expired work may finish after a replacement load. Only its own entry
-    // can be removed when loading or the cache predicate fails.
-    if (!retain && liveCatalogCache.get(key) === entry) {
-      liveCatalogCache.delete(key);
-    }
-  }
+  return await consumeLiveCatalog(entry, params.signal);
 }
 
 /**
@@ -136,40 +155,19 @@ export function clearLiveCatalogCacheForTests(): void {
   liveCatalogCache.clear();
 }
 
-function normalizeConfiguredCatalogModelInput(
-  input: unknown,
-): ConfiguredProviderCatalogEntry["input"] | undefined {
-  if (!Array.isArray(input)) {
-    return undefined;
-  }
-  const normalized = input.filter(
-    (item): item is "text" | "image" | "audio" | "video" | "document" =>
-      item === "text" ||
-      item === "image" ||
-      item === "audio" ||
-      item === "video" ||
-      item === "document",
-  );
-  return normalized.length > 0 ? normalized : undefined;
-}
-
 function resolveConfiguredProviderModels(
   config: OpenClawConfig | undefined,
   providerId: string,
 ): ModelDefinitionConfig[] {
   const providers = config?.models?.providers;
-  if (!providers || typeof providers !== "object") {
+  if (!providers) {
     return [];
   }
   const providerKey = findNormalizedProviderKey(providers, providerId);
   if (!providerKey) {
     return [];
   }
-  const providerConfig = providers[providerKey];
-  if (!providerConfig || typeof providerConfig !== "object") {
-    return [];
-  }
-  return Array.isArray(providerConfig.models) ? providerConfig.models : [];
+  return providers[providerKey]?.models ?? [];
 }
 
 /**
@@ -187,36 +185,26 @@ export function readConfiguredProviderCatalogEntries(params: {
   const models = resolveConfiguredProviderModels(params.config, params.providerId);
   const entries: ConfiguredProviderCatalogEntry[] = [];
   for (const model of models) {
-    if (!model || typeof model !== "object") {
-      continue;
-    }
-    const id = typeof model.id === "string" ? model.id.trim() : "";
+    const id = model.id.trim();
     if (!id) {
       continue;
     }
     const normalizedId = normalizeConfiguredProviderCatalogModelId(provider, id);
-    const name =
-      (typeof model.name === "string" ? model.name : normalizedId).trim() || normalizedId;
-    const contextWindow =
-      typeof model.contextWindow === "number" && model.contextWindow > 0
-        ? model.contextWindow
-        : undefined;
-    const reasoning = typeof model.reasoning === "boolean" ? model.reasoning : undefined;
-    const input = normalizeConfiguredCatalogModelInput(model.input);
+    const name = model.name.trim() || normalizedId;
     entries.push({
       provider,
       id: normalizedId,
       name,
-      ...(contextWindow ? { contextWindow } : {}),
-      ...(reasoning !== undefined ? { reasoning } : {}),
-      ...(input ? { input } : {}),
+      ...((model.contextWindow ?? 0) > 0 ? { contextWindow: model.contextWindow } : {}),
+      ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
+      ...(model.input?.length ? { input: model.input } : {}),
     });
   }
   return entries;
 }
 
 function withStreamingUsageCompat(provider: ModelProviderConfig): ModelProviderConfig {
-  if (!Array.isArray(provider.models) || provider.models.length === 0) {
+  if (!provider.models?.length) {
     return provider;
   }
 

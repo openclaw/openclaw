@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   loadRunCronIsolatedAgentTurn,
@@ -41,12 +42,17 @@ describe("CronService silent failure alerts", { concurrent: false }, () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-silent-failure-" },
       async (state) => {
-        resetTaskRegistryForTests();
+        const cfg = {
+          agents: { defaults: { model: `${modelRef.provider}/${modelRef.model}` } },
+        };
+        setRuntimeConfigSnapshot(cfg);
         const sendCronFailureAlert = vi.fn(
           async (_params: SendCronFailureAlertParams) => undefined,
         );
         const storePath = state.path("cron", "jobs.json");
         const cron = new CronService({
+          scheduler: createTestGatewayScheduler(),
+          nowMs: () => Date.now(),
           storePath,
           cronEnabled: true,
           cronConfig: {
@@ -60,7 +66,7 @@ describe("CronService silent failure alerts", { concurrent: false }, () => {
           runIsolatedAgentJob: async (runParams) =>
             await runCronIsolatedAgentTurn({
               ...runParams,
-              cfg: { agents: { defaults: { model: `${modelRef.provider}/${modelRef.model}` } } },
+              cfg,
               deps: {},
               sessionKey: `cron:${runParams.job.id}`,
             }),
@@ -96,7 +102,6 @@ describe("CronService silent failure alerts", { concurrent: false }, () => {
           );
         } finally {
           cron.stop();
-          resetTaskRegistryForTests({ persist: false });
         }
       },
     );

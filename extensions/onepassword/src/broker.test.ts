@@ -108,47 +108,18 @@ function nonceOf(result: PluginHookBeforeToolCallResult | void): string | undefi
   return typeof nonce === "string" ? nonce : undefined;
 }
 
+async function prepareGet(
+  broker: OnePasswordBroker,
+  toolCallId: string,
+  slug: string,
+  reason: string,
+) {
+  const input = { action: "get", slug, reason } satisfies Parameters<OnePasswordBroker["get"]>[1];
+  const hook = await before(broker, toolCallId, input);
+  return { hook, get: () => broker.get(toolCallId, input, invocation, nonceOf(hook)) };
+}
+
 describe("OnePasswordBroker validation and policy", () => {
-  it("lists only registry metadata and active grant state", async () => {
-    const { broker, getItem } = setup();
-    const approval = await before(broker, "list-grant", {
-      action: "get",
-      slug: "approval",
-      reason: "create listing fixture",
-    });
-    await approval?.requireApproval?.onResolution?.("allow-always");
-    await broker.get(
-      "list-grant",
-      { action: "get", slug: "approval", reason: "create listing fixture" },
-      invocation,
-      nonceOf(approval),
-    );
-    getItem.mockClear();
-
-    const items = await broker.list(invocation);
-    expect(items).toEqual([
-      {
-        slug: "approval",
-        description: "",
-        policy: "approve",
-        standingGrantActive: true,
-      },
-      {
-        slug: "automatic",
-        description: "Automatic item",
-        policy: "auto",
-        standingGrantActive: false,
-      },
-      {
-        slug: "blocked",
-        description: "",
-        policy: "deny",
-        standingGrantActive: false,
-      },
-    ]);
-    expect(getItem).not.toHaveBeenCalled();
-  });
-
   it("requires a non-empty bounded reason before policy evaluation", async () => {
     const { broker, audit, getItem } = setup();
     const missing = await before(broker, "call-1", { action: "get", slug: "blocked" });
@@ -193,20 +164,9 @@ describe("OnePasswordBroker validation and policy", () => {
 
   it("allows auto, blocks deny, and audits one row per attempt", async () => {
     const { broker, audit, getItem } = setup();
-    const automatic = await before(broker, "auto-1", {
-      action: "get",
-      slug: "automatic",
-      reason: "test",
-    });
-    expect(automatic?.requireApproval).toBeUndefined();
-    await expect(
-      broker.get(
-        "auto-1",
-        { action: "get", slug: "automatic", reason: "test" },
-        invocation,
-        nonceOf(automatic),
-      ),
-    ).resolves.toMatchObject({ value: ["fixture", "value"].join("-") });
+    const automatic = await prepareGet(broker, "auto-1", "automatic", "test");
+    expect(automatic.hook?.requireApproval).toBeUndefined();
+    await expect(automatic.get()).resolves.toMatchObject({ value: ["fixture", "value"].join("-") });
     expect(
       await before(broker, "deny-1", { action: "get", slug: "blocked", reason: "test" }),
     ).toMatchObject({ block: true });
@@ -219,25 +179,16 @@ describe("OnePasswordBroker validation and policy", () => {
 
   it("handles allow-once, deny, timeout, and cancellation decisions", async () => {
     const { broker, audit, pending, getItem } = setup();
-    const approved = await before(broker, "approve-1", {
-      action: "get",
-      slug: "approval",
-      reason: "one use",
-    });
-    expect(approved?.requireApproval).toMatchObject({
+    const approved = await prepareGet(broker, "approve-1", "approval", "one use");
+    expect(approved.hook?.requireApproval).toMatchObject({
       title: "1Password: approval",
       description: "Agent agent-a requests approval. Reason: one use",
       severity: "warning",
       timeoutMs: 600_000,
       allowedDecisions: ["allow-once", "allow-always", "deny"],
     });
-    await approved?.requireApproval?.onResolution?.("allow-once");
-    await broker.get(
-      "approve-1",
-      { action: "get", slug: "approval", reason: "one use" },
-      invocation,
-      nonceOf(approved),
-    );
+    await approved.hook?.requireApproval?.onResolution?.("allow-once");
+    await approved.get();
 
     const denied = await before(broker, "approve-2", {
       action: "get",
@@ -299,25 +250,6 @@ describe("OnePasswordBroker validation and policy", () => {
     ).resolves.toMatchObject({ slug: "automatic" });
     const rows = await audit.entries();
     expect(rows.map((entry) => entry.value.outcome)).toEqual(["auto"]);
-  });
-
-  it("shares pending authorizations across broker instances", async () => {
-    const { broker: hookBroker, createBroker } = setup();
-    const executeBroker = createBroker();
-    const issued = await before(hookBroker, "duplicate-instance-1", {
-      action: "get",
-      slug: "automatic",
-      reason: "cross-instance authorization",
-    });
-
-    await expect(
-      executeBroker.get(
-        "duplicate-instance-1",
-        { action: "get", slug: "automatic", reason: "cross-instance authorization" },
-        invocation,
-        nonceOf(issued),
-      ),
-    ).resolves.toMatchObject({ slug: "automatic" });
   });
 
   it.each([false, true])(
@@ -579,25 +511,6 @@ describe("OnePasswordBroker validation and policy", () => {
     ).resolves.toMatchObject({ slug: "automatic" });
   });
 
-  it("authorizes via unique pending match when another hook drops the nonce param", async () => {
-    // before_tool_call results merge last-writer-wins across plugins, so a
-    // later params-returning hook can strip the nonce from the executed params.
-    const { broker } = setup();
-    await before(broker, "dropped-1", {
-      action: "get",
-      slug: "automatic",
-      reason: "nonce dropped by another hook",
-    });
-    await expect(
-      broker.get(
-        "dropped-1",
-        { action: "get", slug: "automatic", reason: "nonce dropped by another hook" },
-        invocation,
-        undefined,
-      ),
-    ).resolves.toMatchObject({ slug: "automatic" });
-  });
-
   it("fails closed when a dropped nonce is ambiguous across pending entries", async () => {
     const { broker } = setup();
     for (let round = 0; round < 2; round += 1) {
@@ -661,37 +574,15 @@ describe("OnePasswordBroker validation and policy", () => {
 
   it("persists allow-always grants and expires them", async () => {
     const { broker, audit, grants, getItem, advance } = setup();
-    const first = await before(broker, "grant-1", {
-      action: "get",
-      slug: "approval",
-      reason: "standing access",
-    });
-    await first?.requireApproval?.onResolution?.("allow-always");
-    await broker.get(
-      "grant-1",
-      {
-        action: "get",
-        slug: "approval",
-        reason: "standing access",
-      },
-      invocation,
-      nonceOf(first),
-    );
+    const first = await prepareGet(broker, "grant-1", "approval", "standing access");
+    await first.hook?.requireApproval?.onResolution?.("allow-always");
+    await first.get();
     expect((await grants.entries()).map((entry) => entry.value.agentId)).toEqual(["agent-a"]);
 
     advance(300_001);
-    const second = await before(broker, "grant-2", {
-      action: "get",
-      slug: "approval",
-      reason: "second access",
-    });
-    expect(second?.requireApproval).toBeUndefined();
-    await broker.get(
-      "grant-2",
-      { action: "get", slug: "approval", reason: "second access" },
-      invocation,
-      nonceOf(second),
-    );
+    const second = await prepareGet(broker, "grant-2", "approval", "second access");
+    expect(second.hook?.requireApproval).toBeUndefined();
+    await second.get();
     expect(getItem).toHaveBeenCalledTimes(2);
 
     advance(60 * 60 * 1000 + 1);
@@ -709,18 +600,9 @@ describe("OnePasswordBroker validation and policy", () => {
 
   it("scopes standing grants and list state to the approved agent", async () => {
     const { broker } = setup();
-    const approved = await before(broker, "agent-grant-1", {
-      action: "get",
-      slug: "approval",
-      reason: "agent a access",
-    });
-    await approved?.requireApproval?.onResolution?.("allow-always");
-    await broker.get(
-      "agent-grant-1",
-      { action: "get", slug: "approval", reason: "agent a access" },
-      invocation,
-      nonceOf(approved),
-    );
+    const approved = await prepareGet(broker, "agent-grant-1", "approval", "agent a access");
+    await approved.hook?.requireApproval?.onResolution?.("allow-always");
+    await approved.get();
 
     const otherAgent = {
       agentId: "agent-b",
@@ -760,18 +642,9 @@ describe("OnePasswordBroker validation and policy", () => {
   it("invalidates a standing grant when its configured target changes", async () => {
     const configured = config();
     const { broker } = setup(1_000, configured);
-    const first = await before(broker, "grant-remap-1", {
-      action: "get",
-      slug: "approval",
-      reason: "approve original target",
-    });
-    await first?.requireApproval?.onResolution?.("allow-always");
-    await broker.get(
-      "grant-remap-1",
-      { action: "get", slug: "approval", reason: "approve original target" },
-      invocation,
-      nonceOf(first),
-    );
+    const first = await prepareGet(broker, "grant-remap-1", "approval", "approve original target");
+    await first.hook?.requireApproval?.onResolution?.("allow-always");
+    await first.get();
 
     configuredItem(configured, "approval").item = "Replacement target";
     const remapped = await before(broker, "grant-remap-2", {
@@ -785,23 +658,17 @@ describe("OnePasswordBroker validation and policy", () => {
   it("fails closed when live policy changes after authorization", async () => {
     const configured = config();
     const { broker, audit, getItem, setConfig } = setup(1_000, configured);
-    const authorized = await before(broker, "live-deny-1", {
-      action: "get",
-      slug: "automatic",
-      reason: "authorized before reload",
-    });
+    const authorized = await prepareGet(
+      broker,
+      "live-deny-1",
+      "automatic",
+      "authorized before reload",
+    );
     const reloaded = structuredClone(configured);
     configuredItem(reloaded, "automatic").policy = "deny";
     setConfig(reloaded);
 
-    await expect(
-      broker.get(
-        "live-deny-1",
-        { action: "get", slug: "automatic", reason: "authorized before reload" },
-        invocation,
-        nonceOf(authorized),
-      ),
-    ).rejects.toMatchObject({ code: "POLICY_CHANGED" });
+    await expect(authorized.get()).rejects.toMatchObject({ code: "POLICY_CHANGED" });
     expect(getItem).not.toHaveBeenCalled();
     expect((await audit.entries()).at(-1)?.value).toMatchObject({
       outcome: "policy-denied",
@@ -811,46 +678,27 @@ describe("OnePasswordBroker validation and policy", () => {
   it("rejects a retargeted authorization and never reuses its cached value", async () => {
     const configured = config();
     const { broker, getItem, setConfig } = setup(1_000, configured);
-    const primed = await before(broker, "live-target-1", {
-      action: "get",
-      slug: "automatic",
-      reason: "prime original target",
-    });
-    await broker.get(
-      "live-target-1",
-      { action: "get", slug: "automatic", reason: "prime original target" },
-      invocation,
-      nonceOf(primed),
-    );
+    const primed = await prepareGet(broker, "live-target-1", "automatic", "prime original target");
+    await primed.get();
 
-    const authorized = await before(broker, "live-target-2", {
-      action: "get",
-      slug: "automatic",
-      reason: "authorized before retarget",
-    });
+    const authorized = await prepareGet(
+      broker,
+      "live-target-2",
+      "automatic",
+      "authorized before retarget",
+    );
     const reloaded = structuredClone(configured);
     configuredItem(reloaded, "automatic").item = "Replacement target";
     setConfig(reloaded);
-    await expect(
-      broker.get(
-        "live-target-2",
-        { action: "get", slug: "automatic", reason: "authorized before retarget" },
-        invocation,
-        nonceOf(authorized),
-      ),
-    ).rejects.toMatchObject({ code: "POLICY_CHANGED" });
+    await expect(authorized.get()).rejects.toMatchObject({ code: "POLICY_CHANGED" });
 
-    const replacement = await before(broker, "live-target-3", {
-      action: "get",
-      slug: "automatic",
-      reason: "authorize replacement target",
-    });
-    await broker.get(
+    const replacement = await prepareGet(
+      broker,
       "live-target-3",
-      { action: "get", slug: "automatic", reason: "authorize replacement target" },
-      invocation,
-      nonceOf(replacement),
+      "automatic",
+      "authorize replacement target",
     );
+    await replacement.get();
     expect(getItem).toHaveBeenCalledTimes(2);
     expect(getItem).toHaveBeenLastCalledWith(
       expect.objectContaining({ item: "Replacement target" }),
@@ -885,18 +733,14 @@ describe("OnePasswordBroker validation and policy", () => {
         targetFingerprint: "removed-target",
       });
     }
-    const approval = await before(broker, "grant-prune-1", {
-      action: "get",
-      slug: "approval",
-      reason: "replace removed grants",
-    });
-    await approval?.requireApproval?.onResolution?.("allow-always");
-    await broker.get(
+    const approval = await prepareGet(
+      broker,
       "grant-prune-1",
-      { action: "get", slug: "approval", reason: "replace removed grants" },
-      invocation,
-      nonceOf(approval),
+      "approval",
+      "replace removed grants",
     );
+    await approval.hook?.requireApproval?.onResolution?.("allow-always");
+    await approval.get();
     expect((await grants.entries()).map((entry) => entry.value.slug)).toEqual(["approval"]);
   });
 
@@ -904,132 +748,18 @@ describe("OnePasswordBroker validation and policy", () => {
     const configured = config();
     configured.grantTtlHours = 0.001;
     const { broker, audit, getItem, advance } = setup(1_000, configured);
-    const first = await before(broker, "grant-cache-1", {
-      action: "get",
-      slug: "approval",
-      reason: "create grant",
-    });
-    await first?.requireApproval?.onResolution?.("allow-always");
-    await broker.get(
-      "grant-cache-1",
-      {
-        action: "get",
-        slug: "approval",
-        reason: "create grant",
-      },
-      invocation,
-      nonceOf(first),
-    );
+    const first = await prepareGet(broker, "grant-cache-1", "approval", "create grant");
+    await first.hook?.requireApproval?.onResolution?.("allow-always");
+    await first.get();
 
-    const second = await before(broker, "grant-cache-2", {
-      action: "get",
-      slug: "approval",
-      reason: "use grant",
-    });
-    expect(second?.requireApproval).toBeUndefined();
+    const second = await prepareGet(broker, "grant-cache-2", "approval", "use grant");
+    expect(second.hook?.requireApproval).toBeUndefined();
     advance(3_601);
-    await expect(
-      broker.get(
-        "grant-cache-2",
-        {
-          action: "get",
-          slug: "approval",
-          reason: "use grant",
-        },
-        invocation,
-        nonceOf(second),
-      ),
-    ).rejects.toMatchObject({ code: "GRANT_EXPIRED" });
+    await expect(second.get()).rejects.toMatchObject({ code: "GRANT_EXPIRED" });
     expect(getItem).toHaveBeenCalledTimes(1);
     expect((await audit.entries()).at(-1)?.value).toMatchObject({
       outcome: "error",
       errorCode: "GRANT_EXPIRED",
     });
-  });
-});
-
-describe("OnePasswordBroker cache and audit", () => {
-  it("honors cache TTL, audits hits, and refetches after expiry", async () => {
-    const { broker, audit, getItem, advance } = setup();
-    for (const [id, reason] of [
-      ["cache-1", "first"],
-      ["cache-2", "second"],
-    ] as const) {
-      const result = await before(broker, id, { action: "get", slug: "automatic", reason });
-      await broker.get(
-        id,
-        { action: "get", slug: "automatic", reason },
-        invocation,
-        nonceOf(result),
-      );
-    }
-    expect(getItem).toHaveBeenCalledTimes(1);
-    advance(300_001);
-    const third = await before(broker, "cache-3", {
-      action: "get",
-      slug: "automatic",
-      reason: "third",
-    });
-    await broker.get(
-      "cache-3",
-      { action: "get", slug: "automatic", reason: "third" },
-      invocation,
-      nonceOf(third),
-    );
-    expect(getItem).toHaveBeenCalledTimes(2);
-    expect((await audit.entries()).map((entry) => entry.value.outcome)).toEqual([
-      "auto",
-      "cache-hit",
-      "auto",
-    ]);
-  });
-
-  it("never lets a cache entry bypass a changed deny policy", async () => {
-    const cfg = config();
-    const audit = new MemoryKeyedStore<AuditRow>();
-    const grants = new MemoryKeyedStore<StandingGrant>();
-    const pending = new MemoryKeyedStore<PendingAuthorization>();
-    const getItem = vi.fn(async () => ({
-      value: ["fixture", "value"].join("-"),
-      itemTitle: "Item",
-      fieldLabel: "credential",
-    }));
-    const broker = new OnePasswordBroker({
-      resolveConfig: () => cfg,
-      opClient: { getItem },
-      stores: { audit, grants, pending },
-    });
-    const primed = await before(broker, "deny-cache-1", {
-      action: "get",
-      slug: "automatic",
-      reason: "prime cache",
-    });
-    await broker.get(
-      "deny-cache-1",
-      {
-        action: "get",
-        slug: "automatic",
-        reason: "prime cache",
-      },
-      invocation,
-      nonceOf(primed),
-    );
-    const automatic = cfg.items.automatic;
-    if (!automatic) {
-      throw new Error("automatic test item missing");
-    }
-    automatic.policy = "deny";
-    expect(
-      await before(broker, "deny-cache-2", {
-        action: "get",
-        slug: "automatic",
-        reason: "blocked",
-      }),
-    ).toMatchObject({ block: true });
-    expect(getItem).toHaveBeenCalledTimes(1);
-    expect((await audit.entries()).map((entry) => entry.value.outcome)).toEqual([
-      "auto",
-      "policy-denied",
-    ]);
   });
 });

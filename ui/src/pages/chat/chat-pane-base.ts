@@ -1,5 +1,3 @@
-import { consume } from "@lit/context";
-import { property, state as litState } from "lit/decorators.js";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type {
   SessionCatalogHost,
@@ -16,7 +14,7 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { chatInputOwnerForContext, type ChatInputRegion } from "../../app/chat-input-owner.ts";
-import { applicationContext } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { observeNativeGateway } from "../../app/native-editor-locality.runtime.ts";
 import {
   createQuestionPromptState,
@@ -27,6 +25,7 @@ import type { PresencePayload } from "../../app/user-profile.ts";
 import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import type { SessionPanelToggleSlot } from "../../components/session-panel-toggle-buffer.ts";
 import { SessionProgressCardController } from "../../components/session-progress-card-controller.ts";
+import { I18nController } from "../../i18n/lib/lit-controller.ts";
 import type {
   BoardCommandEvent,
   BoardProvider,
@@ -38,62 +37,130 @@ import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
   resolveUiConversationIdentity,
+  scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import {
+  ControllerHost,
+  SubscriptionsController,
+  viewState,
+} from "../../lib/subscriptions-controller.ts";
 import { PollController } from "../../lit/poll-controller.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
+import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_RUN_ACTIVITY_CHANGED_EVENT,
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "./chat-history-events.ts";
-import { getAcceptedChatHistorySession, getChatHistoryLoadState } from "./chat-history-state.ts";
+import {
+  getAcceptedChatHistorySession,
+  getChatHistoryLoadState,
+  isChatHistoryRetrying,
+} from "./chat-history-state.ts";
 import { sameChatPanePresence } from "./chat-pane-presence.ts";
 import type { PendingSessionPanelToggle } from "./chat-pane-session-panel-toggle.ts";
-import type {
-  ChatPaneConnectionScope,
-  ChatPageContext,
-  PaneSessionChangeOptions,
-} from "./chat-pane-shared.ts";
+import type { ChatPaneConnectionScope, PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import { SessionParticipationTracker } from "./chat-pane-state.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
+import type { ChatTypingActorState } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
-import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
-import { hasDirectSessionRun } from "./run-lifecycle.ts";
-import { handleChatScrollTakeover } from "./scroll.ts";
-import type { ChatMessageCache } from "./session-message-cache.ts";
+import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
+import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  type ChatMessageCache,
+} from "./session-message-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SidebarLayout } from "./sidebar-layout-types.ts";
 
-export abstract class ChatPaneBase extends OpenClawLightDomElement {
+export abstract class ChatPaneBase extends ControllerHost {
+  protected readonly i18nController = new I18nController(this);
+  private readonly changedProperties = new Map<PropertyKey, unknown>();
+  private completeUpdate: (() => void) | undefined;
+  private commitPromise: Promise<boolean> | undefined;
+  private lastCommittedProperties = new Map<PropertyKey, unknown>();
+
+  get ownerDocument() {
+    return this.element.ownerDocument;
+  }
+  get renderRoot() {
+    return this.element;
+  }
+  querySelector: HTMLElement["querySelector"] = this.element.querySelector.bind(this.element);
+  querySelectorAll: HTMLElement["querySelectorAll"] = this.element.querySelectorAll.bind(
+    this.element,
+  );
+  closest: HTMLElement["closest"] = this.element.closest.bind(this.element);
+  contains(node: Node | null) {
+    return this.element.contains(node);
+  }
+  dispatchEvent(event: Event) {
+    return this.element.dispatchEvent(event);
+  }
+  addEventListener: HTMLElement["addEventListener"] = this.element.addEventListener.bind(
+    this.element,
+  );
+  removeEventListener: HTMLElement["removeEventListener"] = this.element.removeEventListener.bind(
+    this.element,
+  );
+
+  override requestUpdate(name?: PropertyKey, previous?: unknown): void {
+    if (name !== undefined && !this.changedProperties.has(name)) {
+      this.changedProperties.set(name, previous);
+    }
+    if (this.isConnected) {
+      this.commitPromise ??= new Promise<boolean>((resolve) => {
+        this.completeUpdate = () => resolve(true);
+      });
+    }
+    super.requestUpdate();
+  }
+
+  override get updateComplete(): Promise<boolean> {
+    return this.commitPromise ?? Promise.resolve(true);
+  }
+
+  prepareRender(): void {
+    this.lastCommittedProperties = new Map(this.changedProperties);
+    this.changedProperties.clear();
+    this.willUpdate(this.lastCommittedProperties);
+  }
+
+  commitRender(): void {
+    const complete = this.completeUpdate;
+    this.completeUpdate = undefined;
+    this.commitPromise = undefined;
+    this.updated(this.lastCommittedProperties);
+    this.chatState.hostUpdated();
+    complete?.();
+  }
+
+  protected willUpdate(_changed: Map<PropertyKey, unknown>): void {}
+  protected updated(_changed: Map<PropertyKey, unknown>): void {}
   private paneLifecycleRoot: Element | null = null;
-  // The first Lit update must render even while hidden; later hidden work parks.
-  // Disconnect releases the waiter so reconnect can schedule in its new lifecycle.
-  private hiddenUpdateResume: (() => void) | undefined;
+  // The first Solid render initializes hidden panes; later hidden work parks.
   private readonly handleVisibilityChange = () => {
-    // Lit parks hidden updates, but progress watches must follow visibility immediately.
+    // Progress watches follow visibility before the parked view resumes.
     this.progressCard.hostUpdate();
     if (document.visibilityState !== "hidden") {
-      this.hiddenUpdateResume?.();
       return;
     }
     const state = this.state;
     if (!state) {
       return;
     }
-    const liveDraft = getChatComposerState(this.paneId).composerTextarea?.value;
+    const liveDraft = getChatComposerState(this.presentationId).composerTextarea?.value;
     const draftChanged = liveDraft !== undefined && liveDraft !== state.chatMessage;
     if (draftChanged) {
       // Page suspension can interrupt IME before compositionend; commit the
@@ -104,34 +171,28 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       requestChatPageUpdate(state);
     }
   };
-  override connectedCallback() {
-    this.paneLifecycleRoot = this.closest("openclaw-app-shell") ?? this.parentElement;
+  connectedCallback() {
+    this.paneLifecycleRoot = this.closest("openclaw-app-shell") ?? this.element.parentElement;
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
-    super.connectedCallback();
+    super.connect();
     this.addEventListener(
       CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
       this.synchronizeForegroundTranscript,
     );
     this.paneLifecycleRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
-  protected override async scheduleUpdate() {
-    while (this.hasUpdated && this.isConnected && document.visibilityState === "hidden") {
-      await new Promise<void>((resolve) => {
-        this.hiddenUpdateResume = resolve;
-      });
-    }
-    await super.scheduleUpdate();
-  }
 
-  override disconnectedCallback() {
+  disconnectedCallback() {
     this.removeEventListener(
       CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
       this.synchronizeForegroundTranscript,
     );
     this.context?.connectionBootstrap.setForegroundPane(this, null);
-    this.hiddenUpdateResume?.();
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-    super.disconnectedCallback();
+    super.disconnect();
+    this.completeUpdate?.();
+    this.completeUpdate = undefined;
+    this.commitPromise = undefined;
     // A removed Home pane cannot bubble its final loading edge. Notify its
     // former shell so background history does not stay blocked on that pane.
     const paneRoot = this.paneLifecycleRoot;
@@ -141,24 +202,30 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   }
 
   // Relative labels still need a minute tick; external PR state is server-pushed.
-  readonly minutePoll = new PollController(this, 60_000, () => {
-    this.requestUpdate();
-  });
-  @consume({ context: applicationContext, subscribe: true })
-  protected context!: ChatPageContext;
-  @property({ attribute: false }) paneId = "single";
-  @property({ attribute: false }) presentationId = "single";
-  @property({ attribute: false }) chatMessagesBySession?: ChatMessageCache;
-  @property({ attribute: false }) sessionSnapshotStore?: SessionSnapshotStore;
+  readonly minutePoll = new PollController(
+    this,
+    60_000,
+    () => this.requestUpdate(),
+    true,
+    "visible",
+  );
+  @viewState()
+  mcpAppLaunch?: import("../../components/mcp-app-launch.ts").McpAppOpenDetail;
+  @viewState() paneId = "single";
+  @viewState() paneLabel?: string;
+  @viewState() presentationId = "single";
+  @viewState() chatMessagesBySession?: ChatMessageCache;
+  @viewState() sessionSnapshotStore?: SessionSnapshotStore;
   // Empty means unresolved route data: boot on the page state's default session
   // without canonicalizing until the container supplies a real key.
-  @property({ attribute: false }) sessionKey = "";
+  @viewState() sessionKey = "";
   // This session-keyed pane retains its initial skeleton through URL canonicalization.
-  @property({ attribute: false }) routeLoadingSkeleton = false;
-  @property({ attribute: false }) agentId?: string;
-  @property({ attribute: false }) inputRegion: ChatInputRegion = "page";
-  @property({ attribute: false }) compact = false;
-  @property({ attribute: false }) workContext?: ChatWorkContext;
+  @viewState() routeLoadingSkeleton = false;
+  @viewState() agentId?: string;
+  @viewState() inputRegion: ChatInputRegion = "page";
+  @viewState() compact = false;
+  @viewState() onBackToSubagents?: () => void;
+  @viewState() workContext?: ChatWorkContext;
   // Route ownership settles after retained-pane preview; dashboard activity follows
   // the pane the user can already see so its warmed runtime paints immediately.
   private visuallyPresentedValue = true;
@@ -173,6 +240,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     }
     const wasConversationPresented = this.conversationPresented;
     this.visuallyPresentedValue = value;
+    this.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
     this.requestUpdate("visuallyPresented", previous);
     this.notifyConversationPresentation(wasConversationPresented);
   }
@@ -206,6 +274,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     const wasConversationPresented = this.conversationPresented;
     this.headerPresentationGeneration += 1;
     this.presentedValue = value;
+    this.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
     this.progressCard.hostUpdate();
     this.requestUpdate("presented", previous);
     this.presentedChanged(value);
@@ -218,12 +287,20 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     const phase = this.state ? getChatHistoryLoadState(this.state).phase : "idle";
     return phase === "pending-connection" || phase === "in-flight";
   }
+  /** Scoped transient recovery is presented once in the shell connection indicator. */
+  get historyRecovering(): boolean {
+    return Boolean(
+      this.state &&
+      this.state.client === this.context?.gateway.snapshot.client &&
+      isChatHistoryRetrying(this.state),
+    );
+  }
   /** The initial authoritative transcript has a visible result, including errors. */
   get transcriptReady(): boolean {
     if (!this.state?.connected || this.state.client !== this.context?.gateway.snapshot.client) {
       return false;
     }
-    const phase = this.state ? getChatHistoryLoadState(this.state).phase : "idle";
+    const phase = getChatHistoryLoadState(this.state).phase;
     return phase === "committed" || phase === "failed";
   }
   protected readonly synchronizeForegroundTranscript = () => {
@@ -277,42 +354,38 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.headerSessionMutationAbortController.abort();
     this.headerSessionMutationAbortController = new AbortController();
   }
-  @property({ attribute: false }) draft?: string;
-  @property({ attribute: false }) focusComposer = false;
-  @property({ attribute: false }) dashboardExpanded = false;
-  @property({ attribute: false }) routeFace?: BoardFace;
-  @property({ attribute: false }) onFaceChange?: (
-    paneId: string,
-    sessionKey: string,
-    face: BoardFace,
-  ) => void;
-  @property({ attribute: false }) onFocusPane?: (paneId: string, intent?: "review-edit") => void;
+  @viewState() draft?: string;
+  @viewState() focusComposer = false;
+  @viewState() dashboardExpanded = false;
+  @viewState() routeFace?: BoardFace;
+  @viewState() onFaceChange?: (paneId: string, sessionKey: string, face: BoardFace) => void;
+  @viewState() onFocusPane?: (paneId: string, intent?: "review-edit") => void;
   onPaneSessionChange?: (
     paneId: string,
     nextSessionKey: string,
     options?: PaneSessionChangeOptions,
   ) => boolean | void;
-  @property({ attribute: false }) onSessionDeleted?: (
+  @viewState() onSessionDeleted?: (
     paneId: string,
     sessionKey: string,
     replacementSessionKey: string,
     preserveDraft?: boolean,
   ) => void;
-  @property({ attribute: false }) paneTitle = "";
-  @property({ attribute: false }) narrow = false;
-  @property({ attribute: false }) mergedChrome = false;
-  @property({ attribute: false }) navDrawerOpen = false;
-  @property({ attribute: false }) onboarding = false;
-  @property({ attribute: false }) onOpenSplitView?: () => void;
-  @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
-  @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
-  @property({ attribute: false }) onClosePane?: (paneId: string) => void;
-  @property({ attribute: false }) boardProvider?: BoardProvider;
+  @viewState() narrow = false;
+  @viewState() mergedChrome = false;
+  @viewState() navDrawerOpen = false;
+  @viewState() onboarding = false;
+  @viewState() onOpenSplitView?: () => void;
+  @viewState() onSplitDown?: (paneId: string) => void;
+  @viewState() onSplitRight?: (paneId: string) => void;
+  @viewState() onClosePane?: (paneId: string) => void;
+  @viewState() boardProvider?: BoardProvider;
 
   private publishedRunActivity: ChatPaneBase["runActivity"] = null;
   protected readonly chatState = new ChatStateController<ChatPageHost>(
     this,
     () => {
+      this.syncQueuedEditRetention();
       const activity = this.runActivity;
       if (
         activity?.client === this.publishedRunActivity?.client &&
@@ -332,28 +405,33 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   );
 
   get runActivity() {
-    const state = this.state;
-    return state?.connected
-      ? {
-          client: state.client,
-          agentId: resolveChatAgentId(state),
-          working: hasDirectSessionRun(state),
-          completion: state.chatRunStatus,
-        }
-      : null;
+    return this.chatState.projectRunActivity(this.state);
   }
   protected readonly composerCapabilities = new ChatComposerCapabilityHost(() =>
     this.requestUpdate(),
   );
   protected readonly transcript = new ChatTranscriptController(this, () => this.paneId, {
-    visuallyPresented: () => this.visuallyPresented,
+    geometryEventTarget: this.element,
     onViewportResize: () => this.chatState.handleTranscriptResize(),
-    canFollowEnd: () => this.state !== undefined && !this.state.chatFollowLocked,
+    canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
     onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
   });
   protected readonly progressCard = new SessionProgressCardController(this, {
     gateway: () => this.context?.gateway,
     target: () => this.initialProgressCardTarget(),
+    onChange: (target, card) => {
+      const state = this.state;
+      if (!state || !this.ownsChatSnapshot(target)) {
+        return;
+      }
+      const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, target);
+      if (snapshot) {
+        cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
+          ...snapshot,
+          progressCard: card,
+        });
+      }
+    },
   });
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
@@ -361,6 +439,25 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   });
   protected questionPrompts: QuestionPrompt[] = [];
   protected state: ChatPageHost | undefined;
+
+  protected ownsChatSnapshot(target: Parameters<typeof resolveChatSnapshotKey>[1]): boolean {
+    const state = this.state;
+    const gateway = this.context.gateway;
+    return Boolean(
+      state &&
+      resolveChatSnapshotKey(state, target) ===
+        resolveChatSnapshotKey(
+          {
+            settings: gateway.connection,
+            client: gateway.snapshot.client,
+            hello: state.hello,
+            assistantAgentId: state.assistantAgentId,
+            agentsList: state.agentsList,
+          },
+          target,
+        ),
+    );
+  }
 
   protected resolveChatReadTarget(): ReturnType<typeof resolveUiConversationIdentity> | undefined {
     const state = this.state;
@@ -381,6 +478,23 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       : undefined;
   }
 
+  protected projectChildRoster(
+    target: ReturnType<typeof resolveUiConversationIdentity> | undefined,
+  ) {
+    const sessions = target ? this.swarmHydrator?.rows : undefined;
+    return {
+      swarm: target && this.swarmEnabled ? { ...target, sessions: sessions ?? [] } : undefined,
+      subagentSessions: sessions,
+      subagentSessionsHydrated: Boolean(target && this.swarmHydrator?.hydrated),
+      subagentSessionsPending: Boolean(target && this.swarmHydrator?.pendingChildRead),
+      subagentSessionsRead: Boolean(target && this.swarmHydrator?.childrenRead),
+      // Carry the admitted owner forward; route aliases do not identify child ancestry.
+      subagentParentKey: target
+        ? scopedSessionArtifactKey(target.sessionKey, target.agentId)
+        : undefined,
+    };
+  }
+
   protected isCurrentSessionArchived(state: ChatPageHost): boolean {
     return (
       state.selectedChatSessionArchived ||
@@ -391,7 +505,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   }
   /* Infinity until the first ResizeObserver tick so an unmeasured pane keeps
    * the wide side-by-side layout instead of flashing the stacked one. */
-  @litState() protected paneWidth = Number.POSITIVE_INFINITY;
+  @viewState() protected paneWidth = Number.POSITIVE_INFINITY;
   protected paneResizeObserver: ResizeObserver | null = null;
   protected connectedClient: GatewayBrowserClient | null = null;
   protected boardProviderLease: (BoardProviderLease & { cacheKey: string }) | undefined;
@@ -403,19 +517,18 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   // SessionDataController's own epoch-scoped controller for the sidebar.
   protected headerSessionMutationAbortController = new AbortController();
 
-  @litState() protected headerEditing = false;
-  @litState() protected headerRenameValue = "";
-  @litState() protected headerPlatform: string | null = null;
-  @litState() protected headerCopiedAction: ChatPaneHeaderAction | null = null;
+  @viewState() protected headerRenameValue = "";
+  @viewState() protected headerPlatform: string | null = null;
+  @viewState() protected headerCopiedAction: ChatPaneHeaderAction | null = null;
   protected continueInTerminalDialog: {
     qualifiedSessionKey: string;
     selectedGatewayUrl: string;
     clientGatewayUrl: string;
     scope: ChatPaneConnectionScope;
   } | null = null;
-  @litState() protected headerPlacementMovingKey: string | null = null;
-  @litState() protected headerPlacementReclaimingKey: string | null = null;
-  @litState() protected headerPlacementRestartingKey: string | null = null;
+  @viewState() protected headerPlacementMovingKey: string | null = null;
+  @viewState() protected headerPlacementReclaimingKey: string | null = null;
+  @viewState() protected headerPlacementRestartingKey: string | null = null;
   private presencePayloadValue: PresencePayload | undefined;
   protected get presencePayload(): PresencePayload | undefined {
     return this.presencePayloadValue;
@@ -432,15 +545,20 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
         selfInstanceId: snapshot?.client?.instanceId,
       })
     ) {
-      this.requestUpdate("presencePayload", previous);
+      this.chatState.requestBackgroundUpdate();
     }
   }
-  @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
+  private sessionSharingStatesValue = new Map<string, ChatSessionSharingState>();
+  protected get sessionSharingStates(): Map<string, ChatSessionSharingState> {
+    return this.sessionSharingStatesValue;
+  }
+  protected set sessionSharingStates(value: Map<string, ChatSessionSharingState>) {
+    this.sessionSharingStatesValue = value;
+    this.chatState.requestBackgroundUpdate();
+  }
   protected readonly sessionSharingHydrationTargets = new Map<string, string>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
-  @litState() protected resetConfirmationOpen = false;
-  protected deferredSessionHydrationRequestVersion = 0;
-  protected resetConfirmation:
+  @viewState() protected resetConfirmation:
     | {
         scopeKey: string;
         promise: Promise<boolean>;
@@ -455,6 +573,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     pendingRoute?: boolean;
   };
   protected swarmHydrator: SwarmRosterHydrator | null = null;
+  protected swarmEnabled = true;
   protected readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
   protected readonly sessionDiscussionOpenUrls = new Map<string, string | null>();
   protected readonly pendingPanelToggleRequests = new Map<
@@ -470,7 +589,15 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       config: SessionDiscussionPanelConfig;
     }
   >();
+  protected presentationUserId: string | null = null;
+  protected readonly retrySessionPlacementStartup = () => {
+    const sessionKey = this.state?.sessionKey;
+    if (sessionKey) {
+      this.context.placementStartup.retry(sessionKey);
+    }
+  };
   protected headerRenameInitialValue = "";
+  @viewState()
   protected headerRenameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null =
     null;
   protected headerCopiedTimer: number | null = null;
@@ -481,7 +608,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
    * so reused session keys can never inherit another checkout's path. */
   protected readonly headerWorktreePaths = new Map<
     string,
-    { loaded?: boolean; loading?: boolean; path?: string | null }
+    { loading?: boolean; path?: string | null }
   >();
   /** HEAD keyed by the resolved root directory it was read from — a branch is
    * a fact about a checkout, so root transitions miss instead of going stale. */
@@ -501,10 +628,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected sessionSuggestionTargetSignature = "";
   protected sessionSuggestionAddOperation: symbol | undefined;
   protected sessionSuggestionEditOperation: symbol | undefined;
-  protected readonly typingActors = new Map<
-    string,
-    { label: string; expiresAt: number; preview?: string }
-  >();
+  protected readonly typingActors = new Map<string, ChatTypingActorState>();
   protected readonly typingTimers = new Map<string, number>();
   protected sessionPullRequests: ControlUiSessionPullRequest[] = [];
   protected sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
@@ -513,9 +637,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected githubPublication: GitHubPublicationBinding | null = null;
   protected dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
   protected readonly dismissedWorkspaceConflictRefs = new Map<string, string>();
-  @litState() protected catalogMessages: unknown[] = [];
-  @litState() protected catalogLoading = false;
-  @litState() protected loadingOlder = false;
+  @viewState() protected catalogMessages: unknown[] = [];
+  @viewState() protected catalogLoading = false;
+  @viewState() protected loadingOlder = false;
   protected catalogCursor: string | undefined;
   protected catalogSession: SessionCatalogSession | null = null;
   protected catalogHost: SessionCatalogHost | null = null;
@@ -523,28 +647,26 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected catalogRequestedSessionKey: string | null = null;
   protected olderLoadGeneration = 0;
   protected historyObserver: IntersectionObserver | null = null;
-  protected historyObserverRoot: HTMLElement | null = null;
   protected historyObserverSentinel: HTMLElement | null = null;
-  protected historyObserverBootstrap = false;
   protected historyObserverArmed = false;
   protected historyAutoLoadBlocked = false;
-  protected historyIntentConsumed = false;
   protected historyIntentTimer: number | null = null;
-  protected historyTouchY: number | null = null;
   protected transcriptScrollTop: number | null = null;
   // Older cursors already requested this session. A provider that cycles cursors
   // (c1 -> c2 -> c1) on empty/duplicate pages would otherwise loop forever, since
   // the sentinel never scrolls out of view when nothing new renders.
   protected readonly olderCursorsSeen = new Set<string>();
 
-  constructor() {
+  constructor(
+    readonly element: HTMLElement,
+    protected context: ApplicationContext,
+  ) {
     super();
     observeNativeGateway(this);
     void new SubscriptionsController(this)
       .effect(() => this.ownerDocument, installChatComposerPickerDismissal)
-      .watch(
+      .watchStore(
         () => this.context && chatInputOwnerForContext(this.context),
-        (owner, notify) => owner.subscribe(notify),
         () => this.activeChanged(this.active),
       )
       .watch(
@@ -565,14 +687,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
             notify();
           }),
       )
-      .watch(
-        () => this.context?.theme,
-        (theme, notify) => theme.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.plugins,
-        (plugins, notify) => plugins.subscribe(notify),
-      )
+      .watchStore(() => this.context?.config)
+      .watchStore(() => this.context?.theme)
+      .watchStore(() => this.context?.plugins)
       .watch(
         () => this.resolveBoardProvider(),
         (provider, notify) => {
@@ -602,7 +719,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected abstract resolveBoardProvider(): BoardProvider;
   protected abstract handleBoardCommand(event: BoardCommandEvent): void;
   protected abstract reconcileWaitingApprovalSnapshot(
-    approvalQueue?: ChatPageContext["overlays"]["snapshot"]["approvalQueue"],
+    approvalQueue?: ApplicationContext["overlays"]["snapshot"]["approvalQueue"],
   ): boolean;
   protected abstract publishHeaderError(error: unknown, owner?: string): void;
   protected abstract probeSessionDiscussion(sessionKey: string): Promise<void>;
@@ -614,10 +731,13 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     client: GatewayBrowserClient,
     generation: number,
   ): Promise<void>;
-  protected abstract applyGatewaySnapshot(snapshot: ChatPageContext["gateway"]["snapshot"]): void;
-  protected abstract applyApplicationConfig(config: ChatPageContext["config"]["current"]): void;
-  protected abstract applySessionsState(state: ChatPageContext["sessions"]["state"]): void;
+  protected abstract applyGatewaySnapshot(
+    snapshot: ApplicationContext["gateway"]["snapshot"],
+  ): void;
+  protected abstract applyApplicationConfig(config: ApplicationContext["config"]["current"]): void;
+  protected abstract applySessionsState(state: ApplicationContext["sessions"]["state"]): void;
   protected abstract cancelHeaderRename(): void;
   protected abstract handleArchiveSessionShortcut(event: KeyboardEvent): boolean;
   protected abstract resetOlderMessagesViewport(): void;
+  protected abstract syncQueuedEditRetention(): void;
 }

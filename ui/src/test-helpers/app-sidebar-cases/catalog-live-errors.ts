@@ -3,7 +3,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { catalogPage, createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar session catalog request errors", () => {
   it("uses the gateway default before the agent roster loads", async () => {
@@ -14,6 +14,7 @@ describe("AppSidebar session catalog request errors", () => {
       gateway.publish({
         assistantAgentId: "roboclaw",
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -43,6 +44,7 @@ describe("AppSidebar session catalog request errors", () => {
       gateway.publish({
         assistantAgentId: "roboclaw",
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -69,6 +71,7 @@ describe("AppSidebar session catalog request errors", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -108,6 +111,7 @@ describe("AppSidebar session catalog request errors", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -146,6 +150,7 @@ describe("AppSidebar session catalog request errors", () => {
       gateway.publish({
         assistantAgentId: "roboclaw",
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -193,6 +198,7 @@ describe("AppSidebar session catalog request errors", () => {
       gateway.publish({
         assistantAgentId: null,
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -224,6 +230,7 @@ describe("AppSidebar session catalog request errors", () => {
       gateway.publish({
         suspensionPhase: "accepting",
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -284,6 +291,7 @@ describe("AppSidebar session catalog request errors", () => {
         gateway.publish({
           suspensionPhase: "accepting",
           hello: {
+            auth: { role: "operator", scopes: ["operator.read"] },
             features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
           } as ApplicationGatewaySnapshot["hello"],
         });

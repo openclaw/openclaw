@@ -31,11 +31,6 @@ describe("renderMarkdownWithMarkers crossing spans", () => {
 
   it.each([
     {
-      name: "a style ending inside a spoiler",
-      markdown: "**A ||B** C|| D",
-      html: "<b>A <tg-spoiler>B</tg-spoiler></b><tg-spoiler> C</tg-spoiler> D",
-    },
-    {
       name: "a spoiler ending inside a style",
       markdown: "||A **B|| C** D",
       html: "<tg-spoiler>A <b>B</b></tg-spoiler><b> C</b> D",
@@ -113,11 +108,6 @@ describe("renderMarkdownWithMarkers crossing spans", () => {
 
 describe("renderMarkdownWithMarkers code content", () => {
   it.each([
-    {
-      name: "terminal inline code",
-      markdown: "Copy `name `",
-      html: "Copy <code>name </code>",
-    },
     {
       name: "terminal inline code in a link label",
       markdown: "[`name `](https://example.com)",

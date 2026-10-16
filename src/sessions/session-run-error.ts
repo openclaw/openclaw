@@ -3,11 +3,18 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 import {
+  renderAssistantRequestFailureCopy,
+  renderStorageFailureSummary,
+} from "../agents/failover/assistant-request-failure-copy.js";
+import { renderCodexAppServerFailureCopy } from "../agents/failover/user-copy.js";
+import {
   appendSessionTranscriptReport,
   type SessionTranscriptWriteScope,
 } from "../config/sessions/session-accessor.js";
-import { appendSessionTranscriptReportNative } from "../config/sessions/session-accessor.sqlite-transcript-reports.js";
+import type { CustomMessageReportAppend } from "../config/sessions/session-accessor.sqlite-transcript-reports.types.js";
+import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
 
@@ -19,46 +26,49 @@ function sanitizeSessionRunError(error: unknown): string {
   return redactSensitiveText(text, { mode: "tools" });
 }
 
-/** Shared failure receipt; optional settlement joins the receipt's synchronous transaction. */
-export async function recordGatewaySessionRunFailure(params: {
+type GatewaySessionRunFailure = {
   target: SessionTranscriptWriteScope & { sessionId: string };
   runId: string;
   error: unknown;
   errorKind?: "state_contention";
   assertCommitAllowed?: () => void;
-  settleStartupSession?: () => undefined;
-}): Promise<void> {
+  sessionEntryCurrent?: SessionEntryCurrentCheck;
+};
+
+export async function recordGatewaySessionRunFailure(
+  params: GatewaySessionRunFailure,
+): Promise<void> {
   const { runId } = params;
+  const storageFailure = classifyGatewayStorageFailure(params.error);
   const error = truncateUtf16Safe(sanitizeSessionRunError(params.error), 512) || "unknown error";
-  const append = params.settleStartupSession
-    ? appendSessionTranscriptReportNative
-    : appendSessionTranscriptReport;
+  const report: CustomMessageReportAppend = {
+    customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
+    content:
+      params.errorKind === "state_contention"
+        ? STATE_CONTENTION_SUMMARY
+        : (renderAssistantRequestFailureCopy({ storageFailure }) ??
+          renderCodexAppServerFailureCopy(error) ??
+          `Your request couldn't be completed: ${error}`),
+    display: true,
+    excludeFromContext: true,
+    details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
+  };
   const result = await withSessionTranscriptWriteAssertion(
     params.target,
     () => params.assertCommitAllowed?.(),
     () =>
-      append(params.target, {
-        kind: "custom",
-        customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
-        suppressWhenAssistantRun: runId,
-        selectReport: (latest) => {
-          params.assertCommitAllowed?.();
-          params.settleStartupSession?.();
-          params.assertCommitAllowed?.();
-          if (isRecord(latest?.details) && latest.details.runId === runId) {
-            return undefined;
-          }
-          return {
-            customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
-            content:
-              params.errorKind === "state_contention"
-                ? STATE_CONTENTION_SUMMARY
-                : `This turn ended before a reply: ${error}`,
-            display: true,
-            details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
-          };
+      appendSessionTranscriptReport(
+        params.target,
+        {
+          kind: "custom",
+          customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
+          selectReport: (latest) => {
+            params.assertCommitAllowed?.();
+            return isRecord(latest?.details) && latest.details.runId === runId ? undefined : report;
+          },
         },
-      }),
+        { sessionEntryCurrent: params.sessionEntryCurrent },
+      ),
   );
   if (!result.ok) {
     throw new Error(`Failed run notice could not be appended: ${result.error.code}`);
@@ -79,7 +89,9 @@ export function resolveSessionRunError(
   if (outcome.errorKind === "state_contention") {
     return STATE_CONTENTION_SUMMARY;
   }
-  const error = sanitizeSessionRunError(outcome.error);
+  const error =
+    renderStorageFailureSummary(classifyGatewayStorageFailure(outcome.error)) ??
+    sanitizeSessionRunError(outcome.error);
   if (error.length <= SESSION_RUN_ERROR_MAX_CHARS) {
     return error || undefined;
   }

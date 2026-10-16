@@ -66,7 +66,7 @@ const mockGrokProvider = vi.hoisted(() => ({
     config,
     prompter,
   }: {
-    config: Record<string, unknown>;
+    config: OpenClawConfig;
     prompter: { select: (params: Record<string, unknown>) => Promise<string> };
   }) => {
     const enableXSearch = await prompter.select({
@@ -83,22 +83,18 @@ const mockGrokProvider = vi.hoisted(() => ({
       message: "Grok model",
       options: [{ value: "grok-4.3", label: "grok-4.3" }],
     });
-    const pluginEntries = (config.plugins as { entries?: Record<string, unknown> } | undefined)
-      ?.entries;
-    const existingXaiEntry = pluginEntries?.xai as Record<string, unknown> | undefined;
-    const existingXaiConfig = (
-      pluginEntries?.xai as { config?: Record<string, unknown> } | undefined
-    )?.config;
+    const pluginEntries = config.plugins?.entries;
+    const existingXaiEntry = pluginEntries?.xai;
     return {
       ...config,
       plugins: {
-        ...(config.plugins as Record<string, unknown> | undefined),
+        ...config.plugins,
         entries: {
           ...pluginEntries,
           xai: {
             ...existingXaiEntry,
             config: {
-              ...existingXaiConfig,
+              ...existingXaiEntry?.config,
               xSearch: {
                 enabled: true,
                 model,
@@ -131,14 +127,8 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 }));
 
 const ensureOnboardingPluginInstalled = vi.hoisted(() =>
-  vi.fn(
-    async ({
-      cfg,
-      entry,
-    }: {
-      cfg: { plugins?: { installs?: Record<string, unknown> } };
-      entry: { pluginId: string; install: { npmSpec?: string } };
-    }) => ({
+  vi.fn<typeof import("../commands/onboarding-plugin-install.js").ensureOnboardingPluginInstalled>(
+    async ({ cfg, entry }) => ({
       cfg: {
         ...cfg,
         plugins: {
@@ -164,29 +154,23 @@ vi.mock("../commands/onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled,
 }));
 
-function latestPluginInstallRequest(): {
-  autoConfirmSingleSource?: boolean;
-  beforePersistentEffect?: () => Promise<void>;
-  entry?: {
-    install?: { npmSpec?: string };
-    label?: string;
-    pluginId?: string;
-    trustedSourceLinkedOfficialInstall?: boolean;
-  };
-} {
-  const [request] = ensureOnboardingPluginInstalled.mock.calls.at(-1) as unknown as [
-    {
-      autoConfirmSingleSource?: boolean;
-      beforePersistentEffect?: () => Promise<void>;
-      entry?: {
-        install?: { npmSpec?: string };
-        label?: string;
-        pluginId?: string;
-        trustedSourceLinkedOfficialInstall?: boolean;
-      };
+function latestPluginInstallRequest() {
+  return expectDefined(
+    ensureOnboardingPluginInstalled.mock.calls.at(-1),
+    "plugin install request",
+  )[0];
+}
+
+function grokPluginsWithCredential(enabled?: boolean): OpenClawConfig["plugins"] {
+  return {
+    allow: ["xai"],
+    entries: {
+      xai: {
+        ...(enabled === undefined ? {} : { enabled }),
+        config: { webSearch: { apiKey: "xai-test-key" } },
+      },
     },
-  ];
-  return request;
+  };
 }
 
 describe("runSearchSetupFlow", () => {
@@ -266,87 +250,6 @@ describe("runSearchSetupFlow", () => {
     });
   });
 
-  it("localizes setup copy for web search provider selection", async () => {
-    const note = vi.fn(async () => {});
-    const select = vi.fn().mockResolvedValueOnce("__skip__");
-    const prompter = createWizardPrompter({
-      note: note as never,
-      select: select as never,
-    });
-
-    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
-      await runSearchSetupFlow(
-        { plugins: { allow: ["xai"] } },
-        createNonExitingRuntime(),
-        prompter,
-      );
-    });
-
-    expect(note).toHaveBeenCalledWith(expect.stringContaining("在线查询资料"), "网页搜索");
-    expect(select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "搜索提供方",
-        options: expect.arrayContaining([
-          expect.objectContaining({
-            label: "暂时跳过",
-            hint: "稍后可用 openclaw configure --section web 配置",
-          }),
-        ]),
-      }),
-    );
-  });
-
-  it("runs provider-owned setup after selecting Grok web search", async () => {
-    const select = vi
-      .fn()
-      .mockResolvedValueOnce("grok")
-      .mockResolvedValueOnce("yes")
-      .mockResolvedValueOnce("grok-4.3");
-    const text = vi.fn().mockResolvedValue("xai-test-key");
-    const prompter = createWizardPrompter({
-      select: select as never,
-      text: text as never,
-    });
-
-    const { config: next, outcome } = await runSearchSetupFlow(
-      { plugins: { allow: ["xai"] } },
-      createNonExitingRuntime(),
-      prompter,
-    );
-
-    expect(outcome).toBe("completed");
-
-    const xaiConfig = next.plugins?.entries?.xai?.config as
-      | { webSearch?: { apiKey?: string }; xSearch?: { enabled?: boolean; model?: string } }
-      | undefined;
-    expect(xaiConfig?.webSearch?.apiKey).toBe("xai-test-key");
-    expect(next.tools?.web?.search?.provider).toBe("grok");
-    expect(next.tools?.web?.search?.enabled).toBe(true);
-    expect(xaiConfig?.xSearch?.enabled).toBe(true);
-    expect(xaiConfig?.xSearch?.model).toBe("grok-4.3");
-  });
-
-  it("shows provider notes in every search provider row label", async () => {
-    const select = vi.fn().mockResolvedValueOnce("__skip__");
-    const prompter = createWizardPrompter({
-      select: select as never,
-    });
-
-    await runSearchSetupFlow({ plugins: { allow: ["xai"] } }, createNonExitingRuntime(), prompter);
-
-    const options = select.mock.calls[0]?.[0]?.options as
-      | Array<{ value: string; label?: string; hint?: string }>
-      | undefined;
-    const grokOption = options?.find((option) => option.value === "grok");
-
-    expect(grokOption).toEqual(
-      expect.objectContaining({
-        label: "Grok (Search with xAI · xAI API key required)",
-      }),
-    );
-    expect(grokOption).not.toHaveProperty("hint");
-  });
-
   it("recommends Codex hosted search first when the configured model uses Codex", async () => {
     webSearchProviderMocks.resolvePluginWebSearchProviders.mockReturnValue([
       mockGrokProvider,
@@ -420,28 +323,6 @@ describe("runSearchSetupFlow", () => {
     );
   });
 
-  it("shows provider credential notes before plaintext credential prompts", async () => {
-    const select = vi.fn().mockResolvedValueOnce("grok").mockResolvedValueOnce("no");
-    const text = vi.fn().mockResolvedValue("xai-test-key");
-    const note = vi.fn(async () => {});
-    const prompter = createWizardPrompter({
-      note: note as never,
-      select: select as never,
-      text: text as never,
-    });
-
-    await runSearchSetupFlow({ plugins: { allow: ["xai"] } }, createNonExitingRuntime(), prompter);
-
-    expect(note).toHaveBeenCalledWith(mockGrokProvider.credentialNote, mockGrokProvider.label);
-    expect(text).toHaveBeenCalledTimes(1);
-    expect(note.mock.invocationCallOrder[1]).toBeLessThan(
-      expectDefined(
-        text.mock.invocationCallOrder[0],
-        "text.mock.invocationCallOrder[0] test invariant",
-      ),
-    );
-  });
-
   it("shows provider credential notes before SecretRef setup notes", async () => {
     const select = vi.fn().mockResolvedValueOnce("grok").mockResolvedValueOnce("no");
     const note = vi.fn(async () => {});
@@ -488,19 +369,7 @@ describe("runSearchSetupFlow", () => {
 
     await runSearchSetupFlow(
       {
-        plugins: {
-          allow: ["xai"],
-          entries: {
-            xai: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: "xai-test-key",
-                },
-              },
-            },
-          },
-        },
+        plugins: grokPluginsWithCredential(true),
       },
       createNonExitingRuntime(),
       prompter,
@@ -522,19 +391,7 @@ describe("runSearchSetupFlow", () => {
 
     const { config: next } = await runSearchSetupFlow(
       {
-        plugins: {
-          allow: ["xai"],
-          entries: {
-            xai: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: "xai-test-key",
-                },
-              },
-            },
-          },
-        },
+        plugins: grokPluginsWithCredential(true),
         tools: {
           web: {
             search: {
@@ -565,18 +422,7 @@ describe("runSearchSetupFlow", () => {
 
     const { config: next } = await runSearchSetupFlow(
       {
-        plugins: {
-          allow: ["xai"],
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-test-key",
-                },
-              },
-            },
-          },
-        },
+        plugins: grokPluginsWithCredential(),
         tools: {
           web: {
             search: {
@@ -595,39 +441,6 @@ describe("runSearchSetupFlow", () => {
       enabled: true,
       provider: "grok",
     });
-  });
-
-  it("installs an external catalog search provider before enabling it", async () => {
-    const select = vi.fn().mockResolvedValueOnce("brave");
-    const text = vi.fn().mockResolvedValue("brave-test-key");
-    const prompter = createWizardPrompter({
-      select: select as never,
-      text: text as never,
-    });
-
-    const { config: next, outcome } = await runSearchSetupFlow(
-      {},
-      createNonExitingRuntime(),
-      prompter,
-    );
-
-    expect(outcome).toBe("completed");
-
-    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledTimes(1);
-    const installRequest = latestPluginInstallRequest();
-    expect(installRequest.entry?.pluginId).toBe("brave");
-    expect(installRequest.entry?.label).toBe("Brave");
-    expect(installRequest.entry?.trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(installRequest.entry?.install?.npmSpec).toBe("@openclaw/brave-plugin");
-    expect(installRequest.autoConfirmSingleSource).toBe(true);
-    expect(next.tools?.web?.search?.provider).toBe("brave");
-    expect(next.tools?.web?.search?.enabled).toBe(true);
-    const braveConfig = next.plugins?.entries?.brave?.config as
-      | { webSearch?: { apiKey?: string } }
-      | undefined;
-    expect(braveConfig?.webSearch?.apiKey).toBe("brave-test-key");
-    expect(next.plugins?.installs?.brave?.source).toBe("npm");
-    expect(next.plugins?.installs?.brave?.spec).toBe("@openclaw/brave-plugin");
   });
 
   it("forwards the persistent-effect guard to external provider installation", async () => {

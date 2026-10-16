@@ -40,7 +40,7 @@ export function defineMeetingSessionFlowTests(options: {
     runtime.join({ url: options.url, mode: "transcribe", ...request });
   it("joins, reuses, reports, snapshots, speaks safely, and leaves through core", async () => {
     const { harness, runtime } = options.createFixture({
-      fullConfig: { agents: { list: [{ id: "operator", default: true }] } },
+      fullConfig: { agents: { entries: { operator: {} } } },
     });
 
     const first = await joinMeeting(runtime);

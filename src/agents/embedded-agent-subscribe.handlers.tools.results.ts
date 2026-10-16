@@ -8,11 +8,12 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
+import type {
+  ExecApprovalPendingReplyParams,
+  ExecApprovalUnavailableReplyParams,
+} from "../infra/exec-approval-reply.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
-import {
-  parseInteractiveParam,
-  parseJsonMessageParam,
-} from "../infra/outbound/message-action-params.js";
+import { parseJsonMessageParam } from "../infra/outbound/message-action-params.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
@@ -142,11 +143,7 @@ export function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
 }
 
 export function isCronAddAction(args: unknown): boolean {
-  if (!args || typeof args !== "object") {
-    return false;
-  }
-  const action = (args as Record<string, unknown>).action;
-  return normalizeOptionalLowercaseString(action) === "add";
+  return normalizeOptionalLowercaseString(asOptionalObjectRecord(args)?.action) === "add";
 }
 
 export function applyCurrentMessageProvider(
@@ -245,17 +242,15 @@ function skipOpenClawPackageRunner(
         option === "-y" ||
         option === "--yes" ||
         option === "--no-install" ||
-        option === "--bun"
+        option === "--bun" ||
+        option?.startsWith("--package=") ||
+        option?.startsWith("--yes=")
       ) {
         commandIndex += 1;
         continue;
       }
       if (option === "-p" || option === "--package") {
         commandIndex += 2;
-        continue;
-      }
-      if (option?.startsWith("--package=") || option?.startsWith("--yes=")) {
-        commandIndex += 1;
         continue;
       }
       break;
@@ -330,22 +325,6 @@ export function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null
   };
 }
 
-function shouldSuppressStructuredMediaToolOutput(params: {
-  toolName: string;
-  rawToolName: string;
-  isToolError: boolean;
-  hasDeliverableStructuredMedia: boolean;
-  builtinToolNames?: ReadonlySet<string>;
-}): boolean {
-  return (
-    params.toolName === "tts" &&
-    params.rawToolName.trim() === "tts" &&
-    params.builtinToolNames?.has("tts") === true &&
-    !params.isToolError &&
-    params.hasDeliverableStructuredMedia
-  );
-}
-
 export function buildPatchSummaryText(summary: ApplyPatchSummary): string {
   const parts = (["added", "modified", "deleted"] as const).flatMap((kind) =>
     summary[kind].length > 0 ? [`${summary[kind].length} ${kind}`] : [],
@@ -371,7 +350,7 @@ export function hasMessagingRichContent(record: Record<string, unknown>): boolea
   };
   try {
     parseJsonMessageParam(payload, "presentation");
-    parseInteractiveParam(payload);
+    parseJsonMessageParam(payload, "interactive");
   } catch {
     return false;
   }
@@ -426,17 +405,7 @@ function queuePendingToolMedia(
   }
 }
 
-function readExecApprovalPendingDetails(result: unknown): {
-  approvalId: string;
-  approvalSlug: string;
-  expiresAtMs?: number;
-  allowedDecisions?: readonly ExecApprovalDecision[];
-  host: "gateway" | "node";
-  command: string;
-  cwd?: string;
-  nodeId?: string;
-  warningText?: string;
-} | null {
+function readExecApprovalPendingDetails(result: unknown): ExecApprovalPendingReplyParams | null {
   const outer = asOptionalObjectRecord(result);
   const details = readRecordField(outer?.details) ?? outer;
   if (details?.status !== "approval-pending") {
@@ -467,16 +436,9 @@ function readExecApprovalPendingDetails(result: unknown): {
   };
 }
 
-function readExecApprovalUnavailableDetails(result: unknown): {
-  reason: "initiating-platform-disabled" | "initiating-platform-unsupported" | "no-approval-route";
-  warningText?: string;
-  channel?: string;
-  channelLabel?: string;
-  accountId?: string;
-  sentApproverDms?: boolean;
-  host?: "gateway" | "node";
-  nodeId?: string;
-} | null {
+function readExecApprovalUnavailableDetails(
+  result: unknown,
+): ExecApprovalUnavailableReplyParams | null {
   const outer = asOptionalObjectRecord(result);
   const details = readRecordField(outer?.details) ?? outer;
   if (details?.status !== "approval-unavailable") {
@@ -513,55 +475,50 @@ export async function emitToolResultOutput(params: {
   sanitizedResult: unknown;
 }) {
   const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
-  const recordApprovalPromptDeliveryFailure = (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
-    const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
-    const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))({
-      toolName,
-      meta: approvalMeta,
-      executionStarted: false,
-      outcome: "failure",
-      failure: { error: `Approval prompt delivery failed: ${message}` },
-    });
-    ctx.state.lastToolError = terminal.lastToolError;
-    // A later delivery failure does not undo an already delivered pending prompt.
-  };
   const details = readRecordField(asOptionalObjectRecord(result)?.details);
   const hasStructuredMedia = readRecordField(details?.media) !== undefined;
   const approvalPending = readExecApprovalPendingDetails(result);
-  if (!isToolError && approvalPending) {
+  const approvalUnavailable =
+    !isToolError && approvalPending ? null : readExecApprovalUnavailableDetails(result);
+  if (!isToolError && (approvalPending || approvalUnavailable)) {
     if (!ctx.params.onToolResult) {
       return;
     }
-    ctx.state.deterministicApprovalPromptPending = true;
+    // Setup notices are progress; only pending approvals suppress the final answer.
+    if (approvalPending) {
+      ctx.state.deterministicApprovalPromptPending = true;
+    }
     try {
-      const { buildTypedExecApprovalPendingReplyPayload } =
-        await execApprovalReplyModuleLoader.load();
-      await ctx.params.onToolResult(buildTypedExecApprovalPendingReplyPayload(approvalPending));
-      ctx.state.deterministicApprovalPromptSent = true;
+      const replies = await execApprovalReplyModuleLoader.load();
+      if (approvalPending) {
+        await ctx.params.onToolResult(
+          replies.buildTypedExecApprovalPendingReplyPayload(approvalPending),
+        );
+        ctx.state.deterministicApprovalPromptSent = true;
+      } else if (approvalUnavailable) {
+        await ctx.params.onToolResult?.(
+          replies.buildExecApprovalUnavailableReplyPayload(approvalUnavailable),
+        );
+      }
     } catch (error) {
-      recordApprovalPromptDeliveryFailure(error);
-    } finally {
-      ctx.state.deterministicApprovalPromptPending = false;
-    }
-    return;
-  }
-
-  const approvalUnavailable = readExecApprovalUnavailableDetails(result);
-  if (!isToolError && approvalUnavailable) {
-    if (!ctx.params.onToolResult) {
-      return;
-    }
-    // Setup notices are progress, not pending prompts that replace the final answer.
-    try {
-      const { buildExecApprovalUnavailableReplyPayload } =
-        await execApprovalReplyModuleLoader.load();
-      await ctx.params.onToolResult?.(
-        buildExecApprovalUnavailableReplyPayload(approvalUnavailable),
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
+      const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
+      const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))(
+        {
+          toolName,
+          meta: approvalMeta,
+          executionStarted: false,
+          outcome: "failure",
+          failure: { error: `Approval prompt delivery failed: ${message}` },
+        },
       );
-    } catch (error) {
-      recordApprovalPromptDeliveryFailure(error);
+      ctx.state.lastToolError = terminal.lastToolError;
+      // A later delivery failure does not undo an already delivered pending prompt.
+    } finally {
+      if (approvalPending) {
+        ctx.state.deterministicApprovalPromptPending = false;
+      }
     }
     return;
   }
@@ -575,14 +532,14 @@ export async function emitToolResultOutput(params: {
         ctx.trustedLocalMediaToolNames,
       )
     : [];
-  const shouldEmitOutput =
-    !shouldSuppressStructuredMediaToolOutput({
-      toolName,
-      rawToolName,
-      isToolError,
-      hasDeliverableStructuredMedia: hasStructuredMedia && mediaUrls.length > 0,
-      builtinToolNames: ctx.builtinToolNames,
-    }) && ctx.shouldEmitToolOutput();
+  const suppressStructuredTtsOutput =
+    toolName === "tts" &&
+    rawToolName.trim() === "tts" &&
+    ctx.builtinToolNames?.has("tts") === true &&
+    !isToolError &&
+    hasStructuredMedia &&
+    mediaUrls.length > 0;
+  const shouldEmitOutput = !suppressStructuredTtsOutput && ctx.shouldEmitToolOutput();
   if (shouldEmitOutput) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
@@ -593,14 +550,7 @@ export async function emitToolResultOutput(params: {
     }
   }
 
-  if (isToolError) {
-    return;
-  }
-
-  if (!mediaReply) {
-    return;
-  }
-  if (mediaUrls.length === 0) {
+  if (isToolError || !mediaReply || mediaUrls.length === 0) {
     return;
   }
   const autoDeliveryMediaUrls = new Set(

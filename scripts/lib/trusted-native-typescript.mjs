@@ -12,7 +12,10 @@ export async function createTrustedNativeTypeScriptParser(toolingRoot) {
   }
   const manifest = JSON.parse(readFileSync(join(tooling, "package.json"), "utf8"));
   const pin = manifest.devDependencies?.typescript;
-  if (typeof pin !== "string" || !/^\d+\.\d+\.\d+$/.test(pin)) {
+  if (
+    typeof pin !== "string" ||
+    !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(pin)
+  ) {
     throw new Error("parser is not pinned");
   }
   const lock = readFileSync(join(tooling, "pnpm-lock.yaml"), "utf8");

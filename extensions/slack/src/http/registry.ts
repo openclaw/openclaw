@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { normalizeSlackWebhookPath } from "./paths.js";
 
 export { normalizeSlackWebhookPath } from "./paths.js";
@@ -15,30 +16,29 @@ type RegisterSlackHttpHandlerArgs = {
   accountId?: string;
 };
 
-const SLACK_HTTP_ROUTES_GLOBAL_KEY = Symbol.for("openclaw.slack.httpRoutes.v1");
-
-function getSlackHttpRoutes(): Map<string, SlackHttpRequestHandler> {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[SLACK_HTTP_ROUTES_GLOBAL_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, SlackHttpRequestHandler>;
-  }
-  const routes = new Map<string, SlackHttpRequestHandler>();
-  globalStore[SLACK_HTTP_ROUTES_GLOBAL_KEY] = routes;
-  return routes;
-}
+const slackHttpRoutes = resolveGlobalMap<string, SlackHttpRequestHandler>(
+  Symbol.for("openclaw.slack.httpRoutes.v1"),
+);
 
 export function registerSlackHttpHandler(params: RegisterSlackHttpHandlerArgs): () => void {
   const normalizedPath = normalizeSlackWebhookPath(params.path);
-  const routes = getSlackHttpRoutes();
+  const routes = slackHttpRoutes;
   if (routes.has(normalizedPath)) {
     const suffix = params.accountId ? ` for account "${params.accountId}"` : "";
     params.log?.(`slack: webhook path ${normalizedPath} already registered${suffix}`);
     return () => {};
   }
-  routes.set(normalizedPath, params.handler);
+  const handler = params.handler;
+  routes.set(normalizedPath, handler);
+  let registered = true;
   return () => {
-    getSlackHttpRoutes().delete(normalizedPath);
+    if (!registered) {
+      return;
+    }
+    registered = false;
+    if (routes.get(normalizedPath) === handler) {
+      routes.delete(normalizedPath);
+    }
   };
 }
 
@@ -47,7 +47,7 @@ export async function handleSlackHttpRequest(
   res: ServerResponse,
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", "http://localhost");
-  const handler = getSlackHttpRoutes().get(url.pathname);
+  const handler = slackHttpRoutes.get(url.pathname);
   if (!handler) {
     return false;
   }

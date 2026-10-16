@@ -243,6 +243,7 @@ function resolveBuiltChunkPath(importerPath: string, specifier: string): string 
 function collectBuiltModuleStaticDependencies(
   entryPath: string,
   parser: NativeTypeScriptParser,
+  moduleSpecifiers: Map<string, string[]>,
 ): Map<string, string> {
   const dependencies = new Map<string, string>();
   const visited = new Set<string>();
@@ -253,13 +254,18 @@ function collectBuiltModuleStaticDependencies(
       continue;
     }
     visited.add(filePath);
-    let source: string;
-    try {
-      source = fs.readFileSync(filePath, "utf8");
-    } catch {
-      continue;
+    let specifiers = moduleSpecifiers.get(filePath);
+    if (!specifiers) {
+      let source: string;
+      try {
+        source = fs.readFileSync(filePath, "utf8");
+      } catch {
+        continue;
+      }
+      specifiers = parseStaticModuleSpecifiers(parser.parseSourceFile(filePath, source));
+      moduleSpecifiers.set(filePath, specifiers);
     }
-    for (const reference of parseStaticModuleSpecifiers(parser.parseSourceFile(filePath, source))) {
+    for (const reference of specifiers) {
       if (reference.startsWith(".") || reference.startsWith("/")) {
         const resolved = resolveBuiltChunkPath(filePath, reference);
         if (resolved) {
@@ -283,10 +289,13 @@ export function collectBuiltDoctorContractClosureViolations(
   const rootDir = path.resolve(params.rootDir ?? ROOT);
   using parser = createNativeTypeScriptParser({ cwd: rootDir });
   const violations: BuiltDoctorContractClosureViolation[] = [];
+  // Shared chunks are parsed once per check; each contract retains its own traversal and attribution.
+  const moduleSpecifiers = new Map<string, string[]>();
   for (const module of modules.filter((candidate) => candidate.kind === "doctor-contract")) {
     const dependencies = collectBuiltModuleStaticDependencies(
       path.join(rootDir, module.relativePath),
       parser,
+      moduleSpecifiers,
     );
     for (const dependency of FORBIDDEN_DOCTOR_CONTRACT_DEPENDENCIES) {
       const importer = dependencies.get(dependency);

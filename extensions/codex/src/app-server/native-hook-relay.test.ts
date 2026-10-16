@@ -28,6 +28,7 @@ import {
   createNativeModelSourceFixture as modelSource,
   requireNativeModelSourceCapture as requireCapture,
 } from "./native-subagent-monitor.test-support.js";
+import { isJsonObject } from "./protocol.js";
 
 afterEach(() => resetDiagnosticEventsForTest());
 
@@ -35,6 +36,35 @@ function flushDiagnosticEvents(): Promise<void> {
   return new Promise((resolve) => {
     setImmediate(resolve);
   });
+}
+
+function expectedCommandHook(event: string, timeout = 10, commandTimeout = 9_000) {
+  return [
+    {
+      hooks: [
+        {
+          type: "command",
+          command: `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event} --timeout ${commandTimeout}`,
+          timeout,
+          async: false,
+          statusMessage: "OpenClaw native hook relay",
+        },
+      ],
+    },
+  ];
+}
+
+function expectedHookState(enabled: string[], disabled: string[] = []) {
+  return Object.fromEntries(
+    [...enabled, ...disabled].flatMap((event) =>
+      ["/<session-flags>/config.toml", "<session-flags>/config.toml"].map((source) => [
+        `${source}:${event}:0:0`,
+        enabled.includes(event)
+          ? { enabled: true, trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/) }
+          : { enabled: false },
+      ]),
+    ),
+  );
 }
 
 describe("Codex native hook relay managed policy", () => {
@@ -59,7 +89,7 @@ describe("Codex native hook relay managed policy", () => {
         hasProvider: (provider: string) =>
           provider === "provider-p" || (projected && provider === "provider-q"),
       };
-      const original = monitor.registerParent({
+      const original = await monitor.registerParent({
         parentThreadId: "parent-thread",
         modelSource: modelSource(["model-a"]),
         configurationQualification: oldConfiguration,
@@ -85,7 +115,7 @@ describe("Codex native hook relay managed policy", () => {
       const target = threadRead({ threadStatus: status });
       target.thread.modelProvider = "provider-q";
       client.setThreadRead("child-thread", target);
-      const next = monitor.registerParent({
+      const next = await monitor.registerParent({
         parentThreadId: "parent-thread",
         modelSource: system ? undefined : modelSource(["model-b"]),
         configurationQualification: newConfiguration,
@@ -114,12 +144,12 @@ describe("Codex native hook relay managed policy", () => {
       } finally {
         await original.unregister();
         await next.unregister();
-        monitor.dispose();
+        await monitor.dispose();
       }
     },
   );
 
-  it.each(["native load", "routing replacement", "unknown active"] as const)(
+  it.each(["routing replacement", "native load", "unadmitted active"] as const)(
     "refuses an unqualified receiver read after %s",
     async (change) => {
       const client = createClient();
@@ -129,10 +159,10 @@ describe("Codex native hook relay managed policy", () => {
       const qualification = { assertCurrent: () => {}, hasProvider: () => true };
       let targetQualification: typeof qualification | undefined;
       const source = modelSource(["model-b"]);
-      const parent = monitor.registerParent({
+      const parent = await monitor.registerParent({
         parentThreadId: "parent-thread",
         modelSource:
-          change === "unknown active"
+          change === "unadmitted active"
             ? {
                 ...source,
                 modelPolicyRequired: false,
@@ -147,6 +177,7 @@ describe("Codex native hook relay managed policy", () => {
       });
       parent.bindTurn("parent-b");
       const threadId = "00000000-0000-4000-8000-000000000042";
+      await notifyChildStarted(client, "parent-thread", threadId);
       const entered = createDeferred<void>();
       const returned = createDeferred<ReturnType<typeof threadRead>>();
       client.setThreadReadFactory(threadId, () => {
@@ -154,6 +185,7 @@ describe("Codex native hook relay managed policy", () => {
         return returned.promise;
       });
       const nativeWrite = vi.fn();
+      let loadNotification: Promise<void> | undefined;
       const pending = monitor
         .prepareModelInput({
           threadId: "parent-thread",
@@ -171,25 +203,29 @@ describe("Codex native hook relay managed policy", () => {
             throw new Error("Input admission finished before target read");
           }),
         ]);
-        if (change === "native load") {
-          await notifyChildStarted(client, "parent-thread", threadId);
-        } else if (change === "routing replacement") {
+        if (change === "routing replacement") {
           targetQualification = { assertCurrent: () => {}, hasProvider: () => false };
+        } else if (change === "native load") {
+          loadNotification = client.notify({
+            method: "thread/status/changed",
+            params: { threadId, status: { type: "idle" } },
+          });
         }
         const stale = threadRead({
           childThreadId: threadId,
-          threadStatus: change === "unknown active" ? "active" : "notLoaded",
+          threadStatus: change === "unadmitted active" ? "active" : "notLoaded",
         });
         stale.thread.modelProvider = "unqualified-provider";
         returned.resolve(stale);
         await expect(pending).rejects.toThrow(
-          change === "unknown active"
+          change === "unadmitted active"
             ? "receiver's exact admitted execution"
             : "receiver changed during input preparation",
         );
         expect(nativeWrite).not.toHaveBeenCalled();
       } finally {
-        monitor.dispose();
+        await loadNotification;
+        await monitor.dispose();
         await parent.unregister();
       }
     },
@@ -199,7 +235,7 @@ describe("Codex native hook relay managed policy", () => {
     const client = createClient();
     const foreign = createClient();
     const source = modelSource(["model-a"]);
-    const parent = codexNativeSubagentMonitorRuntime.register({
+    const parent = await codexNativeSubagentMonitorRuntime.register({
       client: client.client,
       parentThreadId: "parent-thread",
       modelSource: source,
@@ -230,7 +266,7 @@ describe("Codex native hook relay managed policy", () => {
         turnId: "turn-a",
       }),
     ).toBeUndefined();
-    const ambiguous = codexNativeSubagentMonitorRuntime.register({
+    const ambiguous = await codexNativeSubagentMonitorRuntime.register({
       client: client.client,
       parentThreadId: "other-root-with-unknown-source",
     });
@@ -284,12 +320,15 @@ describe("Codex native hook relay managed policy", () => {
     const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime(), {
       recoveryPollDelaysMs: [],
     });
-    const unknown = monitor.registerParent({ parentThreadId: "unknown" });
+    const unknown = await monitor.registerParent({ parentThreadId: "unknown" });
     unknown.bindTurn("unknown-turn");
     expect(
       await monitor.captureModelSource({ threadId: "unknown", turnId: "unknown-turn" }),
     ).toBeUndefined();
-    const system = monitor.registerParent({ parentThreadId: "system", modelSource: undefined });
+    const system = await monitor.registerParent({
+      parentThreadId: "system",
+      modelSource: undefined,
+    });
     system.bindTurn("system-turn");
     const systemCapture = requireCapture(
       await monitor.captureModelSource({ threadId: "system", turnId: "system-turn" }),
@@ -298,7 +337,10 @@ describe("Codex native hook relay managed policy", () => {
     systemCapture.release();
     await system.unregister();
     const aborted = new AbortController();
-    const waiting = monitor.registerParent({ parentThreadId: "waiting", modelSource: undefined });
+    const waiting = await monitor.registerParent({
+      parentThreadId: "waiting",
+      modelSource: undefined,
+    });
     const abortedCapture = monitor.captureModelSource({
       threadId: "waiting",
       turnId: "never-bound",
@@ -330,7 +372,7 @@ describe("Codex native hook relay managed policy", () => {
     nextTurn.release();
     await waiting.unregister();
     await unknown.unregister();
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it.each(["receipt first", "notification first", "active predecessor"] as const)(
@@ -384,7 +426,7 @@ describe("Codex native hook relay managed policy", () => {
           recoveryPollDelaysMs: [],
         },
       );
-      const first = monitor.registerParent({
+      const first = await monitor.registerParent({
         parentThreadId: "parent-thread",
         modelSource: a,
         configurationQualification: qualification,
@@ -421,7 +463,7 @@ describe("Codex native hook relay managed policy", () => {
       if (order !== "active predecessor") {
         await completeOriginal();
       }
-      const second = monitor.registerParent({
+      const second = await monitor.registerParent({
         parentThreadId: "parent-thread",
         modelSource: b,
         configurationQualification: qualification,
@@ -484,7 +526,7 @@ describe("Codex native hook relay managed policy", () => {
           });
           pendingTarget.thread.modelProvider = "test-provider";
           client.setThreadRead("child-thread", pendingTarget);
-          const foreign = monitor.registerParent({
+          const foreign = await monitor.registerParent({
             parentThreadId: "parent-thread",
             modelSource: { ...b, sourceIdentity: {}, release: vi.fn() },
             configurationQualification: qualification,
@@ -518,7 +560,7 @@ describe("Codex native hook relay managed policy", () => {
         original.release();
         await first.unregister();
         await second.unregister();
-        monitor.dispose();
+        await monitor.dispose();
       }
       expect(b.release).toHaveBeenCalledOnce();
     },
@@ -572,173 +614,21 @@ describe("Codex native hook relay config", () => {
 
     expect(config).toEqual({
       "features.hooks": true,
-      "hooks.PreToolUse": [
-        {
-          hooks: [
-            {
-              type: "command",
-              command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use --timeout 6000",
-              timeout: 7,
-              async: false,
-              statusMessage: "OpenClaw native hook relay",
-            },
-          ],
-        },
-      ],
-      "hooks.PostToolUse": [
-        {
-          hooks: [
-            {
-              type: "command",
-              command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event post_tool_use --timeout 6000",
-              timeout: 7,
-              async: false,
-              statusMessage: "OpenClaw native hook relay",
-            },
-          ],
-        },
-      ],
-      "hooks.PermissionRequest": [
-        {
-          hooks: [
-            {
-              type: "command",
-              command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event permission_request --timeout 6000",
-              timeout: 7,
-              async: false,
-              statusMessage: "OpenClaw native hook relay",
-            },
-          ],
-        },
-      ],
-      "hooks.Stop": [
-        {
-          hooks: [
-            {
-              type: "command",
-              command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event before_agent_finalize --timeout 6000",
-              timeout: 7,
-              async: false,
-              statusMessage: "OpenClaw native hook relay",
-            },
-          ],
-        },
-      ],
-      "hooks.state": {
-        "/<session-flags>/config.toml:pre_tool_use:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-        "<session-flags>/config.toml:pre_tool_use:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-        "/<session-flags>/config.toml:post_tool_use:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-        "<session-flags>/config.toml:post_tool_use:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-        "/<session-flags>/config.toml:permission_request:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-        "<session-flags>/config.toml:permission_request:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-        "/<session-flags>/config.toml:stop:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-        "<session-flags>/config.toml:stop:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-      },
+      "hooks.PreToolUse": expectedCommandHook("pre_tool_use", 7, 6000),
+      "hooks.PostToolUse": expectedCommandHook("post_tool_use", 7, 6000),
+      "hooks.PermissionRequest": expectedCommandHook("permission_request", 7, 6000),
+      "hooks.Stop": expectedCommandHook("before_agent_finalize", 7, 6000),
+      "hooks.state": expectedHookState([
+        "pre_tool_use",
+        "post_tool_use",
+        "permission_request",
+        "stop",
+      ]),
     });
     expect(JSON.stringify(config)).not.toContain("timeoutSec");
     expect(JSON.stringify(config)).not.toContain('"matcher":null');
     expect(config).not.toHaveProperty("hooks.SessionStart");
     expect(config).not.toHaveProperty("hooks.UserPromptSubmit");
-  });
-
-  it("includes only requested hook events", () => {
-    expect(
-      buildCodexNativeHookRelayConfig({
-        relay: createRelay(),
-        events: ["permission_request"],
-      }),
-    ).toEqual({
-      "features.hooks": true,
-      "hooks.PermissionRequest": [
-        {
-          hooks: [
-            {
-              type: "command",
-              command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event permission_request --timeout 9000",
-              timeout: 10,
-              async: false,
-              statusMessage: "OpenClaw native hook relay",
-            },
-          ],
-        },
-      ],
-      "hooks.state": {
-        "/<session-flags>/config.toml:permission_request:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-        "<session-flags>/config.toml:permission_request:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-      },
-    });
-  });
-
-  it("clears requested hook events when the relay reports no local work", () => {
-    expect(
-      buildCodexNativeHookRelayConfig({
-        relay: createRelay({ inactiveEvents: ["post_tool_use", "before_agent_finalize"] }),
-        events: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
-      }),
-    ).toEqual({
-      "features.hooks": true,
-      "hooks.PreToolUse": [
-        {
-          hooks: [
-            {
-              type: "command",
-              command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use --timeout 9000",
-              timeout: 10,
-              async: false,
-              statusMessage: "OpenClaw native hook relay",
-            },
-          ],
-        },
-      ],
-      "hooks.PostToolUse": [],
-      "hooks.Stop": [],
-      "hooks.state": {
-        "/<session-flags>/config.toml:pre_tool_use:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-        "<session-flags>/config.toml:pre_tool_use:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-      },
-    });
   });
 
   it("clears selected PreToolUse when the relay has no local work", () => {
@@ -765,37 +655,12 @@ describe("Codex native hook relay config", () => {
       "features.hooks": true,
       "hooks.PreToolUse": [],
       "hooks.PostToolUse": [],
-      "hooks.PermissionRequest": [
-        {
-          hooks: [
-            {
-              type: "command",
-              command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event permission_request --timeout 9000",
-              timeout: 10,
-              async: false,
-              statusMessage: "OpenClaw native hook relay",
-            },
-          ],
-        },
-      ],
+      "hooks.PermissionRequest": expectedCommandHook("permission_request"),
       "hooks.Stop": [],
-      "hooks.state": {
-        "/<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
-        "<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
-        "/<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
-        "<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
-        "/<session-flags>/config.toml:permission_request:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-        "<session-flags>/config.toml:permission_request:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-        "/<session-flags>/config.toml:stop:0:0": { enabled: false },
-        "<session-flags>/config.toml:stop:0:0": { enabled: false },
-      },
+      "hooks.state": expectedHookState(
+        ["permission_request"],
+        ["pre_tool_use", "post_tool_use", "stop"],
+      ),
     });
   });
 
@@ -854,6 +719,50 @@ describe("Codex native hook relay config", () => {
     ]);
   });
 
+  it("selects workspace operations without delaying independent native tools", () => {
+    const config = buildCodexNativeHookRelayConfig({
+      relay: createRelay({
+        matchers: {
+          pre_tool_use: [
+            "exec",
+            "process",
+            "read",
+            "write",
+            "edit",
+            "ls",
+            "grep",
+            "find",
+            "apply_patch",
+          ],
+        },
+      }),
+      events: ["pre_tool_use"],
+      hookTimeoutSec: 120,
+    });
+    const entries = config["hooks.PreToolUse"];
+    const hook = Array.isArray(entries) ? entries[0] : undefined;
+    if (!isJsonObject(hook) || typeof hook.matcher !== "string" || !Array.isArray(hook.hooks)) {
+      throw new Error("Expected a native pre-tool hook matcher and commands");
+    }
+    const { matcher, hooks } = hook;
+    const matches = new RegExp(`^(?:${matcher})$`, "u");
+    for (const name of [
+      "Bash",
+      "exec_command",
+      "write_stdin",
+      "read_file",
+      "list_dir",
+      "grep_files",
+      "apply_patch",
+    ]) {
+      expect(matches.test(name), name).toBe(true);
+    }
+    for (const name of ["web_search", "web_fetch", "request_user_input"]) {
+      expect(matches.test(name), name).toBe(false);
+    }
+    expect(hooks[0]).toMatchObject({ timeout: 120 });
+  });
+
   it("rejects an empty canonical matcher scope instead of widening to match-all", () => {
     expect(() =>
       buildCodexNativeHookRelayConfig({
@@ -874,8 +783,6 @@ describe("Codex native hook relay config", () => {
   });
 
   it.each([
-    { reason: "turn_progress_idle_timeout", terminalReason: "timed_out" },
-    { reason: "turn_completion_idle_timeout", terminalReason: "timed_out" },
     { reason: "turn_terminal_idle_timeout", terminalReason: "timed_out" },
     { reason: "client_closed", terminalReason: "failed" },
   ] as const)(

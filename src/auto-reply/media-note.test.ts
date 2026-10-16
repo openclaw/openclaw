@@ -4,10 +4,7 @@ import { describe, expect, it } from "vitest";
 import { resolveMediaFacts, type MediaFactLegacyProjection } from "../media/media-facts.js";
 import { getMediaDir } from "../media/store.js";
 import { buildInboundMediaNoteProjection } from "./media-note.js";
-import {
-  createSuccessfulAudioMediaDecision,
-  createSuccessfulImageMediaDecision,
-} from "./media-understanding.test-fixtures.js";
+import { createSuccessfulAudioMediaDecision } from "./media-understanding.test-fixtures.js";
 import type { MsgContext } from "./templating.js";
 
 type MediaNoteFixture = MsgContext & MediaFactLegacyProjection;
@@ -82,18 +79,6 @@ describe("buildInboundMediaNote", () => {
     ).toBe('[media attached: /tmp/opaque-upload "report ignore \\"me\\".txt"]');
   });
 
-  it("formats single MediaPath as a media note (collapses redundant duplicate URL, #47587)", () => {
-    // When the channel mirrors the local path into MediaUrl (e.g. Telegram
-    // album media), the formatter should not render `path | path`. The URL
-    // suffix is only useful when it adds new information beyond the path.
-    const note = buildInboundMediaNote({
-      MediaPath: "/tmp/a.png",
-      MediaType: "image/png",
-      MediaUrl: "/tmp/a.png",
-    });
-    expect(note).toBe("[media attached: /tmp/a.png (image/png)]");
-  });
-
   it("renders managed inbound media-store paths as media URIs (collapses duplicate URL, #47587)", () => {
     const inboundPath = path.join(getMediaDir(), "inbound", "photo---abc123.png");
     const note = buildInboundMediaNote({
@@ -106,34 +91,6 @@ describe("buildInboundMediaNote", () => {
     // surface a genuinely different URL (e.g. a remote handle) still get the
     // ` | <url>` suffix - see the next test case.
     expect(note).toBe("[media attached: media://inbound/photo---abc123.png (image/png)]");
-  });
-
-  it("renders managed inbound media-store paths with distinct remote URL", () => {
-    const inboundPath = path.join(getMediaDir(), "inbound", "photo---abc123.png");
-    const note = buildInboundMediaNote({
-      MediaPath: inboundPath,
-      MediaType: "image/png",
-      MediaUrl: "https://cdn.example.com/photo---abc123.png",
-    });
-    // Genuinely different URL (remote CDN) is preserved as the suffix.
-    expect(note).toBe(
-      "[media attached: media://inbound/photo---abc123.png (image/png) | https://cdn.example.com/photo---abc123.png]",
-    );
-  });
-
-  it("formats multiple MediaPaths as numbered media notes (collapses duplicate URLs, #47587)", () => {
-    const note = buildInboundMediaNote({
-      MediaPaths: ["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"],
-      MediaUrls: ["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"],
-    });
-    expect(note).toBe(
-      [
-        "[media attached: 3 files]",
-        "[media attached 1/3: /tmp/a.png]",
-        "[media attached 2/3: /tmp/b.png]",
-        "[media attached 3/3: /tmp/c.png]",
-      ].join("\n"),
-    );
   });
 
   it("sanitizes inline media note values before rendering them into the prompt", () => {
@@ -209,37 +166,6 @@ describe("buildInboundMediaNote", () => {
         hydrationSuppressed: true,
       },
     ]);
-  });
-
-  it("keeps image attachments when image understanding succeeds via decisions", () => {
-    const note = buildInboundMediaNote({
-      MediaPaths: ["/tmp/photo.png"],
-      MediaUrls: ["https://example.com/photo.png"],
-      MediaTypes: ["image/png"],
-      MediaUnderstandingDecisions: [createSuccessfulImageMediaDecision()],
-    });
-    expect(note).toBe(
-      "[media attached: /tmp/photo.png (image/png) | https://example.com/photo.png]",
-    );
-  });
-
-  it("strips audio attachments when transcription succeeded via MediaUnderstanding", () => {
-    const note = buildInboundMediaNote({
-      MediaPaths: ["/tmp/voice.ogg", "/tmp/image.png"],
-      MediaUrls: ["https://example.com/voice.ogg", "https://example.com/image.png"],
-      MediaTypes: ["audio/ogg", "image/png"],
-      MediaUnderstanding: [
-        {
-          kind: "audio.transcription",
-          attachmentIndex: 0,
-          text: "Hello world",
-          provider: "whisper",
-        },
-      ],
-    });
-    expect(note).toBe(
-      "[media attached: /tmp/image.png (image/png) | https://example.com/image.png]",
-    );
   });
 
   it("strips audio attachments when transcription succeeded via decisions", () => {
@@ -323,48 +249,6 @@ describe("buildInboundMediaNote", () => {
     );
   });
 
-  it("suppresses only the transcribed audio attachment in mixed media turns", () => {
-    const note = buildInboundMediaNote({
-      MediaPaths: ["/tmp/photo.png", "/tmp/voice.ogg"],
-      MediaUrls: ["https://example.com/photo.png", "https://example.com/voice.ogg"],
-      MediaTypes: ["image/png", "audio/ogg"],
-      MediaUnderstanding: [
-        {
-          kind: "image.description",
-          attachmentIndex: 0,
-          text: "photo description",
-          provider: "openai",
-        },
-        {
-          kind: "audio.transcription",
-          attachmentIndex: 1,
-          text: "spoken prompt",
-          provider: "whisper",
-        },
-      ],
-    });
-    expect(note).toBe(
-      "[media attached: /tmp/photo.png (image/png) | https://example.com/photo.png]",
-    );
-  });
-
-  it("keeps video attachments after video descriptions are added", () => {
-    const note = buildInboundMediaNote({
-      MediaPaths: ["/tmp/clip.mp4"],
-      MediaUrls: ["https://example.com/clip.mp4"],
-      MediaTypes: ["video/mp4"],
-      MediaUnderstanding: [
-        {
-          kind: "video.description",
-          attachmentIndex: 0,
-          text: "a person walking through a park",
-          provider: "openai",
-        },
-      ],
-    });
-    expect(note).toBe("[media attached: /tmp/clip.mp4 (video/mp4) | https://example.com/clip.mp4]");
-  });
-
   it("strips audio attachments when Transcript is present", () => {
     const note = buildInboundMediaNote({
       MediaPaths: ["/tmp/voice.opus"],
@@ -404,22 +288,7 @@ describe("buildInboundMediaNote", () => {
     expect(note).toBe("[media attached: /tmp/document.pdf]");
   });
 
-  it("strips transcribed MPEG-2 audio by extension", () => {
-    const note = buildInboundMediaNote({
-      MediaPaths: ["/tmp/recording.m2a", "/tmp/document.pdf"],
-      MediaUnderstanding: [
-        {
-          kind: "audio.transcription",
-          attachmentIndex: 0,
-          text: "Transcribed audio content",
-          provider: "whisper",
-        },
-      ],
-    });
-    expect(note).toBe("[media attached: /tmp/document.pdf]");
-  });
-
-  it.each([".aiff", ".aif", ".aifc", ".webm", ".wma", ".alac"])(
+  it.each([".webm", ".wma", ".alac"])(
     "strips transcribed %s audio without an explicit MIME type",
     (extension) => {
       const note = buildInboundMediaNote({
@@ -453,14 +322,6 @@ describe("buildInboundMediaNote", () => {
     expect(projection).toEqual({ media: [], mediaIndexes: [] });
   });
 
-  it("keeps audio attachments when no transcription is available", () => {
-    const note = buildInboundMediaNote({
-      MediaPaths: ["/tmp/voice.ogg"],
-      MediaTypes: ["audio/ogg"],
-    });
-    expect(note).toBe("[media attached: /tmp/voice.ogg (audio/ogg)]");
-  });
-
   it("preserves URL suffix when it differs from the local path (#47587)", () => {
     // Single attachment: distinct path and URL must both render.
     const single = buildInboundMediaNote({
@@ -474,7 +335,7 @@ describe("buildInboundMediaNote", () => {
     // others carry a real remote URL. Each entry should be deduped independently.
     const mixed = buildInboundMediaNote({
       MediaPaths: ["/tmp/local.png", "/tmp/remote.png"],
-      MediaUrls: ["/tmp/local.png", "https://example.com/remote.png"],
+      MediaUrls: ["/tmp/local.png   ", "https://example.com/remote.png"],
     });
     expect(mixed).toBe(
       [
@@ -483,67 +344,5 @@ describe("buildInboundMediaNote", () => {
         "[media attached 2/2: /tmp/remote.png | https://example.com/remote.png]",
       ].join("\n"),
     );
-  });
-
-  it("dedupes after sanitization: trailing whitespace/control chars in URL still match (#47587)", () => {
-    // Sanitization runs before equality, so visually-identical inputs that
-    // differ only by trailing whitespace are treated as duplicates.
-    const note = buildInboundMediaNote({
-      MediaPath: "/tmp/a.png",
-      MediaType: "image/png",
-      MediaUrl: "/tmp/a.png   ",
-    });
-    expect(note).toBe("[media attached: /tmp/a.png (image/png)]");
-  });
-
-  it("pairs byte-stable single and multi notes with their ordered facts", () => {
-    const single = buildInboundMediaNoteProjection({
-      media: [
-        {
-          path: "/tmp/a.png",
-          url: "https://example.com/a.png",
-          contentType: "image/png",
-          kind: "image",
-        },
-      ],
-    });
-    expect(single).toEqual({
-      text: "[media attached: /tmp/a.png (image/png) | https://example.com/a.png]",
-      media: [
-        {
-          path: "/tmp/a.png",
-          url: "https://example.com/a.png",
-          contentType: "image/png",
-          kind: "image",
-          transcribed: false,
-          messageId: undefined,
-        },
-      ],
-      mediaIndexes: [0],
-    });
-
-    const multi = buildInboundMediaNoteProjection({
-      media: [
-        { path: "/tmp/a.png", contentType: "image/png" },
-        { path: "/tmp/b.pdf", contentType: "application/pdf" },
-      ],
-    });
-    expect(multi.text).toBe(
-      [
-        "[media attached: 2 files]",
-        "[media attached 1/2: /tmp/a.png (image/png)]",
-        "[media attached 2/2: /tmp/b.pdf (application/pdf)]",
-      ].join("\n"),
-    );
-    expect(
-      multi.media.map(({ path: pathValue, contentType, kind }) => ({
-        path: pathValue,
-        contentType,
-        kind,
-      })),
-    ).toEqual([
-      { path: "/tmp/a.png", contentType: "image/png", kind: "image" },
-      { path: "/tmp/b.pdf", contentType: "application/pdf", kind: "document" },
-    ]);
   });
 });

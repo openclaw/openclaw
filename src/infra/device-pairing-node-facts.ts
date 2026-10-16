@@ -12,24 +12,18 @@ export async function updatePairedNodeBins(
   baseDir?: string,
   isProbeCurrent?: () => boolean,
 ): Promise<boolean> {
-  try {
-    return await executeDevicePairingMutation(
-      { type: "node.updateBins", input: { nodeId, bins, expectedPairingGeneration } },
-      {
-        baseDir,
-        assertCurrent: () => {
-          if (isProbeCurrent?.() === false) {
-            throw new DevicePairingAuthorityRefusedError("node bin probe ownership changed");
-          }
-        },
+  return await executeDevicePairingMutation(
+    { type: "node.updateBins", input: { nodeId, bins, expectedPairingGeneration } },
+    {
+      baseDir,
+      onAuthorityRefused: () => false,
+      assertCurrent: () => {
+        if (isProbeCurrent?.() === false) {
+          throw new DevicePairingAuthorityRefusedError("node bin check ownership changed");
+        }
       },
-    );
-  } catch (error) {
-    if (error instanceof DevicePairingAuthorityRefusedError) {
-      return false;
-    }
-    throw error;
-  }
+    },
+  );
 }
 
 /** Persist runner-host consent only while its connection still owns the durable generation. */
@@ -41,22 +35,16 @@ export async function updatePairedNodeSessionHost(params: {
   baseDir?: string;
 }): Promise<boolean> {
   const { baseDir, isConnectionCurrent, ...input } = params;
-  try {
-    return await executeDevicePairingMutation(
-      { type: "node.updateSessionHost", input },
-      {
-        baseDir,
-        assertCurrent: () => {
-          if (!isConnectionCurrent()) {
-            throw new DevicePairingAuthorityRefusedError("node session connection changed");
-          }
-        },
+  return await executeDevicePairingMutation(
+    { type: "node.updateSessionHost", input },
+    {
+      baseDir,
+      onAuthorityRefused: () => false,
+      assertCurrent: () => {
+        if (!isConnectionCurrent()) {
+          throw new DevicePairingAuthorityRefusedError("node session connection changed");
+        }
       },
-    );
-  } catch (error) {
-    if (error instanceof DevicePairingAuthorityRefusedError) {
-      return false;
-    }
-    throw error;
-  }
+    },
+  );
 }

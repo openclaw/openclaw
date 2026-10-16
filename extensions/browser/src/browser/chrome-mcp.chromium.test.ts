@@ -2,6 +2,7 @@ import path from "node:path";
 import type { BrowserContext, Page } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
+import { callTargetTool, resolveChromeMcpSnapshotRef } from "./chrome-mcp-routing.js";
 import {
   clickChromeMcpCoords,
   clickChromeMcpElement,
@@ -288,6 +289,69 @@ describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")(
         );
         expect(replacementClick.statusCode, JSON.stringify(replacementClick.body)).toBe(200);
         expect(await page.evaluate(() => document.body.dataset.clicked)).toBe("replacement");
+      });
+    }, 120_000);
+
+    it("keeps CSS lookup bound to the captured renderer and document", async () => {
+      await withMcpBrowser(async ({ page, context, profile, profileName }) => {
+        const fixturePort = await getFreePort();
+        const mainUrl = `http://127.0.0.1:${fixturePort}/styles`;
+        const frameUrl = `http://localhost:${fixturePort}/frame`;
+        const replacementUrl = `http://localhost:${fixturePort}/replacement`;
+        await context.route(mainUrl, (route) =>
+          route.fulfill({
+            contentType: "text/html",
+            body: `<!doctype html><style>.top { color: red; }</style>${Array.from(
+              { length: 64 },
+              (_, index) => `<button class="top">Top ${index}</button>`,
+            ).join("")}<iframe src="${frameUrl}"></iframe>`,
+          }),
+        );
+        await context.route(frameUrl, (route) =>
+          route.fulfill({
+            contentType: "text/html",
+            body: `<!doctype html><style>.frame { color: blue; }</style>${Array.from(
+              { length: 32 },
+              (_, index) => `<button class="frame">Frame ${index}</button>`,
+            ).join("")}`,
+          }),
+        );
+        await context.route(replacementUrl, (route) =>
+          route.fulfill({
+            contentType: "text/html",
+            body: '<!doctype html><button class="replacement">Replacement</button>',
+          }),
+        );
+        await page.goto(mainUrl);
+
+        const [tab] = await listChromeMcpTabs(profileName, profile, { timeoutMs: 30_000 });
+        const target = {
+          profileName,
+          profile,
+          targetId: tab!.targetId,
+          timeoutMs: 10_000,
+        };
+        const snapshot = await takeChromeMcpSnapshot(target);
+        const topRef = snapshotRef(snapshot, "button", "Top 0");
+        const frameRef = snapshotRef(snapshot, "button", "Frame 0");
+        const cssArgs =
+          (ref: string) => (session: Parameters<typeof resolveChromeMcpSnapshotRef>[0]) => ({
+            uid: resolveChromeMcpSnapshotRef(session, target.targetId, ref).uid,
+            pageSize: 10,
+            pageIdx: 0,
+          });
+
+        await expect(
+          callTargetTool(target, "get_css_styles", cssArgs(topRef)),
+        ).resolves.toBeDefined();
+        await expect(callTargetTool(target, "get_css_styles", cssArgs(frameRef))).rejects.toThrow(
+          /detached or no longer exists/,
+        );
+
+        await page.goto(replacementUrl);
+        await expect(callTargetTool(target, "get_css_styles", cssArgs(topRef))).rejects.toThrow(
+          /no longer exists/,
+        );
       });
     }, 120_000);
 

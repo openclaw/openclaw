@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
-import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import { scanStatusJsonFast } from "./status.scan.fast-json.js";
@@ -119,8 +117,6 @@ it.each([
           heartbeat: { defaultAgentId: "alpha", agents: [] },
           channelSummary: withChannelSummary ? ["Telegram: configured"] : [],
           queuedSystemEvents: [],
-          tasks: createEmptyTaskRegistrySummary(),
-          taskAudit: createEmptyTaskAuditSummary(),
           sessions: {
             paths: [],
             count: 7,

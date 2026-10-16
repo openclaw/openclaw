@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NodePairingGeneration } from "../../infra/device-pairing-node-state.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
+import type { NodeWakeAttempt } from "../node-wake-state-store.js";
 import {
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
   NODE_WAKE_RECONNECT_WAIT_MS,
-  type NodeWakeAttempt,
   type NodeWakeLifecycle,
 } from "../node-wake-state.js";
 import { maybeWakeNodeWithApns, waitForNodeReconnect } from "./nodes.wake.js";

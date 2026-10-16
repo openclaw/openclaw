@@ -1,20 +1,18 @@
-// API baseline helpers render public SDK exports for contract drift reports.
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as ts from "typescript/unstable/ast";
 import {
   SymbolFlags,
   type Checker,
-  type Emitter,
+  type Printer,
   type Program,
   type Symbol as CompilerSymbol,
 } from "typescript/unstable/sync";
 import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
-import { emitNativeDeclarations } from "../../scripts/lib/native-declaration-emitter.mts";
-import {
-  createNativeTypeScriptProject,
-  resolveInstalledNativeTypeScriptCompiler,
-} from "../../scripts/lib/native-typescript.mts";
+import { createDeclarationFileSystem } from "../../scripts/lib/native-declaration-filesystem.mts";
+import { emitNativeDeclarationsInSubprocess } from "../../scripts/lib/native-declaration-subprocess.mts";
+import { createNativeTypeScriptProject } from "../../scripts/lib/native-typescript.mts";
 import {
   pluginSdkDocMetadata,
   type PluginSdkDocCategory,
@@ -106,7 +104,11 @@ function resolveRepoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 }
 
-async function createCompilerContext(repoRoot: string, entrypoints: readonly string[]) {
+async function createCompilerContext(
+  repoRoot: string,
+  entrypoints: readonly string[],
+  inputs: CompilerInputSnapshot,
+) {
   const configPath = path.join(repoRoot, "tsconfig.json");
   const fileNames = entrypoints
     .map((entrypoint) => path.join(repoRoot, "src", "plugin-sdk", `${entrypoint}.ts`))
@@ -120,6 +122,8 @@ async function createCompilerContext(repoRoot: string, entrypoints: readonly str
     noEmit: false,
     // Declaration diagnostics are checked explicitly; unrelated untyped external JS stays valid.
     noEmitOnError: false,
+    // Parallel emit can copy readonly flags from unrelated inferred union properties.
+    singleThreaded: true,
     removeComments: true,
     sourceMap: false,
   };
@@ -130,14 +134,18 @@ async function createCompilerContext(repoRoot: string, entrypoints: readonly str
     files: fileNames,
     include: [],
   });
-  const source = createNativeTypeScriptProject({
-    cwd: repoRoot,
-    configFileName,
-    files: { [configFileName]: config },
-  });
+  const view = createDeclarationFileSystem(repoRoot, undefined, new Map(), inputs.readText);
+  let source: ReturnType<typeof createNativeTypeScriptProject> | undefined;
   let declarations: ReturnType<typeof createNativeTypeScriptProject> | undefined;
   try {
-    const emitted = await emitNativeDeclarations({
+    source = createNativeTypeScriptProject({
+      cwd: repoRoot,
+      configFileName,
+      files: { [configFileName]: config },
+      fs: view.filesystem,
+    });
+    view.assertValid();
+    const emitted = await emitNativeDeclarationsInSubprocess({
       cwd: repoRoot,
       configFile: configPath,
       roots: fileNames,
@@ -155,32 +163,30 @@ async function createCompilerContext(repoRoot: string, entrypoints: readonly str
         ),
         [configFileName]: config,
       },
+      fs: view.filesystem,
     });
+    view.assertValid();
     return {
       checker: source.project.checker,
-      inputs: [
-        ...new Set([
-          ...emitted.inputs,
-          ...source.project.program.getSourceFileNames(),
-          ...declarations.project.program.getSourceFileNames(),
-        ]),
-      ],
+      assertValid: view.assertValid,
       declarationClosure: createDeclarationClosureRenderer({
         project: declarations.project,
+        printer: declarations.api.printer,
         sourceProgram: source.project.program,
         emittedSources: new Set(emitted.declarations.keys()),
         repoRoot,
       }),
-      printer: source.project.emitter,
+      printer: source.api.printer,
       program: source.project.program,
       close() {
         declarations?.close();
-        source.close();
+        source?.close();
       },
     };
   } catch (error) {
     declarations?.close();
-    source.close();
+    source?.close();
+    view.assertValid();
     throw error;
   }
 }
@@ -259,7 +265,7 @@ function resolveSymbolAndDeclaration(
         node !== undefined && node.kind !== ts.SyntaxKind.SourceFile,
     )
     .toSorted((left, right) => compareDeclarations(repoRoot, left, right));
-  const declaration = declarations.find((candidate) => candidate.kind !== ts.SyntaxKind.SourceFile);
+  const declaration = declarations[0];
   return { declaration, resolvedSymbol };
 }
 
@@ -285,7 +291,7 @@ function compareDeclarations(
 function buildExportSurface(params: {
   checker: Checker;
   declarationClosure: DeclarationClosureRenderer;
-  printer: Emitter;
+  printer: Printer;
   repoRoot: string;
   symbol: CompilerSymbol;
 }): RenderedPluginSdkApiExport {
@@ -345,7 +351,7 @@ function sortExports(left: RenderedPluginSdkApiExport, right: RenderedPluginSdkA
 function buildModuleSurface(params: {
   checker: Checker;
   declarationClosure: DeclarationClosureRenderer;
-  printer: Emitter;
+  printer: Printer;
   program: Program;
   repoRoot: string;
   entrypoint: string;
@@ -390,19 +396,15 @@ export async function renderPluginSdkApiBaseline(params?: {
   repoRoot?: string;
   entrypoints?: readonly string[];
 }): Promise<PluginSdkApiBaseline> {
-  const repoRoot = params?.repoRoot ?? resolveRepoRoot();
+  // Native declaration emission roots at the canonical checkout; a symlinked
+  // alias (macOS temporary directories) would place every source outside it.
+  const repoRoot = fs.realpathSync.native(params?.repoRoot ?? resolveRepoRoot());
   const entrypoints = params?.entrypoints ?? listPluginSdkApiBaselineEntrypoints();
   if (params?.entrypoints === undefined) {
     validateMetadata();
   }
-  const configPath = path.join(repoRoot, "tsconfig.json");
-  const { executable: binary } = resolveInstalledNativeTypeScriptCompiler();
-  const snapshot = () =>
-    new CompilerInputSnapshot(repoRoot, { toolchainFiles: [binary], generatorInputs: [] });
-  const before = snapshot();
-  before.signature(configPath, [], []);
-  const startedAt = Date.now();
-  const context = await createCompilerContext(repoRoot, entrypoints);
+  const inputs = new CompilerInputSnapshot(repoRoot, { toolchainFiles: [], generatorInputs: [] });
+  const context = await createCompilerContext(repoRoot, entrypoints, inputs);
   const { checker, declarationClosure, printer, program } = context;
   try {
     const modules = [...entrypoints].toSorted(compareText).map((entrypoint) =>
@@ -454,9 +456,11 @@ export async function renderPluginSdkApiBaseline(params?: {
         }))
         .toSorted((left, right) => compareText(left.importSpecifier, right.importSpecifier)),
     };
-    // Source symbols and emitted closure text must describe the same input generation.
-    snapshot().seal(configPath, [], context.inputs, before, startedAt);
+    context.assertValid();
     return baseline;
+  } catch (error) {
+    context.assertValid();
+    throw error;
   } finally {
     context.close();
   }

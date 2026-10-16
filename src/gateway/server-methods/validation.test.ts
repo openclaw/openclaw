@@ -1,5 +1,7 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
+  ErrorCodes,
+  errorShape,
   validateConversationListParams,
   validateUiCommandParams,
   type ConversationListParams,
@@ -49,10 +51,12 @@ describe("typed gateway method validation", () => {
   it("rejects malformed payloads before invoking the typed handler", async () => {
     const action = vi.fn();
     const respond = vi.fn<RespondFn>();
+    const mapError = vi.fn(() => errorShape(ErrorCodes.UNAVAILABLE, "method failed"));
     const handler = defineValidatedGatewayMethod(
       "conversations.list",
       validateConversationListParams,
       action,
+      mapError,
     );
 
     await handler({
@@ -65,6 +69,7 @@ describe("typed gateway method validation", () => {
     });
 
     expect(action).not.toHaveBeenCalled();
+    expect(mapError).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
@@ -72,6 +77,42 @@ describe("typed gateway method validation", () => {
         code: "INVALID_REQUEST",
         message: expect.stringContaining("invalid conversations.list params"),
       }),
+    );
+  });
+
+  it.each([false, true])("maps handler failures after validation (async: %s)", async (async) => {
+    const failure = new Error("method failed");
+    const respond = vi.fn<RespondFn>();
+    const options: GatewayRequestHandlerOptions = {
+      req: { type: "req", id: "mapped-1", method: "conversations.list" },
+      params: { agentId: "main" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as GatewayRequestContext,
+    };
+    const handler = defineValidatedGatewayMethod(
+      "conversations.list",
+      validateConversationListParams,
+      (request) => {
+        expect(request).toBe(options);
+        if (async) {
+          return Promise.reject(failure);
+        }
+        throw failure;
+      },
+      (error) => {
+        expect(error).toBe(failure);
+        return errorShape(ErrorCodes.UNAVAILABLE, failure.message);
+      },
+    );
+
+    await handler(options);
+
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "method failed"),
     );
   });
 });

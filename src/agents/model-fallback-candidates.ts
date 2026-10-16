@@ -11,7 +11,6 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
-import { isPluginProvidersLoadInFlight } from "../plugins/providers.runtime.js";
 import {
   getActivePluginRegistryWorkspaceDirFromState,
   getPluginRegistryState,
@@ -23,7 +22,10 @@ import {
   allowsPluginModelNormalization,
   hasExactConfiguredProviderModel,
 } from "./configured-provider-model.js";
+import { resolveContextTokensForModelFromCache } from "./context-resolution.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { extractObservedOverflowTokenCount } from "./embedded-agent-helpers/context-overflow-observation.js";
+import { isFailoverError } from "./failover/error.js";
 import type {
   ModelCandidate,
   ModelFallbackCandidate,
@@ -51,6 +53,46 @@ const fallbackCandidateCache = new Map<string, ModelFallbackCandidate[]>();
 const fallbackContextIds = new WeakMap<object, number>();
 let nextFallbackContextId = 0;
 const log = createSubsystemLogger("model-selection");
+
+/** Prefer known headroom without dropping operator-selected models with incomplete metadata. */
+export function preferContextFitFallbackCandidates(params: {
+  candidates: ModelFallbackCandidate[];
+  failedIndex: number;
+  error: unknown;
+  cfg: OpenClawConfig | undefined;
+}): ModelFallbackCandidate[] {
+  if (
+    !isFailoverError(params.error) ||
+    params.error.reason !== "context_overflow" ||
+    params.error.requestSizeCeiling
+  ) {
+    return params.candidates;
+  }
+  const failedCandidate = params.candidates[params.failedIndex];
+  if (!failedCandidate) {
+    return params.candidates;
+  }
+  const contextTokens = (candidate: ModelCandidate) =>
+    resolveContextTokensForModelFromCache({
+      cfg: params.cfg,
+      ...candidate,
+      allowUnscopedModelLookup: false,
+    });
+  const failedTokens = contextTokens(failedCandidate);
+  // Without provider counts, a larger window is a preference, not a guarantee of fit.
+  const requiredTokens =
+    extractObservedOverflowTokenCount(params.error.rawError ?? params.error.message) ??
+    (failedTokens === undefined ? undefined : failedTokens + 1);
+  if (requiredTokens === undefined) {
+    return params.candidates;
+  }
+  const remaining = params.candidates
+    .slice(params.failedIndex + 1)
+    .map((candidate) => ({ candidate, fits: (contextTokens(candidate) ?? 0) >= requiredTokens }))
+    .toSorted((left, right) => Number(right.fits) - Number(left.fits))
+    .map(({ candidate }) => candidate);
+  return [...params.candidates.slice(0, params.failedIndex + 1), ...remaining];
+}
 
 type ModelCandidateChainParams = ModelManifestNormalizationContext & {
   cfg: OpenClawConfig | undefined;
@@ -199,18 +241,11 @@ function resolveFallbackCandidateContext(params: ModelCandidateChainParams) {
     allowWorkspaceScopedSnapshot: true,
     requireDefaultDiscoveryContext: params.cfg === undefined,
   });
-  if (
-    isPluginProvidersLoadInFlight({
-      config: params.cfg,
-      workspaceDir,
-      env,
-      ...(providerLoadMetadata ? { pluginMetadataSnapshot: providerLoadMetadata } : {}),
-      activate: false,
-    })
-  ) {
+  const registryState = getPluginRegistryState();
+  // register() can add provider hooks between lookups in the same growing registry.
+  if (registryState?.registrationContext) {
     return { cacheKey: null, manifestPlugins: providerLoadMetadata };
   }
-  const registryState = getPluginRegistryState();
   const registry = getPluginRuntimeGenerationRegistry() ?? getPluginRegistryForContext();
   const agentConfig =
     params.cfg && params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;

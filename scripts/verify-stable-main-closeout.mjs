@@ -20,6 +20,11 @@ function parseArgs(argv) {
     if (!key.startsWith("--")) {
       throw new Error(`unexpected argument: ${key}`);
     }
+    if (key === "--stable-soak-waiver" || key === "--lane-waiver") {
+      throw new Error(
+        `${key} was removed. Closeout requires the original strict validation evidence; historical waiver-bearing receipt replay is unsupported, and a fresh run cannot replace its published binding.`,
+      );
+    }
     const value = argv[index + 1];
     if (!value || value.startsWith("-")) {
       throw new Error(`${key} requires a value.`);
@@ -120,6 +125,13 @@ function main() {
   const linuxUpdaterObservation = requiresLinuxUpdaterObservation({ release, existingManifest })
     ? inspectLinuxUpdaterManifest({ repository, carrierTag: args.tag })
     : undefined;
+  const withdrawnCompanionAssets =
+    linuxUpdaterObservation?.immutableManifest?.withdrawnCompanionAssets ?? [];
+  if (withdrawnCompanionAssets.length > 0) {
+    console.log(
+      `Linux publication companion assets withdrawn from ${args.tag}: ${withdrawnCompanionAssets.join(", ")}`,
+    );
+  }
   const result = verifyStableMainCloseout({
     // Replay reads the current main feed, so its withdrawal marker lives on main too.
     findAppcastWithdrawal: (withdrawnVersion) =>

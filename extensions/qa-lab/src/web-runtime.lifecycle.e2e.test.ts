@@ -79,7 +79,7 @@ describe("QA web session ownership with Chromium", () => {
     const owner = new Set<string>();
     const openPage = createQaWebPageOpener(owner);
 
-    await expect(openPage({ url: `${baseUrl}/abort` })).rejects.toThrow("page.goto");
+    await expect(openPage({ url: `${baseUrl}/abort` })).rejects.toThrow("ERR_EMPTY_RESPONSE");
     expect(browsers.map((browser) => browser.isConnected())).toEqual([false]);
     expect(owner.size).toBe(0);
 

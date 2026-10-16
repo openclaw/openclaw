@@ -2,19 +2,29 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import * as processIdentity from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as serviceMembership from "../../daemon/service-process-membership.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
+import * as ancestry from "../../infra/restart-stale-pids.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import {
   formatUpdateAncestryBlockMessage,
-  gatewayMaintenanceBlockMessage,
+  gatewayMaintenanceBlock,
+  handoffUpdateFromGateway,
 } from "./update-command-handoff.js";
+import { createHandoffLifetimePreload } from "./update-command-handoff.test-support.js";
 
 const UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE = 75;
+
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
+}));
 
 const tempDirs = createTrackedTempDirs();
 beforeEach(async () => {
@@ -26,7 +36,9 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-it.runIf(process.platform === "darwin").each(["cancel", "cancel-output-first", "transfer"])(
+it
+  .runIf(process.platform === "darwin")
+  .each(["cancel", "cancel-output-first", "transfer"] as const)(
   "settles the initiating CLI's owned handoff lifetime: %s",
   async (mode) => {
     const root = await fs.realpath(await tempDirs.make("openclaw-cli-handoff-lifetime-"));
@@ -51,34 +63,7 @@ it.runIf(process.platform === "darwin").each(["cancel", "cancel-output-first", "
     );
     await fs.writeFile(
       preloadPath,
-      `
-const fs=require('node:fs');
-const record=(event,data={})=>fs.appendFileSync(${JSON.stringify(tracePath)},JSON.stringify({event,...data})+'\\n');
-if(process.argv[1]===${JSON.stringify(callerPath)} && ${mode !== "transfer"}) {
-  const sqlite=require('node:sqlite'), Original=sqlite.DatabaseSync;
-  sqlite.DatabaseSync=new Proxy(Original,{construct(target,args,newTarget) {
-    if(String(args[0])===${JSON.stringify(path.join(root, "state/openclaw.sqlite"))}) {
-      const db=new Original(${JSON.stringify(leasePath)},{readOnly:true});
-      const lease=db.prepare('SELECT owner FROM managed_update_handoffs WHERE install_root=?').get(${JSON.stringify(root)});
-      db.close();record('publication-denied',{ready:!!lease});
-      throw Object.assign(new Error('fixture publication denied'),{code:'SQLITE_CANTOPEN'});
-    }
-    return Reflect.construct(target,args,newTarget);
-  }});
-  require('node:module').syncBuiltinESMExports();
-} else if(process.argv[1]?.endsWith('/handoff.cjs')) {
-  const params=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-  if(params.updateLeaseKey===${JSON.stringify(root)}) {
-    if(params.updateLeaseDatabasePath!==${JSON.stringify(leasePath)} || params.updateLeaseDatabaseIdentity?.databasePath!==${JSON.stringify(leasePath)}) {
-      throw new Error("Fixture handoff escaped its private lease database");
-    }
-    if(${mode === "cancel-output-first"}) {
-      // Close only helper output before native exit; the initiating CLI has no keepalive.
-      process.once('beforeExit',()=>{record('helper-output-closed');process.stdout.end();setTimeout(()=>{},100);});
-    }
-    process.once('exit',()=>record('helper-exit'));
-  }
-}`,
+      createHandoffLifetimePreload({ callerPath, root, leasePath, tracePath, mode }),
     );
     await fs.writeFile(
       callerPath,
@@ -186,18 +171,74 @@ const callerService = {
   runtime: { status: "running", pid: process.pid },
 } satisfies GatewayServiceState;
 
-describe("gatewayMaintenanceBlockMessage", () => {
+describe("gatewayMaintenanceBlock", () => {
+  it.runIf(process.platform === "darwin").each([
+    { membership: "outside", ancestor: false, code: undefined },
+    { membership: "absent", ancestor: false, code: "service-ancestry-unverified" },
+    { membership: "inside", ancestor: false, code: "inside-gateway-service" },
+    { membership: "unknown", ancestor: false, code: "service-membership-unverified" },
+    { membership: "outside", ancestor: true, code: "inside-gateway-process-tree" },
+  ] as const)(
+    "uses native $membership containment with an unreadable login ancestor (gateway ancestor: $ancestor)",
+    ({ membership, ancestor, code }) => {
+      const gatewayPid = process.pid + 1_000_000;
+      vi.spyOn(processIdentity, "readProcessAncestry").mockReturnValue({
+        chain: [
+          {
+            pid: process.pid,
+            parentPid: ancestor ? gatewayPid : gatewayPid + 1,
+            startTimeMicros: 2,
+            startTimeResolutionMicros: 1,
+            exited: false,
+          },
+          ...(ancestor
+            ? [
+                {
+                  pid: gatewayPid,
+                  parentPid: gatewayPid + 1,
+                  startTimeMicros: 1,
+                  startTimeResolutionMicros: 1,
+                  exited: false,
+                },
+              ]
+            : []),
+        ],
+        complete: false,
+        stoppedBy: "unreadable-parent",
+      });
+      vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue(
+        membership,
+      );
+      const block = gatewayMaintenanceBlock(
+        { ...callerService, runtime: { status: "running", pid: gatewayPid } },
+        process.cwd(),
+      );
+      if (code === undefined) {
+        expect(block).toBeUndefined();
+      } else {
+        expect(block?.failureFacts).toEqual([
+          expect.objectContaining({ check: "managed-service-preflight", code }),
+        ]);
+      }
+    },
+  );
+
   it("never advises stopping the gateway service or running update from the caller", () => {
-    const message = gatewayMaintenanceBlockMessage(callerService, process.cwd());
+    const message = gatewayMaintenanceBlock(callerService, process.cwd())?.message;
     expect(message).toContain("inside the gateway process tree");
     expect(message).toContain("from a shell outside the gateway service");
     expect(message).not.toContain("stop the gateway service first");
     expect(message).not.toContain("openclaw update");
   });
 
-  it("returns undefined when the pid is not an ancestor", () => {
+  it("allows a caller with verified external ancestry and native membership", () => {
+    vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue("outside");
+    vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+      pids: new Set([process.pid, 1]),
+      complete: true,
+    });
     expect(
-      gatewayMaintenanceBlockMessage(
+      gatewayMaintenanceBlock(
         { ...callerService, runtime: { status: "running", pid: 2 } },
         process.cwd(),
       ),
@@ -205,10 +246,47 @@ describe("gatewayMaintenanceBlockMessage", () => {
   });
 });
 
+it.runIf(process.platform === "linux" || process.platform === "darwin").each([
+  { complete: true, containsParent: false },
+  { complete: false, containsParent: false },
+  { complete: false, containsParent: true },
+])(
+  "does not start an unverified handoff ($complete, parent: $containsParent)",
+  async ({ complete, containsParent }) => {
+    vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+      pids: new Set(containsParent ? [process.pid, process.ppid] : [process.pid]),
+      complete,
+    });
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_RUN_HANDOFF: undefined,
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_GATEWAY_SERVICE_PID: String(process.ppid),
+        INVOCATION_ID: "fixture-inherited",
+      },
+      async () => {
+        await expect(
+          handoffUpdateFromGateway({
+            state: { ...callerService, runtime: { status: "running", pid: process.ppid } },
+            root: process.cwd(),
+            mode: "npm",
+            opts: {},
+            timeoutMs: 1000,
+            stopProgress: () => {
+              throw new Error("An unverified caller must not start handoff preparation");
+            },
+          }),
+        ).resolves.toBe(false);
+      },
+    );
+  },
+);
+
 describe("formatUpdateAncestryBlockMessage", () => {
   it("adds the chat handoff advice only to ancestry blocks", () => {
-    const ancestry = gatewayMaintenanceBlockMessage(callerService, process.cwd()) ?? "";
-    const updateMessage = formatUpdateAncestryBlockMessage(ancestry);
+    const blockMessage = gatewayMaintenanceBlock(callerService, process.cwd())?.message ?? "";
+    const updateMessage = formatUpdateAncestryBlockMessage(blockMessage);
     expect(updateMessage).toContain("/update");
     expect(updateMessage).not.toContain("shell outside");
     expect(updateMessage).not.toContain("terminal");

@@ -28,6 +28,7 @@ export async function* search<T>(
   window: ActivityWindow,
   itemSchema: z.ZodType<T>,
   first?: Awaited<ReturnType<GithubClient["get"]>>,
+  afterPage?: () => Promise<void>,
 ): AsyncGenerator<T> {
   const { kind } = query;
   const schema = z.object({
@@ -42,7 +43,11 @@ export async function* search<T>(
   ): AsyncGenerator<T> {
     let page = initial ?? (await client.get(searchPath(query, org, start, end)));
     let result = parse(schema, page.data);
+    // The parsed page owns the useful fields; release bodies stripped by the schema,
+    // including the caller's reused probe, before descending into split searches.
+    page.data = undefined;
     if (result.total_count >= 1000 && start < end) {
+      result.items = [];
       client.status.stats.searchSplits = Number(client.status.stats.searchSplits) + 1;
       // Search ranges are inclusive at second precision; disjoint children avoid cap-boundary duplicates.
       const mid = Math.floor((start + end) / 2);
@@ -66,6 +71,7 @@ export async function* search<T>(
         );
       }
       yield* result.items;
+      await afterPage?.();
       emitted += result.items.length;
       if (!page.next || emitted >= 1000) {
         break;
@@ -76,6 +82,7 @@ export async function* search<T>(
       seen.add(page.next);
       page = await client.get(page.next);
       result = parse(schema, page.data);
+      page.data = undefined;
     }
   }
   yield* range(...searchSeconds(window), first);

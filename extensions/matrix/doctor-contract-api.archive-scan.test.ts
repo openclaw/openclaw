@@ -1,7 +1,9 @@
 // Matrix tests cover bounded doctor state-root discovery.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   OpenKeyedStoreOptions,
@@ -61,6 +63,42 @@ function writeLegacySyncCache(storageRootDir: string, nextBatch: string): void {
       cleanShutdown: true,
     }),
   );
+}
+
+function writeSqliteDedupeSource(
+  storageRootDir: string,
+  accountId: string,
+  eventId: string,
+  ts: number,
+): string {
+  const databasePath = path.join(storageRootDir, "state", "openclaw.sqlite");
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  const roomId = "!room:example.org";
+  const key = `${accountId}:${createHash("sha256")
+    .update(`${accountId}\0${roomId}\0${eventId}`)
+    .digest("hex")}`;
+  const db = new DatabaseSync(databasePath);
+  try {
+    // July's per-account store used this row shape and schema version.
+    db.exec(`
+      CREATE TABLE plugin_state_entries (
+        plugin_id TEXT NOT NULL,
+        namespace TEXT NOT NULL,
+        entry_key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER,
+        PRIMARY KEY (plugin_id, namespace, entry_key)
+      ) STRICT;
+      PRAGMA user_version = 1;
+    `);
+    db.prepare(`
+      INSERT INTO plugin_state_entries VALUES ('matrix', 'inbound-dedupe', ?, ?, ?, NULL)
+    `).run(key, JSON.stringify({ roomId, eventId, ts }), ts);
+  } finally {
+    db.close();
+  }
+  return databasePath;
 }
 
 function createStateRoots(stateDir: string) {
@@ -169,17 +207,11 @@ describe("matrix doctor archive scan boundaries", () => {
     const { activeRoots, excludedRoots } = createStateRoots(stateDir);
     const now = Date.now();
     for (const [index, storageRootDir] of activeRoots.entries()) {
-      fs.mkdirSync(storageRootDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(storageRootDir, "inbound-dedupe.json"),
-        JSON.stringify({
-          version: 1,
-          entries: [{ key: `!room:example.org|$active-${index}`, ts: now - 60_000 }],
-        }),
-      );
-      fs.writeFileSync(
-        path.join(storageRootDir, "storage-meta.json"),
-        JSON.stringify({ accountId: index === 0 ? "sync-cache-backup" : "legacy" }),
+      writeSqliteDedupeSource(
+        storageRootDir,
+        index === 0 ? "sync-cache-backup" : "legacy",
+        `$active-${index}`,
+        now - 60_000,
       );
     }
     for (const storageRootDir of excludedRoots) {
@@ -207,10 +239,9 @@ describe("matrix doctor archive scan boundaries", () => {
     expect(result.changes).toEqual([
       "Migrated Matrix inbound dedupe markers to the claimable dedupe store (2 of 2 entries)",
       ...activeRoots.map(
-        (storageRootDir) =>
-          `Archived Matrix inbound dedupe legacy source -> ${path.join(storageRootDir, "inbound-dedupe.json")}.migrated`,
+        (storageRootDir) => `Retired Matrix inbound dedupe rows for ${storageRootDir}`,
       ),
-      "Recorded Matrix inbound dedupe migration completion (0 SQLite roots, 2 JSON roots scanned)",
+      "Recorded Matrix inbound dedupe migration completion (2 SQLite roots scanned)",
     ]);
     for (const [index, accountId] of ["sync-cache-backup", "legacy"].entries()) {
       const deduper = createMatrixInboundEventDeduper({

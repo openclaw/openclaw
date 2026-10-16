@@ -5,6 +5,7 @@ import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { toLine } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const SCAN_ROOTS = ["src", "extensions", "packages"];
@@ -47,10 +48,6 @@ function normalizeCommentText(comment: string) {
     .map((line) => line.replace(/^\s*(?:\*|\/\/)\s?/, "").trim())
     .filter(Boolean)
     .join(" ");
-}
-
-function lineOf(sourceFile: ts.SourceFile, node: ts.Node) {
-  return sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
 }
 
 function isExported(node: ts.ModifiersBase) {
@@ -110,7 +107,7 @@ function collectViolations(filePath: string, sourceFile: ts.SourceFile) {
         !/@deprecated\b/.test(comment)
       ) {
         violations.push({
-          line: lineOf(sourceFile, node),
+          line: toLine(sourceFile, node),
           name: symbolName(node),
           filePath: path.relative(repoRoot, filePath).replaceAll(path.sep, "/"),
         });

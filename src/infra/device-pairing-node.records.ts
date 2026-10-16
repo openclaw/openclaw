@@ -1,27 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
+import type { NodePairingPendingSnapshot } from "./device-pairing-admission.types.js";
 import { resolveNodePairingGeneration } from "./device-pairing-identity.js";
 import type { PairedDevice, PairedDevicePendingNodeSurface } from "./device-pairing.types.js";
 import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
 import { sameNodeApprovalSurfaceSet, sameNodePermissionSurface } from "./node-pairing-surface.js";
 
-type NodeDeclaredSurface = {
-  nodeId: string;
-  clientId?: string;
-  clientMode?: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  caps?: string[];
-  commands?: string[];
-  permissions?: Record<string, boolean>;
-  remoteIp?: string;
-};
+type NodeDeclaredSurface = Omit<
+  PairedDevicePendingNodeSurface,
+  "requestId" | "revision" | "silent" | "ts"
+> & { nodeId: string };
 
 /** Node-declared pairing surface before approval. */
 export type NodePairingRequestInput = NodeDeclaredSurface & {
@@ -32,12 +21,7 @@ export type NodePairingRequestInput = NodeDeclaredSurface & {
 export type NodePairingPendingRequest = NodePairingRequestInput & {
   requestId: string;
   requiredApproveScopes: NodeApprovalScope[];
-  silent?: boolean;
   ts: number;
-};
-
-export type NodePairingPendingSnapshot = Pick<NodePairingPendingRequest, "requestId" | "nodeId"> & {
-  revision?: string;
 };
 
 /** Opaque claim preventing approval while a reconnect resolves stale pending state. */
@@ -232,15 +216,12 @@ export function samePendingApprovalSurface(
   existing: PairedDevicePendingNodeSurface,
   incoming: NodePairingRequestInput,
 ): boolean {
-  const incomingCaps = normalizeArrayBackedTrimmedStringList(incoming.caps) ?? existing.caps;
-  const incomingCommands =
-    normalizeArrayBackedTrimmedStringList(incoming.commands) ?? existing.commands;
-  const incomingPermissions = incoming.permissions ?? existing.permissions;
   return (
     // Metadata-only reconnects may refresh one pending request; approval-surface changes supersede.
-    sameNodeApprovalSurfaceSet(existing.caps, incomingCaps) &&
-    sameNodeApprovalSurfaceSet(existing.commands, incomingCommands) &&
-    sameNodePermissionSurface(existing.permissions, incomingPermissions)
+    (!Array.isArray(incoming.caps) || sameNodeApprovalSurfaceSet(existing.caps, incoming.caps)) &&
+    (!Array.isArray(incoming.commands) ||
+      sameNodeApprovalSurfaceSet(existing.commands, incoming.commands)) &&
+    sameNodePermissionSurface(existing.permissions, incoming.permissions ?? existing.permissions)
   );
 }
 

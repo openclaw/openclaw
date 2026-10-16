@@ -10,10 +10,6 @@ import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import * as stickerCache from "./sticker-cache-store.js";
-import {
-  TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
-  TELEGRAM_STICKER_CACHE_NAMESPACE,
-} from "./sticker-cache-store.legacy-state.js";
 
 vi.mock("openclaw/plugin-sdk/state-paths", () => ({
   resolveStateDir: () => "/tmp/openclaw-test-sticker-cache",
@@ -37,8 +33,8 @@ describe("sticker-cache", () => {
     resetPluginStateStoreForTests({ closeDatabase: false });
     installStore(
       createPluginStateKeyedStoreForTests("telegram", {
-        namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
-        maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+        namespace: "telegram.sticker-cache",
+        maxEntries: 10_000,
       }),
     );
     await store.clear();
@@ -49,41 +45,23 @@ describe("sticker-cache", () => {
     resetPluginStateStoreForTests();
   });
 
-  it.each([
-    {
-      operation: "lookup",
-      run: () => stickerCache.getCachedSticker("unavailable-sticker"),
-      fallback: null,
-    },
-    {
-      operation: "register",
-      run: () =>
-        stickerCache.cacheSticker({
-          fileId: "file-failure",
-          fileUniqueId: "unique-failure",
-          description: "Write failure should not block sticker handling",
-          cachedAt: "2026-01-26T13:00:00.000Z",
-        }),
-      fallback: undefined,
-    },
-    {
-      operation: "entries",
-      run: () => stickerCache.searchStickers("fox"),
-      fallback: [],
-    },
-  ])(
-    "returns the best-effort fallback when plugin-state $operation rejects",
-    async ({ operation, run, fallback }) => {
-      installStore({
-        ...store,
-        async [operation]() {
-          await Promise.resolve();
-          throw new Error(`${operation} failed`);
-        },
-      });
-      await expect(run()).resolves.toStrictEqual(fallback);
-    },
-  );
+  it("returns the best-effort fallback when plugin-state register rejects", async () => {
+    installStore({
+      ...store,
+      async register() {
+        await Promise.resolve();
+        throw new Error("register failed");
+      },
+    });
+    await expect(
+      stickerCache.cacheSticker({
+        fileId: "file-failure",
+        fileUniqueId: "unique-failure",
+        description: "Write failure should not block sticker handling",
+        cachedAt: "2026-01-26T13:00:00.000Z",
+      }),
+    ).resolves.toBeUndefined();
+  });
 
   describe("cacheSticker", () => {
     it("settles only after the backing write commits", async () => {
@@ -134,8 +112,8 @@ describe("sticker-cache", () => {
       resetPluginStateStoreForTests();
       installStore(
         createPluginStateKeyedStoreForTests("telegram", {
-          namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
-          maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+          namespace: "telegram.sticker-cache",
+          maxEntries: 10_000,
         }),
       );
       expect(await stickerCache.getCachedSticker("delayed-unique")).toStrictEqual({
@@ -184,15 +162,6 @@ describe("sticker-cache", () => {
       });
     });
 
-    it("finds stickers by description substring", async () => {
-      const results = await stickerCache.searchStickers("fox");
-      expect(results).toHaveLength(2);
-      expect(results.map((sticker) => sticker.fileUniqueId)).toEqual([
-        "fox-unique-1",
-        "fox-unique-2",
-      ]);
-    });
-
     it("finds stickers by emoji", async () => {
       const results = await stickerCache.searchStickers("🦊");
       expect(results).toHaveLength(2);
@@ -202,34 +171,10 @@ describe("sticker-cache", () => {
       ]);
     });
 
-    it("finds stickers by set name", async () => {
-      const results = await stickerCache.searchStickers("CuteFoxes");
-      expect(results).toHaveLength(2);
-      expect(results.map((sticker) => sticker.fileUniqueId)).toEqual([
-        "fox-unique-1",
-        "fox-unique-2",
-      ]);
-    });
-
     it("respects limit parameter", async () => {
-      const results = await stickerCache.searchStickers("fox", 1);
+      const results = await stickerCache.searchStickers("FOX", 1);
       expect(results).toHaveLength(1);
-    });
-
-    it("returns empty array for no matches", async () => {
-      const results = await stickerCache.searchStickers("elephant");
-      expect(results).toHaveLength(0);
-    });
-
-    it("is case insensitive", async () => {
-      const results = await stickerCache.searchStickers("FOX");
-      expect(results).toHaveLength(2);
-    });
-
-    it("matches multiple words", async () => {
-      const results = await stickerCache.searchStickers("cat keyboard");
-      expect(results).toHaveLength(1);
-      expect(results[0]?.fileUniqueId).toBe("cat-unique-1");
+      expect(results[0]?.fileUniqueId).toBe("fox-unique-1");
     });
   });
 

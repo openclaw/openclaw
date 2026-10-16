@@ -1,4 +1,6 @@
-// Zero-dependency Node release-version contract shared by source and packaged entry points.
+// Zero-dependency runtime version contract shared by source and packaged entry points.
+export const MINIMUM_BUN_VERSION = { major: 1, minor: 4, patch: 3 };
+
 const NODE_RELEASE_VERSION_RE =
   /^v?((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 

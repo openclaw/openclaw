@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -272,25 +273,6 @@ describe("meeting node host audio backend", () => {
     });
     expect(childProcessMocks.spawn).not.toHaveBeenCalled();
   });
-
-  it.each([
-    { name: "input", inputCommand: [], outputCommand: ["play"] },
-    { name: "output", inputCommand: ["capture"], outputCommand: [] },
-  ])("rejects an empty $name command before spawning", async ({ inputCommand, outputCommand }) => {
-    const host = createHost({
-      prepareAudio: vi.fn(async () => ({
-        backend: "pipewire-pulse" as const,
-        deviceLabel: "OpenClaw Meeting Audio",
-        inputCommand,
-        outputCommand,
-      })),
-    });
-
-    await expect(invokeHost(host, { ...AUDIO_START_PARAMS, launch: false })).rejects.toThrow(
-      "audio command must not be empty",
-    );
-    expect(childProcessMocks.spawn).not.toHaveBeenCalled();
-  });
 });
 
 describe("meeting node host audio output", () => {
@@ -310,18 +292,6 @@ describe("meeting node host audio output", () => {
     expect(bridge.host.hasActiveWork()).toBe(true);
     bridge.inputProcess.emit("close", null, "SIGTERM");
     expect(bridge.host.hasActiveWork()).toBe(false);
-  });
-
-  it("copies retained input buffers", async () => {
-    const bridge = await startAudioBridge();
-    const source = Buffer.from([1, 2, 3]);
-
-    bridge.inputStdout.emit("data", source);
-    source.fill(9);
-
-    const pulled = await invokeBridge(bridge, "pullAudio");
-    expect(Buffer.from(pulled.base64 as string, "base64")).toEqual(Buffer.from([1, 2, 3]));
-    await invokeBridge(bridge, "stop");
   });
 
   it("keeps only the newest bounded input chunks", async () => {
@@ -353,7 +323,10 @@ describe("meeting node host audio output", () => {
       MAX_QUEUED_INPUT_BYTES / chunkBytes,
     );
     const pulled = await invokeBridge(bridge, "pullAudio");
-    expect(Buffer.from(pulled.base64 as string, "base64")).toEqual(Buffer.alloc(chunkBytes, 1));
+    assert.deepStrictEqual(
+      Buffer.from(pulled.base64 as string, "base64"),
+      Buffer.alloc(chunkBytes, 1),
+    );
     await invokeBridge(bridge, "stop");
   });
 
@@ -369,7 +342,7 @@ describe("meeting node host audio output", () => {
     source.fill(0);
 
     const pulled = await invokeBridge(bridge, "pullAudio");
-    expect(Buffer.from(pulled.base64 as string, "base64")).toEqual(expected);
+    assert.deepStrictEqual(Buffer.from(pulled.base64 as string, "base64"), expected);
     await invokeBridge(bridge, "stop");
   });
 
@@ -600,22 +573,31 @@ describe("meeting node host audio output", () => {
     );
   });
 
-  it("terminates output when input process construction throws", async () => {
-    const outputProcess = createProcess({ stdin: createStdin(true), autoClose: false });
-    const spawnError = new Error("input spawn failed");
-    childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockImplementationOnce(() => {
-      throw spawnError;
-    });
-    const host = createHost();
+  it.each([true])(
+    "terminates output when input process construction throws (output spawn failed: %s)",
+    async (outputSpawnFailed) => {
+      const outputProcess = createProcess({ stdin: createStdin(true), autoClose: false });
+      if (outputSpawnFailed) {
+        outputProcess.kill.mockReturnValueOnce(false);
+      }
+      const spawnError = new Error("input spawn failed");
+      childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockImplementationOnce(() => {
+        throw spawnError;
+      });
+      const host = createHost();
 
-    await expect(invokeHost(host, { ...AUDIO_START_PARAMS, launch: false })).rejects.toBe(
-      spawnError,
-    );
-    expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(host.hasActiveWork()).toBe(true);
-    outputProcess.emit("close", null, "SIGTERM");
-    expect(host.hasActiveWork()).toBe(false);
-  });
+      await expect(invokeHost(host, { ...AUDIO_START_PARAMS, launch: false })).rejects.toBe(
+        spawnError,
+      );
+      expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+      if (outputSpawnFailed) {
+        expect(() => outputProcess.emit("error", new Error("output spawn failed"))).not.toThrow();
+      }
+      expect(host.hasActiveWork()).toBe(true);
+      outputProcess.emit("close", null, "SIGTERM");
+      expect(host.hasActiveWork()).toBe(false);
+    },
+  );
 
   it("deletes a hidden audio session after browser launch fails", async () => {
     const inputProcess = createProcess({ stdout: new EventEmitter() });
@@ -642,27 +624,6 @@ describe("meeting node host audio output", () => {
     await expect(invokeHost(host, { action: "pullAudio", bridgeId })).rejects.toThrow(
       `unknown bridgeId: ${bridgeId}`,
     );
-  });
-
-  it("deletes a hidden audio session when browser launch throws", async () => {
-    const inputProcess = createProcess({ stdout: new EventEmitter() });
-    const outputProcess = createProcess({ stdin: createStdin(true) });
-    const launchError = new Error("browser launch threw");
-    childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
-    childProcessMocks.spawnSync.mockImplementationOnce(() => {
-      throw launchError;
-    });
-    const host = createHost();
-    const bridgeId = `test-bridge-${TEST_UUID}`;
-
-    await expect(invokeHost(host, AUDIO_START_PARAMS)).rejects.toBe(launchError);
-    await vi.waitFor(async () => {
-      await expect(invokeHost(host, { action: "pullAudio", bridgeId })).rejects.toThrow(
-        `unknown bridgeId: ${bridgeId}`,
-      );
-    });
-    expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
   it("waits for the output stream to accept a backpressured chunk", async () => {

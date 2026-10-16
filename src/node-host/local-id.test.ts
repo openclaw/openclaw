@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as identityReader from "../infra/device-identity-async.js";
 import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
@@ -24,6 +25,7 @@ async function createState(label: string) {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   while (states.length > 0) {
@@ -41,7 +43,11 @@ describe("resolveLocalNodeId", () => {
     });
     const identity = loadOrCreateDeviceIdentity({ env: state.env });
     expect(config.nodeId).not.toBe(identity.deviceId);
-    await expect(resolveLocalNodeId(state.env)).resolves.toBe(identity.deviceId);
+    const read = vi.spyOn(identityReader, "loadDeviceIdentityIfPresentAsync");
+    await expect(
+      Promise.all(Array.from({ length: 6 }, () => resolveLocalNodeId(state.env))),
+    ).resolves.toEqual(Array(6).fill(identity.deviceId));
+    expect(read).toHaveBeenCalledOnce();
 
     await configureNodeHost({
       nodeId: "replacement-instance",
@@ -61,12 +67,17 @@ describe("resolveLocalNodeId", () => {
 
   it("does not create credentials on a miss and discovers an identity created later", async () => {
     const state = await createState("local-node-id-missing");
-    await expect(resolveLocalNodeId(state.env)).resolves.toBeNull();
+    const read = vi.spyOn(identityReader, "loadDeviceIdentityIfPresentAsync");
+    await expect(
+      Promise.all(Array.from({ length: 6 }, () => resolveLocalNodeId(state.env))),
+    ).resolves.toEqual(Array(6).fill(null));
+    expect(read).toHaveBeenCalledOnce();
     expect(await fs.readdir(state.stateDir)).toEqual([]);
 
     await configureNodeHost({ fallbackDisplayName: "Gateway node", gateway: {}, env: state.env });
     await expect(resolveLocalNodeId(state.env)).resolves.toBeNull();
     expect(loadDeviceIdentityIfPresent({ env: state.env })).toBeNull();
+    expect(read).toHaveBeenCalledTimes(2);
 
     const identity = loadOrCreateDeviceIdentity({ env: state.env });
     await expect(resolveLocalNodeId(state.env)).resolves.toBe(identity.deviceId);
@@ -87,7 +98,19 @@ describe("resolveLocalNodeId", () => {
   it("retries after a failed canonical identity read", async () => {
     const state = await createState("local-node-id-retry");
     const legacyPath = await state.writeText("identity/device.json", "{}\n");
-    await expect(resolveLocalNodeId(state.env)).rejects.toThrow("openclaw doctor --fix");
+    const read = vi.spyOn(identityReader, "loadDeviceIdentityIfPresentAsync");
+    const results = await Promise.allSettled(
+      Array.from({ length: 6 }, () => resolveLocalNodeId(state.env)),
+    );
+    for (const result of results) {
+      expect(result).toMatchObject({
+        status: "rejected",
+        reason: expect.objectContaining({
+          message: expect.stringContaining("openclaw doctor --fix"),
+        }),
+      });
+    }
+    expect(read).toHaveBeenCalledOnce();
 
     await fs.rm(legacyPath);
     const identity = loadOrCreateDeviceIdentity({ env: state.env });

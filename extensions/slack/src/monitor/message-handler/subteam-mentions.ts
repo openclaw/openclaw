@@ -17,15 +17,13 @@ type CacheEntry = {
 const subteamMemberCache = new WeakMap<WebClient, Map<string, CacheEntry>>();
 
 export function normalizeSlackId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().toUpperCase() : undefined;
+  return normalizeOptionalString(value)?.toUpperCase();
 }
 
-function extractSlackSubteamMentionIds(text?: string | null): string[] {
-  if (!text) {
-    return [];
-  }
+export function collectSlackMentionIds(text: string | null | undefined, regex: RegExp): string[] {
   const ids = new Set<string>();
-  for (const match of text.matchAll(SUBTEAM_MENTION_RE)) {
+  regex.lastIndex = 0;
+  for (const match of (text ?? "").matchAll(regex)) {
     const id = normalizeSlackId(match[1]);
     if (id) {
       ids.add(id);
@@ -72,7 +70,7 @@ async function readSlackSubteamUsers(params: {
       return new Set();
     }
     const users = new Set(
-      (response.users ?? []).map((userId) => normalizeSlackId(userId)).filter(Boolean) as string[],
+      (response.users ?? []).map(normalizeSlackId).filter((userId) => userId !== undefined),
     );
     const expiresAt = resolveExpiresAtMsFromDurationMs(SUBTEAM_MEMBER_CACHE_TTL_MS, {
       nowMs: params.now,
@@ -104,7 +102,7 @@ export async function isSlackSubteamMentionForBot(params: {
   if (!botUserId) {
     return false;
   }
-  const subteamIds = extractSlackSubteamMentionIds(params.text);
+  const subteamIds = collectSlackMentionIds(params.text, SUBTEAM_MENTION_RE);
   if (subteamIds.length === 0) {
     return false;
   }

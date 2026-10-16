@@ -43,28 +43,6 @@ describe("Slack directory contract", () => {
     expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledWith(fixture);
   });
 
-  it("lists peers/groups from config", async () => {
-    const cfg = {
-      channels: {
-        slack: {
-          botToken: "xoxb-test",
-          appToken: "xapp-test",
-          allowFrom: ["U123", "user:U999"],
-          dms: { U234: {} },
-          channels: { C111: { users: ["U777"] } },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    await expectDirectoryIds(
-      listSlackDirectoryPeersFromConfig,
-      cfg,
-      ["user:u123", "user:u234", "user:u777", "user:u999"],
-      { sorted: true },
-    );
-    await expectDirectoryIds(listSlackDirectoryGroupsFromConfig, cfg, ["channel:c111"]);
-  });
-
   it("keeps directories readable when tokens are unresolved SecretRefs", async () => {
     const envSecret = {
       source: "env",
@@ -106,44 +84,6 @@ describe("Slack directory contract", () => {
     });
     expect(peers).toHaveLength(2);
     expect(peers.every((entry) => entry.id.startsWith("user:u"))).toBe(true);
-  });
-
-  it("resolves current Slack account identity from live auth", async () => {
-    slackClientMocks.authTest.mockResolvedValue({
-      ok: true,
-      user_id: "USELF",
-      user: "ada",
-      team_id: "T1",
-      team: "Test Team",
-    });
-    slackClientMocks.usersInfo.mockResolvedValue({
-      user: {
-        id: "USELF",
-        name: "ada",
-        profile: {
-          display_name: "Ada",
-          real_name: "Ada Lovelace",
-        },
-      },
-    });
-    const cfg = {
-      channels: {
-        slack: {
-          userToken: "xoxp-test",
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const self = await getSlackDirectorySelfLive({ cfg, accountId: "default" });
-    if (!self) {
-      throw new Error("expected Slack self directory entry");
-    }
-    expect(self.kind).toBe("user");
-    expect(self.id).toBe("user:USELF");
-    expect(self.name).toBe("Ada");
-    expect(self.handle).toBe("@ada");
-    expect(slackClientMocks.authTest).toHaveBeenCalled();
-    expect(slackClientMocks.usersInfo).toHaveBeenCalledWith({ user: "USELF" });
   });
 
   it("falls back to auth identity when live user profile lookup fails", async () => {

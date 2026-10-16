@@ -6,20 +6,18 @@ import type { ApplicationContext } from "../app/context.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { sessionProgressHoverTargetFromEvent } from "./session-progress-hovercard-target.ts";
-import { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.ts";
-
-if (!customElements.get("openclaw-session-progress-hovercard-provider")) {
-  customElements.define(
-    "openclaw-session-progress-hovercard-provider",
-    SessionProgressHovercardProvider,
-  );
-}
+import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
+import "./session-progress-hovercard.runtime.tsx";
 
 function mountHovercard(sessionKey = "global", holdProgress = false) {
   let selectedId = "research";
   const selectionListeners = new Set<() => void>();
   const eventListeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
+  const sessionListeners = new Set<() => void>();
+  let rowDetails: Partial<SidebarSessionHovercardRow> = {};
   let releaseProgress: (() => void) | undefined;
   const request = vi.fn(
     async (
@@ -56,6 +54,7 @@ function mountHovercard(sessionKey = "global", holdProgress = false) {
       assistantAgentId: "main",
       client: { request },
       hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
         features: {
           methods: ["progressCard.get", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
         },
@@ -71,7 +70,12 @@ function mountHovercard(sessionKey = "global", holdProgress = false) {
   const context = {
     gateway,
     basePath: "",
-    sessions: { subscribe: () => () => undefined },
+    sessions: {
+      subscribe: (listener: () => void) => {
+        sessionListeners.add(listener);
+        return () => sessionListeners.delete(listener);
+      },
+    },
     agentSelection: {
       get state() {
         return { selectedId, scopeId: selectedId };
@@ -94,6 +98,7 @@ function mountHovercard(sessionKey = "global", holdProgress = false) {
       agentId: selectedId,
       label: `${selectedId} session`,
       kind: "direct",
+      ...rowDetails,
     }),
   });
   const row = document.createElement("div");
@@ -107,9 +112,30 @@ function mountHovercard(sessionKey = "global", holdProgress = false) {
   sidebar.append(row);
   provider.append(sidebar);
   document.body.append(provider);
+  flush();
   return {
+    provider,
     gateway,
     request,
+    updateRow: (details: Partial<SidebarSessionHovercardRow>) => {
+      rowDetails = { ...rowDetails, ...details };
+      for (const listener of sessionListeners) {
+        listener();
+      }
+    },
+    emitPullRequestStatus: (status: "ready" | "rate-limited" | "unavailable") => {
+      for (const listener of eventListeners) {
+        listener({
+          type: "event",
+          event: "controlUi.sessionPullRequests.changed",
+          payload: {
+            sessions: {
+              [sessionKey]: { status, rateLimited: status === "rate-limited", pullRequests: [] },
+            },
+          },
+        });
+      }
+    },
     emitProgressChange: () => {
       for (const listener of eventListeners) {
         listener({
@@ -119,8 +145,10 @@ function mountHovercard(sessionKey = "global", holdProgress = false) {
         });
       }
     },
-    focus: () =>
-      trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true })),
+    focus: async () => {
+      await provider.updateComplete;
+      trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+    },
     selectMain: () => {
       selectedId = "main";
       for (const listener of selectionListeners) {
@@ -134,8 +162,11 @@ function mountHovercard(sessionKey = "global", holdProgress = false) {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.resolve();
+  flush();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -197,15 +228,75 @@ describe("sessionProgressHoverTargetFromEvent", () => {
 });
 
 describe("session progress hovercard ownership", () => {
+  it.each([
+    {
+      status: "rate-limited",
+      warning:
+        "GitHub API rate limit reached. Pull request status may be out of date until the limit resets.",
+    },
+    {
+      status: "unavailable",
+      warning:
+        "GitHub status could not be refreshed. Showing the last known state; check GitHub for the latest.",
+    },
+  ] as const)(
+    "updates a held hovercard when only PR lookup status becomes $status",
+    async ({ status, warning }) => {
+      vi.useFakeTimers();
+      const harness = mountHovercard("agent:research:main");
+      await harness.focus();
+      await vi.advanceTimersByTimeAsync(0);
+      const portal = document.querySelector(".session-progress-hovercard");
+      expect(portal?.textContent).toContain("research progress");
+      harness.emitPullRequestStatus("ready");
+      flush();
+      expect(portal?.querySelector('[role="status"]')).toBeNull();
+
+      harness.emitPullRequestStatus(status);
+      flush();
+      expect(portal?.querySelector('[role="status"]')?.textContent?.trim()).toBe(warning);
+      harness.emitPullRequestStatus("ready");
+      flush();
+      expect(portal?.querySelector('[role="status"]')).toBeNull();
+      expect(document.querySelector(".session-progress-hovercard")).toBe(portal);
+    },
+  );
+
+  it("updates color and machine facts in a held hovercard", async () => {
+    vi.useFakeTimers();
+    const harness = mountHovercard("agent:research:main");
+    harness.updateRow({
+      color: "blue",
+      placementProviderId: "cloud-a",
+      placementProfileId: "standard",
+      placementMachine: { os: "linux", class: "small" },
+    });
+    await harness.focus();
+    await vi.advanceTimersByTimeAsync(0);
+    const portal = document.querySelector(".session-progress-hovercard");
+    expect(portal?.querySelector(".session-color-dot")?.getAttribute("style")).toContain("blue");
+    expect(portal?.textContent).toContain("cloud-a · standard");
+    expect(portal?.textContent).toContain("small");
+
+    harness.updateRow({ color: "red" });
+    flush();
+    expect(portal?.querySelector(".session-color-dot")?.getAttribute("style")).toContain("red");
+    harness.updateRow({ placementMachine: { os: "windows", class: "medium" } });
+    flush();
+    expect(portal?.textContent).toContain("windows");
+    expect(portal?.textContent).toContain("medium");
+    expect(document.querySelector(".session-progress-hovercard")).toBe(portal);
+  });
+
   it.each([true, false])(
     "removes denied progress from a held hovercard while retaining transient failures (denied: %s)",
     async (denied) => {
       const sessionKey = "agent:research:main";
       const harness = mountHovercard(sessionKey);
-      harness.focus();
+      await harness.focus();
       const portalText = () =>
         document.querySelector(".session-progress-hovercard")?.textContent ?? "";
-      await vi.waitFor(() => expect(portalText()).toContain("research progress"));
+      await waitForSolid(() => expect(portalText()).toContain("research progress"));
       const error = denied
         ? new GatewayRequestError({
             code: "INVALID_REQUEST",
@@ -215,7 +306,7 @@ describe("session progress hovercard ownership", () => {
         : new Error("Temporary connection failure");
       harness.request.mockRejectedValueOnce(error);
       harness.emitProgressChange();
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(sessionProgressCardsForGateway(harness.gateway).getError({ sessionKey })).toBe(
           denied ? "access-denied" : "unavailable",
         ),
@@ -236,17 +327,18 @@ describe("session progress hovercard ownership", () => {
     "uses the hovered session owner for progress and PR data: %s",
     async (sessionKey, artifactKey, agentId) => {
       const harness = mountHovercard(sessionKey);
-      harness.focus();
-      await vi.waitFor(() =>
+      await harness.focus();
+      await waitForSolid(() =>
         expect(harness.request).toHaveBeenCalledWith("progressCard.get", {
           sessionKey,
           ...(sessionKey === "global" ? { agentId } : {}),
         }),
       );
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(harness.request).toHaveBeenCalledWith(
           SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
           expect.objectContaining({ sessionKeys: [artifactKey] }),
+          { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
         ),
       );
       expect(document.querySelector(".session-progress-hovercard")?.textContent).toContain(
@@ -255,27 +347,43 @@ describe("session progress hovercard ownership", () => {
     },
   );
 
-  it("retires an in-flight global hover when the sidebar owner changes", async () => {
+  it("retires a removed provider while its progress request is pending", async () => {
     const harness = mountHovercard("global", true);
-    harness.focus();
-    await vi.waitFor(() =>
+    await harness.focus();
+    await waitForSolid(() =>
       expect(harness.request).toHaveBeenCalledWith("progressCard.get", expect.anything()),
     );
-    await vi.waitFor(() =>
+    harness.provider.remove();
+    await Promise.resolve();
+    await harness.releaseProgress();
+    flush();
+    expect(document.querySelector(".session-progress-hovercard")).toBeNull();
+    const requests = harness.request.mock.calls.length;
+    await harness.focus();
+    expect(harness.request).toHaveBeenCalledTimes(requests);
+  });
+
+  it("retires an in-flight global hover when the sidebar owner changes", async () => {
+    const harness = mountHovercard("global", true);
+    await harness.focus();
+    await waitForSolid(() =>
+      expect(harness.request).toHaveBeenCalledWith("progressCard.get", expect.anything()),
+    );
+    await waitForSolid(() =>
       expect(document.querySelector(".session-progress-hovercard")?.textContent).toContain(
         "research session",
       ),
     );
     harness.selectMain();
     expect(document.querySelector(".session-progress-hovercard")).toBeNull();
-    harness.focus();
-    await vi.waitFor(() =>
+    await harness.focus();
+    await waitForSolid(() =>
       expect(document.querySelector(".session-progress-hovercard")?.textContent).toContain(
         "main progress",
       ),
     );
     await harness.releaseProgress();
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(document.querySelector(".session-progress-hovercard")?.textContent).not.toContain(
         "research progress",
       ),

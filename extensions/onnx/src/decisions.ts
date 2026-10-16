@@ -6,26 +6,16 @@ import type {
   DecisionQuestion,
 } from "openclaw/plugin-sdk/decisions";
 import { findModel } from "./catalog.js";
-import type { ClassificationInput, ClassificationResult } from "./models/types.js";
+import type { ClassificationInput } from "./models/types.js";
 import { UnsupportedInputError } from "./models/types.js";
 import { OnnxWorkerError } from "./protocol.js";
-
-type Classifier = {
-  classify(
-    model: string,
-    inputs: ClassificationInput[],
-    signal: AbortSignal,
-  ): Promise<ClassificationResult[]>;
-};
+import type { InferenceWorkerClient } from "./worker-client.js";
 
 function render(value: DecisionEntry): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
-function rubric(question: DecisionQuestion): {
-  labels: string[];
-  descriptions?: Record<string, string>;
-} {
+function rubric(question: DecisionQuestion) {
   if (question.type === "choice") {
     const labels = Object.keys(question.criteria);
     const descriptions = Object.fromEntries(
@@ -60,9 +50,6 @@ function rubric(question: DecisionQuestion): {
 }
 
 function probabilities(logits: readonly number[]): number[] {
-  if (logits.length < 2 || logits.some((value) => !Number.isFinite(value))) {
-    throw new Error("ONNX returned invalid label logits.");
-  }
   const max = Math.max(...logits);
   const weights = logits.map((value) => Math.exp(value - max));
   const sum = weights.reduce((total, value) => total + value, 0);
@@ -70,7 +57,7 @@ function probabilities(logits: readonly number[]): number[] {
 }
 
 export function createOnnxProvider(
-  client: Classifier,
+  client: Pick<InferenceWorkerClient, "classify">,
   warn: (message: string) => void,
 ): DecisionProviderV1 {
   return {
@@ -83,15 +70,9 @@ export function createOnnxProvider(
       }
       try {
         const entries = Object.entries(batch.questions);
-        if (entries.length === 0 || entries.length > 32) {
-          throw new UnsupportedInputError("Unsupported batch size.");
-        }
         const text = render(batch.state);
         const inputs = entries.map(([, question]): ClassificationInput => {
           const selected = rubric(question);
-          if (selected.labels.length < 2 || selected.labels.length > 64) {
-            throw new UnsupportedInputError("Unsupported label count.");
-          }
           return {
             text,
             task: "decision",
@@ -103,17 +84,11 @@ export function createOnnxProvider(
         });
         const results = await client.classify(context.model, inputs, context.signal);
         context.signal.throwIfAborted();
-        if (results.length !== entries.length) {
-          throw new Error("ONNX returned an incomplete batch.");
-        }
         const answers = new Map<string, DecisionAnswer>();
         let inputTokens = 0;
         entries.forEach(([id, question], index) => {
           const result = results[index]!;
           const labels = inputs[index]!.labels;
-          if (result.logits.length !== labels.length) {
-            throw new Error("ONNX returned an incomplete distribution.");
-          }
           const values = probabilities(result.logits);
           inputTokens += result.inputTokens;
           if (question.type === "boolean") {

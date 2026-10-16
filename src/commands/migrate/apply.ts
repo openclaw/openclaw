@@ -1,5 +1,6 @@
 /** Applies migration plans with backup, filtering, reporting, and progress output. */
 import fs from "node:fs/promises";
+import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { exitCliAfterOutput } from "../../cli/one-shot-exit.js";
 import { withProgress } from "../../cli/progress.js";
 import type { ProgressReporter } from "../../cli/progress.js";
@@ -10,22 +11,13 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { backupCreateCommand } from "../backup.js";
 import { buildMigrationContext, buildMigrationReportDir } from "./context.js";
-import { applyMigrationItemSelection } from "./item-selection.js";
 import { assertApplySucceeded, assertConflictFreePlan, writeApplyResult } from "./output.js";
 import { buildMigrationProviderOptions } from "./providers.js";
-import { applyMigrationPluginSelection, applyMigrationSkillSelection } from "./selection.js";
+import { applyMigrationSelections } from "./selection.js";
 import type { MigrateApplyOptions } from "./types.js";
 
-function shouldTreatMissingBackupAsEmptyState(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    message.includes("No local OpenClaw state was found to back up") ||
-    message.includes("No OpenClaw config file was found to back up")
-  );
-}
-
 /** Creates a verified pre-migration backup, treating absent local state as empty. */
-async function createPreMigrationBackup(opts: { output?: string }): Promise<string | undefined> {
+async function createPreMigrationBackup(output: string | undefined): Promise<string | undefined> {
   try {
     const result = await backupCreateCommand(
       {
@@ -36,13 +28,17 @@ async function createPreMigrationBackup(opts: { output?: string }): Promise<stri
         },
       },
       {
-        output: opts.output,
+        output,
         verify: true,
       },
     );
     return result.archivePath;
   } catch (err) {
-    if (shouldTreatMissingBackupAsEmptyState(err)) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (
+      message.includes("No local OpenClaw state was found to back up") ||
+      message.includes("No OpenClaw config file was found to back up")
+    ) {
       return undefined;
     }
     throw err;
@@ -57,109 +53,95 @@ export async function runMigrationApply(params: {
   provider: MigrationProviderPlugin;
   onApplyCompleted?: () => void;
 }): Promise<MigrationApplyResult> {
-  const applyMigration = async (progress?: ProgressReporter) => {
-    const total = (params.opts.preflightPlan ? 0 : 1) + (params.opts.noBackup ? 0 : 1) + 1;
-    let completed = 0;
-    const tick = () => {
-      completed += 1;
-      progress?.setPercent((completed / total) * 100);
-    };
-    if (!params.opts.preflightPlan) {
-      progress?.setLabel("Preparing migration plan…");
-    }
-    const preflightPlan =
-      params.opts.preflightPlan ??
-      (await params.provider.plan(
-        buildMigrationContext({
-          source: params.opts.source,
-          targetAgentId: params.opts.targetAgentId,
-          itemKinds: params.opts.itemKinds,
-          includeSecrets: params.opts.includeSecrets,
-          overwrite: params.opts.overwrite,
-          configOverride: params.opts.configOverride,
-          providerOptions: buildMigrationProviderOptions(params.opts, params.providerId),
-          runtime: params.runtime,
-          json: params.opts.json,
-        }),
-      ));
-    if (!params.opts.preflightPlan) {
-      tick();
-    }
-    const selectedPlan = applyMigrationItemSelection(
-      applyMigrationPluginSelection(
-        applyMigrationSkillSelection(preflightPlan, params.opts.skills),
-        params.opts.plugins,
-      ),
-      params.opts.itemIds,
-    );
-    // Selection is applied before conflict checks so deselected conflicting items
-    // cannot block an otherwise safe migration.
-    assertConflictFreePlan(selectedPlan, params.providerId);
-    const stateDir = resolveStateDir();
-    const reportDir = buildMigrationReportDir(params.providerId, stateDir);
-    const releaseCustody = beginLifecycleWriteCustody("migration");
-    let failure: unknown;
-    try {
-      if (!params.opts.noBackup) {
-        progress?.setLabel("Preparing migration backup…");
-      }
-      const backupPath = params.opts.noBackup
-        ? undefined
-        : await createPreMigrationBackup({ output: params.opts.backupOutput });
-      if (!params.opts.noBackup) {
-        tick();
-      }
-      await fs.mkdir(reportDir, { recursive: true });
-      const ctx = buildMigrationContext({
-        source: params.opts.source,
-        targetAgentId: params.opts.targetAgentId,
-        itemKinds: params.opts.itemKinds,
-        includeSecrets: params.opts.includeSecrets,
-        overwrite: params.opts.overwrite,
-        configOverride: params.opts.configOverride,
-        providerOptions: buildMigrationProviderOptions(params.opts, params.providerId),
-        runtime: params.runtime,
-        backupPath,
-        reportDir,
-        json: params.opts.json,
-      });
-      progress?.setLabel("Applying migration…");
-      const result = await withCommandProcessScope(async () => {
-        const applied = await params.provider.apply(ctx, selectedPlan);
-        params.onApplyCompleted?.();
-        return applied;
-      });
-      tick();
-      return {
-        ...result,
-        backupPath: result.backupPath ?? backupPath,
-        reportDir: result.reportDir ?? reportDir,
+  return await runWithLocalStateOwner({
+    method: "migrate.apply",
+    params: {},
+    target: params.providerId,
+    onForeignOwner: "refuse",
+    runLocal: async ({ assertCurrent }) => {
+      const applyMigration = async (progress?: ProgressReporter) => {
+        assertCurrent();
+        const createContext = (paths: { backupPath?: string; reportDir?: string } = {}) =>
+          buildMigrationContext({
+            ...params.opts,
+            providerOptions: buildMigrationProviderOptions(params.opts, params.providerId),
+            runtime: params.runtime,
+            ...paths,
+          });
+        const total = (params.opts.preflightPlan ? 0 : 1) + (params.opts.noBackup ? 0 : 1) + 1;
+        let completed = 0;
+        const tick = () => {
+          completed += 1;
+          progress?.setPercent((completed / total) * 100);
+        };
+        if (!params.opts.preflightPlan) {
+          progress?.setLabel("Preparing migration plan…");
+        }
+        const preflightPlan =
+          params.opts.preflightPlan ?? (await params.provider.plan(createContext()));
+        if (!params.opts.preflightPlan) {
+          tick();
+        }
+        assertCurrent();
+        const selectedPlan = applyMigrationSelections(preflightPlan, params.opts);
+        // Selection is applied before conflict checks so deselected conflicting items
+        // cannot block an otherwise safe migration.
+        assertConflictFreePlan(selectedPlan, params.providerId);
+        const stateDir = resolveStateDir();
+        const reportDir = buildMigrationReportDir(params.providerId, stateDir);
+        const releaseCustody = beginLifecycleWriteCustody("migration");
+        let failure: unknown;
+        try {
+          if (!params.opts.noBackup) {
+            progress?.setLabel("Preparing migration backup…");
+          }
+          const backupPath = params.opts.noBackup
+            ? undefined
+            : await createPreMigrationBackup(params.opts.backupOutput);
+          if (!params.opts.noBackup) {
+            tick();
+          }
+          assertCurrent();
+          await fs.mkdir(reportDir, { recursive: true });
+          assertCurrent();
+          const ctx = createContext({ backupPath, reportDir });
+          progress?.setLabel("Applying migration…");
+          const result = await withCommandProcessScope(async () => {
+            assertCurrent();
+            const applied = await params.provider.apply(ctx, selectedPlan);
+            params.onApplyCompleted?.();
+            return applied;
+          });
+          tick();
+          return {
+            ...result,
+            backupPath: result.backupPath ?? backupPath,
+            reportDir: result.reportDir ?? reportDir,
+          };
+        } catch (error) {
+          failure = error;
+          throw error;
+        } finally {
+          releaseCustody(failure);
+        }
       };
-    } catch (error) {
-      failure = error;
-      throw error;
-    } finally {
-      releaseCustody(failure);
-    }
-  };
-  const withBackup = params.opts.json
-    ? await applyMigration()
-    : await withProgress(
-        { label: `Applying ${params.providerId} migration…` },
-        async (progress) => await applyMigration(progress),
-      );
-  writeApplyResult(params.runtime, params.opts, withBackup);
-  if (!params.opts.allowPartialResult) {
-    try {
-      assertApplySucceeded(withBackup);
-    } catch (error) {
-      // The JSON result already describes partial failure; a generic error would
-      // append a second document and make stdout impossible to parse as JSON.
-      if (params.opts.json) {
-        exitCliAfterOutput(params.runtime, 1);
+      const withBackup = params.opts.json
+        ? await applyMigration()
+        : await withProgress({ label: `Applying ${params.providerId} migration…` }, applyMigration);
+      writeApplyResult(params.runtime, params.opts, withBackup);
+      if (!params.opts.allowPartialResult) {
+        try {
+          assertApplySucceeded(withBackup);
+        } catch (error) {
+          // The JSON result already describes partial failure; a generic error would
+          // append a second document and make stdout impossible to parse as JSON.
+          if (params.opts.json) {
+            exitCliAfterOutput(params.runtime, 1);
+          }
+          throw error;
+        }
       }
-      throw error;
-    }
-  }
-  return withBackup;
+      return withBackup;
+    },
+  });
 }

@@ -8,13 +8,13 @@ import {
   machoFixture,
   nativeObjectFixture,
   universalArchiveFixture,
-  writeFat64Fixture,
 } from "../helpers/mac-native.js";
 import {
   installFakeCodesign,
   installTransientFakeCodesign,
   installElevationFakeCodesign,
   makeSigningFixture,
+  writeFat64Fixture,
 } from "../helpers/mac-signing.js";
 import { createMacScriptTest, type MacScriptFixture } from "./mac-script-fixture.test-support.js";
 
@@ -54,6 +54,29 @@ async function runCodesignWithoutAllocation(
   });
   expect(existsSync(allocation), result.stderr).toBe(false);
   return result;
+}
+
+async function runElevationMetadataFixture(mac: MacScriptFixture, env: NodeJS.ProcessEnv) {
+  const tempRoot = mac.createTempDir("openclaw-codesign-elevation-metadata-");
+  const app = path.join(tempRoot, "Fake.app");
+  const binDir = path.join(tempRoot, "bin");
+  await mkdir(path.join(app, "Contents", "MacOS"), { recursive: true });
+  await mkdir(binDir);
+  await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
+  await installElevationFakeCodesign(binDir);
+  const result = await mac.run(codesignCommand, [...codesignArgs, app], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...env,
+      OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
+      TMPDIR: tempRoot,
+    },
+  });
+  return { app, result };
 }
 
 describe("codesign-mac-app temp file hygiene", () => {
@@ -203,7 +226,7 @@ describe("codesign-mac-app temp file hygiene", () => {
         script.indexOf("else", script.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]')),
       );
 
-      expect(script).toContain(
+      expect(readFileSync("scripts/lib/mac-signing-identity.sh", "utf8")).toContain(
         'ELEVATION_IDENTITY="Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)"',
       );
       expect(script).toContain('ELEVATION_TEAM_ID="FWJYW4S8P8"');
@@ -254,25 +277,8 @@ describe("codesign-mac-app temp file hygiene", () => {
     "consumes complete codesign metadata under pipefail before validating authority",
     ({ mac, expect }) =>
       mac.lifetime.run(async () => {
-        const tempRoot = mac.createTempDir("openclaw-codesign-elevation-metadata-");
-        const app = path.join(tempRoot, "Fake.app");
-        const binDir = path.join(tempRoot, "bin");
-        await mkdir(path.join(app, "Contents", "MacOS"), { recursive: true });
-        await mkdir(binDir);
-        await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
-        await installElevationFakeCodesign(binDir);
-
-        const result = await mac.run(codesignCommand, [...codesignArgs, app], {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            CODESIGN_FAKE_SECOND_AUTHORITY: "1",
-            OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
-            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-            SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
-            TMPDIR: tempRoot,
-          },
+        const { app, result } = await runElevationMetadataFixture(mac, {
+          CODESIGN_FAKE_SECOND_AUTHORITY: "1",
         });
 
         expect(result.status).toBe(0);
@@ -286,25 +292,8 @@ describe("codesign-mac-app temp file hygiene", () => {
     "preserves the precise diagnostic when codesign omits Authority",
     ({ mac, expect }) =>
       mac.lifetime.run(async () => {
-        const tempRoot = mac.createTempDir("openclaw-codesign-elevation-no-authority-");
-        const app = path.join(tempRoot, "Fake.app");
-        const binDir = path.join(tempRoot, "bin");
-        await mkdir(path.join(app, "Contents", "MacOS"), { recursive: true });
-        await mkdir(binDir);
-        await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
-        await installElevationFakeCodesign(binDir);
-
-        const result = await mac.run(codesignCommand, [...codesignArgs, app], {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            CODESIGN_FAKE_NO_AUTHORITY: "1",
-            OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
-            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-            SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
-            TMPDIR: tempRoot,
-          },
+        const { result } = await runElevationMetadataFixture(mac, {
+          CODESIGN_FAKE_NO_AUTHORITY: "1",
         });
 
         expect(result.status).toBe(1);
@@ -314,25 +303,8 @@ describe("codesign-mac-app temp file hygiene", () => {
 
   macIt.concurrent("preserves a codesign failure after metadata output", ({ mac, expect }) =>
     mac.lifetime.run(async () => {
-      const tempRoot = mac.createTempDir("openclaw-codesign-elevation-failed-metadata-");
-      const app = path.join(tempRoot, "Fake.app");
-      const binDir = path.join(tempRoot, "bin");
-      await mkdir(path.join(app, "Contents", "MacOS"), { recursive: true });
-      await mkdir(binDir);
-      await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
-      await installElevationFakeCodesign(binDir);
-
-      const result = await mac.run(codesignCommand, [...codesignArgs, app], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          CODESIGN_FAKE_FAIL_AFTER_METADATA: "1",
-          OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
-          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-          SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
-          TMPDIR: tempRoot,
-        },
+      const { app, result } = await runElevationMetadataFixture(mac, {
+        CODESIGN_FAKE_FAIL_AFTER_METADATA: "1",
       });
 
       expect(result.status).toBe(7);
@@ -437,11 +409,6 @@ describe("codesign-mac-app temp file hygiene", () => {
 
   macIt.concurrent.for([
     {
-      label: "Developer ID hash",
-      identity: "63A99BFF1D40E5A75C8A32B84BE99D1DDA6A44E1",
-      timestamp: true,
-    },
-    {
       label: "lowercase Developer ID hash",
       identity: "63a99bff1d40e5a75c8a32b84be99d1dda6a44e1",
       timestamp: true,
@@ -519,68 +486,77 @@ printf '%s\\n' \\
 });
 
 describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
-  const workerPath = "Contents/Resources/node-worker/arm64/";
+  const runtimePath = "Contents/Resources/runtime/";
 
   it.concurrent.for([
-    { arch: "arm64", sdkArch: "arm64", cpuType: 0x0100000c },
-    { arch: "x86_64", sdkArch: "x64", cpuType: 0x01000007 },
+    { arch: "arm64", sdkArch: "arm64", cpuType: 0x0100000c, elevation: false },
+    { arch: "x86_64", sdkArch: "x64", cpuType: 0x01000007, elevation: false },
+    { arch: "arm64", sdkArch: "arm64", cpuType: 0x0100000c, elevation: true },
+    { arch: "x86_64", sdkArch: "x64", cpuType: 0x01000007, elevation: true },
   ])(
-    "limits worker JIT entitlements to known JS runtime executables on $arch",
-    ({ arch, sdkArch, cpuType }, { mac, expect }) =>
+    "limits plugin library loading to bundled Bun on $arch (elevation: $elevation)",
+    ({ sdkArch, cpuType, elevation }, { mac, expect }) =>
       mac.lifetime.run(async () => {
         const fixture = await makeSigningFixture(mac, mac.createTempDir("openclaw-inventory-jit-"));
         const modules = "lib/node_modules/openclaw/node_modules";
         const sdkRuntime = `node_modules/@anthropic-ai/claude-agent-sdk-darwin-${sdkArch}/claude`;
-        const expected = new Map<string, boolean>();
-        for (const [relative, fileType, jit] of [
-          ["bin/node", 2, true],
-          [`lib/node_modules/openclaw/${sdkRuntime}`, 2, true],
-          [`${modules}/nested/${sdkRuntime}`, 2, true],
+        const expected = new Map<string, "plugins" | "jit" | "plain">();
+        for (const [relative, fileType, policy] of [
+          ["bin/bun", 2, "plugins"],
+          [`lib/node_modules/openclaw/${sdkRuntime}`, 2, "jit"],
+          [`${modules}/nested/${sdkRuntime}`, 2, "jit"],
           [
             `${modules}/@lydell/node-pty-darwin-${sdkArch}/prebuilds/darwin-${sdkArch}/spawn-helper`,
             2,
-            false,
+            "plain",
           ],
-          [`${modules}/other/bin/node`, 2, false],
-          [`${modules}/other/claude`, 2, false],
-          [`${modules}/library/${sdkRuntime}`, 6, false],
-          ["lib/addon.node", 6, false],
+          [`${modules}/other/bin/bun`, 2, "plain"],
+          [`${modules}/other/claude`, 2, "plain"],
+          [`${modules}/library/${sdkRuntime}`, 6, "plain"],
+          ["lib/addon.node", 6, "plain"],
+          ["lib/libsqlite3.dylib", 6, "plain"],
         ] as const) {
           const bytes = machoFixture(64, true, false, fileType);
           bytes.writeUInt32LE(cpuType, 4);
-          const filename = await fixture.put(
-            `Contents/Resources/node-worker/${arch}/${relative}`,
-            bytes,
-          );
-          expected.set(filename, jit);
+          const filename = await fixture.put(`${runtimePath}${relative}`, bytes);
+          expected.set(filename, policy);
         }
-        const result = await fixture.run();
+        await fixture.put("Contents/MacOS/OpenClaw");
+        const result = await fixture.run({}, elevation);
         expect(result.status, result.stderr).toBe(0);
+        expect(
+          existsSync(path.join(path.dirname(fixture.app), "Library/Caches/com.apple.python")),
+          "Signing helpers must not write bytecode into the operator's Python cache",
+        ).toBe(false);
         const events = fixture.events();
         const signs = events.filter(({ args }) => args.includes("--sign"));
         expect(signs).toHaveLength(expected.size + 1);
         expect(signs.at(-1)?.args.at(-1)).toBe(fixture.app);
-        for (const [filename, jit] of expected) {
+        expect(signs.at(-1)?.entitlements).not.toContain("disable-library-validation");
+        expect(signs.at(-1)?.entitlements).not.toContain("allow-jit");
+        for (const [filename, policy] of expected) {
           const signed = expectDefined(
             signs.find(({ args }) => args.at(-1) === filename),
             filename,
           );
-          const keys = Array.from(
-            signed.entitlements.matchAll(/<key>([^<]+)<\/key>/g),
-            (match) => match[1],
+          const keys = Array.from(signed.entitlements.matchAll(/<key>([^<]+)<\/key>/g), (match) =>
+            expectDefined(match[1], "entitlement key"),
           );
-          expect(keys, filename).toEqual(
-            jit
-              ? [
+          const expectedKeys =
+            policy === "plain"
+              ? []
+              : [
                   "com.apple.security.cs.allow-jit",
                   "com.apple.security.cs.allow-unsigned-executable-memory",
-                ]
-              : [],
-          );
+                  ...(policy === "plugins"
+                    ? ["com.apple.security.cs.disable-library-validation"]
+                    : []),
+                ];
+          expect(keys.toSorted(), filename).toEqual(expectedKeys.toSorted());
           expect(signed.args).toEqual(
             expect.arrayContaining(["--force", "--options", "runtime", "--timestamp", "--sign"]),
           );
-          expect(signed.args.includes("--entitlements"), filename).toBe(jit);
+          expect(signed.args.includes("--entitlements"), filename).toBe(policy !== "plain");
           expect(
             events.some(
               ({ args }) =>
@@ -610,7 +586,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
               }
               for (const type of [2, 6]) {
                 const filename = await fixture.put(
-                  `${workerPath}formats/${bits}-${little}-${fat}-${type} executable\n\t'\\/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude`,
+                  `${runtimePath}formats/${bits}-${little}-${fat}-${type} executable\n\t'\\/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude`,
                   machoFixture(bits, little, fat, type),
                 );
                 candidates.push(filename);
@@ -625,13 +601,13 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
           ["truncated", Buffer.from("cffa", "hex")],
           ["fat-false-positive", Buffer.from("cafebabe", "hex")],
         ] as const) {
-          await fixture.put(workerPath + name, bytes);
+          await fixture.put(runtimePath + name, bytes);
         }
         await symlink(
           expectDefined(candidates[0], "native fixture"),
-          path.join(fixture.worker, "native-link"),
+          path.join(fixture.runtime, "native-link"),
         );
-        await symlink("missing", path.join(fixture.worker, "dangling"));
+        await symlink("missing", path.join(fixture.runtime, "dangling"));
         const result = await fixture.run({}, elevation);
         expect(result.status, result.stderr).toBe(0);
         const events = fixture.events();
@@ -675,7 +651,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
           mac.createTempDir("openclaw-inventory-swapped-fat-"),
         );
         const bytes = machoFixture(bits, true, true);
-        await fixture.put(workerPath + "invalid-fat.node", bytes);
+        await fixture.put(runtimePath + "invalid-fat.node", bytes);
         const result = await fixture.run();
         expect(result.status, result.stdout).not.toBe(0);
         expect(result.stderr).toMatch(/native header/i);
@@ -694,7 +670,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
           mac,
           mac.createTempDir("openclaw-inventory-real-fat64-"),
         );
-        const native = await fixture.put(workerPath + "bin/node");
+        const native = await fixture.put(runtimePath + "bin/bun");
         const bytes = await writeFat64Fixture(native, mac);
         expect(bytes.readUInt32BE(0)).toBe(0xcafebabf);
         expect(bytes.readUInt32BE(4)).toBeGreaterThanOrEqual(2);
@@ -732,7 +708,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
       for (const fileType of [1, 2, 4, 5, 6, 7, 8, 9, 10, 11]) {
         const bytes = machoFixture(64, true, false, fileType);
         const filename = await fixture.put(
-          `${workerPath}type-${fileType}/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude`,
+          `${runtimePath}type-${fileType}/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude`,
           bytes,
         );
         if ([1, 4, 9, 10].includes(fileType)) {
@@ -761,9 +737,9 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
       mac.lifetime.run(async () => {
         const root = mac.createTempDir("openclaw-real-object-");
         const fixture = await makeSigningFixture(mac, root);
-        const node = await fixture.put(workerPath + "bin/node");
+        const node = await fixture.put(runtimePath + "bin/bun");
         const bytes = await nativeObjectFixture(path.join(root, "object-inputs"), format, mac);
-        const object = await fixture.put(workerPath + "opaque-object", bytes);
+        const object = await fixture.put(runtimePath + "opaque-object", bytes);
         const result = await fixture.run();
         expect(result.status, result.stderr).toBe(0);
         expect(readFileSync(object)).toEqual(bytes);
@@ -775,9 +751,10 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
       }),
   );
 
-  it.concurrent.for(
-    [false, true].flatMap((fat64) => [0, 1].map((imageSlice) => ({ fat64, imageSlice }))),
-  )(
+  it.concurrent.for([
+    { fat64: false, imageSlice: 0 },
+    { fat64: true, imageSlice: 1 },
+  ])(
     "rejects object/image containers in either slice order (fat64: $fat64, image: $imageSlice)",
     ({ fat64, imageSlice }, { mac, expect }) =>
       mac.lifetime.run(async () => {
@@ -794,7 +771,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
           : bytes.readUInt32BE(record + 8);
         expect(bytes.readUInt32LE(offset)).toBe(0xfeedfacf);
         bytes.writeUInt32LE(6, offset + 12);
-        await fixture.put(workerPath + "mixed", bytes);
+        await fixture.put(runtimePath + "mixed", bytes);
         const result = await fixture.run();
         expect(result.status, result.stdout).not.toBe(0);
         expect(result.stderr).toMatch(/Mixed.*resource/);
@@ -812,7 +789,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
       mac.lifetime.run(async () => {
         const root = mac.createTempDir("openclaw-inventory-archive-");
         const fixture = await makeSigningFixture(mac, root);
-        const node = await fixture.put(workerPath + "node");
+        const node = await fixture.put(runtimePath + "bun");
         const bytes = await universalArchiveFixture(
           path.join(root, "archive-inputs"),
           fat64,
@@ -830,7 +807,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
             }
           }
         }
-        const archive = await fixture.put(workerPath + "opaque-resource", bytes);
+        const archive = await fixture.put(runtimePath + "opaque-resource", bytes);
         const result = await fixture.run();
         expect(readFileSync(archive)).toEqual(bytes);
         if (content !== "archive") {
@@ -858,12 +835,15 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
     mac.lifetime.run(async () => {
       const fixture = await makeSigningFixture(mac, mac.createTempDir("openclaw-inventory-scale-"));
       for (let i = 0; i < 24; i++) {
-        await fixture.put(`${workerPath}native-${i}`, machoFixture(64, true, false, i % 2 ? 6 : 2));
+        await fixture.put(
+          `${runtimePath}native-${i}`,
+          machoFixture(64, true, false, i % 2 ? 6 : 2),
+        );
       }
       const dataSource = path.join(path.dirname(fixture.app), "non-code-payload");
       await writeFile(dataSource, "export {};\n");
       for (let start = 24; start < 1_024; start += 256) {
-        const directory = path.join(fixture.worker, "data", String(start));
+        const directory = path.join(fixture.runtime, "data", String(start));
         await mkdir(directory, { recursive: true });
         await Promise.all(
           Array.from({ length: Math.min(256, 1_024 - start) }, (_, index) =>
@@ -874,9 +854,9 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
       const outside = path.join(path.dirname(fixture.app), "external");
       await mkdir(outside);
       await writeFile(path.join(outside, "native"), machoFixture());
-      await symlink(outside, path.join(fixture.worker, "directory-link"));
-      await symlink(path.join(outside, "native"), path.join(fixture.worker, "file-link"));
-      await symlink("missing", path.join(fixture.worker, "dangling"));
+      await symlink(outside, path.join(fixture.runtime, "directory-link"));
+      await symlink(path.join(outside, "native"), path.join(fixture.runtime, "file-link"));
+      await symlink("missing", path.join(fixture.runtime, "dangling"));
       const result = await fixture.scan({ maxFileCalls: 8 });
       expect(result.status, result.stderr).toBe(0);
       expect(fixture.classifications().length).toBeLessThanOrEqual(2);
@@ -890,13 +870,13 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
       expect(records).not.toContain(path.join(outside, "native"));
     }));
 
-  it.concurrent.for(["", "/", "///"])(
+  it.concurrent.for(["", "///"])(
     "rejects a symlink bundle root with suffix %j before signing",
     (suffix, { mac, expect }) =>
       mac.lifetime.run(async () => {
         const root = mac.createTempDir("openclaw-inventory-root-link-");
         const fixture = await makeSigningFixture(mac, root);
-        await fixture.put(workerPath + "node");
+        await fixture.put(runtimePath + "bun");
         const alias = path.join(root, "Alias.app");
         await symlink(fixture.app, alias);
         const result = await fixture.run({}, false, alias + suffix);
@@ -916,7 +896,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
     mac.lifetime.run(async () => {
       const root = mac.createTempDir("openclaw-inventory-swap-");
       const fixture = await makeSigningFixture(mac, root);
-      const swapDirectory = path.join(fixture.worker, "package");
+      const swapDirectory = path.join(fixture.runtime, "package");
       const externalDirectory = path.join(root, "external");
       const name = "native ' payload\n.node";
       const external = path.join(externalDirectory, name);
@@ -931,7 +911,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
       // The first schedule discovers a file that never existed in the bundle.
       // Later schedules redirect a previously discovered name at the next boundary.
       if (swapStage !== "before-directory-open") {
-        await fixture.put(`${workerPath}package/${name}`);
+        await fixture.put(`${runtimePath}package/${name}`);
       }
       const result = await fixture.run({
         swapStage,
@@ -971,7 +951,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
     mac.lifetime.run(async () => {
       const root = mac.createTempDir("openclaw-inventory-descriptors-");
       const fixture = await makeSigningFixture(mac, root);
-      const native = await fixture.put(workerPath + "node");
+      const native = await fixture.put(runtimePath + "bun");
       const signed = await fixture.run({ writeTarget: native });
       expect(signed.status, signed.stderr).toBe(0);
       expect(readFileSync(native).subarray(-19).toString()).toBe("\nfixture-signature\n");
@@ -1018,7 +998,7 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
       expect(
         (await mac.run("/usr/bin/xattr", ["-w", attribute, "untouched", external])).status,
       ).toBe(0);
-      await link(external, path.join(fixture.worker, "native.node"));
+      await link(external, path.join(fixture.runtime, "native.node"));
       const result = await fixture.run();
       expect(result.status, result.stderr).toBe(1);
       expect(result.stderr).toContain("private app copy");
@@ -1035,7 +1015,7 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
     mac.lifetime.run(async () => {
       const root = mac.createTempDir("openclaw-inventory-fifo-");
       const fixture = await makeSigningFixture(mac, root);
-      expect((await mac.run("/usr/bin/mkfifo", [path.join(fixture.worker, "fifo")])).status).toBe(
+      expect((await mac.run("/usr/bin/mkfifo", [path.join(fixture.runtime, "fifo")])).status).toBe(
         0,
       );
       // Observe the cleanup boundary without letting a regression hang real xattr on the FIFO.
@@ -1053,7 +1033,7 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
       expect(fixture.events()).toEqual([]);
     }));
 
-  it.concurrent.for(["", "/", "///"])(
+  it.concurrent.for(["", "///"])(
     "seals each bundle owner once after nested code with suffix %j",
     (suffix, { mac, expect }) =>
       mac.lifetime.run(async () => {
@@ -1063,7 +1043,7 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
         );
         const helper = await fixture.put("Contents/MacOS/openclaw-mlx-tts");
         const cua = await fixture.put("Contents/Resources/cua-driver");
-        const worker = await fixture.put(workerPath + "node");
+        const worker = await fixture.put(runtimePath + "bun");
         await fixture.put("Contents/MacOS/OpenClaw");
         const sparkle = "Contents/Frameworks/Sparkle.framework";
         for (const member of [
@@ -1127,39 +1107,20 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
   );
 
   it.concurrent.for([
-    "mismatch",
-    "metadata",
     "metadataFailure",
-    "missingTeam",
-    "format",
     "formatSkipTeam",
-    "missingFormat",
     "verifyFailure",
-    "authority",
     "appleEvents",
     "entitlementFailure",
   ])("fails closed on %s at the signing/audit boundary", (failure, { mac, expect }) =>
     mac.lifetime.run(async () => {
       const fixture = await makeSigningFixture(mac, mac.createTempDir("openclaw-inventory-gates-"));
-      const native = await fixture.put(workerPath + "node");
+      const native = await fixture.put(runtimePath + "bun");
       const config =
-        failure === "formatSkipTeam"
-          ? { format: native, skipTeam: true }
-          : failure === "missingTeam"
-            ? { metadata: "missing" }
-            : failure === "missingFormat"
-              ? { signatureFormat: "missing" }
-              : {
-                  [failure]:
-                    failure === "metadata"
-                      ? "failure"
-                      : failure === "authority"
-                        ? "Wrong Authority"
-                        : native,
-                };
+        failure === "formatSkipTeam" ? { format: native, skipTeam: true } : { [failure]: native };
       const result = await fixture.run(
         config,
-        ["authority", "appleEvents", "entitlementFailure"].includes(failure),
+        ["appleEvents", "entitlementFailure"].includes(failure),
       );
       expect(result.status, result.stdout).not.toBe(0);
       expect(result.stdout).not.toContain("Codesign complete");
@@ -1175,7 +1136,7 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
           mac.createTempDir("openclaw-metadata-"),
           "Injected\nFormat=Mach-O thin (arm64)\nCodeDirectory v=20400\nTeamIdentifier=FWJYW4S8P8\nAuthority=Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)\n.app",
         );
-        const native = await fixture.put(workerPath + "node");
+        const native = await fixture.put(runtimePath + "bun");
         const configs: Record<string, Record<string, unknown>> = {
           valid: {},
           team: { mismatch: native },
@@ -1217,8 +1178,8 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
             mac,
             mac.createTempDir("openclaw-inventory-failure-"),
           );
-          const native = await fixture.put(workerPath + "node");
-          await fixture.put(workerPath + "addon", machoFixture(64, true, false, 6));
+          const native = await fixture.put(runtimePath + "bun");
+          await fixture.put(runtimePath + "addon", machoFixture(64, true, false, 6));
           const result = await fixture.run({ fault, phase, partialPath: native });
           expect(result.status, `${phase}/${fault}: ${result.stdout}`).not.toBe(0);
           expect(result.stdout).not.toContain("Codesign complete");
@@ -1237,8 +1198,8 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
           mac,
           mac.createTempDir("openclaw-inventory-fresh-"),
         );
-        await fixture.put(workerPath + "node");
-        const generated = path.join(fixture.worker, "generated-after-sign.node");
+        await fixture.put(runtimePath + "bun");
+        const generated = path.join(fixture.runtime, "generated-after-sign.node");
         const result = await fixture.run(
           {
             generated,

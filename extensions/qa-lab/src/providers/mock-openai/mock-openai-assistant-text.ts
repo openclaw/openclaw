@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   type ResponsesInputItem,
@@ -17,13 +18,7 @@ import {
   extractExactReplyDirective,
   extractFinishExactlyDirective,
   extractExactMarkerDirective,
-  extractWhatsAppLocationMarkerDirective,
-  extractWhatsAppContactMarkerDirective,
-  extractWhatsAppStickerMarkerDirective,
-  shouldUseWhatsAppLocationMarker,
-  shouldUseWhatsAppContactMarker,
-  shouldUseWhatsAppStickerMarker,
-  extractToolErrorForNamedCall,
+  resolveWhatsAppStructuredReply,
   resolveHeartbeatPromptReply,
   readFirstMediaPath,
 } from "./mock-openai-directives.js";
@@ -103,13 +98,9 @@ export function isCanonicalCompactionRetryWriteResult(toolOutput: string): boole
   if (!parsed || parsed.status !== "completed" || parsed.replaySafe !== false) {
     return false;
   }
-  const value = parsed.value;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const result = value as Record<string, unknown>;
+  const result = asOptionalRecord(parsed.value);
   return (
-    result.changed === true &&
+    result?.changed === true &&
     result.created === true &&
     result.firstChangedLine === 1 &&
     isCompactionRetryWritePatch(result.patch)
@@ -123,6 +114,22 @@ export function readForkedContextCompletion(input: ResponsesInputItem[]) {
   }
   const result = /^FORKED-CONTEXT-CHILD: FORKED-CONTEXT-[A-Z0-9-]+$/m.exec(completion.result);
   return completion.ok && result ? result[0] : "FORKED-CONTEXT-MISSING-RESULT";
+}
+
+export function buildImageInspectionReply(
+  input: ResponsesInputItem[],
+  body: Record<string, unknown>,
+) {
+  const request = extractCurrentImageRequest(input, body);
+  if (request.imageInputCount > 0) {
+    if (/roundtrip image inspection check/i.test(request.text)) {
+      return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
+    }
+    if (/image understanding check/i.test(request.text)) {
+      return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
+    }
+  }
+  return undefined;
 }
 
 export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
@@ -162,12 +169,7 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
         ? JSON.stringify(toolJson.results)
         : scenarioToolOutput;
   const orbitCode = extractOrbitCode(memorySnippet) ?? extractOrbitCode(allInputText);
-  const mediaPath =
-    typeof toolJson?.details === "object" &&
-    toolJson.details !== null &&
-    !Array.isArray(toolJson.details)
-      ? readFirstMediaPath((toolJson.details as { media?: unknown }).media)
-      : "";
+  const mediaPath = readFirstMediaPath(asOptionalRecord(toolJson?.details)?.media);
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const allUserText = userTexts.join("\n");
@@ -176,25 +178,11 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   const userExactMarkerDirective =
     promptExactMarkerDirective ?? extractExactMarkerDirective(allUserText);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
-  const currentImageRequest = extractCurrentImageRequest(input, body);
-  const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
-    ? extractWhatsAppLocationMarkerDirective(allInputText)
-    : "";
-  const whatsAppContactMarker = shouldUseWhatsAppContactMarker(prompt)
-    ? extractWhatsAppContactMarkerDirective(allInputText)
-    : "";
-  const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(input)
-    ? extractWhatsAppStickerMarkerDirective(allInputText)
-    : "";
   const finishExactlyDirective =
     extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
-  const sessionsSpawnError = extractToolErrorForNamedCall({
-    input,
-    name: "sessions_spawn",
-    toolJson,
-  });
+  const toolError = typeof toolJson?.error === "string" ? toolJson.error.trim() : "";
 
   const slackMpimHistoryReply = buildSlackMpimHistoryReply(prompt);
   if (slackMpimHistoryReply !== undefined) {
@@ -203,8 +191,11 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;
   }
-  if (sessionsSpawnError) {
-    return `Protocol note: sessions_spawn failed: ${sessionsSpawnError}`;
+  if (
+    toolError &&
+    input.some((item) => item.type === "function_call" && item.name === "sessions_spawn")
+  ) {
+    return `Protocol note: sessions_spawn failed: ${toolError}`;
   }
   if (/remember this fact/i.test(prompt) && exactReplyDirective) {
     return exactReplyDirective;
@@ -219,41 +210,22 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   if (heartbeatReply) {
     return heartbeatReply;
   }
-  if (
-    /roundtrip image inspection check/i.test(currentImageRequest.text) &&
-    currentImageRequest.imageInputCount > 0
-  ) {
-    return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
+  const imageReply = buildImageInspectionReply(input, body);
+  if (imageReply) {
+    return imageReply;
   }
-  if (
-    /image understanding check/i.test(currentImageRequest.text) &&
-    currentImageRequest.imageInputCount > 0
-  ) {
-    return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
+  const whatsAppStructuredReply = resolveWhatsAppStructuredReply(prompt, input, allInputText);
+  if (whatsAppStructuredReply) {
+    return whatsAppStructuredReply;
   }
-  if (whatsAppLocationMarker) {
-    return whatsAppLocationMarker;
+  const promptMarkerReply = promptExactMarkerDirective ?? promptExactReplyDirective;
+  if (/\bmarker\b/i.test(prompt) && promptMarkerReply) {
+    return promptMarkerReply;
   }
-  if (whatsAppContactMarker) {
-    return whatsAppContactMarker;
-  }
-  if (whatsAppStickerMarker) {
-    return whatsAppStickerMarker;
-  }
-  if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
-    return promptExactMarkerDirective;
-  }
-  if (/\bmarker\b/i.test(prompt) && promptExactReplyDirective) {
-    return promptExactReplyDirective;
-  }
-  if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
-    return promptExactReplyDirective;
-  }
-  if (/\bmarker\b/i.test(allInputText) && userExactMarkerDirective) {
-    return userExactMarkerDirective;
-  }
-  if (/\bmarker\b/i.test(allInputText) && userExactReplyDirective) {
-    return userExactReplyDirective;
+  const historyMarkerReply =
+    promptExactReplyDirective ?? userExactMarkerDirective ?? userExactReplyDirective;
+  if (/\bmarker\b/i.test(allInputText) && historyMarkerReply) {
+    return historyMarkerReply;
   }
   if (promptExactReplyDirective) {
     return promptExactReplyDirective;
@@ -268,6 +240,9 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
     return `Protocol note: I checked memory and the project codename is ${orbitCode}.`;
   }
   if (isSnackRecallPrompt(prompt) && snackPreference) {
+    if (prompt.includes("Reply with only the snack preference, verbatim")) {
+      return snackPreference;
+    }
     return `Protocol note: you usually want ${snackPreference} for QA movie night.`;
   }
   if (isSnackRecallPrompt(prompt)) {
@@ -290,40 +265,24 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
   }
-  if (toolOutput && promptExactReplyDirective) {
-    return promptExactReplyDirective;
-  }
-  if ((toolOutput || allInputText) && /repo contract followthrough check/i.test(allInputText)) {
+  if (/repo contract followthrough check/i.test(allInputText)) {
     const repoEvidenceText = [scenarioToolOutput, allInputText].filter(Boolean).join("\n");
-    if (
+    const complete =
       /successfully (?:wrote|created|updated|replaced)/i.test(repoEvidenceText) ||
-      /status:\s*complete/i.test(repoEvidenceText)
-    ) {
-      return [
-        "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
-        "Wrote: repo-contract-summary.txt",
-        "Status: complete",
-      ].join("\n");
-    }
+      /status:\s*complete/i.test(repoEvidenceText);
     return [
       "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
       "Wrote: repo-contract-summary.txt",
-      "Status: blocked",
+      `Status: ${complete ? "complete" : "blocked"}`,
     ].join("\n");
   }
   if (toolOutput && /personal task followthrough check/i.test(allInputText)) {
-    const taskEvidenceText = scenarioToolOutput;
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)) {
-      return [
-        "Pending: maintainer feedback before publishing",
-        "Blocked: publishing needs explicit user approval",
-        "Done: local evidence captured in personal-task-status.txt",
-      ].join("\n");
-    }
     return [
       "Pending: maintainer feedback before publishing",
       "Blocked: publishing needs explicit user approval",
-      "Done: blocked until personal-task-status.txt exists",
+      /successfully (?:wrote|created|updated|replaced)/i.test(scenarioToolOutput)
+        ? "Done: local evidence captured in personal-task-status.txt"
+        : "Done: blocked until personal-task-status.txt exists",
     ].join("\n");
   }
   if (/session memory ranking check/i.test(prompt) && orbitCode) {

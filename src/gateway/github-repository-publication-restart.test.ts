@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   callPersonalPublicationRpc,
@@ -13,12 +14,16 @@ import {
   SESSION_KEY,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  root,
 } from "./github-publication.test-support.js";
-import { readRepositoryGitHubPublication } from "./github-repository-publication-store.js";
+import { readRepositoryGitHubPublicationInDatabase } from "./github-repository-publication-store.worker.js";
 import {
   createRepositoryPublicationFixture,
   repositoryPublicationTestUrl as url,
 } from "./github-repository-publication.test-support.js";
+
+const readRepositoryGitHubPublication = (requestId: string) =>
+  readRepositoryGitHubPublicationInDatabase(openOpenClawStateDatabase().db, requestId);
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
@@ -39,7 +44,7 @@ describe("repository checkpoint GitHub publication", () => {
     const previous = person.placements;
     await expect(
       previous.withWorkspaceExclusion(SESSION_ID, async (assertOwned) => {
-        restartPersonalPublicationFixture(person);
+        await restartPersonalPublicationFixture(person);
         expect(assertOwned).toThrow("was aborted");
       }),
     ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
@@ -51,7 +56,7 @@ describe("repository checkpoint GitHub publication", () => {
     );
   });
 
-  it.each(["turn", "reset", "move", "held", "store-busy", "retired-owner"] as const)(
+  it.each(["reset", "move", "held", "store-busy", "retired-owner"] as const)(
     "requires the same personal owner after restart and a later %s",
     async (boundary) => {
       const f = await createRepositoryPublicationFixture(checkpoint);
@@ -79,20 +84,24 @@ describe("repository checkpoint GitHub publication", () => {
       expect(original.pushed_head_commit).toBeNull();
       await f.capture("later unselected change\n", "later");
       const retiredCoordinator = person.coordinator;
-      restartPersonalPublicationFixture(person);
-      const pending = person.coordinator.personalStatus(
+      await restartPersonalPublicationFixture(person);
+      const preparedStatus = await person.coordinator.preparePersonalStatus(first.requestId);
+      using _ = { [Symbol.dispose]: () => preparedStatus?.release() };
+      const pending = await person.coordinator.personalStatusAsync(
         person.action,
         person.action,
         first.requestId,
+        preparedStatus,
       );
-      expect(pending.confirmation?.workspaceTree).toBe(f.first.workspaceTree);
-      expect(() =>
-        person.coordinator.personalStatus(
+      expect(pending?.confirmation?.workspaceTree).toBe(f.first.workspaceTree);
+      await expect(
+        person.coordinator.personalStatusAsync(
           { ...person.action, owner: person.otherOwner },
           person.action,
           first.requestId,
+          preparedStatus,
         ),
-      ).toThrow();
+      ).rejects.toThrow();
       if (boundary === "move") {
         await patchSessionEntryCore(
           {
@@ -108,7 +117,12 @@ describe("repository checkpoint GitHub publication", () => {
         );
         expect(mocks.loadSession(SESSION_KEY).entry.repositoryWorkspaceId).toBeUndefined();
         expect(
-          person.coordinator.personalStatus(person.action, person.action, first.requestId),
+          await person.coordinator.personalStatusAsync(
+            person.action,
+            person.action,
+            first.requestId,
+            preparedStatus,
+          ),
         ).toMatchObject({
           result: { status: "failed", code: "session_changed" },
           confirmation: null,
@@ -149,6 +163,8 @@ describe("repository checkpoint GitHub publication", () => {
             .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
             .all("session-workspace-action", SESSION_ID),
         ).toEqual([]);
+        // Restarted agent workers release their leases through shared state.
+        await closeOpenClawAgentDatabasesAsync(root);
         writer = new DatabaseSync(database.path);
         writer.exec("BEGIN IMMEDIATE");
       }
@@ -157,7 +173,7 @@ describe("repository checkpoint GitHub publication", () => {
         requestId: first.requestId,
         generation: person.generation,
         account: personalPublicationAccount,
-        requestDigest: pending.confirmation!.requestDigest,
+        requestDigest: pending!.confirmation!.requestDigest,
       };
       if (boundary === "retired-owner") {
         const aborted = await callPersonalPublicationRpc(

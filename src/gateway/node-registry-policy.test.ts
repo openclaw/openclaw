@@ -89,6 +89,7 @@ function createFixture(
 
 function readCommandState(node: NodeSession, config: OpenClawConfig, command: string) {
   return resolveRequiredNodeCommandAuthority({
+    nodeId: node.nodeId,
     requiredCommands: [command],
     declaredCommands: node.declaredCommands,
     effectiveCommands: node.commands,

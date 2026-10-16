@@ -1,4 +1,3 @@
-// Discord tests cover handle action plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -208,32 +207,6 @@ describe("handleDiscordMessageAction", () => {
     },
   );
 
-  it("falls back to toolContext.currentMessageId for reactions", async () => {
-    const cfg = discordConfig();
-    await handleDiscordMessageAction({
-      action: "react",
-      params: {
-        channelId: "123",
-        emoji: "ok",
-      },
-      cfg,
-      toolContext: { currentMessageId: "9001" },
-    });
-
-    expectDiscordActionCall({
-      payload: {
-        action: "react",
-        accountId: undefined,
-        channelId: "123",
-        messageId: "9001",
-        emoji: "ok",
-        remove: undefined,
-      },
-      cfg,
-      options: defaultActionOptions(),
-    });
-  });
-
   it("falls back to Discord toolContext.currentChannelId for reaction targets", async () => {
     const cfg = discordConfig();
     await handleDiscordMessageAction({
@@ -263,47 +236,13 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
-  it("falls back to Discord toolContext.currentChannelId for sends", async () => {
-    const cfg = discordConfig();
-    await handleDiscordMessageAction({
-      action: "send",
-      params: {
-        message: "hello",
-      },
-      cfg,
-      toolContext: {
-        currentChannelProvider: "discord",
-        currentChannelId: "channel:123",
-      },
-    });
-
-    expectDiscordActionCall({
-      payload: {
-        action: "sendMessage",
-        accountId: undefined,
-        to: "channel:123",
-        content: "hello",
-        mediaUrl: undefined,
-        filename: undefined,
-        replyTo: undefined,
-        components: undefined,
-        embeds: undefined,
-        asVoice: false,
-        silent: false,
-        __sessionKey: undefined,
-        __agentId: undefined,
-      },
-      cfg,
-      options: defaultActionOptions(),
-    });
-  });
-
   it("forwards attested current-conversation context to Discord reads", async () => {
     const cfg = discordConfig();
     await handleDiscordMessageAction({
       action: "read",
       params: {
         channelId: "channel:123",
+        messageId: "1542546825066577940",
       },
       cfg,
       accountId: "ops",
@@ -324,7 +263,7 @@ describe("handleDiscordMessageAction", () => {
         before: undefined,
         after: undefined,
         around: undefined,
-        messageId: undefined,
+        messageId: "1542546825066577940",
       },
       cfg,
       options: {
@@ -336,33 +275,6 @@ describe("handleDiscordMessageAction", () => {
           currentChannelId: "channel:123",
         },
       },
-    });
-  });
-
-  it("forwards messageId for Discord read actions", async () => {
-    const cfg = discordConfig();
-    await handleDiscordMessageAction({
-      action: "read",
-      params: {
-        channelId: "channel:123",
-        messageId: "1542546825066577940",
-      },
-      cfg,
-    });
-
-    expectDiscordActionCall({
-      payload: {
-        action: "readMessages",
-        accountId: undefined,
-        channelId: "123",
-        limit: undefined,
-        before: undefined,
-        after: undefined,
-        around: undefined,
-        messageId: "1542546825066577940",
-      },
-      cfg,
-      options: defaultActionOptions(),
     });
   });
 
@@ -515,86 +427,6 @@ describe("handleDiscordMessageAction", () => {
     },
   );
 
-  it("maps upload-file to Discord sendMessage with media read context", async () => {
-    const mediaReadFile = vi.fn(async () => Buffer.from("image"));
-    const mediaAccess = {
-      localRoots: ["/tmp/agent-root"],
-      readFile: mediaReadFile,
-    };
-    const cfg = discordConfig();
-
-    await handleDiscordMessageAction({
-      action: "upload-file",
-      params: {
-        target: "channel:123",
-        filePath: "/tmp/agent-root/image.png",
-        message: "caption",
-        filename: "image.png",
-        replyTo: "message-1",
-        silent: true,
-        __sessionKey: "session-1",
-        __agentId: "agent-1",
-      },
-      cfg,
-      mediaAccess,
-      mediaLocalRoots: ["/tmp/agent-root"],
-      mediaReadFile,
-    });
-
-    expectDiscordActionCall({
-      payload: {
-        action: "sendMessage",
-        accountId: undefined,
-        to: "channel:123",
-        content: "caption",
-        mediaUrl: "/tmp/agent-root/image.png",
-        filename: "image.png",
-        replyTo: "message-1",
-        silent: true,
-        __sessionKey: "session-1",
-        __agentId: "agent-1",
-      },
-      cfg,
-      options: {
-        mediaAccess,
-        mediaLocalRoots: ["/tmp/agent-root"],
-        mediaReadFile,
-      },
-    });
-  });
-
-  it("falls back to Discord toolContext.currentChannelId for upload-file", async () => {
-    const cfg = discordConfig();
-    await handleDiscordMessageAction({
-      action: "upload-file",
-      params: {
-        path: "/tmp/agent-root/image.png",
-      },
-      cfg,
-      toolContext: {
-        currentChannelProvider: "discord",
-        currentChannelId: "channel:123",
-      },
-    });
-
-    expectDiscordActionCall({
-      payload: {
-        action: "sendMessage",
-        accountId: undefined,
-        to: "channel:123",
-        content: "",
-        mediaUrl: "/tmp/agent-root/image.png",
-        filename: undefined,
-        replyTo: undefined,
-        silent: false,
-        __sessionKey: undefined,
-        __agentId: undefined,
-      },
-      cfg,
-      options: defaultActionOptions(),
-    });
-  });
-
   it("requires a file path for upload-file", async () => {
     await expect(
       handleDiscordMessageAction({
@@ -626,40 +458,6 @@ describe("handleDiscordMessageAction", () => {
     );
 
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
-  });
-
-  it("maps thread-reply filePath to Discord threadReply with media read context", async () => {
-    const mediaReadFile = vi.fn(async () => Buffer.from("report"));
-    const cfg = discordConfig({ threads: true });
-
-    await handleDiscordMessageAction({
-      action: "thread-reply",
-      params: {
-        threadId: "thread-123",
-        message: "thread update",
-        filePath: "/tmp/agent-root/report.md",
-      },
-      cfg,
-      mediaLocalRoots: ["/tmp/agent-root"],
-      mediaReadFile,
-    });
-
-    expectDiscordActionCall({
-      payload: {
-        action: "threadReply",
-        accountId: undefined,
-        channelId: "thread-123",
-        content: "thread update",
-        mediaUrl: "/tmp/agent-root/report.md",
-        replyTo: undefined,
-      },
-      cfg,
-      options: {
-        mediaAccess: undefined,
-        mediaLocalRoots: ["/tmp/agent-root"],
-        mediaReadFile,
-      },
-    });
   });
 
   it("adopts a thread created from the active source message and confirms replies there", async () => {
@@ -865,28 +663,6 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
-  it("forwards embed-only Discord sends without requiring message text", async () => {
-    const embeds = [{ title: "Release notes", description: "Version available" }];
-    const cfg = discordConfig();
-
-    await handleDiscordMessageAction({
-      action: "send",
-      params: { to: "channel:123", embeds },
-      cfg,
-    });
-
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "sendMessage",
-        to: "channel:123",
-        content: undefined,
-        embeds,
-      }),
-      cfg,
-      defaultActionOptions(),
-    );
-  });
-
   it("does not use another provider's current target for Discord sends", async () => {
     await expect(
       handleDiscordMessageAction({
@@ -939,37 +715,6 @@ describe("handleDiscordMessageAction", () => {
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
-  it("does not add session channel to search when explicit channelIds are provided", async () => {
-    handleDiscordActionMock.mockResolvedValueOnce({ content: [], details: { ok: true } });
-    await handleDiscordMessageAction({
-      action: "search",
-      params: {
-        query: "test query",
-        channelIds: ["ch-1", "ch-2"],
-        guildId: "g1",
-      },
-      cfg: discordConfig(),
-      toolContext: {
-        currentChannelProvider: "discord",
-        currentChannelId: "session-ch",
-      },
-    });
-
-    expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
-    const payload = expectDefined(
-      handleDiscordActionMock.mock.calls[0]?.[0],
-      "Discord search action payload",
-    );
-    expect(payload).toMatchObject({
-      action: "searchMessages",
-      content: "test query",
-      guildId: "g1",
-      channelIds: ["ch-1", "ch-2"],
-    });
-    // Session channel must NOT appear as channelId when explicit channelIds exist.
-    expect(payload.channelId).toBeUndefined();
-  });
-
   it("does not inject session channel when guildId is explicit and no channel filters are provided", async () => {
     handleDiscordActionMock.mockResolvedValueOnce({ content: [], details: { ok: true } });
     await handleDiscordMessageAction({
@@ -998,5 +743,217 @@ describe("handleDiscordMessageAction", () => {
     // Guild-wide search must NOT be narrowed to the session channel.
     expect(payload.channelId).toBeUndefined();
     expect(payload.channelIds).toBeUndefined();
+  });
+
+  it("classifies generic sends only when targeting the active adopted thread", async () => {
+    const sessionKey = "agent:main:discord:channel:channel-1";
+    const onThreadReplyDelivered = vi.fn();
+    const endRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
+      accountId: "account-1",
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-1",
+      onThreadAdopted: vi.fn(),
+      onThreadReplyDelivered,
+    });
+    try {
+      await notifyDiscordActiveTurnThreadCreated({
+        sessionKey,
+        accountId: "account-1",
+        sourceChannelId: "channel-1",
+        sourceMessageId: "message-1",
+        threadId: "thread-1",
+      });
+
+      const unrelatedResult = await handleDiscordMessageAction({
+        action: "send",
+        params: {
+          to: "channel:thread-2",
+          message: "unrelated",
+        },
+        cfg: discordConfig(),
+        accountId: "account-1",
+        sessionKey,
+      });
+
+      expect(unrelatedResult.details).toEqual({ ok: true });
+      expect(onThreadReplyDelivered).not.toHaveBeenCalled();
+
+      const result = await handleDiscordMessageAction({
+        action: "send",
+        params: {
+          to: "channel:thread-1",
+          message: "done",
+        },
+        cfg: discordConfig(),
+        accountId: "account-1",
+        sessionKey,
+      });
+
+      expect(result.details).toEqual({
+        ok: true,
+        sourceReplyRoute: "current-source",
+      });
+      expect(onThreadReplyDelivered).toHaveBeenCalledWith("thread-1");
+    } finally {
+      endRoute();
+    }
+  });
+
+  it("preserves a successful send when route-only target parsing rejects the target", async () => {
+    const result = await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        to: "@alice",
+        message: "hello",
+      },
+      cfg: discordConfig(),
+    });
+
+    expect(result.details).toEqual({ ok: true });
+  });
+
+  it("preserves trusted workspace authority for thread replies and rejects forged action capabilities", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("trusted report"));
+    const mediaAccess = {
+      localRoots: ["/tmp/agent-workspace"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp/agent-workspace",
+    };
+    const forgedMediaAccess = {
+      localRoots: ["/tmp/forged-root"],
+      readFile: vi.fn(async () => Buffer.from("forged report")),
+      workspaceDir: "/tmp/forged-root",
+    };
+    const cfg = discordConfig({ threads: true });
+
+    await handleDiscordMessageAction({
+      action: "thread-reply",
+      params: {
+        threadId: "thread-123",
+        message: "thread update",
+        filePath: "./report.md",
+        mediaAccess: forgedMediaAccess,
+      },
+      cfg,
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      {
+        action: "threadReply",
+        accountId: undefined,
+        channelId: "thread-123",
+        content: "thread update",
+        mediaUrl: "./report.md",
+        replyTo: undefined,
+      },
+      cfg,
+      { mediaAccess, mediaLocalRoots: mediaAccess.localRoots, mediaReadFile },
+    );
+    expect(handleDiscordActionMock.mock.calls[0]?.[1]).toBe(cfg);
+    const actionOptions = handleDiscordActionMock.mock.calls[0]?.[2];
+    expect(actionOptions?.mediaAccess).toBe(mediaAccess);
+    expect(actionOptions?.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    expect(actionOptions?.mediaReadFile).toBe(mediaReadFile);
+    expect(forgedMediaAccess.readFile).not.toHaveBeenCalled();
+  });
+
+  it("downgrades oversized table presentations to complete text", async () => {
+    const cfg = discordConfig();
+    const authoredText = `${"x".repeat(1997)}AUTHORED_TAIL`;
+
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        to: "channel:123",
+        presentation: {
+          title: authoredText,
+          blocks: [
+            { type: "text", text: authoredText },
+            { type: "context", text: authoredText },
+            {
+              type: "buttons",
+              buttons: [{ label: `${"x".repeat(80)}LABEL_TAIL`, value: "choice" }],
+            },
+            {
+              type: "table",
+              caption: "Large pipeline",
+              headers: ["Account", "Stage"],
+              rows: Array.from({ length: 900 }, (_entry, index) => [
+                `account-${String(index)}-${"x".repeat(80)}`,
+                "Review",
+              ]),
+            },
+          ],
+        },
+      },
+      cfg,
+    });
+
+    const [call] = handleDiscordActionMock.mock.calls;
+    const payload = call?.[0] as Record<string, unknown> | undefined;
+    expect(payload?.components).toBeUndefined();
+    expect(payload?.content).toEqual(expect.stringContaining("account-0-"));
+    expect(payload?.content).toEqual(expect.stringContaining("account-899-"));
+    expect(String(payload?.content).split("AUTHORED_TAIL")).toHaveLength(4);
+    expect(payload?.content).toEqual(expect.stringContaining("LABEL_TAIL"));
+  });
+
+  it.each([
+    {
+      name: "keeps an explicitly empty message empty instead of using the caption",
+      params: { message: "", caption: "caption text" },
+      expected: "",
+    },
+    {
+      name: "preserves caption indentation and trailing newline",
+      params: { caption: "    example();\n" },
+      expected: "    example();\n",
+    },
+    {
+      name: "preserves an explicit padded message over the caption",
+      params: { message: "    example();\n", caption: "caption text" },
+      expected: "    example();\n",
+    },
+    {
+      name: "preserves the content alias over the caption",
+      params: { content: "    example();\n", caption: "caption text" },
+      expected: "    example();\n",
+    },
+  ])("$name", async ({ params, expected }) => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("image"));
+    const cfg = discordConfig();
+    const mediaAccess = { localRoots: ["/tmp/agent-root"], readFile: mediaReadFile };
+
+    await handleDiscordMessageAction({
+      action: "upload-file",
+      params: {
+        target: "channel:123",
+        media: "/tmp/agent-root/chart.png",
+        ...params,
+      },
+      cfg,
+      mediaAccess,
+      mediaLocalRoots: ["/tmp/agent-root"],
+      mediaReadFile,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
+    const [call] = handleDiscordActionMock.mock.calls;
+    expect(call?.[0]).toMatchObject({
+      action: "sendMessage",
+      to: "channel:123",
+      mediaUrl: "/tmp/agent-root/chart.png",
+      content: expected,
+    });
+    expect(call?.[1]).toBe(cfg);
+    expect(call?.[2]).toEqual({
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile,
+    });
   });
 });

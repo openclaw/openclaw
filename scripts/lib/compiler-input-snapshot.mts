@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { CompilerOptions } from "typescript/unstable/sync";
 import {
   ARTIFACT_CACHE_VERSION,
   portableRelativePath,
@@ -12,40 +13,21 @@ import { readNativeTypeScriptConfig } from "./native-typescript-config.mts";
 type CompilerInputPolicy = {
   toolchainFiles: string[];
   generatorInputs: string[];
+  runtimeVersion?: string;
   isGeneratorInput?: (file: string) => boolean;
   assertInput?: (file: string) => string;
 };
 type TopologyEntry = { id: string; name: string; directory: string; file?: string };
 type NamespaceDirectory = { directory: string; realDirectory: string; installed: boolean };
+type CapturedInput = { bytes: Buffer; hash: string };
 const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 const PREPARATION_CONCURRENCY = 16;
 
-function diagnosticJson(value: object) {
-  // JSON escapes C0 controls but leaves terminal controls and bidi formatting literal.
-  return JSON.stringify(value).replace(
-    /[\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/gu,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
-}
-
-function namespaceEntries(
-  entries: TopologyEntry[],
-  outputRoot?: string,
-  producedFiles?: ReadonlySet<string>,
-  previousEntries?: TopologyEntry[],
-) {
-  const previousIds = previousEntries && new Set(previousEntries.map(({ id }) => id));
+function namespaceEntries(entries: TopologyEntry[], outputRoot?: string) {
   return entries.filter(
-    ({ id, name, directory, file }) =>
-      (!outputRoot ||
-        (directory !== outputRoot && !directory.startsWith(`${outputRoot}${path.sep}`))) &&
-      !(
-        previousIds &&
-        !previousIds.has(id) &&
-        name === id &&
-        file !== undefined &&
-        producedFiles?.has(file)
-      ),
+    ({ directory }) =>
+      !outputRoot ||
+      (directory !== outputRoot && !directory.startsWith(`${outputRoot}${path.sep}`)),
   );
 }
 
@@ -197,16 +179,17 @@ async function prepareBatches<T>(values: T[], prepare: (value: T) => Promise<unk
 
 /** One phase owns all byte reads; freshness never trusts persisted timestamps. */
 export class CompilerInputSnapshot {
-  private readonly files = new Map<string, { bytes: Buffer; hash: string; ctimeMs: number }>();
+  private readonly files = new Map<string, CapturedInput>();
   private readonly configs = new Map<
     string,
-    { files: string[]; roots: string[]; options: Record<string, unknown> }
+    { files: string[]; roots: string[]; options: CompilerOptions }
   >();
   private topology?: TopologyEntry[];
   private readonly namespaceDigests = new Map<string | undefined, string>();
   private generatorInputs?: string[];
   private readonly policy: CompilerInputPolicy;
   private tools?: string;
+  private toolPaths?: string;
   readonly rootDir: string;
   constructor(rootDir: string, policy: CompilerInputPolicy) {
     this.rootDir = rootDir;
@@ -223,23 +206,13 @@ export class CompilerInputSnapshot {
     const absolute = this.inputPath(file);
     let entry = this.files.get(absolute);
     if (!entry) {
-      const before = fs.statSync(absolute);
-      const bytes = fs.readFileSync(absolute);
-      const after = fs.statSync(absolute);
-      entry = this.capture(absolute, before, bytes, after);
+      entry = this.capture(absolute, fs.readFileSync(absolute));
     }
     return entry;
   }
 
-  private capture(file: string, before: fs.Stats, bytes: Buffer, after: fs.Stats) {
-    if (
-      before.ctimeMs !== after.ctimeMs ||
-      before.ino !== after.ino ||
-      before.size !== after.size
-    ) {
-      throw new Error(`Boundary input changed while reading: ${file}`);
-    }
-    const entry = { bytes, hash: digest(bytes), ctimeMs: after.ctimeMs };
+  private capture(file: string, bytes: Buffer) {
+    const entry = { bytes, hash: digest(bytes) };
     this.files.set(file, entry);
     return entry;
   }
@@ -263,16 +236,16 @@ export class CompilerInputSnapshot {
       [...new Set(this.toolInputs().map((file) => this.inputPath(file)))],
       async (file) => {
         if (!this.files.has(file)) {
-          const before = await fs.promises.stat(file);
-          const bytes = await fs.promises.readFile(file);
-          const after = await fs.promises.stat(file);
-          this.capture(file, before, bytes, after);
+          this.capture(file, await fs.promises.readFile(file));
         }
       },
     );
   }
 
   hash = (file: string) => this.read(file).hash;
+
+  /** Supply the compiler and cache signature with the same captured bytes. */
+  readText = (file: string) => this.read(file).bytes.toString("utf8");
 
   private config(file: string) {
     let result = this.configs.get(file);
@@ -281,7 +254,8 @@ export class CompilerInputSnapshot {
         const parsed = readNativeTypeScriptConfig({
           cwd: this.rootDir,
           configFileName: this.inputPath(file),
-          readFile: (name) => this.read(name).bytes.toString("utf8"),
+          readFile: this.readText,
+          assertInput: this.policy.assertInput,
         });
         result = {
           files: parsed.configFiles,
@@ -436,58 +410,10 @@ export class CompilerInputSnapshot {
     return [...this.policy.toolchainFiles, ...this.generatorInputs];
   }
 
-  private namespaceChanges(
-    before: CompilerInputSnapshot,
-    outputRoot?: string,
-    producedFiles?: ReadonlySet<string>,
-  ) {
-    const identities = (entries: TopologyEntry[]) => {
-      const result = new Map<string, string[]>();
-      for (const { id, name } of entries) {
-        const names = result.get(id) ?? [];
-        names.push(name);
-        result.set(id, names);
-      }
-      return result;
-    };
-    // Compare captured topology only. Decorated names contain link targets;
-    // diagnostics must emit the separately captured logical identity instead.
-    const previous = identities(namespaceEntries(before.topology ?? [], outputRoot));
-    const current = identities(
-      namespaceEntries(this.topology ?? [], outputRoot, producedFiles, before.topology),
-    );
-    const changes: { change: string; path: string }[] = [];
-    let omitted = 0;
-    for (const id of [...new Set([...previous.keys(), ...current.keys()])].toSorted()) {
-      if (JSON.stringify(previous.get(id)) === JSON.stringify(current.get(id))) {
-        continue;
-      }
-      if (
-        changes.length >= 16 ||
-        path.posix.isAbsolute(id) ||
-        path.win32.isAbsolute(id) ||
-        id.split(/[\\/]/u).includes("..")
-      ) {
-        omitted++;
-        continue;
-      }
-      changes.push({
-        change: !previous.has(id) ? "added" : !current.has(id) ? "removed" : "changed",
-        path: id.length > 160 ? `${id.slice(0, 157)}...` : id,
-      });
-      // Leave room for category and omission count even with JSON escaping or UTF-8.
-      if (Buffer.byteLength(diagnosticJson(changes)) > 4000) {
-        changes.pop();
-        omitted++;
-      }
-    }
-    return { changes, omitted };
-  }
-
   private toolchain() {
     this.tools ??= digest(
       JSON.stringify([
-        process.versions.node,
+        this.policy.runtimeVersion ?? process.versions.node,
         process.platform,
         process.arch,
         ...this.toolInputs().map((file) => this.hash(file)),
@@ -496,13 +422,46 @@ export class CompilerInputSnapshot {
     return this.tools;
   }
 
-  signature(config: string, args: string[], inputs: string[], outputRoot?: string) {
+  private toolchainPaths() {
+    this.toolPaths ??= digest(
+      JSON.stringify(
+        this.toolInputs().map((file) => {
+          const absolute = this.inputPath(file);
+          return [
+            portableRelativePath(this.rootDir, absolute),
+            portableRelativePath(this.rootDir, this.inputPath(fs.realpathSync.native(absolute))),
+          ];
+        }),
+      ),
+    );
+    return this.toolPaths;
+  }
+
+  signature(
+    config: string,
+    args: string[],
+    inputs: string[],
+    outputRoot?: string,
+    resolutionFingerprint?: string,
+  ) {
     const parsed = this.config(config);
+    const namespace = this.namespace(outputRoot);
     return digest(
       JSON.stringify(
         [
           ARTIFACT_CACHE_VERSION,
-          this.namespace(outputRoot),
+          resolutionFingerprint === undefined
+            ? namespace
+            : [
+                "compiler-lookups",
+                resolutionFingerprint,
+                this.toolchainPaths(),
+                (this.topology ?? [])
+                  .filter(
+                    ({ id, name }) => path.isAbsolute(id) && name === `${id}:ancestor-install`,
+                  )
+                  .map(({ name }) => name),
+              ],
           outputRoot,
           this.toolchain(),
           config,
@@ -531,11 +490,13 @@ export class CompilerInputSnapshot {
     args: string[],
     required: string[],
     outputRoot?: string,
+    resolutionFingerprint?: string,
   ) {
     try {
       return (
         record?.inputs !== undefined &&
-        record.signature === this.signature(config, args, record.inputs, outputRoot) &&
+        record.signature ===
+          this.signature(config, args, record.inputs, outputRoot, resolutionFingerprint) &&
         required.every((file) => Object.hasOwn(record.outputs, file)) &&
         (!outputRoot ||
           listCacheFiles(
@@ -550,63 +511,5 @@ export class CompilerInputSnapshot {
     } catch {
       return false;
     }
-  }
-
-  /** Seal only successful compiler membership after its joined invocation. */
-  seal(
-    config: string,
-    args: string[],
-    inputs: string[],
-    before: CompilerInputSnapshot,
-    startedAt: number,
-    outputRoot?: string,
-    producedFiles?: ReadonlySet<string>,
-  ) {
-    const signature = this.signature(config, args, inputs, outputRoot);
-    const previousNamespace = before.namespace(outputRoot);
-    // A concurrent producer can add its exact declared files. Existing entries,
-    // symlink identities, and every consumed input remain subject to their guards.
-    const currentNamespace = producedFiles?.size
-      ? digest(
-          namespaceEntries(this.topology!, outputRoot, producedFiles, before.topology)
-            .map(({ name }) => name)
-            .join("\0"),
-        )
-      : this.namespace(outputRoot);
-    const category =
-      previousNamespace !== currentNamespace
-        ? "namespace"
-        : before.toolchain() !== this.toolchain()
-          ? "toolchain"
-          : JSON.stringify(before.config(config)) !== JSON.stringify(this.config(config))
-            ? "config"
-            : before.config(config).files.some((file) => before.hash(file) !== this.hash(file))
-              ? "config-bytes"
-              : undefined;
-    if (category) {
-      const diagnostic = {
-        category,
-        ...(category === "namespace"
-          ? this.namespaceChanges(before, outputRoot, producedFiles)
-          : {}),
-      };
-      throw new Error(
-        `Boundary configuration or resolution topology changed during compilation: ${diagnosticJson(diagnostic)}`,
-      );
-    }
-    for (const file of [...inputs, ...this.config(config).files, ...this.toolInputs()]) {
-      const current = this.read(file);
-      const previous = before.files.get(before.inputPath(file));
-      // ctime is an invocation-only mutation fence, never a cache key or a warm
-      // acceptance path. It covers newly discovered inputs (including manifests)
-      // without assuming native XXH3 versions are SHA256 digests of disk bytes.
-      if (current.ctimeMs >= startedAt || (previous && previous.hash !== current.hash)) {
-        throw new Error(`Boundary input changed during compilation: ${file}`);
-      }
-    }
-    return {
-      signature,
-      inputs,
-    };
   }
 }

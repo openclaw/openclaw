@@ -1,90 +1,67 @@
-import { ContextProvider } from "@lit/context";
-import type { GatewayEventFrame, GatewayEventListener } from "../api/gateway.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGateway,
-  type ApplicationGatewaySnapshot,
-} from "../app/context.ts";
-import type { MentionsCapability } from "../app/mentions.ts";
+import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { normalizeApplicationContext } from "./application-context-fixtures.ts";
 
-export const hiddenScopeUpgradeCapability = {
-  state: { phase: "hidden" as const },
-  activate: () => undefined,
-  request: () => undefined,
-  retry: () => undefined,
-  cancel: () => undefined,
-  subscribe: () => () => undefined,
-  dispose: () => undefined,
-} satisfies ApplicationContext["scopeUpgrade"];
+export {
+  createApplicationGateway,
+  createNavigationPreferencesFixture,
+  hiddenScopeUpgradeCapability,
+} from "./application-context-fixtures.ts";
 
-const unavailableMentionsCapability = {
-  snapshot: { phase: "unavailable", items: [], dismissing: [], error: null },
-  refresh: async () => undefined,
-  dismiss: async () => undefined,
-  subscribe: () => () => undefined,
-  dispose: () => undefined,
-} satisfies MentionsCapability;
+type ContextCallback = (value: ApplicationContext, unsubscribe?: () => void) => void;
+type ContextRequest = Event & {
+  context: unknown;
+  contextTarget: Element;
+  callback: ContextCallback;
+  subscribe?: boolean;
+};
 
-const emptySidebarAttentionStore = {
-  entries: [],
-  activate: () => unavailableMentionsCapability,
-  dismiss: () => undefined,
-  subscribe: () => () => undefined,
-  dispose: () => undefined,
-} satisfies ApplicationContext["sidebarAttention"];
+/** Plain-DOM fixture for callers still crossing the application context bridge. */
+export function requestApplicationContext(
+  host: Element,
+  callback: ContextCallback,
+  subscribe = false,
+) {
+  host.dispatchEvent(
+    Object.assign(new Event("context-request", { bubbles: true, composed: true }), {
+      context: applicationContext,
+      contextTarget: host,
+      callback,
+      subscribe,
+    }),
+  );
+}
 
 export function createApplicationContextProvider(context: ApplicationContext) {
   const host = document.createElement("div");
-  const normalize = (value: ApplicationContext) => {
-    if (!value.sidebarAttention) {
-      Object.assign(value, { sidebarAttention: emptySidebarAttentionStore });
+  let current = normalizeApplicationContext(context);
+  const subscribers = new Map<ContextCallback, () => void>();
+  host.addEventListener("context-request", (event) => {
+    // SAFETY: The context-request protocol defines these properties on its DOM event.
+    const request = event as ContextRequest;
+    if (request.context !== applicationContext || request.contextTarget === host) {
+      return;
     }
-    return value;
-  };
-  const provider = new ContextProvider(host, {
-    context: applicationContext,
-    initialValue: normalize(context),
+    event.stopPropagation();
+    if (request.subscribe) {
+      const unsubscribe = () => subscribers.delete(request.callback);
+      subscribers.set(request.callback, unsubscribe);
+      request.callback(current, unsubscribe);
+    } else {
+      request.callback(current);
+    }
   });
   return Object.assign(host, {
-    setContext: (value: ApplicationContext) => provider.setValue(normalize(value)),
+    setContext(this: void, value: ApplicationContext) {
+      const next = normalizeApplicationContext(value);
+      if (next === current) {
+        return;
+      }
+      current = next;
+      for (const [callback, unsubscribe] of subscribers) {
+        callback(current, unsubscribe);
+      }
+    },
   });
 }
 
 export type ApplicationContextProvider = ReturnType<typeof createApplicationContextProvider>;
-
-export function createApplicationGateway(initial: ApplicationGatewaySnapshot) {
-  let snapshot = initial;
-  const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
-  const eventListeners = new Set<GatewayEventListener>();
-  const gateway = {
-    connectionRevision: 0,
-    connection: { gatewayUrl: "ws://gateway.example.test", token: "", password: "" },
-    get snapshot() {
-      return snapshot;
-    },
-    connect: () => undefined,
-    subscribe(listener: (value: ApplicationGatewaySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    subscribeEvents(listener: GatewayEventListener) {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
-  } as unknown as ApplicationGateway;
-  return {
-    gateway,
-    publishEvent: (event: GatewayEventFrame) => {
-      for (const listener of eventListeners) {
-        listener(event);
-      }
-    },
-    publish(next: ApplicationGatewaySnapshot) {
-      snapshot = next;
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
-  };
-}

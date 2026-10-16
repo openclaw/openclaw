@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   runInitialConfigWriteHealth,
   runWriteConfigHealth,
@@ -21,9 +22,64 @@ import {
 
 const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome("billing-route");
 
-describe("Doctor model billing route migration", () => {
-  afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(() => closeOpenClawStateDatabaseForTest());
 
+async function writeBillingFixture(
+  home: string,
+  retiredModel: string,
+  agents: OpenClawConfig["agents"],
+) {
+  const configPath = await observeDoctorConfigStep("write-config", () =>
+    writeOpenClawConfig(home, {
+      auth: {
+        profiles: {
+          "openai:default": { provider: "openai", mode: "api_key" },
+          "openai:chatgpt-default": { provider: "openai", mode: "oauth" },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            models: [{ id: retiredModel, name: "Heartbeat", input: ["text"] }],
+          },
+        },
+      },
+      agents,
+      gateway: {
+        mode: "local",
+        port: 19473,
+        auth: { mode: "token", token: "synthetic-gateway-token" },
+      },
+    }),
+  );
+  const agentDir = path.join(path.dirname(configPath), "agents", "main", "agent");
+  await observeDoctorConfigStep("create-auth-directory", () =>
+    fs.mkdir(agentDir, { recursive: true }),
+  );
+  await observeDoctorConfigStep("write-auth-profiles", () =>
+    fs.writeFile(
+      path.join(agentDir, "auth-profiles.json"),
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", key: "synthetic-api-key" },
+          "openai:chatgpt-default": {
+            type: "oauth",
+            provider: "openai",
+            access: "synthetic-oauth-access",
+            refresh: "synthetic-oauth-refresh",
+            expires: Date.now() + 3_600_000,
+          },
+        },
+      }),
+    ),
+  );
+  return { configPath, agentDir };
+}
+
+describe("Doctor model billing route migration", () => {
   it.each([
     { multiagent: false, successor: "gpt-5.6-luna" },
     { multiagent: true, successor: "gpt-5.4-mini" },
@@ -31,72 +87,26 @@ describe("Doctor model billing route migration", () => {
     "records inherited billing changes once (multiagent: $multiagent)",
     async ({ multiagent, successor }) => {
       await withDoctorConfigPreflightHome(async (home) => {
-        const configPath = await observeDoctorConfigStep("write-config", () =>
-          writeOpenClawConfig(home, {
-            auth: {
-              profiles: {
-                "openai:default": { provider: "openai", mode: "api_key" },
-                "openai:chatgpt-default": { provider: "openai", mode: "oauth" },
-              },
-            },
-            models: {
-              providers: {
-                openai: {
-                  baseUrl: "https://api.openai.com/v1",
-                  api: "openai-completions",
-                  models: [{ id: "gpt-4o-mini", name: "Heartbeat", input: ["text"] }],
+        const { configPath } = await writeBillingFixture(home, "gpt-4o-mini", {
+          defaults: {
+            model: "openai/gpt-5.4",
+            models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
+            heartbeat: { model: "openai/gpt-4o-mini" },
+            subagents: { model: "openai/gpt-4o-mini" },
+          },
+          ...(multiagent ? { ownership: "explicit" } : {}),
+          entries: multiagent
+            ? {
+                main: { heartbeat: {} },
+                metered: {
+                  heartbeat: { model: "openai/gpt-5.4" },
+                  subagents: { model: "openai/gpt-5.4" },
+                  models: { "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } } },
                 },
-              },
-            },
-            agents: {
-              defaults: {
-                model: "openai/gpt-5.4",
-                models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
-                heartbeat: { model: "openai/gpt-4o-mini" },
-                subagents: { model: "openai/gpt-4o-mini" },
-              },
-              ...(multiagent ? { ownership: "explicit" } : {}),
-              entries: multiagent
-                ? {
-                    main: { heartbeat: {} },
-                    metered: {
-                      heartbeat: { model: "openai/gpt-5.4" },
-                      subagents: { model: "openai/gpt-5.4" },
-                      models: { "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } } },
-                    },
-                  }
-                : { main: {} },
-            },
-            gateway: {
-              mode: "local",
-              port: 19473,
-              auth: { mode: "token", token: "synthetic-gateway-token" },
-            },
-          }),
-        );
-        const authDir = path.join(path.dirname(configPath), "agents", "main", "agent");
-        await observeDoctorConfigStep("create-auth-directory", () =>
-          fs.mkdir(authDir, { recursive: true }),
-        );
-        await observeDoctorConfigStep("write-auth-profiles", () =>
-          fs.writeFile(
-            path.join(authDir, "auth-profiles.json"),
-            JSON.stringify({
-              version: 1,
-              profiles: {
-                "openai:default": { type: "api_key", provider: "openai", key: "synthetic-api-key" },
-                "openai:chatgpt-default": {
-                  type: "oauth",
-                  provider: "openai",
-                  access: "synthetic-oauth-access",
-                  refresh: "synthetic-oauth-refresh",
-                  expires: Date.now() + 3_600_000,
-                },
-              },
-            }),
-          ),
-        );
-        const ctx = await observeDoctorConfigStep("prepare-context-outer-unmeasured", () =>
+              }
+            : { main: {} },
+        });
+        await using ctx = await observeDoctorConfigStep("prepare-context-outer-unmeasured", () =>
           prepareDoctorContext(configPath),
         );
         await observeDoctorConfigStep("write-config-health", () =>
@@ -115,7 +125,7 @@ describe("Doctor model billing route migration", () => {
           runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
         );
         expect(ctx.updateWarnings).toHaveLength(2);
-        const repeated = await observeDoctorConfigStep(
+        await using repeated = await observeDoctorConfigStep(
           "repeat-prepare-context-outer-unmeasured",
           () => prepareDoctorContext(configPath),
         );
@@ -129,57 +139,15 @@ describe("Doctor model billing route migration", () => {
 });
 
 describe("Doctor deferred model retirement", () => {
-  afterEach(() => closeOpenClawStateDatabaseForTest());
-
   async function fixture(home: string) {
-    const configPath = await writeOpenClawConfig(home, {
-      auth: {
-        profiles: {
-          "openai:default": { provider: "openai", mode: "api_key" },
-          "openai:chatgpt-default": { provider: "openai", mode: "oauth" },
-        },
+    const { configPath, agentDir } = await writeBillingFixture(home, "gpt-5.4-mini", {
+      defaults: {
+        model: "openai/gpt-5.5",
+        models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+        heartbeat: { model: "openai/gpt-5.4-mini" },
       },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            api: "openai-completions",
-            models: [{ id: "gpt-5.4-mini", name: "Heartbeat", input: ["text"] }],
-          },
-        },
-      },
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.5",
-          models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
-          heartbeat: { model: "openai/gpt-5.4-mini" },
-        },
-        entries: { main: {} },
-      },
-      gateway: {
-        mode: "local",
-        port: 19473,
-        auth: { mode: "token", token: "synthetic-gateway-token" },
-      },
+      entries: { main: {} },
     });
-    const agentDir = path.join(path.dirname(configPath), "agents", "main", "agent");
-    await fs.mkdir(agentDir, { recursive: true });
-    await fs.writeFile(
-      path.join(agentDir, "auth-profiles.json"),
-      JSON.stringify({
-        version: 1,
-        profiles: {
-          "openai:default": { type: "api_key", provider: "openai", key: "synthetic-api-key" },
-          "openai:chatgpt-default": {
-            type: "oauth",
-            provider: "openai",
-            access: "synthetic-oauth-access",
-            refresh: "synthetic-oauth-refresh",
-            expires: Date.now() + 3_600_000,
-          },
-        },
-      }),
-    );
     const { runId } = createUpdateRun({ trigger: "cli" });
     const receipt = () =>
       getUpdateRun(runId)?.steps.find((step) => step.step === "finalize:doctor:model-retirement");
@@ -209,7 +177,7 @@ describe("Doctor deferred model retirement", () => {
             OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
           },
           async () => {
-            const swap = await prepareDoctorContext(f.configPath);
+            await using swap = await prepareDoctorContext(f.configPath);
             await runInitialConfigWriteHealth(swap);
             expect(swap.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.4-mini");
             expect(f.receipt()).toMatchObject({ status: "skipped" });
@@ -226,7 +194,7 @@ describe("Doctor deferred model retirement", () => {
             }
 
             await withEnvAsync({ OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" }, async () => {
-              const converged = await prepareDoctorContext(f.configPath);
+              await using converged = await prepareDoctorContext(f.configPath);
               expect(converged.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.6-luna");
               expect(
                 createModelAuthAvailabilityResolver({
@@ -255,7 +223,7 @@ describe("Doctor deferred model retirement", () => {
               );
 
               f.defer();
-              const repeated = await prepareDoctorContext(f.configPath);
+              await using repeated = await prepareDoctorContext(f.configPath);
               expect(repeated.configResult.shouldWriteConfig).toBe(false);
               await runInitialConfigWriteHealth(repeated);
               expect(f.receipt()).toMatchObject({ status: "completed" });
@@ -279,7 +247,7 @@ describe("Doctor deferred model retirement", () => {
           OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
         },
         async () => {
-          const ctx = await prepareDoctorContext(f.configPath);
+          await using ctx = await prepareDoctorContext(f.configPath);
           await runInitialConfigWriteHealth(ctx);
           expect(ctx.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.4-mini");
           expect(getUpdateRun(f.runId)).toEqual(before);
@@ -300,7 +268,7 @@ describe("Doctor deferred model retirement", () => {
           OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
         },
         async () => {
-          const ctx = await prepareDoctorContext(f.configPath);
+          await using ctx = await prepareDoctorContext(f.configPath);
           expect(ctx.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.6-luna");
           const before = await fs.readFile(f.configPath, "utf8");
           ctx.cfg.gateway = { ...ctx.cfg.gateway, port: -1 };

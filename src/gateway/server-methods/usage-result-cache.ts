@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getSessionCostUsageUpdatedAt } from "../../infra/session-cost-usage-events.js";
 import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
@@ -12,16 +13,24 @@ import {
   type UsageCacheStatus,
   type UsageDailyBucket,
 } from "../../infra/session-cost-usage.js";
+import { getActiveRemoteModelCatalog } from "../../model-catalog/remote-overlay.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { readSessionRowChangeRevision } from "../../sessions/session-row-changes.js";
+import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { readUserProfileVersion } from "../../state/user-profile-events.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { loadUsageResultCached, type UsageCacheEntry } from "./usage-cache.js";
 import { mergeUsageCacheStatus, runUsageAgentTasks } from "./usage-session-loading.js";
-import type { UsageGroupingMode } from "./usage-session-selection.js";
+import type { UsageSessionSelection, UsageGroupingMode } from "./usage-session-selection.js";
 
 const costUsageCache = new Map<string, UsageCacheEntry<CostUsageSummary>>();
-const sessionsUsageCache = new Map<string, UsageCacheEntry<SessionsUsageResult>>();
+export type SessionsUsageSnapshot = Pick<
+  SessionsUsageResult,
+  "updatedAt" | "sessions" | "cacheStatus"
+> & { sources: UsageSessionSelection[]; accessRevision: number; sessionRevision: number };
+const sessionsUsageCache = new Map<string, UsageCacheEntry<SessionsUsageSnapshot>>();
 
 function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string {
   return dayBucket
@@ -32,7 +41,7 @@ function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string
 }
 
 type SessionsUsageCacheKeyParams = {
-  configRef: object;
+  configRef: OpenClawConfig;
   visibilityIdentity?: string;
   creatorKey?: string;
   agentId?: string;
@@ -45,10 +54,10 @@ type SessionsUsageCacheKeyParams = {
   groupingMode: UsageGroupingMode;
   specificKey: string | null;
   includeContextWeight: boolean;
+  overviewKey?: string;
 };
 
-// Every normalized query axis that can change response bytes belongs in this
-// key; the 30s TTL mirrors usage.cost and keeps dashboard refreshes coherent.
+// Revisions replace the value for a stable query instead of retaining every rollup.
 function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
   return JSON.stringify([
     params.agentScope === "all" ? "all" : `agent:${params.agentId}`,
@@ -61,20 +70,24 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
     params.specificKey,
     params.includeContextWeight,
     params.creatorKey,
-    readUserProfileVersion(),
+    params.overviewKey,
     ...(params.visibilityIdentity ? [params.visibilityIdentity] : []),
   ]);
 }
 
-export async function loadSessionsUsageResultCached(
+export async function loadSessionsUsageSnapshotCached(
   params: SessionsUsageCacheKeyParams & {
-    load: () => Promise<SessionsUsageResult>;
+    load: () => Promise<SessionsUsageSnapshot>;
   },
-): Promise<SessionsUsageResult> {
+): Promise<SessionsUsageSnapshot> {
   return await loadUsageResultCached({
     cache: sessionsUsageCache,
+    maxEntries: 8,
+    shareInFlight: false,
     cacheKey: sessionsUsageCacheKey(params),
     configRef: params.configRef,
+    revision: `${readUserProfileVersion()}:${getSessionCostUsageUpdatedAt()}:${readSessionRowChangeRevision()}:${readSessionTranscriptUpdateVersion()}:${readGatewayAccessRevision()}:${getActiveRemoteModelCatalog(params.configRef)?.revision ?? ""}`,
+    revisionOnly: params.overviewKey !== undefined,
     load: params.load,
     // Incomplete lower-cache snapshots must not acquire the outer freshness TTL.
     isComplete: (result) => !result.cacheStatus || result.cacheStatus.status === "fresh",
@@ -99,22 +112,14 @@ export async function loadCostUsageSummaryCached(params: {
     cache: costUsageCache,
     cacheKey,
     configRef: params.config,
+    revision: `${getSessionCostUsageUpdatedAt()}:${readSessionTranscriptUpdateVersion()}`,
     load: () =>
       allAgents
-        ? loadAllAgentCostUsageSummary({
-            startMs: params.startMs,
-            endMs: params.endMs,
-            dayBucket: params.dayBucket,
-            config: params.config,
-          })
+        ? loadAllAgentCostUsageSummary(params)
         : loadCostUsageSummaryFromCache({
-            startMs: params.startMs,
-            endMs: params.endMs,
-            dayBucket: params.dayBucket,
-            config: params.config,
+            ...params,
             agentId: expectDefined(agentId, "non-aggregate usage agent id"),
             requestRefresh: true,
-            refreshMode: "background",
           }),
   });
 }
@@ -127,20 +132,16 @@ async function loadAllAgentCostUsageSummary(params: {
 }): Promise<CostUsageSummary> {
   // Same agent universe as discoverAllSessionsForUsage: enumerating configured
   // ids only would list system-agent sessions whose cost never reaches totals.
-  const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
+  const agentIds = (await listGatewayAgentsBasic(params.config)).agents.map((agent) =>
     normalizeAgentId(agent.id),
   );
   const summaries = await runUsageAgentTasks(
     agentIds.map(
       (agentId) => () =>
         loadCostUsageSummaryFromCache({
-          startMs: params.startMs,
-          endMs: params.endMs,
-          dayBucket: params.dayBucket,
-          config: params.config,
+          ...params,
           agentId,
           requestRefresh: true,
-          refreshMode: "background",
         }),
     ),
   );

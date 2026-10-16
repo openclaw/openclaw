@@ -8,11 +8,7 @@ import {
   type CodexAppInventoryCache,
 } from "./app-inventory-cache.js";
 import type { CodexAppServerClient } from "./client.js";
-import {
-  resolveCodexPluginsPolicy,
-  type CodexPluginConfig,
-  type ResolvedCodexPluginsPolicy,
-} from "./config.js";
+import { resolveCodexPluginsPolicy, type CodexPluginConfig } from "./config.js";
 import { disableCodexPluginThreadConfig } from "./dynamic-tool-build.js";
 import {
   resolveRecoverableCodexPluginConfigKeys,
@@ -25,10 +21,12 @@ import {
 import {
   buildCodexPluginThreadConfig,
   buildCodexPluginThreadConfigTimeoutFallback,
+  buildCodexPluginThreadConfigInputFingerprint,
   shouldBuildCodexPluginThreadConfig,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import {
+  buildScheduledCodexAppAuthorityInputFingerprint,
   intersectCodexPluginThreadConfigWithScheduledAuthority,
   readCurrentCodexScheduledAppPolicy,
 } from "./scheduled-app-authority.js";
@@ -69,15 +67,18 @@ class CodexPluginThreadConfigDeadlineError extends Error {
 export function resolveCodexPluginThreadConfigStartupPolicy(params: {
   pluginConfig: CodexPluginConfig;
   nativeToolSurfaceEnabled: boolean;
+  hostedAppsSupported?: boolean;
   scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
 }) {
   const pluginThreadConfigRequired =
+    params.hostedAppsSupported === false ||
     Boolean(params.scheduledRuntimeAuthority) ||
     !params.nativeToolSurfaceEnabled ||
     shouldBuildCodexPluginThreadConfig(params.pluginConfig);
   // Restricted runs disable the native apps feature without inventory discovery.
   const pluginThreadConfigPluginConfig =
-    params.nativeToolSurfaceEnabled || params.scheduledRuntimeAuthority
+    params.hostedAppsSupported !== false &&
+    (params.nativeToolSurfaceEnabled || params.scheduledRuntimeAuthority)
       ? params.pluginConfig
       : disableCodexPluginThreadConfig(params.pluginConfig);
   const resolvedPluginPolicy = pluginThreadConfigRequired
@@ -106,10 +107,12 @@ async function buildCodexPluginThreadConfigWithinDeadline(
   const timeoutMs = resolveCodexPluginThreadConfigTimeoutMs(requestTimeoutMs);
   // One deadline owns the whole config build; every RPC gets only the remaining
   // budget so discovery cannot consume one full request timeout per call.
-  const deadlineMs = Date.now() + timeoutMs;
+  // Use the monotonic clock so NTP adjustments or sleep resumes cannot stretch
+  // or shrink the budget while request timers (also monotonic) are in flight.
+  const deadlineMs = performance.now() + timeoutMs;
   let requestTimedOut = false;
   const boundedRequest: CodexPluginRuntimeRequest = async (method, requestParams) => {
-    const remainingTimeoutMs = deadlineMs - Date.now();
+    const remainingTimeoutMs = deadlineMs - performance.now();
     if (requestTimedOut || remainingTimeoutMs <= 0) {
       throw new CodexPluginThreadConfigDeadlineError();
     }
@@ -117,7 +120,7 @@ async function buildCodexPluginThreadConfigWithinDeadline(
       return await request(method, requestParams, { timeoutMs: remainingTimeoutMs, signal });
     } catch (error) {
       // Inventory readers absorb failures. Preserve timeout evidence before they
-      // turn it into missing apps, even if the wall clock trails the request timer.
+      // turn it into missing apps, even if the monotonic clock trails the request timer.
       requestTimedOut ||= isCodexPluginThreadConfigTimeoutError(error);
       throw error;
     }
@@ -133,7 +136,7 @@ async function buildCodexPluginThreadConfigWithinDeadline(
         });
         const result = transform ? await transform(config, boundedRequest) : config;
         // Inventory readers can absorb an RPC timeout into an unavailable result.
-        if (requestTimedOut || Date.now() >= deadlineMs) {
+        if (requestTimedOut || performance.now() >= deadlineMs) {
           throw new CodexPluginThreadConfigDeadlineError();
         }
         return result;
@@ -144,7 +147,9 @@ async function buildCodexPluginThreadConfigWithinDeadline(
   } catch (error) {
     if (
       signal.aborted ||
-      (!requestTimedOut && !isCodexPluginThreadConfigTimeoutError(error) && Date.now() < deadlineMs)
+      (!requestTimedOut &&
+        !isCodexPluginThreadConfigTimeoutError(error) &&
+        performance.now() < deadlineMs)
     ) {
       throw error;
     }
@@ -161,72 +166,81 @@ async function buildCodexPluginThreadConfigWithinDeadline(
   }
 }
 
-/** Creates the recovery metadata and bounded builder used by thread startup. */
-export function createCodexPluginThreadConfigStartupProvider(params: {
-  inputFingerprint: string | undefined;
-  enabledPluginConfigKeys: string[] | undefined;
-  policy: ResolvedCodexPluginsPolicy | undefined;
-  requestTimeoutMs: number;
-  signal: AbortSignal;
-  pluginConfig?: unknown;
-  client: Pick<CodexAppServerClient, "request">;
-  configCwd?: string;
-  appCache?: CodexAppInventoryCache;
+/** Captures fingerprint inputs before startup work and binds the provider at admission. */
+export function prepareCodexPluginThreadConfigStartupProvider(prepared: {
+  startupPolicy: ReturnType<typeof resolveCodexPluginThreadConfigStartupPolicy>;
   appCacheKey: string;
-  metadataCache?: CodexPluginMetadataCache;
   scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
 }) {
+  const { startupPolicy, appCacheKey } = prepared;
+  if (!startupPolicy.pluginThreadConfigRequired) {
+    return undefined;
+  }
   const {
-    client,
-    policy,
-    inputFingerprint,
+    pluginThreadConfigPluginConfig: pluginConfig,
+    resolvedPluginPolicy: policy,
     enabledPluginConfigKeys,
-    appCache,
-    metadataCache: configuredMetadataCache,
-    ...buildParams
-  } = params;
-  const metadataCache = configuredMetadataCache ?? defaultCodexPluginMetadataCache;
-  return {
-    enabled: true,
-    // The bound context stores admitted apps only; native config owns excluded
-    // app IDs and tool/link overrides that can change between turns.
-    requiresCurrentPolicyCheck: Boolean(policy?.enabled || params.scheduledRuntimeAuthority),
-    inputFingerprint,
-    enabledPluginConfigKeys,
-    accountAppRecoveryEnabled: policy?.allowAllPlugins,
-    recoverablePluginConfigKeys: policy
-      ? resolveRecoverableCodexPluginConfigKeys({
-          policy,
+  } = startupPolicy;
+  const inputFingerprint = buildScheduledCodexAppAuthorityInputFingerprint(
+    buildCodexPluginThreadConfigInputFingerprint({ pluginConfig, appCacheKey }),
+    prepared.scheduledRuntimeAuthority,
+  );
+  return (params: {
+    requestTimeoutMs: number;
+    signal: AbortSignal;
+    client: Pick<CodexAppServerClient, "request">;
+    configCwd?: string;
+    appCache?: CodexAppInventoryCache;
+    metadataCache?: CodexPluginMetadataCache;
+    scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
+  }) => {
+    const { client, appCache, metadataCache: configuredMetadataCache, ...buildParams } = params;
+    const metadataCache = configuredMetadataCache ?? defaultCodexPluginMetadataCache;
+    return {
+      enabled: true,
+      // The bound context stores admitted apps only; native config owns excluded
+      // app IDs and tool/link overrides that can change between turns.
+      requiresCurrentPolicyCheck: Boolean(policy?.enabled || params.scheduledRuntimeAuthority),
+      inputFingerprint,
+      enabledPluginConfigKeys,
+      accountAppRecoveryEnabled: policy?.allowAllPlugins,
+      recoverablePluginConfigKeys: policy
+        ? resolveRecoverableCodexPluginConfigKeys({
+            policy,
+            metadataCache,
+            appCacheKey,
+            configCwd: params.configCwd,
+          })
+        : undefined,
+      build: async (buildOptions?: { threadId?: string }) => {
+        const config = await buildCodexPluginThreadConfigWithinDeadline({
+          ...buildParams,
+          pluginConfig,
+          appCacheKey,
+          threadId: buildOptions?.threadId,
+          appCache: appCache ?? defaultCodexAppInventoryCache,
           metadataCache,
-          appCacheKey: params.appCacheKey,
-          configCwd: params.configCwd,
-        })
-      : undefined,
-    build: async (buildOptions?: { threadId?: string }) => {
-      const config = await buildCodexPluginThreadConfigWithinDeadline({
-        ...buildParams,
-        threadId: buildOptions?.threadId,
-        appCache: appCache ?? defaultCodexAppInventoryCache,
-        metadataCache,
-        failClosedOnTimeout: Boolean(params.scheduledRuntimeAuthority),
-        transform: params.scheduledRuntimeAuthority
-          ? async (builtConfig, request) =>
-              intersectCodexPluginThreadConfigWithScheduledAuthority(
-                builtConfig,
-                params.scheduledRuntimeAuthority,
-                await readCurrentCodexScheduledAppPolicy({
-                  request,
-                  configCwd: params.configCwd,
-                  threadId: buildOptions?.threadId,
-                }),
-              )
-          : undefined,
-        request: (method, requestParams, options) => client.request(method, requestParams, options),
-      });
-      return params.scheduledRuntimeAuthority && params.inputFingerprint
-        ? { ...config, inputFingerprint: params.inputFingerprint }
-        : config;
-    },
+          failClosedOnTimeout: Boolean(params.scheduledRuntimeAuthority),
+          transform: params.scheduledRuntimeAuthority
+            ? async (builtConfig, request) =>
+                intersectCodexPluginThreadConfigWithScheduledAuthority(
+                  builtConfig,
+                  params.scheduledRuntimeAuthority,
+                  await readCurrentCodexScheduledAppPolicy({
+                    request,
+                    configCwd: params.configCwd,
+                    threadId: buildOptions?.threadId,
+                  }),
+                )
+            : undefined,
+          request: (method, requestParams, options) =>
+            client.request(method, requestParams, options),
+        });
+        return params.scheduledRuntimeAuthority && inputFingerprint
+          ? { ...config, inputFingerprint }
+          : config;
+      },
+    };
   };
 }
 

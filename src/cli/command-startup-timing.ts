@@ -10,15 +10,6 @@ type CliCommandStartupTimingOptions = {
 
 let diagnosticsTimelineModulePromise: Promise<DiagnosticsTimelineModule> | undefined;
 
-function hasDiagnosticsTimelinePath(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH?.trim());
-}
-
-function loadDiagnosticsTimelineModule(): Promise<DiagnosticsTimelineModule> {
-  diagnosticsTimelineModulePromise ??= import("../infra/diagnostics-timeline.js");
-  return diagnosticsTimelineModulePromise;
-}
-
 /** Measures command-specific work hidden inside Commander parse/action dispatch. */
 export async function measureCliCommandStartup<T>(
   stage: string,
@@ -29,10 +20,11 @@ export async function measureCliCommandStartup<T>(
   const tracedRun = stage.startsWith("doctor.config-preflight.")
     ? run
     : () => measureGatewayBootstrapStep(`cli.command.${stage}`, run);
-  if (!hasDiagnosticsTimelinePath(env)) {
+  if (!env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH?.trim()) {
     return await tracedRun();
   }
-  const { measureDiagnosticsTimelineSpan } = await loadDiagnosticsTimelineModule();
+  diagnosticsTimelineModulePromise ??= import("../infra/diagnostics-timeline.js");
+  const { measureDiagnosticsTimelineSpan } = await diagnosticsTimelineModulePromise;
   return await measureDiagnosticsTimelineSpan("cli.command-startup", tracedRun, {
     config: options.config,
     env,

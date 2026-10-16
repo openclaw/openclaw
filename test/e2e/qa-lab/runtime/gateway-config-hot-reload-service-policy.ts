@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { request } from "node:http";
 import path from "node:path";
@@ -15,7 +16,6 @@ import { GatewayClient, GatewayClientRequestError } from "../../../../src/gatewa
 import { discoverGatewayBeacons } from "../../../../src/infra/bonjour-discovery.js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { stopChildProcess } from "../../../helpers/stop-child-process.js";
 import {
   connectHotReloadClient,
   waitForHotReloadFact,
@@ -98,6 +98,8 @@ function observeBonjourRemovals(port: number) {
   const child = spawn("avahi-browse", ["-prk", "_openclaw-gw._tcp"], {
     stdio: ["ignore", "pipe", "pipe"],
   });
+  const exited = once(child, "exit");
+  void exited.catch(() => {});
   const ownServices = new Set<string>();
   const events: Array<{ kind: "resolved" | "removed"; service: string }> = [];
   let pending = "";
@@ -133,7 +135,10 @@ function observeBonjourRemovals(port: number) {
     },
     stop: async () => {
       if (child.pid) {
-        await stopChildProcess(child, 2_000);
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGTERM");
+        }
+        await exited;
       }
     },
   };

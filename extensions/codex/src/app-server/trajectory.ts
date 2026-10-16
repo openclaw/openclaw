@@ -1,31 +1,17 @@
-/** Records optional Codex runtime trajectory events through the host recorder. */
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
-/** Runtime trajectory recorder used by Codex run attempts and event projectors. */
-export type CodexTrajectoryRecorder = {
-  recordEvent: (type: string, data?: Record<string, unknown>) => void;
-  flush: () => Promise<void>;
-};
+export type CodexTrajectoryRecorder = NonNullable<
+  EmbeddedRunAttemptParams["hostCapabilities"]["trajectory"]
+>;
 
-type CodexTrajectoryInit = {
-  attempt: EmbeddedRunAttemptParams;
-  cwd: string;
-  developerInstructions?: string;
-  prompt?: string;
-  trajectory?: NonNullable<EmbeddedRunAttemptParams["hostCapabilities"]["trajectory"]> | null;
-  tools?: CodexDynamicToolSpec[];
-};
-
-/** Creates a trajectory recorder when the host exposes its capture capability. */
 export function createCodexTrajectoryRecorder(
-  params: CodexTrajectoryInit,
+  trajectory: CodexTrajectoryRecorder | null | undefined,
 ): CodexTrajectoryRecorder | null {
-  if (!params.trajectory) {
+  if (!trajectory) {
     return null;
   }
-  const trajectory = params.trajectory;
 
   return {
     recordEvent: (type, data) => {
@@ -40,15 +26,16 @@ export function createCodexTrajectoryRecorder(
   };
 }
 
-/** Records compiled prompt/tool context at the start of a Codex runtime attempt. */
 export function recordCodexTrajectoryContext(
   recorder: CodexTrajectoryRecorder | null,
-  params: CodexTrajectoryInit,
+  params: {
+    attempt: EmbeddedRunAttemptParams;
+    developerInstructions?: string;
+    prompt?: string;
+    tools?: CodexDynamicToolSpec[];
+  },
 ): void {
-  if (!recorder) {
-    return;
-  }
-  recorder.recordEvent("context.compiled", {
+  recorder?.recordEvent("context.compiled", {
     systemPrompt: params.developerInstructions,
     prompt: params.prompt ?? params.attempt.prompt,
     imagesCount: params.attempt.images?.length ?? 0,
@@ -56,11 +43,9 @@ export function recordCodexTrajectoryContext(
   });
 }
 
-/** Records final Codex model completion metadata and assistant snapshots. */
 export function recordCodexTrajectoryCompletion(
   recorder: CodexTrajectoryRecorder | null,
   params: {
-    attempt: EmbeddedRunAttemptParams;
     result: EmbeddedRunAttemptResult;
     threadId: string;
     turnId: string;
@@ -95,21 +80,11 @@ function toTrajectoryToolDefinitions(
   return flattenCodexDynamicToolFunctions(tools)
     .flatMap((tool) => {
       const name = tool.name?.trim();
-      if (!name) {
-        return [];
-      }
-      return [
-        {
-          name,
-          description: tool.description,
-          parameters: tool.inputSchema,
-        },
-      ];
+      return name ? [{ name, description: tool.description, parameters: tool.inputSchema }] : [];
     })
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-/** Converts arbitrary prompt errors into trajectory-safe text. */
 export function normalizeCodexTrajectoryError(value: unknown): string | null {
   if (!value) {
     return null;

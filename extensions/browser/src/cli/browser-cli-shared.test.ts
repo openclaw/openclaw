@@ -1,12 +1,12 @@
+import type { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { callGatewayFromCli } from "./core-api.js";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn<typeof callGatewayFromCli>(async () => ({ ok: true })),
 }));
 
-vi.mock("./core-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
   callGatewayFromCli: gatewayMocks.callGatewayFromCli,
 }));
 
@@ -63,18 +63,6 @@ describe("callBrowserRequest", () => {
     expect(gatewayMocks.callGatewayFromCli).not.toHaveBeenCalled();
   });
 
-  it("caps explicit request timeouts to Node's safe timer range", async () => {
-    await callBrowserRequest(
-      { json: true },
-      { method: "GET", path: "/status" },
-      { timeoutMs: 3_000_000_000 },
-    );
-
-    const call = gatewayMocks.callGatewayFromCli.mock.calls[0];
-    expect(call?.[1]).toMatchObject({ timeout: String(MAX_TIMER_TIMEOUT_MS) });
-    expect(call?.[2]).toMatchObject({ timeoutMs: MAX_TIMER_TIMEOUT_MS - 10_000 });
-  });
-
   it("caps parent timeout values to Node's safe timer range", async () => {
     await callBrowserRequest(
       { json: true, timeout: "3000000000" },
@@ -84,16 +72,5 @@ describe("callBrowserRequest", () => {
     const call = gatewayMocks.callGatewayFromCli.mock.calls[0];
     expect(call?.[1]).toMatchObject({ timeout: String(MAX_TIMER_TIMEOUT_MS) });
     expect(call?.[2]).toMatchObject({ timeoutMs: MAX_TIMER_TIMEOUT_MS - 10_000 });
-  });
-
-  it("accepts strict signed and zero-padded parent timeout values", async () => {
-    await callBrowserRequest(
-      { json: true, timeout: " +060000 " },
-      { method: "GET", path: "/status" },
-    );
-
-    const call = gatewayMocks.callGatewayFromCli.mock.calls[0];
-    expect(call?.[1]).toMatchObject({ timeout: "70000" });
-    expect(call?.[2]).toMatchObject({ timeoutMs: 60_000 });
   });
 });

@@ -79,21 +79,45 @@ describe("waitForAgentJob settled execution", () => {
     vi.useRealTimers();
   });
 
-  it.each(
-    (["agent", "chat"] as const).flatMap((source) =>
-      [true, false].map((lifecycleFirst) => ({ source, lifecycleFirst })),
-    ),
-  )(
-    "keeps execution timing across $source publication (lifecycle first=$lifecycleFirst)",
-    async ({ source, lifecycleFirst }) => {
+  it.each([
+    ["agent", true, "ok", { disposition: "visible", text: "Recorded reply" }],
+    ["agent", false, "ok", { disposition: "visible", text: "Recorded reply" }],
+    ["chat", true, "error", { disposition: "visible", text: "Recorded reply" }],
+    ["chat", true, "timeout", { disposition: "visible", text: "Recorded reply" }],
+    ["chat", false, "ok", { disposition: "silent" }],
+    ["chat", false, "ok", { disposition: "empty", code: "message-tool-not-called" }],
+  ] as const)(
+    "keeps %s timing and reply evidence (lifecycle first=%s, status=%s, reply=%j)",
+    async (source, lifecycleFirst, status, terminalReply) => {
       const runId = `execution-timing-${runSequence++}`;
       const dedupe = new Map<string, DedupeEntry>();
-      const entry = { ts: Date.now(), ok: true, payload: { runId, status: "ok" } };
+      const publishedAt = Date.now();
+      const entry = { ts: publishedAt, ok: status === "ok", payload: { runId, status } };
+      const terminalReceipt = {
+        runId,
+        sessionId: "session-a",
+        turnId: "turn-a",
+        requested: { provider: "test", model: "test-model" },
+        effective: { provider: "test", model: "test-model", responseModel: "test-model" },
+        successfulToolNames: [],
+        rerouted: false,
+        terminalDisposition: "visible",
+      };
+      const waiter = lifecycleFirst
+        ? waitForAgentJob({ runId, source, timeoutMs: 60_000 })
+        : undefined;
       const recordLifecycle = () =>
         emitAgentEvent({
           runId,
           stream: "lifecycle",
-          data: { phase: "end", executionSettled: true, startedAt: 100, endedAt: 200 },
+          data: {
+            phase: "end",
+            executionSettled: true,
+            startedAt: 100,
+            endedAt: 200,
+            terminalReply,
+            terminalReceipt,
+          },
         });
       if (lifecycleFirst) {
         recordLifecycle();
@@ -103,19 +127,25 @@ describe("waitForAgentJob settled execution", () => {
       if (!lifecycleFirst) {
         recordLifecycle();
       }
+      const expected = {
+        status,
+        startedAt: 100,
+        endedAt: status === "ok" ? 200 : publishedAt,
+        terminalReply,
+        terminalReceipt,
+      };
+      if (waiter) {
+        await expect(waiter).resolves.toMatchObject(expected);
+      }
       for (const selectedSource of [undefined, source]) {
         await expect(
           waitForAgentJob({ runId, source: selectedSource, timeoutMs: 0 }),
-        ).resolves.toMatchObject({
-          status: "ok",
-          startedAt: 100,
-          endedAt: 200,
-        });
+        ).resolves.toMatchObject(expected);
       }
       expect(dedupe.get(`${source}:${runId}`)).toBe(entry);
       await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
       await expect(waitForAgentJob({ runId, source, timeoutMs: 0 })).resolves.toMatchObject({
-        endedAt: 200,
+        endedAt: expected.endedAt,
       });
       await vi.advanceTimersByTimeAsync(2);
       await expect(waitForAgentJob({ runId, source, timeoutMs: 0 })).resolves.toBeNull();
@@ -169,90 +199,6 @@ describe("waitForAgentJob settled execution", () => {
       status: "ok",
       startedAt: undefined,
       endedAt: publishedAt,
-    });
-  });
-
-  it.each(
-    (["agent", "chat"] as const).flatMap((source) =>
-      (["ok", "error", "timeout"] as const).map((status) => ({ source, status })),
-    ),
-  )(
-    "returns recorded reply evidence only after $source publishes: $status",
-    async ({ source, status }) => {
-      const runId = `${source}-recorded-reply-${runSequence++}`;
-      const terminalReply = { disposition: "visible", text: "The requested answer" } as const;
-      const terminalReceipt = {
-        runId,
-        sessionId: "session-a",
-        turnId: "turn-a",
-        requested: { provider: "test", model: "test-model" },
-        effective: { provider: "test", model: "test-model", responseModel: "test-model" },
-        successfulToolNames: [],
-        rerouted: false,
-        terminalDisposition: "visible",
-      };
-      const waiter = waitForAgentJob({ runId, source, timeoutMs: 60_000 });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          executionSettled: true,
-          startedAt: 100,
-          endedAt: 200,
-          terminalReply,
-          terminalReceipt,
-        },
-      });
-      // Runtime completion must not release the RPC publication barrier.
-      await expect(waitForAgentJob({ runId, source, timeoutMs: 0 })).resolves.toBeNull();
-      const publishedAt = Date.now();
-      setGatewayDedupeEntry({
-        dedupe: new Map<string, DedupeEntry>(),
-        key: `${source}:${runId}`,
-        entry: { ts: publishedAt, ok: status === "ok", payload: { runId, status } },
-      });
-      // A successful replay retains execution time; a later publication failure
-      // is a new terminal fact and must not be backdated to that earlier success.
-      const expectedTiming = { startedAt: 100, endedAt: status === "ok" ? 200 : publishedAt };
-      await expect(waiter).resolves.toMatchObject({
-        status,
-        terminalReply,
-        terminalReceipt,
-        ...expectedTiming,
-      });
-      await expect(waitForAgentJob({ runId, source, timeoutMs: 0 })).resolves.toMatchObject({
-        status,
-        terminalReply,
-        terminalReceipt,
-        ...expectedTiming,
-      });
-    },
-  );
-
-  it.each([
-    { disposition: "visible", text: "Recorded reply" },
-    { disposition: "silent" },
-    { disposition: "empty", code: "message-tool-not-called" },
-  ] as const)("preserves late lifecycle reply disposition: $disposition", async (terminalReply) => {
-    const runId = `chat-late-reply-${runSequence++}`;
-    setGatewayDedupeEntry({
-      dedupe: new Map<string, DedupeEntry>(),
-      key: `chat:${runId}`,
-      entry: { ts: Date.now(), ok: true, payload: { runId, status: "ok" } },
-    });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        executionSettled: true,
-        terminalReply,
-      },
-    });
-    await expect(waitForAgentJob({ runId, source: "chat", timeoutMs: 0 })).resolves.toMatchObject({
-      status: "ok",
-      terminalReply,
     });
   });
 

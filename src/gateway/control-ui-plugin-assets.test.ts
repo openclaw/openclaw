@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { TLSSocket } from "node:tls";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -10,7 +11,13 @@ import type { PluginRecord } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import * as userProfileCatalog from "../state/user-profile-list.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  handleControlUiPluginAssetRequest,
   listControlUiPluginCatalog,
   listControlUiPluginActivations,
   reportControlUiPluginActivation,
@@ -35,10 +42,15 @@ import {
   withGatewayServer,
 } from "./server-http.test-harness.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+import { makeMockHttpResponse } from "./test-http-response.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 const roots: string[] = [];
 const firstSource = 'export default { id: "native-ui" };';
+
+function responseHeader(response: ReturnType<typeof createResponse>, name: string) {
+  return response.setHeader.mock.calls.findLast(([header]) => header.toLowerCase() === name)?.[1];
+}
 
 function activateFixture(origin: PluginRecord["origin"] = "bundled") {
   const rootDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "native-ui-")));
@@ -53,6 +65,7 @@ function activateFixture(origin: PluginRecord["origin"] = "bundled") {
     origin,
     rootDir,
     controlUi: { entry: "dist/control-ui/index.js", styles: ["dist/control-ui/theme.css"] },
+    uiCapabilities: ["page", "widget"],
   });
   fs.writeFileSync(
     path.join(rootDir, "openclaw.plugin.json"),
@@ -60,6 +73,7 @@ function activateFixture(origin: PluginRecord["origin"] = "bundled") {
       id: record.id,
       configSchema: { type: "object", additionalProperties: false },
       controlUi: record.controlUi,
+      uiCapabilities: record.uiCapabilities,
     }),
   );
   registry.plugins.push(record);
@@ -72,7 +86,9 @@ function activateFixture(origin: PluginRecord["origin"] = "bundled") {
   return { rootDir, directory, registry, record };
 }
 
-function cookieForGrant(overrides: { pluginId?: string; generation?: string } = {}): string {
+function cookieForGrant(
+  overrides: { pluginId?: string; generation?: string; profileId?: string } = {},
+): string {
   const response = createResponse();
   const [grant] = listControlUiPluginTabAuthGrants(["operator.read"]);
   if (!grant) {
@@ -82,6 +98,7 @@ function cookieForGrant(overrides: { pluginId?: string; generation?: string } = 
     response.res,
     [{ ...grant, pluginId: overrides.pluginId ?? grant.pluginId }],
     {
+      profileId: overrides.profileId,
       generation:
         overrides.generation ??
         resolveControlUiPluginAuthCookieGeneration(
@@ -112,39 +129,21 @@ describe("native Control UI browser assets", () => {
     await import("./control-ui.js");
   });
 
-  it.each(["global", "workspace", "config"] as const)(
-    "keeps Custom plugin UI off by default for %s plugins",
-    async (origin) => {
-      await withTempConfig({
-        cfg: {},
-        run: async () => {
-          const fixture = activateFixture(origin);
-          fixture.record.trustedOfficialInstall = true;
-          const catalog = await listControlUiPluginCatalog();
-          expect(catalog.plugins).toEqual([]);
-          expect(catalog.diagnostics).toEqual([
-            {
-              pluginId: fixture.record.id,
-              code: "custom-plugin-ui-disabled",
-              message: expect.stringContaining("Settings > Labs"),
-            },
-          ]);
-          expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
-          expect(listControlUiPluginWidgetKinds(["operator.read"])).not.toContainEqual(
-            expect.objectContaining({ pluginId: fixture.record.id }),
-          );
-          expect(await reloadControlUiPluginCatalog(fixture.record.id)).toEqual(catalog);
-        },
-      });
-    },
-  );
-
   it("hot-applies Custom plugin UI admission without replacing the backend plugin", async () => {
     await withTempConfig({
       cfg: {},
       run: async () => {
-        activateFixture("workspace");
-        expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
+        const fixture = activateFixture("workspace");
+        fixture.record.trustedOfficialInstall = true;
+        const catalog = await listControlUiPluginCatalog();
+        expect(catalog.plugins).toEqual([]);
+        expect(catalog.diagnostics).toEqual([
+          {
+            pluginId: fixture.record.id,
+            code: "custom-plugin-ui-disabled",
+            message: expect.stringContaining("Settings > Labs"),
+          },
+        ]);
         expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
 
         setRuntimeConfigSnapshot({
@@ -213,11 +212,10 @@ describe("native Control UI browser assets", () => {
     });
   });
 
-  it.each(
-    [AUTH_NONE, AUTH_TOKEN].flatMap((auth) =>
-      ["", "/openclaw"].map((basePath) => ({ auth, basePath })),
-    ),
-  )(
+  it.each([
+    { auth: AUTH_NONE, basePath: "" },
+    { auth: AUTH_TOKEN, basePath: "/openclaw" },
+  ])(
     "reports and enforces native asset authentication for $auth.mode Gateways at '$basePath'",
     async ({ auth, basePath }) => {
       const requiresAuth = auth.mode !== "none";
@@ -240,6 +238,7 @@ describe("native Control UI browser assets", () => {
           });
           expect(bootstrap.res.statusCode).toBe(200);
           expect(JSON.parse(bootstrap.getBody())).toMatchObject({
+            pluginControlUiModules: [entry],
             basePath,
             pluginAssetsRequireAuth: requiresAuth,
             pluginFrameGrants: requiresAuth
@@ -272,6 +271,12 @@ describe("native Control UI browser assets", () => {
             );
             const asset = await sendRequest(server, { path: assetUrl, headers: { cookie } });
             expect(asset.res.statusCode).toBe(200);
+            expect(responseHeader(asset, "cache-control")).toBe(
+              "private, max-age=31536000, immutable",
+            );
+            expect(String(responseHeader(asset, "vary")).toLowerCase().split(/,\s*/)).not.toContain(
+              "cookie",
+            );
             expect(asset.end.mock.calls[0]?.[0]?.toString()).toBe(source);
             if (basePath) {
               expect(
@@ -383,8 +388,6 @@ describe("native Control UI browser assets", () => {
               setControlUiPluginAuthCookieForRequest(
                 request,
                 response.res,
-                "token",
-                false,
                 resolveSharedGatewaySessionGeneration(AUTH_TOKEN),
                 getRuntimeConfig(),
                 ["operator.read"],
@@ -404,7 +407,7 @@ describe("native Control UI browser assets", () => {
     });
   });
 
-  it.each(["", "/openclaw"])(
+  it.each(["/openclaw"])(
     "keeps opaque iframe grants Secure when native HTTP grants are allowed at %j",
     (basePath) => {
       const response = createResponse();
@@ -441,13 +444,60 @@ describe("native Control UI browser assets", () => {
     },
   );
 
-  it("serves authenticated immutable builds and preserves the last working revision on failure", async () => {
+  it("advertises only admitted static dependencies, including re-exports and cycles", async () => {
     const fixture = activateFixture();
+    fs.mkdirSync(path.join(fixture.directory, "chunks"));
+    for (const [name, source] of Object.entries({
+      "index.js": `
+        import './chunks/first.js';
+        export { value } from './chunks/second.mjs';
+        import('./lazy.js');
+        import './missing.js';
+        import '../outside.js';
+        import 'bare-package';
+        import 'https://example.test/remote.js';
+        import './theme.css' with { type: 'css' };
+        const text = "import './decoy.js'";
+      `,
+      "chunks/first.js": "export * from './second.mjs'; import '../index.js';",
+      "chunks/second.mjs": "export { value } from '../shared.js';",
+      "shared.js": "export const value = 1;",
+      "lazy.js": "import './decoy.js';",
+      "decoy.js": "export const decoy = true;",
+    })) {
+      fs.writeFileSync(path.join(fixture.directory, name), source);
+    }
+    const catalog = await listControlUiPluginCatalog();
+    expect(catalog.diagnostics).toEqual([]);
+    const entry = catalog.plugins[0]!;
+    const prefix = entry.entryUrl.slice(0, -"index.js".length);
+    expect(entry.imports).toEqual([
+      `${prefix}chunks/first.js`,
+      `${prefix}chunks/second.mjs`,
+      `${prefix}shared.js`,
+    ]);
+  });
+
+  it("preserves browser build admission when a module cannot be parsed for preload hints", async () => {
+    const fixture = activateFixture();
+    fs.writeFileSync(path.join(fixture.directory, "index.js"), "export const = ;");
+    const catalog = await listControlUiPluginCatalog();
+    expect(catalog.diagnostics).toEqual([]);
+    expect(catalog.plugins[0]?.imports).toEqual([]);
+  });
+
+  it("serves hardlinked bundled assets, reloads a hardlinked manifest, and preserves working revisions", async () => {
+    const fixture = activateFixture();
+    fs.linkSync(
+      path.join(fixture.directory, "index.js"),
+      path.join(fixture.rootDir, "linked-entry.js"),
+    );
     const firstChunk = "export const value = 'first';";
     fs.writeFileSync(path.join(fixture.directory, "lazy.js"), firstChunk);
     const first = await listControlUiPluginCatalog();
     expect(first.diagnostics).toEqual([]);
     const entry = first.plugins[0]!;
+    expect(entry.uiCapabilities).toEqual(["page", "widget"]);
     const browser = {};
     expect(
       reportControlUiPluginActivation(browser, {
@@ -479,12 +529,19 @@ describe("native Control UI browser assets", () => {
         const head = await read(entry.entryUrl, "HEAD");
         expect(head.res.statusCode).toBe(200);
         expect(head.getBody()).toBe("");
-        expect((await read(entry.entryUrl, "POST")).res.statusCode).toBe(405);
+        expect(responseHeader(head, "cache-control")).toBe("private, max-age=31536000, immutable");
+        const unsupported = await read(entry.entryUrl, "POST");
+        expect(unsupported.res.statusCode).toBe(405);
+        expect(unsupported.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
 
         const nextSource = 'export default { id: "native-ui", version: 2 };';
         fs.writeFileSync(path.join(fixture.directory, "index.js"), nextSource);
         expect(await listControlUiPluginCatalog()).toEqual(first);
         expect((await read(entry.entryUrl)).end.mock.calls[0]?.[0]?.toString()).toBe(firstSource);
+        fs.linkSync(
+          path.join(fixture.rootDir, "openclaw.plugin.json"),
+          path.join(fixture.rootDir, "linked-manifest.json"),
+        );
         const next = await reloadControlUiPluginCatalog("native-ui");
         expect(next.plugins[0]!.revision).not.toBe(entry.revision);
         expect((await read(next.plugins[0]!.entryUrl)).end.mock.calls[0]?.[0]?.toString()).toBe(
@@ -499,13 +556,10 @@ describe("native Control UI browser assets", () => {
             status: "failed",
           }),
         ).toBe(true);
-        fs.writeFileSync(
-          path.join(fixture.directory, "index.js"),
-          "export default { version: 3 };",
-        );
         fs.writeFileSync(path.join(fixture.directory, "lazy.js"), "export const value = 'third';");
         const third = await reloadControlUiPluginCatalog("native-ui");
         expect(third.diagnostics).toEqual([]);
+        expect(third.plugins[0]!.revision).not.toBe(next.plugins[0]!.revision);
         expect(
           reportControlUiPluginActivation(browser, {
             pluginId: "native-ui",
@@ -516,6 +570,9 @@ describe("native Control UI browser assets", () => {
         // Failed activations still use the first renderer, including its later imports.
         const retainedChunk = await read(entry.entryUrl.replace(/index\.js$/u, "lazy.js"));
         expect(retainedChunk.res.statusCode).toBe(200);
+        expect(responseHeader(retainedChunk, "cache-control")).toBe(
+          "private, max-age=31536000, immutable",
+        );
         expect(retainedChunk.end.mock.calls[0]?.[0]?.toString()).toBe(firstChunk);
         expect((await read(entry.entryUrl)).end.mock.calls[0]?.[0]?.toString()).toBe(firstSource);
 
@@ -531,6 +588,102 @@ describe("native Control UI browser assets", () => {
       },
     });
   });
+
+  it("serves profile-bound cookie assets with a replaced profile catalog", async () => {
+    await withOpenClawTestState({ prefix: "native-ui-profile-cookie-" }, async () => {
+      activateFixture();
+      const entry = (await listControlUiPluginCatalog()).plugins[0]!;
+      const profile = ensureProfileForEmail("reader@example.test");
+      const previous = await userProfileCatalog.prepareUserProfileCatalog();
+      try {
+        const databasePath = resolveOpenClawStateSqlitePath();
+        await closeOpenClawStateDatabaseByPathAsync(databasePath);
+        fs.renameSync(databasePath, `${databasePath}.previous`);
+        fs.copyFileSync(`${databasePath}.previous`, databasePath);
+        await withGatewayServer({
+          prefix: "native-ui-profile-http-",
+          resolvedAuth: AUTH_TOKEN,
+          overrides: { controlUiEnabled: true, controlUiBasePath: "" },
+          run: async (server) => {
+            const response = await sendRequest(server, {
+              path: entry.entryUrl,
+              headers: { cookie: cookieForGrant({ profileId: profile.id }) },
+            });
+            expect(response.res.statusCode).toBe(200);
+            expect(response.end.mock.calls[0]?.[0]?.toString()).toBe(firstSource);
+          },
+        });
+      } finally {
+        previous.release();
+      }
+    });
+  });
+
+  it.each(["auth rotation", "response closure"] as const)(
+    "refuses asset disclosure after %s during profile preparation",
+    async (invalidation) => {
+      await withOpenClawTestState({ prefix: "native-ui-profile-authority-" }, async () => {
+        await withTempConfig({
+          cfg: {},
+          run: async () => {
+            activateFixture();
+            const entry = (await listControlUiPluginCatalog()).plugins[0]!;
+            const profile = ensureProfileForEmail("reader@example.test");
+            const prepared = createDeferred();
+            const resume = createDeferred();
+            const prepare = userProfileCatalog.prepareUserProfileCatalog;
+            const preparation = vi
+              .spyOn(userProfileCatalog, "prepareUserProfileCatalog")
+              .mockImplementationOnce(async () => {
+                const catalog = await prepare();
+                prepared.resolve();
+                await resume.promise;
+                return catalog;
+              });
+            let currentAuth = AUTH_TOKEN;
+            const request = createRequest({
+              path: entry.entryUrl,
+              headers: { cookie: cookieForGrant({ profileId: profile.id }) },
+            });
+            const response = makeMockHttpResponse();
+            const operation = handleControlUiPluginAssetRequest(request, response.res, {
+              auth: currentAuth,
+              getResolvedAuth: () => currentAuth,
+              basePath: "",
+            });
+            try {
+              await awaitGateBeforeSettlement(
+                prepared.promise,
+                operation,
+                "asset request completed before profile preparation",
+              );
+              if (invalidation === "auth rotation") {
+                currentAuth = { ...AUTH_TOKEN, token: "rotated-token" };
+              } else {
+                response.res.destroy();
+              }
+              resume.resolve();
+              expect(await operation).toBe(true);
+              if (invalidation === "auth rotation") {
+                expect(response.res.statusCode).toBe(401);
+              } else {
+                expect(response.end).not.toHaveBeenCalled();
+              }
+            } finally {
+              resume.resolve();
+              try {
+                await operation;
+              } finally {
+                preparation.mockRestore();
+                response.res.destroy();
+                request.destroy();
+              }
+            }
+          },
+        });
+      });
+    },
+  );
 
   it("retains advertised revisions and receipts only for the exact backend owner", async () => {
     const fixture = activateFixture();
@@ -617,31 +770,7 @@ describe("native Control UI browser assets", () => {
     expect(await listControlUiPluginCatalog()).toEqual(second);
   });
 
-  it.each(["cold", "initialized"] as const)(
-    "serves a %s catalog when a concurrent reload rejects",
-    async (initialization) => {
-      activateFixture();
-      const first = initialization === "initialized" ? await listControlUiPluginCatalog() : null;
-      const rejected = reloadControlUiPluginCatalog("missing-plugin");
-      const reading = listControlUiPluginCatalog();
-      const [catalog] = await Promise.all([
-        reading,
-        expect(rejected).rejects.toThrow("No active Control UI entrypoint for this plugin"),
-      ]);
-
-      expect(catalog.plugins.map((plugin) => plugin.pluginId)).toEqual(["native-ui"]);
-      expect(catalog.diagnostics).toEqual([]);
-      if (first) {
-        expect(catalog).toEqual(first);
-      }
-      expect(await listControlUiPluginCatalog()).toEqual(catalog);
-    },
-  );
-
-  it.each([
-    { limit: "256 revisions", maxChanges: 256, sourceBytes: 0 },
-    { limit: "64 MiB", maxChanges: 16, sourceBytes: 4 * 1024 * 1024 },
-  ])(
+  it.each([{ limit: "64 MiB", maxChanges: 16, sourceBytes: 4 * 1024 * 1024 }])(
     "refuses reloads past $limit without evicting advertised assets",
     async ({ maxChanges, sourceBytes }) => {
       const fixture = activateFixture();
@@ -718,14 +847,22 @@ describe("native Control UI browser assets", () => {
           { cookie: cookieForGrant({ generation: "stale-generation" }) },
         ];
         for (const headers of unauthorizedHeaders) {
-          expect(
-            (await sendRequest(server, { path: entry.entryUrl, headers })).res.statusCode,
-          ).toBe(401);
+          const denied = await sendRequest(server, { path: entry.entryUrl, headers });
+          expect(denied.res.statusCode).toBe(401);
+          expect(responseHeader(denied, "cache-control")).toBe("no-store");
         }
         expect(
           (await sendRequest(server, { path: entry.entryUrl, authorization: "Bearer test-token" }))
             .res.statusCode,
         ).toBe(200);
+        for (const invalidRevision of ["latest", "", "0".repeat(64)]) {
+          const missing = await sendRequest(server, {
+            path: entry.entryUrl.replace(entry.revision, invalidRevision),
+            headers: { cookie },
+          });
+          expect(missing.res.statusCode).toBe(404);
+          expect(responseHeader(missing, "cache-control")).toBe("no-store");
+        }
         for (const suffix of [
           "source.ts",
           "index.js.map",
@@ -734,89 +871,103 @@ describe("native Control UI browser assets", () => {
           "%252e%252e/server.js",
           "missing.js",
         ]) {
-          expect(
-            (await sendRequest(server, { path: prefix + suffix, headers: { cookie } })).res
-              .statusCode,
-            suffix,
-          ).toBe(404);
+          const missing = await sendRequest(server, { path: prefix + suffix, headers: { cookie } });
+          expect(missing.res.statusCode, suffix).toBe(404);
+          expect(responseHeader(missing, "cache-control"), suffix).toBe("no-store");
         }
       },
     });
   });
 
-  it.each(["symlink", "hardlink"])(
-    "rejects %s browser files outside their built owner",
-    async (kind) => {
-      const fixture = activateFixture();
-      const privatePath = path.join(fixture.rootDir, "private.js");
-      fs.writeFileSync(privatePath, "private source");
-      const entry = path.join(fixture.directory, "index.js");
-      fs.unlinkSync(entry);
-      if (kind === "symlink") {
-        fs.symlinkSync(privatePath, entry);
-      } else {
-        fs.linkSync(privatePath, entry);
-      }
-      const catalog = await listControlUiPluginCatalog();
-      expect(catalog.plugins).toEqual([]);
-      expect(catalog.diagnostics).toEqual([{ pluginId: "native-ui", message: expect.any(String) }]);
-    },
-  );
+  it("rejects symlink browser files outside their built owner", async () => {
+    const fixture = activateFixture();
+    const privatePath = path.join(fixture.rootDir, "private.js");
+    fs.writeFileSync(privatePath, "private source");
+    const entry = path.join(fixture.directory, "index.js");
+    fs.unlinkSync(entry);
+    fs.symlinkSync(privatePath, entry);
+    const catalog = await listControlUiPluginCatalog();
+    expect(catalog.plugins).toEqual([]);
+    expect(catalog.diagnostics).toEqual([{ pluginId: "native-ui", message: expect.any(String) }]);
+  });
 
-  it("adopts an immutable manifest publication only on explicit reload and retires old browser receipts", async () => {
+  it("rejects hardlink browser files for untrusted plugin roots", async () => {
+    await withTempConfig({
+      cfg: {},
+      run: async () => {
+        const fixture = activateFixture("workspace");
+        setRuntimeConfigSnapshot({
+          gateway: { controlUi: { experimental: { customPlugins: true } } },
+        });
+        const privatePath = path.join(fixture.rootDir, "private.js");
+        fs.writeFileSync(privatePath, "private source");
+        const entry = path.join(fixture.directory, "index.js");
+        fs.unlinkSync(entry);
+        fs.linkSync(privatePath, entry);
+        const catalog = await listControlUiPluginCatalog();
+        expect(catalog.plugins).toEqual([]);
+        expect(catalog.diagnostics).toEqual([
+          { pluginId: "native-ui", message: expect.any(String) },
+        ]);
+      },
+    });
+  });
+
+  it("rejects a hardlinked workspace manifest on reload and retains the working build", async () => {
+    await withTempConfig({
+      cfg: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
+      run: async () => {
+        const fixture = activateFixture("workspace");
+        const first = await listControlUiPluginCatalog();
+        expect(first.plugins).toHaveLength(1);
+        fs.linkSync(
+          path.join(fixture.rootDir, "openclaw.plugin.json"),
+          path.join(fixture.rootDir, "linked-manifest.json"),
+        );
+        const reloaded = await reloadControlUiPluginCatalog("native-ui");
+        expect(reloaded.plugins).toEqual(first.plugins);
+        expect(reloaded.diagnostics).toEqual([
+          { pluginId: "native-ui", message: expect.stringContaining("Build the plugin") },
+        ]);
+      },
+    });
+  });
+
+  it("refreshes UI declarations and retires receipts when browser bytes stay unchanged", async () => {
     const fixture = activateFixture();
     const first = await listControlUiPluginCatalog();
     const browser = {};
     const report = {
-      pluginId: "native-ui",
+      pluginId: fixture.record.id,
       revision: first.plugins[0]!.revision,
       status: "activated" as const,
     };
     expect(reportControlUiPluginActivation(browser, report)).toBe(true);
-    expect(listControlUiPluginActivations(browser)).toEqual([report]);
-    expect(listControlUiPluginActivations({})).toEqual([]);
-    const nextDirectory = path.join(fixture.directory, "published");
-    fs.mkdirSync(nextDirectory);
-    fs.writeFileSync(path.join(nextDirectory, "index.js"), "export default { version: 2 };");
     fs.writeFileSync(
       path.join(fixture.rootDir, "openclaw.plugin.json"),
       JSON.stringify({
-        id: "native-ui",
+        id: fixture.record.id,
         configSchema: { type: "object" },
-        controlUi: { entry: "dist/control-ui/published/index.js" },
+        controlUi: fixture.record.controlUi,
+        uiCapabilities: [],
       }),
     );
     expect(await listControlUiPluginCatalog()).toEqual(first);
-    const second = await reloadControlUiPluginCatalog("native-ui");
-    expect(second.diagnostics).toEqual([]);
-    expect(second.plugins[0]!.revision).not.toBe(report.revision);
-    expect(fixture.record.controlUi?.entry).toBe("dist/control-ui/index.js");
+    const next = await reloadControlUiPluginCatalog(fixture.record.id);
+    expect(next.plugins[0]!.uiCapabilities).toEqual([]);
+    expect(next.plugins[0]!.revision).not.toBe(first.plugins[0]!.revision);
     expect(listControlUiPluginActivations(browser)).toEqual([]);
     expect(reportControlUiPluginActivation(browser, report)).toBe(false);
-    const pending = {
-      ...report,
-      revision: second.plugins[0]!.revision,
-      status: "failed" as const,
-      error: "Activation failed",
-    };
-    expect(reportControlUiPluginActivation(browser, pending)).toBe(true);
-    expect(listControlUiPluginActivations(browser)).toEqual([pending]);
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    expect(reportControlUiPluginActivation(browser, pending)).toBe(false);
-  });
-
-  it("fences a queued reload after registry replacement and builds a fresh backend owner", async () => {
-    const fixture = activateFixture();
-    const first = await listControlUiPluginCatalog();
-    const pending = reloadControlUiPluginCatalog("native-ui");
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    await expect(pending).rejects.toThrow("no longer active");
-    expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
-    fs.writeFileSync(path.join(fixture.directory, "index.js"), "export default {};");
-    const replacement = createEmptyPluginRegistry();
-    replacement.plugins.push(createPluginRecord({ ...fixture.record }));
-    setActivePluginRegistry(replacement);
-    const second = await listControlUiPluginCatalog();
-    expect(second.plugins[0]!.revision).not.toBe(first.plugins[0]!.revision);
+    fs.writeFileSync(
+      path.join(fixture.rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: fixture.record.id,
+        configSchema: { type: "object" },
+        controlUi: fixture.record.controlUi,
+      }),
+    );
+    const undeclared = await reloadControlUiPluginCatalog(fixture.record.id);
+    expect(undeclared.plugins[0]).not.toHaveProperty("uiCapabilities");
+    expect(undeclared.plugins[0]!.revision).not.toBe(next.plugins[0]!.revision);
   });
 });

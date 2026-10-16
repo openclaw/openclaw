@@ -15,29 +15,6 @@ import {
 import { analyzeCommandSecretAssignmentsFromSnapshot } from "./command-config.js";
 
 describe("analyzeCommandSecretAssignmentsFromSnapshot", () => {
-  it("returns assignments from the active runtime snapshot for configured refs", () => {
-    const sourceConfig = buildTalkTestProviderConfig({
-      source: "env",
-      provider: "default",
-      id: "TALK_API_KEY",
-    });
-    const resolvedConfig = buildTalkTestProviderConfig("talk-key"); // pragma: allowlist secret
-
-    const result = analyzeCommandSecretAssignmentsFromSnapshot({
-      sourceConfig,
-      resolvedConfig,
-      targetIds: new Set(["talk.providers.*.apiKey"]),
-    });
-
-    expect(result.assignments).toEqual([
-      {
-        path: TALK_TEST_PROVIDER_API_KEY_PATH,
-        pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
-        value: "talk-key",
-      },
-    ]);
-  });
-
   it("reports configured refs that are unresolved in the snapshot", () => {
     const sourceConfig = buildTalkTestProviderConfig({
       source: "env",

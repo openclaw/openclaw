@@ -14,16 +14,15 @@ import {
 import { closedObject } from "./closed-object.js";
 import { ModelAuthProfileIdSchema } from "./model-account-selection.js";
 import { NonEmptyString, UserProfileIdSchema } from "./primitives.js";
-import { UserChannelIdentitySchema } from "./user-channel-identity.js";
 import { USER_PREFS_ENTRY_LIMIT } from "./user-profile-constants.js";
 import { WizardAnswerSchema, WizardStepSchema } from "./wizard.js";
+
+export * from "./users-background.js";
 
 export {
   ChatAccountSelectionSchema,
   type ChatAccountSelection,
 } from "./model-account-selection.js";
-
-export { UserChannelIdentitySchema } from "./user-channel-identity.js";
 
 export {
   GATEWAY_OWNER_PROFILE_ID,
@@ -69,10 +68,32 @@ export const UserProfileSchema = closedObject({
   githubIdentity: Type.Union([UserProfileGitHubIdentitySchema, Type.Null()]),
   hasAvatar: Type.Boolean(),
   role: Type.Optional(UserProfileRoleSchema),
+  effectiveRole: Type.Optional(UserProfileRoleSchema),
+  roleSource: Type.Optional(
+    Type.Union([Type.Literal("assigned"), Type.Literal("githubLogin"), Type.Literal("default")]),
+  ),
 });
 
-export const UsersListParamsSchema = closedObject({});
-export const UsersListResultSchema = closedObject({ profiles: Type.Array(UserProfileSchema) });
+export const UsersListParamsSchema = closedObject({
+  githubAccountIds: Type.Optional(
+    Type.Array(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }), {
+      maxItems: 500,
+      uniqueItems: true,
+    }),
+  ),
+});
+export const UsersListResultSchema = closedObject({
+  profiles: Type.Array(UserProfileSchema),
+  githubProfiles: Type.Optional(
+    Type.Array(
+      closedObject({
+        accountId: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+        profileId: UserProfileIdSchema,
+      }),
+      { maxItems: 500 },
+    ),
+  ),
+});
 
 // The profile and relative path are derived from the authenticated connection.
 export const UsersPersonalFileGetParamsSchema = closedObject({ agentId: NonEmptyString });
@@ -103,6 +124,28 @@ export const UsersLinkEmailParamsSchema = closedObject({
 });
 export const UsersLinkEmailResultSchema = closedObject({ profile: UserProfileSchema });
 
+export const UsersMergeParamsSchema = closedObject({
+  sourceProfileId: UserProfileIdSchema,
+  targetProfileId: UserProfileIdSchema,
+});
+export const UsersMergeResultSchema = closedObject({
+  profile: UserProfileSchema,
+  movedAliasKinds: Type.Array(
+    Type.Union([Type.Literal("email"), Type.Literal("provider"), Type.Literal("channel")]),
+    { maxItems: 3, uniqueItems: true },
+  ),
+});
+
+const ChannelIdentityPartSchema = Type.String({
+  minLength: 1,
+  maxLength: 512,
+  pattern: "^\\S(?:.*\\S)?$",
+});
+export const UserChannelIdentitySchema = closedObject({
+  channelId: ChannelIdentityPartSchema,
+  accountId: ChannelIdentityPartSchema,
+  senderId: ChannelIdentityPartSchema,
+});
 export const UserChannelIdentityLinkSchema = closedObject({
   profileId: UserProfileIdSchema,
   identity: UserChannelIdentitySchema,
@@ -297,6 +340,8 @@ export type UsersSelfParams = Static<typeof UsersSelfParamsSchema>;
 export type UsersSelfResult = Static<typeof UsersSelfResultSchema>;
 export type UsersLinkEmailParams = Static<typeof UsersLinkEmailParamsSchema>;
 export type UsersLinkEmailResult = Static<typeof UsersLinkEmailResultSchema>;
+export type UsersMergeParams = Static<typeof UsersMergeParamsSchema>;
+export type UsersMergeResult = Static<typeof UsersMergeResultSchema>;
 export type UsersLinkChannelIdentityParams = Static<typeof UsersLinkChannelIdentityParamsSchema>;
 export type UsersLinkChannelIdentityResult = Static<typeof UsersLinkChannelIdentityResultSchema>;
 export type UsersUnlinkChannelIdentityParams = Static<
@@ -372,6 +417,7 @@ export const UsersGitHubAuthorizeCancelResultSchema = closedObject({ cancelled: 
 export const UsersGitHubDisconnectParamsSchema = closedObject({});
 export const UsersGitHubDisconnectResultSchema = closedObject({ disconnected: Type.Literal(true) });
 export const PersonalGitHubStatusSchema = closedObject({
+  stale: Type.Optional(Type.Boolean()),
   state: Type.Union([
     Type.Literal("connected"),
     Type.Literal("disconnected"),

@@ -4,6 +4,7 @@ import {
   collectString,
   invalidQaCliArgument,
   parseQaCliPositiveIntegerOption,
+  qaCliAction,
 } from "./cli-options.js";
 import type {
   QaLabSelfCheckCommandOptions,
@@ -47,24 +48,6 @@ type QaRunCliOptions = QaLabSelfCheckCommandOptions &
     excludeTestExecutionEvidence?: boolean;
   };
 
-const QA_RUN_PROFILE_ONLY_OPTIONS = [
-  { optionName: "outputDir", flag: "--output-dir" },
-  { optionName: "surface", flag: "--surface" },
-  { optionName: "category", flag: "--category" },
-  { optionName: "scenario", flag: "--scenario" },
-  { optionName: "evidenceMode", flag: "--evidence-mode" },
-  { optionName: "excludeTestExecutionEvidence", flag: "--exclude-test-execution-evidence" },
-  { optionName: "transport", flag: "--transport" },
-  { optionName: "providerMode", flag: "--provider-mode" },
-  { optionName: "model", flag: "--model" },
-  { optionName: "altModel", flag: "--alt-model" },
-  { optionName: "concurrency", flag: "--concurrency" },
-  { optionName: "allowFailures", flag: "--allow-failures" },
-  { optionName: "failFast", flag: "--fail-fast" },
-  { optionName: "fast", flag: "--fast" },
-] as const;
-
-const QA_RUN_SELF_CHECK_ONLY_OPTIONS = [{ optionName: "output", flag: "--output" }] as const;
 const MAX_QA_CLI_TCP_PORT = 65_535;
 
 type QaSuiteCliOptions = QaScenarioRunCliOptions & {
@@ -86,12 +69,14 @@ type QaSuiteCliOptions = QaScenarioRunCliOptions & {
 
 const loadQaLabCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
 
-function parseQaCliTcpPortOption(value: string, flag: string): number {
-  const parsed = parseQaCliPositiveIntegerOption(value, flag);
-  if (parsed > MAX_QA_CLI_TCP_PORT) {
-    throw invalidQaCliArgument(`${flag} must be a TCP port between 1 and 65535.`);
-  }
-  return parsed;
+function tcpPort(flag: string) {
+  return (value: string) => {
+    const parsed = parseQaCliPositiveIntegerOption(value, flag);
+    if (parsed > MAX_QA_CLI_TCP_PORT) {
+      throw invalidQaCliArgument(`${flag} must be a TCP port between 1 and 65535.`);
+    }
+    return parsed;
+  };
 }
 
 function parseQaEvidenceModeOption(value: string): QaProfileCommandOptions["evidenceMode"] {
@@ -110,24 +95,9 @@ function resolveQaEvidenceModeOptions(opts: QaRunCliOptions) {
     return opts.evidenceMode;
   }
   if (opts.evidenceMode === "full") {
-    throw invalidQaCliArgument(
-      "--exclude-test-execution-evidence conflicts with --evidence-mode full.",
-    );
+    throw new Error("--exclude-test-execution-evidence conflicts with --evidence-mode full.");
   }
   return "slim";
-}
-
-function collectCliSuppliedQaRunFlags(
-  command: Command,
-  options: readonly { optionName: string; flag: string }[],
-): string[] {
-  return options
-    .filter((option) => command.getOptionValueSource(option.optionName) === "cli")
-    .map((option) => option.flag);
-}
-
-function formatFlagList(flags: readonly string[]): string {
-  return flags.join(", ");
 }
 
 function validateQaRunMode(opts: QaRunCliOptions, command: Command) {
@@ -137,19 +107,24 @@ function validateQaRunMode(opts: QaRunCliOptions, command: Command) {
   }
 
   if (hasQaProfile) {
-    const selfCheckFlags = collectCliSuppliedQaRunFlags(command, QA_RUN_SELF_CHECK_ONLY_OPTIONS);
-    if (selfCheckFlags.length > 0) {
+    if (command.getOptionValueSource("output") === "cli") {
       throw new Error(
-        `qa run ${formatFlagList(selfCheckFlags)} is only valid for the self-check mode without --qa-profile.`,
+        "qa run --output is only valid for the self-check mode without --qa-profile.",
       );
     }
     return;
   }
 
-  const profileFlags = collectCliSuppliedQaRunFlags(command, QA_RUN_PROFILE_ONLY_OPTIONS);
+  const profileFlags = command.options
+    .filter(
+      (option) =>
+        !["repoRoot", "output", "qaProfile"].includes(option.attributeName()) &&
+        command.getOptionValueSource(option.attributeName()) === "cli",
+    )
+    .map((option) => option.long);
   if (profileFlags.length > 0) {
     throw new Error(
-      `qa run ${formatFlagList(profileFlags)} requires --qa-profile; without --qa-profile, qa run only executes the self-check.`,
+      `qa run ${profileFlags.join(", ")} requires --qa-profile; without --qa-profile, qa run only executes the self-check.`,
     );
   }
 }
@@ -157,7 +132,7 @@ function validateQaRunMode(opts: QaRunCliOptions, command: Command) {
 function validateQaScenarioSelection(opts: QaScenarioRunCliOptions, command: Command) {
   // Keep omitted defaults distinct from an explicitly empty selection.
   if (command.getOptionValueSource("scenario") === "cli" && opts.scenario?.length === 0) {
-    throw invalidQaCliArgument("--scenario must name at least one non-empty scenario id.");
+    throw new Error("--scenario must name at least one non-empty scenario id.");
   }
 }
 
@@ -169,6 +144,20 @@ function assertNoQaSubcommandCollision(qa: Command, commandName: string) {
   if (qa.commands.some((command) => command.name() === commandName)) {
     throw new Error(`QA runner command "${commandName}" conflicts with an existing qa subcommand`);
   }
+}
+
+function addQaDockerRuntimeOptions(command: Command, imageDescription: string) {
+  return command
+    .option("--gateway-port <port>", "Gateway host port", tcpPort("--gateway-port"))
+    .option("--qa-lab-port <port>", "QA lab host port", tcpPort("--qa-lab-port"))
+    .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
+    .option("--image <name>", imageDescription, "openclaw:qa-local-prebaked")
+    .option("--use-prebuilt-image", "Use image: instead of build: in docker-compose", false)
+    .option(
+      "--bind-ui-dist",
+      "Bind-mount extensions/qa-lab/web/dist into the qa-lab container for faster UI refresh",
+      false,
+    );
 }
 
 export function registerQaLabCli(program: Command) {
@@ -218,38 +207,39 @@ export function registerQaLabCli(program: Command) {
     )
     .option("--fail-fast", "Stop after the first failed QA scenario")
     .option("--fast", "Enable provider fast mode where supported");
-  qaRun.action(async (opts: QaRunCliOptions, command: Command) => {
-    validateQaRunMode(opts, command);
-    if (opts.qaProfile?.trim()) {
-      const evidenceMode = resolveQaEvidenceModeOptions(opts);
-      validateQaScenarioSelection(opts, command);
+  qaRun.action(
+    qaCliAction(async (opts: QaRunCliOptions, command: Command) => {
+      validateQaRunMode(opts, command);
+      if (opts.qaProfile?.trim()) {
+        const evidenceMode = resolveQaEvidenceModeOptions(opts);
+        validateQaScenarioSelection(opts, command);
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaProfileCommand({
+          repoRoot: opts.repoRoot,
+          outputDir: opts.outputDir,
+          profile: opts.qaProfile,
+          surface: opts.surface,
+          category: opts.category,
+          scenarioIds: opts.scenario,
+          evidenceMode,
+          transportId: opts.transport,
+          providerMode: opts.providerMode,
+          primaryModel: opts.model,
+          alternateModel: opts.altModel,
+          concurrency: opts.concurrency,
+          allowFailures: opts.allowFailures,
+          ...(opts.failFast ? { failFast: true } : {}),
+          fastMode: opts.fast,
+        });
+        return;
+      }
       const runtime = await loadQaLabCliRuntime();
-      await runtime.runQaProfileCommand({
+      await runtime.runQaLabSelfCheckCommand({
         repoRoot: opts.repoRoot,
-        outputDir: opts.outputDir,
-        profile: opts.qaProfile,
-        surface: opts.surface,
-        category: opts.category,
-        scenarioIds: opts.scenario,
-        evidenceMode,
-        transportId: opts.transport,
-        providerMode: opts.providerMode,
-        primaryModel: opts.model,
-        alternateModel: opts.altModel,
-        concurrency: opts.concurrency,
-        allowFailures: opts.allowFailures,
-        ...(opts.failFast ? { failFast: true } : {}),
-        fastMode: opts.fast,
+        output: opts.output,
       });
-      return;
-    }
-    const selfCheckOptions = {
-      repoRoot: opts.repoRoot,
-      output: opts.output,
-    };
-    const runtime = await loadQaLabCliRuntime();
-    await runtime.runQaLabSelfCheckCommand(selfCheckOptions);
-  });
+    }),
+  );
 
   qa.command("suite")
     .description("Run repo-backed QA scenarios against the QA gateway lane")
@@ -302,37 +292,39 @@ export function registerQaLabCli(program: Command) {
       collectString,
       [],
     )
-    .action(async (opts: QaSuiteCliOptions, command: Command) => {
-      validateQaScenarioSelection(opts, command);
-      const runtime = await loadQaLabCliRuntime();
-      await runtime.runQaSuiteCommand({
-        repoRoot: opts.repoRoot,
-        outputDir: opts.outputDir,
-        transportId: opts.transport,
-        channelDriver: opts.channelDriver,
-        channel: opts.channel,
-        runner: opts.runner,
-        providerMode: opts.providerMode,
-        primaryModel: opts.model,
-        alternateModel: opts.altModel,
-        fastMode: opts.fast,
-        thinking: opts.thinking,
-        cliAuthMode: opts.cliAuthMode,
-        parityPack: opts.parityPack,
-        scenarioIds: opts.scenario,
-        enabledPluginIds: opts.enablePlugin,
-        concurrency: opts.concurrency,
-        allowFailures: opts.allowFailures,
-        ...(opts.failFast ? { failFast: true } : {}),
-        image: opts.image,
-        cpus: opts.cpus,
-        memory: opts.memory,
-        disk: opts.disk,
-        preflight: opts.preflight,
-        runtimePair: opts.runtimePair,
-        runtimePairLane: opts.runtimePairLane,
-      });
-    });
+    .action(
+      qaCliAction(async (opts: QaSuiteCliOptions, command: Command) => {
+        validateQaScenarioSelection(opts, command);
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaSuiteCommand({
+          repoRoot: opts.repoRoot,
+          outputDir: opts.outputDir,
+          transportId: opts.transport,
+          channelDriver: opts.channelDriver,
+          channel: opts.channel,
+          runner: opts.runner,
+          providerMode: opts.providerMode,
+          primaryModel: opts.model,
+          alternateModel: opts.altModel,
+          fastMode: opts.fast,
+          thinking: opts.thinking,
+          cliAuthMode: opts.cliAuthMode,
+          parityPack: opts.parityPack,
+          scenarioIds: opts.scenario,
+          enabledPluginIds: opts.enablePlugin,
+          concurrency: opts.concurrency,
+          allowFailures: opts.allowFailures,
+          ...(opts.failFast ? { failFast: true } : {}),
+          image: opts.image,
+          cpus: opts.cpus,
+          memory: opts.memory,
+          disk: opts.disk,
+          preflight: opts.preflight,
+          runtimePair: opts.runtimePair,
+          runtimePairLane: opts.runtimePairLane,
+        });
+      }),
+    );
 
   qa.command("parity-report")
     .description("Write either a model-axis parity gate report or a runtime-axis parity report")
@@ -353,7 +345,9 @@ export function registerQaLabCli(program: Command) {
     )
     .option("--baseline-label <label>", "Baseline display label", QA_FRONTIER_PARITY_BASELINE_LABEL)
     .option("--output-dir <path>", "Artifact directory for the parity report")
-    .action(async (opts) => (await loadQaLabCliRuntime()).runQaParityReportCommand(opts));
+    .action(
+      qaCliAction(async (opts) => (await loadQaLabCliRuntime()).runQaParityReportCommand(opts)),
+    );
 
   qa.command("coverage")
     .description("Print the YAML QA coverage inventory")
@@ -368,7 +362,9 @@ export function registerQaLabCli(program: Command) {
       collectString,
       [],
     )
-    .action(async (opts) => (await loadQaLabCliRuntime()).runQaCoverageReportCommand(opts));
+    .action(
+      qaCliAction(async (opts) => (await loadQaLabCliRuntime()).runQaCoverageReportCommand(opts)),
+    );
 
   qa.command("confidence-report")
     .description("Classify QA proof artifacts into a zero-unknown confidence report")
@@ -386,13 +382,19 @@ export function registerQaLabCli(program: Command) {
       "Fail unless every lane passes with no blocked, missing, unknown, classified-fail, or unbackfilled skipped rows",
       false,
     )
-    .action(async (opts) => (await loadQaLabCliRuntime()).runQaConfidenceReportCommand(opts));
+    .action(
+      qaCliAction(async (opts) => (await loadQaLabCliRuntime()).runQaConfidenceReportCommand(opts)),
+    );
 
   qa.command("confidence-self-test")
     .description("Write seeded negative-control canaries proving the confidence gate detects drift")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output-dir <path>", "Artifact directory for the confidence self-test")
-    .action(async (opts) => (await loadQaLabCliRuntime()).runQaConfidenceSelfTestCommand(opts));
+    .action(
+      qaCliAction(async (opts) =>
+        (await loadQaLabCliRuntime()).runQaConfidenceSelfTestCommand(opts),
+      ),
+    );
 
   qa.command("jsonl-replay")
     .description("Replay curated JSONL transcripts through the runtime parity replay harness")
@@ -409,7 +411,9 @@ export function registerQaLabCli(program: Command) {
       "mock-openai",
     )
     .option("--output-dir <path>", "Artifact directory for the JSONL replay report")
-    .action(async (opts) => (await loadQaLabCliRuntime()).runQaJsonlReplayCommand(opts));
+    .action(
+      qaCliAction(async (opts) => (await loadQaLabCliRuntime()).runQaJsonlReplayCommand(opts)),
+    );
 
   qa.command("character-eval")
     .description("Run the character QA scenario across live models and write a judged report")
@@ -452,7 +456,9 @@ export function registerQaLabCli(program: Command) {
     .option("--judge-concurrency <count>", "Judge model run concurrency", (value: string) =>
       parseQaCliPositiveIntegerOption(value, "--judge-concurrency"),
     )
-    .action(async (opts) => (await loadQaLabCliRuntime()).runQaCharacterEvalCommand(opts));
+    .action(
+      qaCliAction(async (opts) => (await loadQaLabCliRuntime()).runQaCharacterEvalCommand(opts)),
+    );
 
   qa.command("manual")
     .description("Run a one-off QA agent prompt against the selected provider/model lane")
@@ -467,29 +473,30 @@ export function registerQaLabCli(program: Command) {
       parseQaCliPositiveIntegerOption(value, "--timeout-ms"),
     )
     .action(
-      async (opts: {
-        message: string;
-        repoRoot?: string;
-        transport?: string;
-        providerMode?: QaProviderModeInput;
-        model?: string;
-        altModel?: string;
-        fast?: boolean;
-        timeoutMs?: number;
-      }) => {
-        const manualOptions = {
-          repoRoot: opts.repoRoot,
-          transportId: opts.transport,
-          providerMode: opts.providerMode,
-          primaryModel: opts.model,
-          alternateModel: opts.altModel,
-          fastMode: opts.fast,
-          message: opts.message,
-          timeoutMs: opts.timeoutMs,
-        };
-        const runtime = await loadQaLabCliRuntime();
-        await runtime.runQaManualLaneCommand(manualOptions);
-      },
+      qaCliAction(
+        async (opts: {
+          message: string;
+          repoRoot?: string;
+          transport?: string;
+          providerMode?: QaProviderModeInput;
+          model?: string;
+          altModel?: string;
+          fast?: boolean;
+          timeoutMs?: number;
+        }) => {
+          const runtime = await loadQaLabCliRuntime();
+          await runtime.runQaManualLaneCommand({
+            repoRoot: opts.repoRoot,
+            transportId: opts.transport,
+            providerMode: opts.providerMode,
+            primaryModel: opts.model,
+            alternateModel: opts.altModel,
+            fastMode: opts.fast,
+            message: opts.message,
+            timeoutMs: opts.timeoutMs,
+          });
+        },
+      ),
     );
 
   const credentials = qa
@@ -499,11 +506,11 @@ export function registerQaLabCli(program: Command) {
   credentials
     .command("doctor")
     .description("Check Convex credential broker env and admin reachability")
-    .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
-    .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
-    .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
-    .option("--json", "Emit machine-readable JSON output", false)
-    .action(async (opts) => (await loadQaLabCliRuntime()).runQaCredentialsDoctorCommand(opts));
+    .action(
+      qaCliAction(async (opts) =>
+        (await loadQaLabCliRuntime()).runQaCredentialsDoctorCommand(opts),
+      ),
+    );
 
   credentials
     .command("add")
@@ -512,21 +519,19 @@ export function registerQaLabCli(program: Command) {
     .requiredOption("--payload-file <path>", "JSON object file containing the credential payload")
     .option("--repo-root <path>", "Repository root for resolving relative payload-file paths")
     .option("--note <text>", "Optional note stored with this credential row")
-    .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
-    .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
-    .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
-    .option("--json", "Emit machine-readable JSON output", false)
-    .action(async (opts) => (await loadQaLabCliRuntime()).runQaCredentialsAddCommand(opts));
+    .action(
+      qaCliAction(async (opts) => (await loadQaLabCliRuntime()).runQaCredentialsAddCommand(opts)),
+    );
 
   credentials
     .command("remove")
     .description("Remove one credential from active use by disabling it")
     .requiredOption("--credential-id <id>", "Credential row id from the Convex pool")
-    .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
-    .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
-    .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
-    .option("--json", "Emit machine-readable JSON output", false)
-    .action(async (opts) => (await loadQaLabCliRuntime()).runQaCredentialsRemoveCommand(opts));
+    .action(
+      qaCliAction(async (opts) =>
+        (await loadQaLabCliRuntime()).runQaCredentialsRemoveCommand(opts),
+      ),
+    );
 
   credentials
     .command("list")
@@ -537,22 +542,28 @@ export function registerQaLabCli(program: Command) {
       parseQaCliPositiveIntegerOption(value, "--limit"),
     )
     .option("--show-secrets", "Include credential payload JSON in output", false)
-    .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
-    .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
-    .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
-    .option("--json", "Emit machine-readable JSON output", false)
-    .action(async (opts) => (await loadQaLabCliRuntime()).runQaCredentialsListCommand(opts));
+    .action(
+      qaCliAction(async (opts) => (await loadQaLabCliRuntime()).runQaCredentialsListCommand(opts)),
+    );
+
+  for (const command of credentials.commands) {
+    command
+      .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
+      .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
+      .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
+      .option("--json", "Emit machine-readable JSON output", false);
+  }
 
   qa.command("ui")
     .description("Start the private QA debugger UI and local QA bus")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--host <host>", "Bind host", "127.0.0.1")
-    .option("--port <port>", "Bind port", (value: string) =>
-      parseQaCliTcpPortOption(value, "--port"),
-    )
+    .option("--port <port>", "Bind port", tcpPort("--port"))
     .option("--advertise-host <host>", "Optional public host to advertise in bootstrap payloads")
-    .option("--advertise-port <port>", "Optional public port to advertise", (value: string) =>
-      parseQaCliTcpPortOption(value, "--advertise-port"),
+    .option(
+      "--advertise-port <port>",
+      "Optional public port to advertise",
+      tcpPort("--advertise-port"),
     )
     .option("--control-ui-url <url>", "Optional Control UI URL to embed beside the QA panel")
     .option(
@@ -567,67 +578,49 @@ export function registerQaLabCli(program: Command) {
       "Inject the repo-backed kickoff task when the UI starts",
       false,
     )
-    .action(async (opts) => (await loadQaLabCliRuntime()).runQaLabUiCommand(opts));
+    .action(qaCliAction(async (opts) => (await loadQaLabCliRuntime()).runQaLabUiCommand(opts)));
 
-  qa.command("docker-scaffold")
-    .description("Write a prebaked Docker scaffold for the QA dashboard + gateway lane")
-    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
-    .requiredOption("--output-dir <path>", "Output directory for docker-compose + state files")
-    .option("--gateway-port <port>", "Gateway host port", (value: string) =>
-      parseQaCliTcpPortOption(value, "--gateway-port"),
-    )
-    .option("--qa-lab-port <port>", "QA lab host port", (value: string) =>
-      parseQaCliTcpPortOption(value, "--qa-lab-port"),
-    )
-    .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
-    .option("--image <name>", "Prebaked image name", "openclaw:qa-local-prebaked")
-    .option("--use-prebuilt-image", "Use image: instead of build: in docker-compose", false)
-    .option(
-      "--bind-ui-dist",
-      "Bind-mount extensions/qa-lab/web/dist into the qa-lab container for faster UI refresh",
-      false,
-    )
-    .action(async (opts) => (await loadQaLabCliRuntime()).runQaDockerScaffoldCommand(opts));
+  addQaDockerRuntimeOptions(
+    qa
+      .command("docker-scaffold")
+      .description("Write a prebaked Docker scaffold for the QA dashboard + gateway lane")
+      .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+      .requiredOption("--output-dir <path>", "Output directory for docker-compose + state files"),
+    "Prebaked image name",
+  ).action(
+    qaCliAction(async (opts) => (await loadQaLabCliRuntime()).runQaDockerScaffoldCommand(opts)),
+  );
 
   qa.command("docker-build-image")
     .description("Build the prebaked QA Docker image with qa-channel + qa-lab bundled")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--image <name>", "Image tag", "openclaw:qa-local-prebaked")
-    .action(async (opts) => (await loadQaLabCliRuntime()).runQaDockerBuildImageCommand(opts));
+    .action(
+      qaCliAction(async (opts) => (await loadQaLabCliRuntime()).runQaDockerBuildImageCommand(opts)),
+    );
 
-  qa.command("up")
-    .description("Build the QA site, start the Docker-backed QA stack, and print the QA Lab URL")
-    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
-    .option("--output-dir <path>", "Output directory for docker-compose + state files")
-    .option("--gateway-port <port>", "Gateway host port", (value: string) =>
-      parseQaCliTcpPortOption(value, "--gateway-port"),
-    )
-    .option("--qa-lab-port <port>", "QA lab host port", (value: string) =>
-      parseQaCliTcpPortOption(value, "--qa-lab-port"),
-    )
-    .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
-    .option("--image <name>", "Image tag", "openclaw:qa-local-prebaked")
-    .option("--use-prebuilt-image", "Use image: instead of build: in docker-compose", false)
-    .option(
-      "--bind-ui-dist",
-      "Bind-mount extensions/qa-lab/web/dist into the qa-lab container for faster UI refresh",
-      false,
-    )
+  addQaDockerRuntimeOptions(
+    qa
+      .command("up")
+      .description("Build the QA site, start the Docker-backed QA stack, and print the QA Lab URL")
+      .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+      .option("--output-dir <path>", "Output directory for docker-compose + state files"),
+    "Image tag",
+  )
     .option("--skip-ui-build", "Skip pnpm qa:lab:build before starting Docker", false)
-    .action(async (opts) => (await loadQaLabCliRuntime()).runQaDockerUpCommand(opts));
+    .action(qaCliAction(async (opts) => (await loadQaLabCliRuntime()).runQaDockerUpCommand(opts)));
 
   for (const providerCommand of listQaStandaloneProviderCommands()) {
     qa.command(providerCommand.name)
       .description(providerCommand.description)
       .option("--host <host>", "Bind host", "127.0.0.1")
-      .option("--port <port>", "Bind port", (value: string) =>
-        parseQaCliTcpPortOption(value, "--port"),
-      )
-      .action(async (opts: { host?: string; port?: number }) => {
-        const providerMode = providerCommand.providerMode;
-        const runtime = await loadQaLabCliRuntime();
-        await runtime.runQaProviderServerCommand(providerMode, opts);
-      });
+      .option("--port <port>", "Bind port", tcpPort("--port"))
+      .action(
+        qaCliAction(async (opts: { host?: string; port?: number }) => {
+          const runtime = await loadQaLabCliRuntime();
+          await runtime.runQaProviderServerCommand(providerCommand.providerMode, opts);
+        }),
+      );
   }
 
   for (const lane of listLiveTransportQaCliRegistrations()) {

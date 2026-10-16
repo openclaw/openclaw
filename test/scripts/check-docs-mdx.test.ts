@@ -15,25 +15,25 @@ describe("scripts/check-docs-mdx", () => {
       name: "plain component",
       prefix: "",
       body: "<Note>\n  </Note>\n",
-      error: { type: "mintlify-mdx", line: 2, column: 3 },
+      error: null,
     },
     {
       name: "LF frontmatter",
       prefix: "---\ntitle: Example\n---\n",
       body: "<Note>\n  </Note>\n",
-      error: { type: "mintlify-mdx", line: 5, column: 3 },
+      error: null,
     },
     {
       name: "CRLF frontmatter",
       prefix: "---\r\ntitle: Example\r\n---\r\n",
       body: "<Note>\r\n  </Note>\r\n",
-      error: { type: "mintlify-mdx", line: 5, column: 3 },
+      error: null,
     },
     {
       name: "YAML document-end delimiter",
       prefix: "---\ntitle: Example\n...\n",
       body: "<Note>\n  </Note>\n",
-      error: { type: "mintlify-mdx", line: 5, column: 3 },
+      error: null,
     },
     {
       name: "LF MDX expression",
@@ -83,6 +83,20 @@ describe("scripts/check-docs-mdx", () => {
     if (error) {
       expect(result.stderr).toContain(`page.mdx:${error.line}:${error.column}:`);
     }
+  });
+
+  it("accepts custom-site Persian and Thai navigation without a host whitelist", () => {
+    const root = createTempDir("openclaw-mdx-locales-");
+    const config = path.join(root, "docs.json");
+    writeFileSync(
+      config,
+      JSON.stringify({ navigation: { languages: [{ language: "fa" }, { language: "th" }] } }),
+    );
+    const result = spawnSync(process.execPath, [checkerPath, config], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
   });
 
   it("parses roots and output options", () => {

@@ -33,6 +33,7 @@ import {
 type LineageOwner = {
   readonly context: ApplicationContext | undefined;
   readonly isSessionDataHostConnected: boolean;
+  readonly sessionLineageVisible: boolean;
   sessionsResult: SessionsListResult | null;
   activeSessionLineageRoot: GatewaySessionRow | null;
   activeSessionLineageSelectedRow: GatewaySessionRow | null;
@@ -56,8 +57,6 @@ type DescriptorBinding = LineageScope & {
 };
 
 type LineageRequest = {
-  identity: ReturnType<typeof resolveUiConversationIdentity>;
-  sourceRevision: number;
   publishingSelected: boolean;
   promise: Promise<void>;
 };
@@ -209,16 +208,11 @@ export class SessionLineageController {
   reset(preserveOperatorContext: boolean): void {
     // A list/filter generation does not retire a still-owned descriptor read.
     // The capability's ledger, route and connection decide that lease's lifetime.
-    if (
-      this.binding &&
-      this.bindingIsCurrent(this.binding) &&
-      (this.binding.target.key === "global" || preserveOperatorContext)
-    ) {
-      if (this.binding.target.key === "global") {
-        this.publish(this.binding, this.binding.observation?.row ?? null);
-      } else {
+    if (this.binding && this.bindingIsCurrent(this.binding)) {
+      if (this.binding.target.key !== "global") {
         this.retireWalk();
       }
+      this.publish(this.binding, this.binding.observation?.row ?? null);
       return;
     }
     this.retire();
@@ -277,6 +271,10 @@ export class SessionLineageController {
           if (reason === "runner-availability" && this.bindingIsCurrent(binding)) {
             binding.refreshRequested = true;
             this.loaded = null;
+            if (this.owner.sessionLineageVisible) {
+              // Join the event's shared descriptor before a later event retires its cache entry.
+              void this.load(binding.key);
+            }
             this.owner.requestSessionDataUpdate();
           }
         },
@@ -371,11 +369,6 @@ export class SessionLineageController {
           this.publish(binding, outcome.row);
           return { status: "selected", row: outcome.row };
         }
-        if (outcome.status === "invalidated") {
-          this.loaded = null;
-          this.owner.requestSessionDataUpdate();
-          return { status: "selected", row: binding.observation?.row ?? null };
-        }
         this.synchronize();
         return { status: "selected", row: null };
       },
@@ -385,6 +378,11 @@ export class SessionLineageController {
   load(sessionKey: string): Promise<void> {
     this.synchronize();
     const key = sessionKey.trim();
+    const creation = this.owner.context?.chatSubmissions?.readCreate()?.creation;
+    // A displayed provisional key has no authoritative descriptor to discover yet.
+    if (creation?.sessionKey === key && !creation.admitted) {
+      return Promise.resolve();
+    }
     if (key !== this.routeKey) {
       this.evictPreviousLineage();
       this.retire();
@@ -432,8 +430,6 @@ export class SessionLineageController {
         : null);
     const childScope = this.childScope();
     const request: LineageRequest = {
-      identity,
-      sourceRevision: sessions.canonicalListRevision,
       publishingSelected: false,
       promise: Promise.resolve(),
     };
@@ -448,6 +444,7 @@ export class SessionLineageController {
         (globalBinding ? this.bindingIsCurrent(globalBinding) : childScope === this.childScope());
       const lineage = await fetchSessionLineage({
         client,
+        sessions,
         sessionKey: key,
         captureReconcile: sessions.captureReconcile,
         knownRows: collectKnownSessionRows(
@@ -490,14 +487,7 @@ export class SessionLineageController {
           this.clearPresentation();
         }
       } else {
-        publishActiveSessionLineage(
-          this.owner,
-          key,
-          lineage,
-          request.sourceRevision,
-          sessions.inheritRow,
-          isCurrent,
-        );
+        publishActiveSessionLineage(this.owner, key, lineage, sessions.inheritRow, isCurrent);
       }
       if (!isCurrent()) {
         return;
@@ -529,36 +519,35 @@ export class SessionLineageController {
     if (observation.row && !binding.refreshRequested) {
       return observation.row;
     }
-    // Invalidated receipts reissue within the existing descriptor request.
-    // Failures leave through fetchSessionLineage's existing retry policy.
-    while (isCurrent()) {
-      binding.refreshRequested = false;
-      const reconcile = observation.captureReconcile();
-      const described = await binding.client
-        .request<{ session?: GatewaySessionRow | null }>("sessions.describe", {
+    binding.refreshRequested = false;
+    const reconcile = observation.captureReconcile();
+    const described = await binding.sessions
+      .describe(
+        {
           key: binding.key,
           ...(isUiGlobalSessionKey(binding.key) ? { agentId: binding.target.agentId } : {}),
-        })
-        .catch((error: unknown) => {
-          binding.refreshRequested = true;
-          throw error;
-        });
-      if (!isCurrent()) {
-        return undefined;
-      }
-      const outcome = reconcile(
-        described?.session ? { ...described.session, runtimeSampledAt: Date.now() } : undefined,
-      );
-      if (outcome.status === "invalidated") {
-        continue;
-      }
-      if (outcome.status === "retired") {
-        this.synchronize();
-        return undefined;
-      }
-      this.publish(binding, outcome.row);
-      return outcome.row ?? undefined;
+        },
+        { client: binding.client },
+      )
+      .catch((error: unknown) => {
+        binding.refreshRequested = true;
+        throw error;
+      });
+    if (!isCurrent()) {
+      return undefined;
     }
-    return undefined;
+    const outcome = reconcile(
+      described?.session
+        ? {
+            ...described.session,
+            runtimeSampledAt: described.session.runtimeSampledAt ?? Date.now(),
+          }
+        : undefined,
+    );
+    if (outcome.status !== "current") {
+      return observation.row ?? undefined;
+    }
+    this.publish(binding, outcome.row);
+    return outcome.row ?? undefined;
   }
 }

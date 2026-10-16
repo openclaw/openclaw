@@ -22,8 +22,9 @@ export function createDiscordAudioWorkerThread(
     distWorkerPath: "extensions/discord/src/voice/audio-worker.runtime.js",
     package: { name: "@openclaw/discord", distWorkerPath: "src/voice/audio-worker.runtime.js" },
   });
-  return createCpuTrackedWorker(url, {
+  const workerOptions = {
     workerData: options,
     execArgv: resolveRuntimeWorkerArgv(url).slice(0, -1),
-  });
+  };
+  return createCpuTrackedWorker(url, workerOptions);
 }

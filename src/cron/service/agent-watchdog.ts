@@ -1,4 +1,5 @@
 /** Timeout watchdogs for isolated cron agent setup and execution phases. */
+import { raceWithTimeout } from "@openclaw/retry";
 import type {
   CronAgentExecutionPhase,
   CronAgentExecutionPhaseUpdate,
@@ -46,25 +47,12 @@ const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
   model_call_started: "execution",
 } as const satisfies Record<CronAgentExecutionPhase, CronAgentPhaseWatchdogStage>;
 
-/** Handle for feeding isolated-agent progress into cron timeout watchdogs. */
-type CronAgentWatchdog = {
-  start: () => void;
-  replaceTimeout: (timeoutMs: number | undefined) => void;
-  noteLaneWait: () => void;
-  noteLaneAdmitted: () => void;
-  noteRunnerStarted: (info?: CronAgentExecutionStarted) => void;
-  notePhase: (info: CronAgentExecutionPhaseUpdate) => void;
-  activeExecution: () => CronAgentExecutionStarted | undefined;
-  observedLaneWait: () => boolean;
-  dispose: () => void;
-};
-
 /** Tracks isolated-agent setup/execution progress and fires the correct cron timeout reason. */
 export function createCronAgentWatchdog(params: {
   deferUntilRunner: boolean;
   jobTimeoutMs: number;
   triggerTimeout: (reason: string) => void;
-}): CronAgentWatchdog {
+}) {
   let state: CronAgentWatchdogState = params.deferUntilRunner ? "waiting_for_runner" : "executing";
   let timeoutId: NodeJS.Timeout | undefined;
   let setupTimeoutId: NodeJS.Timeout | undefined;
@@ -151,7 +139,7 @@ export function createCronAgentWatchdog(params: {
       }
       startTimeout();
     },
-    replaceTimeout: (timeoutMs) => {
+    replaceTimeout: (timeoutMs: number | undefined) => {
       // A heartbeat handoff starts a distinct configured deadline. Keeping the
       // original timer would still abort long heartbeat turns at the cron default.
       if (timeoutId) {
@@ -222,23 +210,17 @@ export async function settleTimedOutCronRun(
   if (!cleanupPromise && !commandSettlement) {
     return;
   }
-  let settleTimer: NodeJS.Timeout | undefined;
   const cleanup = cleanupPromise?.catch((err: unknown) => {
     state.deps.log.warn(
       { jobId: job.id, err: String(err) },
       "cron: timed-out agent cleanup failed",
     );
   });
-  const settleTimeout = new Promise<void>((resolve) => {
-    settleTimer = setTimeout(resolve, CRON_TIMEOUT_CLEANUP_GUARD_MS);
-  });
-  try {
-    await Promise.race([Promise.allSettled([cleanup, commandSettlement]), settleTimeout]);
-  } finally {
-    if (settleTimer) {
-      clearTimeout(settleTimer);
-    }
-  }
+  await raceWithTimeout(
+    Promise.allSettled([cleanup, commandSettlement]),
+    CRON_TIMEOUT_CLEANUP_GUARD_MS,
+    () => undefined,
+  );
 }
 
 function resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs: number): number {

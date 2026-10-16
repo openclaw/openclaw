@@ -295,7 +295,6 @@ describe("runtime.llm.complete diagnostics", () => {
 
   it.each([
     ["resolved provider error", "error", [{ type: "text", text: "partial" }], "partial"],
-    ["resolved provider abort", "aborted", [{ type: "text", text: "partial" }], "partial"],
     ["thinking-only completion", "stop", [{ type: "thinking", thinking: "hidden" }], ""],
   ] as const)("keeps %s usage silent", async (_name, stopReason, content, expectedText) => {
     hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({

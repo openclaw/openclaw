@@ -88,6 +88,12 @@ reads and writes. A positive value limits reuse by the current request's TTL;
 cached entries still expire at their original deadline. Provider-side caching,
 such as Firecrawl's `maxAgeMs`, is configured separately.
 
+Response decoding honors a byte-order mark first, then the HTTP `Content-Type`
+charset, then an XML declaration or HTML charset metadata. Without a supported
+charset, it falls back to UTF-8. ASCII-compatible documents that declare UTF-16
+in their XML or HTML metadata are decoded as UTF-8 instead; correctly declared
+legacy encodings such as Windows-1252 remain supported.
+
 ## Progress updates
 
 `web_fetch` emits a public progress line only when the fetch is still pending
@@ -202,7 +208,7 @@ Current runtime behavior:
   whose official npm or ClawHub provenance is verified. Today that permits the
   official Firecrawl plugin; third-party external fetch plugins stay excluded.
 - If Readability is disabled, `web_fetch` skips straight to the selected
-  provider fallback. If no provider is available, it fails closed.
+  provider fallback. If no provider is available, the request fails.
 
 ## Custom request headers
 
@@ -239,7 +245,7 @@ Behavior worth knowing:
   [Firecrawl](/tools/firecrawl) call their own API and never receive these headers.
 - Entries are validated when the request is built, not at config load, so one bad
   entry is dropped while the rest still apply. Config load stays permissive on
-  purpose: a fail-closed validation error over a single header-name typo would
+  purpose: rejecting the config over a single header-name typo would
   disable the whole surface. Every dropped entry is logged by name.
 - Dropped names:
   - `Accept`, `Accept-Language`, and `User-Agent` belong to the fetch and
@@ -277,6 +283,25 @@ outbound policy after DNS resolution.
   pinning. Hostname matching ignores case and a single trailing DNS dot in
   either the URL or the `NO_PROXY` entry.
 </Note>
+
+## Saved output
+
+When fetched content exceeds the inline limit, `web_fetch` includes a `spill.path`
+and a **Full output** location. Use `read` with that path and bounded `offset`/`limit`
+arguments to retrieve the omitted content. Saved output retains the untrusted-content
+warning and is capped at 2,000,000 characters; `spill.truncated` indicates an
+incomplete saved response.
+
+Local Docker and Podman sandboxes save this output in their existing private
+input-staging area, accessible through the sandbox reader. Cached saved paths remain
+scoped to the requesting session and sandbox workspace. Recovery also works when
+guest workspace access is read-only: the trusted input-staging owner prepares the
+file without granting guest write access.
+
+Other backends, including remote-shell sandboxes, need a prepared input-staging
+capability before saved output is available. Without it, the inline result reports
+that full output is unavailable, makes no staging write, and advertises no host-only
+path. An unsuccessful save is not cached.
 
 ## Limits and safety
 

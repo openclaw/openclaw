@@ -6,6 +6,7 @@ export function finalizeGatewayRestartSnapshot(
   expectedVersion: string | undefined,
   expectedBuildId: string | undefined,
   requirePluginHealth: boolean,
+  requireChannelHealth: boolean,
 ): GatewayRestartSnapshot {
   if (expectedVersion) {
     snapshot.expectedVersion = expectedVersion;
@@ -34,7 +35,7 @@ export function finalizeGatewayRestartSnapshot(
   }
   if (
     (requirePluginHealth && snapshot.activatedPluginErrors?.length) ||
-    snapshot.channelProbeErrors?.length
+    (requireChannelHealth && snapshot.channelProbeErrors?.length)
   ) {
     snapshot.healthy = false;
   }

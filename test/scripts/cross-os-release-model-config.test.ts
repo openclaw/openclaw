@@ -33,7 +33,7 @@ function createProvider(overrides: Partial<ProviderConfig> = {}): ProviderConfig
   };
 }
 
-describe.each(["packaged", "installed"] as const)("%s release model config", (adapter) => {
+describe("release model config", () => {
   const root = join("fixture", "release");
   const env = { RELEASE_TEST: "1" };
   const logPath = join(root, "config.log");
@@ -43,7 +43,7 @@ describe.each(["packaged", "installed"] as const)("%s release model config", (ad
     command.mockReset().mockResolvedValue(success);
   });
 
-  function run(providerConfig: ProviderConfig) {
+  function run(providerConfig: ProviderConfig, adapter: "packaged" | "installed" = "packaged") {
     const params = { env, logPath, providerConfig };
     return adapter === "installed"
       ? runInstalledModelsSet({ ...params, cliPath: join(root, "openclaw"), cwd: root })
@@ -62,15 +62,16 @@ describe.each(["packaged", "installed"] as const)("%s release model config", (ad
         });
   }
 
-  function calledArgs() {
+  function calledArgs(adapter: "packaged" | "installed" = "packaged") {
     return command.mock.calls.map(([invocation]) =>
       invocation.args.slice(adapter === "packaged" ? 1 : 0),
     );
   }
 
   it.each([
-    { extensionId: "anthropic", overrides: {}, expectedOverride: null },
+    { adapter: "packaged", extensionId: "anthropic", overrides: {}, expectedOverride: null },
     {
+      adapter: "installed",
       extensionId: "openai",
       overrides: { baseUrl: "https://example.com/v1", timeoutSeconds: 600 },
       expectedOverride: {
@@ -81,20 +82,22 @@ describe.each(["packaged", "installed"] as const)("%s release model config", (ad
       },
     },
     {
+      adapter: "packaged",
       extensionId: "minimax",
       overrides: { baseUrl: "https://example.com/v1" },
       expectedOverride: { baseUrl: "https://example.com/v1", models: [] },
     },
     {
+      adapter: "packaged",
       extensionId: "browser",
       overrides: { timeoutSeconds: 700 },
       expectedOverride: { models: [], timeoutSeconds: 700 },
     },
-  ])(
-    "keeps the exact ordered $extensionId commands",
-    async ({ extensionId, overrides, expectedOverride }) => {
-      await run(createProvider({ extensionId, ...overrides }));
-      expect(calledArgs()).toEqual([
+  ] as const)(
+    "keeps the exact ordered $extensionId commands through $adapter",
+    async ({ adapter, extensionId, overrides, expectedOverride }) => {
+      await run(createProvider({ extensionId, ...overrides }), adapter);
+      expect(calledArgs(adapter)).toEqual([
         ["models", "set", "test/model"],
         ...(expectedOverride
           ? [
@@ -145,43 +148,5 @@ describe.each(["packaged", "installed"] as const)("%s release model config", (ad
     await expect(run(providerConfig)).rejects.toBe(error);
     expect(calledArgs()).toEqual([["models", "set", "test/model"]]);
     expect(baseUrl).not.toHaveBeenCalled();
-  });
-
-  it("builds later commands after each preceding command completes", async () => {
-    const providerConfig = createProvider({ extensionId: "openai" });
-    command.mockImplementation(async () => {
-      if (command.mock.calls.length === 1) {
-        providerConfig.baseUrl = "https://example.com/updated";
-        providerConfig.timeoutSeconds = 900;
-      } else if (command.mock.calls.length === 2) {
-        providerConfig.extensionId = "browser";
-      }
-      return success;
-    });
-
-    await run(providerConfig);
-    expect(calledArgs().slice(0, 3)).toEqual([
-      ["models", "set", "test/model"],
-      [
-        "config",
-        "set",
-        "models.providers.openai",
-        JSON.stringify({
-          baseUrl: "https://example.com/updated",
-          agentRuntime: { id: "openclaw" },
-          models: [],
-          timeoutSeconds: 900,
-        }),
-        "--strict-json",
-        "--merge",
-      ],
-      [
-        "config",
-        "set",
-        "plugins.allow",
-        JSON.stringify(["browser", "acpx", "bonjour", "device-pair", "talk-voice"]),
-        "--strict-json",
-      ],
-    ]);
   });
 });

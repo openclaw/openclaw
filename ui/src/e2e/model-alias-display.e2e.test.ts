@@ -115,7 +115,7 @@ suite.define(() => {
             "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
           },
         },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     };
     const gateway = await installMockGateway(page, {

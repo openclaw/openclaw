@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import * as cli from "./cli-shared.js";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
@@ -7,7 +6,9 @@ import { listMatrixOwnDevices } from "./matrix/actions/devices.js";
 import { updateMatrixOwnProfile } from "./matrix/actions/profile.js";
 import { resolveMatrixConfigPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { isOpenClawManagedMatrixDevice } from "./matrix/device-health.js";
+import type { MatrixProfileSyncResult } from "./matrix/profile.js";
 import { getMatrixRuntime } from "./runtime.js";
+import type { maybeBootstrapNewEncryptedMatrixAccount } from "./setup-bootstrap.js";
 import type { MatrixSetupInput } from "./setup-config.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
@@ -22,19 +23,9 @@ type MatrixCliAccountAddResult = {
     staleOpenClawDeviceIds: string[];
     error?: string;
   };
-  verificationBootstrap: {
+  verificationBootstrap: Awaited<ReturnType<typeof maybeBootstrapNewEncryptedMatrixAccount>>;
+  profile: Omit<MatrixProfileSyncResult, "skipped" | "uploadedAvatarSource"> & {
     attempted: boolean;
-    success: boolean;
-    recoveryKeyCreatedAt: string | null;
-    backupVersion: string | null;
-    error?: string;
-  };
-  profile: {
-    attempted: boolean;
-    displayNameUpdated: boolean;
-    avatarUpdated: boolean;
-    resolvedAvatarUrl: string | null;
-    convertedAvatarFromHttp: boolean;
     error?: string;
   };
 };
@@ -59,10 +50,6 @@ async function addMatrixAccount(params: {
   });
   const runtime = getMatrixRuntime();
   const cfg = runtime.config.current() as CoreConfig;
-  if (!matrixSetupAdapter.applyAccountConfig) {
-    throw new Error("Matrix account setup is unavailable.");
-  }
-
   const input: MatrixSetupInput = {
     name: params.name,
     avatarUrl: params.avatarUrl,
@@ -76,13 +63,12 @@ async function addMatrixAccount(params: {
     initialSyncLimit,
     useEnv: params.useEnv === true,
   };
-  const accountId =
-    matrixSetupAdapter.resolveAccountId?.({
-      cfg,
-      accountId: params.account,
-      input,
-    }) ?? normalizeAccountId(params.account?.trim() || params.name?.trim());
-  const validationError = matrixSetupAdapter.validateInput?.({
+  const accountId = matrixSetupAdapter.resolveAccountId({
+    cfg,
+    accountId: params.account,
+    input,
+  });
+  const validationError = matrixSetupAdapter.validateInput({
     cfg,
     accountId,
     input,
@@ -150,11 +136,8 @@ async function addMatrixAccount(params: {
         };
       } catch (err) {
         profile = {
+          ...profile,
           attempted: true,
-          displayNameUpdated: false,
-          avatarUpdated: false,
-          resolvedAvatarUrl: null,
-          convertedAvatarFromHttp: false,
           error: formatErrorMessage(err),
         };
       }
@@ -226,27 +209,14 @@ export function registerMatrixAccountCommands(root: Command): void {
     .option("--verbose", "Show setup details")
     .option("--json", "Output as JSON")
     .action(
-      async (options: {
-        account?: string;
-        name?: string;
-        avatarUrl?: string;
-        homeserver?: string;
-        proxy?: string;
-        allowPrivateNetwork?: boolean;
-        userId?: string;
-        accessToken?: string;
-        password?: string;
-        deviceName?: string;
-        initialSyncLimit?: string;
-        enableE2ee?: boolean;
-        encryption?: boolean;
-        useEnv?: boolean;
-        verbose?: boolean;
-        json?: boolean;
-      }) => {
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
+      async (
+        options: cli.MatrixCliOptions &
+          Omit<Parameters<typeof addMatrixAccount>[0], "enableEncryption"> & {
+            enableE2ee?: boolean;
+            encryption?: boolean;
+          },
+      ) => {
+        await cli.runMatrixCliCommand(options, {
           run: async () =>
             await addMatrixAccount({
               account: options.account,
@@ -316,8 +286,9 @@ export function registerMatrixAccountCommands(root: Command): void {
                 }
               }
             }
-            const bindHint = `openclaw agents bind --agent <id> --bind matrix:${result.accountId}`;
-            console.log(`Bind this account to an agent: ${bindHint}`);
+            console.log(
+              `Bind this account to an agent: openclaw agents bind --agent <id> --bind matrix:${result.accountId}`,
+            );
           },
           errorPrefix: "Account setup failed",
         });

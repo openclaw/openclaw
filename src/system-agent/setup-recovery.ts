@@ -8,27 +8,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   completeLocalOnboarding,
-  readLocalOnboardingStateForConfig,
+  readLocalOnboardingStateForConfigAsync,
   type LocalOnboardingState,
 } from "../state/local-onboarding-state.js";
 import { resolveUserPath } from "../utils.js";
 
 type SetupConfigSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-
-export type LocalSetupRecovery = {
-  workspace: string;
-  applyOptions?: {
-    resume: true;
-    teamCoordinatorId?: string;
-    allowWorkspaceChange?: true;
-    firstAgent?: { name: string; team: true };
-    assertCommitPreconditions: (sourceConfig: OpenClawConfig) => void;
-  };
-  complete: (
-    appliedConfigPath: string,
-    authorize: <T>(effect: () => Promise<T> | T) => Promise<T>,
-  ) => Promise<SetupConfigSnapshot | undefined>;
-};
 
 /** A team receipt owns the complete preset under its root, not just the coordinator. */
 export async function matchesLocalSetupWorkspace(
@@ -99,9 +84,7 @@ export async function completeLocalSetupRecovery(params: {
       throw new Error("The onboarding configuration changed before setup could complete.");
     }
     if (
-      readLocalOnboardingStateForConfig(snapshot.path, sourceConfig)?.runId !==
-        params.owner.runId ||
-      !completeLocalOnboarding({ configPath: snapshot.path, runId: params.owner.runId })
+      !(await completeLocalOnboarding({ configPath: snapshot.path, runId: params.owner.runId }))
     ) {
       throw new Error("Another onboarding run replaced this setup operation. Retry onboarding.");
     }
@@ -110,15 +93,16 @@ export async function completeLocalSetupRecovery(params: {
 }
 
 /** Adopt only a valid, local, same-workspace onboarding receipt. */
-export async function loadLocalSetupRecovery(
-  requestedWorkspace?: string,
-): Promise<LocalSetupRecovery> {
+export async function loadLocalSetupRecovery(requestedWorkspace?: string) {
   const snapshot = await readConfigFileSnapshot();
   const recorded =
     snapshot.exists &&
     snapshot.valid &&
     (snapshot.sourceConfig ?? snapshot.config)?.gateway?.mode !== "remote"
-      ? readLocalOnboardingStateForConfig(snapshot.path, snapshot.sourceConfig ?? snapshot.config)
+      ? await readLocalOnboardingStateForConfigAsync(
+          snapshot.path,
+          snapshot.sourceConfig ?? snapshot.config,
+        )
       : undefined;
   const pending = recorded?.status === "pending" ? recorded : undefined;
   const workspace = resolveUserPath(requestedWorkspace ?? pending?.workspace ?? process.cwd());
@@ -138,7 +122,7 @@ export async function loadLocalSetupRecovery(
   const assertOwner = (sourceConfig: OpenClawConfig) => {
     if (
       pending &&
-      readLocalOnboardingStateForConfig(snapshot.path, sourceConfig)?.runId !== pending.runId
+      sourceConfig.wizard?.securityAcknowledgedAt?.trim() !== pending.securityAcknowledgedAt
     ) {
       throw new Error("Another onboarding run replaced this setup operation. Retry onboarding.");
     }
@@ -159,7 +143,11 @@ export async function loadLocalSetupRecovery(
           },
         }
       : {}),
-    async complete(appliedConfigPath, authorize) {
+    async complete(
+      this: void,
+      appliedConfigPath: string,
+      authorize: <T>(effect: () => Promise<T> | T) => Promise<T>,
+    ) {
       if (!pending) {
         return undefined;
       }

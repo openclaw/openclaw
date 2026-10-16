@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { readServiceHeapExecArgv, resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
@@ -94,6 +95,21 @@ function retains(
   return index === current.length;
 }
 
+function describeEnvironmentValue(key: string, value: string | undefined): string {
+  if (value === undefined) {
+    return "<absent>";
+  }
+  // Arbitrary operator environment values may be credentials, regardless of key name.
+  if (
+    key !== "PATH" &&
+    !(key === "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS" && /^\d+$/u.test(value))
+  ) {
+    return "<redacted>";
+  }
+  const display = JSON.stringify(value);
+  return display.length > 240 ? `${truncateUtf16Safe(display, 240)}…` : display;
+}
+
 /** Compare prepared installer output; reporting-only audit never constructs a rewrite plan. */
 export function auditGatewayInstallPreservation(
   command: GatewayServiceCommand,
@@ -105,11 +121,11 @@ export function auditGatewayInstallPreservation(
   if (!current) {
     return;
   }
-  const unknown = (key: string) =>
+  const unknown = (key: string, detail = "") =>
     findings.push(
       serviceDefinitionUnknown(
         key,
-        "The installer would discard or change an operator setting.",
+        `The installer would discard or change an operator setting.${detail}`,
         command?.sourcePath,
       ),
     );
@@ -152,9 +168,7 @@ export function auditGatewayInstallPreservation(
     }
     if (upper === "PATH" && replacement !== undefined) {
       const paths = (text: string) =>
-        text
-          .split(platform === "win32" ? ";" : ":")
-          .map((part) => normalizeServicePathEntry(part, platform));
+        text.split(":").map((part) => normalizeServicePathEntry(part, platform));
       if (retains(paths(value), paths(replacement))) {
         continue;
       }
@@ -170,6 +184,29 @@ export function auditGatewayInstallPreservation(
         continue;
       }
     }
-    unknown(`Environment.${key}`);
+    unknown(
+      `Environment.${key}`,
+      ` Current: ${describeEnvironmentValue(key, value)}; installer: ${describeEnvironmentValue(key, replacement)}.`,
+    );
+  }
+  const expectedManaged = readManagedServiceEnvKeysFromEnvironment(expected.environment);
+  const effective = new Set(Object.keys(command?.environment ?? {}).map(normalize));
+  for (const [key, value] of Object.entries(expected.environment ?? {})) {
+    if (
+      value === undefined ||
+      !expectedManaged.has(key.toUpperCase()) ||
+      effective.has(normalize(key))
+    ) {
+      continue;
+    }
+    const installer = describeEnvironmentValue(key, value);
+    findings.push({
+      kind: "outdated",
+      key: `Environment.${key}`,
+      current: null,
+      expected: installer,
+      sourcePath: command?.sourcePath,
+      message: `Gateway service Environment.${key} is missing. Current: <absent>; installer: ${installer}.`,
+    });
   }
 }

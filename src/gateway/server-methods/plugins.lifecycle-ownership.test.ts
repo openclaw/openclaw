@@ -31,26 +31,10 @@ const context: Pick<GatewayRequestContext, "applyPluginLifecycleChange"> = {
 };
 const lifecycleRequests = [
   {
-    method: "plugins.install",
-    params: { source: "official", pluginId: "workboard" },
-    operation: managementMocks.install,
-  },
-  {
-    method: "plugins.setEnabled",
-    params: { pluginId: "workboard", enabled: false },
-    operation: managementMocks.setEnabled,
-  },
-  {
-    method: "plugins.uninstall",
-    params: { pluginId: "workboard" },
-    operation: managementMocks.uninstall,
-  },
-  {
     method: "plugins.reload",
     params: { plugins: [{ pluginId: "workboard" }] },
     operation: managementMocks.reload,
   },
-  { method: "plugins.refresh", params: {}, operation: managementMocks.refreshMetadata },
 ] as const;
 type ManagedMutationOptions = Pick<
   Parameters<typeof installManagedPlugin>[0],

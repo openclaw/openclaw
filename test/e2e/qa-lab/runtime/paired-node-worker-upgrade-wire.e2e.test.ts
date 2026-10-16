@@ -106,6 +106,7 @@ describe("paired node worker Gateway upgrade wire", () => {
       for (const file of [
         "package.json",
         "openclaw.mjs",
+        "cli-invocation.mjs",
         "node-version.mjs",
         "node-sqlite.mjs",
         "node-runtime-update.mjs",
@@ -215,7 +216,7 @@ describe("paired node worker Gateway upgrade wire", () => {
           { runId, timeoutMs: PROOF_TIMEOUT_MS },
           { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
         );
-        expect(blockedUploads, JSON.stringify(firstTurn)).toBeGreaterThan(0);
+        expect(firstTurn).toMatchObject({ status: "ok" });
         const activeGateway = gateway;
         await vi.waitFor(
           () => {
@@ -226,6 +227,7 @@ describe("paired node worker Gateway upgrade wire", () => {
           },
           { timeout: PROOF_TIMEOUT_MS, interval: 100 },
         );
+        expect(blockedUploads).toBeGreaterThan(0);
         const localDir = created.execCwd ?? created.spawnedCwd;
         if (!localDir) {
           throw new Error("session omitted its canonical workspace");

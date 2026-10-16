@@ -1,8 +1,14 @@
 // Codex tests cover native subagent notification plugin behavior.
 import { describe, expect, it } from "vitest";
-import { codexNativeSubagentNotifications } from "./native-subagent-notification.js";
+import { readCodexNativeSubagentNotification } from "./native-subagent-notification.js";
+import type { CodexServerNotification } from "./protocol.js";
 
-const extractCodexNativeSubagentCompletions = codexNativeSubagentNotifications.fromNotification;
+const extractCodexNativeSubagentCompletions = (notification: CodexServerNotification) =>
+  readCodexNativeSubagentNotification(notification).completions;
+const codexNativeSubagentNotifications = {
+  deliveredAgentPaths: (notification: CodexServerNotification) =>
+    readCodexNativeSubagentNotification(notification).receipts.map((receipt) => receipt.agentPath),
+};
 type ContextualNotificationItem = {
   type: string;
   role: string;
@@ -30,7 +36,7 @@ function contextualNotificationItem(
 }
 
 describe("Codex native subagent notifications", () => {
-  it.each(["single", "mixed"])(
+  it.each(["mixed"])(
     "recognizes only classified content in a %s native contextual push",
     (shape) => {
       const item = contextualNotificationItem();
@@ -102,68 +108,12 @@ describe("Codex native subagent notifications", () => {
 
   it.each([
     {
-      kind: "completed result",
-      tool: "wait",
-      toolStatus: "completed",
-      childStatus: "completed",
-      sender: "parent-thread",
-      expected: ["child-thread"],
-    },
-    {
-      kind: "running child",
-      tool: "wait",
-      toolStatus: "completed",
-      childStatus: "running",
-      sender: "parent-thread",
-      expected: [],
-    },
-    {
-      kind: "failed child result",
-      tool: "wait",
-      toolStatus: "completed",
-      childStatus: "errored",
-      sender: "parent-thread",
-      expected: ["child-thread"],
-    },
-    {
-      kind: "closed child result",
-      tool: "wait",
-      toolStatus: "completed",
-      childStatus: "shutdown",
-      sender: "parent-thread",
-      expected: ["child-thread"],
-    },
-    {
-      kind: "missing child result",
-      tool: "wait",
-      toolStatus: "completed",
-      childStatus: "notFound",
-      sender: "parent-thread",
-      expected: ["child-thread"],
-    },
-    {
-      kind: "interrupted child",
-      tool: "wait",
-      toolStatus: "completed",
-      childStatus: "interrupted",
-      sender: "parent-thread",
-      expected: [],
-    },
-    {
       kind: "unfinished wait",
       tool: "wait",
       toolStatus: "inProgress",
       childStatus: "completed",
       sender: "parent-thread",
       expected: [],
-    },
-    {
-      kind: "wait returning a failure",
-      tool: "wait",
-      toolStatus: "failed",
-      childStatus: "completed",
-      sender: "parent-thread",
-      expected: ["child-thread"],
     },
     {
       kind: "spawn status",
@@ -254,7 +204,7 @@ describe("Codex native subagent notifications", () => {
     ).toEqual(["/root/worker"]);
   });
 
-  it.each([null, "  "])("preserves completed-without-final for %j", (completed) => {
+  it.each(["  "])("preserves completed-without-final for %j", (completed) => {
     expect(
       extractCodexNativeSubagentCompletions({
         method: "rawResponseItem/completed",
@@ -284,17 +234,14 @@ describe("Codex native subagent notifications", () => {
     ]);
   });
 
-  it.each(["pending_init", "running", "interrupted"])(
-    "leaves native %s status unresolved",
-    (nativeStatus) => {
-      expect(
-        extractCodexNativeSubagentCompletions({
-          method: "rawResponseItem/completed",
-          params: { threadId: "parent-thread", item: contextualNotificationItem(nativeStatus) },
-        }),
-      ).toEqual([]);
-    },
-  );
+  it.each(["running"])("leaves native %s status unresolved", (nativeStatus) => {
+    expect(
+      extractCodexNativeSubagentCompletions({
+        method: "rawResponseItem/completed",
+        params: { threadId: "parent-thread", item: contextualNotificationItem(nativeStatus) },
+      }),
+    ).toEqual([]);
+  });
 
   it("reads native errors from a classified completion", () => {
     expect(

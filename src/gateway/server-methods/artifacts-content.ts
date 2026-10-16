@@ -20,6 +20,11 @@ export type ArtifactLookup = {
   assertCurrent?: () => void;
 };
 
+export function toArtifactSummary(artifact: ArtifactRecord): ArtifactSummary {
+  const { data: _data, url: _url, ...summary } = artifact;
+  return summary;
+}
+
 export function mediaUrlValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     return asNonEmptyString(value);
@@ -30,28 +35,12 @@ export function mediaUrlValue(value: unknown): string | undefined {
 
 function isSafeDownloadUrl(value: string): boolean {
   const trimmed = value.trim();
-  if (!trimmed || /^data:/i.test(trimmed)) {
-    return false;
-  }
-  if (trimmed.startsWith("/")) {
-    return !trimmed.startsWith("//") && trimmed.startsWith("/api/");
-  }
-  return isHttpUrl(trimmed);
+  return trimmed.startsWith("/api/") || isHttpUrl(trimmed);
 }
 
 export function resolveMessageRunId(message: Record<string, unknown>): string | undefined {
   const meta = asOptionalRecord(message["__openclaw"]);
   return asNonEmptyString(meta?.runId) ?? asNonEmptyString(message.runId);
-}
-
-export function resolveMessageTaskId(message: Record<string, unknown>): string | undefined {
-  const meta = asOptionalRecord(message["__openclaw"]);
-  return (
-    asNonEmptyString(meta?.messageTaskId) ??
-    asNonEmptyString(meta?.taskId) ??
-    asNonEmptyString(message.messageTaskId) ??
-    asNonEmptyString(message.taskId)
-  );
 }
 
 export function resolveBlockDownload(
@@ -63,6 +52,8 @@ export function resolveBlockDownload(
   url?: string;
   mimeType?: string;
   sizeBytes?: number;
+  /** Decoded size measured from the inline payload itself, ignoring declared metadata. */
+  payloadSizeBytes?: number;
 } {
   const data = readStringValue(block.data)?.trim();
   const content = readStringValue(block.content)?.trim();
@@ -99,7 +90,13 @@ export function resolveBlockDownload(
       ? Math.floor(explicitSize)
       : base64?.sizeBytes;
   if (base64) {
-    return { mode: "bytes", data: base64.data, mimeType, sizeBytes };
+    return {
+      mode: "bytes",
+      data: base64.data,
+      mimeType,
+      sizeBytes,
+      payloadSizeBytes: base64.sizeBytes,
+    };
   }
   if (remoteUrl) {
     return { mode: "url", url: remoteUrl, mimeType, sizeBytes };

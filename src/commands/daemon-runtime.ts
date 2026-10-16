@@ -1,4 +1,3 @@
-// Gateway daemon runtime option definitions used by install/configure flows.
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 
 export type GatewayDaemonRuntime = "bun" | "node";
@@ -17,8 +16,8 @@ export const GATEWAY_DAEMON_RUNTIME_OPTIONS: Array<{
   },
   {
     value: "bun",
-    label: "Bun 1.4+",
-    hint: "Requires Bun 1.4 or newer with WAL-reset-safe node:sqlite.",
+    label: "Bun 1.4.3+",
+    hint: "Requires Bun 1.4.3 or newer with WAL-reset-safe node:sqlite.",
   },
 ];
 

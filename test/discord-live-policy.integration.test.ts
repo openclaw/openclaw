@@ -28,14 +28,16 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../src/test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../src/test-utils/gateway-scheduler-clock.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
 
 const tempDirs = createTempDirTracker();
 let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+let stateDir: string;
 
 beforeEach(() => {
   registrySnapshot = captureActivePluginRegistrySnapshot();
-  const stateDir = tempDirs.make("discord-live-policy-");
+  stateDir = tempDirs.make("discord-live-policy-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
   vi.stubEnv("OPENCLAW_SKIP_CHANNELS", undefined);
@@ -189,13 +191,21 @@ describe("Discord admission through Gateway policy publication", () => {
     const send = (id: string) => handler(createRawMessage(id), client);
     const startChannel = vi.fn(async () => new Map());
     const stopChannel = vi.fn(async () => {});
+    const scheduler = createTestGatewayScheduler();
     let state: ReturnType<GatewayReloadHandlerParams["getState"]> = {
       hooksConfig: null,
       hookClientIpConfig: { allowRealIpFallback: false },
       heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() },
-      cronState: createLazyGatewayCronState({ cfg, deps: {}, broadcast: vi.fn() }),
+      cronState: createLazyGatewayCronState({
+        scheduler,
+        storePath: path.join(stateDir, "cron", "jobs.json"),
+        cfg,
+        deps: {},
+        broadcast: vi.fn(),
+      }),
     };
     const { applyHotReload } = createGatewayReloadHandlers({
+      scheduler,
       deps: {},
       broadcast: vi.fn(),
       getPluginRegistry: () => registry,

@@ -4,20 +4,15 @@ import type {
   ChannelResolveResult,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-// Matrix plugin module implements resolve targets behavior.
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
 import { isMatrixQualifiedUserId, normalizeMatrixMessagingTarget } from "./matrix/target-ids.js";
-
-function normalizeLookupQuery(query: string): string {
-  return normalizeOptionalLowercaseString(query) ?? "";
-}
 
 function findExactDirectoryMatches(
   matches: ChannelDirectoryEntry[],
   query: string,
 ): ChannelDirectoryEntry[] {
-  const normalized = normalizeLookupQuery(query);
+  const normalized = normalizeOptionalLowercaseString(query);
   if (!normalized) {
     return [];
   }
@@ -57,24 +52,6 @@ function pickBestDirectoryMatch(
   };
 }
 
-async function readCachedMatches(
-  cache: Map<string, ChannelDirectoryEntry[]>,
-  query: string,
-  lookup: (query: string) => Promise<ChannelDirectoryEntry[]>,
-): Promise<ChannelDirectoryEntry[]> {
-  const key = normalizeLookupQuery(query);
-  if (!key) {
-    return [];
-  }
-  const cached = cache.get(key);
-  if (cached) {
-    return cached;
-  }
-  const matches = await lookup(query.trim());
-  cache.set(key, matches);
-  return matches;
-}
-
 export async function resolveMatrixTargets(params: {
   cfg: unknown;
   accountId?: string | null;
@@ -104,14 +81,17 @@ export async function resolveMatrixTargets(params: {
       continue;
     }
     try {
-      const matches = await readCachedMatches(lookupCache, trimmed, (query) =>
-        lookup({
+      const key = trimmed.toLowerCase();
+      let matches = lookupCache.get(key);
+      if (!matches) {
+        matches = await lookup({
           cfg: params.cfg,
           accountId: params.accountId,
-          query,
+          query: trimmed,
           limit: 5,
-        }),
-      );
+        });
+        lookupCache.set(key, matches);
+      }
       const { best, note } = pickBestDirectoryMatch(matches, trimmed, params.kind);
       results.push({
         input,

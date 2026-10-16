@@ -1,4 +1,3 @@
-// Elevenlabs API module exposes the plugin public contract.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { migrateElevenLabsLegacyTalkConfig } from "./config-compat.js";
 

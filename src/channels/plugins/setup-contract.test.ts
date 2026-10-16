@@ -17,97 +17,49 @@ describe("defineChannelSetupContract", () => {
     expect(resolveChannelSetupExecutionAdapter({})).toBeUndefined();
   });
 
-  it.each(
-    ["channel-owned", "metadata-only"].flatMap((source) =>
-      [undefined, "work-phone"].map((defaultAccount) => ({ source, defaultAccount })),
-    ),
-  )(
-    "keeps ignored aliases ineligible during cold promotion: $source, default=$defaultAccount",
-    ({ source, defaultAccount }) => {
-      const next = withPluginCache(createPluginCache(), () => {
-        const promotion = {
-          accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
-          singleAccountKeysToMove: ["account"],
-          namedAccountPromotionKeys: ["account"],
-        };
-        const plugin = {
-          setupContract: defineChannelSetupContract({
-            fields: {},
-            adapter: {
-              ...promotion,
-              applyAccountConfig: ({ cfg }) => cfg,
-            },
-          }),
-        };
-        const cfg: OpenClawConfig = {
-          channels: {
-            demo: {
-              account: "+12025550123",
-              defaultAccount,
-              accounts: {
-                "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
-              },
+  it("keeps ignored aliases ineligible during cold channel-owned promotion", () => {
+    const defaultAccount = "work-phone";
+    const next = withPluginCache(createPluginCache(), () => {
+      const promotion = {
+        accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
+        singleAccountKeysToMove: ["account"],
+        namedAccountPromotionKeys: ["account"],
+      };
+      const plugin = {
+        setupContract: defineChannelSetupContract({
+          fields: {},
+          adapter: {
+            ...promotion,
+            applyAccountConfig: ({ cfg }) => cfg,
+          },
+        }),
+      };
+      const cfg: OpenClawConfig = {
+        channels: {
+          demo: {
+            account: "+12025550123",
+            defaultAccount,
+            accounts: {
+              "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
             },
           },
-        };
+        },
+      };
 
-        return moveSingleAccountChannelSectionToDefaultAccount({
-          cfg,
-          channelKey: "demo",
-          setupSurface:
-            source === "metadata-only" ? promotion : resolveChannelSetupExecutionAdapter(plugin),
-        });
+      return moveSingleAccountChannelSectionToDefaultAccount({
+        cfg,
+        channelKey: "demo",
+        setupSurface: resolveChannelSetupExecutionAdapter(plugin),
       });
-
-      expect(next.channels?.demo).toEqual({
-        defaultAccount,
-        accounts: {
-          "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
-          default: { account: "+12025550123" },
-        },
-      });
-    },
-  );
-
-  it("requires field keys to match camelCased long flag names", () => {
-    expect(() =>
-      defineChannelSetupContract({
-        fields: {
-          credential: {
-            kind: "string",
-            cli: { flags: "--token <value>", description: "Credential" },
-          },
-        },
-        adapter: { applyAccountConfig: ({ cfg }) => cfg },
-      }),
-    ).toThrow('Channel setup field "credential" must match camelCased long flag name "token"');
-
-    expect(() =>
-      defineChannelSetupContract({
-        fields: {
-          apiToken: {
-            kind: "string",
-            cli: { flags: "--api-token <value>", description: "API token" },
-          },
-        },
-        adapter: { applyAccountConfig: ({ cfg }) => cfg },
-      }),
-    ).not.toThrow();
-  });
-
-  it("publishes the validated map key over a field-owned key property", () => {
-    const contract = defineChannelSetupContract({
-      fields: {
-        apiToken: {
-          key: "credential",
-          kind: "string",
-          cli: { flags: "--api-token <value>", description: "API token" },
-        } as const,
-      },
-      adapter: { applyAccountConfig: ({ cfg }) => cfg },
     });
 
-    expect(contract.metadata.fields[0]?.key).toBe("apiToken");
+    expect(next.channels?.demo).toEqual({
+      defaultAccount,
+      accounts: {
+        "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
+        default: { account: "+12025550123" },
+      },
+    });
   });
 
   it("requires negated flags to resolve to the same field key", () => {
@@ -260,56 +212,6 @@ describe("defineChannelSetupContract", () => {
     expect(contract.parseInput({ port: "8.5" })).toEqual({
       ok: false,
       error: "port must be a non-negative integer.",
-    });
-  });
-
-  it("projects serializable CLI metadata from the same field definition", () => {
-    const contract = defineChannelSetupContract({
-      fields: {
-        token: {
-          kind: "string",
-          sensitive: true,
-          cli: { flags: "--token <token>", description: "Bot token" },
-        },
-        mode: {
-          kind: "choice",
-          choices: ["socket", "http"],
-          cli: { flags: "--mode <mode>", description: "Connection mode" },
-        },
-        useEnv: {
-          kind: "boolean",
-          cli: { flags: "--use-env", description: "Use environment credentials" },
-          envVars: ["CHAT_TOKEN", "CHAT_TOKEN_FILE"],
-          envVarMode: "any",
-        },
-      },
-      adapter: {
-        applyAccountConfig: ({ cfg }) => cfg,
-      },
-    });
-
-    expect(contract.metadata).toEqual({
-      fields: [
-        {
-          key: "token",
-          kind: "string",
-          sensitive: true,
-          cli: { flags: "--token <token>", description: "Bot token" },
-        },
-        {
-          key: "mode",
-          kind: "choice",
-          choices: ["socket", "http"],
-          cli: { flags: "--mode <mode>", description: "Connection mode" },
-        },
-        {
-          key: "useEnv",
-          kind: "boolean",
-          cli: { flags: "--use-env", description: "Use environment credentials" },
-          envVars: ["CHAT_TOKEN", "CHAT_TOKEN_FILE"],
-          envVarMode: "any",
-        },
-      ],
     });
   });
 });

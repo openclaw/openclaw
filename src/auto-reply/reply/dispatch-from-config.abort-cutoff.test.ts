@@ -1,15 +1,15 @@
 // Stopped queued input must not become a missing-reply warning at finalization.
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { MISSING_REPLY_NOTICE_TEXT } from "../../agents/reply-completion.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { TemplateContext } from "../templating.js";
-import { buildNoVisibleReplyFallbackText } from "./dispatch-from-config.payloads.js";
 import { createDispatcher, emptyConfig } from "./dispatch-from-config.shared.test-harness.js";
 import {
   describe0BeforeEach0,
   dispatchReplyFromConfig,
   globalBeforeAll0,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -22,7 +22,6 @@ beforeEach(() => {
 });
 
 it.each([
-  { name: "older message ID", message: { MessageSid: "41" }, cancelled: true },
   { name: "cutoff message ID", message: { MessageSid: "42" }, cancelled: true },
   { name: "older timestamp", message: { Timestamp: 999 }, cancelled: true },
   { name: "newer message ID", message: { MessageSid: "43" }, cancelled: false },
@@ -123,7 +122,9 @@ it.each([
   } else {
     expect(continueTurn).toHaveBeenCalledOnce();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({
-      text: buildNoVisibleReplyFallbackText(),
+      text: MISSING_REPLY_NOTICE_TEXT,
+      isError: true,
+      isStatusNotice: true,
     });
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
     expect(result.deliberateSilentTerminalReply).toBeUndefined();

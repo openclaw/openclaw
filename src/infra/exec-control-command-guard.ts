@@ -3,24 +3,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import {
-  buildCommandPayloadArgvCandidates,
-  buildCommandPayloadCandidates,
-} from "./command-analysis/risks.js";
+import { buildCommandPayloadArgvCandidates } from "./command-analysis/risks.js";
 import {
   CommandExplanationWorkLimitError,
   explainShellCommand,
 } from "./command-explainer/extract.js";
 import type { CommandExplanation } from "./command-explainer/types.js";
 import { isPathInside } from "./path-guards.js";
-
-type ParsedExecApprovalCommand = {
-  approvalId: string;
-  decision: "allow-once" | "allow-always" | "deny";
-};
 
 type UnsafeExecControlShellCommandKind =
   | "approve"
@@ -56,21 +51,10 @@ const SQLITE_OPEN_OPTIONS_WITH_VALUES = new Map<string, number>([
   ["textkey", 1],
 ]);
 
-function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
-  const normalized = raw.trimStart();
-  const match = normalized.match(
-    /^\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i,
+function isExecApprovalShellCommand(raw: string): boolean {
+  return /^\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i.test(
+    raw.trimStart(),
   );
-  if (!match) {
-    return null;
-  }
-  return {
-    approvalId: expectDefined(match[1], "exec control command guard regex capture 1"),
-    decision:
-      normalizeLowercaseStringOrEmpty(match[2]) === "always"
-        ? "allow-always"
-        : (normalizeLowercaseStringOrEmpty(match[2]) as ParsedExecApprovalCommand["decision"]),
-  };
 }
 
 function normalizeCommandBaseName(token: string | undefined): string {
@@ -199,10 +183,54 @@ function parseSqliteDatabaseTokens(argv: string[]): string[] {
   return databaseTokens;
 }
 
+// Recognized variable-bearing file: URI bodies whose variables the shell
+// expands even inside double quotes. An optional empty or "localhost"
+// authority ("file://$VAR/…") expands to the valid URI "file:///<path>/…".
+// Other file: URIs (absolute, relative, opaque, tilde) keep fileURLToPath
+// semantics.
+const SQLITE_URI_RECOGNIZED_VARIABLE_BODY =
+  /^(?:\/\/(?:localhost)?)?\$(?:\{?OPENCLAW_STATE_DIR\}?|\{?HOME\}?)(?=$|[\\/])/iu;
+const SQLITE_URI_EMPTY_AUTHORITY = /^\/\/(?:localhost)?(?=\$)/iu;
+
 function expandSqliteDatabaseToken(token: string, stateDir: string): string | null {
   let expanded = token.trim();
   if (!expanded || expanded === ":memory:") {
     return null;
+  }
+  const fileUriBody = expanded.toLowerCase().startsWith("file:")
+    ? expanded.slice("file:".length)
+    : null;
+  if (fileUriBody !== null && SQLITE_URI_RECOGNIZED_VARIABLE_BODY.test(fileUriBody)) {
+    // A recognized variable-bearing file: URI (e.g. "file:$OPENCLAW_STATE_DIR/…")
+    // is not an absolute file URL: fileURLToPath would prefix the literal
+    // variable with "/" and hide it from expansion. Strip the scheme and any
+    // query/fragment, percent-decode, then run the variable expansions below.
+    const filename = fileUriBody.replace(SQLITE_URI_EMPTY_AUTHORITY, "").split(/[?#]/u, 1)[0] ?? "";
+    if (!filename) {
+      return null;
+    }
+    try {
+      expanded = decodeURIComponent(filename);
+    } catch {
+      expanded = filename;
+    }
+  } else if (fileUriBody !== null) {
+    // Absolute, relative, opaque, and tilde file: URIs keep fileURLToPath
+    // semantics (host/percent handling, root-relative resolution) so their
+    // allow/refuse behavior is unchanged by this guard.
+    try {
+      expanded = fileURLToPath(expanded);
+    } catch {
+      const filename = fileUriBody.split(/[?#]/u, 1)[0] ?? "";
+      if (!filename) {
+        return null;
+      }
+      try {
+        expanded = decodeURIComponent(filename);
+      } catch {
+        expanded = filename;
+      }
+    }
   }
   const stateVariable = expanded.match(
     /^\$(?:OPENCLAW_STATE_DIR|\{OPENCLAW_STATE_DIR\})(?=$|[\\/])/u,
@@ -216,21 +244,6 @@ function expandSqliteDatabaseToken(token: string, stateDir: string): string | nu
   }
   if (expanded === "~" || expanded.startsWith("~/") || expanded.startsWith("~\\")) {
     expanded = path.join(os.homedir(), expanded.slice(2));
-  }
-  if (expanded.toLowerCase().startsWith("file:")) {
-    try {
-      expanded = fileURLToPath(expanded);
-    } catch {
-      const filename = expanded.slice("file:".length).split(/[?#]/u, 1)[0];
-      if (!filename) {
-        return null;
-      }
-      try {
-        expanded = decodeURIComponent(filename);
-      } catch {
-        expanded = filename;
-      }
-    }
   }
   return expanded;
 }
@@ -275,29 +288,19 @@ export async function detectUnsafeExecControlShellCommand(
     }
     // Fall back to line-local shell splitting below.
   }
-  const { controlCandidates, argvCandidates } = (() => {
+  const argvCandidates = (() => {
     if (explanation?.ok) {
       const commands = [...explanation.topLevelCommands, ...explanation.nestedCommands];
-      return {
-        controlCandidates: commands.flatMap((step) => buildCommandPayloadCandidates(step.argv)),
-        argvCandidates: commands.flatMap((step) => buildCommandPayloadArgvCandidates(step.argv)),
-      };
+      return commands.flatMap((step) => buildCommandPayloadArgvCandidates(step.argv));
     }
-    const fallbackArgv = normalizeStringEntries(rawCommand.split(/\r?\n/)).map((line) => {
+    return normalizeStringEntries(rawCommand.split(/\r?\n/)).flatMap((line) => {
       const argv = splitShellArgs(line);
-      return { argv, line };
+      return argv ? buildCommandPayloadArgvCandidates(argv) : [[line]];
     });
-    return {
-      controlCandidates: fallbackArgv.flatMap(({ argv, line }) =>
-        argv ? buildCommandPayloadCandidates(argv) : [line],
-      ),
-      argvCandidates: fallbackArgv.flatMap(({ argv, line }) =>
-        argv ? buildCommandPayloadArgvCandidates(argv) : [[line]],
-      ),
-    };
   })();
+  const controlCandidates = uniqueStrings(argvCandidates.map((argv) => argv.join(" ")));
   for (const candidate of controlCandidates) {
-    if (parseExecApprovalShellCommand(candidate)) {
+    if (isExecApprovalShellCommand(candidate)) {
       return "approve";
     }
     if (parseOpenClawChannelsLoginShellCommand(candidate)) {

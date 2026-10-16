@@ -1,17 +1,23 @@
-import { html, nothing } from "lit";
 import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
 import { isTerminalPanelShortcut } from "../components/panel-toggle-contract.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
-import type { ApplicationContext } from "./context.ts";
+
+export const NAVIGATION_RAIL_WIDTH = 52;
 
 const NAV_DRAWER_FOCUSABLE_SELECTOR =
   "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
 type AppSidebarElement = HTMLElement & { dismissTransientMenus(): boolean };
 type SidebarAttentionElement = HTMLElement & { dismissPanel(): boolean };
+
+export function navDrawerFocusableElements(drawer: HTMLElement): HTMLElement[] {
+  return [...drawer.querySelectorAll<HTMLElement>(NAV_DRAWER_FOCUSABLE_SELECTOR)].filter(
+    (candidate) => candidate.checkVisibility(),
+  );
+}
 
 export function dismissNavigationTransientSurfaces(host: HTMLElement): boolean {
   // Unupgraded elements cannot own transient UI; navigation must not wait for their imports.
@@ -43,9 +49,7 @@ function trapNavDrawerFocus(host: HTMLElement, event: KeyboardEvent): void {
   ) {
     return;
   }
-  const focusable = [...drawer.querySelectorAll<HTMLElement>(NAV_DRAWER_FOCUSABLE_SELECTOR)].filter(
-    (candidate) => candidate.checkVisibility(),
-  );
+  const focusable = navDrawerFocusableElements(drawer);
   const target = event.shiftKey ? focusable.at(-1) : focusable[0];
   const boundary = event.shiftKey ? focusable[0] : focusable.at(-1);
   if (
@@ -111,9 +115,11 @@ export function navigationSurfaceIsHidden(params: {
   navCollapsed: boolean;
   navDrawerOpen: boolean;
   mobileNavLayout: boolean;
+  railAvailable?: boolean;
 }): boolean {
   return (
-    params.onboarding || (params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed)
+    params.onboarding ||
+    (params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed && !params.railAvailable)
   );
 }
 
@@ -126,40 +132,4 @@ export function floatingSidebarAttentionVisible(params: {
   const attentionNeedsFloating =
     params.navigationSurfaceHidden && !params.mobileNavLayout && !params.onboarding;
   return attentionNeedsFloating && !params.compact;
-}
-
-export function renderFloatingUpdateCard(params: {
-  navigationSurfaceHidden: boolean;
-  mobileNavLayout: boolean;
-  onboarding: boolean;
-  compact?: boolean;
-  updateRun?: ApplicationContext["overlays"]["snapshot"]["updateRun"];
-  statusBanner?: ApplicationContext["overlays"]["snapshot"]["updateStatusBanner"];
-  refreshRequired: boolean;
-  onRefresh: () => Promise<boolean>;
-  onNavigate?: ApplicationContext["navigate"];
-}) {
-  const showAttention = floatingSidebarAttentionVisible(params);
-  const showUpdateCard = !params.compact && params.refreshRequired;
-  if (!showAttention && !showUpdateCard) {
-    return nothing;
-  }
-  return html`${
-    showAttention
-      ? html`<openclaw-sidebar-attention
-          class="sidebar-attention--floating"
-          .onNavigate=${params.onNavigate}
-        ></openclaw-sidebar-attention>`
-      : nothing
-  }${
-    showUpdateCard
-      ? html`<openclaw-sidebar-update-card
-          class="sidebar-update-card--floating"
-          .updateRun=${params.updateRun ?? null}
-          .statusBanner=${params.statusBanner ?? null}
-          .refreshRequired=${params.refreshRequired}
-          .onRefresh=${params.onRefresh}
-        ></openclaw-sidebar-update-card>`
-      : nothing
-  }`;
 }

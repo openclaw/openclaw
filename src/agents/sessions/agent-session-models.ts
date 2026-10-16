@@ -16,18 +16,14 @@ import { AgentSessionPrompting } from "./agent-session-prompting.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ExtensionRunner } from "./extensions/runner.js";
 import type { ThinkingLevelSelectEvent } from "./extensions/types.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
 
 type ThinkingSelection = { event: ThinkingLevelSelectEvent; saveDefault: boolean };
 
 export abstract class AgentSessionModels extends AgentSessionPrompting {
-  // =========================================================================
-  // Model Management
-  // =========================================================================
-
   private async emitModelSelect(
     nextModel: Model,
     previousModel: Model | undefined,
@@ -52,45 +48,43 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
       previousModel,
       thinkingSelection: committedThinkingSelection,
       commit: committedMetadata,
-    } = await owner.run(() =>
-      withSessionManagerWrite(owner.manager, async () => {
-        owner.assertCurrent();
-        if (!this.sessionModelRegistry.hasConfiguredAuth(model)) {
-          throw new Error(`No API key for ${model.provider}/${model.id}`);
+    } = await owner.run(async () => {
+      owner.assertCurrent();
+      if (!this.sessionModelRegistry.hasConfiguredAuth(model)) {
+        throw new Error(`No API key for ${model.provider}/${model.id}`);
+      }
+      // Queued transitions replace the state at admission, not at invocation.
+      const previous = this.model;
+      const thinkingSelection = this.planThinkingLevel(
+        this.getThinkingLevelForModelSwitch(),
+        model,
+      );
+      const publication: { commit?: SessionMetadataCommit } = {};
+      await withSessionMetadataPublication(
+        owner.manager,
+        { type: "model_change", provider: model.provider, modelId: model.id },
+        (commit) => {
+          publication.commit = commit;
+          this.agent.state.model = model;
+          this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
+        },
+        () => owner.manager.appendModelChange(model.provider, model.id),
+      );
+      if (thinkingSelection) {
+        try {
+          owner.assertCurrent();
+          publication.commit =
+            (await this.appendThinkingSelection(owner, thinkingSelection)) ?? publication.commit;
+        } catch (cause) {
+          this.failAfterMetadataCommit(cause, publication.commit);
         }
-        // Queued transitions replace the state at admission, not at invocation.
-        const previous = this.model;
-        const thinkingSelection = this.planThinkingLevel(
-          this.getThinkingLevelForModelSwitch(),
-          model,
-        );
-        const publication: { commit?: SessionMetadataCommit } = {};
-        await withSessionMetadataPublication(
-          owner.manager,
-          { type: "model_change", provider: model.provider, modelId: model.id },
-          (commit) => {
-            publication.commit = commit;
-            this.agent.state.model = model;
-            this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
-          },
-          () => owner.manager.appendModelChange(model.provider, model.id),
-        );
-        if (thinkingSelection) {
-          try {
-            owner.assertCurrent();
-            publication.commit =
-              (await this.appendThinkingSelection(owner, thinkingSelection)) ?? publication.commit;
-          } catch (cause) {
-            this.failAfterMetadataCommit(cause, publication.commit);
-          }
-        }
-        return {
-          previousModel: previous,
-          thinkingSelection: thinkingSelection?.event,
-          commit: publication.commit,
-        };
-      }),
-    );
+      }
+      return {
+        previousModel: previous,
+        thinkingSelection: thinkingSelection?.event,
+        commit: publication.commit,
+      };
+    });
     // Hooks can await another transition after this write has settled.
     try {
       const thinking = this.emitThinkingLevelSelect(
@@ -116,10 +110,6 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
     }
   }
 
-  // =========================================================================
-  // Thinking Level Management
-  // =========================================================================
-
   /**
    * Set thinking level.
    * Clamps to model capabilities based on available thinking levels.
@@ -127,17 +117,15 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
    */
   async setThinkingLevel(level: ThinkingLevel): Promise<void> {
     const owner = this.captureMetadataOwner();
-    const committedSelection = await owner.run(() =>
-      withSessionManagerWrite(owner.manager, async () => {
-        owner.assertCurrent();
-        const selection = this.planThinkingLevel(level, this.model);
-        if (!selection) {
-          return undefined;
-        }
-        const commit = await this.appendThinkingSelection(owner, selection);
-        return { event: selection.event, commit };
-      }),
-    );
+    const committedSelection = await owner.run(async () => {
+      owner.assertCurrent();
+      const selection = this.planThinkingLevel(level, this.model);
+      if (!selection) {
+        return undefined;
+      }
+      const commit = await this.appendThinkingSelection(owner, selection);
+      return { event: selection.event, commit };
+    });
     try {
       await this.emitThinkingLevelSelect(committedSelection?.event, owner.runner, owner.isCurrent);
     } catch (cause) {
@@ -215,14 +203,12 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
     const sessionId = manager.getSessionId();
     const runner = this.currentExtensionRunner;
     const assertAmbient = target ? captureOwnedTranscriptWriteAssertion(target) : undefined;
-    const isBound = () => {
-      const current = manager.getSessionTarget();
-      return (
-        manager.getSessionId() === sessionId && sameSessionTranscriptTargetBinding(target, current)
-      );
-    };
     const assertCurrent = () => {
-      if (!isBound()) {
+      const current = manager.getSessionTarget();
+      if (
+        manager.getSessionId() !== sessionId ||
+        !sameSessionTranscriptTargetBinding(target, current)
+      ) {
         throw new Error("Session manager identity changed before transcript write admission");
       }
       if (
@@ -245,27 +231,13 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
           return false;
         }
       },
-      run: <T>(operation: () => Promise<T>): Promise<T> =>
-        target
-          ? withSessionTranscriptWriteAssertion(target, assertCurrent, operation)
-          : operation(),
+      run: <T>(operation: () => Promise<T>): Promise<T> => {
+        const write = () => withSessionManagerAppend(manager, operation);
+        return target ? withSessionTranscriptWriteAssertion(target, assertCurrent, write) : write();
+      },
     };
   }
 
-  /**
-   * Get available thinking levels for current model.
-   * The provider will clamp to what the specific model supports internally.
-   */
-  getAvailableThinkingLevels(): ThinkingLevel[] {
-    if (!this.model) {
-      return THINKING_LEVELS;
-    }
-    return getSupportedThinkingLevels(this.model) as ThinkingLevel[];
-  }
-
-  /**
-   * Check if current model supports thinking/reasoning.
-   */
   supportsThinking(): boolean {
     return Boolean(this.model?.reasoning);
   }
@@ -277,23 +249,13 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
     return this.thinkingLevel;
   }
 
-  // =========================================================================
-  // Queue Mode Management
-  // =========================================================================
-
-  /**
-   * Set steering message mode.
-   * Saves to settings.
-   */
+  /** Update steering mode and persist it to settings. */
   setSteeringMode(mode: "all" | "one-at-a-time"): void {
     this.agent.steeringMode = mode;
     this.settingsManager.setSteeringMode(mode);
   }
 
-  /**
-   * Set follow-up message mode.
-   * Saves to settings.
-   */
+  /** Update follow-up mode and persist it to settings. */
   setFollowUpMode(mode: "all" | "one-at-a-time"): void {
     this.agent.followUpMode = mode;
     this.settingsManager.setFollowUpMode(mode);

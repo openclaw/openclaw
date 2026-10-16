@@ -1,19 +1,19 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { materializeSkill } from "../loading/skill-materializer.js";
 import { prepareSkillResourceDelivery } from "../runtime/resources.js";
 import type { SkillSnapshot } from "../types.js";
@@ -24,14 +24,7 @@ import * as selection from "./selection.js";
 import { loadSkillLibrarySelection } from "./selection.js";
 import { saveSkillLibrary } from "./service.js";
 
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const dirs = useStateDatabaseTempDirs();
 const content =
   "---\nname: guide\ndescription: Saved procedure\n---\n# Guide\nRead references/data.bin.\n";
 
@@ -71,17 +64,6 @@ async function fixture() {
   return { root, options, authority, pin, snapshot, databasePath };
 }
 
-function observeParentSqlite() {
-  const native = requireNodeSqlite();
-  return [
-    vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-    vi.spyOn(native.DatabaseSync.prototype, "exec"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(native.StatementSync.prototype, method),
-    ),
-  ];
-}
-
 function familyHashes(databasePath: string) {
   return ["", "-wal", "-shm", "-journal"].map((suffix) => {
     const file = `${databasePath}${suffix}`;
@@ -97,7 +79,8 @@ it.each(["ordinary", "artifact-preserving", "disposable"] as const)(
     const { root, snapshot, pin, databasePath } = await fixture();
     const before = familyHashes(databasePath);
     const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    const counters = observeParentSqlite();
+    requireNodeSqlite();
+    const sql = observeMainThreadSql();
     const run = () =>
       withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
         const first = await prepareSkillResourceDelivery(snapshot, () => {});
@@ -129,7 +112,7 @@ it.each(["ordinary", "artifact-preserving", "disposable"] as const)(
       } else {
         await run();
       }
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      sql.expectIdle();
       expect(execute.mock.calls.map(([, command]) => command.type)).toEqual([
         "skills.library.descriptions",
         "skills.library.manifests",
@@ -139,9 +122,7 @@ it.each(["ordinary", "artifact-preserving", "disposable"] as const)(
         expect(familyHashes(databasePath)).toEqual(before);
       }
     } finally {
-      for (const counter of counters) {
-        counter.mockRestore();
-      }
+      sql.restore();
     }
   },
 );

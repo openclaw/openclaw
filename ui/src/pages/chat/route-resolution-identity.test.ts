@@ -1,7 +1,10 @@
 // @vitest-environment node
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import {
+  SESSION_NAVIGATION_KEY_PARAM,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
 import { createControlUiSessionFixtures } from "../../test-helpers/control-ui-session-fixtures.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import {
@@ -10,6 +13,34 @@ import {
 } from "./route-resolution.test-support.ts";
 
 describe("resolved exact session identity", () => {
+  it("clears a retained Incognito navigation hint without changing its exact identity or draft", async () => {
+    const { context, request, list } = contextFor();
+    const sessionKey = "agent:main:dashboard:incognito-12345678-aaaa-4000-8000-000000000001";
+    const location = {
+      pathname: "/chat/main/dashboard/incognito-12345678-aaaa-4000-8000-000000000001",
+      search: `?${new URLSearchParams({
+        [SESSION_NAVIGATION_KEY_PARAM]: sessionKey,
+        draft: "Continue this conversation",
+        dashboard: "expanded",
+      })}`,
+      hash: "",
+    };
+    const loaded = await loadChatRoute(context, location, "chat", new AbortController().signal);
+    expect(loaded).toMatchObject({
+      kind: "session",
+      sessionKey,
+      draft: "Continue this conversation",
+      dashboardExpanded: true,
+      canonicalLocation: {
+        ...location,
+        search: "?draft=Continue+this+conversation&dashboard=expanded",
+      },
+      canonicalLocationSource: location,
+    });
+    expect(request).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
+  });
+
   it.each(["chat", "dashboard"] as const)(
     "keeps a literal selection reloadable after adopting its %s face",
     async (face) => {

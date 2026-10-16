@@ -5,9 +5,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { registerAcpSessionResetControls } from "../../acp/control-plane/manager.reset-controls.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
+import type { HookRunner } from "../../plugins/hooks.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { flushPendingSessionsChangedEvents } from "../server-methods/session-change-event.js";
@@ -16,6 +18,7 @@ import {
   initializeSessionReadContext,
 } from "../server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
+import { loadGatewayTestConfig } from "../test-helpers.config-runtime.js";
 import { embeddedRunMock, testState } from "../test-helpers.runtime-state.js";
 import * as gatewayTestHelpers from "../test-helpers.server.js";
 import {
@@ -111,16 +114,10 @@ export async function loadSeededTranscriptEvents(params: {
 }
 
 const sessionCleanupMocks = vi.hoisted(() => ({
-  clearSessionQueues: vi.fn((keys: Array<string | undefined>) => {
-    const clearedKeys = Array.from(
-      new Set(
-        keys
-          .map((key) => (typeof key === "string" ? key.trim() : ""))
-          .filter((key) => key.length > 0),
-      ),
-    );
-    return { followupCleared: 0, laneCleared: 0, keys: clearedKeys };
-  }),
+  clearSessionLifecycleQueues:
+    vi.fn<
+      (typeof import("../../auto-reply/reply/queue/cleanup.js"))["clearSessionLifecycleQueues"]
+    >(),
   stopSessionResetSubagents: vi.fn(async () => {}),
 }));
 
@@ -138,8 +135,8 @@ const beforeResetHookMocks = vi.hoisted(() => ({
 }));
 
 const sessionLifecycleHookMocks = vi.hoisted(() => ({
-  runSessionEnd: vi.fn(async () => {}),
-  runSessionStart: vi.fn(async () => {}),
+  runSessionEnd: vi.fn<HookRunner["runSessionEnd"]>(async () => {}),
+  runSessionStart: vi.fn<HookRunner["runSessionStart"]>(async () => {}),
 }));
 
 const subagentLifecycleHookMocks = vi.hoisted(() => ({
@@ -153,6 +150,7 @@ const beforeResetHookState = vi.hoisted(() => ({
 const sessionLifecycleHookState = vi.hoisted(() => ({
   hasSessionEndHook: true,
   hasSessionStartHook: true,
+  runner: undefined as HookRunner | undefined,
 }));
 
 const subagentLifecycleHookState = vi.hoisted(() => ({
@@ -184,23 +182,15 @@ const bundleMcpRuntimeMocks = vi.hoisted(() => ({
   retireSessionMcpRuntime: vi.fn(async (_params: RetireSessionMcpRuntimeParams) => true),
 }));
 
-vi.mock("../../auto-reply/reply/queue.js", async () => {
-  const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue.js")>(
-    "../../auto-reply/reply/queue.js",
-  );
-  return {
-    ...actual,
-    clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
-  };
-});
-
 vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
   const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue/cleanup.js")>(
     "../../auto-reply/reply/queue/cleanup.js",
   );
   return {
     ...actual,
-    clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
+    clearSessionLifecycleQueues: sessionCleanupMocks.clearSessionLifecycleQueues.mockImplementation(
+      actual.clearSessionLifecycleQueues,
+    ),
   };
 });
 
@@ -241,17 +231,20 @@ vi.mock("../../plugins/hook-runner-global.js", async () => {
   );
   return {
     ...actual,
-    getGlobalHookRunner: vi.fn(() => ({
-      hasHooks: (hookName: string) =>
-        (hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook) ||
-        (hookName === "before_reset" && beforeResetHookState.hasBeforeResetHook) ||
-        (hookName === "session_end" && sessionLifecycleHookState.hasSessionEndHook) ||
-        (hookName === "session_start" && sessionLifecycleHookState.hasSessionStartHook),
-      runBeforeReset: beforeResetHookMocks.runBeforeReset,
-      runSessionEnd: sessionLifecycleHookMocks.runSessionEnd,
-      runSessionStart: sessionLifecycleHookMocks.runSessionStart,
-      runSubagentEnded: subagentLifecycleHookMocks.runSubagentEnded,
-    })),
+    getGlobalHookRunner: vi.fn(
+      () =>
+        sessionLifecycleHookState.runner ?? {
+          hasHooks: (hookName: string) =>
+            (hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook) ||
+            (hookName === "before_reset" && beforeResetHookState.hasBeforeResetHook) ||
+            (hookName === "session_end" && sessionLifecycleHookState.hasSessionEndHook) ||
+            (hookName === "session_start" && sessionLifecycleHookState.hasSessionStartHook),
+          runBeforeReset: beforeResetHookMocks.runBeforeReset,
+          runSessionEnd: sessionLifecycleHookMocks.runSessionEnd,
+          runSessionStart: sessionLifecycleHookMocks.runSessionStart,
+          runSubagentEnded: subagentLifecycleHookMocks.runSubagentEnded,
+        },
+    ),
   };
 });
 
@@ -325,7 +318,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
-    sessionCleanupMocks.clearSessionQueues.mockClear();
+    sessionCleanupMocks.clearSessionLifecycleQueues.mockClear();
     sessionCleanupMocks.stopSessionResetSubagents.mockClear();
     bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
     sessionHookMocks.hasInternalHookListeners.mockReset();
@@ -337,6 +330,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     sessionLifecycleHookMocks.runSessionStart.mockClear();
     sessionLifecycleHookState.hasSessionEndHook = true;
     sessionLifecycleHookState.hasSessionStartHook = true;
+    sessionLifecycleHookState.runner = undefined;
     subagentLifecycleHookMocks.runSubagentEnded.mockClear();
     subagentLifecycleHookState.hasSubagentEndedHook = true;
     threadBindingMocks.unbindThreadBindingsBySessionKey.mockClear();
@@ -373,7 +367,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     const dir = path.join(requireSharedSessionStoreDir(), `case-${sessionStoreCaseSeq++}`);
     await fs.mkdir(dir, { recursive: true });
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot(); // A suite server may prewarm before case setup.
+    setRuntimeConfigSnapshot(loadGatewayTestConfig());
     return { dir, storePath: testState.sessionStorePath };
   }
 
@@ -382,7 +376,13 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     const storeTemplate = path.join(dir, "agents", "{agentId}", "sessions", "sessions.json");
     testState.sessionStorePath = storeTemplate;
     testState.sessionConfig = { scope: "global" };
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, work: {} } };
+    testState.agentConfig = {
+      ...testState.agentConfig,
+      systemAgent: { agentId: "main" },
+      sessionStore: { agentId: "main" },
+    };
+    setRuntimeConfigSnapshot(loadGatewayTestConfig());
     return {
       dir,
       storeTemplate,
@@ -453,7 +453,11 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
       configPath,
       `${JSON.stringify(
         {
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: {
+            ownership: "explicit",
+            entries: { main: {}, work: {} },
+            defaults: { systemAgent: { agentId: "main" }, sessionStore: { agentId: "main" } },
+          },
           session: { scope: "global", store: storeTemplate },
         },
         null,
@@ -544,23 +548,22 @@ export function expectActiveRunCleanup(
       agentId: requesterAgentId,
     }),
   );
-  expectSessionQueueCleanup(expectedQueueKeys);
+  expect(sessionCleanupMocks.clearSessionLifecycleQueues).toHaveBeenCalledTimes(1);
+  expect(sessionCleanupMocks.clearSessionLifecycleQueues).toHaveBeenCalledWith(
+    expect.objectContaining({
+      keys: expect.arrayContaining(expectedQueueKeys),
+      agentId: requesterAgentId,
+      sessionKey: requesterSessionKey,
+      sessionId,
+      assertCurrent: expect.any(Function),
+    }),
+  );
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
   expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
 }
 
-function expectSessionQueueCleanup(expectedQueueKeys: string[]) {
-  expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
-  const clearedKeys = (
-    sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[]]>
-  )[0]?.[0];
-  for (const key of expectedQueueKeys) {
-    expect(clearedKeys).toContain(key);
-  }
-}
-
 export function expectNoSessionQueueCleanup() {
-  expect(sessionCleanupMocks.clearSessionQueues).not.toHaveBeenCalled();
+  expect(sessionCleanupMocks.clearSessionLifecycleQueues).not.toHaveBeenCalled();
 }
 
 type SessionsHandlers = Awaited<ReturnType<typeof getSessionsHandlers>>;
@@ -578,6 +581,7 @@ export async function directSessionReq<TPayload = unknown>(
     client?: SessionsHandlerOptions["client"];
     isWebchatConnect?: SessionsHandlerOptions["isWebchatConnect"];
     sessionMutationAuthorization?: SessionsHandlerOptions["sessionMutationAuthorization"];
+    hasCurrentClientAuthority?: SessionsHandlerOptions["hasCurrentClientAuthority"];
     coercePayload?: (payload: unknown) => TPayload;
   },
 ): Promise<{
@@ -598,11 +602,13 @@ export async function directSessionReq<TPayload = unknown>(
   if (!handler) {
     throw new Error(`missing sessions handler for ${method}`);
   }
+  const contextKey = opts?.context ?? defaultDirectContext;
+  const existingContext = directContexts.get(contextKey);
   const contextFields: GatewayRequestContext = createDirectChatContext({
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
-    dedupe: new Map(),
+    chatAbortControllers: existingContext?.chatAbortControllers ?? new Map(),
+    chatQueuedTurns: existingContext?.chatQueuedTurns ?? new Map(),
+    dedupe: existingContext?.dedupe ?? new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     readPreparedGatewayModelCatalog: async () => {
       const catalog = await contextFields.loadGatewayModelCatalogSnapshot();
@@ -611,8 +617,7 @@ export async function directSessionReq<TPayload = unknown>(
     getRuntimeConfig,
     ...opts?.context,
   });
-  const contextKey = opts?.context ?? defaultDirectContext;
-  const context = directContexts.get(contextKey) ?? createDirectChatContext();
+  const context = existingContext ?? createDirectChatContext();
   Object.assign(context, contextFields);
   directContexts.set(contextKey, context);
   if (
@@ -620,6 +625,8 @@ export async function directSessionReq<TPayload = unknown>(
       "chat.startup",
       "chat.history",
       "sessions.list",
+      "sessions.processes.list",
+      "sessions.processes.stop",
       "sessions.describe",
       "sessions.get",
       "sessions.preview",
@@ -651,6 +658,7 @@ export async function directSessionReq<TPayload = unknown>(
     client: opts?.client ?? null,
     isWebchatConnect: opts?.isWebchatConnect ?? (() => false),
     sessionMutationAuthorization: opts?.sessionMutationAuthorization,
+    hasCurrentClientAuthority: opts?.hasCurrentClientAuthority,
   });
   await flushPendingSessionsChangedEvents(context);
   if (!result) {
@@ -672,6 +680,10 @@ export function isInternalHookEvent(value: unknown): value is InternalHookEvent 
     typeof candidate.context === "object" &&
     candidate.context !== null
   );
+}
+
+export function setSessionLifecycleHookRunnerForTest(runner: HookRunner | undefined): void {
+  sessionLifecycleHookState.runner = runner;
 }
 
 export {

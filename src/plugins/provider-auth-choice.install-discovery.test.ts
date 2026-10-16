@@ -11,6 +11,7 @@ import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash, resolveAcceptedSurfaceCurrent } from "./capability-summary.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { enableExplicitlySelectedPluginInConfig } from "./enable.js";
+import { resolvePluginNpmProjectDir } from "./install-paths.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-reader.js";
 import { recordPluginInstall } from "./installs.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
@@ -65,7 +66,10 @@ it.each([false, true])(
     const root = fs.realpathSync(makeTrackedTempDir("onboarding-installed-provider", tempDirs));
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
-    const projectRoot = path.join(stateDir, "npm", "projects", "installed-provider");
+    const projectRoot = resolvePluginNpmProjectDir({
+      npmDir: path.join(stateDir, "npm"),
+      packageName: "@fixture/installed-provider",
+    });
     const pluginRoot = path.join(projectRoot, "node_modules", "@fixture", "installed-provider");
     const config: OpenClawConfig = { gateway: { mode: "local" } };
     const event = `installed-provider-owner-${setDefaultModel}`;

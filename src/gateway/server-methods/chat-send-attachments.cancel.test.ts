@@ -9,6 +9,7 @@ import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import * as staging from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunById } from "../chat-abort.js";
@@ -25,6 +26,7 @@ it.each([
   { canTransfer: true, stopped: true },
 ])("routes chat uploads: %j", async ({ canTransfer, stopped }) => {
   await withOpenClawTestState({ label: "remote-chat-attachment" }, async (state) => {
+    await loadOrCreateProcessDeviceIdentityAsync();
     const cfg = {
       agents: {
         ownership: "explicit",
@@ -84,11 +86,11 @@ it.each([
     }
     const sandboxSpy = vi.spyOn(sandboxWorkspace, "ensureSandboxWorkspaceForSession");
     let prepared: Awaited<ReturnType<typeof prepareChatSendAttachments>> | undefined;
-    const admission = setup.admitted.value;
+    const admission = setup.admission;
     try {
       prepared = await prepareChatSendAttachments({
-        request: setup.normalizedRequest.value,
-        session: setup.preparedSession.value,
+        request: setup.request,
+        session: setup.session,
         admission,
         respond,
         context,
@@ -195,6 +197,7 @@ it.each([
   const { pdf, interruption, stageError, outcome } = testCase;
   const preparation = "preparation" in testCase ? testCase.preparation : "stage";
   await withOpenClawTestState({ label: "gateway-attachment-cancellation" }, async (state) => {
+    await loadOrCreateProcessDeviceIdentityAsync();
     const cfg = {
       agents: {
         ownership: "explicit",
@@ -249,7 +252,7 @@ it.each([
     if (!setup) {
       throw new Error("chat admission failed before attachment preparation");
     }
-    const admission = setup.admitted.value;
+    const admission = setup.admission;
     const signal = admission.activeRunAbort.controller.signal;
     const ordinaryFailure = new Error("synthetic staging filesystem failure");
     const stageRelease = createDeferred();
@@ -298,8 +301,8 @@ it.each([
     });
     let prepared: Awaited<ReturnType<typeof prepareChatSendAttachments>> | undefined;
     const preparing = prepareChatSendAttachments({
-      request: setup.normalizedRequest.value,
-      session: setup.preparedSession.value,
+      request: setup.request,
+      session: setup.session,
       admission,
       respond,
       context,
@@ -328,7 +331,7 @@ it.each([
         expect(
           abortChatRunById(createChatAbortOps(context), {
             runId,
-            sessionKey: setup.preparedSession.value.sessionKey,
+            sessionKey: setup.session.sessionKey,
             stopReason: "rpc",
           }),
         ).toEqual({ aborted: true });
@@ -371,7 +374,7 @@ it.each([
           .soft(
             abortChatRunById(createChatAbortOps(context), {
               runId,
-              sessionKey: setup.preparedSession.value.sessionKey,
+              sessionKey: setup.session.sessionKey,
               stopReason: "rpc",
             }),
           )

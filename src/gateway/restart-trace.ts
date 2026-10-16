@@ -1,5 +1,3 @@
-// Gateway restart timing trace helpers.
-// Emits opt-in restart handoff diagnostics with bounded metric formatting.
 import { performance } from "node:perf_hooks";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -8,10 +6,9 @@ const restartTraceLog = createSubsystemLogger("gateway");
 const RESTART_TRACE_HANDOFF_STARTED_AT_ENV = "OPENCLAW_GATEWAY_RESTART_TRACE_STARTED_AT_MS";
 const RESTART_TRACE_HANDOFF_LAST_AT_ENV = "OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS";
 const RESTART_TRACE_HANDOFF_MAX_AGE_MS = 10 * 60_000;
+const CLOSE_STEP_SLOW_MS = 1_000;
+const MAX_PENDING_CLOSE_STEPS = 8;
 
-// Restart trace is an opt-in timing logger for gateway restart handoff paths.
-// It preserves elapsed time across process replacement through bounded env
-// handoff values and ignores stale/future handoffs.
 type RestartTraceMetricValue = boolean | number | string | null | undefined;
 type RestartTraceMetrics =
   | Readonly<Record<string, RestartTraceMetricValue>>
@@ -24,6 +21,7 @@ type GatewayRestartTraceHandoff = {
 let startedAt = 0;
 let lastAt = 0;
 let active = false;
+const pendingCloseSteps = new Set<{ name: string; startedAt: number }>();
 
 function nowMs(): number {
   return performance.timeOrigin + performance.now();
@@ -31,15 +29,6 @@ function nowMs(): number {
 
 function isRestartTraceEnabled(): boolean {
   return isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_RESTART_TRACE);
-}
-
-function normalizeMetricEntries(
-  metrics?: RestartTraceMetrics,
-): Array<readonly [string, RestartTraceMetricValue]> {
-  if (!metrics) {
-    return [];
-  }
-  return Array.isArray(metrics) ? [...metrics] : Object.entries(metrics);
 }
 
 function formatMetricKey(key: string): string {
@@ -75,7 +64,7 @@ function formatMetricValue(value: RestartTraceMetricValue): string | null {
 
 function formatMetrics(metrics?: RestartTraceMetrics): string {
   const parts: string[] = [];
-  for (const [key, value] of normalizeMetricEntries(metrics)) {
+  for (const [key, value] of Array.isArray(metrics) ? metrics : Object.entries(metrics ?? {})) {
     const formatted = formatMetricValue(value);
     if (formatted === null) {
       continue;
@@ -96,15 +85,6 @@ function emitRestartTrace(
   );
 }
 
-function emitRestartTraceDetail(name: string, metrics: RestartTraceMetrics): void {
-  const formatted = formatMetrics(metrics).trim();
-  if (!formatted) {
-    return;
-  }
-  restartTraceLog.info(`restart trace: ${name} ${formatted}`);
-}
-
-/** Starts a restart trace sequence when OPENCLAW_GATEWAY_RESTART_TRACE is enabled. */
 export function startGatewayRestartTrace(name: string, metrics?: RestartTraceMetrics): void {
   if (!isRestartTraceEnabled()) {
     active = false;
@@ -121,7 +101,6 @@ function isGatewayRestartTraceActive(): boolean {
   return isRestartTraceEnabled() && active;
 }
 
-/** Emits a restart trace mark since the previous mark. */
 export function markGatewayRestartTrace(name: string, metrics?: RestartTraceMetrics): void {
   if (!isGatewayRestartTraceActive()) {
     return;
@@ -131,37 +110,82 @@ export function markGatewayRestartTrace(name: string, metrics?: RestartTraceMetr
   lastAt = now;
 }
 
-/** Emits the final restart trace mark and deactivates tracing. */
 export function finishGatewayRestartTrace(name: string, metrics?: RestartTraceMetrics): void {
   markGatewayRestartTrace(name, metrics);
   active = false;
 }
 
-/** Measures a restart trace span around async or sync work. */
 export async function measureGatewayRestartTrace<T>(
   name: string,
   run: () => Promise<T> | T,
   metrics?: RestartTraceMetrics | (() => RestartTraceMetrics | undefined),
 ): Promise<T> {
-  if (!isGatewayRestartTraceActive()) {
+  return await measureGatewayTraceSpan(name, run, metrics, false);
+}
+
+/** Tracks shutdown joins even when detailed restart tracing is disabled. */
+export async function measureGatewayCloseStep<T>(
+  name: string,
+  run: () => Promise<T> | T,
+  metrics?: RestartTraceMetrics | (() => RestartTraceMetrics | undefined),
+): Promise<T> {
+  return await measureGatewayTraceSpan(formatMetricValue(name) ?? "unnamed", run, metrics, true);
+}
+
+/** A bounded snapshot for the process deadline; overlapping joins retain separate identities. */
+export function formatGatewayPendingCloseSteps(): string {
+  const now = nowMs();
+  const entries: string[] = [];
+  for (const step of pendingCloseSteps) {
+    entries.push(`${step.name}=${Math.max(0, Math.round(now - step.startedAt))}ms`);
+    if (entries.length === MAX_PENDING_CLOSE_STEPS) {
+      break;
+    }
+  }
+  const omitted = pendingCloseSteps.size - entries.length;
+  if (omitted > 0) {
+    entries.push(`+${omitted} more`);
+  }
+  return entries.join(", ") || "none";
+}
+
+async function measureGatewayTraceSpan<T>(
+  name: string,
+  run: () => Promise<T> | T,
+  metrics: RestartTraceMetrics | (() => RestartTraceMetrics | undefined) | undefined,
+  closeStep: boolean,
+): Promise<T> {
+  const trace = isGatewayRestartTraceActive();
+  if (!trace && !closeStep) {
     return await run();
   }
   const before = nowMs();
+  const pending = closeStep ? { name, startedAt: before } : undefined;
+  if (pending) {
+    pendingCloseSteps.add(pending);
+    markGatewayRestartTrace(`${name}.begin`);
+  }
   try {
     return await run();
   } finally {
+    if (pending) {
+      pendingCloseSteps.delete(pending);
+    }
     const now = nowMs();
-    emitRestartTrace(
-      name,
-      now - before,
-      now - startedAt,
-      typeof metrics === "function" ? metrics() : metrics,
-    );
-    lastAt = now;
+    if (trace) {
+      emitRestartTrace(
+        name,
+        now - before,
+        now - startedAt,
+        typeof metrics === "function" ? metrics() : metrics,
+      );
+      lastAt = now;
+    } else if (closeStep && now - before >= CLOSE_STEP_SLOW_MS) {
+      restartTraceLog.info(`shutdown step ${name} settled after ${Math.round(now - before)}ms`);
+    }
   }
 }
 
-/** Records a measured restart trace duration against the active sequence. */
 export function recordGatewayRestartTrace(
   name: string,
   durationMs: number,
@@ -175,7 +199,6 @@ export function recordGatewayRestartTrace(
   lastAt = now;
 }
 
-/** Records an externally measured restart trace span with explicit total time. */
 export function recordGatewayRestartTraceSpan(
   name: string,
   durationMs: number,
@@ -188,15 +211,16 @@ export function recordGatewayRestartTraceSpan(
   emitRestartTrace(name, Math.max(0, durationMs), Math.max(0, totalMs), metrics);
 }
 
-/** Records restart trace detail metrics without a duration. */
 export function recordGatewayRestartTraceDetail(name: string, metrics: RestartTraceMetrics): void {
   if (!isGatewayRestartTraceActive()) {
     return;
   }
-  emitRestartTraceDetail(name, metrics);
+  const formatted = formatMetrics(metrics).trim();
+  if (formatted) {
+    restartTraceLog.info(`restart trace: ${name} ${formatted}`);
+  }
 }
 
-/** Collects process memory/resource metrics for restart trace diagnostics. */
 export function collectGatewayProcessMemoryUsageMb(): ReadonlyArray<readonly [string, number]> {
   const usage = process.memoryUsage();
   const toMb = (bytes: number) => bytes / 1024 / 1024;
@@ -207,61 +231,29 @@ export function collectGatewayProcessMemoryUsageMb(): ReadonlyArray<readonly [st
     ["externalMb", toMb(usage.external)],
     ["arrayBuffersMb", toMb(usage.arrayBuffers)],
   ];
-  const resources = collectGatewayProcessResourceCounts();
-  if (resources) {
-    metrics.push(...resources);
-  }
-  return metrics;
-}
-
-function collectGatewayProcessResourceCounts(): ReadonlyArray<readonly [string, number]> | null {
   const processWithResourceAccess = process as NodeJS.Process & {
     _getActiveHandles?: () => unknown[];
     _getActiveRequests?: () => unknown[];
-    getActiveResourcesInfo?: () => string[];
   };
   const activeHandles = processWithResourceAccess["_getActiveHandles"]?.();
   const activeRequests = processWithResourceAccess["_getActiveRequests"]?.();
-  const activeResources = processWithResourceAccess.getActiveResourcesInfo?.();
-  const metrics: Array<readonly [string, number]> = [
+  const activeResources = process.getActiveResourcesInfo();
+  metrics.push(
     ["processSigintListenersCount", process.listenerCount("SIGINT")],
     ["processSigtermListenersCount", process.listenerCount("SIGTERM")],
     ["processRestartListenersCount", process.listenerCount("SIGUSR2")],
-  ];
+  );
   if (activeHandles) {
     metrics.push(["activeHandlesCount", activeHandles.length]);
   }
   if (activeRequests) {
     metrics.push(["activeRequestsCount", activeRequests.length]);
   }
-  const activeTimersCount = activeResources
-    ? countActiveTimersFromResourceInfo(activeResources)
-    : activeHandles
-      ? countActiveTimersFromHandles(activeHandles)
-      : undefined;
-  if (activeTimersCount !== undefined) {
-    metrics.push(["activeTimersCount", activeTimersCount]);
-  }
-  return metrics.length > 0 ? metrics : null;
-}
-
-function countActiveTimersFromResourceInfo(activeResources: readonly string[]): number {
-  return activeResources.filter((resource) => resource === "Timeout" || resource === "Timer")
-    .length;
-}
-
-function countActiveTimersFromHandles(activeHandles: readonly unknown[]): number {
-  let count = 0;
-  for (const handle of activeHandles) {
-    if (typeof handle !== "object" || handle === null) {
-      continue;
-    }
-    const constructorName = (handle as { constructor?: { name?: string } }).constructor?.name;
-    if (constructorName === "Timeout" || constructorName === "Timer") {
-      count += 1;
-    }
-  }
-  return count;
+  metrics.push([
+    "activeTimersCount",
+    activeResources.filter((resource) => resource === "Timeout" || resource === "Timer").length,
+  ]);
+  return metrics;
 }
 
 function normalizeRestartTraceHandoff(value: unknown): GatewayRestartTraceHandoff | null {
@@ -292,7 +284,6 @@ function normalizeRestartTraceHandoff(value: unknown): GatewayRestartTraceHandof
   };
 }
 
-/** Captures restart trace handoff state for a child replacement process. */
 export function captureGatewayRestartTraceHandoff(): GatewayRestartTraceHandoff | undefined {
   if (!isGatewayRestartTraceActive()) {
     return undefined;
@@ -300,7 +291,6 @@ export function captureGatewayRestartTraceHandoff(): GatewayRestartTraceHandoff 
   return { startedAt, lastAt };
 }
 
-/** Builds env vars that carry restart trace handoff state to a replacement process. */
 export function createGatewayRestartTraceHandoffEnv(
   handoff: GatewayRestartTraceHandoff | undefined = captureGatewayRestartTraceHandoff(),
 ): NodeJS.ProcessEnv | undefined {
@@ -314,7 +304,6 @@ export function createGatewayRestartTraceHandoffEnv(
   };
 }
 
-/** Resumes restart tracing from a validated in-memory handoff object. */
 export function resumeGatewayRestartTraceFromHandoff(
   handoff: unknown,
   metrics?: RestartTraceMetrics,
@@ -333,7 +322,6 @@ export function resumeGatewayRestartTraceFromHandoff(
   return true;
 }
 
-/** Resumes restart tracing from env handoff vars and removes them from the env. */
 export function resumeGatewayRestartTraceFromEnv(
   env: NodeJS.ProcessEnv = process.env,
   metrics?: RestartTraceMetrics,

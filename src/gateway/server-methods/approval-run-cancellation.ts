@@ -55,9 +55,7 @@ export function cancelAgentRuntimeBoundApprovals<TPayload>(params: {
   publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
 }): Promise<number> {
   return cancelMatchingApprovals({
-    reason: params.reason,
-    manager: params.manager,
-    publish: params.publish,
+    ...params,
     matches: (pending) => {
       const bound = pending.agentRuntimeDelegatedAuthority;
       return (
@@ -78,8 +76,7 @@ export function cancelWorkerTurnClaimBoundApprovals<TPayload>(params: {
   publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
 }): Promise<number> {
   return cancelMatchingApprovals({
-    manager: params.manager,
-    publish: params.publish,
+    ...params,
     matches: (pending) => {
       const authority = pending.agentRuntimeDelegatedAuthority;
       return (
@@ -98,8 +95,7 @@ export function cancelUnboundRunApprovals<TPayload extends { runId?: string | nu
   publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
 }): Promise<number> {
   return cancelMatchingApprovals({
-    manager: params.manager,
-    publish: params.publish,
+    ...params,
     matches: (pending) =>
       !pending.agentRuntimeDelegatedAuthority && pending.request.runId === params.runId,
   });

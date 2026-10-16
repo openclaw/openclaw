@@ -1,7 +1,10 @@
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type {
+  PluginMetadataSnapshot,
+  ResolvePluginMetadataSnapshotParams,
+} from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   createPluginRuntimeLoaderLogger,
@@ -20,6 +23,28 @@ type PreparedPluginContextInput = Pick<
 
 const emptyPluginDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
 
+export function prepareOwnedPluginMetadataSnapshotParams(
+  input: PreparedPluginContextInput,
+  env: NodeJS.ProcessEnv,
+): ResolvePluginMetadataSnapshotParams {
+  return {
+    config: input.config,
+    env,
+    ...(input.workspaceDir
+      ? { workspaceDir: input.workspaceDir, allowWorkspaceScopedCurrent: true }
+      : {}),
+    ...(input.loadRuntimePlugins && input.runtimePluginSelections && input.workspaceDir
+      ? {
+          pluginIdScope: createAgentRuntimeMetadataPluginIdScope({
+            config: input.config,
+            workspaceDir: input.workspaceDir,
+            selections: input.runtimePluginSelections,
+          }),
+        }
+      : {}),
+  };
+}
+
 /** Resolves and attaches the plugin facts owned by one prepared workspace generation. */
 export function prepareOwnedPluginLoadContext(
   input: PreparedPluginContextInput,
@@ -31,22 +56,7 @@ export function prepareOwnedPluginLoadContext(
 ): PluginMetadataSnapshot {
   const metadataSnapshot =
     preparedMetadataSnapshot ??
-    resolvePluginMetadataSnapshot({
-      config: input.config,
-      env,
-      ...(input.workspaceDir
-        ? { workspaceDir: input.workspaceDir, allowWorkspaceScopedCurrent: true }
-        : {}),
-      ...(input.loadRuntimePlugins && input.runtimePluginSelections && input.workspaceDir
-        ? {
-            pluginIdScope: createAgentRuntimeMetadataPluginIdScope({
-              config: input.config,
-              workspaceDir: input.workspaceDir,
-              selections: input.runtimePluginSelections,
-            }),
-          }
-        : {}),
-    });
+    resolvePluginMetadataSnapshot(prepareOwnedPluginMetadataSnapshotParams(input, env));
   if (!registry) {
     return metadataSnapshot;
   }

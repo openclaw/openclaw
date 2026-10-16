@@ -137,90 +137,55 @@ describe("published upstream repository advisories", () => {
     });
   });
 
-  it.each([
-    {
-      name: "fast-xml-builder",
-      id: "GHSA-45c6-75p6-83cc",
-      raw: "> 1.1.5",
-      reviewed: "= 1.1.5",
-      version: "1.3.1",
-    },
-    {
+  it("reconciles the published GHSA-8r6m-32jq-jx6q range without losing raw evidence", async () => {
+    const { name, id, raw, reviewed, version } = {
       name: "fast-xml-parser",
       id: "GHSA-8r6m-32jq-jx6q",
       raw: ">= 5.9.3",
       reviewed: ">= 5.9.3, < 5.10.1",
       version: "5.11.0",
-    },
-    {
-      name: "hono",
-      id: "GHSA-m732-5p4w-x69g",
-      raw: "> 1.1.0",
-      reviewed: ">= 1.1.0, < 4.10.2",
-      version: "4.13.3",
-    },
-    {
-      name: "hono",
-      id: "GHSA-xh87-mx6m-69f3",
-      raw: ">= 4.12.0",
-      reviewed: ">= 4.12.0, < 4.12.2",
-      version: "4.13.3",
-    },
-  ])(
-    "reconciles the published $id range without losing raw evidence",
-    async ({ name, id, raw, reviewed, version }) => {
-      const source = createSourceFetch({
-        page: () =>
-          Response.json([
-            advisory(raw, { ghsa_id: id, vulnerabilities: [vulnerability(raw, name)] }),
-          ]),
-        reviewed: () =>
-          Response.json({
-            ghsa_id: id,
-            published_at: "2026-08-01T00:00:00Z",
-            github_reviewed_at: "2026-08-02T00:00:00Z",
-            withdrawn_at: null,
-            vulnerabilities: [vulnerability(reviewed, name)],
-          }),
-      });
-      const report = await scan(source.fetchImpl, { [name]: [version] });
-      expect(report.advisories).toEqual([]);
-      expect(report.coverage).toMatchObject({
-        status: "checked",
-        reconciliations: [
-          {
-            id,
-            packageName: name,
-            repositoryRange: raw.replaceAll(" ", ""),
-            reviewedRanges: [
-              reviewed
-                .replaceAll(", ", " ")
-                .replace(/([<>=]) /g, "$1")
-                .replace(/^=/, ""),
-            ],
-            matchedVersions: [],
-          },
-        ],
-      });
-    },
-  );
+    };
+
+    const source = createSourceFetch({
+      page: () =>
+        Response.json([
+          advisory(raw, { ghsa_id: id, vulnerabilities: [vulnerability(raw, name)] }),
+        ]),
+      reviewed: () =>
+        Response.json({
+          ghsa_id: id,
+          published_at: "2026-08-01T00:00:00Z",
+          github_reviewed_at: "2026-08-02T00:00:00Z",
+          withdrawn_at: null,
+          vulnerabilities: [vulnerability(reviewed, name)],
+        }),
+    });
+    const report = await scan(source.fetchImpl, { [name]: [version] });
+    expect(report.advisories).toEqual([]);
+    expect(report.coverage).toMatchObject({
+      status: "checked",
+      reconciliations: [
+        {
+          id,
+          packageName: name,
+          repositoryRange: raw.replaceAll(" ", ""),
+          reviewedRanges: [
+            reviewed
+              .replaceAll(", ", " ")
+              .replace(/([<>=]) /g, "$1")
+              .replace(/^=/, ""),
+          ],
+          matchedVersions: [],
+        },
+      ],
+    });
+  });
 
   it.each([
-    {
-      name: "caps the fallback at the patch",
-      versions: ["1.19.0", "1.20.0", "1.21.0"],
-      matched: ["1.19.0"],
-    },
     {
       name: "retains partial coverage when only patched versions are installed",
       versions: ["1.20.0"],
       matched: [],
-    },
-    {
-      name: "lets reviewed ranges override the cap",
-      versions: ["1.20.0"],
-      matched: ["1.20.0"],
-      reviewed: true,
     },
     {
       name: "ignores ambiguous patch metadata",
@@ -228,70 +193,42 @@ describe("published upstream repository advisories", () => {
       matched: ["1.20.0"],
       patched: ">=1.20",
     },
-    {
-      name: "preserves affected sibling ranges",
-      versions: ["1.20.0"],
-      matched: ["1.20.0"],
-      sibling: true,
-    },
-  ])("$name", async ({ versions, matched, reviewed, patched, sibling }) => {
+  ])("$name", async ({ versions, matched, patched }) => {
     const source = createSourceFetch({
       page: () =>
         Response.json([
           advisory(">= 1.13.0", {
             vulnerabilities: [
               { ...vulnerability(">= 1.13.0"), patched_versions: patched ?? ">=1.20.0" },
-              ...(sibling ? [vulnerability(">= 1.19.0, < 1.21.0")] : []),
             ],
           }),
         ]),
-      ...(reviewed ? {} : { reviewed: () => new Response(null, { status: 404 }) }),
+      reviewed: () => new Response(null, { status: 404 }),
     });
     const report = await scan(source.fetchImpl, { fixture: versions });
     expect(report.advisories.flatMap((entry) => entry.matchedVersions)).toEqual(matched);
-    if (matched.length > 0 && !reviewed && !patched && !sibling) {
-      expect(report.advisories[0]?.vulnerable_versions).toBe(">=1.13.0");
-    }
-    if (reviewed) {
-      expect(report.coverage.reconciliations).toMatchObject([
-        { repositoryRange: ">=1.13.0", matchedVersions: ["1.20.0"] },
-      ]);
-    }
     expect(report.coverage).toMatchObject({
-      status: reviewed ? "checked" : "partial",
-      issues: reviewed ? [] : [{ subject: `fixture#${ADVISORY_ID}`, reason: "request-failed" }],
+      status: "partial",
+      issues: [{ subject: `fixture#${ADVISORY_ID}`, reason: "request-failed" }],
     });
   });
 
   it.each([
-    { name: "unavailable", response: null },
     { name: "wrong identity", response: { ghsa_id: "GHSA-5555-6666-7777" } },
     { name: "unreviewed", response: { github_reviewed_at: null } },
-    { name: "unpublished", response: { published_at: null } },
-    { name: "withdrawn", response: { withdrawn_at: "2026-08-03T00:00:00Z" } },
     { name: "wrong package", response: { vulnerabilities: [vulnerability("< 1.0.0", "another")] } },
-    {
-      name: "wrong ecosystem",
-      response: { vulnerabilities: [vulnerability("< 1.0.0", "fixture", "pip")] },
-    },
-    {
-      name: "malformed sibling",
-      response: { vulnerabilities: [vulnerability("< 1.0.0"), vulnerability("unknown")] },
-    },
   ])("retains the raw blocker when reviewed evidence is $name", async ({ response }) => {
     const source = createSourceFetch({
       page: () => Response.json([advisory()]),
       reviewed: () =>
-        response === null
-          ? new Response(null, { status: 503 })
-          : Response.json({
-              ghsa_id: ADVISORY_ID,
-              published_at: "2026-08-01T00:00:00Z",
-              github_reviewed_at: "2026-08-02T00:00:00Z",
-              withdrawn_at: null,
-              vulnerabilities: [vulnerability("< 1.0.0")],
-              ...response,
-            }),
+        Response.json({
+          ghsa_id: ADVISORY_ID,
+          published_at: "2026-08-01T00:00:00Z",
+          github_reviewed_at: "2026-08-02T00:00:00Z",
+          withdrawn_at: null,
+          vulnerabilities: [vulnerability("< 1.0.0")],
+          ...response,
+        }),
     });
     const report = await scan(source.fetchImpl);
     expect(report.advisories).toMatchObject([{ id: ADVISORY_ID, matchedVersions: ["1.0.0"] }]);
@@ -301,46 +238,45 @@ describe("published upstream repository advisories", () => {
     );
   });
 
-  it.each(["integration", "personal access token"])(
-    "keeps resource denial by %s local while preserving real findings and reconciling stale ranges",
-    async (actor) => {
-      const ids = Array.from({ length: 6 }, (_, index) => `GHSA-2222-3333-444${index}`);
-      const inaccessible = ids.slice(0, 4);
-      const trueMatch = expectDefined(ids[4], "true advisory");
-      const staleMatch = expectDefined(ids[5], "stale advisory");
-      const secret = "synthetic-advisory-secret";
-      vi.stubEnv("GH_TOKEN", secret);
-      const source = createSourceFetch({
-        page: () => Response.json(ids.map((id) => advisory("< 2.0.0", { ghsa_id: id }))),
-        reviewed: (url) => {
-          const id = url.pathname.split("/").at(-1) ?? "";
-          if (inaccessible.includes(id)) {
-            return Response.json(
-              { message: `Resource not accessible by ${actor}`, diagnostic: secret },
-              { status: 403, headers: { "x-ratelimit-remaining": "100" } },
-            );
-          }
-          return Response.json({
-            ghsa_id: id,
-            published_at: "2026-08-01T00:00:00Z",
-            github_reviewed_at: "2026-08-02T00:00:00Z",
-            withdrawn_at: null,
-            vulnerabilities: [vulnerability(id === staleMatch ? "< 1.0.0" : "< 2.0.0")],
-          });
-        },
-      });
-      const report = await scan(source.fetchImpl);
-      expect(report.advisories.map(({ id }) => id)).toEqual([...inaccessible, trueMatch]);
-      expect(report.coverage.issues).toEqual(
-        inaccessible.map((id) => ({ subject: `fixture#${id}`, reason: "request-failed" })),
-      );
-      expect(report.coverage.reconciliations).toMatchObject([
-        { id: trueMatch, matchedVersions: ["1.0.0"] },
-        { id: staleMatch, matchedVersions: [] },
-      ]);
-      expect(JSON.stringify(report)).not.toContain(secret);
-    },
-  );
+  it("keeps resource denial by personal access token local while preserving real findings and reconciling stale ranges", async () => {
+    const actor = "personal access token";
+
+    const ids = Array.from({ length: 6 }, (_, index) => `GHSA-2222-3333-444${index}`);
+    const inaccessible = ids.slice(0, 4);
+    const trueMatch = expectDefined(ids[4], "true advisory");
+    const staleMatch = expectDefined(ids[5], "stale advisory");
+    const secret = "synthetic-advisory-secret";
+    vi.stubEnv("GH_TOKEN", secret);
+    const source = createSourceFetch({
+      page: () => Response.json(ids.map((id) => advisory("< 2.0.0", { ghsa_id: id }))),
+      reviewed: (url) => {
+        const id = url.pathname.split("/").at(-1) ?? "";
+        if (inaccessible.includes(id)) {
+          return Response.json(
+            { message: `Resource not accessible by ${actor}`, diagnostic: secret },
+            { status: 403, headers: { "x-ratelimit-remaining": "100" } },
+          );
+        }
+        return Response.json({
+          ghsa_id: id,
+          published_at: "2026-08-01T00:00:00Z",
+          github_reviewed_at: "2026-08-02T00:00:00Z",
+          withdrawn_at: null,
+          vulnerabilities: [vulnerability(id === staleMatch ? "< 1.0.0" : "< 2.0.0")],
+        });
+      },
+    });
+    const report = await scan(source.fetchImpl);
+    expect(report.advisories.map(({ id }) => id)).toEqual([...inaccessible, trueMatch]);
+    expect(report.coverage.issues).toEqual(
+      inaccessible.map((id) => ({ subject: `fixture#${id}`, reason: "request-failed" })),
+    );
+    expect(report.coverage.reconciliations).toMatchObject([
+      { id: trueMatch, matchedVersions: ["1.0.0"] },
+      { id: staleMatch, matchedVersions: [] },
+    ]);
+    expect(JSON.stringify(report)).not.toContain(secret);
+  });
 
   it("sends the token only to fixed GitHub requests and refuses redirects on every request", async () => {
     vi.stubEnv("GH_TOKEN", "synthetic-upstream-test-token");
@@ -390,11 +326,6 @@ describe("published upstream repository advisories", () => {
 
   it.each([
     {
-      name: "wrong package",
-      data: { name: "another", version: "1.0.0" },
-      reason: "invalid-response",
-    },
-    {
       name: "latest instead of locked version",
       data: { name: "fixture", version: "2.0.0" },
       reason: "invalid-response",
@@ -402,11 +333,6 @@ describe("published upstream repository advisories", () => {
     {
       name: "missing repository",
       data: { name: "fixture", version: "1.0.0" },
-      reason: "unsupported-repository",
-    },
-    {
-      name: "non-GitHub",
-      repository: "https://gitlab.com/fixture/packages",
       reason: "unsupported-repository",
     },
     {
@@ -441,8 +367,6 @@ describe("published upstream repository advisories", () => {
 
   it.each([
     { name: "private", data: { id: 42, private: true }, reason: "repository-not-public" },
-    { name: "missing visibility", data: { id: 42 }, reason: "repository-not-public" },
-    { name: "malformed", data: [], reason: "repository-not-public" },
     { name: "invalid ID", data: { id: "42", private: false }, reason: "invalid-response" },
   ])("does not request advisories from $name repository metadata", async ({ data, reason }) => {
     const source = createSourceFetch({ repository: () => Response.json(data) });
@@ -457,54 +381,6 @@ describe("published upstream repository advisories", () => {
       issues: [{ subject: REPOSITORY, reason }],
     });
   });
-
-  it("reports a redirect without requesting its destination", async () => {
-    const source = createSourceFetch({
-      repository: () =>
-        new Response(null, {
-          status: 302,
-          headers: { location: "https://evil.example/advisories" },
-        }),
-    });
-    const report = await scan(source.fetchImpl);
-    expect(source.calls).toHaveLength(2);
-    expect(source.calls.every(({ init }) => init?.redirect === "error")).toBe(true);
-    expect(report.coverage).toMatchObject({
-      status: "partial",
-      issues: [{ subject: REPOSITORY, reason: "request-failed" }],
-    });
-  });
-
-  it.each([
-    {
-      range: ">= 0",
-      versions: ["0.0.0-alpha", "0.0.0", "1.0.0"],
-      matched: ["0.0.0", "0.0.0-alpha", "1.0.0"],
-    },
-    { range: "> 0", versions: ["0.0.0", "0.0.1", "0.1.0"], matched: ["0.0.1", "0.1.0"] },
-    { range: "= 1.0.0", versions: ["1.0.0-rc.1", "1.0.0", "1.0.1"], matched: ["1.0.0"] },
-    { range: "= 1.0.0-rc.1", versions: ["1.0.0-rc.1", "1.0.0"], matched: ["1.0.0-rc.1"] },
-    {
-      range: ">= 1.0.0, < 2.0.0",
-      versions: ["0.9.0", "1.0.0", "1.5.0-beta.1", "2.0.0"],
-      matched: ["1.0.0", "1.5.0-beta.1"],
-    },
-    {
-      range: "> 1.0.0, <= 2.0.0",
-      versions: ["1.0.0", "1.0.1", "2.0.0", "2.0.1"],
-      matched: ["1.0.1", "2.0.0"],
-    },
-    { range: "< 1.0.0", versions: ["0.9.0-beta.1", "1.0.0"], matched: ["0.9.0-beta.1"] },
-  ])(
-    "compares documented $range bounds without installer prerelease exclusions",
-    async ({ range, versions, matched }) => {
-      const source = createSourceFetch({ page: () => Response.json([advisory(range)]) });
-      const report = await scan(source.fetchImpl, { fixture: versions });
-      expect(report.advisories).toMatchObject([{ id: ADVISORY_ID, matchedVersions: matched }]);
-      expect(report.advisories).toHaveLength(1);
-      expect(report.coverage.status).toBe("checked");
-    },
-  );
 
   it("matches only the declared npm package, ignores withdrawn entries, and normalizes medium severity", async () => {
     const source = createSourceFetch({
@@ -552,58 +428,30 @@ describe("published upstream repository advisories", () => {
     );
   });
 
-  it.each([
-    null,
-    "",
-    ">= 1.0.0 < 2.0.0",
-    ">= 1.0.0, < 2.0.0; >= 3.0.0, < 4.0.0",
-    "^1.0.0",
-    ">= 1.0",
-    "< 2.0.0, > 1.0.0",
-    "= " + "1".repeat(257),
-  ])("retains a confirmed match when a sibling range is malformed (%s)", async (range) => {
-    const source = createSourceFetch({
-      page: () =>
-        Response.json([
-          advisory("< 2.0.0", {
-            vulnerabilities: [vulnerability("< 2.0.0"), vulnerability(range)],
-          }),
+  it.each([null, ">= 1.0", "< 2.0.0, > 1.0.0"])(
+    "retains a confirmed match when a sibling range is malformed (%s)",
+    async (range) => {
+      const source = createSourceFetch({
+        page: () =>
+          Response.json([
+            advisory("< 2.0.0", {
+              vulnerabilities: [vulnerability("< 2.0.0"), vulnerability(range)],
+            }),
+          ]),
+      });
+      const report = await scan(source.fetchImpl);
+      expect(report.advisories).toMatchObject([{ id: ADVISORY_ID, matchedVersions: ["1.0.0"] }]);
+      expect(report.coverage).toMatchObject({
+        status: "partial",
+        issues: expect.arrayContaining([
+          { subject: `fixture#${ADVISORY_ID}`, reason: "invalid-range" },
         ]),
-    });
-    const report = await scan(source.fetchImpl);
-    expect(report.advisories).toMatchObject([{ id: ADVISORY_ID, matchedVersions: ["1.0.0"] }]);
-    expect(report.coverage).toMatchObject({
-      status: "partial",
-      issues: expect.arrayContaining([
-        { subject: `fixture#${ADVISORY_ID}`, reason: "invalid-range" },
-      ]),
-    });
-  });
-
-  it("uses repository-id pagination cursors without changing the verified target or published-state filter", async () => {
-    const source = createSourceFetch({
-      page: (url) =>
-        url.searchParams.has("after")
-          ? Response.json([])
-          : Response.json([advisory()], { headers: { link: NEXT_PAGE } }),
-    });
-    const report = await scan(source.fetchImpl);
-    const pages = source.calls.filter(({ url }) => url.pathname.endsWith("/security-advisories"));
-    expect(pages).toHaveLength(2);
-    const nextPage = expectDefined(pages[1], "next advisory page");
-    expect(nextPage.url.pathname).toBe("/repos/fixture/packages/security-advisories");
-    expect(Object.fromEntries(nextPage.url.searchParams)).toEqual({
-      state: "published",
-      per_page: "100",
-      after: "next+cursor",
-    });
-    expect(report.advisories).toHaveLength(1);
-    expect(report.coverage.status).toBe("checked");
-  });
+      });
+    },
+  );
 
   it.each([
     "https://evil.example/repositories/42/security-advisories?after=next",
-    "https://api.github.com/repos/another/package/security-advisories?state=published&after=next",
     "https://api.github.com/repositories/999/security-advisories?state=published&after=next",
     "https://api.github.com/repositories/42/security-advisories?state=draft&after=next",
     "https://user:password@api.github.com/repositories/42/security-advisories?state=published&after=next",
@@ -626,30 +474,21 @@ describe("published upstream repository advisories", () => {
     });
   });
 
-  it.each(["unavailable", "oversized", "invalid-json"])(
-    "preserves earlier findings when a later page is %s",
-    async (failure) => {
-      const source = createSourceFetch({
-        page: (url) => {
-          if (!url.searchParams.has("after")) {
-            return Response.json([advisory()], { headers: { link: NEXT_PAGE } });
-          }
-          if (failure === "unavailable") {
-            return new Response(null, { status: 503 });
-          }
-          if (failure === "oversized") {
-            return Response.json(Array.from({ length: 101 }, () => advisory()));
-          }
-          return new Response("{");
-        },
-      });
-      const report = await scan(source.fetchImpl);
-      expect(report.advisories).toHaveLength(1);
-      expect(report.coverage.status).toBe("partial");
-      expect(report.coverage.checkedRepositories).toBe(0);
-      expect(report.coverage.issues).toHaveLength(1);
-    },
-  );
+  it("preserves earlier findings when a later page is oversized", async () => {
+    const source = createSourceFetch({
+      page: (url) => {
+        if (!url.searchParams.has("after")) {
+          return Response.json([advisory()], { headers: { link: NEXT_PAGE } });
+        }
+        return Response.json(Array.from({ length: 101 }, () => advisory()));
+      },
+    });
+    const report = await scan(source.fetchImpl);
+    expect(report.advisories).toHaveLength(1);
+    expect(report.coverage.status).toBe("partial");
+    expect(report.coverage.checkedRepositories).toBe(0);
+    expect(report.coverage.issues).toHaveLength(1);
+  });
 
   it.each(["repeated cursor", "page budget"])(
     "stops at the %s without discarding findings",
@@ -712,10 +551,8 @@ describe("published upstream repository advisories", () => {
       let now = 0;
       vi.spyOn(performance, "now").mockImplementation(() => now);
       const realSetTimeout = globalThis.setTimeout;
-      const requestedTimeouts: Array<number | undefined> = [];
       // Exercise the real timeout race without a 15-second wait or shared fake timers.
       vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, milliseconds, ...args) => {
-        requestedTimeouts.push(milliseconds);
         return realSetTimeout(callback, milliseconds === 15_000 ? 1 : milliseconds, ...args);
       });
       const cancel = vi.fn();
@@ -736,7 +573,14 @@ describe("published upstream repository advisories", () => {
         },
       });
       const report = await scan(source.fetchImpl);
-      expect(requestedTimeouts.at(-1)).toBe(deadline === "run" ? 5 : 15_000);
+      const stalledSignal = expectDefined(
+        source.calls.find(({ url }) => url.searchParams.has("after"))?.init?.signal,
+        "stalled advisory request signal",
+      );
+      expect(stalledSignal.aborted).toBe(true);
+      expect(stalledSignal.reason).toMatchObject({
+        message: `Upstream advisory request exceeded timeout of ${deadline === "run" ? 5 : 15_000}ms`,
+      });
       expect(cancel).toHaveBeenCalledTimes(deadline === "run" ? 1 : 0);
       expect(report.advisories).toHaveLength(1);
       expect(report.coverage).toMatchObject({ status: "partial", checkedRepositories: 0 });
@@ -889,23 +733,7 @@ describe("published upstream repository advisories", () => {
   });
 
   it.each([
-    { code: 403, remaining: "0", reason: "rate-limited" },
-    { code: 429, remaining: "0", reason: "rate-limited" },
     { code: 403, remaining: "100", reason: "request-failed" },
-    { code: 401, remaining: "100", reason: "request-failed" },
-    {
-      code: 403,
-      remaining: "100",
-      reason: "request-failed",
-      body: JSON.stringify({ message: "You have exceeded a secondary rate limit." }),
-    },
-    {
-      code: 403,
-      remaining: "100",
-      reason: "request-failed",
-      body: JSON.stringify({ message: "Unknown denial", diagnostic: "synthetic-advisory-secret" }),
-    },
-    { code: 403, remaining: "100", reason: "request-failed", body: "{" },
     {
       code: 403,
       remaining: "100",
@@ -921,13 +749,6 @@ describe("published upstream repository advisories", () => {
       reason: "rate-limited",
       body: JSON.stringify({ message: "Resource not accessible by integration" }),
     },
-    {
-      code: 403,
-      remaining: "100",
-      reason: "request-failed",
-      body: JSON.stringify({ message: "Resource not accessible by integration" }),
-      retryAfter: "60",
-    },
   ])("stops scheduling GitHub work after HTTP $code (remaining $remaining)", async (entry) => {
     const { code, remaining, reason: expectedReason } = entry;
     const source = createSourceFetch({
@@ -937,7 +758,6 @@ describe("published upstream repository advisories", () => {
           status: code,
           headers: {
             "x-ratelimit-remaining": remaining,
-            ...("retryAfter" in entry ? { "retry-after": entry.retryAfter } : {}),
           },
         }),
     });

@@ -2,16 +2,24 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
+import {
+  createGatewayUpdateLifecycle,
+  type UpdateCheckLifecycle,
+} from "./update-check-lifecycle.js";
 import type { UpdateCheckResult } from "./update-check.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
 import { renderUpdateRunReport } from "./update-run-report.js";
 import { readUpdateRunStatus } from "./update-run-status.js";
-import { getUpdateSchedule } from "./update-status-state.js";
+import { getUpdateSchedule, resetUpdateStatusState } from "./update-status-state.js";
 
 const { fault } = vi.hoisted(
   (): {
@@ -37,15 +45,17 @@ vi.mock("./restart-sentinel.js", async () => {
   };
 });
 
-vi.mock("../state/config-machine-state-write.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../state/config-machine-state-write.js")>();
+vi.mock("../state/config-machine-state-async.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/config-machine-state-async.js")>();
   return {
     ...actual,
-    writeConfigMachineState: (...args: Parameters<typeof actual.writeConfigMachineState>) => {
+    writeConfigMachineStateAsync: (
+      ...args: Parameters<typeof actual.writeConfigMachineStateAsync>
+    ) => {
       if (fault.at === "state-write" && fault.error) {
         throw fault.error;
       }
-      return actual.writeConfigMachineState(...args);
+      return actual.writeConfigMachineStateAsync(...args);
     },
   };
 });
@@ -84,8 +94,9 @@ function idleActiveWorkInspectors(): GatewayActiveWorkInspectors {
     getEmbeddedRuns: () => 0,
     getBackgroundExecSessions: () => 0,
     getCronRuns: () => 0,
-    getActiveTasks: () => 0,
-    getTaskBlockers: () => [],
+    getAgentRuns: () => 0,
+    getAcpRuns: () => 0,
+    getMediaRuns: () => 0,
     getRootRequests: () => 0,
     getSessionAdmissions: () => 0,
     getSessionMutations: () => 0,
@@ -98,10 +109,13 @@ function idleActiveWorkInspectors(): GatewayActiveWorkInspectors {
 
 describe("update campaign apply exception boundary", () => {
   let testState: OpenClawTestState;
+  let clock: ReturnType<typeof createGatewaySchedulerClock>;
+  let lifecycle: UpdateCheckLifecycle;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
+    clock = createGatewaySchedulerClock(Date.parse("2026-01-17T10:00:00Z"));
+    vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
+    lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler(clock.clock));
     testState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-update-campaign-apply-",
@@ -118,9 +132,10 @@ describe("update campaign apply exception boundary", () => {
   afterEach(async () => {
     delete fault.at;
     delete fault.error;
-    const { resetUpdateAvailableStateForTest } = await import("./update-startup.js");
-    resetUpdateAvailableStateForTest();
-    vi.useRealTimers();
+    await lifecycle.stop();
+    await lifecycle.scheduler.stop();
+    resetUpdateStatusState();
+    vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
     await testState.cleanup();
   });
@@ -141,7 +156,6 @@ describe("update campaign apply exception boundary", () => {
         tag: null,
         branch: "main",
         upstream: "origin/main",
-        upstreamSource: "tracking",
         upstreamSha: "upstream-sha",
         commitAtMs: null,
         dirty: false,
@@ -167,7 +181,7 @@ describe("update campaign apply exception boundary", () => {
     fault.at = at;
     fault.error = Object.assign(new Error(message), { code });
 
-    await vi.advanceTimersByTimeAsync(60_000);
+    await clock.advanceBy(60_000);
 
     const runId = listUpdateRuns()[0]?.runId ?? "";
     const run = getUpdateRun(runId);
@@ -185,7 +199,7 @@ describe("update campaign apply exception boundary", () => {
       target: { kind: "git", installationMethod: "git-checkout" },
       verification: { rollbackOutcome: { status: "not-attempted" } },
     });
-    const runStatus = readUpdateRunStatus();
+    const runStatus = await readUpdateRunStatus();
     assert(!("runStatusError" in runStatus));
     const { lastRun } = runStatus;
     expect(lastRun).toEqual(run);

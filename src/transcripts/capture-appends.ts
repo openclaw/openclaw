@@ -1,5 +1,5 @@
 import { createDeferredCore } from "../shared/deferred.js";
-import type { TranscriptAppendScheduler } from "./store-worker-contract.js";
+import type { TranscriptAppendScheduler } from "./store-worker.types.js";
 
 type AppendOutcome = { ok: true } | { ok: false; error: unknown };
 

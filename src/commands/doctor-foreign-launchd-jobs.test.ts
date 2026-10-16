@@ -1,9 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ForeignLaunchdJob } from "../daemon/launchd-foreign-jobs.js";
-import { runGatewayServicesHealth } from "../flows/doctor-health-contribution-runners.gateway.js";
-import { createDoctorHealthFlowContext } from "../flows/doctor-health-contributions.test-support.js";
 import { noteMacForeignLaunchdJobs } from "./doctor-foreign-launchd-jobs.js";
-import type { DoctorOptions } from "./doctor.types.js";
 
 const mocks = vi.hoisted(() => ({
   find: vi.fn<() => Promise<ForeignLaunchdJob[]>>(),
@@ -65,36 +62,17 @@ describe("Doctor foreign launchd jobs", () => {
 
   afterEach(() => Object.defineProperty(process, "platform", platform));
 
-  it.each<DoctorOptions>([{}, { yes: true }, { nonInteractive: true }])(
-    "reports lifecycle details without removal when --fix is absent: %j",
-    async (options) => {
-      await noteMacForeignLaunchdJobs(options, runtime, {});
+  it("reports lifecycle details without removal when --fix is absent", async () => {
+    await noteMacForeignLaunchdJobs({}, runtime, {});
 
-      const report = mocks.note.mock.calls[0]?.[0];
-      expect(report).toContain(lifecycleJob.label);
-      expect(report).toContain(lifecycleJob.program);
-      expect(report).toContain("keepalive=true");
-      expect(report).toContain("Gateway lifecycle=restart");
-      expect(report).toContain(reportOnlyJob.label);
-      expect(report).toContain("3 external forced Gateway restart(s)");
-      expect(mocks.repair).not.toHaveBeenCalled();
-    },
-  );
-
-  it("names confirmed removals through the maintenance-owned --fix runner and preserves report-only jobs", async () => {
-    await runGatewayServicesHealth(
-      createDoctorHealthFlowContext({
-        options: { repair: true, nonInteractive: true },
-        gatewayMaintenanceActive: true,
-        runtime,
-        env: {},
-      }),
-    );
-
-    expect(mocks.repair).toHaveBeenCalledExactlyOnceWith(lifecycleJob, {});
-    expect(runtime.log).toHaveBeenCalledWith(
-      `Removed stray launchd job ${lifecycleJob.label}. Verified unloaded.`,
-    );
+    const report = mocks.note.mock.calls[0]?.[0];
+    expect(report).toContain(lifecycleJob.label);
+    expect(report).toContain(lifecycleJob.program);
+    expect(report).toContain("keepalive=true");
+    expect(report).toContain("Gateway lifecycle=restart");
+    expect(report).toContain(reportOnlyJob.label);
+    expect(report).toContain("3 external forced Gateway restart(s)");
+    expect(mocks.repair).not.toHaveBeenCalled();
   });
 
   it("reports a job rejected by fresh owner inspection as not removed", async () => {
@@ -102,6 +80,7 @@ describe("Doctor foreign launchd jobs", () => {
 
     await noteMacForeignLaunchdJobs({ repair: true, nonInteractive: true }, runtime, {});
 
+    expect(mocks.repair).toHaveBeenCalledExactlyOnceWith(lifecycleJob, {});
     expect(runtime.log).toHaveBeenCalledWith(
       `Removal not confirmed for launchd job ${lifecycleJob.label}: Lifecycle command changed.`,
     );

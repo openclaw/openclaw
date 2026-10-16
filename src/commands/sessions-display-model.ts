@@ -1,11 +1,6 @@
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
-/**
- * Model display resolution for session listings.
- *
- * Session rows may carry persisted model/provider overrides or CLI-runtime
- * model strings; this module normalizes them into display-ready model refs.
- */
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { ModelRef } from "../agents/model-ref-shared.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   isCliProvider,
@@ -15,35 +10,21 @@ import {
   type CliProviderClassifier,
 } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-type SessionDisplayModelRow = {
+type SessionDisplayModelRow = Pick<
+  SessionEntry,
+  "model" | "modelProvider" | "modelOverride" | "providerOverride"
+> & {
   key: string;
-  model?: string;
-  modelProvider?: string;
-  modelOverride?: string;
-  providerOverride?: string;
 };
 
-type SessionDisplayDefaults = {
-  model: string;
-};
-
-type SessionDisplayModelRef = { provider: string; model: string };
-
-function resolveAgentPrimaryModel(
-  cfg: OpenClawConfig,
-  agentId: string | undefined,
-): string | undefined {
-  if (!agentId) {
-    return undefined;
-  }
-  return resolveAgentModelPrimaryValue(resolveAgentConfig(cfg, agentId)?.model);
-}
-
-function resolveDefaultModelRef(cfg: OpenClawConfig, agentId?: string): SessionDisplayModelRef {
+function resolveSessionDisplayDefaults(cfg: OpenClawConfig, agentId?: string): ModelRef {
   const primary =
-    resolveAgentPrimaryModel(cfg, agentId) ??
+    (agentId
+      ? resolveAgentModelPrimaryValue(resolveAgentConfig(cfg, agentId)?.model)
+      : undefined) ??
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
     DEFAULT_MODEL;
   return (
@@ -54,23 +35,13 @@ function resolveDefaultModelRef(cfg: OpenClawConfig, agentId?: string): SessionD
   );
 }
 
-/** Resolves default display values for a session table scoped to an agent. */
-export function resolveSessionDisplayDefaults(
-  cfg: OpenClawConfig,
-  agentId?: string,
-): SessionDisplayDefaults {
-  return {
-    model: resolveDefaultModelRef(cfg, agentId).model,
-  };
-}
-
 function normalizeCliRuntimeDisplayRef(
   cfg: OpenClawConfig,
   agentId: string | undefined,
-  ref: SessionDisplayModelRef,
-  defaultRef: SessionDisplayModelRef,
+  ref: ModelRef,
+  defaultRef: ModelRef,
   classifyCliProvider: CliProviderClassifier,
-): SessionDisplayModelRef {
+): ModelRef {
   if (!classifyCliProvider(ref.provider)) {
     return ref;
   }
@@ -104,25 +75,16 @@ function normalizeCliRuntimeDisplayRef(
   };
 }
 
-/** Resolves only the model id to show for a session row. */
-export function resolveSessionDisplayModel(
-  cfg: OpenClawConfig,
-  row: SessionDisplayModelRow,
-  classifyCliProvider?: CliProviderClassifier,
-): string {
-  return resolveSessionDisplayModelRef(cfg, row, classifyCliProvider).model;
-}
-
 /** Resolves provider/model display metadata for a session row. */
 export function resolveSessionDisplayModelRef(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,
   classifyCliProvider: CliProviderClassifier = (provider) => isCliProvider(provider, cfg),
   ownerAgentId?: string,
-): SessionDisplayModelRef {
+): ModelRef {
   const agentId =
     ownerAgentId ?? (row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined);
-  const defaultRef = resolveDefaultModelRef(cfg, agentId);
+  const defaultRef = resolveSessionDisplayDefaults(cfg, agentId);
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: row.providerOverride,
     modelOverride: row.modelOverride,

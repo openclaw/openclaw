@@ -4,7 +4,13 @@
 // independent of the Kysely value graph.
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { registerListener } from "../shared/listeners.js";
 import { pruneMapToMaxSize } from "./map-size.js";
+import {
+  isPostgresSqlConnection,
+  type EngineConnection,
+  type SqlStatement,
+} from "./sql-connection.js";
 
 export const { kyselyByDatabase, queryErrorHandlerByDatabase } = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteKyselyCacheState"),
@@ -49,11 +55,7 @@ export function registerNodeSqliteDisposeCallback(
 ): () => void {
   const owner: StatementCacheOwner = db;
   installStatementInvalidation(owner);
-  const callbacks = (owner[disposeCallbacksSymbol] ??= new Set());
-  callbacks.add(callback);
-  return () => {
-    callbacks.delete(callback);
-  };
+  return registerListener((owner[disposeCallbacksSymbol] ??= new Set()), callback);
 }
 
 export function disposeNodeSqliteDependents(
@@ -117,29 +119,19 @@ export function installStatementInvalidation(owner: StatementCacheOwner): void {
       },
     });
   }
-  if (typeof owner.close === "function") {
-    const close = owner.close.bind(owner);
-    Object.defineProperty(owner, "close", {
-      configurable: true,
-      writable: true,
-      value(this: StatementCacheOwner): void {
-        disposeNodeSqliteDependents(this);
-        clearNodeSqliteKyselyCacheForDatabase(this);
-        return close();
-      },
-    });
-  }
-  if (typeof owner[Symbol.dispose] === "function") {
-    const dispose = owner[Symbol.dispose].bind(owner);
-    Object.defineProperty(owner, Symbol.dispose, {
-      configurable: true,
-      writable: true,
-      value(this: StatementCacheOwner): void {
-        disposeNodeSqliteDependents(this);
-        clearNodeSqliteKyselyCacheForDatabase(this);
-        return dispose();
-      },
-    });
+  for (const method of ["close", Symbol.dispose] as const) {
+    if (typeof owner[method] === "function") {
+      const dispose = owner[method].bind(owner);
+      Object.defineProperty(owner, method, {
+        configurable: true,
+        writable: true,
+        value(this: StatementCacheOwner): void {
+          disposeNodeSqliteDependents(this);
+          clearNodeSqliteKyselyCacheForDatabase(this);
+          return dispose();
+        },
+      });
+    }
   }
   Object.defineProperty(owner, statementInvalidationSymbol, {
     configurable: true,
@@ -182,11 +174,14 @@ function queryFitsStatementCache(sql: string, parameters: readonly SQLInputValue
 // The callback must consume the statement synchronously; active-use protection
 // ends when it returns. Only the existing database owner enables retention.
 export function executeWithCachedStatement<Result>(
-  db: DatabaseSync,
+  db: EngineConnection,
   sql: string,
   parameters: readonly SQLInputValue[],
-  execute: (statement: StatementSync) => Result,
+  execute: (statement: SqlStatement) => Result,
 ): Result {
+  if (isPostgresSqlConnection(db)) {
+    return execute(db.prepare(sql));
+  }
   const owner: StatementCacheOwner = db;
   if (
     !owner[statementCacheEnabledSymbol] ||

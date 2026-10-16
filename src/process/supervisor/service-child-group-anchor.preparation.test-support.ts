@@ -90,7 +90,7 @@ export function createHeldAnchorPreparation(
       });
       registerFixtureSourceTransform({
         name: "held-lineage-preparation",
-        filter: /[/\\\\]node-worker-lineage-completion(?:-[A-Za-z0-9_-]+)?\\.[cm]?[jt]s$/,
+        filter: /[/\\\\]service-child-group-anchor(?:-[A-Za-z0-9_-]+)?\\.[cm]?[jt]s$/,
         transform(url, readSource) {
           let original;
           try { original = readSource(); } catch (error) {
@@ -99,8 +99,14 @@ export function createHeldAnchorPreparation(
           }
           emit({ type: "loader-match", url });
           const gate = 'globalThis[Symbol.for("openclaw.anchor-preparation-test")]';
-          return gate + '.emit({type:"lineage-loading"});\\nawait ' + gate + '.released;\\n'
-            + original + '\\n' + gate + '.emit({type:"lineage-loaded"});\\n';
+          // Hold the awaited preparation in both source and standalone output,
+          // where the bundler inlines the lineage module's initialization.
+          const preparation = /(lineageCompletion\\s*=\\s*)([\\s\\S]*?);/;
+          if (!preparation.test(original)) throw new Error("Missing anchor lineage preparation");
+          return original.replace(preparation, (_match, assignment, expression) =>
+            assignment + "await (async () => { " + gate + '.emit({type:"lineage-loading"}); await '
+              + gate + ".released; const loaded = " + expression + "; "
+              + gate + '.emit({type:"lineage-loaded"}); return loaded; })();');
         },
       });
     `,

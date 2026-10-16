@@ -113,11 +113,7 @@ export function scanNodeHostedSkills(
     }
     // Metadata and advertised instructions must come from the same bounded descriptor read.
     const { skill, frontmatter, content } = loaded;
-    if (
-      frontmatter.name?.trim() !== skill.name ||
-      frontmatter.description?.trim() !== skill.description ||
-      candidate.name !== skill.name
-    ) {
+    if (!frontmatter.name?.trim() || candidate.name !== skill.name) {
       warn(
         `node host skill skipped (${skill.filePath}): directory, name, and frontmatter must match`,
       );
@@ -126,7 +122,6 @@ export function scanNodeHostedSkills(
     const contentBytes = Buffer.byteLength(content, "utf8");
     if (
       !NODE_SKILL_NAME_RE.test(skill.name) ||
-      !skill.description ||
       skill.description.length > NODE_SKILL_MAX_DESCRIPTION_LENGTH ||
       contentBytes > NODE_SKILL_MAX_CONTENT_BYTES
     ) {

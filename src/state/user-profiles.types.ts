@@ -1,56 +1,76 @@
 import type { SqlBool } from "kysely";
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
+import type { GatewayConfig } from "../config/types.gateway.js";
+import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import type { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
-import type { UserProfileWriteOperations } from "./user-profile-writes.worker.js";
-import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
-
-export function isUserProfileWriteCommand(command: {
-  type: string;
-}): command is SqliteWorkerCommand<UserProfileWriteOperations> {
-  return (
-    command.type === "userProfiles.setRole" ||
-    command.type === "userProfiles.linkEmail" ||
-    command.type === "userProfiles.ensureEmail" ||
-    command.type === "userProfiles.ensureTailscale" ||
-    command.type === "userProfiles.syncGitHub" ||
-    command.type === "userProfiles.ensureOwner"
-  );
-}
-
-export function isUserProfileCommand(command: {
-  type: string;
-}): command is SqliteWorkerCommand<UserProfileWorkerOperations> {
-  return (
-    isUserProfileWriteCommand(command) ||
-    command.type === "userProfiles.list" ||
-    command.type === "userProfiles.directory" ||
-    command.type === "userProfiles.channelIdentity.change" ||
-    command.type === "userProfiles.avatar.inspect" ||
-    command.type === "userProfiles.avatar.adopt"
-  );
-}
+import type { DB } from "./openclaw-state-db.generated.js";
 
 export const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
 
 export type UserProfileAvatarMime = (typeof USER_PROFILE_AVATAR_MIME_TYPES)[number];
 
+export type UserProfile = Omit<
+  UserProfileListItem,
+  "emails" | "githubIdentity" | "hasAvatar" | "effectiveRole" | "roleSource"
+>;
+
 export type UserProfileOwnerErrorCode = "merge" | "role" | "repair-required";
 
-export type UserProfileDisplay = {
-  id: string;
-  displayName: string | null;
+export type UserProfileDisplay = Pick<UserProfileListItem, "id" | "displayName" | "hasAvatar"> & {
   avatarRevision: string;
-  hasAvatar: boolean;
 };
+
+export type UserProfileAuthority = {
+  profileId: string;
+  role: string | null;
+  githubLogin?: string | null;
+  aliases: string[];
+  display: UserProfileDisplay;
+};
+
+export type UserProfileRoleAuthority = Pick<
+  UserProfileAuthority,
+  "profileId" | "role" | "githubLogin"
+>;
 
 export type CachedGitHubIdentity = { profileId: string; updatedAt: number };
 
+/** A sign-in binding verified earlier: Access email + immutable account ID, or a GitHub login alias. */
+export type CachedGitHubIdentityBinding = { accountId: number; email: string } | { login: string };
+
+export type StoredGitHubIdentity = { accountId: number; login: string };
+
+export type UserProfileGitHubAttribution = Map<string, StoredGitHubIdentity | null>;
+
+export type UserProfileGitHubAttributionRead = {
+  identities: UserProfileGitHubAttribution;
+  canonicalProfileIds: string[];
+};
+
+export type UserChannelAuthorizationReference = Readonly<{ version: 1; id: string }>;
+export type UserChannelAuthorization = {
+  reference: UserChannelAuthorizationReference;
+  subject: string;
+  grant: GatewayAccessGrantRef | null;
+};
+export type UserChannelAuthorizationPolicy = {
+  roles: NonNullable<GatewayConfig["roles"]> | null;
+  identityScopes: NonNullable<NonNullable<GatewayConfig["auth"]>["identityScopes"]> | null;
+};
+
 export type UserChannelIdentity = { channelId: string; accountId: string; senderId: string };
+export type UserChannelIdentitySelector =
+  | UserChannelIdentity
+  | { authorizationId: string; policy: UserChannelAuthorizationPolicy };
 export type UserChannelIdentityLink = { profileId: string; identity: UserChannelIdentity };
 export type UserChannelIdentityAuthorityFacts = {
+  authorization?: UserChannelAuthorization;
   profileId: string;
+  displayName: string | null;
   role: string | null;
   emails: string[];
+  githubAccountIds?: readonly number[];
+  githubLogin?: string;
   loginIdentities: string[];
 };
 
@@ -61,9 +81,21 @@ export type UserChannelIdentityResult<T> =
 
 export type UserChannelIdentityWorkerOperations = {
   "userProfiles.channelIdentity.change": {
-    input: { action: "link" | "unlink"; profileId: string; identity: UserChannelIdentity };
+    input:
+      | { action: "link" | "unlink"; profileId: string; identity: UserChannelIdentity }
+      | { action: "policy"; policy: UserChannelAuthorizationPolicy; configuredOwnersHash?: string }
+      | {
+          action: "authorize";
+          profileId: string;
+          identity: UserChannelIdentity;
+          policy: UserChannelAuthorizationPolicy;
+          grant: GatewayAccessGrantRef | null;
+        };
     output: UserChannelIdentityResult<
-      { kind: "linked"; link: UserChannelIdentityLink } | { kind: "unlinked"; removed: boolean }
+      | { kind: "linked"; link: UserChannelIdentityLink }
+      | { kind: "unlinked"; removed: boolean }
+      | { kind: "policy" }
+      | { kind: "authorized"; reference: UserChannelAuthorizationReference | undefined }
     >;
   };
 };
@@ -77,10 +109,21 @@ export type UserProfileEmailBinding = {
 export type UserProfileAccessFacts = Readonly<{
   profileId: string;
   emails: readonly string[];
+  githubAccountIds?: readonly number[];
   assignedRole: string | null;
+  githubLogin?: string | null;
 }>;
 
+export type UserProfileIdentity = Omit<UserProfileAuthority, "aliases" | "display"> & {
+  aliases: ReadonlySet<string>;
+};
+
 export type PreparedUserProfileIdentity = {
+  readCurrentProfile(
+    this: void,
+    requiredEmailBindingIds?: readonly string[],
+    requiredGithubAccountIds?: readonly number[],
+  ): Pick<UserProfileAccessFacts, "profileId" | "assignedRole" | "githubLogin">;
   readonly emailBindingIds: readonly string[];
   readCurrentFacts(
     this: void,
@@ -114,16 +157,24 @@ export type UserProfilesDatabase = {
     binding_id: string | null;
     created_at: number;
   };
-  user_profile_identities: {
-    provider: string;
-    subject: string;
-    profile_id: string;
-    canonical_login: string | null;
-    created_at: number;
-  };
+  user_profile_identities: DB["user_profile_identities"];
 };
 
 export type ProfileDisplayRow = Pick<
   UserProfilesDatabase["user_profiles"],
-  "id" | "display_name" | "avatar_mime" | "avatar_sha256" | "merged_into" | "updated_at" | "role"
-> & { has_avatar: SqlBool };
+  | "id"
+  | "display_name"
+  | "avatar_mime"
+  | "avatar_sha256"
+  | "merged_into"
+  | "created_at"
+  | "updated_at"
+  | "role"
+> & {
+  has_avatar: SqlBool;
+  githubAccountIds?: readonly number[];
+  githubLogin?: string | null;
+  githubIdentity?: UserProfileListItem["githubIdentity"];
+  /** Present only for the canonical row with its exact local-owner identity binding. */
+  gatewayOwnerCreatedAt?: number;
+};

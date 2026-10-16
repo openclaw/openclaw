@@ -227,10 +227,11 @@ to a workspace installation or an Enterprise Grid org-wide installation. No
 installation-mode setting is required. Slack remains the source of truth for
 which workspaces have granted the installation; OpenClaw then applies the
 configured channel, user, DM, and mention policies to each delivered event.
-Enterprise installs reject bot-authored `message` and `app_mention` events by
-default. Set `allowBots` on the account or channel to admit them under the same
-loop-prevention rules used by workspace installs. OpenClaw retains the org
-installation's `auth.test` `user_id` and `bot_id` for that check.
+Enterprise installs default `allowBots` to `true`, with the same channel access,
+mention, bot-room authorization, and loop-prevention rules as workspace installs.
+Set `allowBots: false` on the account or channel to disable bot-triggered turns.
+OpenClaw retains the org installation's `auth.test` `user_id` and `bot_id` to
+ignore its own messages.
 
 Enterprise support accepts direct Socket Mode or HTTP message, mention,
 membership, reaction, pin, channel-created, channel-renamed, Block Kit action,
@@ -267,7 +268,7 @@ the sending bot's installed workspaces, then selecting one shared workspace.
 An explicit workspace-qualified owner target is preserved. If that verification
 fails, the detached-send guard remains in effect. Other detached or
 proactive calls must provide a workspace-qualified target; bare channel and
-user IDs fail closed because those IDs can be reused by different workspaces.
+user IDs are rejected because those IDs can be reused by different workspaces.
 Actions without a destination parameter, such as `member-info` and
 `emoji-list`, require trusted current Slack conversation context.
 
@@ -290,9 +291,11 @@ per-channel `users` accept raw stable Slack user IDs, `slack:<user-id>`,
 `user:<user-id>`, `team:<team-id>:user:<user-id>`, or `"*"`. Unqualified
 entries compare only the user ID and can match an org-wide user in any
 workspace. Qualified entries compare both the workspace and user ID.
-Enterprise `toolsBySender` keys accept raw stable user IDs, `id:<user-id>`,
-`channel:slack:<user-id>`, or `"*"`. Names, slugs, display names, and email
-addresses fail startup. IDs must use Slack's canonical uppercase prefix and body
+Enterprise `toolsBySender` keys accept `id:<sender-id>`,
+`channel:slack:<sender-id>`, or `"*"`, including stable bot IDs such as
+`id:B0123456789`. Run `openclaw doctor --fix` to migrate unprefixed sender IDs.
+Names, slugs, display names, and email
+addresses fail startup. IDs must use Slack's required uppercase prefix and body
 (for example, `C0123456789` or `U0123456789`); lowercase and short lookalikes
 fail startup. Enterprise accounts cannot enable
 `dangerouslyAllowNameMatching`. Enterprise accounts may set the global

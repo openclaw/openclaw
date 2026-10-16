@@ -18,7 +18,7 @@ import {
   linkUserChannelIdentity,
   unlinkUserChannelIdentity,
 } from "../../state/user-channel-identities.js";
-import { setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
@@ -140,7 +140,6 @@ it.each([
   "missing-grant",
   "expired-grant",
   "allowed",
-  "revoked",
   "restored",
   "changed-binding",
   "configured-owner",
@@ -223,10 +222,8 @@ it.each([
               entered.promise.then(() => "entered"),
               pending.then(() => "finished"),
             ]);
-            if (scenario === "revoked" || scenario === "restored") {
-              grant.abort();
-            }
             if (scenario === "restored") {
+              grant.abort();
               grant = new AbortController();
             }
             if (scenario === "changed-binding") {

@@ -1,4 +1,4 @@
-import type { RuntimeId } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
 
 type QaRuntimeWallClockMetrics = {
   totalWallClockMs: number | null;
@@ -11,26 +11,16 @@ type QaRuntimeSpeedComparison = {
   speedupPercent: number | null;
 };
 
-export type QaRuntimeTiming = QaRuntimeSpeedComparison & {
-  openclaw: QaRuntimeWallClockMetrics;
-  codex: QaRuntimeWallClockMetrics;
-  bootstrap?: {
-    openclaw: QaRuntimeWallClockMetrics;
-    codex: QaRuntimeWallClockMetrics;
-  };
-};
+export type QaRuntimeTiming = ReturnType<typeof summarizeRuntimeParityTiming>;
 
-export type QaRuntimeParityCellTiming = {
-  wallClockMs: number;
-  bootstrapWallClockMs: number;
-};
+export type QaRuntimeParityCellTiming = ReturnType<typeof measureRuntimeParityCellTiming>;
 
 export function measureRuntimeParityCellTiming(params: {
   suiteStartedAt: Date;
   bootstrapFinishedAt?: Date;
   scenarioStartedAt: Date;
   scenarioFinishedAt: Date;
-}): QaRuntimeParityCellTiming {
+}) {
   return {
     // Gateway/provider startup is harness bootstrap, not an agent turn. Keep
     // both measurements so a faster report cannot hide cold-start regressions.
@@ -89,7 +79,7 @@ export function summarizeRuntimeParityTiming(
     openclawBootstrapWallClockMs?: number | null;
     codexBootstrapWallClockMs?: number | null;
   }[],
-): QaRuntimeTiming {
+) {
   const openclaw = summarizeRuntimeWallClock(
     scenarios.flatMap(({ openclawWallClockMs }) =>
       openclawWallClockMs === null ? [] : [openclawWallClockMs],

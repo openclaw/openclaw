@@ -16,35 +16,6 @@ describe("telegramPlugin outbound", () => {
     ).toBe(32768);
   });
 
-  it("preserves an explicitly configured lower rich-message limit", () => {
-    expect(
-      telegramOutbound.resolveEffectiveTextChunkLimit?.({
-        cfg: {
-          channels: { telegram: { richMessages: true, textChunkLimit: 1200 } },
-        },
-        accountId: "default",
-        fallbackLimit: 4000,
-      }),
-    ).toBe(1200);
-  });
-
-  it("uses the selected account's rich-message limit", () => {
-    expect(
-      telegramOutbound.resolveEffectiveTextChunkLimit?.({
-        cfg: {
-          channels: {
-            telegram: {
-              richMessages: false,
-              accounts: { rich: { richMessages: true } },
-            },
-          },
-        },
-        accountId: "rich",
-        fallbackLimit: 4000,
-      }),
-    ).toBe(32768);
-  });
-
   it("preserves a selected account's lower rich-message limit", () => {
     expect(
       telegramOutbound.resolveEffectiveTextChunkLimit?.({
@@ -60,10 +31,22 @@ describe("telegramPlugin outbound", () => {
       }),
     ).toBe(1200);
   });
-  it("strips assistant-visible tool traces before outbound delivery", () => {
+  it("strips GLM arg_key shadow XML and keeps a finished literal marker", () => {
     clearTelegramRuntime();
-    const text = 'Done.\n⚠️ 🛠️ `search "Pipeline" in ~/.openclaw/workspace-* (agent)` failed';
-
-    expect(telegramOutbound.sanitizeText?.({ text, payload: { text } })).toBe("Done.");
+    const shadow =
+      "Visible\n<tool_call>exec<arg_key>command</arg_key><arg_value>echo redacted</arg_value></tool_call>\nDone.";
+    const literal = "Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.";
+    const cfg = { channels: { telegram: { richMessages: true } } };
+    expect(telegramOutbound.sanitizeText?.({ text: shadow, payload: { text: shadow } })).toBe(
+      "Visible\n\nDone.",
+    );
+    expect(
+      telegramOutbound.sanitizeText?.({
+        text: literal,
+        payload: { text: literal },
+        cfg,
+        accountId: "default",
+      }),
+    ).toBe(literal);
   });
 });

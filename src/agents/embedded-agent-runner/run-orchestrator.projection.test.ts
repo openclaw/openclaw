@@ -7,19 +7,29 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runAgentLoopContinue } from "../../../packages/agent-core/src/agent-loop.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   persistSessionTranscriptTurn,
+  replaceSessionEntry,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import * as reconciliation from "../../config/sessions/session-transcript-reconcile.js";
 import { useReconcileWorkerObserver } from "../../config/sessions/session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "../../config/sessions/session-transcript-reconcile.worker.js";
+import { computeBackoff } from "../../infra/backoff.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -30,6 +40,7 @@ import {
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
   installEmbeddedRunnerBaseE2eMocks,
+  installEmbeddedRunnerBackoffE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
 } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
@@ -48,6 +59,7 @@ let runEmbeddedAgent: ProductionRun;
 
 beforeAll(async () => {
   installEmbeddedRunnerBaseE2eMocks();
+  installEmbeddedRunnerBackoffE2eMocks({ computeBackoff, sleepWithAbort: async () => {} });
   installEmbeddedRunnerFastRunE2eMocks({ runEmbeddedAttempt: runAttempt });
   vi.doMock("../models-config.js", () => ({ ensureOpenClawModelsJson: vi.fn() }));
   vi.doMock("./model.js", () => ({
@@ -69,18 +81,29 @@ beforeAll(async () => {
       admission.close();
     }
   };
-});
+  // Preserve the embedded project's cold-import budget after moving to host-process tests.
+}, 600_000);
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   tempRoots.cleanup();
   runAttempt.mockReset();
 });
 
-function fenceProjection(target: SessionTranscriptRuntimeTarget) {
+type ProjectionFence = {
+  held: Promise<void>;
+  joined: Promise<void>;
+  expectDirty: () => void;
+  release: () => void;
+};
+
+function fenceProjection(target: SessionTranscriptRuntimeTarget): ProjectionFence {
   const databaseOptions = { agentId: target.agentId };
   const database = openOpenClawAgentDatabase(databaseOptions);
   // Existing fault-injection pattern: the real owner must rebuild this projection.
@@ -141,16 +164,94 @@ function fenceProjection(target: SessionTranscriptRuntimeTarget) {
 }
 
 describe("embedded retry transcript ownership", () => {
+  it("waits for an earlier transcript rewrite before starting a foreground attempt", async () => {
+    const root = tempRoots.make("openclaw-foreground-projection-");
+    const stateDir = path.join(root, "state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const workspaceDir = path.join(root, "workspace");
+    const agentDir = path.join(root, "agent");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(agentDir, { recursive: true });
+    const config = createEmbeddedAgentRunnerOpenAiConfig(["gpt-5.4-mini"]);
+    setRuntimeConfigSnapshot(config);
+    const target = {
+      agentId: "main",
+      sessionId: "foreground-projection",
+      sessionKey: "agent:main:foreground-projection",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    const history = [{ role: "user" as const, content: "Retain this fact.", timestamp: 1 }];
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await persistSessionTranscriptTurn(target, {
+      messages: history.map((message) => ({ eventId: "seed", message })),
+      touchSessionEntry: false,
+    });
+    await reconciliation.waitForSessionTranscriptIndexReconcile({ agentId: target.agentId });
+    const fence = fenceProjection(target);
+    await fence.held;
+    const waiting = createDeferred();
+    const waitForProjection = reconciliation.waitForSessionTranscriptProjection;
+    vi.spyOn(reconciliation, "waitForSessionTranscriptProjection").mockImplementation((...args) => {
+      const pending = waitForProjection(...args);
+      waiting.resolve();
+      return pending;
+    });
+    runAttempt.mockImplementationOnce(async () => {
+      const manager = await SessionManager.openAsync(target, workspaceDir, {
+        maxBytes: 4096,
+        maxEvents: 20,
+      });
+      expect(manager.buildSessionContext().messages).toEqual(history);
+      return makeEmbeddedRunnerAttempt({
+        sessionIdUsed: target.sessionId,
+        assistantTexts: ["Retained."],
+      });
+    });
+    const outcome = runEmbeddedAgent({
+      ...target,
+      agentDir,
+      workspaceDir,
+      config,
+      prompt: "Recall the fact.",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      timeoutMs: 30_000,
+      runId: "foreground-projection-run",
+      enqueue: immediateEnqueue,
+    }).then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      expect(
+        await Promise.race([
+          waiting.promise.then(() => "projection-wait"),
+          outcome.then((result) => result),
+        ]),
+      ).toBe("projection-wait");
+      fence.expectDirty();
+      expect(runAttempt).not.toHaveBeenCalled();
+      fence.release();
+      await expect(outcome).resolves.toMatchObject({
+        result: { payloads: [{ text: "Retained." }] },
+      });
+    } finally {
+      fence.release();
+      await outcome;
+      await fence.joined;
+      await reconciliation.waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+    }
+  });
+
   it.each([
     ["detached", false, "active", false, "disconnect"],
-    ["detached", true, "active", false, "disconnect"],
     ["durable", true, "active", false, "disconnect"],
     ["durable", false, "active", false, "disconnect"],
     ["durable", false, "active", true, "disconnect"],
-    ["detached", false, "absent", false, "disconnect"],
-    ["durable", false, "idle", false, "disconnect"],
     ["detached", false, "absent", false, "output-limit"],
     ["durable", false, "active", false, "output-limit"],
+    ["detached", false, "absent", false, "output-limit-repeat"],
+    ["detached", false, "absent", false, "output-limit-empty"],
   ] as const)(
     "%s metadata, caller manager=%s, projection=%s, abort=%s, failure=%s",
     async (sessionPersistence, suppliedManager, projection, abort, failure) => {
@@ -175,10 +276,12 @@ describe("embedded retry transcript ownership", () => {
         api: "openai-responses" as const,
         input: ["text" as const],
       };
+      const config = createEmbeddedAgentRunnerOpenAiConfig([model.id]);
+      setRuntimeConfigSnapshot(config);
       const fetchMock = vi
         .fn<typeof fetch>()
         .mockRejectedValue(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
-      if (failure === "output-limit") {
+      if (failure.startsWith("output-limit")) {
         const item = {
           type: "function_call",
           id: "fc_unfinished",
@@ -187,15 +290,16 @@ describe("embedded retry transcript ownership", () => {
           arguments: '{"command":',
           status: "incomplete",
         };
+        const emptyOutput = failure === "output-limit-empty";
         const events = [
-          { type: "response.output_item.added", output_index: 0, item },
+          ...(emptyOutput ? [] : [{ type: "response.output_item.added", output_index: 0, item }]),
           {
             type: "response.incomplete",
             response: {
               id: "response-output-limit",
               status: "incomplete",
               incomplete_details: { reason: "max_output_tokens" },
-              output: [item],
+              output: emptyOutput ? [] : [item],
               usage: { input_tokens: 440_445, output_tokens: 128_000 },
             },
           },
@@ -241,9 +345,11 @@ describe("embedded retry transcript ownership", () => {
       }
       expect(responseMessages.some((message) => message.role === "toolResult")).toBe(false);
       expect(fetchMock).toHaveBeenCalledOnce();
-      if (failure === "output-limit") {
+      if (failure.startsWith("output-limit")) {
         expect(erroredAssistant).toMatchObject({
-          errorCode: "incomplete_tool_call",
+          ...(failure === "output-limit-empty"
+            ? { stopReason: "length", content: [] }
+            : { errorCode: "incomplete_tool_call" }),
           usage: { output: 128_000 },
           diagnostics: [
             expect.objectContaining({
@@ -256,20 +362,27 @@ describe("embedded retry transcript ownership", () => {
       history.push(erroredAssistant);
       const waiting = createDeferred();
       const secondAttempt = createDeferred();
+      let fence: ProjectionFence | undefined;
       const waitForProjection = reconciliation.waitForSessionTranscriptProjection;
       const waitSpy = vi
         .spyOn(reconciliation, "waitForSessionTranscriptProjection")
         .mockImplementation((...args) => {
           const pending = waitForProjection(...args);
-          waiting.resolve();
+          if (fence) {
+            waiting.resolve();
+          }
           return pending;
         });
-      let fence: ReturnType<typeof fenceProjection> | undefined;
       let firstManager: EmbeddedRunAttemptParams["sessionManager"];
+      let nextRequestNumber = 0;
       const controller = new AbortController();
       runAttempt
         .mockImplementationOnce(async (attempt) => {
           expect(attempt).toMatchObject({ provider: model.provider, modelId: model.id });
+          if (!attempt.modelCallSequence) {
+            throw new Error("The run must carry its model request sequence");
+          }
+          nextRequestNumber = ++attempt.modelCallSequence.value;
           firstManager = attempt.sessionManager;
           if (callerOwned) {
             expect(firstManager).toBeDefined();
@@ -305,6 +418,7 @@ describe("embedded retry transcript ownership", () => {
         .mockImplementationOnce(async (attempt) => {
           secondAttempt.resolve();
           expect(attempt).toMatchObject({ provider: model.provider, modelId: model.id });
+          expect(attempt.modelCallSequence).toEqual({ value: nextRequestNumber });
           expect(attempt.prompt).toContain(
             "Continue the current task from the existing transcript",
           );
@@ -313,12 +427,44 @@ describe("embedded retry transcript ownership", () => {
           if (callerOwned) {
             expect(attempt.sessionManager).toBe(firstManager);
             expect(attempt.sessionTarget).toBeUndefined();
-            expect(attempt.sessionManager?.buildSessionContext().messages).toEqual(history);
             fence?.expectDirty();
           } else {
             expect(attempt.sessionManager).toBeUndefined();
             expect(attempt.sessionTarget).toMatchObject(target);
-            expect(SessionManager.open(target).buildSessionContext().messages).toEqual(history);
+          }
+          const resumedHistory = (
+            attempt.sessionManager ?? (await SessionManager.openAsync(target))
+          ).buildSessionContext().messages;
+          expect(resumedHistory.slice(0, history.length)).toEqual(history);
+          if (failure.startsWith("output-limit")) {
+            expect(resumedHistory.slice(history.length)).toEqual([
+              expect.objectContaining({
+                role: "custom",
+                customType: "incomplete-tool-call",
+                content: expect.stringContaining(
+                  failure === "output-limit-empty"
+                    ? "The model response reached the provider's output limit"
+                    : "Split the remaining work into smaller tool calls",
+                ),
+                details: {
+                  reason: "max_output_tokens",
+                  ...(failure === "output-limit-empty"
+                    ? {}
+                    : { toolCallId: "unfinished|fc_unfinished" }),
+                },
+              }),
+            ]);
+            expect(JSON.stringify(resumedHistory.at(-1))).toContain("provider's output limit");
+          } else {
+            expect(resumedHistory).toEqual(history);
+          }
+          if (failure === "output-limit-repeat") {
+            return makeEmbeddedRunnerAttempt({
+              sessionIdUsed: target.sessionId,
+              messagesSnapshot: resumedHistory,
+              lastAssistant: erroredAssistant,
+              currentAttemptAssistant: erroredAssistant,
+            });
           }
           return makeEmbeddedRunnerAttempt({
             sessionIdUsed: target.sessionId,
@@ -332,6 +478,7 @@ describe("embedded retry transcript ownership", () => {
       let outcome: Promise<unknown> | undefined;
       try {
         if (projection !== "absent") {
+          await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
           await persistSessionTranscriptTurn(target, {
             messages: history.map((message, index) => ({ eventId: `seed-${index}`, message })),
             touchSessionEntry: false,
@@ -342,7 +489,7 @@ describe("embedded retry transcript ownership", () => {
           ...target,
           agentDir,
           workspaceDir,
-          config: createEmbeddedAgentRunnerOpenAiConfig([model.id]),
+          config,
           sessionPersistence,
           sessionManager: callerManager,
           prompt: "Check the results.",
@@ -366,7 +513,7 @@ describe("embedded retry transcript ownership", () => {
           fence!.expectDirty();
           if (!callerOwned) {
             expect(runAttempt).toHaveBeenCalledOnce();
-            expect(waitSpy).toHaveBeenCalledOnce();
+            expect(waitSpy).toHaveBeenCalledTimes(2);
             if (abort) {
               controller.abort();
               await expect(outcome).resolves.toMatchObject({ error: { name: "AbortError" } });
@@ -378,7 +525,16 @@ describe("embedded retry transcript ownership", () => {
           }
         }
         await expect(outcome).resolves.toMatchObject({
-          result: { payloads: [{ text: "Verified." }] },
+          result: {
+            payloads: [
+              failure === "output-limit-repeat"
+                ? {
+                    text: "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.",
+                    isError: true,
+                  }
+                : { text: "Verified." },
+            ],
+          },
         });
         expect(runAttempt).toHaveBeenCalledTimes(2);
         expect(fetchMock).toHaveBeenCalledOnce();

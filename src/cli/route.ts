@@ -1,4 +1,3 @@
-// Route-first CLI entry point for commands that can run before full Commander setup.
 import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { type LogLevel, tryParseLogLevel } from "../logging/levels.js";
@@ -24,32 +23,27 @@ function resolveRoutedCliLogLevel(argv: string[]): LogLevel | null | undefined {
     if (!arg || arg === FLAG_TERMINATOR) {
       break;
     }
+    let value: string | undefined;
     if (arg === LOG_LEVEL_FLAG) {
-      const value = args[index + 1];
+      value = args[++index];
       if (!isValueToken(value)) {
         return null;
       }
-      const parsed = tryParseLogLevel(value);
-      if (!parsed) {
-        return null;
-      }
-      logLevel = parsed;
-      index += 1;
+    } else if (arg.startsWith(LOG_LEVEL_EQUALS_PREFIX)) {
+      value = arg.slice(LOG_LEVEL_EQUALS_PREFIX.length);
+    } else {
       continue;
     }
-    if (arg.startsWith(LOG_LEVEL_EQUALS_PREFIX)) {
-      const parsed = tryParseLogLevel(arg.slice(LOG_LEVEL_EQUALS_PREFIX.length));
-      if (!parsed) {
-        return null;
-      }
-      logLevel = parsed;
+    const parsed = tryParseLogLevel(value);
+    if (!parsed) {
+      return null;
     }
+    logLevel = parsed;
   }
 
   return logLevel;
 }
 
-/** Try a lightweight route-first command before falling back to the full CLI program. */
 export async function tryRouteCli(
   argv: string[],
   options: { machineOutput?: boolean } = {},

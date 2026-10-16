@@ -4,6 +4,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
 import {
+  captureUiProof,
   createChatFlowE2eSuite,
   expectRequestCountStable,
   installMockGateway,
@@ -27,6 +28,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 15_000 });
+      await page.locator(".agent-chat__welcome").waitFor({ state: "visible" });
 
       // Offline holds the queue still, so the round-trip stays observable.
       await gateway.setOnline(false);
@@ -61,12 +63,35 @@ suite.define(() => {
       expect(await queueText()).toEqual([...QUEUED]);
       expect(await page.locator(".chat-queue__item--editing").count()).toBe(1);
 
-      await page.keyboard.insertText("then update the docs and the changelog");
-      await page.locator(".chat-queue__edit-submit").click();
+      await rowEditor.fill("日本語の編集");
+      const confirmationConsumed = await rowEditor.evaluate((textarea) => {
+        textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        const end = new CompositionEvent("compositionend", {
+          bubbles: true,
+          data: "日本語の編集",
+        });
+        textarea.dispatchEvent(end);
+        const confirm = new KeyboardEvent("keydown", {
+          key: "Enter",
+          keyCode: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(confirm, "timeStamp", { value: end.timeStamp - 1 });
+        textarea.dispatchEvent(confirm);
+        return confirm.defaultPrevented;
+      });
+      await captureUiProof(suite, page, "queue-ime", "after-confirmation.png");
+      expect(confirmationConsumed).toBe(false);
+      expect(await rowEditor.isVisible()).toBe(true);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await rowEditor.dispatchEvent("keyup", { key: "Enter" });
+      await rowEditor.press("Enter");
 
       await expect
         .poll(queueText, { timeout: 10_000 })
-        .toEqual([QUEUED[0], "then update the docs and the changelog", QUEUED[2]]);
+        .toEqual([QUEUED[0], "日本語の編集", QUEUED[2]]);
+      await expect.poll(() => page.locator(".chat-queue__item--editing").count()).toBe(0);
       expect(await composer.inputValue()).toBe("a separate composer draft");
     } finally {
       await suite.closeBrowserContext(context);

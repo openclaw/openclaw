@@ -1,4 +1,3 @@
-// Openrouter provider module implements model/runtime integration.
 import type {
   GeneratedImageAsset,
   ImageGenerationProvider,
@@ -13,12 +12,8 @@ import {
 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import {
-  assertOkOrThrowHttpError,
-  postJsonRequest,
-  readProviderJsonResponse,
-} from "openclaw/plugin-sdk/provider-http";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
+import { postJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveOpenRouterGenerationRequestContext } from "./generation-request-context.js";
 import { normalizeOpenRouterBaseUrl } from "./provider-catalog.js";
@@ -256,7 +251,7 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
     label: "OpenRouter",
     defaultModel: DEFAULT_MODEL,
     models: [...SUPPORTED_MODELS],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "openrouter", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "openrouter", ...ctx }),
     capabilities: {
       generate: {
         maxCount: MAX_IMAGE_RESULTS,
@@ -297,7 +292,7 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
       // the whole count. Either route fails the batch if any request fails.
       const generated = await Promise.all(
         Array.from({ length: canonicalBaseUrl ? count : 1 }, async () => {
-          const { response, release } = await postJsonRequest({
+          const payload = await postJsonResponse<unknown>({
             url: canonicalBaseUrl ? `${canonicalBaseUrl}/images` : `${baseUrl}/chat/completions`,
             headers,
             body: canonicalBaseUrl
@@ -314,32 +309,25 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
             allowPrivateNetwork,
             ssrfPolicy: req.ssrfPolicy,
             dispatcherPolicy,
+            errorLabel: "OpenRouter image generation failed",
+            responseLabel: "openrouter.image-generation",
+            readOptions: {
+              maxBytes: resolveInlineImageJsonResponseMaxBytes(
+                canonicalBaseUrl ? 1 : count,
+                resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+              ),
+            },
           });
-          try {
-            await assertOkOrThrowHttpError(response, "OpenRouter image generation failed");
-            const payload = await readProviderJsonResponse(
-              response,
-              "openrouter.image-generation",
-              {
-                maxBytes: resolveInlineImageJsonResponseMaxBytes(
-                  canonicalBaseUrl ? 1 : count,
-                  resolveGeneratedMediaMaxBytes(req.cfg, "image"),
-                ),
-              },
-            );
-            const images = canonicalBaseUrl
-              ? parseOpenAiCompatibleImageResponse(normalizeDedicatedImageResponse(payload), {
-                  malformedResponseError: OPENROUTER_IMAGE_MALFORMED_RESPONSE,
-                  sniffMimeType: true,
-                })
-              : extractOpenRouterImagesFromResponse(payload);
-            if (images.length === 0) {
-              throw new Error("OpenRouter image generation response missing image data");
-            }
-            return images;
-          } finally {
-            await release();
+          const images = canonicalBaseUrl
+            ? parseOpenAiCompatibleImageResponse(normalizeDedicatedImageResponse(payload), {
+                malformedResponseError: OPENROUTER_IMAGE_MALFORMED_RESPONSE,
+                sniffMimeType: true,
+              })
+            : extractOpenRouterImagesFromResponse(payload);
+          if (images.length === 0) {
+            throw new Error("OpenRouter image generation response missing image data");
           }
+          return images;
         }),
       );
       return { images: generated.flat(), model };

@@ -35,7 +35,7 @@ validate_pr_temp_storage() {
 path_is_docsish() {
   local path="$1"
   case "$path" in
-    CHANGELOG.md|AGENTS.md|CLAUDE.md|README*.md|docs/*|*.md|*.mdx|mintlify.json|docs.json)
+    CHANGELOG.md|AGENTS.md|CLAUDE.md|README*.md|docs/*|*.md|*.mdx|docs.json)
       return 0
       ;;
   esac
@@ -557,6 +557,29 @@ remove_worktree_if_present() {
       return 1
     fi
   fi
+  # A child changing cwd does not release its parent session's working directory.
+  node - "$registered_path" <<'EOF_NODE' || return 1
+const { spawnSync } = require("node:child_process");
+const target = process.argv[2];
+const scan = spawnSync("lsof", ["-nP", "-d", "cwd", "-Fpn0"], {
+  encoding: "utf8", timeout: 30000, maxBuffer: 16 * 1024 * 1024,
+});
+if (scan.error || scan.status !== 0 || !scan.stdout) {
+  console.error(`Preserving ${target}: unable to inspect process working directories. Retry cleanup after checking lsof and session ownership.`);
+  process.exit(1);
+}
+let pid;
+for (const field of scan.stdout.split("\0")) {
+  const record = field.replace(/^\n/, "");
+  if (record.startsWith("p")) pid = record.slice(1);
+  if (!record.startsWith("n")) continue;
+  const cwd = record.slice(1);
+  if (cwd === target || cwd.startsWith(target + "/")) {
+    console.error(`Preserving ${target}: live process ${pid} has its cwd in this worktree. Defer cleanup until the owning session exits or releases its cwd.`);
+    process.exit(1);
+  }
+}
+EOF_NODE
   [ "${2:-false}" != true ] || return 0
   # One native removal owns both the path and its exact admin entry. A partial
   # deletion still fails; neither repository-wide prune nor orphan trash is safe.

@@ -60,13 +60,26 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
-it.each(
-  (["inspection", "fallback"] as const).flatMap((phase) =>
-    (["forced", "uncertain"] as const).map((cleanupResult) => ({ phase, cleanupResult })),
-  ),
-)(
-  "joins $phase cleanup before returning unavailable ($cleanupResult)",
-  async ({ phase, cleanupResult }) => {
+it.each([
+  { phase: "inspection", cleanupResult: "uncertain", owned: false },
+  { phase: "fallback", cleanupResult: "forced", owned: false },
+  { phase: "inspection", cleanupResult: "forced", owned: true },
+] as const)(
+  "joins $phase cleanup before publishing ownership=$owned ($cleanupResult)",
+  async ({ phase, cleanupResult, owned }) => {
+    let installRoot: string | undefined;
+    let selectedCommand = command;
+    if (owned) {
+      installRoot = await fs.realpath(dirs.make("service-reader-owned-package-"));
+      const entrypoint = path.join(installRoot, "dist", "index.js");
+      await fs.mkdir(path.dirname(entrypoint));
+      await fs.writeFile(
+        path.join(installRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
+      );
+      await fs.writeFile(entrypoint, "// isolated ownership fixture\n");
+      selectedCommand = { programArguments: [process.execPath, entrypoint, "gateway"] };
+    }
     const cleanup = createDeferredCore<"forced" | "uncertain">();
     const joining = createDeferredCore();
     const retainCleanup = () => {
@@ -78,7 +91,7 @@ it.each(
     if (phase === "inspection") {
       boundary.read.mockImplementation(async () => {
         retainCleanup();
-        return state(false);
+        return state(owned, selectedCommand);
       });
     } else {
       boundary.read.mockRejectedValue(
@@ -109,7 +122,16 @@ it.each(
     }
     const result = await work;
     expect(hasCommandProcessCleanupError(result)).toBe(cleanupResult === "uncertain");
-    if (cleanupResult === "forced") {
+    if (owned) {
+      expect(result).toMatchObject({
+        command: selectedCommand,
+        verdict: { kind: "owned", root: installRoot, refreshDefinition: true },
+      });
+      if (typeof result !== "object" || result === null || !("command" in result)) {
+        throw new Error("Expected the owned service selection");
+      }
+      expect(result.command).toBe(selectedCommand);
+    } else if (cleanupResult === "forced") {
       expect(result).toBeNull();
     }
     expect(service.isLoaded).toHaveBeenCalledTimes(phase === "fallback" ? 1 : 0);
@@ -133,51 +155,3 @@ it.each(["inspection", "fallback"] as const)(
     expect(service.isLoaded).toHaveBeenCalledTimes(phase === "fallback" ? 1 : 0);
   },
 );
-
-it("returns the verified command and ownership verdict only after confirmed cleanup", async () => {
-  const installRoot = await fs.realpath(dirs.make("service-reader-owned-package-"));
-  const entrypoint = path.join(installRoot, "dist", "index.js");
-  await fs.mkdir(path.dirname(entrypoint));
-  await fs.writeFile(
-    path.join(installRoot, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
-  );
-  await fs.writeFile(entrypoint, "// isolated ownership fixture\n");
-  const ownedCommand: GatewayServiceCommandConfig = {
-    programArguments: [process.execPath, entrypoint, "gateway"],
-  };
-  const cleanup = createDeferredCore<"forced">();
-  const joining = createDeferredCore();
-  boundary.read.mockImplementation(async () => {
-    retainCommandProcessCleanup(cleanup.promise);
-    resolveCommandProcessSignal()?.addEventListener("abort", () => joining.resolve(), {
-      once: true,
-    });
-    return state(true, ownedCommand);
-  });
-  let selected = false;
-  const work = readManagedGatewayServiceForUpdate({}).then((result) => {
-    selected = true;
-    return result;
-  });
-  try {
-    await Promise.race([
-      joining.promise,
-      work.then(() => {
-        throw new Error("owned command escaped cleanup ownership");
-      }),
-    ]);
-    expect(selected).toBe(false);
-  } finally {
-    cleanup.resolve("forced");
-    await work;
-  }
-  const result = await work;
-  expect(result?.command).toBe(ownedCommand);
-  expect(result?.verdict).toMatchObject({
-    kind: "owned",
-    root: installRoot,
-    refreshDefinition: true,
-  });
-  expect(service.isLoaded).not.toHaveBeenCalled();
-});

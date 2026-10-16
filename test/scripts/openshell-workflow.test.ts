@@ -133,12 +133,12 @@ ${run}`,
       "120",
       "-o",
       packagePath,
-      "https://github.com/NVIDIA/OpenShell/releases/download/v0.0.109/openshell_0.0.109-1_amd64.deb",
+      "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.2/openshell_0.1.2-1_amd64.deb",
     ]);
     if (scenario.curlExit === 0) {
       expect(readNulSeparatedArgs(join(root, "checksum-args"))).toEqual(["--check", "-"]);
       expect(readFileSync(join(root, "checksum-input"), "utf8")).toBe(
-        `0364a21f279023a241d967309ebb0177dadb66bd792eeb3daf542283158ca40f  ${packagePath}\n`,
+        `1f5416ea08f32fdc621f20a2cc0324298e60aba8bbe996459d9e3b44195f23df  ${packagePath}\n`,
       );
     }
     if (scenario.curlExit === 0 && scenario.checksumExit === 0) {

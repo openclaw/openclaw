@@ -10,6 +10,7 @@ import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
 } from "../../../lib/sqlite-transcript-payload.mjs";
+import { childOf, retainedSnapshots, sqliteFamily } from "./fixture-files.mjs";
 import {
   resolveWorkerCellExport,
   resolveWorkerCellFunctionBinding,
@@ -72,15 +73,6 @@ function digest(file) {
 function writeJson(file, value) {
   fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n", { flag: "wx" });
 }
-function childOf(root, file) {
-  const relative = path.relative(root, file);
-  return (
-    relative !== "" &&
-    relative !== ".." &&
-    !relative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relative)
-  );
-}
 function context() {
   const get = (name) => {
     assert(path.isAbsolute(process.env[name] ?? ""), `Missing isolated ${name}`);
@@ -103,31 +95,6 @@ function context() {
     fixture: path.join(artifacts, "project-worktree-fixture.json"),
     importReceipt: path.join(artifacts, "project-worktree-import.json"),
   };
-}
-function sqliteFamily(file) {
-  return Object.fromEntries(
-    ["", "-wal", "-shm", "-journal"].flatMap((suffix) =>
-      fs.existsSync(file + suffix) ? [[suffix || "main", digest(file + suffix)]] : [],
-    ),
-  );
-}
-function retainedSnapshots(roots) {
-  const results = [];
-  function visit(dir) {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const file = path.join(dir, entry.name);
-      if (/^openclaw-(sqlite-readonly-|doctor-lint-state-)/.test(entry.name)) {
-        results.push(file);
-      }
-      if (entry.isDirectory()) {
-        visit(file);
-      }
-    }
-  }
-  for (const root of new Set(roots)) {
-    visit(root);
-  }
-  return results.toSorted((a, b) => a.localeCompare(b));
 }
 function loadFixture(ctx) {
   const f = readJson(ctx.fixture);
@@ -280,7 +247,7 @@ async function prepareSchema(ctx, packageRoot, bindings) {
 }
 
 async function inspectDatabase(owner, file, read) {
-  const before = sqliteFamily(file);
+  const before = sqliteFamily(file, digest);
   const prepared = owner.api.prepare(file);
   assert.notEqual(
     prepared.location,
@@ -313,7 +280,7 @@ async function inspectDatabase(owner, file, read) {
   if (errors.length) {
     throw new AggregateError(errors, "Project startup observer did not settle");
   }
-  assert.deepEqual(sqliteFamily(file), before, "Observer modified source SQLite files");
+  assert.deepEqual(sqliteFamily(file, digest), before, "Observer modified source SQLite files");
   return value;
 }
 

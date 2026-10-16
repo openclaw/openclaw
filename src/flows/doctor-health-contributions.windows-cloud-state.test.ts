@@ -11,10 +11,8 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import { runDoctorHealthRepairs } from "./doctor-repair-flow.js";
@@ -43,9 +41,9 @@ beforeEach(() => {
   vi.stubEnv("OneDriveCommercial", undefined);
 });
 
-afterEach(() => {
+afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   vi.clearAllMocks();
   vi.unstubAllEnvs();
   tempDirs.cleanup();

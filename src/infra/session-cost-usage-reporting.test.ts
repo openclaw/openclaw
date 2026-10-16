@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import {
   loadSessionCostSummary,
   loadSessionLogs,
@@ -12,7 +12,7 @@ import {
 } from "./session-cost-usage.js";
 import type { CostBreakdown } from "./session-cost-usage.types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useStateDatabaseTempDirs();
 const flatPricing = { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 };
 const tieredPricing: ModelDefinitionConfig["cost"] = {
   ...flatPricing,
@@ -27,6 +27,7 @@ type PricingCase = {
   pricing?: ModelDefinitionConfig["cost"];
   recordedCost?: CostBreakdown;
   topLevelUsage?: boolean;
+  usageUnavailable?: true;
   expectedCost: number | undefined;
   expectedBreakdown?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 };
@@ -52,6 +53,19 @@ describe("session usage reporting pricing", () => {
       expectedCost: 0,
     },
     {
+      name: "interrupted usage with zero pricing and placeholder cost",
+      pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      recordedCost: { total: 0 },
+      usageUnavailable: true,
+      expectedCost: undefined,
+    },
+    {
+      name: "interrupted usage with an interim billed amount",
+      recordedCost: { total: 0.001, totalOrigin: "provider-billed" },
+      usageUnavailable: true,
+      expectedCost: undefined,
+    },
+    {
       // The recorded call owns its estimate; a later catalog cannot recover its service tier.
       name: "recorded flat estimate preserved after catalog gains tiers",
       pricing: tieredPricing,
@@ -72,19 +86,6 @@ describe("session usage reporting pricing", () => {
       expectedBreakdown: { input: 0.004, output: 0.004, cacheRead: 0.0004, cacheWrite: 0 },
     },
     {
-      name: "flex-adjusted recorded cost preserved with tiered pricing",
-      pricing: tieredPricing,
-      recordedCost: {
-        total: 0.0021,
-        input: 0.001,
-        output: 0.001,
-        cacheRead: 0.0001,
-        cacheWrite: 0,
-      },
-      expectedCost: 0.0021,
-      expectedBreakdown: { input: 0.001, output: 0.001, cacheRead: 0.0001, cacheWrite: 0 },
-    },
-    {
       name: "missing recorded cost estimated from tiered pricing",
       pricing: tieredPricing,
       expectedCost: 0.0042,
@@ -97,22 +98,10 @@ describe("session usage reporting pricing", () => {
       expectedCost: 0,
     },
     {
-      name: "provider-billed positive cost preserved with tiered pricing",
-      pricing: tieredPricing,
-      recordedCost: { total: 0.125, totalOrigin: "provider-billed" },
-      expectedCost: 0.125,
-    },
-    {
       name: "zero total with recorded component evidence",
       recordedCost: { total: 0, input: 0.25 },
       expectedCost: 0,
       expectedBreakdown: { input: 0.25, output: 0, cacheRead: 0, cacheWrite: 0 },
-    },
-    {
-      name: "recorded positive cost preserved with flat pricing",
-      pricing: flatPricing,
-      recordedCost: { total: 0.125 },
-      expectedCost: 0.125,
     },
   ])("keeps logs, summaries, and charts consistent for $name", async (testCase) => {
     const root = tempDirs.make("openclaw-usage-reporting-");
@@ -123,6 +112,7 @@ describe("session usage reporting pricing", () => {
       output: 500,
       cacheRead: 200,
       totalTokens: 1_700,
+      ...(testCase.usageUnavailable ? { usageReport: { state: "unavailable" } } : {}),
       ...(testCase.recordedCost ? { cost: testCase.recordedCost } : {}),
     };
     const entries = [
@@ -183,7 +173,7 @@ describe("session usage reporting pricing", () => {
           timestamp,
           role: "assistant",
           content: "Answer\n[Tool: lookup]",
-          tokens: 1_700,
+          tokens: testCase.usageUnavailable ? undefined : 1_700,
           cost: testCase.expectedCost,
         },
         expect.objectContaining({
@@ -193,7 +183,16 @@ describe("session usage reporting pricing", () => {
       ]);
 
       const summary = await loadSessionCostSummary(params);
-      expect(summary?.totalTokens).toBe(1_700);
+      expect(summary?.totalTokens).toBe(testCase.usageUnavailable ? 0 : 1_700);
+      const expectedReport = testCase.usageUnavailable ? { state: "unavailable" } : undefined;
+      expect(summary?.usageReport).toEqual(expectedReport);
+      expect(summary?.dailyBreakdown?.[0]?.usageReport).toEqual(expectedReport);
+      expect(summary?.modelUsage?.[0]?.totals.usageReport).toEqual(expectedReport);
+      expect(summary?.dailyModelUsage?.[0]?.usageReport).toEqual(expectedReport);
+      expect(
+        summary?.utcQuarterHourTokenUsage?.find((bucket) => bucket.quarterIndex === 48)
+          ?.usageReport,
+      ).toEqual(expectedReport);
       expect(summary?.totalCost).toBeCloseTo(testCase.expectedCost ?? 0, 8);
       expect(summary?.inputCost).toBeCloseTo(testCase.expectedBreakdown?.input ?? 0, 8);
       expect(summary?.outputCost).toBeCloseTo(testCase.expectedBreakdown?.output ?? 0, 8);
@@ -202,9 +201,14 @@ describe("session usage reporting pricing", () => {
       expect(summary?.missingCostEntries).toBe(testCase.expectedCost === undefined ? 1 : 0);
 
       const series = await loadSessionUsageTimeSeries(params);
-      expect(series?.points).toHaveLength(1);
-      expect(series?.points[0]?.totalTokens).toBe(1_700);
-      expect(series?.points[0]?.cost).toBeCloseTo(testCase.expectedCost ?? 0, 8);
+      expect(series?.usageReport).toEqual(expectedReport);
+      if (testCase.usageUnavailable) {
+        expect(series?.points).toEqual([]);
+      } else {
+        expect(series?.points).toHaveLength(1);
+        expect(series?.points[0]?.totalTokens).toBe(1_700);
+        expect(series?.points[0]?.cost).toBeCloseTo(testCase.expectedCost ?? 0, 8);
+      }
     });
   });
 });

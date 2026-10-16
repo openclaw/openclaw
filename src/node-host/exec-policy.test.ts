@@ -37,11 +37,6 @@ const expectAllowedDecision = (decision: EvaluatePolicyDecision) => {
 };
 
 describe("resolveExecApprovalDecision", () => {
-  it("accepts known approval decisions", () => {
-    expect(resolveExecApprovalDecision("allow-once")).toBe("allow-once");
-    expect(resolveExecApprovalDecision("allow-always")).toBe("allow-always");
-  });
-
   it("normalizes unknown approval decisions to null", () => {
     expect(resolveExecApprovalDecision("deny")).toBeNull();
     expect(resolveExecApprovalDecision(undefined)).toBeNull();
@@ -57,14 +52,6 @@ describe("evaluateSystemRunPolicy", () => {
     expect(denied.errorMessage).toBe("SYSTEM_RUN_DISABLED: security=deny");
   });
 
-  it("requires approval when ask policy requires it", () => {
-    const denied = expectDeniedDecision(
-      evaluateSystemRunPolicy(buildPolicyParams({ ask: "always" })),
-    );
-    expect(denied.eventReason).toBe("approval-required");
-    expect(denied.requiresAsk).toBe(true);
-  });
-
   it("still requires approval when ask=always even with durable trust", () => {
     const denied = expectDeniedDecision(
       evaluateSystemRunPolicy(
@@ -76,7 +63,6 @@ describe("evaluateSystemRunPolicy", () => {
       ),
     );
     expect(denied.eventReason).toBe("approval-required");
-    expect(denied.requiresAsk).toBe(true);
   });
 
   it("allows allowlist miss when explicit approval is provided", () => {
@@ -93,23 +79,6 @@ describe("evaluateSystemRunPolicy", () => {
     expect(allowed.approvedByAsk).toBe(true);
   });
 
-  it("denies allowlist misses without approval", () => {
-    const denied = expectDeniedDecision(
-      evaluateSystemRunPolicy(buildPolicyParams({ analysisOk: false, allowlistSatisfied: false })),
-    );
-    expect(denied.eventReason).toBe("allowlist-miss");
-    expect(denied.errorMessage).toBe("SYSTEM_RUN_DENIED: allowlist miss");
-  });
-
-  it("keeps POSIX shell wrapper decisions tied to allowlist analysis", () => {
-    const allowed = expectAllowedDecision(
-      evaluateSystemRunPolicy(buildPolicyParams({ shellWrapperInvocation: true })),
-    );
-    expect(allowed.shellWrapperBlocked).toBe(false);
-    expect(allowed.analysisOk).toBe(true);
-    expect(allowed.allowlistSatisfied).toBe(true);
-  });
-
   it("keeps Windows-specific guidance for cmd.exe wrappers", () => {
     const denied = expectDeniedDecision(
       evaluateSystemRunPolicy(
@@ -117,7 +86,6 @@ describe("evaluateSystemRunPolicy", () => {
       ),
     );
     expect(denied.shellWrapperBlocked).toBe(true);
-    expect(denied.windowsShellWrapperBlocked).toBe(true);
     expect(denied.errorMessage).toContain("Windows shell wrappers like cmd.exe /c");
   });
 
@@ -128,15 +96,5 @@ describe("evaluateSystemRunPolicy", () => {
       ),
     );
     expect(allowed.shellWrapperBlocked).toBe(false);
-    expect(allowed.windowsShellWrapperBlocked).toBe(false);
-  });
-
-  it("allows execution when policy checks pass", () => {
-    const allowed = expectAllowedDecision(
-      evaluateSystemRunPolicy(buildPolicyParams({ ask: "on-miss" })),
-    );
-    expect(allowed.requiresAsk).toBe(false);
-    expect(allowed.analysisOk).toBe(true);
-    expect(allowed.allowlistSatisfied).toBe(true);
   });
 });

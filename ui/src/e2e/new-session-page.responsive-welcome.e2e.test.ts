@@ -1,8 +1,10 @@
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureNewSessionComposerUiProof,
+  captureUiProofEnabled,
   createNewSessionPageE2eSuite,
   installMockGateway,
   waitForGatewayRecoveryScope,
@@ -11,7 +13,7 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
-  it.each([1, 2])("stacks phone setup selectors with %s agents", async (agentCount) => {
+  it.each([1, 2])("keeps phone setup selectors on one row with %s agents", async (agentCount) => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, hasTouch: true },
       async ({ page }) => {
@@ -75,6 +77,14 @@ suite.define(() => {
           // Measure only after the shell mode, controls, and container layout settle.
           await waitForLayoutSettled(page, ".new-session-page__triggers button");
           await captureNewSessionComposerUiProof(suite, page, `mobile-setup-${width}.png`);
+          if (captureUiProofEnabled && width === 390 && agentCount === 2) {
+            await evaluateControlUiContext(page, (context) => context.theme.setMode("dark"));
+            await expect
+              .poll(() => page.locator("html").getAttribute("data-theme-mode"))
+              .toBe("dark");
+            await captureNewSessionComposerUiProof(suite, page, "mobile-setup-dark.png");
+            await evaluateControlUiContext(page, (context) => context.theme.setMode("light"));
+          }
           const layout = await selectors.evaluateAll((buttons) =>
             buttons.map((button) => {
               const box = button.getBoundingClientRect();
@@ -85,14 +95,18 @@ suite.define(() => {
                 left: box.left,
                 right: box.right,
                 height: box.height,
+                width: box.width,
               };
             }),
           );
-          expect(new Set(layout.map((box) => box.row)).size).toBe(width <= 560 ? layout.length : 1);
+          expect(new Set(layout.map((box) => box.row)).size).toBe(1);
           for (const [index, box] of layout.entries()) {
             expect(box.left).toBeGreaterThanOrEqual(0);
             expect(box.right).toBeLessThanOrEqual(width);
             expect(box.height).toBeGreaterThanOrEqual(width <= 560 ? 44 : 26);
+            if (mobile) {
+              expect(box.width).toBeGreaterThanOrEqual(44);
+            }
             const next = layout[index + 1];
             if (next && box.row === next.row) {
               expect(box.right).toBeLessThanOrEqual(next.left);
@@ -100,6 +114,17 @@ suite.define(() => {
           }
         }
         await page.setViewportSize({ width: 320, height: 700 });
+        for (const selector of await selectors.all()) {
+          await selector.click();
+          await expect.poll(() => selector.getAttribute("aria-expanded")).toBe("true");
+          await page.keyboard.press("Escape");
+          await expect.poll(() => selector.getAttribute("aria-expanded")).toBe("false");
+          await selector.focus();
+          await page.keyboard.press("Enter");
+          await expect.poll(() => selector.getAttribute("aria-expanded")).toBe("true");
+          await page.keyboard.press("Escape");
+          await expect.poll(() => selector.getAttribute("aria-expanded")).toBe("false");
+        }
         await checkout.click();
         const baseRef = page.locator("#new-session-worktree-base-ref");
         await baseRef.fill("feature/mobile-layout-with-a-long-branch-name");
@@ -142,8 +167,100 @@ suite.define(() => {
     });
   });
 
-  it("keeps recent sessions visible on phone layouts", async () => {
-    await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
+  it("keeps recent-chat timestamps on one right-aligned line in a narrow column", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const now = Date.now();
+      const checkout = (branch?: string) => ({
+        worktree: { repoRoot: "/workspace/workspace-openclaw", ...(branch ? { branch } : {}) },
+      });
+      await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": {
+            count: 4,
+            defaults: { contextTokens: null, model: null, modelProvider: null },
+            path: "",
+            sessions: [
+              {
+                key: "agent:main:dashboard:theme",
+                kind: "direct",
+                label: "Install and set up theme",
+                updatedAt: now - 5_000,
+                ...checkout("neat-lobster"),
+              },
+              {
+                key: "agent:main:dashboard:pr",
+                kind: "direct",
+                label: "I'll pull the PR details and diff from GitHub and summarize the review",
+                updatedAt: now - 32 * 60_000,
+                ...checkout(),
+              },
+              {
+                key: "agent:main:dashboard:clawhub",
+                kind: "direct",
+                label: "ClawHub app detection via deeplinks",
+                updatedAt: now - 2 * 86_400_000,
+                ...checkout("tender-krill"),
+              },
+              {
+                key: "agent:main:dashboard:ads",
+                kind: "direct",
+                label: "Stop Facebook and Google ads",
+                updatedAt: now - 5 * 86_400_000,
+              },
+            ],
+            ts: now,
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}new`);
+      const rows = page.locator(".agent-chat__recent");
+      await expect.poll(() => rows.count()).toBe(4);
+      await page.evaluate(() => document.fonts.ready);
+      // A narrow chat pane; the second pass lets inherited text wrap, as a
+      // theme or plugin stylesheet may, which must not squeeze the timestamp.
+      await page.addStyleTag({ content: ".agent-chat__recents { width: 320px; }" });
+      for (const textWrap of ["default", "inherited-wrap"] as const) {
+        if (textWrap === "inherited-wrap") {
+          await page.addStyleTag({
+            content: ".agent-chat__recent-time { white-space: normal; }",
+          });
+        }
+        await waitForLayoutSettled(page, ".agent-chat__recent");
+        await captureNewSessionComposerUiProof(suite, page, `recent-chats-narrow-${textWrap}.png`, {
+          surface: page.locator(".agent-chat__recents"),
+          content: [rows.first()],
+        });
+        const layout = await rows.evaluateAll((elements) =>
+          elements.map((row) => {
+            const time = row.querySelector<HTMLElement>(".agent-chat__recent-time")!;
+            const name = row.querySelector<HTMLElement>(".agent-chat__recent-name")!;
+            const lineHeight = Number.parseFloat(getComputedStyle(time).lineHeight);
+            return {
+              text: time.textContent,
+              timeRight: Math.round(time.getBoundingClientRect().right),
+              timeHeight: time.getBoundingClientRect().height,
+              lineHeight,
+              timeClipped: time.scrollWidth > time.clientWidth,
+              nameTruncated: name.scrollWidth > name.clientWidth,
+              rowRight: Math.round(row.getBoundingClientRect().right),
+            };
+          }),
+        );
+        expect(new Set(layout.map((row) => row.timeRight)).size, JSON.stringify(layout)).toBe(1);
+        for (const row of layout) {
+          expect(row.timeHeight, JSON.stringify(row)).toBeLessThanOrEqual(row.lineHeight + 1);
+          expect(row.timeClipped, JSON.stringify(row)).toBe(false);
+          expect(row.timeRight).toBeLessThanOrEqual(row.rowRight);
+        }
+        // The left side gives up the width: the long title truncates instead.
+        expect(layout[1]!.nameTruncated).toBe(true);
+      }
+    });
+  });
+
+  it("keeps the mobile composer within reach and lets long prompts scroll", async () => {
+    await suite.withPage({ viewport: { width: 320, height: 568 } }, async ({ page }) => {
       await installMockGateway(page, {
         methodResponses: {
           "sessions.list": {
@@ -165,7 +282,32 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}new`);
       await expect.poll(() => page.locator(".agent-chat__recent").count()).toBe(1);
-      await expect.poll(() => page.locator(".agent-chat__recent").isVisible()).toBe(true);
+      expect(await page.locator(".agent-chat__recent").isVisible()).toBe(false);
+      const scroll = page.locator(".new-session-page__scroll");
+      const composer = page.locator(".new-session-page__composer");
+      const textarea = page.locator(".new-session-page__message");
+      await waitForLayoutSettled(page, ".new-session-page__composer");
+      expect(await scroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBe(
+        0,
+      );
+      const bottomGap = await composer.evaluate(
+        (element) => innerHeight - element.getBoundingClientRect().bottom,
+      );
+      expect(bottomGap).toBeGreaterThanOrEqual(0);
+      expect(bottomGap).toBeLessThanOrEqual(16);
+
+      await textarea.fill("A line of a longer first prompt.\n".repeat(20));
+      await waitForLayoutSettled(page, ".new-session-page__composer");
+      await composer.scrollIntoViewIfNeeded();
+      expect(await scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      await textarea.fill("");
+      await waitForLayoutSettled(page, ".new-session-page__composer");
+      expect(await scroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBe(
+        0,
+      );
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      expect(await page.locator(".agent-chat__recent").isVisible()).toBe(true);
     });
   });
 
@@ -209,6 +351,14 @@ suite.define(() => {
         { width: 390, height: 844 },
       ]) {
         await page.setViewportSize(viewport);
+        // CSS resizes before the shell commits its drawer layout.
+        await page
+          .locator(viewport.width === 390 ? ".shell--mobile-nav" : ".shell:not(.shell--mobile-nav)")
+          .waitFor();
+        await waitForLayoutSettled(
+          page,
+          ".new-session-page__composer .chat-reply-preview, .new-session-page__composer .chat-reply-preview button",
+        );
         await captureNewSessionComposerUiProof(
           suite,
           page,
@@ -221,6 +371,10 @@ suite.define(() => {
             .getBoundingClientRect();
           const button = element.querySelector("button")!.getBoundingClientRect();
           return {
+            viewport: { width: innerWidth, height: innerHeight },
+            bar: bar.toJSON(),
+            text: text.toJSON(),
+            button: button.toJSON(),
             height: bar.height,
             textBeforeButton: text.right <= button.left,
             sameRow: Math.abs(text.top + text.height / 2 - button.top - button.height / 2) <= 1,
@@ -236,7 +390,7 @@ suite.define(() => {
           };
         });
         expect(layout.height).toBeLessThanOrEqual(48);
-        expect(layout).toMatchObject({
+        expect(layout, JSON.stringify(layout)).toMatchObject({
           textBeforeButton: true,
           sameRow: true,
           buttonContained: true,

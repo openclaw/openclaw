@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
-import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator-errors.js";
 import {
   classifyAcceptedChatSendFailure,
   runAcceptedChatSendDispatch,
@@ -20,16 +19,6 @@ describe("accepted chat-send retry classification", () => {
       name: "post-ACK projection unavailability before execution",
       params: { error: projectionError, phase: "post-ack" as const },
       expected: "retry",
-    },
-    {
-      name: "projection unavailability after model start",
-      params: { error: projectionError, phase: "post-ack" as const, executionStarted: true },
-      expected: "reconcile",
-    },
-    {
-      name: "projection unavailability after observable side effects",
-      params: { error: projectionError, phase: "post-ack" as const, sideEffectsObserved: true },
-      expected: "reconcile",
     },
     {
       name: "an unclassified dispatch failure",
@@ -82,9 +71,12 @@ describe("accepted chat-send retry classification", () => {
 });
 
 it.each([false, true])(
-  "never replays a dispatch after lifecycle contention (effects=%s)",
+  "never replays a dispatch after SQLite contention (effects=%s)",
   async (effects) => {
-    const error = new StateDatabaseCoordinatorContentionError("state-lifecycle");
+    const error = Object.assign(new Error("database is locked"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 5,
+    });
     const operation = vi.fn().mockRejectedValue(error);
     const waitForRetry = vi.fn();
     await expect(

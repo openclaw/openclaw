@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
-import { readEmittedModuleRegions } from "./emitted-module-regions.mts";
 import type { NativeTypeScriptParser } from "./native-typescript.mts";
-import { buildUpdateConfigRuntimeAlias } from "./update-config-runtime-compat.mts";
+import { isUpdateConfigRuntimeAlias } from "./update-config-runtime-compat.mts";
 
 export type UpdateCompatibilityOrigin = { module: string; symbol: string };
 
@@ -52,7 +51,7 @@ function inspectModule(file: string, sourceFile: ts.SourceFile, sourceModule?: s
     const resolvedFile = target(specifier);
     return resolvedFile ? { file: resolvedFile, symbol } : { external: specifier, symbol };
   };
-  const regions = sourceModule === undefined ? readEmittedModuleRegions(sourceFile.text) : [];
+  const regions = [...sourceFile.text.matchAll(/^\/\/#region (.+)$/gm)];
   let regionIndex = 0;
   let regionOwner: string | undefined;
   for (const statement of sourceFile.statements) {
@@ -118,7 +117,7 @@ function inspectModule(file: string, sourceFile: ts.SourceFile, sourceModule?: s
       if (!region || region.index >= statement.getStart()) {
         break;
       }
-      regionOwner = region.owner;
+      regionOwner = region[1];
       regionIndex += 1;
     }
     const owner = sourceModule ?? regionOwner;
@@ -184,8 +183,8 @@ export class ModuleGraph {
         // Only the complete generated read contract proves delegation. Unknown wrappers
         // must still fail provenance tracing; never execute a release to discover exports.
         if (
-          source ===
-          buildUpdateConfigRuntimeAlias(
+          isUpdateConfigRuntimeAlias(
+            source,
             delegatedTarget,
             this.parser.parseSourceFile(targetFile, targetSource),
           )

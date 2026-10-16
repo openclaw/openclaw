@@ -1,5 +1,6 @@
 import { createHook } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import { addAbortListener } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -77,17 +78,21 @@ it.each(["before traversal", "during traversal", "root resolution", "safe-root s
   },
 );
 
-it.each(["metadata", "files"] as const)(
+it.for(["metadata", "files"] as const)(
   "bounds pending promise resources while %s operations are blocked",
-  async (phase) => {
+  async (phase, { signal }) => {
     const root = await fs.realpath(tempDirs.make("workspace-inventory-pending-"));
     const files = Array.from({ length: 512 }, (_, index) => `file-${index}.txt`);
     await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "inside")));
     const gate = createDeferred();
+    const allStarted = createDeferred();
     let started = 0;
     const pause = async (target: unknown) => {
       if (String(target).startsWith(root + path.sep)) {
         started++;
+        if (started === 4) {
+          allStarted.resolve();
+        }
         await gate.promise;
       }
     };
@@ -120,12 +125,15 @@ it.each(["metadata", "files"] as const)(
       baseCommit: null,
       includePaths: new Set(files),
     });
+    const cancelWait = addAbortListener(signal, () => allStarted.reject(signal.reason));
     try {
-      await vi.waitFor(() => expect(started).toBe(4));
+      await Promise.race([allStarted.promise, scan]);
+      expect(started).toBe(4);
       // Observe queued resources, not limiter internals: idle paths must not
       // each retain a promise graph while the active I/O is blocked.
       expect(pendingPromises.size).toBeLessThan(files.length);
     } finally {
+      cancelWait[Symbol.dispose]();
       hook.disable();
       gate.resolve();
       await Promise.allSettled([scan]);

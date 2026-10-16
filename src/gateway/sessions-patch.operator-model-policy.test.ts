@@ -5,8 +5,9 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
 
+// mock-isolation: Model-policy fixtures intentionally have no ACP metadata and must not open real session stores.
 vi.mock("../acp/runtime/session-meta-readonly.js", () => ({
-  readAcpSessionMetaForEntry: () => undefined,
+  readAcpSessionMetaForEntryAsync: async () => undefined,
 }));
 
 const key = "agent:main:model-policy";
@@ -88,7 +89,6 @@ describe("session model patches under operator policy", () => {
   it.each([
     { model: "fixture/blocked", allowed: false },
     { model: "blocked", allowed: false },
-    { model: "chosen", allowed: true },
     { model: null, allowed: true },
     { model: "fixture/allowed", allowed: false, change: "source" },
     { model: "fixture/allowed", allowed: false, change: "model-policy" },
@@ -107,8 +107,8 @@ describe("session model patches under operator policy", () => {
         if (!result.ok) {
           throw new Error(result.error.message);
         }
-        expect(result.entry.providerOverride).toBe(model === null ? undefined : "fixture");
-        expect(result.entry.modelOverride).toBe(model === null ? undefined : "allowed");
+        expect(result.entry.providerOverride).toBeUndefined();
+        expect(result.entry.modelOverride).toBeUndefined();
       } else {
         expect(result).toMatchObject({
           ok: false,
@@ -128,8 +128,12 @@ describe("session model patches under operator policy", () => {
 
   it("retains the exact selected-model guard until the write commits", async () => {
     const value = fixture();
+    const before = structuredClone(value.initial);
     const result = await value.project("chosen");
-    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({
+      ok: true,
+      entry: { providerOverride: "fixture", modelOverride: "allowed", contextWindow: "extended" },
+    });
     if (!result.ok) {
       throw new Error(result.error.message);
     }
@@ -139,6 +143,6 @@ describe("session model patches under operator policy", () => {
       code: "FORBIDDEN",
       message: expect.stringContaining("operator role cannot use this model"),
     });
-    expect(value.initial.modelOverride).toBe("blocked");
+    expect(value.initial).toEqual(before);
   });
 });

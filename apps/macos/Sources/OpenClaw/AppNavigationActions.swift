@@ -62,8 +62,20 @@ enum AppNavigationActions {
             search: DashboardRouteMap.custodianOnboardingSearch)
     }
 
+    static func openDashboardOnboardingAndWait() async throws {
+        let generation = self.presentationGeneration
+        let result = await DashboardManager.shared.show(
+            atPath: DashboardRouteMap.custodianPagePath,
+            search: DashboardRouteMap.custodianOnboardingSearch,
+            target: .primary,
+            ifCurrent: { generation == self.presentationGeneration },
+            waitForLoad: true,
+            reportErrors: false)
+        try result.get()
+    }
+
     static func openChat(sessionKey: String? = nil, agentID: String? = nil, draft: String? = nil) {
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.shared.activate()
         if AppStateStore.shared.nativeExperienceEnabled {
             WebChatManager.shared.show(sessionKey: sessionKey, agentID: agentID, draft: draft)
             return
@@ -107,7 +119,7 @@ enum AppNavigationActions {
                 let alert = NSAlert()
                 alert.messageText = "Could Not Open Chat"
                 alert.informativeText = "Connect to the Gateway, then select this conversation in the Dashboard."
-                alert.runModal()
+                AppActivation.shared.presentAlert(alert)
             }
         }
     }
@@ -118,7 +130,7 @@ enum AppNavigationActions {
     }
 
     static func openConnection(tab: ConnectionTab = .connection) {
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.shared.activate()
         ConnectionWindowOpener.shared.open(tab: tab, debugEnabled: AppStateStore.shared.debugPaneEnabled)
     }
 

@@ -3,6 +3,7 @@ import { afterEach, beforeAll, describe, expect, it, vi, type MockInstance } fro
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayTool } from "../../agents/tools/in-process-gateway.js";
 import type { CliDeps } from "../../cli/deps.types.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
@@ -86,6 +87,7 @@ async function withCleanupFixture(
       channels: { discord: { threadBindings: { enabled: true } } },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const close = vi.fn<AcpRuntime["close"]>(async () => {});
     const ensureSession = vi.fn<AcpRuntime["ensureSession"]>(async (input) => ({
       agentId: input.agentId,
@@ -149,6 +151,8 @@ async function withCleanupFixture(
     const socket = vi
       .spyOn(gatewayCall, "callGateway")
       .mockRejectedValue(new Error("Raw WebSocket transport is unavailable"));
+    // Only deadline scenarios advance the RPC clock; filesystem work must not consume it.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     try {
       await withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
         run({
@@ -181,6 +185,7 @@ async function withCleanupFixture(
         }),
       );
     } finally {
+      vi.useRealTimers();
       await disposeAcpSessionManagerInstance(manager, "fixture-cleanup");
       managerTesting.resetAcpSessionManagerForTests();
       unregisterAcpRuntimeBackend(backendId);
@@ -366,7 +371,6 @@ describe("failed ACP provisional cleanup", () => {
         await withPluginRuntimeGatewayRequestScope(
           { ...scope, context, resolveGatewayContext: () => context },
           async () => {
-            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
             const settled = vi.fn();
             const cleaning = cleanup({
               ...initialized,
@@ -393,7 +397,6 @@ describe("failed ACP provisional cleanup", () => {
                 boundary === "before admission" ? before : undefined,
               );
             } finally {
-              vi.useRealTimers();
               release.resolve();
               await cleaning;
               await Promise.allSettled(executions);

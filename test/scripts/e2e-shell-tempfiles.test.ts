@@ -336,6 +336,44 @@ run_wizard_cmd failing-wizard fake-state "node fake-wizard" send_noop false
     }
   });
 
+  it("delivers wizard input and EOF without retaining an inherited writer", async () => {
+    const tempRoot = tempDirs.make("openclaw-onboard-fifo-eof-");
+    const fixturePath = path.join(tempRoot, "wizard-eof.sh");
+    await writeFile(
+      fixturePath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+export OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY=1
+export OPENCLAW_ONBOARD_E2E_TMPDIR=${JSON.stringify(tempRoot)}
+OPENCLAW_ENTRY=node
+openclaw_test_state_create() { :; }
+source scripts/e2e/lib/onboard/scenario.sh
+
+openclaw_e2e_run_script_with_pty() { cat >"$2"; }
+send_and_close() {
+  printf 'wizard input\\n' >&3
+  exec 3>&-
+}
+run_wizard_cmd eof-wizard fake-state cat send_and_close false
+printf 'recorded input:'
+cat "$WIZARD_LOG_PATH"
+test -z "$(find "$ONBOARD_TMP_DIR" -name '*.fifo.*')"
+cleanup_onboard_artifacts
+test ! -e "$ONBOARD_TMP_DIR"
+`,
+    );
+
+    const result = spawnSync("bash", [fixturePath], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("recorded input:wizard input\n");
+  });
+
   it("does not wait for a skills prompt after the ready state renders", async () => {
     const tempRoot = tempDirs.make("openclaw-onboard-skills-ready-");
     const fixturePath = path.join(tempRoot, "skills-ready.sh");

@@ -8,7 +8,7 @@ import {
   clampTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { terminateManagedChild } from "../../lib/managed-child-process.mts";
-import { resolveNpmRunner } from "../../npm-runner.mts";
+import { resolveNpmRunner, type NpmRunnerParams } from "../../npm-runner.mts";
 import { resolvePnpmRunner } from "../../pnpm-runner.mts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../windows-cmd-helpers.mjs";
 import type { CommandResult, RunOptions } from "./types.ts";
@@ -24,30 +24,8 @@ const HOST_COMMAND_SPAWN_ERROR_PREFIX = "__OPENCLAW_HOST_COMMAND_SPAWN_ERROR__";
 const HOST_COMMAND_TIMEOUT_PREFIX = "__OPENCLAW_HOST_COMMAND_TIMEOUT__";
 let progressStderrDepth = 0;
 
-type HostCommandInvocation = {
-  args: string[];
-  command: string;
-  env?: NodeJS.ProcessEnv;
-  shell?: boolean;
-  windowsVerbatimArguments?: boolean;
-};
-
-type ResolveHostCommandOptions = {
-  comSpec?: string;
-  env?: NodeJS.ProcessEnv;
-  execPath?: string;
-  existsSync?: (path: string) => boolean;
-  platform?: NodeJS.Platform;
-};
-
-function hostInvocationFromRunner(runner: HostCommandInvocation): HostCommandInvocation {
-  if (runner.env === undefined) {
-    const invocation = { ...runner };
-    delete invocation.env;
-    return invocation;
-  }
-  return runner;
-}
+type HostCommandInvocation = Omit<ReturnType<typeof resolveNpmRunner>, "packageJsonPath">;
+type ResolveHostCommandOptions = Omit<NpmRunnerParams, "npmArgs">;
 
 export function say(message: string): void {
   const stream = progressStderrDepth > 0 ? process.stderr : process.stdout;
@@ -383,7 +361,7 @@ export function resolveHostCommandInvocation(
   const comSpec = options.comSpec ?? resolveWindowsCmdExePath(env);
 
   if (isBareCommand(command, "pnpm")) {
-    const runner = resolvePnpmRunner({
+    return resolvePnpmRunner({
       comSpec,
       env,
       npmExecPath: env.npm_execpath,
@@ -391,11 +369,10 @@ export function resolveHostCommandInvocation(
       platform,
       pnpmArgs: args,
     });
-    return hostInvocationFromRunner(runner);
   }
 
   if (isBareCommand(command, "npm")) {
-    const runner = resolveNpmRunner({
+    return resolveNpmRunner({
       comSpec,
       env,
       execPath: options.execPath ?? process.execPath,
@@ -403,7 +380,6 @@ export function resolveHostCommandInvocation(
       npmArgs: args,
       platform,
     });
-    return hostInvocationFromRunner(runner);
   }
 
   const extension = portableExtension(command);
@@ -436,7 +412,7 @@ export function run(command: string, args: string[], options: RunOptions = {}): 
       input: options.input,
       killSignal: "SIGKILL",
       maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
-      stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       shell: invocation.shell,
       timeout: timeoutMs,
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,

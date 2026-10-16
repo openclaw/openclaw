@@ -10,18 +10,7 @@ export type ManagedHandoffStoreDefect =
   | "unreadable-database"
   | "undecodable-record";
 
-/**
- * Coordination state for updates lives in a shared temp directory, so anything
- * that lands there — an interrupted first write, an operator clearing the file,
- * a half-written page — used to refuse config mutation and native service
- * operations for every install root on the host, permanently and with no
- * in-product recovery. Updates cannot have a state that ends that way.
- *
- * Retain the evidence instead of trusting or deleting it: move the store aside
- * under a name that records the defect, and let the caller open a fresh one. The
- * retained copy keeps whatever diagnostics the failure left behind, while nothing
- * inside it is read back or believed.
- */
+/** Retain unusable coordination state for diagnostics before the caller provisions its replacement. */
 export function quarantineManagedHandoffStore(
   databasePath: string,
   defect: ManagedHandoffStoreDefect,

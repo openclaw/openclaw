@@ -3,35 +3,28 @@ import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sani
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { logVerbose } from "../../globals.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import type { PartialReplyPayload } from "../get-reply-options.types.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import {
-  HEARTBEAT_TOKEN,
-  isSilentReplyPayloadText,
-  isSilentReplyPrefixText,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-} from "../tokens.js";
-import type { ReplyPayload } from "../types.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
+import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { createBlockReplyDeliveryHandler, type DirectBlockDelivery } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { hasCommittedReplyOperationOutcome } from "./reply-run-registry.js";
 
-type AgentTurnPresentation = {
-  classifyStreamingPartial: (payload: ReplyPayload) => { text?: string; skip: boolean };
-  sanitizeStreamingText: (
-    text: string | undefined,
-    errorContext: boolean,
-  ) => { text?: string; skip: boolean };
-  normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
-  presentWithTyping: (
-    typingPromise: Promise<void>,
-    startPresentation: () => boolean | void | Promise<boolean | void>,
-  ) => Promise<boolean | void>;
-  blockReplyHandler: ReturnType<typeof createBlockReplyDeliveryHandler> | undefined;
-};
+export async function deliverPreparedBlockReply(
+  opts: Pick<GetReplyOptions, "onPreparedBlockReply" | "onBlockReply"> | undefined,
+  payload: ReplyPayload,
+  context?: BlockReplyContext,
+): Promise<void> {
+  if (opts?.onPreparedBlockReply) {
+    for (const plan of createStructuredOutboundPayloadPlan([payload])) {
+      await opts.onPreparedBlockReply(plan, context);
+    }
+  } else {
+    await opts?.onBlockReply?.(payload, context);
+  }
+}
 
 /** Builds the channel-presentation callbacks shared by CLI and embedded runs. */
 export function createAgentTurnPresentation(params: {
@@ -39,8 +32,8 @@ export function createAgentTurnPresentation(params: {
   replyMediaContext: ReplyMediaContext;
   directBlockDeliveries: DirectBlockDelivery[];
   heartbeatState: { didLogStrip: boolean };
-}): AgentTurnPresentation {
-  const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+}) {
+  const classifyReplyText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
     let text = payload.text;
     const reply = resolveSendableOutboundReplyParts(payload, { text: "" });
     if (params.turn.followupRun.run.silentExpected) {
@@ -57,17 +50,8 @@ export function createAgentTurnPresentation(params: {
       }
       text = stripped.text;
     }
-    if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+    if (getReplyPayloadMetadata(payload)?.silentReply === true) {
       return { skip: true };
-    }
-    if (
-      isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
-      isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
-    ) {
-      return { skip: true };
-    }
-    if (text && startsWithSilentToken(text, SILENT_REPLY_TOKEN)) {
-      text = stripLeadingSilentToken(text, SILENT_REPLY_TOKEN);
     }
     if (!text) {
       return reply.hasMedia ? { text: undefined, skip: false } : { skip: true };
@@ -87,13 +71,11 @@ export function createAgentTurnPresentation(params: {
     const sanitized = errorContext
       ? renderUserFacingText(text, { errorContext: true, conversationContext, streaming: true })
       : sanitizeUserFacingText(text, { conversationContext, streaming: true });
-    return sanitized.trim()
-      ? { text: sanitized, skip: isSilentReplyPayloadText(sanitized, SILENT_REPLY_TOKEN) }
-      : { skip: true };
+    return sanitized.trim() ? { text: sanitized, skip: false } : { skip: true };
   };
 
   const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
-    const classified = classifyStreamingPartial(payload);
+    const classified = classifyReplyText(payload);
     if (classified.skip || !classified.text) {
       return classified;
     }
@@ -133,20 +115,47 @@ export function createAgentTurnPresentation(params: {
     return result;
   };
 
+  const presentPartialReply = async (payload: ReplyPayload, runtime: "cli" | "embedded") => {
+    const classified = classifyReplyText(payload);
+    if (classified.skip || !classified.text) {
+      return runtime === "embedded" ? false : undefined;
+    }
+    const textForTyping = classified.text;
+    let didMaterialize = false;
+    let materializedText: string | undefined;
+    const materializeText = () => {
+      if (!didMaterialize) {
+        const sanitized = sanitizeStreamingText(textForTyping, false);
+        materializedText = sanitized.skip ? undefined : sanitized.text;
+        didMaterialize = true;
+      }
+      return materializedText;
+    };
+    // Embedded drafts consume cumulative text lazily; CLI previews arrive already paced.
+    const partialPayload: PartialReplyPayload =
+      runtime === "cli"
+        ? { text: materializeText() }
+        : {
+            get text() {
+              return materializeText();
+            },
+            mediaUrls: payload.mediaUrls,
+          };
+    const onPartialReply = params.turn.opts?.onPartialReply;
+    return await presentWithTyping(params.turn.typingSignals.signalTextDelta(textForTyping), () =>
+      !onPartialReply || (runtime === "cli" && !partialPayload.text)
+        ? false
+        : onPartialReply(partialPayload),
+    );
+  };
+
   const blockReplyPipeline = params.turn.blockReplyPipeline;
   // One handler owns threading and direct-send dedupe for this fallback cycle.
   const blockReplyHandler =
     params.turn.opts?.onPreparedBlockReply || params.turn.opts?.onBlockReply
       ? createBlockReplyDeliveryHandler({
-          onBlockReply: async (payload, context) => {
-            if (params.turn.opts?.onPreparedBlockReply) {
-              for (const plan of createStructuredOutboundPayloadPlan([payload])) {
-                await params.turn.opts.onPreparedBlockReply(plan, context);
-              }
-              return;
-            }
-            await params.turn.opts?.onBlockReply?.(payload, context);
-          },
+          onBlockReply: (payload, context) =>
+            deliverPreparedBlockReply(params.turn.opts, payload, context),
           currentMessageId:
             params.turn.sessionCtx.MessageSidFull ?? params.turn.sessionCtx.MessageSid,
           replyThreading: params.turn.replyThreading,
@@ -163,8 +172,7 @@ export function createAgentTurnPresentation(params: {
       : undefined;
 
   return {
-    classifyStreamingPartial,
-    sanitizeStreamingText,
+    presentPartialReply,
     normalizeStreamingText,
     presentWithTyping,
     blockReplyHandler,
