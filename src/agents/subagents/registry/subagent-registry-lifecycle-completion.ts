@@ -284,6 +284,7 @@ export async function completeSubagentRunAttempt(
                 const published = postimages.get(planned.entry.runId) ?? planned.entry;
                 completeParams.recoveryCurrent?.onPublished?.(published);
                 clearPublishedSwarmCollectorOutput(published);
+                context.resumeAncestorCleanup(published);
               }
             },
             assertCurrent: () => {

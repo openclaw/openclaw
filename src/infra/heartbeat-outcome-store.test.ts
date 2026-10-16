@@ -33,6 +33,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   claimHeartbeatContextForUserRun,
   claimHeartbeatOutcomeForRun,
@@ -414,7 +415,7 @@ async function reserveWorker(env: NodeJS.ProcessEnv) {
 it("queues captured outcomes off-thread and claims once per run until the next heartbeat", async () => {
   const env = await createEnv();
   const target = { agentId: "main", sessionKey: "agent:main:main", env };
-  const db = openOpenClawAgentDatabase(target).db;
+  const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(target).db);
   const databasePath = resolveOpenClawAgentSqlitePath(target);
   const initialWriteToken = readSqliteDatabaseWriteTokenForPath(databasePath);
   expect(initialWriteToken).toBeTypeOf("string");

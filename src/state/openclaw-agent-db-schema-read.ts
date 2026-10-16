@@ -1,5 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
@@ -15,10 +16,21 @@ import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-age
 
 export { readExistingAgentSchemaMeta } from "./openclaw-agent-db-metadata.js";
 
+export function readAgentDatabaseSchemaVersion(db: EngineConnection): number {
+  if (isPostgresSqlConnection(db)) {
+    const facts = getPostgresPhysicalFacts(db);
+    if (!facts) {
+      throw new Error("Agent database has no PostgreSQL schema admission");
+    }
+    return facts.version;
+  }
+  return getAdmittedSqliteSchemaFacts(db)?.userVersion ?? readSqliteUserVersion(db);
+}
+
 export function assertSupportedAgentSchemaVersion(
-  db: DatabaseSync,
+  db: EngineConnection,
   pathname: string,
-  userVersion = getAdmittedSqliteSchemaFacts(db)?.userVersion ?? readSqliteUserVersion(db),
+  userVersion = readAgentDatabaseSchemaVersion(db),
 ): number {
   if (userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
     throw createNewerSqliteSchemaVersionError(
@@ -31,7 +43,10 @@ export function assertSupportedAgentSchemaVersion(
   return userVersion;
 }
 
-export function hasAgentDatabaseApplicationSchema(db: DatabaseSync): boolean {
+export function hasAgentDatabaseApplicationSchema(db: EngineConnection): boolean {
+  if (isPostgresSqlConnection(db)) {
+    return Boolean(getPostgresPhysicalFacts(db)?.catalog.some((fact) => fact.kind === "table"));
+  }
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (schema) {
     for (const names of [schema.tables, schema.views, schema.indexes, schema.triggers.keys()]) {
@@ -50,10 +65,15 @@ export function hasAgentDatabaseApplicationSchema(db: DatabaseSync): boolean {
 
 /** Persistence gates consume the catalog published by admission or schema maintenance. */
 export function assertCanonicalAgentPersistenceVersion(
-  db: DatabaseSync,
+  db: EngineConnection,
   pathname: string,
-  userVersion = getAdmittedSqliteSchemaFacts(db)?.userVersion ?? readSqliteUserVersion(db),
+  userVersion = readAgentDatabaseSchemaVersion(db),
 ): void {
+  if (getAdmittedSqliteSchemaFacts(db)?.tables.has("openclaw_engine_anchor")) {
+    throw new Error(
+      "This agent store lives in PostgreSQL; set database.engine to postgres and configure database.postgres.connection.",
+    );
+  }
   const isNewUnownedDatabase = userVersion === 0 && !hasAgentDatabaseApplicationSchema(db);
   if (userVersion < AGENT_MEDIA_SCHEMA_VERSION && !isNewUnownedDatabase) {
     throw new OpenClawAgentDatabaseMediaMigrationRequiredError(pathname, userVersion);

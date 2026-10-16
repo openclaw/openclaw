@@ -33,6 +33,7 @@ import {
   ensureSessionInputCompletionsSchema,
   ensureSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
@@ -196,7 +197,7 @@ it("shares transaction rows without retaining stale custody and returns the pers
       )
       .run(scope.sessionKey, "new-member", "owner", 2);
     const counter = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["entry", "members", "pending", "completion"],
       (sql) => {
         if (/\bfrom "session_nodes"/iu.test(sql)) {
@@ -254,8 +255,10 @@ it("shares transaction rows without retaining stale custody and returns the pers
     const requeued = mutate(stage());
     expect(requeued.stagedInput).toEqual(staged.stagedInput);
 
-    const completionCounter = trackSqliteStatementExecutions(database.db, ["completion"], (sql) =>
-      /\bfrom "session_input_completions"/iu.test(sql) ? "completion" : null,
+    const completionCounter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["completion"],
+      (sql) => (/\bfrom "session_input_completions"/iu.test(sql) ? "completion" : null),
     );
     const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
     try {

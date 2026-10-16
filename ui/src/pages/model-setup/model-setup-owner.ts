@@ -12,8 +12,7 @@ import { i18n } from "../../i18n/lib/translate.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
-import { useSolidControllerHost } from "../../lit/solid-controller-host.ts";
-import { ModelProviderLoginController } from "../model-providers/login-controller.ts";
+import { createModelProviderLogin } from "../model-providers/login-controller.ts";
 import {
   captureModelSetupConnection,
   modelSetupAgentSelection,
@@ -66,7 +65,6 @@ export function createModelSetup(
       }
     }
   };
-  const { host: loginHost, revision: loginRevision } = useSolidControllerHost();
   const actionsDisabled = (): boolean =>
     login.busy ||
     nativeModels.saving ||
@@ -133,7 +131,7 @@ export function createModelSetup(
     () => state.pageState,
     (urls) => setState("iconUrls", urls),
   );
-  const login = new ModelProviderLoginController(loginHost, {
+  const login = createModelProviderLogin({
     getScope: () => ({ context, agentId: agentSelection().state.selectedId }),
     getManualProviders: () =>
       state.pageState.phase === "ready" ? state.pageState.result.manualProviders : [],
@@ -732,7 +730,6 @@ export function createModelSetup(
   );
   const view = () => {
     projection.read();
-    loginRevision();
     return viewProps();
   };
   createEffect(
@@ -772,14 +769,13 @@ export function createModelSetup(
     disposed = true;
     connected = false;
     firstRun.dispose();
-    resetActivity();
+    retireWizardMutation();
+    iconLoader.reset();
+    void wizard.cancel();
   });
   return {
     view,
     login,
-    revision: () => {
-      projection.read();
-      return loginRevision();
-    },
+    revision: projection.revision,
   };
 }

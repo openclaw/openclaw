@@ -32,6 +32,7 @@ import type {
   BoardProviderLease,
 } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
 import type { GitHubPublicationBinding } from "../../lib/sessions/session-capability.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -47,7 +48,6 @@ import {
   viewState,
 } from "../../lib/subscriptions-controller.ts";
 import { PollController } from "../../lit/poll-controller.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,

@@ -127,19 +127,11 @@ function collectPreparationRangeMessages(
 function readSessionBranch(
   sessionManager: ExtensionContext["sessionManager"],
 ): CoreSessionTreeEntry[] {
-  try {
-    return sessionManager.getBranch() as CoreSessionTreeEntry[];
-  } catch {
-    return [];
-  }
+  return sessionManager.getBranch() as CoreSessionTreeEntry[];
 }
 
 function projectBranchEntries(entries: CoreSessionTreeEntry[]): AgentMessage[] {
-  try {
-    return buildCoreSessionContext(entries).messages as AgentMessage[];
-  } catch {
-    return [];
-  }
+  return buildCoreSessionContext(entries).messages as AgentMessage[];
 }
 
 function containsRealConversation(messages: AgentMessage[]): boolean {
@@ -657,38 +649,46 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       preparation.turnPrefixMessages ?? [],
     );
     const latestUnresolvedUserRequest = preparation.latestUnresolvedUserRequest ?? null;
-    if (!containsRealConversation([...baseMessagesToSummarize, ...baseTurnPrefixMessages])) {
-      // Safety net for a preparation that dropped real conversation from the
-      // range it covers: summarize that boundary-scoped range instead. It is
-      // never the raw branch, which re-read every reset and prior compaction.
-      const rangeMessages = stripRuntimeContextCustomMessages(
-        collectPreparationRangeMessages(ctx.sessionManager, preparation.firstKeptEntryId),
-      );
-      if (containsRealConversation(rangeMessages)) {
-        log.info(
-          "Compaction safeguard: summarizing the boundary-scoped preparation range after compaction preparation omitted real conversation content.",
-        );
-        baseMessagesToSummarize = rangeMessages;
-        baseTurnPrefixMessages = [];
-      }
-    }
-    // A prepared window of pure tool traffic is still real work when the current
-    // context anchors it (a kept user turn or a prior compaction summary); only a
-    // context with no real conversation at all gets the anti-loop boundary below.
-    const hasRealConversation =
-      containsRealConversation([...baseMessagesToSummarize, ...baseTurnPrefixMessages]) ||
-      containsRealConversation(
-        stripRuntimeContextCustomMessages(
-          // Project the current boundary; raw branch history would re-summarize
-          // messages hidden by earlier resets and compactions.
-          projectBranchEntries(readSessionBranch(ctx.sessionManager)),
-        ),
-      );
     setCompactionSafeguardCancellation(ctx.sessionManager, undefined);
     const cancelCompaction = (reason: string, error?: unknown) => {
       setCompactionSafeguardCancellation(ctx.sessionManager, reason, error);
       return { cancel: true as const };
     };
+    let hasRealConversation: boolean;
+    try {
+      if (!containsRealConversation([...baseMessagesToSummarize, ...baseTurnPrefixMessages])) {
+        // Safety net for a preparation that dropped real conversation from the
+        // range it covers: summarize that boundary-scoped range instead. It is
+        // never the raw branch, which re-read every reset and prior compaction.
+        const rangeMessages = stripRuntimeContextCustomMessages(
+          collectPreparationRangeMessages(ctx.sessionManager, preparation.firstKeptEntryId),
+        );
+        if (containsRealConversation(rangeMessages)) {
+          log.info(
+            "Compaction safeguard: summarizing the boundary-scoped preparation range after compaction preparation omitted real conversation content.",
+          );
+          baseMessagesToSummarize = rangeMessages;
+          baseTurnPrefixMessages = [];
+        }
+      }
+      // A prepared window of pure tool traffic is still real work when the current
+      // context anchors it (a kept user turn or a prior compaction summary); only a
+      // context with no real conversation at all gets the anti-loop boundary below.
+      hasRealConversation =
+        containsRealConversation([...baseMessagesToSummarize, ...baseTurnPrefixMessages]) ||
+        containsRealConversation(
+          stripRuntimeContextCustomMessages(
+            // Project the current boundary; raw branch history would re-summarize
+            // messages hidden by earlier resets and compactions.
+            projectBranchEntries(readSessionBranch(ctx.sessionManager)),
+          ),
+        );
+    } catch (error) {
+      log.warn(
+        `Compaction safeguard: session history inspection failed; preserving history: ${formatErrorMessage(error)}`,
+      );
+      return cancelCompaction("session history inspection failed", error);
+    }
     if (!hasRealConversation) {
       // Canceling an empty preparation re-triggers compaction on the next response (#41981).
       // A compaction boundary suppresses immediate retries until another assistant turn.

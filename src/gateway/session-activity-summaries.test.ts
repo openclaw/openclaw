@@ -36,6 +36,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { sessionActivitySummaryHandlers } from "./server-methods/session-activity-summary.js";
@@ -991,7 +992,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     const relocatedPath = testState.path("relocated", "openclaw-agent.sqlite");
     const originalDatabase = openOpenClawAgentDatabase({ agentId: "main" });
     const originalScope = { ...scope, storePath: originalDatabase.path };
-    await backup(originalDatabase.db, relocatedPath);
+    await backup(requireNativeSqliteDatabase(originalDatabase.db), relocatedPath);
     cfg = { ...cfg, session: { store: relocatedPath } };
     const relocatedScope = { ...scope, storePath: relocatedPath };
     try {

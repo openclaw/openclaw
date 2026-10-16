@@ -24,6 +24,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   withOpenClawTestState,
@@ -195,9 +196,10 @@ async function prepareRace(state: OpenClawTestState) {
     matches = (query: string) => query.includes('from "session_transcript_cold_archives"'),
     afterArchive?: () => void,
   ) => {
-    clearNodeSqliteKyselyCacheForDatabase(database.db);
-    const prepare = database.db.prepare.bind(database.db);
-    vi.spyOn(database.db, "prepare").mockImplementation((query) => {
+    const nativeDb = requireNativeSqliteDatabase(database.db);
+    clearNodeSqliteKyselyCacheForDatabase(nativeDb);
+    const prepare = nativeDb.prepare.bind(nativeDb);
+    vi.spyOn(nativeDb, "prepare").mockImplementation((query) => {
       const statement = prepare(query);
       if (!matches(query)) {
         return statement;
@@ -382,11 +384,14 @@ it("bounds hot and cold transcript stats selections in batches", async () => {
         ? expectedStats
         : { eventCount: 0, maxSeq: 0, sizeBytes: 0 },
     );
-    const reads = trackSqliteStatementExecutions(race.database.db, ["stats"], (query) =>
-      query.startsWith("select ") &&
-      /"(?:transcript_events|session_transcript_cold_archives|session_windows)"/u.test(query)
-        ? "stats"
-        : null,
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(race.database.db),
+      ["stats"],
+      (query) =>
+        query.startsWith("select ") &&
+        /"(?:transcript_events|session_transcript_cold_archives|session_windows)"/u.test(query)
+          ? "stats"
+          : null,
     );
     try {
       const first = read();

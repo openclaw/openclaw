@@ -9,6 +9,7 @@ import {
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import {
   iterateUnindexedActiveTranscriptNavigation,
@@ -84,7 +85,7 @@ type VisibleMessageRange = MessageRangeSelection & {
 function cacheResetMessageWindow(key: string, entry: ResetMessageWindowCacheEntry): void {
   const { database } = entry;
   if (!resetMessageWindowOwners.has(database)) {
-    registerNodeSqliteDisposeCallback(database, () => {
+    registerNodeSqliteDisposeCallback(sqlPublicationAnchor(database), () => {
       // Path-keyed windows must not retain closed handles or replaced database contents.
       for (const [cachedKey, cached] of resetMessageWindowCache) {
         if (cached.database === database) {

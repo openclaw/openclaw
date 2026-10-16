@@ -20,6 +20,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { loadAgentTrajectoryOperations } from "../state/openclaw-agent-execution-operations.js";
 import type { AgentWorkerOperationContext } from "../state/openclaw-agent-operation-context.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   beginTrajectoryRuntimeRetention,
@@ -503,8 +504,9 @@ describe("SQLite trajectory runtime retention", () => {
 
       const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
       using _ = { [Symbol.dispose]: retainAgentDatabase(database.db) };
-      clearNodeSqliteKyselyCacheForDatabase(database.db);
-      const prepare = database.db.prepare.bind(database.db);
+      const native = requireNativeSqliteDatabase(database.db);
+      clearNodeSqliteKyselyCacheForDatabase(native);
+      const prepare = native.prepare.bind(native);
       let aggregates = 0;
       let writing = false;
       const nativeExec = database.db.exec.bind(database.db);
@@ -516,7 +518,7 @@ describe("SQLite trajectory runtime retention", () => {
           writing = false;
         }
       });
-      const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+      const prepareSpy = vi.spyOn(native, "prepare").mockImplementation((sql) => {
         const statement = prepare(sql);
         if (
           sql.includes('"trajectory_runtime_events"') &&
@@ -573,7 +575,7 @@ describe("SQLite trajectory runtime retention", () => {
         );
         expect(aggregates).toBeGreaterThan(0);
       } finally {
-        clearNodeSqliteKyselyCacheForDatabase(database.db);
+        clearNodeSqliteKyselyCacheForDatabase(native);
         prepareSpy.mockRestore();
         transactionSpy.mockRestore();
       }
@@ -813,10 +815,11 @@ describe("SQLite trajectory runtime retention", () => {
     const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
     const competing = openNodeSqliteDatabase(sqlitePath());
     competing.exec("PRAGMA busy_timeout = 0");
-    clearNodeSqliteKyselyCacheForDatabase(database.db);
-    const prepare = database.db.prepare.bind(database.db);
+    const native = requireNativeSqliteDatabase(database.db);
+    clearNodeSqliteKyselyCacheForDatabase(native);
+    const prepare = native.prepare.bind(native);
     let writes = 0;
-    const spy = vi.spyOn(database.db, "prepare").mockImplementation((query) => {
+    const spy = vi.spyOn(native, "prepare").mockImplementation((query) => {
       const statement = prepare(query);
       if (
         query.includes('"trajectory_runtime_events"') &&
@@ -826,7 +829,7 @@ describe("SQLite trajectory runtime retention", () => {
         const afterSelection = () => {
           if (writes < maxWrites) {
             writes++;
-            mutate(managed ? database.db : competing);
+            mutate(managed ? native : competing);
           }
         };
         const all = statement.all.bind(statement);
@@ -848,7 +851,7 @@ describe("SQLite trajectory runtime retention", () => {
       append();
       expect(writes).toBeGreaterThan(0);
     } finally {
-      clearNodeSqliteKyselyCacheForDatabase(database.db);
+      clearNodeSqliteKyselyCacheForDatabase(native);
       spy.mockRestore();
       competing.close();
     }

@@ -9,7 +9,12 @@ import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "./heartbeat-display.ts";
-import { extractText, extractTextCached, isEmptyUserTextOnlyMessage } from "./message-extract.ts";
+import {
+  extractText,
+  extractTextCached,
+  isEmptyUserTextOnlyMessage,
+  readTranscriptMediaEntries,
+} from "./message-extract.ts";
 
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
@@ -20,6 +25,9 @@ export function resolveMessageVisibleContent(
   message: unknown,
   normalized: NormalizedMessage,
 ): MessageGroup["visibleContent"] {
+  if (readTranscriptMediaEntries(message).length > 0) {
+    return "non-text";
+  }
   let hasText = false;
   for (const block of normalized.content) {
     if (block.type === "text") {

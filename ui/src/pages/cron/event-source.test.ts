@@ -4,7 +4,7 @@ import { buildCronSchedule, hasUnchangedCronSchedule } from "../../lib/cron/form
 import { createInitialCronState, startCronEdit, validateCronForm } from "../../lib/cron/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
-  CronEventSourceController,
+  createCronEventSource,
   resolveCronEventPatch,
   validateCronEventSelection,
   type McpEventDefinition,
@@ -118,7 +118,7 @@ describe("Automation event source", () => {
         events: [{ ...definition, name: "release.published" }],
       });
     const client = createTestGatewayClient(request);
-    const controller = new CronEventSourceController(vi.fn());
+    const controller = createCronEventSource(vi.fn());
     const old = controller.load({
       client,
       agentId: "main",
@@ -152,7 +152,7 @@ describe("Automation event source", () => {
         ],
       };
     });
-    const controller = new CronEventSourceController(vi.fn());
+    const controller = createCronEventSource(vi.fn());
     await controller.load({
       client: createTestGatewayClient(request),
       agentId: "main",

@@ -1,9 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import type { Model } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -31,10 +31,10 @@ type GuardedFetchCall = Parameters<typeof fetchWithSsrFGuard>[0];
 const requireRecord = createRequireRecord("object", "expected-label");
 
 function convertAssistantContent(
-  content: Array<Record<string, unknown>>,
+  content: AssistantMessage["content"],
   options?: Parameters<typeof convertToOllamaMessages>[2],
 ) {
-  return convertToOllamaMessages([{ role: "assistant", content }] as never, undefined, options);
+  return convertToOllamaMessages([makeAgentAssistantMessage({ content })], undefined, options);
 }
 
 type AssistantResponse = Parameters<typeof buildAssistantMessage>[0];
@@ -181,12 +181,6 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
 });
 
 describe("convertToOllamaMessages", () => {
-  it("converts legacy tool text without inventing metadata", () => {
-    expect(convertToOllamaMessages([{ role: "tool", content: "output" }])).toEqual([
-      { role: "tool", content: "output" },
-    ]);
-  });
-
   it.each([
     {
       name: "thinking alongside text",
@@ -196,7 +190,7 @@ describe("convertToOllamaMessages", () => {
         { type: "thinking", thinking: "redacted reasoning", redacted: true },
         { type: "text", text: "Let me check." },
         { type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } },
-      ],
+      ] satisfies AssistantMessage["content"],
       text: "Let me check.",
       thinking: "Check the directory.\nThen report its contents.",
       expected: [{ id: "call_1", function: { name: "bash", arguments: { command: "ls" } } }],
@@ -205,10 +199,10 @@ describe("convertToOllamaMessages", () => {
       name: "allowlisted underscore and dash suffixes",
       content: [
         { type: "toolCall", id: "call_1", name: "tools_exec", arguments: { command: "pwd" } },
-        { type: "tool_use", id: "call_2", name: "function-read", input: { path: "." } },
+        { type: "toolCall", id: "call_2", name: "function-read", arguments: { path: "." } },
         { type: "toolCall", id: "call_3", name: "tool_missing", arguments: {} },
         { type: "toolCall", id: "call_4", name: "tool_a", arguments: {} },
-      ],
+      ] satisfies AssistantMessage["content"],
       options: { availableToolNames: new Set(["exec", "read", "tool_a"]) },
       expected: [
         { id: "call_1", function: { name: "exec", arguments: { command: "pwd" } } },

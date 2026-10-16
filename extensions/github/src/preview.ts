@@ -5,6 +5,7 @@ import {
   isRecord,
   readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   ControlUiGitHubError,
   discardResponse,
@@ -59,13 +60,18 @@ type CachedPreview = {
   preview: ControlUiGitHubPreview;
   credentialScope: string;
   pages: Map<string, ConditionalPage>;
-  authorDecoratedAt: number;
-  coAuthorsDecoratedAt: number;
 };
 
 const previewCaches = new WeakMap<
   typeof fetch,
   ReturnType<typeof createStaleWhileRevalidateCache<CachedPreview>>
+>();
+
+// Public avatar bytes carry no repository or credential state. Share them across
+// items and identities, but keep injected transports in their own API environment.
+const avatarCaches = new WeakMap<
+  typeof fetch,
+  ReturnType<typeof createStaleWhileRevalidateCache<string | undefined>>
 >();
 
 export const parseControlUiGitHubPreviewTarget = parseGitHubItemTarget;
@@ -246,22 +252,41 @@ async function fetchAvatarDataUrl(
     return undefined;
   }
   try {
-    const response = await fetchImpl(url, {
-      headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
-      redirect: "error",
-      signal,
-    });
-    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
-    if (
-      !response.ok ||
-      !contentType ||
-      !["image/gif", "image/jpeg", "image/png", "image/webp"].includes(contentType)
-    ) {
-      await discardResponse(response);
-      return undefined;
+    let cache = avatarCaches.get(fetchImpl);
+    if (!cache) {
+      cache = createStaleWhileRevalidateCache<string | undefined>({
+        maxEntries: CACHE_LIMIT,
+        ttlMs: DECORATION_CACHE_MS,
+        cacheable: (value) => value !== undefined,
+      });
+      avatarCaches.set(fetchImpl, cache);
     }
-    const body = await readBoundedResponse(response, GITHUB_AVATAR_MAX_BYTES);
-    return `data:${contentType};base64,${body.toString("base64")}`;
+    const { value } = await racePromiseWithAbortSignal(
+      cache.read(
+        url.href,
+        async () => {
+          const response = await fetchImpl(url, {
+            headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
+            redirect: "error",
+            signal: AbortSignal.timeout(GITHUB_PREVIEW_TIMEOUT_MS),
+          });
+          const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
+          if (
+            !response.ok ||
+            !contentType ||
+            !["image/gif", "image/jpeg", "image/png", "image/webp"].includes(contentType)
+          ) {
+            await discardResponse(response);
+            return undefined;
+          }
+          const body = await readBoundedResponse(response, GITHUB_AVATAR_MAX_BYTES);
+          return `data:${contentType};base64,${body.toString("base64")}`;
+        },
+        { allowStale: false },
+      ),
+      signal,
+    );
+    return value;
   } catch {
     return undefined;
   }
@@ -317,14 +342,14 @@ async function fetchPreview(
     if (response.status === 304 && cached?.etag) {
       await discardResponse(response);
       pages.set(url, cached);
-      return { value: cached.value, unchanged: true };
+      return cached.value;
     }
     const value = await readGitHubJsonResponse(response, maxBytes);
     const etag = response.headers.get("etag");
     if (etag) {
       pages.set(url, { value, etag });
     }
-    return { value, unchanged: false };
+    return value;
   };
   // Both item reads use the same public admission and redirect guard. Commits
   // are optional decoration; their failure must not discard useful metadata.
@@ -336,38 +361,17 @@ async function fetchPreview(
           GITHUB_COMMITS_MAX_BYTES,
         ).catch(() => undefined)
       : Promise.resolve(undefined);
-  const { value: parsed, unchanged: itemUnchanged } = await item;
+  const parsed = await item;
   if (!isRecord(parsed)) {
     throw new ControlUiGitHubError(502, "GitHub response was not an object");
   }
   const metadataAt = performance.now();
   const { preview, avatarUrl } = parseControlUiGitHubPreviewResponse(target, parsed);
   const renderedAt = performance.now();
-  const now = Date.now();
-  const reuseAuthor =
-    itemUnchanged &&
-    previous !== undefined &&
-    now - previous.authorDecoratedAt < DECORATION_CACHE_MS;
-  let coAuthorsDecoratedAt = now;
   // Anonymous decoration can overlap visibility validation; delivery still awaits both.
   const [avatarDataUrl, coAuthorFacts] = await Promise.all([
-    reuseAuthor ? previous.preview.avatarDataUrl : fetchAvatarDataUrl(avatarUrl, fetchImpl, signal),
-    commits.then((page) => {
-      // The coauthor projection also depends on which login it excludes.
-      if (
-        page?.unchanged &&
-        previous &&
-        previous.preview.login.toLowerCase() === preview.login.toLowerCase() &&
-        now - previous.coAuthorsDecoratedAt < DECORATION_CACHE_MS
-      ) {
-        coAuthorsDecoratedAt = previous.coAuthorsDecoratedAt;
-        return {
-          coAuthors: previous.preview.coAuthors ?? [],
-          coAuthorCount: previous.preview.coAuthorCount ?? 0,
-        };
-      }
-      return fetchCoAuthors(preview.login, page?.value, fetchImpl, signal);
-    }),
+    fetchAvatarDataUrl(avatarUrl, fetchImpl, signal),
+    commits.then((value) => fetchCoAuthors(preview.login, value, fetchImpl, signal)),
     token && assertPublicRepository(previewRepositoryApiUrl(target, parsed)),
   ]);
   const finishedAt = performance.now();
@@ -381,8 +385,6 @@ async function fetchPreview(
   return {
     pages,
     credentialScope,
-    authorDecoratedAt: reuseAuthor ? previous.authorDecoratedAt : now,
-    coAuthorsDecoratedAt,
     preview: {
       ...preview,
       ...(avatarDataUrl ? { avatarDataUrl } : {}),

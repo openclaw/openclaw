@@ -1,5 +1,5 @@
 import { mkdirSync, symlinkSync } from "node:fs";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { StatementSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -13,6 +13,7 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   openOpenClawAgentDatabase,
@@ -21,6 +22,7 @@ import {
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureUserProfilesSchema } from "../state/user-profiles-schema.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { withSessionMutationCommitGuard } from "./server-methods/session-mutation-guards.js";
@@ -35,7 +37,8 @@ import { advancePlacementFixtureToActive } from "./worker-environments/placement
 
 afterEach(() => vi.restoreAllMocks());
 
-function inWriterTransaction(db: DatabaseSync, check: () => void) {
+function inWriterTransaction(connection: EngineConnection, check: () => void) {
+  const db = requireNativeSqliteDatabase(connection);
   db.exec("BEGIN IMMEDIATE");
   try {
     check();

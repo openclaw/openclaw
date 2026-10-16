@@ -46,17 +46,17 @@ const resolveCodexProviderWebSearchSupportForClientMock = vi.fn();
 type RequestScopeParams = {
   lease: { client?: unknown };
   options: { timeoutMs?: number; abandonSignal?: AbortSignal };
+  signal?: AbortSignal;
   run: (
     client: unknown,
-    requestOptions: () => { timeoutMs: number; signal?: AbortSignal; assertCurrent: () => void },
+    requestOptions: () => { timeoutMs: number; signal?: AbortSignal },
   ) => Promise<unknown>;
 };
 const withCodexAppServerClientRequestScopeMock = vi.fn(
   async (params: RequestScopeParams) =>
     await params.run(params.lease.client, () => ({
       timeoutMs: params.options.timeoutMs ?? 60_000,
-      signal: params.options.abandonSignal,
-      assertCurrent: () => {},
+      signal: params.signal ?? params.options.abandonSignal,
     })),
 );
 
@@ -380,8 +380,7 @@ export function useSideQuestionTestSetup() {
       async (params: RequestScopeParams) =>
         await params.run(params.lease.client, () => ({
           timeoutMs: params.options.timeoutMs ?? 60_000,
-          signal: params.options.abandonSignal,
-          assertCurrent: () => {},
+          signal: params.signal ?? params.options.abandonSignal,
         })),
     );
     resolveCodexProviderWebSearchSupportForClientMock.mockResolvedValue("supported");

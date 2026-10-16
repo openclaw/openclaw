@@ -22,7 +22,11 @@ import {
   isExclusiveCompactShardName,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { rebalanceRuntimeTestJobs } from "../../scripts/lib/ci-runtime-test-placement.mts";
-import { refitTestTimings, type CiTimingRun } from "../../scripts/lib/ci-test-timings-refit.mts";
+import {
+  isCiTimingRuntimeTrial,
+  refitTestTimings,
+  type CiTimingRun,
+} from "../../scripts/lib/ci-test-timings-refit.mts";
 import {
   createNativeSoloTimingKey,
   ciTestTimingsSchema,
@@ -1045,6 +1049,82 @@ if (args[1] === "--help") {
 }
 
 describe("CI test timing refit", () => {
+  it.each(["bun-all", "dual-all"])(
+    "excludes complete %s run fragments from learning and pruning legacy keys",
+    (policy) => {
+      const previous: CiTestTimings = {
+        ...baseline,
+        compactGroupSeconds: { blacksmith: { retained: 90 }, github: {} },
+      };
+      const runs = [1, 2, 3].flatMap((id) => [
+        timingRun(id, [
+          { kind: "compact", labels: ["blacksmith-4vcpu-ubuntu-2404"], text: compactLog(20) },
+        ]),
+        timingRun(id, [
+          {
+            kind: "compact",
+            labels: ["blacksmith-4vcpu-ubuntu-2404"],
+            text: `2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: ${policy}\n${compactLog(30)}`,
+          },
+        ]),
+      ]);
+      const result = refitTestTimings(runs, previous);
+      expect(result.timings).toEqual(previous);
+      expect(result.contributingRunIds.blacksmith).toEqual([]);
+      expect(result.runIds).toEqual([]);
+    },
+  );
+
+  it("recognizes only recorded runtime policy headers, including gh-wrapped ANSI logs", () => {
+    expect(
+      isCiTimingRuntimeTrial(
+        "job\tstep\t2026-08-27T23:00:00Z \u001b[32m  OPENCLAW_CI_TEST_RUNTIME_POLICY: dual-all\u001b[0m",
+      ),
+    ).toBe(true);
+    expect(
+      isCiTimingRuntimeTrial(
+        "2026-08-27T23:00:00Z [shard:fixture] OPENCLAW_CI_TEST_RUNTIME_POLICY: dual-all",
+      ),
+    ).toBe(false);
+    expect(
+      isCiTimingRuntimeTrial("2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: dual"),
+    ).toBe(false);
+  });
+
+  it.each(["bun-all", "dual-all"])(
+    "does not sample %s dispatch trials in the refit CLI",
+    (policy) => {
+      const packed = packedReleaseFixture().text.replace(
+        "OPENCLAW_CI_TEST_RUNTIME_POLICY: dual",
+        `OPENCLAW_CI_TEST_RUNTIME_POLICY: ${policy}`,
+      );
+      withSamplerFixture(
+        {
+          runs: [samplerRun(1), samplerRun(2)],
+          packedReleaseRuns: [samplerRun(3, { event: "workflow_dispatch" })],
+          jobs: [
+            samplerJob(11, 1),
+            samplerJob(21, 2),
+            samplerJob(31, 3, {
+              name: "checks-node-release-packed-1",
+              labels: ["ubuntu-24.04"],
+              log: packed,
+            }),
+          ],
+        },
+        (fixture) => {
+          const result = fixture.invoke();
+          expect(result.status, result.stderr).toBe(0);
+          expect(result.stderr).toContain("Skipped packed-release run 3: runtime trial");
+          expect(JSON.parse(fixture.contents()).compactGroupSeconds).toEqual({
+            blacksmith: { "core-unit-src-security-2": 20 },
+            github: {},
+          });
+        },
+      );
+    },
+  );
+
   it("refits complete packed release runtime walls from independent runs without pruning", () => {
     const { timingKeys, text } = packedReleaseFixture();
     const previous: CiTestTimings = {

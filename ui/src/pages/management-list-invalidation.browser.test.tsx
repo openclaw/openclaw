@@ -1,13 +1,17 @@
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import type { SkillLibraryEntry } from "../../../packages/gateway-protocol/src/index.ts";
+import type {
+  SkillLibraryEntry,
+  SkillsLibraryListResult,
+} from "../../../packages/gateway-protocol/src/index.ts";
 import { registerSkillLibraryEnglish } from "../i18n/locales/en-skill-library.ts";
 import { registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { createDevicesViewProps } from "../test-helpers/devices-fixtures.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { DevicesView } from "./devices/view.tsx";
-import { SkillLibraryController } from "./skills/library-controller.ts";
+import { createSkillLibrary } from "./skills/library-state.ts";
 import { SkillLibrary } from "./skills/library-view.tsx";
 registerEnglishCatalog(registerSkillLibraryEnglish);
 
@@ -52,7 +56,7 @@ it("does not rebuild the large device inventory for unrelated config feedback", 
   expect(first?.textContent).toContain("new-runtime");
 });
 
-it("does not rescan a large skill library for unrelated feedback while preserving search", async () => {
+it("does not rescan a large skill library for unrelated read errors while preserving search", async () => {
   let reads = 0;
   const entries: SkillLibraryEntry[] = Array.from({ length: 240 }, (_, index) => ({
     skillId: "audit-skill-" + index,
@@ -73,16 +77,7 @@ it("does not rescan a large skill library for unrelated feedback while preservin
     updatedAt: 1,
     canEdit: true,
   }));
-  const [revision, setRevision] = createSignal(0);
-  const controller = new SkillLibraryController(
-    { requestUpdate: () => setRevision((value) => value + 1) },
-    {
-      snapshot: null,
-      capture: () => null,
-      isCurrent: () => false,
-    },
-  );
-  controller.list = {
+  let list: SkillsLibraryListResult = {
     entries,
     profileId: "person",
     multipleProfiles: true,
@@ -90,17 +85,31 @@ it("does not rescan a large skill library for unrelated feedback while preservin
     canManageWorkspace: false,
     defaultSelectionLimit: 4,
   };
-  controller.view = "all";
-  controller.query = "skill";
-  const library = new Proxy(controller, {
-    get(target, key, receiver) {
-      revision();
-      return Reflect.get(target, key, receiver);
-    },
+  const request = vi.fn(async (method: string) => {
+    if (method === "skills.library.list") {
+      return list;
+    }
+    if (method === "skills.library.read") {
+      throw new Error("Unrelated read feedback");
+    }
+    throw new Error(`Unexpected method: ${method}`);
   });
-  const view = mountSolid(() => <SkillLibrary library={library} navigationActions={undefined} />);
+  const client = createTestGatewayClient(request);
+  let library!: ReturnType<typeof createSkillLibrary>;
+  const view = mountSolid(() => {
+    library = createSkillLibrary({
+      snapshot: null,
+      capture: () => ({ client, epoch: 0 }),
+      isCurrent: (scope) => scope.client === client && scope.epoch === 0,
+    });
+    return <SkillLibrary library={library} navigationActions={undefined} />;
+  });
+  await library.load();
   flush();
   const input = view.container.querySelector<HTMLInputElement>('[name="library-search"]')!;
+  input.value = "skill";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
   const first = view.container.querySelector(".plugins-item__detail-button");
   expect(first).not.toBeNull();
   input.focus();
@@ -109,30 +118,39 @@ it("does not rescan a large skill library for unrelated feedback while preservin
   expect(input.value).toBe("skill ");
   input.setSelectionRange(1, 3);
   reads = 0;
-  library.notice = "Unrelated upload notice";
-  library.changed();
+  await library.open("audit-skill-0");
   flush();
-  expect(view.container.textContent).toContain("Unrelated upload notice");
+  expect(view.container.textContent).toContain("Unrelated read feedback");
   expect(view.container.querySelector('[name="library-search"]')).toBe(input);
   expect(document.activeElement).toBe(input);
   expect([input.selectionStart, input.selectionEnd]).toEqual([1, 3]);
   expect(view.container.querySelector(".plugins-item__detail-button")).toBe(first);
   expect(reads).toBe(0);
-  await userEvent.keyboard("{Control>}z{/Control}");
+  await userEvent.keyboard(
+    navigator.platform === "MacIntel" ? "{Meta>}z{/Meta}" : "{Control>}z{/Control}",
+  );
   expect(input.value).toBe("skill");
-  expect(library.query).toBe("skill");
-  library.list = {
-    ...controller.list!,
+  expect(library.local.query).toBe("skill");
+  list = {
+    ...list,
     entries: entries.map((entry, index) =>
       index === 0 ? Object.assign({}, entry, { description: "Updated library receipt" }) : entry,
     ),
   };
-  library.changed();
+  library.edit((state) => {
+    state.list = list;
+  });
   flush();
   expect(view.container.querySelector(".plugins-item__detail-button")).toBe(first);
-  expect(first?.textContent).toContain("Updated library receipt");
-  library.query = "skill-239";
-  library.changed();
+  expect(view.container.querySelector('[name="library-search"]')).toBe(input);
+  expect(document.activeElement).toBe(input);
+  expect(input.value).toBe("skill");
+  expect(library.local.query).toBe("skill");
+  expect(view.container.querySelector(".plugins-item__detail-button")?.textContent).toContain(
+    "Updated library receipt",
+  );
+  input.value = "skill-239";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   expect(view.container.querySelectorAll(".plugins-item__detail-button")).toHaveLength(1);
   expect(view.container.querySelector(".plugins-item__detail-button")?.textContent).toContain(

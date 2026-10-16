@@ -49,11 +49,19 @@ cutoff controls are runtime controls, not request overrides.
 
 ### Restricted turns and ring zero
 
-OpenClaw applies Codex restrictions per turn, not as a permanent session mode.
-An existing session can therefore run one restricted turn and return to its
-normal Codex thread on the next unrestricted turn. When a restriction is
-temporary, OpenClaw preserves the normal thread binding and uses a temporary
-restricted thread where necessary.
+OpenClaw evaluates Codex tool policy on every turn. Compatible conversation-wide
+restrictions reuse the same native thread, including after a connection restart.
+Temporary restrictions, such as per-run allowlists, scheduled restrictions, or
+sender-specific restrictions, use an isolated thread where necessary and preserve
+the conversation's existing binding. A temporary first turn does not establish
+a permanent restricted binding.
+
+When a managed restricted thread's creation policy changes, or an older binding
+has no saved policy fingerprint, OpenClaw creates a compatible successor and
+projects the prepared conversation history into it. A failed replacement keeps
+the previous binding. Existing ownership guards still reject replacing an
+externally owned thread or one protected by active work; changing policy does
+not broaden that thread's permissions.
 
 An ordinary **policy-restricted turn** occurs when an explicit OpenClaw tool
 policy cannot be mapped safely onto Codex's native tool surface. Common

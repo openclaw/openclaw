@@ -16,7 +16,7 @@ type NewSessionDictationOptions = {
   onMessage: (message: string) => void;
   onError: (message: string) => void;
   onSubmit: () => void;
-  requestUpdate: () => void;
+  onChange: () => void;
 };
 
 /**
@@ -29,7 +29,7 @@ export class NewSessionDictationControl {
   private owner: { key: string } | null = null;
 
   constructor(private readonly options: NewSessionDictationOptions) {
-    this.devicePicker = new ComposerMicrophonePicker(options.requestUpdate);
+    this.devicePicker = new ComposerMicrophonePicker(options.onChange);
   }
 
   dispose(): void {
@@ -82,7 +82,7 @@ export class NewSessionDictationControl {
         if (next !== null) {
           this.options.onMessage(next);
         }
-        this.options.requestUpdate();
+        this.options.onChange();
       },
       onError: (message: string) => {
         if (ownsDraft()) {
@@ -91,7 +91,7 @@ export class NewSessionDictationControl {
       },
       onStateChange: () => {
         if (ownsDraft()) {
-          this.options.requestUpdate();
+          this.options.onChange();
         }
       },
       onDictationUnavailable: this.devicePicker.handleOpen,

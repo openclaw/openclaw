@@ -15,7 +15,11 @@ import "../../../styles/chat/layout.css";
 import "../../../styles/chat/split-view.css";
 import { openSlot, setSidebarOpen } from "../sidebar-layout.ts";
 import type { ChatDetails } from "./chat-details.tsx";
-import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
+import {
+  chatPaneHeaderSharing,
+  chatPaneHeaderSessionMenu,
+  mountChatPaneHeader,
+} from "./chat-pane-header.test-support.ts";
 import "./chat-details.tsx";
 import { ChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.tsx";
 
@@ -284,16 +288,8 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           sidebarLayout: { columns: [] },
           onLayoutChange: vi.fn(),
           onToggleSidePanel: vi.fn(),
-          sharingControl: (
-            <button class="btn btn--ghost chat-pane__sharing-trigger" aria-label="Share">
-              Share
-            </button>
-          ),
-          sessionMenuAction: (
-            <button class="btn btn--ghost chat-icon-btn" aria-label="Session actions">
-              …
-            </button>
-          ),
+          sharingControl: chatPaneHeaderSharing(),
+          sessionMenuAction: chatPaneHeaderSessionMenu(),
         });
         container.style.width = `${width}px`;
         const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
@@ -303,9 +299,9 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         const bounds = header.getBoundingClientRect();
         for (const selector of [
           ".chat-details-toggle",
-          '[aria-label="Share"]',
+          ".chat-pane__sharing-trigger",
           ".chat-pane__layout-trigger",
-          '[aria-label="Session actions"]',
+          ".chat-header-session-menu__trigger",
         ]) {
           const button = container.querySelector<HTMLElement>(selector)!;
           expect(button.checkVisibility()).toBe(true);
