@@ -301,6 +301,7 @@ class SecretsPageState {
 export function SecretsPage() {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  // This mount owns one secrets request state; Gateway replacement is bound below.
   const model = untrack(
     () => new SecretsPageState(context, () => setRevision((value) => value + 1)),
   );
