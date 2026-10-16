@@ -182,9 +182,10 @@ describe("update report shared transport boundary", () => {
       let current = true;
       const finalizeReceipt = vi
         .fn(finalizeUpdateFailureReportReceipt)
-        .mockImplementationOnce(async () => {
+        .mockImplementationOnce(async (...args) => {
+          const committed = await finalizeUpdateFailureReportReceipt(...args);
           current = false;
-          return false;
+          return committed;
         });
       const result = await fixture
         .submit({

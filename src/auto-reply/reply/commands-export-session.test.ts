@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateExportHtmlVendorAssets } from "../../../scripts/runtime-postbuild.mts";
 import { FsSafeError } from "../../infra/fs-safe.js";
+import * as logger from "../../logger.js";
 import { buildCommandTextFromArgs, findCommandByNativeName } from "../commands-registry.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -449,17 +450,25 @@ describe("buildExportSessionReply", () => {
     expect(sessionDataFromHtml(writtenHtml()).warning).toContain("backend runtime");
   });
 
-  it("continues exporting when persisted ACP metadata cannot be read", async () => {
+  it("reports unavailable ACP metadata while retaining a usable transcript export", async () => {
+    const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
     hoisted.readAcpSessionMetaForEntryAsyncMock.mockImplementation(async () => {
       throw new Error("state database unavailable");
     });
     hoisted.sessionTranscriptEvents = userTranscript();
 
-    const reply = await buildExportSessionReply(makeParams());
+    try {
+      const reply = await buildExportSessionReply(makeParams());
 
-    expect(reply.text).toContain("Session exported");
-    expect(reply.text).not.toContain("backend runtime");
-    expect(sessionDataFromHtml(writtenHtml()).warning).toBeUndefined();
+      expect(reply.text).toContain("Session exported");
+      expect(reply.text).not.toContain("backend runtime");
+      expect(sessionDataFromHtml(writtenHtml()).warning).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        "session-export: Could not read persisted ACP metadata: state database unavailable",
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("does not warn when the transcript includes assistant messages", async () => {

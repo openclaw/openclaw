@@ -153,59 +153,54 @@ export async function applyMessageSendingHook(params: {
   if (!params.enabled) {
     return unchanged();
   }
-  try {
-    const group = getGroupThreadDispatchContext();
-    const sendingResult = await params.hookRunner!.runMessageSending(
-      {
-        to: params.to,
-        content: params.payloadSummary.hookContent ?? params.payloadSummary.text,
-        replyToId: params.replyToId ?? undefined,
-        threadId: params.threadId ?? undefined,
-        metadata: {
-          channel: params.channel,
-          accountId: params.accountId,
-          mediaUrls: params.payloadSummary.mediaUrls,
-        },
+  const group = getGroupThreadDispatchContext();
+  const sendingResult = await params.hookRunner!.runMessageSending(
+    {
+      to: params.to,
+      content: params.payloadSummary.hookContent ?? params.payloadSummary.text,
+      replyToId: params.replyToId ?? undefined,
+      threadId: params.threadId ?? undefined,
+      metadata: {
+        channel: params.channel,
+        accountId: params.accountId,
+        mediaUrls: params.payloadSummary.mediaUrls,
       },
-      {
-        channelId: params.channel,
-        accountId: params.accountId ?? undefined,
-        conversationId: params.to,
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        ...(group ? { sessionKey: group.ctx.SessionKey, runId: group.runState.runId } : {}),
-      },
-    );
-    if (sendingResult?.cancel) {
-      const { cancelReason, metadata } = sendingResult;
-      return {
-        ...unchanged(),
-        cancelled: true,
-        hookEffect:
-          cancelReason || metadata
-            ? {
-                ...(cancelReason ? { cancelReason } : {}),
-                ...(metadata ? { metadata } : {}),
-              }
-            : undefined,
-      };
-    }
-    if (sendingResult?.content == null) {
-      return unchanged();
-    }
-    const spokenOnly = params.payloadSummary.hookContent && !params.payloadSummary.text;
-    const payload = copyReplyPayloadMetadata(params.payload, {
-      ...params.payload,
-      [spokenOnly ? "spokenText" : "text"]: sendingResult.content,
-    });
+    },
+    {
+      channelId: params.channel,
+      accountId: params.accountId ?? undefined,
+      conversationId: params.to,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(group ? { sessionKey: group.ctx.SessionKey, runId: group.runState.runId } : {}),
+    },
+  );
+  if (sendingResult?.cancel) {
+    const { cancelReason, metadata } = sendingResult;
     return {
-      cancelled: false,
-      changed: true,
-      payload,
+      ...unchanged(),
+      cancelled: true,
+      hookEffect:
+        cancelReason || metadata
+          ? {
+              ...(cancelReason ? { cancelReason } : {}),
+              ...(metadata ? { metadata } : {}),
+            }
+          : undefined,
     };
-  } catch {
-    // Don't block delivery on hook failure.
+  }
+  if (sendingResult?.content == null) {
     return unchanged();
   }
+  const spokenOnly = params.payloadSummary.hookContent && !params.payloadSummary.text;
+  const payload = copyReplyPayloadMetadata(params.payload, {
+    ...params.payload,
+    [spokenOnly ? "spokenText" : "text"]: sendingResult.content,
+  });
+  return {
+    cancelled: false,
+    changed: true,
+    payload,
+  };
 }
 
 export async function applyReplyPayloadSendingHook(

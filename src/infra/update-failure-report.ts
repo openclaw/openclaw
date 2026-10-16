@@ -39,8 +39,7 @@ import {
 import {
   assertUpdateReportPreCreateState,
   assertUpdateReportSubmissionAuthority,
-  retryUpdateReportStateWrite,
-  retryUpdateReportStateWriteAfterNoStart,
+  attemptUpdateReportStateWrite,
   UpdateReportPreCreateGuardError,
 } from "./update-failure-report-precreate.js";
 import type { PreparedUpdateFailureReport } from "./update-failure-report-prepare.js";
@@ -189,7 +188,7 @@ export async function submitUpdateFailureReport(
     } catch {
       return false;
     }
-    return retryUpdateReportStateWrite(() =>
+    return attemptUpdateReportStateWrite(() =>
       completeUpdateFailureReportReceiptCleanup(
         prepared.attemptId,
         receipt.reservationId,
@@ -202,7 +201,7 @@ export async function submitUpdateFailureReport(
     receipt: UpdateFailureReportSweepReceipt,
     beginCleanup = beginUpdateFailureReportReceiptCleanup,
   ): Promise<boolean> => {
-    const cleanupRecorded = await retryUpdateReportStateWrite(() =>
+    const cleanupRecorded = await attemptUpdateReportStateWrite(() =>
       beginCleanup(prepared.attemptId, receipt.reservationId, stateEnv, context),
     );
     return cleanupRecorded ? cleanOwnedArtifact(receipt) : false;
@@ -215,7 +214,7 @@ export async function submitUpdateFailureReport(
       status: "created",
       url,
     };
-    const finalized = await retryUpdateReportStateWrite(() =>
+    const finalized = await attemptUpdateReportStateWrite(() =>
       finalizeReceipt(prepared.attemptId, receipt, stateEnv, context),
     );
     if (
@@ -233,7 +232,7 @@ export async function submitUpdateFailureReport(
   const persistKnownNoStartReceipt = async (
     receipt: UpdateFailureReportReceipt,
   ): Promise<boolean> =>
-    await retryUpdateReportStateWriteAfterNoStart(async () => {
+    await attemptUpdateReportStateWrite(async () => {
       try {
         if (await finalizeReceipt(prepared.attemptId, receipt, stateEnv, context)) {
           return true;
@@ -373,7 +372,7 @@ export async function submitUpdateFailureReport(
       return ownedResult("stale", "This failed update attempt is stale or unavailable.");
     }
     ensureAuthority("submission");
-    const publicationReserved = await retryUpdateReportStateWrite(() =>
+    const publicationReserved = await attemptUpdateReportStateWrite(() =>
       markUpdateFailureReportReceiptPrepared(
         prepared.attemptId,
         reservationId,
@@ -549,7 +548,7 @@ export async function submitUpdateFailureReport(
       : created.reason === "authentication-unavailable"
         ? "GitHub authentication is unavailable. Review and submit the prefilled issue in your browser."
         : "GitHub submission is unavailable. Review and submit the prefilled issue in your browser.";
-  const preparationRefreshed = await retryUpdateReportStateWrite(() =>
+  const preparationRefreshed = await attemptUpdateReportStateWrite(() =>
     refreshUpdateFailureReportReceiptPreparation(
       prepared.attemptId,
       reservationId,

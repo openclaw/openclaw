@@ -1,4 +1,4 @@
-import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -33,10 +33,7 @@ async function readOllamaPullChunkWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   return await raceWithTimeout(
-    () =>
-      reader.read().catch((error: unknown) => {
-        throw toErrorObject(error, "Non-Error rejection");
-      }),
+    () => reader.read(),
     OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS,
     () => {
       void reader.cancel().catch(() => undefined);
@@ -107,7 +104,7 @@ async function pullOllamaModelCore(params: {
         if (chunk.error) {
           return { ok: false, message: `Download failed: ${chunk.error}` };
         }
-        if (!chunk.status) {
+        if (typeof chunk.status !== "string" || !chunk.status) {
           continue;
         }
         if (chunk.status === "success") {

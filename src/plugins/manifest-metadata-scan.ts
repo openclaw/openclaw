@@ -59,7 +59,8 @@ function listChildPluginDirs(
         dirs.push({ pluginDir: path.join(root, entry.name), rank, order: order++, origin });
       }
     }
-  } catch {
+  } catch (error) {
+    log.warn(`Ignoring unreadable plugin directory at ${root}: ${formatErrorMessage(error)}`);
     return [];
   }
   return dirs;

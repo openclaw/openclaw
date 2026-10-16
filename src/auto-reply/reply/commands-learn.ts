@@ -86,85 +86,81 @@ async function isWorkshopAvailable(params: HandleCommandsParams): Promise<boolea
     return false;
   }
 
-  try {
-    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-    const runtimeOverride = targetSessionEntry?.agentRuntimeOverride;
-    const cliProvider = isCliRuntimeAliasForProvider({
-      provider: params.provider,
-      runtime: runtimeOverride,
-      cfg: params.cfg,
-    })
-      ? runtimeOverride
-      : resolveCliRuntimeExecutionProvider({
-          provider: params.provider,
-          cfg: params.cfg,
-          agentId: params.agentId,
-          modelId: params.model,
-          authProfileId: targetSessionEntry?.authProfileOverride,
-        });
-    if (cliProvider) {
-      const cliBackend = resolveCliBackendConfig(cliProvider, params.cfg, {
-        agentId: params.agentId,
-      });
-      if (!cliBackend?.bundleMcp) {
-        return false;
-      }
-      if (
-        detectNodeClaudePlacement({
-          backendId: cliBackend.id,
-          execHost: targetSessionEntry?.execHost,
-          execNode: targetSessionEntry?.execNode,
-        })
-      ) {
-        return false;
-      }
-    } else {
-      const harness = selectAgentHarness({
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const runtimeOverride = targetSessionEntry?.agentRuntimeOverride;
+  const cliProvider = isCliRuntimeAliasForProvider({
+    provider: params.provider,
+    runtime: runtimeOverride,
+    cfg: params.cfg,
+  })
+    ? runtimeOverride
+    : resolveCliRuntimeExecutionProvider({
         provider: params.provider,
-        modelId: params.model,
-        config: params.cfg,
+        cfg: params.cfg,
         agentId: params.agentId,
-        sessionKey: params.sessionKey,
+        modelId: params.model,
+        authProfileId: targetSessionEntry?.authProfileOverride,
       });
-      if (!agentHarnessExposesOpenClawTools(harness.id)) {
-        return false;
-      }
-    }
-    const modelCompat = resolveConfiguredModelCompat({
-      cfg: params.cfg,
-      modelProvider: params.provider,
-      modelId: params.model,
+  if (cliProvider) {
+    const cliBackend = resolveCliBackendConfig(cliProvider, params.cfg, {
+      agentId: params.agentId,
     });
-    if (modelCompat && !supportsModelTools({ compat: modelCompat })) {
+    if (!cliBackend?.bundleMcp) {
       return false;
     }
-    const capabilityProfile = await prepareConversationCapabilityProfile({
-      config: params.cfg,
-      agentId: sandboxRuntime.classificationAgentId,
-      sessionKey: sandboxRuntime.classificationSessionKey,
-      runSessionKey: params.sessionKey,
-      workspaceDir: params.workspaceDir,
-      runtimeToolAllowlist: params.opts?.toolsAllow,
-      messageProvider: params.command.channel,
-      senderId: params.command.senderId,
-      senderName: params.ctx.SenderName,
-      senderUsername: params.ctx.SenderUsername,
-      senderE164: params.ctx.SenderE164,
-      senderIsOwner: params.command.senderIsOwner,
-      agentAccountId: params.command.accountId ?? params.ctx.AccountId,
-      modelProvider: params.provider,
+    if (
+      detectNodeClaudePlacement({
+        backendId: cliBackend.id,
+        execHost: targetSessionEntry?.execHost,
+        execNode: targetSessionEntry?.execNode,
+      })
+    ) {
+      return false;
+    }
+  } else {
+    const harness = selectAgentHarness({
+      provider: params.provider,
       modelId: params.model,
-      groupId: params.sessionEntry?.groupId,
-      groupChannel: params.sessionEntry?.groupChannel ?? params.ctx.GroupChannel,
-      groupSpace: params.sessionEntry?.space ?? params.ctx.GroupSpace,
-    });
-    return resolveSkillWorkshopToolPolicyAvailability({
       config: params.cfg,
-      conversationCapabilityProfile: capabilityProfile,
-    }).available;
-  } catch {
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    });
+    if (!agentHarnessExposesOpenClawTools(harness.id)) {
+      return false;
+    }
+  }
+  const modelCompat = resolveConfiguredModelCompat({
+    cfg: params.cfg,
+    modelProvider: params.provider,
+    modelId: params.model,
+  });
+  if (modelCompat && !supportsModelTools({ compat: modelCompat })) {
     return false;
   }
+  const capabilityProfile = await prepareConversationCapabilityProfile({
+    config: params.cfg,
+    agentId: sandboxRuntime.classificationAgentId,
+    sessionKey: sandboxRuntime.classificationSessionKey,
+    runSessionKey: params.sessionKey,
+    workspaceDir: params.workspaceDir,
+    runtimeToolAllowlist: params.opts?.toolsAllow,
+    messageProvider: params.command.channel,
+    senderId: params.command.senderId,
+    senderName: params.ctx.SenderName,
+    senderUsername: params.ctx.SenderUsername,
+    senderE164: params.ctx.SenderE164,
+    senderIsOwner: params.command.senderIsOwner,
+    agentAccountId: params.command.accountId ?? params.ctx.AccountId,
+    modelProvider: params.provider,
+    modelId: params.model,
+    groupId: params.sessionEntry?.groupId,
+    groupChannel: params.sessionEntry?.groupChannel ?? params.ctx.GroupChannel,
+    groupSpace: params.sessionEntry?.space ?? params.ctx.GroupSpace,
+  });
+  return resolveSkillWorkshopToolPolicyAvailability({
+    config: params.cfg,
+    conversationCapabilityProfile: capabilityProfile,
+  }).available;
 }
 
 /** Reverts one background review's skill changes, as the Undo button on its notice asks. */

@@ -12,7 +12,7 @@ import {
   throwIfSetupInferenceCancelled,
   type ActivateSetupInferenceParams,
   type ActivateSetupInferenceDeps,
-  type StageFailure,
+  SetupInferenceActivationUnavailableError,
 } from "./setup-inference-core.js";
 
 export type SetupProviderAuthMethod = {
@@ -33,13 +33,13 @@ export async function withSetupProviderAuthMethod<T>(
     signal?: AbortSignal;
   },
   consume: (loaded: SetupProviderAuthMethod) => T | Promise<T>,
-): Promise<T | StageFailure> {
+): Promise<T> {
   await using cache = createPluginCache();
   const activation = params.activation;
   const loaded = await withPluginLifecycleLease(
     { signal: params.signal ?? activation?.signal },
     async () =>
-      withPluginCache(cache, async (): Promise<SetupProviderAuthMethod | StageFailure> => {
+      withPluginCache(cache, async (): Promise<SetupProviderAuthMethod> => {
         const enabled = await enablePluginWithCapabilityConsent(
           params.cfg,
           params.choice.pluginId,
@@ -54,9 +54,9 @@ export async function withSetupProviderAuthMethod<T>(
           },
         );
         if (!enabled.enabled) {
-          return {
-            error: `${params.choice.choiceLabel} is disabled (${enabled.reason ?? "blocked"}).`,
-          };
+          throw new SetupInferenceActivationUnavailableError(
+            `${params.choice.choiceLabel} is disabled (${enabled.reason ?? "blocked"}).`,
+          );
         }
         const providers = (params.deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
           config: enabled.config,
@@ -73,10 +73,12 @@ export async function withSetupProviderAuthMethod<T>(
         );
         const method = provider?.auth.find((entry) => entry.id === params.choice.methodId);
         if (!provider || !method || !supportsSetupTextInference(method.wizard?.onboardingScopes)) {
-          return { error: "That provider setup is not available on this Gateway." };
+          throw new SetupInferenceActivationUnavailableError(
+            "That provider setup is not available on this Gateway.",
+          );
         }
         return { config: enabled.config, provider, method };
       }),
   );
-  return "error" in loaded ? loaded : await withPluginCache(cache, () => consume(loaded));
+  return await withPluginCache(cache, () => consume(loaded));
 }

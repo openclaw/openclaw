@@ -35,11 +35,11 @@ import {
   type SaveSetupCredentialParams,
   type StagedCandidate,
   type StageContext,
-  type StageFailure,
   parseInferenceRef,
   resolveSetupModel,
   validateSetupModelTarget,
   SetupInferenceCancelledError,
+  SetupInferenceActivationUnavailableError,
   throwIfSetupInferenceCancelled,
   waitForProviderAuth,
 } from "./setup-inference-core.js";
@@ -185,12 +185,9 @@ async function stagePreparedCandidate(
     pendingPluginInstalls?: Record<string, PluginInstallRecord>;
     agentRuntimeId?: string;
   },
-): Promise<StagedCandidate | StageFailure> {
+): Promise<StagedCandidate> {
   const modelTarget = params.choice?.modelTarget ?? params.modelTarget;
-  const roleError = validateSetupModelTarget(modelTarget, ctx.params.modelTarget);
-  if (roleError) {
-    return roleError;
-  }
+  validateSetupModelTarget(modelTarget, ctx.params.modelTarget);
   assertUtilitySeparation(ctx, modelTarget);
   const resolvedModel = resolveSetupModel({
     label: params.provider?.label ?? params.choice?.choiceLabel ?? "Custom provider",
@@ -201,9 +198,6 @@ async function stagePreparedCandidate(
     defaultModel: params.result.defaultModel,
     modelRef: params.modelRef ?? ctx.params.modelRef,
   });
-  if (typeof resolvedModel !== "string") {
-    return resolvedModel;
-  }
   const ref = parseInferenceRef(resolvedModel);
   const normalizedModel = params.provider
     ?.normalizeModelId?.({ provider: ref.provider, modelId: ref.model })
@@ -211,9 +205,9 @@ async function stagePreparedCandidate(
   const modelRef = normalizedModel ? `${ref.provider}/${normalizedModel}` : resolvedModel;
   let profile = selectSetupCredential(params.result.profiles, modelRef, params.config);
   if (params.result.profiles.length > 0 && !profile) {
-    return {
-      error: `${params.provider?.label ?? ref.provider} did not return credentials for "${modelRef}".`,
-    };
+    throw new SetupInferenceActivationUnavailableError(
+      `${params.provider?.label ?? ref.provider} did not return credentials for "${modelRef}".`,
+    );
   }
   const pluginId = params.pluginId ?? params.choice?.pluginId ?? params.provider?.pluginId;
   const codex = params.config.plugins?.entries?.codex;
@@ -250,7 +244,7 @@ async function stagePreparedCandidate(
       beforePersistentApply: () => throwIfSetupInferenceCancelled(ctx.params),
     });
     if (!installed.ok) {
-      return { error: installed.message };
+      throw new SetupInferenceActivationUnavailableError(installed.message);
     }
     preparedConfig = installed.cfg;
   }
@@ -302,13 +296,13 @@ async function stagePreparedCandidate(
 export async function stageSavedAuthCandidate(
   ctx: StageContext,
   profileId: string,
-): Promise<StagedCandidate | StageFailure> {
+): Promise<StagedCandidate> {
   const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir);
   const credential = store.profiles[profileId];
   if (!credential) {
-    return {
-      error: "That saved sign-in is no longer available. Open Model Setup and choose again.",
-    };
+    throw new SetupInferenceActivationUnavailableError(
+      "That saved sign-in is no longer available. Open Model Setup and choose again.",
+    );
   }
   const saved = credential.setup;
   const choices = (
@@ -321,23 +315,17 @@ export async function stageSavedAuthCandidate(
   });
   const choice = findSetupCredentialChoice(choices, credential);
   if (saved?.authChoice && !choice) {
-    return {
-      error: "The saved sign-in's provider is no longer available. Review installed providers.",
-    };
+    throw new SetupInferenceActivationUnavailableError(
+      "The saved sign-in's provider is no longer available. Review installed providers.",
+    );
   }
-  const roleError = validateSetupModelTarget(choice?.modelTarget, ctx.params.modelTarget);
-  if (roleError) {
-    return roleError;
-  }
+  validateSetupModelTarget(choice?.modelTarget, ctx.params.modelTarget);
   assertUtilitySeparation(ctx, choice?.modelTarget);
-  const materialize = async (
-    loaded?: SetupProviderAuthMethod,
-  ): Promise<StagedCandidate | StageFailure> => {
+  const materialize = async (loaded?: SetupProviderAuthMethod): Promise<StagedCandidate> => {
     if (!saved && !loaded) {
-      return {
-        error:
-          "Choose this provider's endpoint and model again. Your saved sign-in is still available.",
-      };
+      throw new SetupInferenceActivationUnavailableError(
+        "Choose this provider's endpoint and model again. Your saved sign-in is still available.",
+      );
     }
     const modelRef = saved?.modelRef ?? loaded?.method.starterModel;
     const { validateConfigObjectRaw } = await import("../config/validation-core.js");
@@ -345,10 +333,9 @@ export async function stageSavedAuthCandidate(
       ? validateConfigObjectRaw(applyMergePatch(ctx.cfg, JSON.parse(saved.configJson)))
       : undefined;
     if (storedConfig && !storedConfig.ok) {
-      return {
-        error:
-          "The saved connection settings are no longer valid. Choose the provider settings again.",
-      };
+      throw new SetupInferenceActivationUnavailableError(
+        "The saved connection settings are no longer valid. Choose the provider settings again.",
+      );
     }
     const config = applyProviderPluginAuthMethodResultConfig({
       config: storedConfig?.ok ? storedConfig.config : (loaded?.config ?? ctx.cfg),
@@ -381,7 +368,7 @@ export async function stageSavedAuthCandidate(
 export async function stageProviderAutoCandidate(
   ctx: StageContext,
   choiceId: string,
-): Promise<StagedCandidate | StageFailure> {
+): Promise<StagedCandidate> {
   const choice = (ctx.deps.resolveManifestProviderAuthChoice ?? resolveManifestProviderAuthChoice)(
     choiceId,
     {
@@ -396,12 +383,11 @@ export async function stageProviderAutoCandidate(
     choice.appGuidedDiscovery !== true ||
     !supportsSetupTextInference(choice.onboardingScopes)
   ) {
-    return { error: "That detected provider is no longer available on this Gateway." };
+    throw new SetupInferenceActivationUnavailableError(
+      "That detected provider is no longer available on this Gateway.",
+    );
   }
-  const roleError = validateSetupModelTarget(choice.modelTarget, ctx.params.modelTarget);
-  if (roleError) {
-    return roleError;
-  }
+  validateSetupModelTarget(choice.modelTarget, ctx.params.modelTarget);
   assertUtilitySeparation(ctx, choice.modelTarget);
   return await withSetupProviderAuthMethod(
     { ...ctx, choice, activation: ctx.params },
@@ -409,7 +395,9 @@ export async function stageProviderAutoCandidate(
       const guidedSetup = loaded.method.appGuidedSetup;
       const modelRef = ctx.params.modelRef?.trim();
       if (!guidedSetup || !modelRef) {
-        return { error: "The detected provider model is missing. Run detection again." };
+        throw new SetupInferenceActivationUnavailableError(
+          "The detected provider model is missing. Run detection again.",
+        );
       }
       const prepared = await guidedSetup.prepare({
         config: loaded.config,
@@ -419,9 +407,9 @@ export async function stageProviderAutoCandidate(
         ...(ctx.params.signal ? { signal: ctx.params.signal } : {}),
       });
       if (!prepared || normalizeAgentModelRefForConfig(prepared.defaultModel ?? "") !== modelRef) {
-        return {
-          error: `${choice.choiceLabel} could not prepare the detected model. Run detection again.`,
-        };
+        throw new SetupInferenceActivationUnavailableError(
+          `${choice.choiceLabel} could not prepare the detected model. Run detection again.`,
+        );
       }
       return await stagePreparedCandidate(ctx, {
         result: prepared,
@@ -441,26 +429,24 @@ export async function stageProviderAuthCandidate(
   ctx: StageContext,
   interactive: boolean,
   agentRuntimeId?: string,
-): Promise<StagedCandidate | StageFailure> {
+): Promise<StagedCandidate> {
   const { params } = ctx;
   const apiKey = params.apiKey?.trim();
   if (!interactive && !apiKey) {
-    return { error: "Enter an API key or token first." };
+    throw new SetupInferenceActivationUnavailableError("Enter an API key or token first.");
   }
   const authChoice = params.authChoice?.trim();
   if (interactive && authChoice === "custom-api-key") {
-    const roleError = validateSetupModelTarget(undefined, params.modelTarget);
-    if (roleError) {
-      return roleError;
-    }
+    validateSetupModelTarget(undefined, params.modelTarget);
     if (params.isRemoteProviderAuth ?? params.surface === "gateway") {
-      return {
-        error:
-          "For a custom provider, run openclaw onboard --auth-choice custom-api-key on the Gateway host, then return here and refresh connections.",
-      };
+      throw new SetupInferenceActivationUnavailableError(
+        "For a custom provider, run openclaw onboard --auth-choice custom-api-key on the Gateway host, then return here and refresh connections.",
+      );
     }
     if (!params.prompter) {
-      return { error: "Custom provider setup requires an interactive setup session." };
+      throw new SetupInferenceActivationUnavailableError(
+        "Custom provider setup requires an interactive setup session.",
+      );
     }
     const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
     const prepared = await waitForProviderAuth(
@@ -510,17 +496,13 @@ export async function stageProviderAuthCandidate(
           (!choice.appGuidedAuth && choice.appGuidedDiscovery !== true))
       ? { pluginId: choice.pluginId, label: choice.groupLabel ?? choice.choiceLabel }
       : undefined;
-  const roleError = validateSetupModelTarget(
-    choice?.modelTarget ?? installEntry?.modelTarget,
-    params.modelTarget,
-  );
-  if (roleError) {
-    return roleError;
-  }
+  validateSetupModelTarget(choice?.modelTarget ?? installEntry?.modelTarget, params.modelTarget);
   assertUtilitySeparation(ctx, choice?.modelTarget ?? installEntry?.modelTarget);
   if (interactive && authChoice && managedWizardChoice) {
     if (!params.prompter) {
-      return { error: "Installing this provider requires an interactive setup session." };
+      throw new SetupInferenceActivationUnavailableError(
+        "Installing this provider requires an interactive setup session.",
+      );
     }
     return await prepareAuthChoiceLoadedPluginProvider(
       {
@@ -542,11 +524,10 @@ export async function stageProviderAuthCandidate(
         throwIfSetupInferenceCancelled(params);
         const selectedModel = prepared?.utilityModelOverride ?? prepared?.agentModelOverride;
         if (!prepared || prepared.retrySelection || !selectedModel?.trim()) {
-          return {
-            error:
-              prepared?.installError ||
+          throw new SetupInferenceActivationUnavailableError(
+            prepared?.installError ||
               `${managedWizardChoice.label} was not installed and configured. Review the installer details and try again.`,
-          };
+          );
         }
         return await stagePreparedCandidate(ctx, {
           result: { profiles: prepared.authProfiles, defaultModel: selectedModel },
@@ -572,7 +553,7 @@ export async function stageProviderAuthCandidate(
       (choice.assistantVisibility === "manual-only" ||
         (!choice.appGuidedAuth && choice.appGuidedDiscovery !== true)))
   ) {
-    return { error: unavailable };
+    throw new SetupInferenceActivationUnavailableError(unavailable);
   }
   return await withSetupProviderAuthMethod(
     { ...ctx, choice, activation: params },
@@ -584,11 +565,13 @@ export async function stageProviderAuthCandidate(
         method.kind !== "oauth" &&
         method.kind !== "device_code"
       ) {
-        return { error: unavailable };
+        throw new SetupInferenceActivationUnavailableError(unavailable);
       }
       try {
         if (interactive && !params.prompter) {
-          return { error: "This provider login requires an interactive setup session." };
+          throw new SetupInferenceActivationUnavailableError(
+            "This provider login requires an interactive setup session.",
+          );
         }
         throwIfSetupInferenceCancelled(params);
         const store = interactive
@@ -632,7 +615,7 @@ export async function stageProviderAuthCandidate(
         if (interactive && choice.appGuidedDiscovery === true) {
           const guided = method.appGuidedSetup;
           if (!guided) {
-            return { error: unavailable };
+            throw new SetupInferenceActivationUnavailableError(unavailable);
           }
           const selectedModel = params.modelRef?.trim() || result.defaultModel;
           const selected = selectedModel
@@ -644,9 +627,9 @@ export async function stageProviderAuthCandidate(
                 signal: params.signal,
               });
           if (!selected) {
-            return {
-              error: `${loaded.provider.label} setup completed, but no compatible model was found. Add a compatible model and try again.`,
-            };
+            throw new SetupInferenceActivationUnavailableError(
+              `${loaded.provider.label} setup completed, but no compatible model was found. Add a compatible model and try again.`,
+            );
           }
           const prepared = await guided.prepare({
             config,
@@ -659,9 +642,9 @@ export async function stageProviderAuthCandidate(
             !prepared ||
             normalizeAgentModelRefForConfig(prepared.defaultModel ?? "") !== selected.modelRef
           ) {
-            return {
-              error: `${loaded.provider.label} could not prepare its detected model. Try setup again.`,
-            };
+            throw new SetupInferenceActivationUnavailableError(
+              `${loaded.provider.label} could not prepare its detected model. Try setup again.`,
+            );
           }
           config = applyProviderPluginAuthMethodResultConfig({ config, result: prepared });
           result = {
@@ -686,12 +669,15 @@ export async function stageProviderAuthCandidate(
           pendingPluginInstalls: config.plugins?.installs,
         });
       } catch (error) {
-        if (error instanceof SetupInferenceCancelledError || params.signal?.aborted) {
-          return { error: "Provider login was cancelled." };
+        if (error instanceof SetupInferenceActivationUnavailableError) {
+          throw error;
         }
-        return {
-          error: `${loaded.provider.label} could not prepare this ${interactive ? "login" : "credential"} for app-guided setup: ${formatErrorMessage(error)}`,
-        };
+        if (error instanceof SetupInferenceCancelledError || params.signal?.aborted) {
+          throw new SetupInferenceActivationUnavailableError("Provider login was cancelled.");
+        }
+        throw new SetupInferenceActivationUnavailableError(
+          `${loaded.provider.label} could not prepare this ${interactive ? "login" : "credential"} for app-guided setup: ${formatErrorMessage(error)}`,
+        );
       }
     },
   );

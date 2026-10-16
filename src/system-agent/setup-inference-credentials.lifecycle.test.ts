@@ -244,18 +244,22 @@ describe("setup inference credential provider lifetime", () => {
             lease.assertOwned(),
           );
           release.resolve();
+          if (profileCase === "missing-match") {
+            await expect(work).rejects.toThrow("did not return credentials");
+            expect(process.listenerCount(nativeEvent)).toBe(nativeBefore);
+            expect(cfg).toEqual(originalConfig);
+            expect(loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles).toEqual(
+              {},
+            );
+            expect(observations[0]).toEqual({ phase: "auth-result", value: rawModelRef });
+            expect(observations.at(-1)).toEqual({ phase: "dispose", value: undefined });
+            return;
+          }
           const plan = await work;
           expect(process.listenerCount(nativeEvent)).toBe(nativeBefore);
           expect(cfg).toEqual(originalConfig);
           expect(structuredClone(plan)).toEqual(plan);
           const saved = loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles;
-          if (profileCase === "missing-match") {
-            expect(plan).toEqual({ error: expect.stringContaining("did not return credentials") });
-            expect(saved).toEqual({});
-            expect(observations[0]).toEqual({ phase: "auth-result", value: rawModelRef });
-            expect(observations.at(-1)).toEqual({ phase: "dispose", value: undefined });
-            return;
-          }
           expect(observations).toEqual([
             { phase: "auth-result", value: rawModelRef },
             {
@@ -275,9 +279,6 @@ describe("setup inference credential provider lifetime", () => {
               },
             },
           });
-          if ("error" in plan) {
-            throw new Error(plan.error);
-          }
           if (profileCase === "matching-last") {
             expect(plan.authProfileId).toBeDefined();
             expect(Object.keys(saved)).toEqual([plan.authProfileId]);
@@ -291,7 +292,7 @@ describe("setup inference credential provider lifetime", () => {
         } finally {
           release.resolve();
           try {
-            await work;
+            await Promise.allSettled([work]);
           } finally {
             process.off(observationEvent, observe);
           }

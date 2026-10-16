@@ -13,7 +13,9 @@ import {
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
 import type { SessionEntry as StoredSessionEntry } from "../../config/sessions/types.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
+import { logWarn } from "../../logger.js";
 import type { ReplyPayload } from "../types.js";
 import {
   parseExportCommandOutputPath,
@@ -48,7 +50,8 @@ async function hasPersistedAcpSession(params: {
   }
   try {
     return Boolean(await readAcpSessionMetaForEntryAsync(params));
-  } catch {
+  } catch (error) {
+    logWarn(`session-export: Could not read persisted ACP metadata: ${formatErrorMessage(error)}`);
     return false;
   }
 }

@@ -271,7 +271,7 @@ describe("git commit resolution", () => {
       }),
     ).toBeNull();
     const firstCallReads = readGitCommit.mock.calls.length;
-    expect(firstCallReads).toBe(2);
+    expect(firstCallReads).toBe(1);
     expect(
       resolveCommitHash({
         cwd: repoRootResult,

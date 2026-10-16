@@ -14,9 +14,7 @@ import {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   asFiniteNumber,
   asNullableRecord as asRecord,
@@ -108,38 +106,15 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
   const accountUrl = account.url;
   const accountCode = account.code;
 
-  async function authenticateWithRetry(maxAttempts = 10): Promise<string> {
-    let authAttempt = 0;
-    return await retryAsync(
-      async () => {
-        authAttempt += 1;
-        if (opts.abortSignal?.aborted) {
-          throw new Error("Aborted while waiting to authenticate");
-        }
-        try {
-          runtime.log?.(`[tlon] Attempting authentication to ${accountUrl}...`);
-          return await authenticate(accountUrl, accountCode, { ssrfPolicy });
-        } catch (error: unknown) {
-          runtime.error?.(
-            `[tlon] Failed to authenticate (attempt ${authAttempt}): ${formatErrorMessage(error)}`,
-          );
-          throw error;
-        }
-      },
-      {
-        attempts: Math.max(1, maxAttempts),
-        minDelayMs: 0,
-        shouldRetry: () => !opts.abortSignal?.aborted,
-        delayMs: ({ attempt }) => Math.min(30_000, 1_000 * 2 ** (attempt - 1)),
-        onRetry: ({ delayMs }) => {
-          runtime.log?.(`[tlon] Retrying authentication in ${delayMs}ms...`);
-        },
-        sleep: (delayMs) => sleepWithAbort(delayMs, opts.abortSignal),
-      },
-    );
+  async function authenticateOnce(): Promise<string> {
+    if (opts.abortSignal?.aborted) {
+      throw new Error("Aborted while waiting to authenticate");
+    }
+    runtime.log?.(`[tlon] Attempting authentication to ${accountUrl}...`);
+    return await authenticate(accountUrl, accountCode, { ssrfPolicy });
   }
 
-  const cookie = await authenticateWithRetry();
+  const cookie = await authenticateOnce();
   const api = new UrbitSSEClient(account.url, cookie, {
     ship: botShipName,
     ssrfPolicy,
@@ -149,7 +124,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     },
     onReconnect: async (client) => {
       runtime.log?.("[tlon] Re-authenticating on SSE reconnect...");
-      const newCookie = await authenticateWithRetry(5);
+      const newCookie = await authenticateOnce();
       client.updateCookie(newCookie);
       runtime.log?.("[tlon] Re-authentication successful");
     },

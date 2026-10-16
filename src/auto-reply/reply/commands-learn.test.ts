@@ -160,6 +160,25 @@ describe("learn command", () => {
     expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
   });
 
+  it("surfaces a missing configured harness instead of claiming the workshop is unsupported", async () => {
+    const params = buildLearnParams("/learn", {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+            agentRuntime: { id: "missing-workshop-harness" },
+          },
+        },
+      },
+    });
+
+    await expect(handleLearnCommand(params, true)).rejects.toThrow(
+      'Requested agent harness "missing-workshop-harness" is not registered.',
+    );
+    expect(params.ctx.BodyForAgent).toBe("/learn");
+  });
+
   it("replies without continuing when the selected model disables tools", async () => {
     const params = buildLearnParams("/learn", {
       models: {

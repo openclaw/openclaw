@@ -296,29 +296,24 @@ export async function persistCallRecord(
   stateRuntime?: VoiceCallStateRuntime["state"],
   options?: { assertCurrent?: () => void },
 ): Promise<void> {
-  try {
-    const stores = createCallRecordStateStores(storePath, stateRuntime);
-    const order = nextCallRecordOrder();
-    const eventKey = `event:${order.persistedAt.toString(36)}:${String(order.sequence).padStart(6, "0")}:${randomUUID()}`;
-    // Capture the snapshot before chunk writes yield to later call mutations.
-    const encoded = encodeCallRecordEvent(call);
-    for (let index = 0; index < encoded.meta.chunkCount; index += 1) {
-      await stores.chunks.register(buildChunkKey(eventKey, index), encoded.chunk(index));
-    }
-    if (options?.assertCurrent) {
-      // Keep guarded registration as the final await. Its caller can install the same snapshot in
-      // memory without an authority gap after durable write admission.
-      await pruneCallRecordEvents(stores, 1);
-      await stores.events.register(eventKey, { ...encoded.meta, ...order }, options);
-    } else {
-      // Existing callers publish before pruning and surface pruning failures with that snapshot
-      // still readable. Preserve that recovery contract for ordinary call-state writes.
-      await stores.events.register(eventKey, { ...encoded.meta, ...order });
-      await pruneCallRecordEvents(stores);
-    }
-  } catch (err) {
-    console.error("[voice-call] Failed to persist call record:", err);
-    throw err;
+  const stores = createCallRecordStateStores(storePath, stateRuntime);
+  const order = nextCallRecordOrder();
+  const eventKey = `event:${order.persistedAt.toString(36)}:${String(order.sequence).padStart(6, "0")}:${randomUUID()}`;
+  // Capture the snapshot before chunk writes yield to later call mutations.
+  const encoded = encodeCallRecordEvent(call);
+  for (let index = 0; index < encoded.meta.chunkCount; index += 1) {
+    await stores.chunks.register(buildChunkKey(eventKey, index), encoded.chunk(index));
+  }
+  if (options?.assertCurrent) {
+    // Keep guarded registration as the final await. Its caller can install the same snapshot in
+    // memory without an authority gap after durable write admission.
+    await pruneCallRecordEvents(stores, 1);
+    await stores.events.register(eventKey, { ...encoded.meta, ...order }, options);
+  } else {
+    // Existing callers publish before pruning and surface pruning failures with that snapshot
+    // still readable. Preserve that recovery contract for ordinary call-state writes.
+    await stores.events.register(eventKey, { ...encoded.meta, ...order });
+    await pruneCallRecordEvents(stores);
   }
 }
 

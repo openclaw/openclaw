@@ -376,7 +376,12 @@ async function mutateStorageMeta(rootDir: string, mutation: StorageMetaMutation)
       (current) => prepareStorageMetaMutation(decode(current), mutation) ?? undefined,
       "skip",
     );
-  } catch {
+  } catch (error) {
+    getMatrixRuntime()
+      .logging.getChildLogger({ module: "matrix-storage" })
+      .warn("matrix: failed to update client storage metadata; check storage and retry", {
+        error,
+      });
     return false;
   }
 }

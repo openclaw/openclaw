@@ -17,7 +17,6 @@ const {
   buildChannelInboundEnvelopeMock,
   builtInboundContextPayload,
   formatInboundMediaUnavailableTextMock,
-  sleepWithAbortMock,
   saveRemoteMediaMock,
   sseClientMock,
   ingressMock,
@@ -138,12 +137,12 @@ it.each([
   }
 });
 
-describe("monitorTlonProvider authentication retry", () => {
-  it("uses the shared abort-aware sleep for retry backoff", async () => {
+describe("monitorTlonProvider authentication", () => {
+  it("forwards authentication failure without an inner retry", async () => {
     const controller = new AbortController();
     const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
-    authenticateMock.mockRejectedValueOnce(new Error("login failed"));
-    sleepWithAbortMock.mockRejectedValueOnce(new Error("aborted"));
+    const error = new Error("login failed");
+    authenticateMock.mockRejectedValueOnce(error);
 
     await expect(
       monitorTlonProvider({
@@ -151,10 +150,10 @@ describe("monitorTlonProvider authentication retry", () => {
         abortSignal: controller.signal,
         runtime,
       }),
-    ).rejects.toThrow("aborted");
+    ).rejects.toBe(error);
 
     expect(authenticateMock).toHaveBeenCalledTimes(1);
-    expect(sleepWithAbortMock).toHaveBeenCalledWith(1_000, controller.signal);
+    expect(sseClientMock.connect).not.toHaveBeenCalled();
   });
 });
 

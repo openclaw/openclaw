@@ -41,7 +41,7 @@ it("binds automatic Codex path trust to the selected bundle", async () => {
         { sourceMatches: true, installMatches: false, origin: "bundled", accepted: false },
         { sourceMatches: true, installMatches: true, origin: "config", accepted: false },
       ] as const) {
-        const staged = await stageCodexCandidate(
+        const staged = stageCodexCandidate(
           {
             cfg,
             snapshot,
@@ -81,14 +81,14 @@ it("binds automatic Codex path trust to the selected bundle", async () => {
           "openai/fixture",
         );
         if (accepted) {
-          expect(staged).toMatchObject({
+          await expect(staged).resolves.toMatchObject({
             agentRuntimeId: "codex",
             config: {
               plugins: { entries: { codex: { config: { appServer: { homeScope: "user" } } } } },
             },
           });
         } else {
-          expect(staged).toMatchObject({ error: expect.stringContaining("official Codex plugin") });
+          await expect(staged).rejects.toThrow("official Codex plugin");
         }
       }
     },
@@ -221,20 +221,14 @@ it.each([
               beforePersistentEffect,
               beforePersistentApply,
             });
-        const checked = preparing.then((value) => {
-          if ("error" in value) {
-            throw new Error(value.error);
-          }
-          return value;
-        });
-        const settled = checked.then(
+        const settled = preparing.then(
           (value) => ({ ok: true as const, value }),
           (error: unknown) => ({ ok: false as const, error }),
         );
         try {
           await awaitGateBeforeSettlement(
             entered.promise,
-            checked,
+            preparing,
             "repair never reached index preparation",
           );
           revoked = revoke;

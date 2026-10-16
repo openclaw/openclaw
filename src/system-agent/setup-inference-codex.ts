@@ -25,10 +25,10 @@ import { createQuickstartNotePrompter } from "./setup-apply.js";
 import { listSetupInferenceAuthOptions } from "./setup-inference-auth-options.js";
 import {
   SetupInferenceActivationIndeterminateError,
+  SetupInferenceActivationUnavailableError,
   throwIfSetupInferenceCancelled,
   type StageContext,
   type StagedCandidate,
-  type StageFailure,
 } from "./setup-inference-core.js";
 import { saveSetupCredential, stageProviderAuthCandidate } from "./setup-inference-credentials.js";
 import { withCodexHomeScope } from "./setup-model-selection.js";
@@ -70,7 +70,7 @@ type PrepareCodexRuntimeParams = {
 
 async function prepareCodexRuntimePlugin(
   params: PrepareCodexRuntimeParams,
-): Promise<{ config: OpenClawConfig } | StageFailure> {
+): Promise<OpenClawConfig> {
   if (params.automaticSetup) {
     const resolveMetadata =
       params.resolveMetadata ??
@@ -103,10 +103,9 @@ async function prepareCodexRuntimePlugin(
         record,
       });
     if ((installed || record) && !trustedBundled && !trustedInstall) {
-      return {
-        error:
-          "Automatic setup requires the official Codex plugin. Remove the conflicting Codex plugin source with openclaw plugins uninstall codex, then retry, or select it manually in Model Setup.",
-      };
+      throw new SetupInferenceActivationUnavailableError(
+        "Automatic setup requires the official Codex plugin. Remove the conflicting Codex plugin source with openclaw plugins uninstall codex, then retry, or select it manually in Model Setup.",
+      );
     }
   }
   const onCapabilityConsent = params.automaticSetup
@@ -126,7 +125,9 @@ async function prepareCodexRuntimePlugin(
     },
   );
   if (!enabled.enabled) {
-    return { error: `Could not enable the Codex runtime plugin: ${enabled.reason}.` };
+    throw new SetupInferenceActivationUnavailableError(
+      `Could not enable the Codex runtime plugin: ${enabled.reason}.`,
+    );
   }
   const ensured = await params.ensureCodex({
     cfg: enabled.config,
@@ -141,7 +142,7 @@ async function prepareCodexRuntimePlugin(
     recordOfficialCapabilities: params.automaticSetup,
   });
   if (!ensured.ok) {
-    return { error: ensured.message };
+    throw new SetupInferenceActivationUnavailableError(ensured.message);
   }
   const install = ensured.cfg.plugins?.installs?.codex;
   if (install?.source === "npm" && install.installPath) {
@@ -160,7 +161,7 @@ async function prepareCodexRuntimePlugin(
       );
     }
   }
-  return { config: normalizePluginTargetConfig(ensured.cfg, "codex") };
+  return normalizePluginTargetConfig(ensured.cfg, "codex");
 }
 
 /** Prepare the official runtime without starting an interactive provider login. */
@@ -171,7 +172,7 @@ export async function prepareAutomaticSetupCodex(params: {
   beforePersistentEffect: () => void | Promise<void>;
   beforePersistentApply: () => void;
   signal?: AbortSignal;
-}): Promise<{ ok: true; config: OpenClawConfig } | StageFailure> {
+}): Promise<OpenClawConfig> {
   const leaseOptions = { signal: params.signal, assertCurrent: params.beforePersistentApply };
   return await withPluginLifecycleLease(leaseOptions, async () => {
     const { ensureCodexRuntimePluginForSupervision } =
@@ -182,16 +183,14 @@ export async function prepareAutomaticSetupCodex(params: {
       ensureCodex: ensureCodexRuntimePluginForSupervision,
     });
     // A new ChatGPT sign-in stays isolated from the native Codex login.
-    return "error" in prepared
-      ? prepared
-      : { ok: true, config: withCodexHomeScope(prepared.config, "agent") };
+    return withCodexHomeScope(prepared, "agent");
   });
 }
 
 export async function stageCodexCandidate(
   ctx: StageContext,
   modelRef: string,
-): Promise<StagedCandidate | StageFailure> {
+): Promise<StagedCandidate> {
   const beforePersistentApply = () => throwIfSetupInferenceCancelled(ctx.params);
   const leaseOptions = { signal: ctx.params.signal, assertCurrent: beforePersistentApply };
   return await withPluginLifecycleLease(leaseOptions, async () => {
@@ -213,21 +212,15 @@ export async function stageCodexCandidate(
       markRetained: ctx.deps.markRetainedManagedNpmInstall,
       resolveMetadata: ctx.deps.resolvePluginMetadataSnapshot,
     });
-    if ("error" in prepared) {
-      return prepared;
-    }
     // Codex alone owns rotation of the native login; never import its OAuth tokens.
-    const config = ctx.params.automaticSetup
-      ? withCodexHomeScope(prepared.config, "user")
-      : prepared.config;
+    const config = ctx.params.automaticSetup ? withCodexHomeScope(prepared, "user") : prepared;
     const entry = config.plugins?.entries?.codex;
     const pluginConfig = entry?.config ?? {};
     const appServer = isRecord(pluginConfig.appServer) ? pluginConfig.appServer : {};
     if (typeof appServer.transport === "string" && appServer.transport !== "stdio") {
-      return {
-        error:
-          "Codex setup needs a local stdio app-server. Finish sign-in on the remote app-server host or remove the transport override before retrying.",
-      };
+      throw new SetupInferenceActivationUnavailableError(
+        "Codex setup needs a local stdio app-server. Finish sign-in on the remote app-server host or remove the transport override before retrying.",
+      );
     }
     const candidate = {
       modelRef,
@@ -288,10 +281,9 @@ export async function stageCodexCandidate(
       );
       const choice = options.find((option) => option.id === ctx.params.authChoice) ?? options[0];
       if (!choice) {
-        return {
-          error:
-            "OpenAI sign-in is unavailable. Connect OpenAI in Model Setup, then retry Codex setup.",
-        };
+        throw new SetupInferenceActivationUnavailableError(
+          "OpenAI sign-in is unavailable. Connect OpenAI in Model Setup, then retry Codex setup.",
+        );
       }
       return await stageProviderAuthCandidate(
         { ...ctx, cfg: config, params: { ...ctx.params, modelRef, authChoice: choice.id } },

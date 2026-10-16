@@ -220,11 +220,8 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
           beforePersistentEffect: assertCurrent,
           beforePersistentApply: assertCurrent,
         });
-        if ("error" in prepared) {
-          throw new Error(prepared.error);
-        }
         const config = applySetupNativeSessionCatalogPreference({
-          config: prepared.config,
+          config: prepared,
           workspaceDir: detection.workspace,
           enabled: false,
           onlyUnset: true,

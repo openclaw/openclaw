@@ -29,30 +29,6 @@ import {
 import type { OutboundPayloadPlan } from "./reply-payload-parts.js";
 import { createReplyToDeliveryPolicy, normalizeOutboundReplyFacts } from "./reply-policy.js";
 
-class OutboundPayloadPreparationError extends Error {
-  readonly sourceIndex: number;
-  readonly payload: ReplyPayload;
-
-  constructor(error: unknown, sourceIndex: number, payload: ReplyPayload) {
-    super(error instanceof Error ? error.message : String(error), { cause: error });
-    this.name = "OutboundPayloadPreparationError";
-    this.sourceIndex = sourceIndex;
-    this.payload = payload;
-  }
-}
-
-function throwIfPreparationAborted(
-  signal: AbortSignal | undefined,
-  sourceIndex: number,
-  payload: ReplyPayload,
-): void {
-  try {
-    throwIfAborted(signal);
-  } catch (error) {
-    throw new OutboundPayloadPreparationError(error, sourceIndex, payload);
-  }
-}
-
 function compactPreparedPayload(payload: ReplyPayload): ReplyPayload {
   const summary = buildPayloadSummary(payload);
   const {
@@ -218,25 +194,18 @@ async function prepareOutboundPlan(
   let modifierBoundaryEntered = false;
 
   payloads: for (const { index: sourceIndex, payload } of normalized) {
-    throwIfPreparationAborted(params.abortSignal, sourceIndex, payload);
+    throwIfAborted(params.abortSignal);
     if (hasModifyingHooks && !modifierBoundaryEntered) {
       await options?.onBeforeFirstModifier?.();
-      throwIfPreparationAborted(params.abortSignal, sourceIndex, payload);
+      throwIfAborted(params.abortSignal);
       modifierBoundaryEntered = true;
     }
     const changes = { replyHookChanged: false, messageHookChanged: false };
     let postHookPayload = payload;
     for (const modifier of modifiers) {
-      let result: Awaited<ReturnType<typeof applyMessageSendingHook>>;
-      try {
-        result = await modifier.apply(postHookPayload);
-      } catch (error) {
-        // Modifier handlers are fail-open. Only a host invariant failure can
-        // escape here, and atomic preparation must attribute it before aborting.
-        throw new OutboundPayloadPreparationError(error, sourceIndex, postHookPayload);
-      }
+      const result = await modifier.apply(postHookPayload);
       postHookPayload = copyMetadata(postHookPayload, result.payload);
-      throwIfPreparationAborted(params.abortSignal, sourceIndex, postHookPayload);
+      throwIfAborted(params.abortSignal);
       if (result.cancelled) {
         entries.push({
           sourceIndex,

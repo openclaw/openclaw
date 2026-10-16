@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { formatByteSize, resolveIntegerOption } from "@openclaw/normalization-core";
-import { toErrorObject } from "../infra/errors.js";
 import { LruCache } from "../infra/lru-cache.js";
 import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -213,20 +212,12 @@ async function resizeImageBase64IfNeeded(params: {
   let smallestSize: number | undefined;
   for (const side of sideGrid) {
     for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
-      let out: Buffer;
-      try {
-        out = await resizeToJpeg({
-          buffer: buf,
-          maxSide: side,
-          quality,
-          withoutEnlargement: true,
-        });
-      } catch (err) {
-        if (isImageProcessorUnavailableError(err)) {
-          throw toErrorObject(err, "Non-Error thrown");
-        }
-        throw err;
-      }
+      const out = await resizeToJpeg({
+        buffer: buf,
+        maxSide: side,
+        quality,
+        withoutEnlargement: true,
+      });
       if (smallestSize === undefined || out.byteLength < smallestSize) {
         smallestSize = out.byteLength;
       }

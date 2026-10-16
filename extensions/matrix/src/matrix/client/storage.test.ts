@@ -324,8 +324,9 @@ describe("matrix client storage paths", () => {
     expect(fs.existsSync(rootDir)).toBe(false);
   });
 
-  it("preserves metadata when its worker write fails", async () => {
-    setupStateDir();
+  it("reports a worker write failure without changing metadata", async () => {
+    const logger = createTestLogger();
+    setupStateDir(undefined, logger);
     const storagePaths = await resolveDefaultStoragePaths();
     seedStorageMeta(storagePaths.rootDir, {
       accessTokenHash: storagePaths.tokenHash,
@@ -346,6 +347,10 @@ describe("matrix client storage paths", () => {
     expect(
       await recordCurrentStorageMetaDeviceId({ rootDir: storagePaths.rootDir, deviceId: "NEW" }),
     ).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "matrix: failed to update client storage metadata; check storage and retry",
+      { error: expect.objectContaining({ message: "synthetic worker failure" }) },
+    );
     expect(native).not.toHaveBeenCalled();
     expect(readStorageMeta(storagePaths.rootDir)?.deviceId).toBe("ORIGINAL");
   });

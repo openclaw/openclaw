@@ -4846,7 +4846,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/process/supervisor/service-child-group-anchor.retirement.test.ts",
   "src/process/supervisor/service-child-relay-host.retirement.test.ts",
   "src/process/supervisor/supervisor.anchored-shell.real.test.ts",
-  "src/process/supervisor/supervisor.no-detach.real.test.ts",
   "src/process/windows-command.test.ts",
   "src/projects/project-registry.test.ts",
   "src/proxy-capture/runtime.guarded-fetch.test.ts",

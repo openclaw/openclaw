@@ -114,12 +114,33 @@ describe("Ollama onboarding model pulls", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("coerces non-Error stream failures through the shared error contract", async () => {
+  it.each(['{"status":42}'])(
+    "ignores a malformed progress record before success: %s",
+    async (line) => {
+      const release = vi.fn(async () => {});
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(`${line}\n{"status":"success"}\n`),
+        release,
+      });
+      const progress = { update: vi.fn(), stop: vi.fn() };
+      const prompter = { progress: vi.fn(() => progress) } as unknown as WizardPrompter;
+
+      await expect(pullOllamaModel("http://127.0.0.1:11434", "gemma4:e2b", prompter)).resolves.toBe(
+        true,
+      );
+
+      expect(progress.update).not.toHaveBeenCalled();
+      expect(progress.stop).toHaveBeenCalledWith("Downloaded gemma4:e2b");
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("reports stream failures and releases the guarded response", async () => {
     const release = vi.fn(async () => {});
     const response = new Response(
       new ReadableStream<Uint8Array>({
         pull(controller) {
-          controller.error({ code: "OLLAMA_PULL_INTERRUPTED" });
+          controller.error(new Error("Ollama pull interrupted"));
         },
       }),
     );
@@ -134,7 +155,7 @@ describe("Ollama onboarding model pulls", () => {
     );
 
     expect(progress.stop).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to download gemma4:e2b: Non-Error rejection"),
+      "Failed to download gemma4:e2b: Ollama pull interrupted",
     );
     expect(release).toHaveBeenCalledOnce();
   });

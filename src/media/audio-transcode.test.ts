@@ -229,6 +229,68 @@ describe("transcodeAudioBuffer", () => {
 
   it.each([
     [
+      "command rejection",
+      async () => {
+        throw new Error("afconvert launch failed");
+      },
+      "afconvert launch failed",
+    ],
+    ["timeout", async () => ({ termination: "timeout", code: 124 }), "timeout-1234ms"],
+    ["nonzero exit", async () => ({ termination: "exit", code: 7 }), "exit-7"],
+    ["unknown exit", async () => ({ termination: "signal", code: null }), "exit-unknown"],
+  ] as const)(
+    "reports %s and cleans the native transcode workspace",
+    async (_name, run, detail) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      let workspaceDir = "";
+      runCommandWithTimeoutMock.mockImplementationOnce(async (argv: string[]) => {
+        workspaceDir = path.dirname(argv.at(-1)!);
+        return await run();
+      });
+
+      await expect(
+        transcodeAudioBuffer({
+          audioBuffer: Buffer.from("payload"),
+          sourceExtension: "mp3",
+          targetExtension: "caf",
+          timeoutMs: 1234,
+        }),
+      ).resolves.toEqual({ ok: false, reason: "transcoder-failed", detail });
+      expect(workspaceDir).not.toBe("");
+      expect(existsSync(workspaceDir)).toBe(false);
+    },
+  );
+
+  it("returns native CAF output and cleans the successful workspace", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    let inputPath = "";
+    let outputPath = "";
+    runCommandWithTimeoutMock.mockImplementationOnce(async (argv: string[]) => {
+      inputPath = argv.at(-2)!;
+      outputPath = argv.at(-1)!;
+      await expect(readFile(inputPath)).resolves.toEqual(Buffer.from("payload"));
+      await writeFile(outputPath, Buffer.from("caf-output"));
+      return { termination: "exit", code: 0 };
+    });
+
+    await expect(
+      transcodeAudioBuffer({
+        audioBuffer: Buffer.from("payload"),
+        sourceExtension: "mp3",
+        targetExtension: "caf",
+        timeoutMs: 1234,
+      }),
+    ).resolves.toEqual({ ok: true, buffer: Buffer.from("caf-output") });
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledExactlyOnceWith(
+      ["/usr/bin/afconvert", "-f", "caff", "-d", "opus@24000", "-c", "1", inputPath, outputPath],
+      { maxOutputBytes: 1024, timeoutMs: 1234 },
+    );
+    expect(existsSync(inputPath)).toBe(false);
+    expect(existsSync(outputPath)).toBe(false);
+  });
+
+  it.each([
+    [
       "returns noop-same-container when source and target containers match",
       "mp3",
       ".mp3",

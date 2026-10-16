@@ -37,7 +37,6 @@ import {
   type ActivateSetupInferenceParams,
   type StagedCandidate,
   type StageContext,
-  type StageFailure,
   type ActivateSetupInferenceResult,
   describeSetupInferenceError,
   invalidSetupConfigError,
@@ -90,7 +89,7 @@ import {
 } from "./setup-native-session-catalogs.js";
 import { captureSystemAgentOwnerPluginArtifacts } from "./verified-inference.js";
 
-async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | StageFailure> {
+async function stageCandidate(ctx: StageContext): Promise<StagedCandidate> {
   const { params, cfg } = ctx;
   const hasProviderTarget =
     params.kind.startsWith("saved-auth:") ||
@@ -98,16 +97,15 @@ async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | Stag
     params.kind === "existing-model" ||
     params.kind === "provider-auth" ||
     params.kind === "api-key";
-  const roleError = hasProviderTarget
-    ? undefined
-    : validateSetupModelTarget(undefined, params.modelTarget);
-  if (roleError) {
-    return roleError;
+  if (!hasProviderTarget) {
+    validateSetupModelTarget(undefined, params.modelTarget);
   }
   if (params.kind.startsWith("saved-auth:")) {
     const profileId = parseSavedAuthSetupProfileId(params.kind);
     if (!profileId) {
-      return { error: "Invalid saved sign-in choice. Open Model Setup and choose again." };
+      throw new SetupInferenceActivationUnavailableError(
+        "Invalid saved sign-in choice. Open Model Setup and choose again.",
+      );
     }
     return await stageSavedAuthCandidate(ctx, profileId);
   }
@@ -127,17 +125,16 @@ async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | Stag
         ctx.snapshot,
       );
       if (!route) {
-        return { error: "No configured default-agent inference route is available." };
+        throw new SetupInferenceActivationUnavailableError(
+          "No configured default-agent inference route is available.",
+        );
       }
-      const routeRoleError = validateSetupModelTarget(route.modelTarget, params.modelTarget);
-      if (routeRoleError) {
-        return routeRoleError;
-      }
+      validateSetupModelTarget(route.modelTarget, params.modelTarget);
       const requested = params.modelRef?.trim();
       if (requested && normalizeAgentModelRefForConfig(requested) !== route.modelLabel) {
-        return {
-          error: `The configured default model changed from ${requested} to ${route.modelLabel}. Try setup again.`,
-        };
+        throw new SetupInferenceActivationUnavailableError(
+          `The configured default model changed from ${requested} to ${route.modelLabel}. Try setup again.`,
+        );
       }
       return {
         modelRef: route.modelLabel,
@@ -169,9 +166,6 @@ async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | Stag
         defaultModel,
         modelRef: params.modelRef,
       });
-      if (typeof modelRef !== "string") {
-        return modelRef;
-      }
       if (params.kind === "codex-cli") {
         return await stageCodexCandidate(ctx, modelRef);
       }
@@ -193,7 +187,9 @@ async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | Stag
       };
     }
     default:
-      return { error: `Unknown inference choice "${params.kind}".` };
+      throw new SetupInferenceActivationUnavailableError(
+        `Unknown inference choice "${params.kind}".`,
+      );
   }
 }
 
@@ -295,7 +291,6 @@ async function activateCandidate(
       throwIfSetupInferenceCancelled(params);
     },
   };
-  const staged = await stageCandidate(ctx);
   const failure = (result: Extract<ActivateSetupInferenceResult, { ok: false }>) => ({
     ...result,
     ...(ctx.effects.credentialsSaved
@@ -305,8 +300,14 @@ async function activateCandidate(
       : {}),
     disposition: "rejected-before-promotion" as const,
   });
-  if ("error" in staged) {
-    return failure({ ok: false, status: "unavailable", error: staged.error });
+  let staged: StagedCandidate;
+  try {
+    staged = await stageCandidate(ctx);
+  } catch (error) {
+    if (!(error instanceof SetupInferenceActivationUnavailableError)) {
+      throw error;
+    }
+    return failure({ ok: false, status: "unavailable", error: error.message });
   }
   await using cache = createPluginCache();
   const prepared = await prepareSetupNativeRuntimeConsent(ctx, staged, cache);
