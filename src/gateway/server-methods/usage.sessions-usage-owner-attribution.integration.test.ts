@@ -71,6 +71,31 @@ function usageMessage(tokens: number, timestamp: number): AssistantMessage {
   };
 }
 
+function writeUsage(
+  state: OpenClawTestState,
+  target: Parameters<typeof persistSessionTranscriptTurn>[0],
+  tokens: number,
+  timestamp: number,
+) {
+  return persistSessionTranscriptTurn(target, {
+    cwd: state.workspaceDir,
+    updateMode: "none",
+    messages: [{ message: usageMessage(tokens, timestamp), now: timestamp }],
+  });
+}
+
+function sessionScope(state: OpenClawTestState, agentId: string, sessionKey: string) {
+  return { agentId, sessionKey, storePath: path.join(state.sessionsDir(agentId), "sessions.json") };
+}
+
+async function warmUsage(agentIds: string[]) {
+  for (const agentId of agentIds) {
+    for (const { sessionId, sessionFile } of await discoverAllSessions({ agentId })) {
+      await loadSessionCostSummary({ agentId, sessionId, sessionFile, config: getRuntimeConfig() });
+    }
+  }
+}
+
 async function requestUsage(params: Record<string, unknown>, method = "sessions.usage") {
   const respond = vi.fn<RespondFn>();
   const handler = expectDefined(usageHandlers[method], "usage handler");
@@ -215,21 +240,15 @@ it("keeps same-key overview context reports with their selected agent", async ()
     for (const [index, agentId] of ["main", "opus"].entries()) {
       const sessionId = `${agentId}-global-context`;
       const scope = {
-        agentId,
+        ...sessionScope(state, agentId, "global"),
         sessionId,
-        sessionKey: "global",
-        storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
       };
       await upsertSessionEntryCore(scope, {
         sessionId,
         updatedAt: timestamp,
         systemPromptReport: reports[index],
       });
-      await persistSessionTranscriptTurn(scope, {
-        cwd: state.workspaceDir,
-        updateMode: "none",
-        messages: [{ message: usageMessage(index + 1, timestamp), now: timestamp }],
-      });
+      await writeUsage(state, scope, index + 1, timestamp);
       await loadSessionCostSummary({ agentId, sessionId, sessionTarget: scope, config });
       candidates.push(
         ...(await usageSessionSelection.selectUsageSessions({
@@ -302,23 +321,14 @@ it("keeps prior cron runs attributed through guarded replacement and the real us
       })();
       const sessionId = cronSession.sessionEntry.sessionId;
       sessionIds.push(sessionId);
-      await persistSessionTranscriptTurn(
-        { ...scope, sessionId },
-        {
-          cwd: state.workspaceDir,
-          updateMode: "none",
-          messages: [{ message: usageMessage(tokens, timestamp), now: timestamp }],
-        },
-      );
+      await writeUsage(state, { ...scope, sessionId }, tokens, timestamp);
     }
     expect(loadSessionEntryReadOnly(scope)).toMatchObject({
       usageFamilyKey: sessionKey,
       usageFamilySessionIds: sessionIds,
       createdActor: { type: "system" },
     });
-    for (const { sessionId, sessionFile } of await discoverAllSessions({ agentId: "main" })) {
-      await loadSessionCostSummary({ agentId: "main", sessionId, sessionFile, config });
-    }
+    await warmUsage(["main"]);
     for (const groupBy of ["instance", "family"]) {
       const sql = observeHostDataSql();
       let result: SessionsUsageResult;
@@ -358,11 +368,7 @@ it("uses committed metadata for selected usage and families with an empty curren
   await withUsageState(async (state) => {
     const config = getRuntimeConfig();
     const key = "agent:main:usage-receipts";
-    const scope = {
-      agentId: "main",
-      sessionKey: key,
-      storePath: path.join(state.sessionsDir(), "sessions.json"),
-    };
+    const scope = sessionScope(state, "main", key);
     const timestamp = Date.now() - 60_000;
     const firstId = "usage-receipts-first";
     await upsertSessionEntryCore(scope, {
@@ -370,14 +376,7 @@ it("uses committed metadata for selected usage and families with an empty curren
       updatedAt: timestamp,
       label: "Before rename",
     });
-    await persistSessionTranscriptTurn(
-      { ...scope, sessionId: firstId },
-      {
-        cwd: state.workspaceDir,
-        updateMode: "none",
-        messages: [{ message: usageMessage(17, timestamp), now: timestamp }],
-      },
-    );
+    await writeUsage(state, { ...scope, sessionId: firstId }, 17, timestamp);
     await loadSessionCostSummary({
       config,
       agentId: scope.agentId,
@@ -425,7 +424,6 @@ it("uses committed metadata for selected usage and families with an empty curren
 
 it("hydrates context metadata only for emitted usage rows while aggregating every match", async () => {
   await withUsageState(async (state) => {
-    const config = getRuntimeConfig();
     const ada = ensureProfileForEmail("ada@example.test");
     const bob = ensureProfileForEmail("bob@example.test");
     const timestamp = Date.now() - 60_000;
@@ -446,10 +444,8 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
     );
     for (const fixture of fixtures) {
       const scope = {
-        agentId: fixture.agentId,
+        ...sessionScope(state, fixture.agentId, fixture.key),
         sessionId: fixture.sessionId,
-        sessionKey: fixture.key,
-        storePath: path.join(state.sessionsDir(fixture.agentId), "sessions.json"),
       };
       await upsertSessionEntryCore(scope, {
         sessionId: fixture.sessionId,
@@ -463,24 +459,14 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
         skillsSnapshot: { prompt: fixture.promptMarker + "x".repeat(65_536), skills: [] },
         systemPromptReport: fixture.report,
       });
-      await persistSessionTranscriptTurn(scope, {
-        cwd: state.workspaceDir,
-        updateMode: "none",
-        messages: [
-          { message: usageMessage(fixture.tokens, fixture.updatedAt), now: fixture.updatedAt },
-        ],
-      });
+      await writeUsage(state, scope, fixture.tokens, fixture.updatedAt);
       fixture.updatedAt = expectDefined(
         loadSessionEntryReadOnly({ ...scope, projection: "list" }),
         "persisted usage fixture",
       ).updatedAt;
     }
     // Refresh outside the observation window so transcript work cannot hide metadata overreads.
-    for (const agentId of ["main", "opus"]) {
-      for (const { sessionId, sessionFile } of await discoverAllSessions({ agentId })) {
-        await loadSessionCostSummary({ agentId, sessionId, sessionFile, config });
-      }
-    }
+    await warmUsage(["main", "opus"]);
     const newest = expectDefined(fixtures.at(-1), "newest usage row");
     const secondNewest = expectDefined(fixtures.at(-2), "second newest usage row");
     const older = expectDefined(fixtures[3], "older main usage row");
@@ -708,13 +694,8 @@ it.each(["direct owner", "compressed history", "current JSONL"])(
       const secondId = "family-second";
       const currentId = currentArtifact ? archiveManager.getSessionId() : "family-current";
       const timestamp = Date.now();
-      const scopeFor = (agentId: string, sessionKey: string) => ({
-        agentId,
-        sessionKey,
-        storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
-      });
-      const mainScope = scopeFor("main", mainKey);
-      const opusScope = scopeFor("opus", opusKey);
+      const mainScope = sessionScope(state, "main", mainKey);
+      const opusScope = sessionScope(state, "opus", opusKey);
       const writeArtifact = async (tokens: number) => {
         archiveManager.appendMessage(usageMessage(tokens, timestamp));
         const content = [archiveManager.getHeader(), ...archiveManager.getEntries()]
@@ -746,14 +727,7 @@ it.each(["direct owner", "compressed history", "current JSONL"])(
           await writeArtifact(tokens);
           continue;
         }
-        await persistSessionTranscriptTurn(
-          { ...scope, sessionId },
-          {
-            cwd: state.workspaceDir,
-            updateMode: "none",
-            messages: [{ message: usageMessage(tokens, timestamp), now: timestamp }],
-          },
-        );
+        await writeUsage(state, { ...scope, sessionId }, tokens, timestamp);
       }
       const current = await upsertSessionEntryCore(mainScope, {
         sessionId: currentId,
@@ -766,7 +740,7 @@ it.each(["direct owner", "compressed history", "current JSONL"])(
       }
       if (directOwner) {
         // Exact-run continuation nodes retain an instance while their logical root rotates.
-        await upsertSessionEntryCore(scopeFor("main", directKey), {
+        await upsertSessionEntryCore(sessionScope(state, "main", directKey), {
           sessionId: firstId,
           label: "retained run",
           updatedAt: timestamp,

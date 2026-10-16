@@ -46,15 +46,9 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
           ]
         : [],
     ),
-    loadSessionCostSummariesFromCache: vi.fn(async ({ sessions }: { sessions: unknown[] }) => ({
-      summaries: sessions.map(() => createEmptyCostUsageTotals()),
-      cacheStatus: {
-        status: "fresh",
-        cachedFiles: sessions.length,
-        pendingFiles: 0,
-        staleFiles: 0,
-      },
-    })),
+    loadSessionCostSummariesFromCache: vi.fn(async ({ sessions }: { sessions: unknown[] }) =>
+      summaryBatch(sessions.map(() => createEmptyCostUsageTotals())),
+    ),
     loadSessionUsageTimeSeries: vi.fn(async () => ({ sessionId: "s-opus", points: [] })),
     loadSessionLogs: vi.fn(async () => []),
   };
@@ -83,6 +77,24 @@ let TEST_RUNTIME_CONFIG: OpenClawConfig = {
 };
 let projectionFixture: UsageSessionStoreFixture = { store: {} };
 const BASE_USAGE_RANGE = { startDate: "2026-02-01", endDate: "2026-02-02", limit: 10 };
+function summaryBatch(summaries: Array<SessionCostSummary | null>) {
+  return {
+    summaries,
+    cacheStatus: {
+      status: "fresh" as const,
+      cachedFiles: summaries.length,
+      pendingFiles: 0,
+      staleFiles: 0,
+    },
+  };
+}
+function discoveredRows(prefix: string, count: number, newestFirst = false) {
+  return Array.from({ length: count }, (_, index) => ({
+    sessionId: `${prefix}-${index}`,
+    sessionFile: `/tmp/${prefix}-${index}.jsonl`,
+    mtime: newestFirst ? count - index : index + 1,
+  }));
+}
 async function runSessionsUsageMethod(
   method: "sessions.usage" | "sessions.usage.timeseries" | "sessions.usage.logs",
   params: Record<string, unknown>,
@@ -118,25 +130,6 @@ function readResult(respond: ReturnType<typeof vi.fn>): SessionsUsageResult {
   expect(respond.mock.calls[0]?.[0]).toBe(true);
   return respond.mock.calls[0]?.[1] as SessionsUsageResult;
 }
-function mockStoredSession(
-  key: string,
-  entry: SessionEntry,
-  resolution: "valid" | "missing" = "valid",
-) {
-  const storePath = "/tmp/agents/opus/agent/openclaw-agent.sqlite";
-  vi.mocked(resolveGatewaySessionStoreTargetInWorker).mockResolvedValueOnce({
-    agentId: "opus",
-    canonicalKey: key,
-    store: { [key]: entry },
-    storeKeys: [key],
-    storePath,
-  });
-  vi.mocked(resolveUsageSessionSource).mockResolvedValueOnce(
-    resolution === "missing"
-      ? undefined
-      : { entry, sessionFile: `sqlite:opus:${entry.sessionId}:${storePath}` },
-  );
-}
 
 describe("sessions.usage", () => {
   beforeEach(() => {
@@ -153,10 +146,7 @@ describe("sessions.usage", () => {
       vi.mocked(loadSessionCostSummariesFromCache).mockImplementationOnce(async () => {
         started.resolve();
         await released.promise;
-        return {
-          summaries: [{ ...createEmptyCostUsageTotals(), totalTokens: 123 }],
-          cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
-        };
+        return summaryBatch([{ ...createEmptyCostUsageTotals(), totalTokens: 123 }]);
       });
       const pending = runSessionsUsage(BASE_USAGE_RANGE);
       await started.promise;
@@ -185,10 +175,7 @@ describe("sessions.usage", () => {
         const signal = getAsyncWorkSignal();
         started.resolve(signal);
         await release.promise;
-        return {
-          summaries: [createEmptyCostUsageTotals()],
-          cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
-        };
+        return summaryBatch([createEmptyCostUsageTotals()]);
       });
       const pending = runSessionsUsageMethod("sessions.usage", BASE_USAGE_RANGE, {
         signal: controller.signal,
@@ -239,13 +226,7 @@ describe("sessions.usage", () => {
     const originalDiscovery = discovered.getMockImplementation()!;
     const load = vi.mocked(loadSessionCostSummariesFromCache);
     const originalLoad = load.getMockImplementation()!;
-    discovered.mockResolvedValue(
-      Array.from({ length: 257 }, (_, index) => ({
-        sessionId: `budget-${index}`,
-        sessionFile: `/tmp/budget-${index}.jsonl`,
-        mtime: 257 - index,
-      })),
-    );
+    discovered.mockResolvedValue(discoveredRows("budget", 257, true));
     load.mockImplementation(async ({ sessions }) => {
       if (sessions.some(({ sessionId }) => sessionId === "budget-256")) {
         const signal = getAsyncWorkSignal()!;
@@ -259,15 +240,9 @@ describe("sessions.usage", () => {
           signal.removeEventListener("abort", abort);
         }
       }
-      return {
-        summaries: sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 7 })),
-        cacheStatus: {
-          status: "fresh",
-          cachedFiles: sessions.length,
-          pendingFiles: 0,
-          staleFiles: 0,
-        },
-      };
+      return summaryBatch(
+        sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 7 })),
+      );
     });
     const pending = runSessionsUsage({ ...BASE_USAGE_RANGE, projection: "overview" });
     try {
@@ -304,13 +279,7 @@ describe("sessions.usage", () => {
     const originalDiscovery = discovered.getMockImplementation()!;
     const load = vi.mocked(loadSessionCostSummariesFromCache);
     const originalLoad = load.getMockImplementation()!;
-    discovered.mockResolvedValue(
-      Array.from({ length: 257 }, (_, index) => ({
-        sessionId: `memory-${index}`,
-        sessionFile: `/tmp/memory-${index}.jsonl`,
-        mtime: 257 - index,
-      })),
-    );
+    discovered.mockResolvedValue(discoveredRows("memory", 257, true));
     load.mockImplementation(async ({ sessions, reportBudgetBytes }) => ({
       summaries: sessions.map(() =>
         reportBudgetBytes === 0 ? null : { ...createEmptyCostUsageTotals(), totalTokens: 7 },
@@ -360,15 +329,9 @@ describe("sessions.usage", () => {
       try {
         await Promise.race([release.promise, aborted.promise]);
         signal.throwIfAborted();
-        return {
-          summaries: sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 123 })),
-          cacheStatus: {
-            status: "fresh",
-            cachedFiles: sessions.length,
-            pendingFiles: 0,
-            staleFiles: 0,
-          },
-        };
+        return summaryBatch(
+          sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 123 })),
+        );
       } finally {
         signal.removeEventListener("abort", abort);
       }
@@ -420,38 +383,30 @@ describe("sessions.usage", () => {
   });
 
   it("filters all overview candidates before pagination and keeps canonical filtered exports complete", async () => {
-    const discovered = Array.from({ length: 1001 }, (_, index) => ({
-      sessionId: `row-${index}`,
-      sessionFile: `/tmp/row-${index}.jsonl`,
-      mtime: index + 1,
-    }));
+    const discovered = discoveredRows("row", 1001);
     vi.mocked(discoverAllSessions)
       .mockResolvedValueOnce(discovered)
       .mockResolvedValueOnce(discovered);
-    vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async (params) => ({
-      summaries: params.sessions.map(({ sessionId }) => ({
-        ...createEmptyCostUsageTotals(),
-        sessionId,
-        totalTokens: 7,
-        firstActivity: 1,
-        activityDates: ["2026-02-01"],
-        dailyBreakdown: [
-          {
-            ...createEmptyCostUsageTotals(),
-            date: "2026-02-01",
-            totalTokens: 7,
-            tokens: 7,
-            cost: 0,
-          },
-        ],
-      })),
-      cacheStatus: {
-        status: "fresh",
-        cachedFiles: params.sessions.length,
-        staleFiles: 0,
-        pendingFiles: 0,
-      },
-    }));
+    vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async (params) =>
+      summaryBatch(
+        params.sessions.map(({ sessionId }) => ({
+          ...createEmptyCostUsageTotals(),
+          sessionId,
+          totalTokens: 7,
+          firstActivity: 1,
+          activityDates: ["2026-02-01"],
+          dailyBreakdown: [
+            {
+              ...createEmptyCostUsageTotals(),
+              date: "2026-02-01",
+              totalTokens: 7,
+              tokens: 7,
+              cost: 0,
+            },
+          ],
+        })),
+      ),
+    );
     const overview = readResult(
       await runSessionsUsage({
         ...BASE_USAGE_RANGE,
@@ -497,13 +452,7 @@ describe("sessions.usage", () => {
   });
 
   it("rejects oversized usage selections before loading summaries", async () => {
-    vi.mocked(discoverAllSessions).mockResolvedValueOnce(
-      Array.from({ length: 20_001 }, (_, index) => ({
-        sessionId: `budget-${index}`,
-        sessionFile: `/tmp/budget-${index}.jsonl`,
-        mtime: index + 1,
-      })),
-    );
+    vi.mocked(discoverAllSessions).mockResolvedValueOnce(discoveredRows("budget", 20_001));
     const respond = await runSessionsUsage(BASE_USAGE_RANGE);
     expect(respond).toHaveBeenCalledExactlyOnceWith(
       false,
@@ -518,11 +467,7 @@ describe("sessions.usage", () => {
 
   it("applies the usage size budget to the selected creator", async () => {
     await withOpenClawTestState({ label: "usage-creator-budget" }, async (state) => {
-      const unrelated = Array.from({ length: 20_001 }, (_, index) => ({
-        sessionId: `other-creator-${index}`,
-        sessionFile: `/tmp/other-creator-${index}.jsonl`,
-        mtime: index + 1,
-      }));
+      const unrelated = discoveredRows("other-creator", 20_001);
       const selected = {
         sessionId: "selected-creator",
         sessionFile: "/tmp/selected-creator.jsonl",
@@ -542,15 +487,9 @@ describe("sessions.usage", () => {
         () => storePath,
       );
       vi.mocked(discoverAllSessions).mockResolvedValueOnce([...unrelated, selected]);
-      vi.mocked(loadSessionCostSummariesFromCache).mockImplementationOnce(async ({ sessions }) => ({
-        summaries: sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 7 })),
-        cacheStatus: {
-          status: "fresh",
-          cachedFiles: sessions.length,
-          pendingFiles: 0,
-          staleFiles: 0,
-        },
-      }));
+      vi.mocked(loadSessionCostSummariesFromCache).mockImplementationOnce(async ({ sessions }) =>
+        summaryBatch(sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 7 }))),
+      );
       const result = readResult(
         await runSessionsUsage({ ...BASE_USAGE_RANGE, creatorKey: '["system",null]', limit: 1 }),
       );
@@ -769,8 +708,8 @@ describe("sessions.usage", () => {
     ]);
 
     projectionFixture = createUsageSessionStoreFixture({ [storeKey]: entry }, [[storeKey, "opus"]]);
-    vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async ({ sessions }) => ({
-      summaries: sessions.map((session) => {
+    vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async ({ sessions }) => {
+      const summaries = sessions.map((session) => {
         const historical = session.sessionId === "old";
         const oldest = session.sessionId === "oldest";
         const totalTokens = oldest ? 30 : historical ? 10 : 20;
@@ -843,14 +782,9 @@ describe("sessions.usage", () => {
         sources.push(summary);
         sourceSnapshots.push(structuredClone(summary));
         return summary;
-      }),
-      cacheStatus: {
-        status: "fresh",
-        cachedFiles: sessions.length,
-        pendingFiles: 0,
-        staleFiles: 0,
-      },
-    }));
+      });
+      return summaryBatch(summaries);
+    });
 
     const respond = await runSessionsUsage({
       ...BASE_USAGE_RANGE,
@@ -866,7 +800,8 @@ describe("sessions.usage", () => {
     expect(result.sessions[0]?.includedSessionIds).toEqual(["current", "old", "oldest"]);
     expect(result.sessions[0]?.usage?.totalTokens).toBe(60);
     expect(result.sessions[0]?.usage?.totalCost).toBeCloseTo(0.06);
-    expect(result.sessions[0]?.usage?.dailyBreakdown).toMatchObject([
+    const usage = result.sessions[0]?.usage;
+    expect(usage?.dailyBreakdown).toMatchObject([
       {
         date: "2026-02-01",
         tokens: 30,
@@ -886,7 +821,6 @@ describe("sessions.usage", () => {
       },
     ]);
     expect(sources).toEqual(sourceSnapshots);
-    const usage = result.sessions[0]?.usage;
     expect(usage?.activityDates).toEqual(["2026-02-01", "2026-02-02"]);
     expect(usage?.messageCounts?.total).toBe(3);
     expect(usage?.dailyMessageCounts).toMatchObject([
@@ -911,11 +845,11 @@ describe("sessions.usage", () => {
       { name: "a-second", count: 3 },
       { name: "z-first", count: 3 },
     ]);
-    expect(result.sessions[0]?.usage?.modelUsage).toMatchObject([
+    expect(usage?.modelUsage).toMatchObject([
       { provider: "fixture", model: "bedrock::arn" },
       { provider: "fixture::bedrock", model: "arn" },
     ]);
-    expect(result.sessions[0]?.usage?.dailyModelUsage).toMatchObject([
+    expect(usage?.dailyModelUsage).toMatchObject([
       { provider: "fixture", model: "bedrock:arn" },
       { provider: "fixture:bedrock", model: "arn" },
       { provider: "fixture", model: "bedrock:arn" },
@@ -1002,7 +936,14 @@ describe("sessions.usage", () => {
 
   it("fails closed when a canonical stored target no longer matches", async () => {
     const key = "agent:opus:stale";
-    mockStoredSession(key, { sessionId: "stale", updatedAt: 1_000 }, "missing");
+    vi.mocked(resolveGatewaySessionStoreTargetInWorker).mockResolvedValueOnce({
+      agentId: "opus",
+      canonicalKey: key,
+      store: { [key]: { sessionId: "stale", updatedAt: 1_000 } },
+      storeKeys: [key],
+      storePath: "/tmp/agents/opus/agent/openclaw-agent.sqlite",
+    });
+    vi.mocked(resolveUsageSessionSource).mockResolvedValueOnce(undefined);
     const respond = await runSessionsUsageMethod("sessions.usage.timeseries", { key });
     expect(respond.mock.calls[0]?.[0]).toBe(false);
     expect(loadSessionUsageTimeSeries).not.toHaveBeenCalled();

@@ -119,33 +119,16 @@ describe("gateway usage", () => {
     );
   });
 
-  it("crosses a skipped IANA civil date for the prior day's end", () => {
-    const params = { mode: "specific", timeZone: "Pacific/Apia" };
-    expect(range({ ...params, startDate: "2011-12-29", endDate: "2011-12-29" })).toEqual({
-      startMs: Date.parse("2011-12-29T10:00:00.000Z"),
-      endMs: Date.parse("2011-12-30T10:00:00.000Z") - 1,
-    });
-    expect(resolveDateRange({ ...params, startDate: "2011-12-30", endDate: "2011-12-30" })).toEqual(
-      {
-        ok: false,
-        error: "calendar day does not exist in requested time zone",
-      },
-    );
-  });
-
-  it("rejects a host civil date the gateway timezone skipped", () => {
+  it.each(["specific", "gateway"])("handles skipped civil dates in %s mode", (mode) => {
     withEnv({ TZ: "Pacific/Apia" }, () => {
+      const params = { mode, ...(mode === "specific" ? { timeZone: "Pacific/Apia" } : {}) };
       expect(
-        resolveDateRange({
-          mode: "gateway",
-          startDate: "2011-12-30",
-          endDate: "2011-12-30",
-        }),
+        resolveDateRange({ ...params, startDate: "2011-12-30", endDate: "2011-12-30" }),
       ).toEqual({
         ok: false,
         error: "calendar day does not exist in requested time zone",
       });
-      expect(range({ mode: "gateway", startDate: "2011-12-29", endDate: "2011-12-29" })).toEqual({
+      expect(range({ ...params, startDate: "2011-12-29", endDate: "2011-12-29" })).toEqual({
         startMs: Date.parse("2011-12-29T10:00:00.000Z"),
         endMs: Date.parse("2011-12-30T10:00:00.000Z") - 1,
       });

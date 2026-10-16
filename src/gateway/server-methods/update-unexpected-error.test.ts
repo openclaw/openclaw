@@ -19,6 +19,30 @@ import {
   transferManagedServiceUpdateHandoffMock,
 } from "./update.test-harness.js";
 
+async function captureLoggedUpdate(params: Record<string, unknown> = {}) {
+  const logGateway = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+  let payload:
+    | { runId: string; ok: boolean; ackDelivered: boolean; result: UpdateRunResult }
+    | undefined;
+  await invokeUpdateRun(
+    params,
+    (_ok, response) => {
+      payload = response as typeof payload;
+    },
+    undefined,
+    { logGateway },
+  );
+  return { response: expectDefined(payload, "update response"), logGateway };
+}
+
+function failureReport(response: { runId: string; result: UpdateRunResult }) {
+  return prepareUpdateFailureReport({
+    attemptId: response.runId,
+    result: response.result,
+    recordedRun: getUpdateRun(response.runId),
+  });
+}
+
 describe("update.run unexpected-error diagnostics", () => {
   it("refuses exhausted Git discovery before adopting a campaign", async () => {
     const root = "/tmp/openclaw-source";
@@ -48,17 +72,7 @@ describe("update.run unexpected-error diagnostics", () => {
     startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(
       new Error("synthetic helper launch failure"),
     );
-    const logGateway = { warn: vi.fn(), info: vi.fn() };
-    let payload: { runId: string; result: UpdateRunResult } | undefined;
-    await invokeUpdateRun(
-      {},
-      (_ok, response) => {
-        payload = response as typeof payload;
-      },
-      undefined,
-      { logGateway },
-    );
-    const response = expectDefined(payload, "update response");
+    const { response, logGateway } = await captureLoggedUpdate();
     expect(response.result).toMatchObject({
       status: "error",
       reason: "managed-service-handoff-failed",
@@ -83,21 +97,9 @@ describe("update.run unexpected-error diagnostics", () => {
       .mockImplementation(() => {
         throw new Error("history lookup failed");
       });
-    const logGateway = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
-    let payload: { runId: string; result: UpdateRunResult } | undefined;
-    try {
-      await invokeUpdateRun(
-        {},
-        (_ok, response) => {
-          payload = response as typeof payload;
-        },
-        undefined,
-        { logGateway },
-      );
-    } finally {
+    const { response, logGateway } = await captureLoggedUpdate().finally(() => {
       historyRead.mockRestore();
-    }
-    const response = expectDefined(payload, "update response");
+    });
     expect(response.result).toMatchObject({
       status: "error",
       reason: "unexpected-error",
@@ -161,21 +163,9 @@ describe("update.run unexpected-error diagnostics", () => {
         }
         throw error;
       });
-      const logGateway = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
-      let payload: { runId: string; ok: boolean; result: UpdateRunResult } | undefined;
-      try {
-        await invokeUpdateRun(
-          {},
-          (_ok, response) => {
-            payload = response as typeof payload;
-          },
-          undefined,
-          { logGateway },
-        );
-      } finally {
+      const { response, logGateway } = await captureLoggedUpdate().finally(() => {
         restoreDiagnosticFailure?.();
-      }
-      const response = expectDefined(payload, "update response");
+      });
       expect(response).toMatchObject({
         ok: false,
         result: { status: "error", reason: "managed-service-handoff-failed" },
@@ -196,11 +186,7 @@ describe("update.run unexpected-error diagnostics", () => {
       expect(cancelManagedServiceUpdateHandoffMock).toHaveBeenCalledOnce();
       expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
       expect(getUpdateRun(response.runId)?.status).toBe("failed");
-      const report = await prepareUpdateFailureReport({
-        attemptId: response.runId,
-        result: response.result,
-        recordedRun: getUpdateRun(response.runId),
-      });
+      const report = await failureReport(response);
       expect(report.body).toContain("EACCES");
       expect(report.body).toContain("ECONNREFUSED");
       for (const privateText of [
@@ -265,30 +251,16 @@ describe("update.run unexpected-error diagnostics", () => {
           });
         }
       }
-      const logGateway = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
-      let payload:
-        | { runId: string; ok: boolean; ackDelivered: boolean; result: UpdateRunResult }
-        | undefined;
-      await invokeUpdateRun(
-        { target: { kind: "git", upstreamRef: "origin/main", upstreamSha: "a".repeat(40) } },
-        (_ok, response) => {
-          payload = response as typeof payload;
-        },
-        undefined,
-        { logGateway },
-      );
-
-      const response = expectDefined(payload, "update response");
+      const { response, logGateway } = await captureLoggedUpdate({
+        target: { kind: "git", upstreamRef: "origin/main", upstreamSha: "a".repeat(40) },
+      });
       const recordedRun = expectDefined(getUpdateRun(response.runId), "recorded update run");
       expect(response).toMatchObject({ ok: false, ackDelivered: false });
       expect(recordedRun).toMatchObject({
         status: "failed",
         phase: "finished",
         reason: "unexpected-error",
-      });
-      expect(recordedRun.target).toMatchObject({
-        kind: "git",
-        sha: "a".repeat(40),
+        target: { kind: "git", sha: "a".repeat(40) },
       });
       const phase = source === "campaign adoption" ? "requested" : "installation-inspection";
       const failureFacts = [
@@ -321,11 +293,7 @@ describe("update.run unexpected-error diagnostics", () => {
       expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
       expect(cancelManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
       expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
-      const report = await prepareUpdateFailureReport({
-        attemptId: response.runId,
-        result: response.result,
-        recordedRun,
-      });
+      const report = await failureReport(response);
       expect(report.body).toContain(`Update target: ${"a".repeat(40)}`);
       expect(report.body).toContain("Update mode: git");
       expect(report.body).toContain(`Failed phase ${phase}:`);

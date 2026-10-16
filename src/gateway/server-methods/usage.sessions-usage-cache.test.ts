@@ -75,12 +75,16 @@ async function runSessionsUsage(
   runtimeConfig: OpenClawConfig = config,
   client?: GatewayClient,
   method: "sessions.usage" | "usage.cost" = "sessions.usage",
+  rows: Pick<
+    Parameters<typeof createSessionRowProjectionFixture>[0],
+    "store" | "storePath" | "agentId" | "targetsBySessionKey"
+  > = projectionFixture,
 ) {
   const respond = vi.fn();
   const handler = expectDefined(usageHandlers[method], "usage handler");
   const projection = createSessionRowProjectionFixture({
     cfg: runtimeConfig,
-    ...projectionFixture,
+    ...rows,
   });
   try {
     await handler({
@@ -100,7 +104,7 @@ async function runSessionsUsage(
     expect(respond.mock.calls[0]?.[0]).toBe(false);
     return expectDefined(respond.mock.calls[0]?.[2], "usage.cost error");
   }
-  expect(respond.mock.calls[0]?.[0]).toBe(true);
+  expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
   return expectDefined(respond.mock.calls[0]?.[1], "sessions.usage result");
 }
 
@@ -173,21 +177,7 @@ describe("sessions.usage result cache and owner attribution", () => {
       const firstProfile = ensureProfileForEmail("first@example.com");
       const secondProfile = ensureProfileForEmail("second@example.com");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      const roleConfig: OpenClawConfig = {
-        ...config,
-        gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "none" },
-                agents: "*",
-                scopes: ["operator.read", "operator.write"],
-              },
-            },
-          },
-        },
-      };
+      const roleConfig = restrictedConfig(config);
       mockStore(
         [firstProfile, secondProfile].map((profile, index) => ({
           key: `agent:main:${index === 0 ? "first" : "second"}`,
@@ -333,38 +323,18 @@ function fixture(rows: Record<string, SessionEntry>, tokens: Record<string, numb
       },
     }),
   );
-  return async (
+  return (
     params: Record<string, unknown> = {},
     client: GatewayClient | null = null,
     runtimeConfig = creatorConfig,
-  ) => {
-    const respond = vi.fn();
-    const projection = createSessionRowProjectionFixture({
-      cfg: runtimeConfig,
-      store: rows,
-      agentId: "main",
-      storePath: "/tmp/usage.sqlite",
-    });
-    try {
-      await expectDefined(
-        usageHandlers["sessions.usage"],
-        "usage handler",
-      )({
-        params: { range: "all", agentId: "main", limit: 1, ...params },
-        respond,
-        client,
-        context: bindSessionRowProjection(
-          { getRuntimeConfig: () => runtimeConfig },
-          () => projection,
-        ),
-      } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
-    } finally {
-      projection.dispose();
-    }
-    expect(respond).toHaveBeenCalledOnce();
-    const response = expectDefined(respond.mock.calls[0], "usage response");
-    expect(response[0], JSON.stringify(response[2])).toBe(true);
-    return response[1] as SessionsUsageResult;
+  ): Promise<SessionsUsageResult> => {
+    return runSessionsUsage(
+      { range: "all", agentId: "main", limit: 1, ...params },
+      runtimeConfig,
+      client ?? undefined,
+      "sessions.usage",
+      { store: rows, agentId: "main", storePath: "/tmp/usage.sqlite" },
+    );
   };
 }
 
@@ -373,6 +343,33 @@ const actor = (id: string): SessionEntry["createdActor"] => ({
   source: "profile",
   id,
 });
+
+function ownedRow(
+  sessionId: string,
+  updatedAt: number,
+  profileId: string,
+  extra: Partial<SessionEntry> = {},
+): SessionEntry {
+  return { sessionId, updatedAt, createdActor: actor(profileId), ...extra };
+}
+
+function restrictedConfig(base: OpenClawConfig): OpenClawConfig {
+  return {
+    ...base,
+    gateway: {
+      roles: {
+        default: "guest",
+        definitions: {
+          guest: {
+            sessions: { others: "none" },
+            agents: "*",
+            scopes: ["operator.read", "operator.write"],
+          },
+        },
+      },
+    },
+  };
+}
 
 describe("usage creator attribution", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -385,13 +382,8 @@ describe("usage creator attribution", () => {
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const query = fixture(
         {
-          "agent:main:ada": {
-            sessionId: "ada",
-            updatedAt: 30,
-            createdActor: actor(ada.id),
-            usageFamilySessionIds: ["ada-old"],
-          },
-          "agent:main:bob": { sessionId: "bob", updatedAt: 40, createdActor: actor(bob.id) },
+          "agent:main:ada": ownedRow("ada", 30, ada.id, { usageFamilySessionIds: ["ada-old"] }),
+          "agent:main:bob": ownedRow("bob", 40, bob.id),
         },
         { "ada-old": 20, ada: 10, bob: 30, orphan: 40 },
       );
@@ -444,17 +436,10 @@ describe("usage creator attribution", () => {
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const query = fixture(
         {
-          "agent:main:ada": {
-            sessionId: "ada",
-            updatedAt: 6,
-            createdActor: actor(ada.id),
+          "agent:main:ada": ownedRow("ada", 6, ada.id, {
             owner: { actor: { type: "human", id: former.id } },
-          },
-          "agent:main:former": {
-            sessionId: "former",
-            updatedAt: 5,
-            createdActor: actor(former.id),
-          },
+          }),
+          "agent:main:former": ownedRow("former", 5, former.id),
           "agent:main:discord": {
             sessionId: "discord",
             updatedAt: 4,
@@ -512,18 +497,8 @@ describe("usage creator attribution", () => {
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const query = fixture(
         {
-          "agent:main:ada": {
-            sessionId: "ada",
-            updatedAt: 1,
-            createdActor: actor(ada.id),
-            visibility: "shared",
-          },
-          "agent:main:bob": {
-            sessionId: "bob",
-            updatedAt: 2,
-            createdActor: actor(bob.id),
-            visibility: "shared",
-          },
+          "agent:main:ada": ownedRow("ada", 1, ada.id, { visibility: "shared" }),
+          "agent:main:bob": ownedRow("bob", 2, bob.id, { visibility: "shared" }),
         },
         { ada: 10, bob: 20 },
       );
@@ -536,25 +511,11 @@ describe("usage creator attribution", () => {
         connect: { scopes: ["operator.read", "operator.write"] },
         authenticatedUserProfile: { profileId: ada.id },
       } as GatewayClient;
-      const restrictedConfig: OpenClawConfig = {
-        agents: { entries: { main: {} } },
-        gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "none" },
-                agents: "*",
-                scopes: ["operator.read", "operator.write"],
-              },
-            },
-          },
-        },
-      };
-      const restricted = await query({}, client, restrictedConfig);
+      const roleConfig = restrictedConfig({ agents: { entries: { main: {} } } });
+      const restricted = await query({}, client, roleConfig);
       expect(restricted.creatorOptions).toMatchObject([{ actor: { id: ada.id } }]);
       expect(restricted.totals.totalTokens).toBe(10);
-      const blocked = await query({ creatorKey: hidden.key }, client, restrictedConfig);
+      const blocked = await query({ creatorKey: hidden.key }, client, roleConfig);
       expect(blocked.sessions).toEqual([]);
       expect(blocked.totals.totalTokens).toBe(0);
       expect(blocked.creatorOptions).toEqual(restricted.creatorOptions);

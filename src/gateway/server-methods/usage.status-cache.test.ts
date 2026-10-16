@@ -53,6 +53,13 @@ const refreshingCapableClient = { connect: { caps: ["usage-refreshing"] } };
 const providerDescriptor = { provider: "openai", displayName: "OpenAI" };
 const visibleProvider = { providers: [{ provider: "openai" }] };
 
+function usageSummary(updatedAt: number, usedPercent: number): UsageSummary {
+  return {
+    updatedAt,
+    providers: [{ ...providerDescriptor, windows: [{ label: "5h", usedPercent }], plan: "Plus" }],
+  };
+}
+
 function createStore(access = "access-one"): AuthProfileStore {
   return {
     version: 1,
@@ -114,18 +121,9 @@ describe("usage.status provider usage cache", () => {
     clearModelAuthStatusUsageCache();
     mocks.ensureAuthProfileStoreAsync.mockImplementation(() => store);
     mocks.listProviderUsagePluginDescriptors.mockReturnValue([providerDescriptor]);
-    mocks.loadProviderUsageSummary.mockImplementation(async () => ({
-      updatedAt: now,
-      providers: [
-        {
-          ...providerDescriptor,
-          windows: [
-            { label: "5h", usedPercent: mocks.loadProviderUsageSummary.mock.calls.length * 10 },
-          ],
-          plan: "Plus",
-        },
-      ],
-    }));
+    mocks.loadProviderUsageSummary.mockImplementation(async () =>
+      usageSummary(now, mocks.loadProviderUsageSummary.mock.calls.length * 10),
+    );
   });
 
   afterEach(() => {
@@ -228,20 +226,7 @@ describe("usage.status provider usage cache", () => {
     expect(JSON.stringify(await settledStatus(null))).toBe(JSON.stringify(first));
     now = 62_000;
     const retained = (await runUsageStatus()) as UsageSummary;
-    expect(retained).toEqual(
-      timeout
-        ? first
-        : {
-            updatedAt: 61_000,
-            providers: [
-              {
-                ...providerDescriptor,
-                windows: [{ label: "5h", usedPercent: 20 }],
-                plan: "Plus",
-              },
-            ],
-          },
-    );
+    expect(retained).toEqual(timeout ? first : usageSummary(61_000, 20));
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
   });
   it("shares the credential-bound snapshot and invalidates it on rotation", async () => {
