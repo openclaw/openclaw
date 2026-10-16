@@ -67,36 +67,34 @@ vi.mock("openclaw/plugin-sdk/outbound-media", async (importOriginal) => ({
 
 const { sendMessageSlack } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
+function expectCall(mock: { mock: { calls: unknown[][] } }, ...args: unknown[]) {
+  expect(mock.mock.calls).toMatchObject([args]);
+}
 
-type ApiMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
-type UploadTestClient = WebClient & {
-  conversations: { open: ApiMock };
-  chat: { postMessage: ApiMock };
-  files: {
-    getUploadURLExternal: ApiMock;
-    completeUploadExternal: ApiMock;
-  };
-};
+type Api = (...args: unknown[]) => Promise<unknown>;
+const uploadLocation = (upload_url = "https://files.slack.com/upload") => ({
+  ok: true,
+  upload_url,
+  file_id: "F001",
+});
 
-function createUploadTestClient(slackApiUrl = "https://slack.com/api/"): UploadTestClient {
-  return {
+function createUploadTestClient(slackApiUrl = "https://slack.com/api/") {
+  const stub = {
     slackApiUrl,
     conversations: {
       open: vi.fn(async () => ({ channel: { id: "D99RESOLVED" } })),
     },
     chat: {
-      postMessage: vi.fn(async () => ({ ts: "171234.567" })),
+      postMessage: vi.fn<Api>(async () => ({ ts: "171234.567" })),
     },
     files: {
-      getUploadURLExternal: vi.fn(async () => ({
-        ok: true,
-        upload_url: "https://files.slack.com/upload",
-        file_id: "F001",
-      })),
-      completeUploadExternal: vi.fn(async () => ({ ok: true })),
+      getUploadURLExternal: vi.fn(async () => uploadLocation()),
+      completeUploadExternal: vi.fn<Api>(async () => ({ ok: true })),
     },
-  } as unknown as UploadTestClient;
+  };
+  return stub as typeof stub & WebClient;
 }
+type UploadTestClient = ReturnType<typeof createUploadTestClient>;
 
 function slackPlatformError(code: string): Error {
   return Object.assign(new Error(`An API error occurred: ${code}`), {
@@ -120,11 +118,7 @@ function sendUpload(client: UploadTestClient, params: UploadParams = {}) {
 }
 
 function mockUploadDestination(client: UploadTestClient, uploadUrl: string) {
-  client.files.getUploadURLExternal.mockResolvedValueOnce({
-    ok: true,
-    upload_url: uploadUrl,
-    file_id: "F001",
-  });
+  client.files.getUploadURLExternal.mockResolvedValueOnce(uploadLocation(uploadUrl));
 }
 
 async function useRealUploadGuard(networkFetch: typeof fetch, lookupAddress?: string) {
@@ -233,22 +227,17 @@ describe("sendMessageSlack file upload with user IDs", () => {
   });
 
   it("scopes DM channel resolution cache by token identity", async () => {
-    await sendUpload(client, {
-      target: "UABC123",
-      token: "xoxb-test-a",
-    });
-    await sendUpload(client, {
-      target: "user:UABC123",
-      token: "xoxb-test-b",
-    });
-
-    expect(client.conversations.open).toHaveBeenCalledTimes(2);
-    expect(client.conversations.open).toHaveBeenCalledWith({ users: "UABC123" });
-    expect(client.files.completeUploadExternal).toHaveBeenCalledTimes(2);
-    expect(client.files.completeUploadExternal.mock.calls).toMatchObject([
-      [{ channel_id: "D99RESOLVED", files: [{ id: "F001", title: "screenshot.png" }] }],
-      [{ channel_id: "D99RESOLVED", files: [{ id: "F001", title: "screenshot.png" }] }],
+    await sendUpload(client, { target: "UABC123", token: "xoxb-test-a" });
+    await sendUpload(client, { target: "user:UABC123", token: "xoxb-test-b" });
+    expect(client.conversations.open.mock.calls).toEqual([
+      [{ users: "UABC123" }],
+      [{ users: "UABC123" }],
     ]);
+    expect(client.files.completeUploadExternal.mock.calls).toMatchObject(
+      Array.from({ length: 2 }, () => [
+        { channel_id: "D99RESOLVED", files: [{ id: "F001", title: "screenshot.png" }] },
+      ]),
+    );
   });
 
   it("uploads the named original file, disposes transfer resources, then completes the threaded send", async () => {
@@ -294,45 +283,26 @@ describe("sendMessageSlack file upload with user IDs", () => {
     completionResult.resolve({ ok: true });
     const result = await sendPromise;
 
-    expect(loadOutboundMediaFromUrlMock.mock.calls).toMatchObject([
-      ["/tmp/threaded.png", { optimizeImages: false }],
-    ]);
+    expectCall(loadOutboundMediaFromUrlMock, "/tmp/threaded.png", { optimizeImages: false });
     expect(client.files.getUploadURLExternal).toHaveBeenCalledWith({
       filename: "custom-name.bin",
       length: Buffer.from("fake-image").length,
     });
-    expect(vi.mocked(globalThis.fetch).mock.calls).toMatchObject([
-      ["https://files.slack.com/upload", { method: "POST" }],
-    ]);
-    expect(buildTimeoutAbortSignal.mock.calls).toMatchObject([
-      [
-        {
-          timeoutMs: 120_000,
-          url: "https://files.slack.com",
-        },
-      ],
-    ]);
-    expect(fetchWithSsrFGuard.mock.calls).toMatchObject([
-      [
-        {
-          timeoutMs: 120_000,
-          signal: expect.any(AbortSignal),
-          capture: false,
-        },
-      ],
-    ]);
+    expectCall(vi.mocked(globalThis.fetch), "https://files.slack.com/upload", { method: "POST" });
+    expectCall(buildTimeoutAbortSignal, { timeoutMs: 120_000, url: "https://files.slack.com" });
+    expectCall(fetchWithSsrFGuard, {
+      timeoutMs: 120_000,
+      signal: expect.any(AbortSignal),
+      capture: false,
+    });
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
     expect(events).toEqual(["byte-upload", "dispatch-start", "dispatch-end", "completion"]);
-    expect(client.files.completeUploadExternal.mock.calls).toMatchObject([
-      [
-        {
-          channel_id: "C123CHAN",
-          initial_comment: "caption",
-          thread_ts: "171.222",
-          files: [{ id: "F001", title: "Custom Title" }],
-        },
-      ],
-    ]);
+    expectCall(client.files.completeUploadExternal, {
+      channel_id: "C123CHAN",
+      initial_comment: "caption",
+      thread_ts: "171.222",
+      files: [{ id: "F001", title: "Custom Title" }],
+    });
     expect(hasSlackThreadParticipation("default", "C123CHAN", "171.222")).toBe(true);
     expect(result).toMatchObject({ messageId: "F001", receipt: { threadId: "171.222" } });
   });
@@ -418,9 +388,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
         expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
         if (failure !== "private") {
           expect(error).toMatchObject({
-            cause: expect.objectContaining({
-              name: failure === "host" ? "SsrFBlockedError" : failure,
-            }),
+            cause: { name: failure === "host" ? "SsrFBlockedError" : failure },
           });
         }
       }
