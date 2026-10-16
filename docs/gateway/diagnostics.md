@@ -715,6 +715,7 @@ objects. Coverage includes the named structures, not module runtime or closure r
 `truncated: true` means the estimator reached its work bound or skipped opaque
 values (proxies, accessors, or custom instances), so that estimate is partial.
 Only plain records and arrays are traversed; plugin iterators and accessors never run. Native-only fallback samples omit the census until the worker responds.
+`catalog-static` counts retained provider records without reading plugin-owned model arrays.
 `catalog-source` covers shared cached provider payloads, which may already be
 normalized. `catalog-request` rows count pending cache loads and active worker
 tasks separately. Pending loads have zero-byte estimates because their state is

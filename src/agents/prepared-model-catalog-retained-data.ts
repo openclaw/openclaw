@@ -61,14 +61,9 @@ export function measurePreparedCatalogRetainedData(
         0,
       ),
     ),
-    row(
-      "catalog-static",
-      staticProviders,
-      staticProviders.reduce((count, provider) => count + provider.models.length, 0),
-      {
-        providers: staticProviders.length,
-      },
-    ),
+    row("catalog-static", staticProviders, staticProviders.length, {
+      providers: staticProviders.length,
+    }),
     row(
       "catalog-remote",
       [...catalogs].map((catalog) => catalog?.providers),
