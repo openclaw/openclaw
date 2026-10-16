@@ -5,7 +5,6 @@ import {
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../auto-reply/reply-payload.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
   emitAgentEventWithAssistantSourceIfCurrent,
   readAgentAssistantSource,
@@ -525,11 +524,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   };
 
   const pushAssistantText = (text: string, normalizedText?: string) => {
-    if (
-      !text ||
-      (params.silentExpected && !isSilentReplyText(text, SILENT_REPLY_TOKEN)) ||
-      shouldSkipAssistantText(text, normalizedText)
-    ) {
+    if (!text || params.silentExpected || shouldSkipAssistantText(text, normalizedText)) {
       return;
     }
     assistantTexts.push(text);
@@ -565,13 +560,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       // Without block replies, the final payload still owns text seen during interim streaming.
       replaceCurrentAssistantText(text);
       state.suppressBlockChunks = true;
-    } else if (
-      !addedDuringMessage &&
-      text &&
-      (!chunkerHasBuffered || isSilentReplyText(text, SILENT_REPLY_TOKEN))
-    ) {
-      // Silent markers never produce block payloads. Retain their terminal
-      // evidence before the chunker consumes them without emitting text.
+    } else if (!addedDuringMessage && text && !chunkerHasBuffered) {
       pushAssistantText(text);
     }
 

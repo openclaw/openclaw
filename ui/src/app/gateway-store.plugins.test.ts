@@ -1,5 +1,6 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginsUiDescriptorsResult } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
@@ -14,13 +15,37 @@ import type { ApplicationGatewayConnectOptions } from "./gateway.ts";
 import { createMentionsCapability } from "./mentions.ts";
 import { loadSettings } from "./settings.ts";
 
+function capabilities(
+  generation: number,
+  overrides: Partial<Required<PluginsUiDescriptorsResult>> = {},
+) {
+  return {
+    ok: true,
+    generation,
+    descriptors: [],
+    methods: ["plugins.reload"],
+    controlUiTabs: [],
+    controlUiWidgetKinds: [],
+    pluginSurfaceUrls: {},
+    ...overrides,
+  };
+}
+
 describe("plugin capabilities", () => {
-  beforeEach(stubGatewayStoreTestGlobals);
-  afterEach(() => vi.unstubAllGlobals());
+  let gateway: ReturnType<typeof createGatewayStoreTestStore>["gateway"];
+  let current: ReturnType<typeof createGatewayStoreTestStore>["current"];
+  let clients: ReturnType<typeof createGatewayStoreTestStore>["clients"];
+  beforeEach(() => {
+    stubGatewayStoreTestGlobals();
+    ({ gateway, current, clients } = createGatewayStoreTestStore());
+    gateway.start();
+  });
+  afterEach(() => {
+    gateway.stop();
+    vi.unstubAllGlobals();
+  });
 
   it("refreshes plugin methods and surfaces on the existing connection", async () => {
-    const { gateway, clients, current } = createGatewayStoreTestStore();
-    gateway.start();
     current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
     const sessionKey = gateway.snapshot.sessionKey;
     const before = gateway.snapshot;
@@ -33,30 +58,20 @@ describe("plugin capabilities", () => {
         );
       }
     });
-    const capabilities = {
-      ok: true,
-      generation: 7,
-      descriptors: [],
+    const published = capabilities(7, {
       methods: ["plugins.reload", "plugin.notes.read"],
       controlUiTabs: [{ pluginId: "notes", id: "notes", label: "Notes" }],
       controlUiWidgetKinds: [{ pluginId: "notes", kind: "notes:card", label: "Note" }],
-      pluginSurfaceUrls: {},
-    };
-    current().request.mockResolvedValue(capabilities);
+    });
+    current().request.mockResolvedValue(published);
     current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 7 }));
     await vi.waitFor(() => expect(gateway.snapshot.pluginCapabilities?.generation).toBe(7));
     expect(gateway.snapshot.hello).toMatchObject({
-      features: { methods: capabilities.methods },
-      controlUiTabs: capabilities.controlUiTabs,
-      controlUiWidgetKinds: capabilities.controlUiWidgetKinds,
+      features: { methods: published.methods },
+      controlUiTabs: published.controlUiTabs,
+      controlUiWidgetKinds: published.controlUiWidgetKinds,
     });
-    current().request.mockResolvedValue({
-      ...capabilities,
-      generation: 8,
-      methods: ["plugins.reload"],
-      controlUiTabs: [],
-      controlUiWidgetKinds: [],
-    });
+    current().request.mockResolvedValue(capabilities(8));
     current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 8 }));
     await vi.waitFor(() => expect(gateway.snapshot.hello?.controlUiTabs).toEqual([]));
     expect(gateway.snapshot).not.toBe(before);
@@ -70,22 +85,15 @@ describe("plugin capabilities", () => {
     expect(gateway.snapshot.phase).toBe("connected");
     expect(clients).toHaveLength(1);
     expect(current().stopped).toBe(0);
-    gateway.stop();
   });
 
   it.each([
     { boundary: "replacement", event: "plugins.changed" },
     { boundary: "same-client reconnect", event: "plugins.controlUi.changed" },
   ])("discards a $event capability response after $boundary", async ({ boundary, event }) => {
-    const { gateway, current } = createGatewayStoreTestStore();
-    gateway.start();
     current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
-    let resolve!: (value: unknown) => void;
-    current().request.mockReturnValue(
-      new Promise((done) => {
-        resolve = done;
-      }),
-    );
+    const pending = createDeferred<unknown>();
+    current().request.mockReturnValue(pending.promise);
     current().opts.onEvent?.(
       createGatewayEvent(
         event,
@@ -101,41 +109,19 @@ describe("plugin capabilities", () => {
       current().opts.onClose?.({ code: 1006, reason: "disconnected", willRetry: true });
     }
     current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
-    resolve({
-      ok: true,
-      generation: 7,
-      descriptors: [],
-      methods: ["plugin.retired.read"],
-      controlUiTabs: [],
-      controlUiWidgetKinds: [],
-      pluginSurfaceUrls: {},
-    });
+    pending.resolve(capabilities(7, { methods: ["plugin.retired.read"] }));
     await vi.dynamicImportSettled();
     expect(gateway.snapshot.pluginCapabilities).toBeNull();
     expect(gateway.snapshot.hello?.features?.methods).toBeUndefined();
-    gateway.stop();
   });
 
   it("ignores malformed plugin change events", async () => {
-    const { gateway, current } = createGatewayStoreTestStore();
-    gateway.start();
     current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
-    const pending: Array<{ resolve: (value: unknown) => void; reject: (error: Error) => void }> =
-      [];
-    current().request.mockImplementation(
-      () =>
-        new Promise((resolve, reject) => {
-          pending.push({ resolve, reject });
-        }),
-    );
-    const capabilities = (generation: number) => ({
-      ok: true,
-      generation,
-      descriptors: [],
-      methods: ["plugins.reload"],
-      controlUiTabs: [],
-      controlUiWidgetKinds: [],
-      pluginSurfaceUrls: {},
+    const pending: ReturnType<typeof createDeferred<unknown>>[] = [];
+    current().request.mockImplementation(() => {
+      const request = createDeferred<unknown>();
+      pending.push(request);
+      return request.promise;
     });
     const changed = (generation: unknown) =>
       current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation }));
@@ -155,12 +141,9 @@ describe("plugin capabilities", () => {
     expect(pending).toHaveLength(2);
     pending[1]!.resolve(capabilities(8));
     await vi.waitFor(() => expect(gateway.snapshot.pluginCapabilities?.generation).toBe(8));
-    gateway.stop();
   });
 
   it("preserves an in-flight Inbox read across capability publication", async () => {
-    const { gateway, current } = createGatewayStoreTestStore();
-    gateway.start();
     const auth = { role: "operator", scopes: ["operator.read"] };
     const server = { bootId: "inbox-boot", connId: "inbox-connection" };
     current().opts.onHello?.({
@@ -183,15 +166,12 @@ describe("plugin capabilities", () => {
         return inboxRead.promise;
       }
       if (method === "plugins.uiDescriptors") {
-        return Promise.resolve({
-          ok: true,
-          generation: 1,
-          descriptors: [],
-          methods: ["mentions.list", "plugin.notes.read"],
-          controlUiTabs: [{ pluginId: "notes", id: "notes", label: "Notes" }],
-          controlUiWidgetKinds: [],
-          pluginSurfaceUrls: {},
-        });
+        return Promise.resolve(
+          capabilities(1, {
+            methods: ["mentions.list", "plugin.notes.read"],
+            controlUiTabs: [{ pluginId: "notes", id: "notes", label: "Notes" }],
+          }),
+        );
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -223,7 +203,6 @@ describe("plugin capabilities", () => {
       ).toHaveLength(1);
     } finally {
       inbox.dispose();
-      gateway.stop();
     }
   });
 });

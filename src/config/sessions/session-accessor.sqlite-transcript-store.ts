@@ -23,6 +23,7 @@ import {
   readEventTimestamp,
   readTranscriptEventId,
   readTranscriptEventMessage,
+  type SqliteTranscriptSnapshotRow,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import type {
@@ -401,6 +402,8 @@ export function replaceSqliteTranscriptEventsInTransaction(
     preserveSessionWindowRecency?: boolean;
     scheduleProjectionReconcile?: boolean;
     onProjectionReconcileNeeded?: () => void;
+    /** Capture inserted bytes only when the caller retains a replacement snapshot. */
+    writtenRows?: SqliteTranscriptSnapshotRow[];
   } = {},
 ): void {
   return withSqliteDatabaseWriteScope(
@@ -472,13 +475,11 @@ export function replaceSqliteTranscriptEventsInTransaction(
         if (identity && seenEventIds.has(identity.eventId)) {
           continue;
         }
-        insertEvent({
-          seq,
-          eventJson: withoutSqliteDatabaseWriteScope(database.db, () =>
-            JSON.stringify(persistedEvent),
-          ),
-          createdAt,
-        });
+        const eventJson = withoutSqliteDatabaseWriteScope(database.db, () =>
+          JSON.stringify(persistedEvent),
+        );
+        insertEvent({ seq, eventJson, createdAt });
+        options.writtenRows?.push({ seq, eventJson });
         appendToIndex({
           seq,
           event: persistedEvent,

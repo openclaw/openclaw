@@ -187,7 +187,11 @@ export function registerRequesterCompletionCustodyTests({
               endedAt: Date.now(),
               outcome: { status: "ok" },
             };
-            draft.completion = { required: true, resultText: "Original child result" };
+            draft.completion = {
+              required: true,
+              resultText: "Original child result",
+              terminalReply: { disposition: "visible", text: "Original child result" },
+            };
             draft.delivery = { status: "delivered" };
           });
           if (authority === "revoked") {

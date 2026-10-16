@@ -9,7 +9,7 @@ import { markdownBlocksRef } from "../../../components/markdown-element-refs-sol
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { renderSolidRef } from "../../../test-helpers/render-solid-ref.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -149,7 +149,7 @@ describe("user message disclosure", () => {
     const markdown = "A long prompt with unchanged layout. ".repeat(50);
     const view = mountSolid(
       (props: { text: string; expanded: boolean; presented: boolean }) => (
-        <SolidContentPresentation value={() => props.presented}>
+        <ContentPresentation value={() => props.presented}>
           <For each={["first", "second"]}>
             {(key) => (
               <MessageMarkdown
@@ -165,7 +165,7 @@ describe("user message disclosure", () => {
               />
             )}
           </For>
-        </SolidContentPresentation>
+        </ContentPresentation>
       ),
       { text: markdown, expanded: false, presented: true },
       container,

@@ -19,7 +19,6 @@ import {
 } from "../../infra/sqlite-worker-contract.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
 import { createSqliteWorkerTransferOwner } from "../../infra/sqlite-worker-transfer.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
@@ -270,9 +269,7 @@ export function createSessionActorWorker(
       }
       working.hot.writeToken = pendingToken;
       if (stageResidentState(database, working)) {
-        publication.actorPostimages = new Map([
-          [sessionKey, freezeJsonSnapshot(structuredClone(working.hot))],
-        ]);
+        publication.actorPostimages = new Map([[sessionKey, structuredClone(working.hot)]]);
       }
     };
     return {
@@ -356,13 +353,11 @@ export function createSessionActorWorker(
           }
           return {
             ...authority,
-            actorRewrite: freezeJsonSnapshot(
-              structuredClone({
-                before: before.hot.transcript.version,
-                postimage: working.hot,
-                rows: rewrite.rows,
-              }),
-            ),
+            actorRewrite: structuredClone({
+              before: before.hot.transcript.version,
+              postimage: working.hot,
+              rows: rewrite.rows,
+            }),
           };
         });
       },

@@ -15,12 +15,18 @@ import { captureSessionActorTranscriptRead } from "../config/sessions/session-ac
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { resolveSessionTitleSource } from "../sessions/session-title-source.js";
+import type { SkillCommandSpec } from "../skills/types.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
 import { toTranscriptReadScope } from "./session-transcript-read-target.js";
 import type { SessionTitleFields } from "./session-utils.types.js";
 
-type SessionTitleReadOptions = { includeInterSession?: boolean; readOnly?: boolean };
+type SessionTitleReadOptions = {
+  includeInterSession?: boolean;
+  readOnly?: boolean;
+  skillCommands?: SkillCommandSpec[];
+};
 
 const EMPTY_SESSION_TITLE_FIELDS: SessionTitleFields = {
   firstUserMessage: null,
@@ -71,6 +77,7 @@ function readSqliteTitleProbeRange(
 function findFirstTitleUserText(
   entries: readonly Parameters<typeof sqliteMessageEventWithSeq>[0][],
   includeInterSession: boolean,
+  skillCommands?: SkillCommandSpec[],
 ): string | null {
   for (const entry of entries) {
     const message = sqliteMessageEventWithSeq(entry);
@@ -79,7 +86,10 @@ function findFirstTitleUserText(
       projected?.role === "user" &&
       (includeInterSession || !hasInterSessionUserProvenance(asOptionalRecord(message)))
     ) {
-      return projected.text;
+      const source = resolveSessionTitleSource(projected.text, skillCommands);
+      if (source) {
+        return source;
+      }
     }
   }
   return null;
@@ -156,7 +166,11 @@ export function readSessionTitleFieldsFromTranscript(
       memory.owner?.readSessionById(input.sessionId, memory.authority)?.sessionKey;
     const command = {
       type: "session.history.title" as const,
-      input: { sessionId: input.sessionId, includeInterSession: opts?.includeInterSession },
+      input: {
+        sessionId: input.sessionId,
+        includeInterSession: opts?.includeInterSession,
+        skillCommands: opts?.skillCommands,
+      },
     };
     const binding = memory.binding;
     const result =
@@ -176,7 +190,8 @@ export function readSessionTitleFieldsFromTranscript(
       return { ...EMPTY_SESSION_TITLE_FIELDS };
     }
     const variant = opts?.includeInterSession === true ? "includeInterSession" : "default";
-    const entry = sqliteTitleFieldCache.peek(cacheKey);
+    // Command metadata belongs to this naming attempt, not the stable list cache.
+    const entry = opts?.skillCommands ? undefined : sqliteTitleFieldCache.peek(cacheKey);
     const cached = entry?.generation === watermark.generation ? entry : undefined;
     const current = cached?.maxSeq === watermark.maxSeq;
     const cachedTitle = cached?.firstUserMessages[variant];
@@ -232,6 +247,7 @@ export function readSessionTitleFieldsFromTranscript(
             opts?.readOnly,
           ),
           opts?.includeInterSession === true,
+          opts?.skillCommands,
         );
         scannedMessages = end;
       }
@@ -242,14 +258,16 @@ export function readSessionTitleFieldsFromTranscript(
     };
     firstUserMessages[variant] = { text: fields.firstUserMessage, scannedMessages };
     // Retain only the watermark and bounded strings, never the probe's transcript payloads.
-    sqliteTitleFieldCache.set(cacheKey, {
-      generation: tail.generation,
-      maxSeq: tail.maxSeq,
-      boundarySeq: tail.boundarySeq,
-      totalMessages: tail.totalMessages,
-      firstUserMessages,
-      lastMessagePreview: fields.lastMessagePreview,
-    });
+    if (!opts?.skillCommands) {
+      sqliteTitleFieldCache.set(cacheKey, {
+        generation: tail.generation,
+        maxSeq: tail.maxSeq,
+        boundarySeq: tail.boundarySeq,
+        totalMessages: tail.totalMessages,
+        firstUserMessages,
+        lastMessagePreview: fields.lastMessagePreview,
+      });
+    }
     return { ...fields };
   } catch (error) {
     if (opts?.readOnly && isSessionTranscriptProjectionUnavailableError(error)) {

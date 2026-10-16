@@ -1,9 +1,5 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import {
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  type ChunkMode,
-} from "openclaw/plugin-sdk/reply-chunking";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
@@ -134,7 +130,7 @@ export function renderReplyPayloadsToMessages(
       );
       for (const chunk of chunks) {
         const text = chunk.trim();
-        if (text && !isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+        if (text) {
           out.push({ text });
         }
       }

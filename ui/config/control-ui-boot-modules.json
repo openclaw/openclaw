@@ -1045,7 +1045,6 @@
   "src/cron/store/delivery-codec.ts",
   "src/cron/system-owned-declaration.ts",
   "src/cron/types.ts",
-  "src/gateway/control-reply-text.ts",
   "src/gateway/control-ui-bootstrap-contract.ts",
   "src/gateway/control-ui-contract.ts",
   "src/gateway/control-ui-plugin-assets-contract.ts",

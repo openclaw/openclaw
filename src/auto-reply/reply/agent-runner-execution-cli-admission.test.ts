@@ -7,6 +7,7 @@ import { buildCliRunResult } from "../../agents/cli-runner/cli-run-settlement.js
 import { executeDeps } from "../../agents/cli-runner/execute-deps.js";
 import { executePreparedCliRun } from "../../agents/cli-runner/execute.js";
 import { buildCliMcpGrantContext } from "../../agents/cli-runner/mcp-grant-context.js";
+import { prepareCliRunTerminalReply } from "../../agents/cli-runner/terminal-reply.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
@@ -191,11 +192,15 @@ describe("executeAgentTurn: CLI admission", () => {
         agentMeta: { sessionId: settledBinding.sessionId, cliSessionBinding: settledBinding },
       },
     };
+    const cliContext = buildPreparedCliRunContext();
     state.runCliAgentMock.mockResolvedValueOnce(
       rejected
         ? buildCliRunResult({
-            context: buildPreparedCliRunContext(),
+            context: cliContext,
             output: { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
+            preparedReply: prepareCliRunTerminalReply(cliContext, {
+              text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+            }),
             effectiveCliSessionId: settledBinding.sessionId,
             bindingFlushOk: kind !== "rejected-clear",
             usedHistoryPrompt: false,
@@ -409,11 +414,14 @@ describe("executeAgentTurn: CLI admission", () => {
         followupRun.currentInboundEventKind = "room_event";
       }
       state.isCliProviderMock.mockImplementation((provider) => provider === "claude-cli");
+      const context = buildPreparedCliRunContext();
+      const output = {
+        text: kind === "rejected-clear" ? GENERIC_EXTERNAL_RUN_FAILURE_TEXT : "Captured reply",
+      };
       const candidate = buildCliRunResult({
-        context: buildPreparedCliRunContext(),
-        output: {
-          text: kind === "rejected-clear" ? GENERIC_EXTERNAL_RUN_FAILURE_TEXT : "Captured reply",
-        },
+        context,
+        output,
+        preparedReply: prepareCliRunTerminalReply(context, output),
         effectiveCliSessionId: "replacement-native-session",
         bindingFlushOk: kind !== "rejected-clear",
         usedHistoryPrompt: false,

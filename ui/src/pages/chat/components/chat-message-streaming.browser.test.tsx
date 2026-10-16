@@ -10,7 +10,8 @@ import { markdownBlocksRef } from "../../../components/markdown-element-refs-sol
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
-import { SolidContentPresentation, solidContent } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { renderSolidRef } from "../../../test-helpers/render-solid-ref.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { prepareMarkdownMedia, type MarkdownMedia } from "./chat-message-media-markdown.ts";
@@ -30,11 +31,11 @@ let messageProps: PresentedMessage;
 
 function MessageView(props: PresentedMessage) {
   return (
-    <SolidContentPresentation value={() => props.presented}>
+    <ContentPresentation value={() => props.presented}>
       <section>
         <MessageMarkdown {...props} />
       </section>
-    </SolidContentPresentation>
+    </ContentPresentation>
   );
 }
 
@@ -453,7 +454,7 @@ describe("streaming Markdown DOM", () => {
       let policy = "allowed";
       const connections: boolean[] = [];
       function MediaCard(props: { label: string }) {
-        const presented = useContext(SolidContentPresentation);
+        const presented = useContext(ContentPresentation);
         let activated = false;
         createEffect(presented, (active) => {
           if (active) {
