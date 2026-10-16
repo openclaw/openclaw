@@ -11,6 +11,59 @@ import { getAppSidebarOwner } from "./app-sidebar.tsx";
 
 setupSidebarTest();
 
+it("restores destination offsets and updates fades after content commits", async () => {
+  const { sidebar } = await mountSidebar(
+    createGateway({} as GatewayBrowserClient),
+    createSessions("main", []),
+  );
+  const scroller = sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!;
+  let contentHeight = 500;
+  Object.defineProperties(scroller, {
+    clientHeight: { configurable: true, value: 100 },
+    scrollHeight: { configurable: true, get: () => contentHeight },
+  });
+  const expectFade = (state: string) =>
+    waitForSolid(() =>
+      expect(scroller.classList.contains(`sidebar-shell__body--scroll-${state}`)).toBe(true),
+    );
+  scroller.scrollTop = 140;
+  scroller.dispatchEvent(new Event("scroll"));
+  await expectFade("middle");
+
+  sidebar.navigationView = "pages";
+  await sidebar.updateComplete;
+  expect(scroller.scrollTop).toBe(0);
+  await expectFade("top");
+  scroller.scrollTop = 400;
+  scroller.dispatchEvent(new Event("scroll"));
+  await expectFade("bottom");
+  sidebar.navigationView = "sessions";
+  await sidebar.updateComplete;
+  expect(scroller.scrollTop).toBe(140);
+
+  const machines = {
+    key: "systems",
+    data: undefined,
+    loaderPending: false,
+    render: () => "machine inventory",
+  };
+  sidebar.contextualSidebar = machines;
+  await sidebar.updateComplete;
+  expect(scroller.scrollTop).toBe(0);
+  // Navigation must also capture an offset whose native scroll event has not arrived yet.
+  scroller.scrollTop = 35;
+  sidebar.contextualSidebar = undefined;
+  await sidebar.updateComplete;
+  expect(scroller.scrollTop).toBe(140);
+  sidebar.contextualSidebar = machines;
+  await sidebar.updateComplete;
+  expect(scroller.scrollTop).toBe(35);
+
+  contentHeight = 80;
+  sidebar.contextualSidebar = { ...machines, loaderPending: true };
+  await expectFade("none");
+});
+
 type RouteModule = NonNullable<
   ReturnType<ApplicationRouter["getState"]>["matches"][number]["module"]
 >;
