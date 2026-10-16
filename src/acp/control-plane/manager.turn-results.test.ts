@@ -1,4 +1,8 @@
-import type { AcpRuntimeEvent, AcpRuntimeTurnResult } from "@openclaw/acp-core/runtime/types";
+import type {
+  AcpRuntimeEvent,
+  AcpRuntimeTurn,
+  AcpRuntimeTurnResult,
+} from "@openclaw/acp-core/runtime/types";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
@@ -13,6 +17,8 @@ import {
   runtimeTurn as turn,
 } from "./manager.test-helpers.js";
 
+const runtimeExit = { code: "ACP_TURN_FAILED", message: "acpx exited with code 1" };
+
 describe("AcpSessionManager turn results", () => {
   installAcpSessionManagerTestLifecycle();
 
@@ -24,7 +30,14 @@ describe("AcpSessionManager turn results", () => {
         requestId: "turn-result",
         ...overrides,
       });
-    return { ...f.runtimeState, sessionKey, run };
+    const start = (result: (requestId: string) => Partial<AcpRuntimeTurn> = () => ({})) => {
+      const startTurn = vi.fn<NonNullable<typeof f.runtimeState.runtime.startTurn>>((input) =>
+        turn(input.requestId, result(input.requestId)),
+      );
+      f.runtimeState.runtime.startTurn = startTurn;
+      return startTurn;
+    };
+    return { ...f.runtimeState, sessionKey, run, start };
   }
 
   function parentSession(sessionKey: string) {
@@ -40,10 +53,7 @@ describe("AcpSessionManager turn results", () => {
       currentMeta: readySessionMeta({
         agent: "claude",
         runtimeSessionName: sessionKey,
-        identity: resolvedIdentity({
-          acpxSessionId: "acpx-sid-stale",
-          lastUpdatedAt: Date.now(),
-        }),
+        identity: resolvedIdentity({ acpxSessionId: "acpx-sid-stale" }),
       }),
     };
     const state = setupRuntime(meta.currentMeta, sessionKey);
@@ -64,10 +74,7 @@ describe("AcpSessionManager turn results", () => {
 
   it("rejects expired admission before submitting to the runtime", async () => {
     const state = setupRuntime();
-    const startTurn = vi.fn((input: Parameters<NonNullable<typeof state.runtime.startTurn>>[0]) =>
-      turn(input.requestId),
-    );
-    state.runtime.startTurn = startTurn;
+    const startTurn = state.start();
     const onBeforePrompt = vi.fn(() => {
       throw new Error("gateway admission deadline elapsed");
     });
@@ -83,16 +90,15 @@ describe("AcpSessionManager turn results", () => {
     const state = setupRuntime();
     const transitions: string[] = [];
     const result = createDeferred<AcpRuntimeTurnResult>();
-    const startTurn = vi.fn<NonNullable<typeof state.runtime.startTurn>>((input) => {
+    const startTurn = state.start(() => {
       transitions.push("turn-created");
-      return turn(input.requestId, {
+      return {
         promptStarted: Promise.resolve().then(() => {
           transitions.push("prompt-started");
         }),
         result: result.promise,
-      });
+      };
     });
-    state.runtime.startTurn = startTurn;
     await expect(
       state.run({
         onBeforePrompt: () => {
@@ -129,25 +135,21 @@ describe("AcpSessionManager turn results", () => {
       const closing = createDeferred();
       const onLifecycle = vi.fn();
       let attempt = 0;
-      const startTurn = vi.fn<NonNullable<typeof state.runtime.startTurn>>((input) => {
+      const startTurn = state.start(() => {
         if (attempt++ > 0) {
-          return turn(input.requestId, { promptStarted: Promise.resolve() });
+          return { promptStarted: Promise.resolve() };
         }
         created.resolve();
-        return turn(input.requestId, {
+        return {
           promptStarted: promptStarted.promise,
           result: result.promise,
           closeStream: vi.fn(async () => {
             closing.resolve();
           }),
-        });
+        };
       });
-      state.runtime.startTurn = startTurn;
       const operation = state.run({ onLifecycle });
-      const failure = {
-        status: "failed" as const,
-        error: { code: "ACP_TURN_FAILED", message: "acpx exited with code 1" },
-      };
+      const failure = { status: "failed" as const, error: runtimeExit };
       try {
         await created.promise;
         if (readiness === "rejected") {
@@ -176,16 +178,10 @@ describe("AcpSessionManager turn results", () => {
     await withStateDirEnv("openclaw-acp-manager-", async () => {
       const state = setupRuntime();
       parentSession(state.sessionKey);
-      const startTurn = vi.fn<NonNullable<typeof state.runtime.startTurn>>((input) =>
-        turn(input.requestId, {
-          promptStarted: Promise.resolve(),
-          result: Promise.resolve({
-            status: "failed",
-            error: { code: "ACP_TURN_FAILED", message: "acpx exited with code 1" },
-          }),
-        }),
-      );
-      state.runtime.startTurn = startTurn;
+      const startTurn = state.start(() => ({
+        promptStarted: Promise.resolve(),
+        result: Promise.resolve({ status: "failed", error: runtimeExit }),
+      }));
       await expect(state.run()).rejects.toMatchObject({
         code: "ACP_TURN_FAILED",
         message: "acpx exited with code 1",
@@ -209,26 +205,21 @@ describe("AcpSessionManager turn results", () => {
         });
         const result: AcpRuntimeTurnResult =
           status === "completed" ? { status, stopReason: "end_turn" } : { status };
-        state.runtime.startTurn = vi.fn((input) =>
-          turn(input.requestId, {
-            events: (async function* () {
-              await Promise.resolve();
-              if (streamClosed) {
-                return;
-              }
-              yield {
-                type: "text_delta" as const,
-                stream: "output" as const,
-                text: "partial output",
-              };
-              if (status === "completed") {
-                await closed.promise;
-              }
-            })(),
-            result: Promise.resolve(result),
-            closeStream,
-          }),
-        );
+        const output = { type: "text_delta", stream: "output", text: "partial output" } as const;
+        state.start(() => ({
+          events: (async function* () {
+            await Promise.resolve();
+            if (streamClosed) {
+              return;
+            }
+            yield output;
+            if (status === "completed") {
+              await closed.promise;
+            }
+          })(),
+          result: Promise.resolve(result),
+          closeStream,
+        }));
         const events: AcpRuntimeEvent[] = [];
         await state.run({
           onEvent: (event) => {

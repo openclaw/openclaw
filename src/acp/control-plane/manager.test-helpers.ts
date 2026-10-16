@@ -13,6 +13,7 @@ import { resetAcpActiveTurnsForTests } from "./active-turns.test-support.js";
 import { resolveAcpSessionTarget } from "./manager.utils.js";
 
 export type { AcpRuntime, OpenClawConfig, SessionAcpMeta };
+type MutableMeta = { currentMeta: SessionAcpMeta | undefined };
 
 type AcpMetaUpsertInput = Parameters<
   typeof import("../runtime/session-meta.js").upsertAcpSessionMeta
@@ -192,10 +193,7 @@ export function createRuntime() {
   return { runtime, ...mocks };
 }
 
-export function mockMutableSession(
-  sessionKey: string,
-  state: { currentMeta: SessionAcpMeta | undefined },
-) {
+export function mockMutableSession(sessionKey: string, state: MutableMeta) {
   hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
     sessionKey,
     storeSessionKey: sessionKey,
@@ -284,11 +282,7 @@ export function extractStatesFromUpserts(): SessionAcpMeta["state"][] {
   return recordedUpserts().flatMap(({ next }) => (next?.state ? [next.state] : []));
 }
 
-export function extractStateUpsertPersistenceOptions(): Array<{
-  state: SessionAcpMeta["state"];
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-}> {
+export function extractStateUpsertPersistenceOptions() {
   return recordedUpserts().flatMap(({ next, skipMaintenance, takeCacheOwnership }) =>
     next?.state && skipMaintenance && takeCacheOwnership
       ? [{ state: next.state, skipMaintenance: true, takeCacheOwnership: true }]
@@ -331,9 +325,7 @@ export function installAcpSessionManagerTestLifecycle(): void {
   });
 }
 
-export function installMutableAcpSessionMetaUpsert(state: {
-  currentMeta: SessionAcpMeta | undefined;
-}): void {
+export function installMutableAcpSessionMetaUpsert(state: MutableMeta): void {
   hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
     const params = paramsUnknown as {
       mutate: (

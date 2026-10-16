@@ -25,12 +25,43 @@ installAcpSessionManagerTestLifecycle();
 const sessionTarget = { cfg: baseCfg, sessionKey: "agent:codex:acp:actor-epoch-fencing" };
 const initialization = { ...sessionTarget, agent: "codex", mode: "persistent" as const };
 
+function barrier() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  return {
+    entered: entered.promise,
+    release: () => release.resolve(),
+    wait: () => {
+      entered.resolve();
+      return release.promise;
+    },
+  };
+}
+
+function expectIdle(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
+function useRuntime() {
+  const state = createRuntime();
+  hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
+  return state;
+}
+
 function createFixture(beforeCommit?: () => Promise<void>, initialMeta?: SessionAcpMeta) {
-  const runtimeState = createRuntime();
+  const runtimeState = useRuntime();
   let ensureCount = 0;
   let persistedMeta = initialMeta;
   const entry = () =>
     persistedMeta ? { sessionId: "session-1", updatedAt: 1, acp: persistedMeta } : undefined;
+  const stored = (key: string) => ({
+    sessionKey: key,
+    storeSessionKey: key,
+    entry: entry(),
+    acp: persistedMeta,
+  });
   runtimeState.ensureSession.mockImplementation(async (input) => {
     const callNumber = ++ensureCount;
     return {
@@ -40,17 +71,8 @@ function createFixture(beforeCommit?: () => Promise<void>, initialMeta?: Session
       backendSessionId: `backend-${callNumber}`,
     };
   });
-  hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-    id: "acpx",
-    runtime: runtimeState.runtime,
-  });
   hoisted.readAcpSessionEntryMock.mockImplementation(
-    ({ sessionKey: key }: { sessionKey: string }) => ({
-      sessionKey: key,
-      storeSessionKey: key,
-      entry: entry(),
-      acp: persistedMeta,
-    }),
+    ({ sessionKey: key }: { sessionKey: string }) => stored(key),
   );
   hoisted.upsertAcpSessionMetaMock.mockImplementation(
     async (input: Parameters<WriteManagerSessionMeta>[0]) => {
@@ -60,14 +82,7 @@ function createFixture(beforeCommit?: () => Promise<void>, initialMeta?: Session
       if (next !== undefined) {
         persistedMeta = next ?? undefined;
       }
-      return persistedMeta
-        ? {
-            sessionKey: input.sessionKey,
-            storeSessionKey: input.sessionKey,
-            entry: entry(),
-            acp: persistedMeta,
-          }
-        : null;
+      return persistedMeta ? stored(input.sessionKey) : null;
     },
   );
   return {
@@ -180,8 +195,7 @@ describe("AcpSessionManager actor epoch fencing", () => {
               ...services,
             });
       await expect(pending).rejects.toThrow();
-      expect(runtime.close).not.toHaveBeenCalled();
-      expect(writeSessionMeta).not.toHaveBeenCalled();
+      expectIdle(runtime.close, writeSessionMeta);
       expect(runtimeHandles.get(target)?.handle).toBe(handle);
     },
   );
@@ -189,23 +203,17 @@ describe("AcpSessionManager actor epoch fencing", () => {
   it.each(["actor", "caller"] as const)(
     "does not start backend work after %s authority expires during the status metadata read",
     async (retired) => {
-      const runtime = createRuntime();
-      const entered = createDeferred();
-      const release = createDeferred();
+      const runtime = useRuntime();
+      const read = barrier();
       const stored = {
         sessionKey,
         storeSessionKey: sessionKey,
         entry: { sessionId: "held-read", lifecycleRevision: "original", updatedAt: 1 },
         acp: readySessionMeta(),
       };
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtime.runtime,
-      });
       hoisted.readAcpSessionEntryMock.mockReturnValue(stored);
       hoisted.readAcpSessionEntryAsyncMock.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
+        await read.wait();
         return stored;
       });
       let current = true;
@@ -226,7 +234,7 @@ describe("AcpSessionManager actor epoch fencing", () => {
       });
       try {
         expect(
-          await Promise.race([entered.promise.then(() => "read"), outcome.then(() => "settled")]),
+          await Promise.race([read.entered.then(() => "read"), outcome.then(() => "settled")]),
         ).toBe("read");
         if (retired === "actor") {
           await getAcpSessionResetControls(manager).forceDiscardSessionRuntime({
@@ -237,7 +245,7 @@ describe("AcpSessionManager actor epoch fencing", () => {
           current = false;
         }
         expect(settled).toBe(false);
-        release.resolve();
+        read.release();
         const result = await outcome;
         if (result.status !== "rejected") {
           throw new Error("Expected the retired status read to reject");
@@ -247,12 +255,14 @@ describe("AcpSessionManager actor epoch fencing", () => {
         } else {
           expect(result.reason).toBe(revoked);
         }
-        expect(runtime.ensureSession).not.toHaveBeenCalled();
-        expect(runtime.getCapabilities).not.toHaveBeenCalled();
-        expect(runtime.getStatus).not.toHaveBeenCalled();
-        expect(hoisted.upsertAcpSessionMetaMock).not.toHaveBeenCalled();
+        expectIdle(
+          runtime.ensureSession,
+          runtime.getCapabilities,
+          runtime.getStatus,
+          hoisted.upsertAcpSessionMetaMock,
+        );
       } finally {
-        release.resolve();
+        read.release();
         await outcome;
         await disposeAcpSessionManagerInstance(manager, "test-complete");
       }
@@ -265,37 +275,29 @@ describe("AcpSessionManager actor epoch fencing", () => {
     { operation: "option update", freshOptions: { cwd: "/workspace/fresh" } },
     { operation: "option reset", freshOptions: { runtimeMode: "fresh" } },
     { operation: "status reconciliation", freshOptions: { model: "fresh-model" } },
-  ])(
+  ] as const)(
     "does not let a stale $operation write or clear the fresh actor lane",
     async ({ operation, freshOptions }) => {
-      const releaseStaleOperation = createDeferred();
-      const staleOperationEntered = createDeferred();
+      const stale = barrier();
       let pauseNextUpsert = false;
-      let closeCalls = 0;
       const fixture = createFixture(async () => {
         if (pauseNextUpsert) {
           pauseNextUpsert = false;
-          staleOperationEntered.resolve();
-          await releaseStaleOperation.promise;
+          await stale.wait();
         }
       });
       const { runtimeState, manager } = fixture;
       if (operation === "runtime mode" || operation === "config option") {
         runtimeState.getCapabilities.mockImplementation(async () => {
-          staleOperationEntered.resolve();
-          await releaseStaleOperation.promise;
+          await stale.wait();
           return {
             controls: ["session/set_mode", "session/set_config_option", "session/status"],
           };
         });
       }
       if (operation === "option reset") {
-        runtimeState.close.mockImplementation(async () => {
-          closeCalls += 1;
-          if (closeCalls === 1) {
-            staleOperationEntered.resolve();
-            await releaseStaleOperation.promise;
-          }
+        runtimeState.close.mockImplementationOnce(async () => {
+          await stale.wait();
         });
       }
       if (operation === "status reconciliation") {
@@ -303,8 +305,7 @@ describe("AcpSessionManager actor epoch fencing", () => {
         runtimeState.getStatus.mockImplementation(async () => {
           statusCalls += 1;
           if (statusCalls === 2) {
-            staleOperationEntered.resolve();
-            await releaseStaleOperation.promise;
+            await stale.wait();
           }
           return {
             summary: "status=alive",
@@ -319,27 +320,20 @@ describe("AcpSessionManager actor epoch fencing", () => {
       if (operation === "option update") {
         pauseNextUpsert = true;
       }
-      const staleOperation =
-        operation === "runtime mode"
-          ? manager.setSessionRuntimeMode({
-              ...sessionTarget,
-              runtimeMode: "stale",
-            })
-          : operation === "config option"
-            ? manager.setSessionConfigOption({
-                ...sessionTarget,
-                key: "model",
-                value: "stale-model",
-              })
-            : operation === "option update"
-              ? manager.updateSessionRuntimeOptions({
-                  ...sessionTarget,
-                  patch: { cwd: "/workspace/stale" },
-                })
-              : operation === "status reconciliation"
-                ? manager.getSessionStatus(sessionTarget)
-                : manager.resetSessionRuntimeOptions(sessionTarget);
-      await staleOperationEntered.promise;
+      const staleOperation = {
+        "runtime mode": () =>
+          manager.setSessionRuntimeMode({ ...sessionTarget, runtimeMode: "stale" }),
+        "config option": () =>
+          manager.setSessionConfigOption({ ...sessionTarget, key: "model", value: "stale-model" }),
+        "option update": () =>
+          manager.updateSessionRuntimeOptions({
+            ...sessionTarget,
+            patch: { cwd: "/workspace/stale" },
+          }),
+        "status reconciliation": () => manager.getSessionStatus(sessionTarget),
+        "option reset": () => manager.resetSessionRuntimeOptions(sessionTarget),
+      }[operation]();
+      await stale.entered;
 
       await getAcpSessionResetControls(manager).forceDiscardSessionRuntime({
         ...sessionTarget,
@@ -350,7 +344,7 @@ describe("AcpSessionManager actor epoch fencing", () => {
         runtimeOptions: freshOptions,
       });
 
-      releaseStaleOperation.resolve();
+      stale.release();
       await expect(staleOperation).rejects.toMatchObject({
         code: "ACP_SESSION_INIT_FAILED",
         detailCode: "SESSION_ACTOR_SUPERSEDED",
@@ -387,11 +381,10 @@ describe("AcpSessionManager actor epoch fencing", () => {
   );
 
   it("rejects a stale discard token without removing the successor runtime", async () => {
-    const state = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
+    const state = useRuntime();
     installMutableAcpSessionMetaUpsert({ currentMeta: undefined });
     const manager = new AcpSessionManager();
-    const input = { cfg: baseCfg, sessionKey, agent: "codex", mode: "persistent" as const };
+    const input = initialization;
     await manager.initializeSession(input);
     const old = getAcpSessionResetControls(manager).captureSessionRuntimeOwnership(input);
     await getAcpSessionResetControls(manager).forceDiscardSessionRuntime({
@@ -417,7 +410,7 @@ describe("AcpSessionManager actor epoch fencing", () => {
 
 it("captures the expected owner before waiting for the session actor", async () => {
   const sessionKey = "agent:main:acp:close-wait";
-  const state = createRuntime();
+  const state = useRuntime();
   const meta = readySessionMeta({ agent: "main" });
   let entry = {
     sessionId: "original",
@@ -431,19 +424,16 @@ it("captures the expected owner before waiting for the session actor", async () 
     entry,
     acp: meta,
   }));
-  hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
-  const entered = createDeferred();
-  const release = createDeferred();
+  const ensure = barrier();
   state.ensureSession.mockImplementation(async () => {
-    entered.resolve();
-    await release.promise;
+    await ensure.wait();
     return { sessionKey, backend: "acpx", runtimeSessionName: meta.runtimeSessionName };
   });
   const manager = new AcpSessionManager();
   const status = manager.getSessionStatus({ cfg: baseCfg, sessionKey });
   let closing: Promise<unknown> | undefined;
   try {
-    await entered.promise;
+    await ensure.entered;
     const expectedControlBinding = {
       sessionId: entry.sessionId,
       lifecycleRevision: entry.lifecycleRevision,
@@ -463,14 +453,12 @@ it("captures the expected owner before waiting for the session actor", async () 
     });
     entry = { ...entry, spawnedBy: "agent:main:replacement-owner" };
     expectedControlBinding.ownerKey = entry.spawnedBy;
-    release.resolve();
+    ensure.release();
     await status;
     await rejected;
-    expect(state.close).not.toHaveBeenCalled();
-    expect(state.prepareFreshSession).not.toHaveBeenCalled();
-    expect(hoisted.upsertAcpSessionMetaMock).not.toHaveBeenCalled();
+    expectIdle(state.close, state.prepareFreshSession, hoisted.upsertAcpSessionMetaMock);
   } finally {
-    release.resolve();
+    ensure.release();
     await Promise.allSettled([status, closing]);
     await disposeAcpSessionManagerInstance(manager, "fixture-cleanup");
   }
@@ -478,13 +466,11 @@ it("captures the expected owner before waiting for the session actor", async () 
 it.each(["update", "reset"] as const)(
   "rechecks the admitted requester before an awaited %s commits",
   async (operation) => {
-    const entered = createDeferred();
-    const release = createDeferred();
+    const commit = barrier();
     let current = true;
     const fixture = createFixture(
       async () => {
-        entered.resolve();
-        await release.promise;
+        await commit.wait();
       },
       readySessionMeta({ runtimeOptions: { cwd: "/workspace/original" } }),
     );
@@ -502,12 +488,11 @@ it.each(["update", "reset"] as const)(
         ? manager.updateSessionRuntimeOptions({ ...target, patch: { cwd: "/workspace/changed" } })
         : manager.resetSessionRuntimeOptions(target);
     const rejected = expect(pending).rejects.toThrow("requester authority revoked");
-    await entered.promise;
+    await commit.entered;
     current = false;
-    release.resolve();
+    commit.release();
     await rejected;
     expect(fixture.meta?.runtimeOptions).toEqual({ cwd: "/workspace/original" });
-    expect(runtime.ensureSession).not.toHaveBeenCalled();
-    expect(runtime.close).not.toHaveBeenCalled();
+    expectIdle(runtime.ensureSession, runtime.close);
   },
 );
