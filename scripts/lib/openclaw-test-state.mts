@@ -345,16 +345,6 @@ function renderShellSnippet(options: TestStateOptions = {}) {
 }
 
 function renderShellFunction() {
-  const survivor = upgradeSurvivorConfig();
-  const { entries, ...agents } = survivor.agents;
-  // The reusable function seeds published baselines that still use agents.list.
-  const legacySurvivor = {
-    ...survivor,
-    agents: {
-      ...agents,
-      list: Object.entries(entries).map(([id, agent]) => Object.assign({ id }, agent)),
-    },
-  };
   return `openclaw_test_state_create() {
   local raw_label="\${1:-state}"
   local label="$raw_label"
@@ -398,7 +388,7 @@ function renderShellFunction() {
       ${renderConfigWrite('"$OPENCLAW_CONFIG_PATH"', scenarioConfig("update-stable"))}
       ;;
     upgrade-survivor)
-      ${renderConfigWrite('"$OPENCLAW_CONFIG_PATH"', legacySurvivor)}
+      ${renderConfigWrite('"$OPENCLAW_CONFIG_PATH"', upgradeSurvivorConfig())}
       ;;
     gateway-loopback)
       ${renderConfigWrite('"$OPENCLAW_CONFIG_PATH"', scenarioConfig("gateway-loopback"))}

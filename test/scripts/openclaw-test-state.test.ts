@@ -199,7 +199,10 @@ describe("scripts/lib/openclaw-test-state", () => {
         "-c",
         `source ${shellQuote(snippetFile)}; openclaw_test_state_create ${shellQuote(shellHome)} upgrade-survivor; cat "$OPENCLAW_CONFIG_PATH"`,
       ]);
-      expect(JSON.parse(shellProbe.stdout).gateway).toStrictEqual(payload.config.gateway);
+      const shellConfig = JSON.parse(shellProbe.stdout);
+      expect(shellConfig.gateway).toStrictEqual(payload.config.gateway);
+      expect(Object.keys(shellConfig.agents.entries).toSorted()).toStrictEqual(["main", "ops"]);
+      expect(shellConfig.agents).not.toHaveProperty("list");
     } finally {
       await fs.rm(payload.root, { recursive: true, force: true });
     }
