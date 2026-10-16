@@ -56,15 +56,6 @@ async function createDeps() {
     ...store,
     readState: (id: string) => readConversationDeliveryStateForTest(store.scope, id),
     get: (id: string) => deliveryStore.getConversationDeliveryOperation(store.scope, id),
-    holdWriter: async () => {
-      const scope = await prepareConversationRegistryScope({
-        agentId: "main",
-        config: store.config,
-      });
-      const writer = holdConversationWriterForTest(scope);
-      await writer.entered;
-      return writer;
-    },
     send: (
       operationId: string,
       overrides: Partial<Parameters<typeof runGatewayConversationSend>[0]> = {},
@@ -183,7 +174,12 @@ describe("runGatewayConversationSend", () => {
     "admits the initial writable lookup before sending (aborted=%s)",
     async (aborted) => {
       const deps = await createDeps();
-      const writer = await deps.holdWriter();
+      const scope = await prepareConversationRegistryScope({
+        agentId: "main",
+        config: deps.config,
+      });
+      const writer = holdConversationWriterForTest(scope);
+      await writer.entered;
       const controller = new AbortController();
       const reason = new Error("conversation cancelled while waiting");
       const sent = deps.send("send-admitted-lookup", {
@@ -230,15 +226,13 @@ describe("runGatewayConversationSend", () => {
       blocked.resolve(writer);
       return sentResult();
     });
-    let settled = false;
+    const settled = vi.fn();
     const sent = deps
       .send("send-settlement", {
         readCurrentConfig: () => currentConfig,
         signal: controller.signal,
       })
-      .finally(() => {
-        settled = true;
-      });
+      .finally(settled);
     const outcome = captureOutcome(sent);
     const writerReady = Promise.race([blocked.promise, outcome.then(() => undefined)]);
     try {
@@ -252,7 +246,7 @@ describe("runGatewayConversationSend", () => {
       controller.abort(new Error("cancelled after recipient evidence"));
       currentConfig = replacement.config;
       await setImmediate();
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
       expect(deps.readState("send-settlement")?.status).toBe("queued");
       await writer.release();
       expect(await outcome).toMatchObject({

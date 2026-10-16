@@ -175,21 +175,18 @@ it.each(["final", "queued"] as const)(
             scope,
             initiate,
           );
-    const observeAttempt = async () => {
-      const sql = observeHostDataSql();
-      try {
-        return await attempt(async () => undefined);
-      } finally {
-        sql.restore();
-        // Existing shared-state route-owner checks are a separate authority boundary.
-        expect(
-          sql.queries.filter((query) =>
-            /\b(?:conversations|conversation_deliveries|session_conversations)\b/i.test(query),
-          ),
-        ).toEqual([]);
-      }
-    };
-    await expect(observeAttempt()).resolves.toBeUndefined();
+    const sql = observeHostDataSql();
+    try {
+      await expect(attempt(async () => undefined)).resolves.toBeUndefined();
+    } finally {
+      sql.restore();
+      // Existing shared-state route-owner checks are a separate authority boundary.
+      expect(
+        sql.queries.filter((query) =>
+          /\b(?:conversations|conversation_deliveries|session_conversations)\b/i.test(query),
+        ),
+      ).toEqual([]);
+    }
     const initialForeign = new (requireNodeSqlite().DatabaseSync)(storePath);
     try {
       initialForeign.exec("PRAGMA busy_timeout = 0");

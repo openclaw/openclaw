@@ -96,7 +96,7 @@ describe("conversation directory write admission", () => {
         toDatabaseOptions(resolveSqliteReadScope(fixture.scope)),
         () => release.promise,
       );
-      let settled = false;
+      const settled = vi.fn();
       let forcedUnavailable = false;
       const prepare = routeOwnership.prepareConversationRouteEligibilitiesForAgent;
       vi.spyOn(routeOwnership, "prepareConversationRouteEligibilitiesForAgent").mockImplementation(
@@ -117,13 +117,11 @@ describe("conversation directory write admission", () => {
           (value) => ({ value }),
           (error: unknown) => ({ error }),
         )
-        .finally(() => {
-          settled = true;
-        });
+        .finally(settled);
       try {
         await fixture.routed.promise;
         await setImmediate();
-        expect(settled).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
         expect(await listConversations(fixture.scope)).toEqual([]);
         if (eligibility === "denied") {
           currentConfig = {

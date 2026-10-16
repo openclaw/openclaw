@@ -210,8 +210,7 @@ describe("createCronExitWatchers", () => {
 
     await finish(runs[0]);
     expect(fireOnExit).toHaveBeenCalledTimes(1);
-    expect(fireOnExit.mock.calls[0]?.[0].id).toBe("job-a");
-    expect(fireOnExit.mock.calls[0]?.[0].agentId).toBe("ops");
+    expect(fireOnExit.mock.calls[0]?.[0]).toMatchObject({ id: "job-a", agentId: "ops" });
     expect(fireOnExit.mock.calls[0]?.[1]).toMatchObject({
       exitCode: 0,
       reason: "exit",

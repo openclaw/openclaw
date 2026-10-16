@@ -95,12 +95,10 @@ describe("cron creator authority grants", () => {
   it("carries direct-local origin without claiming channel requester authority", () => {
     const local = createScope("run-local", { kind: "local" });
     const grant = mint(local, undefined, undefined, undefined, "requester");
-
     expect(provenance(grant, local.runId)).toEqual({
       capturesRuntimeAuthority: false,
       callerOrigin: { kind: "local" },
     });
-
     const external = createScope("run-external", {
       kind: "external",
       channel: "discord",
@@ -110,36 +108,7 @@ describe("cron creator authority grants", () => {
     );
   });
 
-  it("rejects a runId mismatch without consuming the exact grant", () => {
-    const scope = createScope("run-1");
-    const grant = mint(scope);
-
-    expect(() => consume({ ...grant, runId: "run-other" })).toThrow(
-      "Configured MCP cron authority is no longer active",
-    );
-    expect(() => consume(grant)).not.toThrow();
-  });
-
-  it("rejects grants revoked by run settlement or abort", () => {
-    const scope = createScope("run-1");
-    const grant = mint(scope);
-    revokeScope(scope);
-
-    expect(scope.signal.aborted).toBe(true);
-    expect(() => consume(grant)).toThrow("Configured MCP cron authority is no longer active");
-  });
-
-  it("rejects a grant when its exact tool operation aborts", () => {
-    const scope = createScope("run-1");
-    const operation = new AbortController();
-    const grant = mint(scope, operation.signal);
-
-    operation.abort(new Error("tool call timed out"));
-
-    expect(() => consume(grant)).toThrow("Configured MCP cron authority is no longer active");
-  });
-
-  it("transports a private immutable runtime authority only through one-shot consumption", () => {
+  it("rejects run substitution and transports private runtime authority only once", () => {
     const scope = createScope("run-authority");
     const runtimeAuthority = {
       version: 1 as const,
@@ -147,10 +116,11 @@ describe("cron creator authority grants", () => {
       namespace: "codex.apps",
       payload: { apps: [{ id: "calendar" }] },
     };
-
     const grant = mint(scope, undefined, runtimeAuthority);
-
     expect(grant).toEqual({ runId: "run-authority", token: expect.any(String) });
+    expect(() => consume({ ...grant, runId: "run-other" })).toThrow(
+      "Configured MCP cron authority is no longer active",
+    );
     expect(consume(grant).authority).toEqual(runtimeAuthority);
     expect(() => consume(grant)).toThrow("Configured MCP cron authority is no longer active");
   });
@@ -173,15 +143,11 @@ describe("cron creator authority grants", () => {
         () => current.scope,
       );
       const operation = new AbortController();
-      const grant = mint(
-        scope,
-        operation.signal,
-        undefined,
-        undefined,
-        "runtime",
-        () => current.issuer,
-      );
+      const mintCurrent = () =>
+        mint(scope, operation.signal, undefined, undefined, "runtime", () => current.issuer);
+      const grant = mintCurrent();
       const consumed = consume(grant);
+      const unspent = mintCurrent();
       expect(consumed.authority).toBeUndefined();
       expect(consumed.assertCurrent).not.toThrow();
       expect(() => consume(grant)).toThrow("no longer active");
@@ -192,10 +158,14 @@ describe("cron creator authority grants", () => {
         current.channel = false;
       } else if (revoked === "run settlement") {
         revokeScope(scope);
+        expect(scope.signal.aborted).toBe(true);
+      } else if (revoked === "operation") {
+        operation.abort(new Error("tool call timed out"));
       } else {
-        (revoked === "operation" ? operation : scope).abort();
+        scope.abort();
       }
       expect(consumed.assertCurrent).toThrow("no longer active");
+      expect(() => consume(unspent)).toThrow("Configured MCP cron authority is no longer active");
     },
   );
 });
