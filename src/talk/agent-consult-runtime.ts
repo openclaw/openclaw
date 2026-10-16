@@ -8,9 +8,18 @@ import {
 import { resolveAgentRunCwd } from "../agents/agent-scope-config.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+import { resolveEmbeddedCliBackendDispatchEligibility } from "../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js";
+import { resolveInitialEmbeddedRunModel } from "../agents/embedded-agent-runner/run/runtime-resolution.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
+import { resolveModelCandidateChain } from "../agents/model-fallback-candidates.js";
+import { runWithModelFallback } from "../agents/model-fallback-runner.js";
+import { resolveAgentRunErrorLifecycleFields } from "../agents/run-termination.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import {
+  createAgentLifecycleTerminalBackstop,
+  resolveAgentLifecycleTerminalMetadata,
+} from "../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import { resolveLoadedSessionThreadInfo } from "../channels/plugins/session-thread-info-loaded.js";
 import { buildSpawnAuthorityReceipt } from "../config/sessions/session-entry-lineage.js";
@@ -20,6 +29,7 @@ import {
 } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isModelSelectionLocked, ModelSelectionLockedError } from "../sessions/model-overrides.js";
@@ -35,6 +45,7 @@ import {
   collectRealtimeVoiceAgentConsultVisibleText,
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "./agent-consult-tool.js";
+import { holdClientVoiceRunCompletion } from "./client-voice-run-hold.js";
 
 export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
 
@@ -574,67 +585,185 @@ export async function consultRealtimeVoiceAgent(params: {
         throw error;
       }
 
-      // Voice consults suppress verbose/reasoning output because the bridge needs a short,
-      // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
-      const runPromise = params.agentRuntime.runEmbeddedAgent({
-        sessionId,
-        sessionKey: params.sessionKey,
-        sessionTarget: {
-          agentId,
-          sessionId,
-          sessionKey: params.sessionKey,
-          storePath,
-        },
-        sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(agentId, params.sessionKey),
-        agentId,
-        ...toolAuthorityOverlay,
-        // ASR voice ingress has no trace/client-tool or privileged handoff capability.
-        messageProvider: toolAuthorityOverlay.messageProvider,
-        messageTo: consultDeliveryContext?.to,
-        messageThreadId: consultDeliveryContext?.threadId,
-        currentChannelId: consultDeliveryContext?.to,
-        currentThreadTs:
-          consultDeliveryContext?.threadId != null
-            ? String(consultDeliveryContext.threadId)
-            : undefined,
-        workspaceDir,
-        cwd,
+      // Normal turns walk the agent's model fallback chain; consults must too, or a primary
+      // that cannot run here (e.g. a CLI-runtime-only provider with no direct credential)
+      // ends every voice turn with no reply (#161885). The primary attempt keeps the
+      // caller's original provider/model so its resolution is unchanged.
+      const primary = resolveInitialEmbeddedRunModel({
         config: params.cfg,
-        prompt: buildRealtimeVoiceAgentConsultPrompt({
-          args: params.args,
-          transcript: params.transcript,
-          surface: params.surface,
-          userLabel: params.userLabel,
-          assistantLabel: params.assistantLabel,
-          questionSourceLabel: params.questionSourceLabel,
-        }),
+        agentId,
         provider: params.provider,
         model: params.model,
-        thinkLevel: params.thinkLevel ?? "high",
-        fastMode: params.fastMode,
-        verboseLevel: "off",
-        reasoningLevel: "off",
-        toolResultFormat: "plain",
-        execSession: sessionEntry,
-        sessionRoot: normalizeOptionalString(sessionEntry.sessionRoot),
-        toolsAllow: params.toolsAllow,
-        toolBindings: params.toolBindings,
-        timeoutMs,
-        runId,
-        lane: params.lane,
-        extraSystemPrompt:
-          params.extraSystemPrompt ??
-          "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.",
-        agentDir,
-        ...params.prepareToolContext?.(sessionEntry),
-        abortSignal,
       });
+      // Consults run on the embedded path only. A candidate whose provider is reachable
+      // solely through a subscription CLI runtime (e.g. anthropic via claude-cli with no
+      // API key) is certain to fail there, so start from the first candidate that can run.
+      // If none can, keep the configured chain so the real error still surfaces.
+      const runnableCandidates = resolveModelCandidateChain({
+        cfg: params.cfg,
+        agentId,
+        provider: primary.provider,
+        model: primary.modelId,
+      }).filter(
+        (candidate) =>
+          !resolveEmbeddedCliBackendDispatchEligibility({
+            provider: candidate.provider,
+            model: candidate.model,
+            agentId,
+            config: params.cfg,
+            agentDir,
+            workspaceDir,
+          }),
+      );
+      const [firstRunnable, ...laterRunnable] = runnableCandidates;
+      const skipsPrimary =
+        firstRunnable !== undefined &&
+        (firstRunnable.provider !== primary.provider || firstRunnable.model !== primary.modelId);
+      const route = skipsPrimary
+        ? {
+            provider: firstRunnable.provider,
+            model: firstRunnable.model,
+            fallbacksOverride: laterRunnable.map(
+              (candidate) => `${candidate.provider}/${candidate.model}`,
+            ),
+          }
+        : { provider: primary.provider, model: primary.modelId };
+      // A consult that already ran a tool may have acted; never replay it on another model.
+      let toolActivity = false;
+      // The consult owns one terminal lifecycle event across its fallback attempts, like a
+      // chat reply does. Otherwise each failed candidate records its own "ended before a
+      // reply" notice in the session even when a later candidate answers.
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
+        runId,
+        sessionKey: params.sessionKey,
+        getLifecycleGeneration: () => lifecycleGeneration,
+        resolveTerminationFields: (error) =>
+          resolveAgentRunErrorLifecycleFields(error, abortSignal),
+      });
+
+      // Voice consults suppress verbose/reasoning output because the bridge needs a short,
+      // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
+      const runConsultAttempt = (
+        provider: RunEmbeddedAgentParams["provider"],
+        model: RunEmbeddedAgentParams["model"],
+        allowTransientCooldownProbe?: boolean,
+      ) =>
+        params.agentRuntime.runEmbeddedAgent({
+          sessionId,
+          sessionKey: params.sessionKey,
+          sessionTarget: {
+            agentId,
+            sessionId,
+            sessionKey: params.sessionKey,
+            storePath,
+          },
+          sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(agentId, params.sessionKey),
+          agentId,
+          ...toolAuthorityOverlay,
+          // ASR voice ingress has no trace/client-tool or privileged handoff capability.
+          messageProvider: toolAuthorityOverlay.messageProvider,
+          messageTo: consultDeliveryContext?.to,
+          messageThreadId: consultDeliveryContext?.threadId,
+          currentChannelId: consultDeliveryContext?.to,
+          currentThreadTs:
+            consultDeliveryContext?.threadId != null
+              ? String(consultDeliveryContext.threadId)
+              : undefined,
+          workspaceDir,
+          cwd,
+          config: params.cfg,
+          prompt: buildRealtimeVoiceAgentConsultPrompt({
+            args: params.args,
+            transcript: params.transcript,
+            surface: params.surface,
+            userLabel: params.userLabel,
+            assistantLabel: params.assistantLabel,
+            questionSourceLabel: params.questionSourceLabel,
+          }),
+          provider,
+          model,
+          ...(allowTransientCooldownProbe ? { allowTransientCooldownProbe: true } : {}),
+          thinkLevel: params.thinkLevel ?? "high",
+          fastMode: params.fastMode,
+          verboseLevel: "off",
+          reasoningLevel: "off",
+          toolResultFormat: "plain",
+          execSession: sessionEntry,
+          sessionRoot: normalizeOptionalString(sessionEntry.sessionRoot),
+          toolsAllow: params.toolsAllow,
+          toolBindings: params.toolBindings,
+          timeoutMs,
+          runId,
+          lane: params.lane,
+          extraSystemPrompt:
+            params.extraSystemPrompt ??
+            "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.",
+          agentDir,
+          ...params.prepareToolContext?.(sessionEntry),
+          abortSignal,
+          onAgentToolResult: () => {
+            toolActivity = true;
+          },
+          deferTerminalLifecycle: true,
+          onAgentEvent: (event) => lifecycleBackstop.note(event),
+              });
+
+      // Each attempt emits its own run.completed; hold the voice binding for the whole
+      // consult so a failed attempt cannot drop spoken confirmation before a fallback acts.
+      const releaseVoiceRunCompletion = holdClientVoiceRunCompletion(runId);
+      const runPromise = runWithModelFallback({
+        cfg: params.cfg,
+        agentId,
+        ...route,
+        runId,
+        sessionId,
+        lane: params.lane,
+        agentDir,
+        abortSignal,
+        canFallbackAfterError: () => !toolActivity && !abortSignal.aborted,
+        run: (provider, model, options) => {
+          const isPrimary = provider === primary.provider && model === primary.modelId;
+          return runConsultAttempt(
+            isPrimary ? params.provider : provider,
+            isPrimary ? params.model : model,
+            options?.allowTransientCooldownProbe,
+          );
+        },
+      }).then(
+        (fallbackResult) => {
+          const attemptResult = fallbackResult.result;
+          const error = attemptResult.meta.error?.message ?? lifecycleBackstop.getDeferredError();
+          lifecycleBackstop.emit(
+            error ? "error" : "end",
+            error ? new Error(error) : attemptResult,
+            {
+              ...resolveAgentLifecycleTerminalMetadata(attemptResult.meta),
+              ...(attemptResult.meta.agentMeta?.terminalReceipt
+                ? {
+                    assistantTranscriptIdempotencyKey:
+                      attemptResult.meta.agentMeta.terminalReceipt
+                        .assistantTranscriptIdempotencyKey,
+                  }
+                : {}),
+            },
+          );
+          return attemptResult;
+        },
+        (error: unknown) => {
+          lifecycleBackstop.emit("error", error);
+          throw error;
+        },
+      );
       const result = await runPromise
         .catch((error: unknown) => {
           assertRealtimeVoiceConsultNotInterrupted(abortSignal);
           throw error;
         })
-        .finally(() => runRegistration?.cleanup?.());
+        .finally(() => {
+          runRegistration?.cleanup?.();
+          releaseVoiceRunCompletion();
+        });
       assertRealtimeVoiceConsultNotInterrupted(abortSignal, result.meta);
 
       if (result.meta?.yielded === true) {
