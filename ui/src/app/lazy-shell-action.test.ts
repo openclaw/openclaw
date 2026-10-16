@@ -148,6 +148,60 @@ describe("shell lazy events", () => {
     });
   });
 
+  it("retires a composing palette on disconnect while the shell owner remains reusable", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const gate = createDeferred();
+    const element = createLazyElementSpec("reconnected cold palette");
+    const load = element.loadModule;
+    element.loadModule = async () => {
+      await gate.promise;
+      await load();
+    };
+    const shell = paletteShell(element, vi.fn());
+    try {
+      shell.connect();
+      shell.openPalette();
+      const state = shell.commandPaletteLoading;
+      const input = document.createElement("textarea");
+      state.inputRef(input);
+      input.value = "retired prompt";
+      state.captureInput();
+      const file = new File(["image"], "retired.png", { type: "image/png" });
+      const paste = new Event("paste", { cancelable: true }) as ClipboardEvent;
+      Object.defineProperty(paste, "clipboardData", {
+        value: { items: [{ getAsFile: () => file }] },
+      });
+      state.handlePaste(paste);
+      expect(paste.defaultPrevented).toBe(true);
+      state.handleCompositionStart();
+      const retired = vi.fn();
+      state.handoff(retired);
+      const take = state.captureHandoff();
+      state.handleCompositionEnd();
+
+      shell.disconnect();
+      expect(state.active()).toBe(false);
+      expect(state.value()).toBe("");
+      expect(take()).toBeUndefined();
+      shell.connect();
+      shell.openPalette();
+      expect(shell.commandPaletteLoading).toBe(state);
+      const fresh = state.captureHandoff()();
+      expect(fresh?.value).toBe("");
+      expect(fresh?.imageFiles).toBeUndefined();
+      expect(fresh?.submitRequested).toBeUndefined();
+      expect(take()).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(20);
+      expect(retired).not.toHaveBeenCalled();
+    } finally {
+      shell.disconnect();
+      vi.useRealTimers();
+      gate.resolve();
+      await vi.dynamicImportSettled();
+    }
+  });
+
   it.each(["connection", "account", "reconnect"] as const)(
     "respects the canonical %s boundary while a cold palette is composing",
     async (change) => {
@@ -198,8 +252,8 @@ describe("shell lazy events", () => {
       }
       shell.shellChrome.synchronizeCommandPaletteScope();
       if (change === "reconnect") {
-        expect(state.value).toBe("old-owner prompt");
-        expect(state.active).toBe(true);
+        expect(state.value()).toBe("old-owner prompt");
+        expect(state.active()).toBe(true);
         snapshot = {
           ...snapshot,
           phase: "connected",
@@ -209,8 +263,8 @@ describe("shell lazy events", () => {
         expect(take()?.value).toBe("old-owner prompt");
         shell.lazyCustomElements.close();
       } else {
-        expect(state.active).toBe(false);
-        expect(state.value).toBe("");
+        expect(state.active()).toBe(false);
+        expect(state.value()).toBe("");
         expect(take()).toBeUndefined();
         expect(readLazyShellAction()).toBeNull();
       }

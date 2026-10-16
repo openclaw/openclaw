@@ -232,8 +232,20 @@ export function createEmbeddedRunFailoverRetryController(input: {
         transientRetryWindowStartMs = null;
       }
     },
-    advanceAuthProfile: (reason: FailoverReason | null, context: RateLimitAuthProfileContext) =>
-      reason === "rate_limit" ? advanceRateLimitAuthProfile(context) : advanceAttemptAuthProfile(),
+    advanceAuthProfile: (reason: FailoverReason | null, context: RateLimitAuthProfileContext) => {
+      if (
+        params.retryTransientErrors === false &&
+        (reason === "rate_limit" ||
+          reason === "overloaded" ||
+          reason === "server_error" ||
+          reason === "timeout")
+      ) {
+        return Promise.resolve(false);
+      }
+      return reason === "rate_limit"
+        ? advanceRateLimitAuthProfile(context)
+        : advanceAttemptAuthProfile();
+    },
     maybeMarkAuthProfileFailure,
     resolveAuthProfileFailureReason: resolveProfileFailureReason,
     recoverThrownHarnessAuthFailure: async (error: unknown): Promise<AuthRetryTrace | null> => {
@@ -293,6 +305,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         reason:
           | "non_transient"
           | "connection_retry_disabled"
+          | "transient_retry_disabled"
           | "long_window_rate_limit"
           | "organization_tpm_exhausted"
           | "retry_budget_exhausted"
@@ -310,6 +323,10 @@ export function createEmbeddedRunFailoverRetryController(input: {
           },
           { config: params.config },
         );
+      if (params.retryTransientErrors === false && retry.reason !== "output_limit") {
+        recordDecision("rejected", "transient_retry_disabled");
+        return false;
+      }
       if (
         params.retryConnectionErrors === false &&
         retry.code !== undefined &&

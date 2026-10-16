@@ -204,7 +204,7 @@ builder embeds known worker and child programs. Plugins that use
 or their own standalone integration and qualification.
 
 The shared `cli-invocation.mjs` module owns OpenClaw CLI launch arguments for
-startup respawns, update helpers, and service launchers. A standalone invocation
+startup respawns, native hook relays, ACP and TUI launches, update helpers, and service launchers. A standalone invocation
 passes CLI arguments directly to the executable, including root options such as
 `--profile`; it does not prepend a script path or interpreter flags. A loose
 Node or Bun invocation retains its runtime flags and entry script. Standalone
@@ -237,6 +237,11 @@ For each production-pinned JIT and bytecode artifact:
    The trace must observe every JavaScript VM and worker, reconcile worker
    creation receipts, and find no disk JavaScript reads, resolutions, or cache
    entries on the exercised paths.
+   Include a real Codex-backed reply and a tool-using turn. Verify the tool's
+   result and observe the native hook child running `<executable> hooks relay`
+   without a loose entry script. Reuse native Codex login with
+   `appServer.homeScope: "user"`; keep OpenClaw state isolated and do not copy
+   credentials into the artifact or test state.
 4. Run the signed functional campaign with only the declared entitlements.
    Remove each declared entitlement in a separate negative control and record
    the concrete failure that makes it necessary. Drop entitlements with no
