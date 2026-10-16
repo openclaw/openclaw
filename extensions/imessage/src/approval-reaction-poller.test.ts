@@ -8,30 +8,15 @@ import {
 } from "./approval-reactions.js";
 import type { IMessageRpcClient } from "./client.js";
 import type { IMessagePayload } from "./monitor/types.js";
+import { resolvedApproval } from "./test-support/approval.js";
 
-const resolverMocks = vi.hoisted(() => ({
-  resolve: vi.fn(),
-  isApprovalNotFoundError: vi.fn(() => false),
-}));
+const resolverMocks = vi.hoisted(() => ({ resolve: vi.fn() }));
 
 type IMessageTargetParams = Parameters<typeof registerIMessageApprovalReactionTarget>[0];
 
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: resolverMocks.resolve,
 }));
-vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
-    "openclaw/plugin-sdk/error-runtime",
-  );
-  return {
-    ...actual,
-    isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
-  };
-});
-
-function createClient(request: ReturnType<typeof vi.fn>): IMessageRpcClient {
-  return { request } as unknown as IMessageRpcClient;
-}
 
 function createRpcRequest(messages: unknown[], chatIds?: number[]) {
   return vi.fn(async (method: string) => {
@@ -48,9 +33,7 @@ function createRpcRequest(messages: unknown[], chatIds?: number[]) {
 const APPROVER = "+15551230000";
 const DEFAULT_CHAT_ID = 42;
 
-function buildApprovalConfig(approver = APPROVER) {
-  return { channels: { imessage: { allowFrom: [approver] } } };
-}
+const cfg = { channels: { imessage: { allowFrom: [APPROVER] } } };
 function expectHistory(request: ReturnType<typeof vi.fn>) {
   expect(request).toHaveBeenCalledWith(
     "messages.history",
@@ -89,12 +72,7 @@ function buildApprovalMessage(
 function buildGroupApprovalMessage(
   reactions: ReturnType<typeof buildReaction>[] = [
     buildReaction({ id: 8, created_at: "2026-05-27T21:01:00.000Z" }),
-    buildReaction({
-      id: 9,
-      type: "dislike",
-      emoji: "👎",
-      created_at: "2026-05-27T21:02:00.000Z",
-    }),
+    buildReaction({ id: 9, type: "dislike", emoji: "👎", created_at: "2026-05-27T21:02:00.000Z" }),
   ],
 ) {
   return buildApprovalMessage({
@@ -122,7 +100,7 @@ describe("iMessage approval reaction poller", () => {
   function expectResolution() {
     expect(resolverMocks.resolve).toHaveBeenCalledWith({
       accountId,
-      cfg: buildApprovalConfig(),
+      cfg,
       approvalId: "exec-1",
       approvalKind: "exec",
       decision: "allow-once",
@@ -138,12 +116,7 @@ describe("iMessage approval reaction poller", () => {
     request: ReturnType<typeof vi.fn>,
     overrides: Partial<Omit<PollParams, "client" | "accountId">> = {},
   ): PollParams {
-    return {
-      client: createClient(request),
-      cfg: buildApprovalConfig(),
-      accountId,
-      ...overrides,
-    };
+    return { client: { request } as unknown as IMessageRpcClient, cfg, accountId, ...overrides };
   }
 
   function registerTarget(
@@ -164,18 +137,7 @@ describe("iMessage approval reaction poller", () => {
     clearIMessageApprovalReactionTargetsForTest();
     accountSequence += 1;
     accountId = `test-${accountSequence}`;
-    resolverMocks.resolve.mockReset();
-    resolverMocks.resolve.mockImplementation(
-      async ({ decision }: { decision: "allow-once" | "allow-always" | "deny" }) => ({
-        applied: true,
-        approval:
-          decision === "deny"
-            ? { status: "denied", decision, reason: "user" }
-            : { status: "allowed", decision, reason: "user" },
-      }),
-    );
-    resolverMocks.isApprovalNotFoundError.mockReset();
-    resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
+    resolverMocks.resolve.mockReset().mockImplementation(resolvedApproval);
   });
 
   it("does not resolve reactions from a history response after its account retires", async () => {
@@ -222,15 +184,8 @@ describe("iMessage approval reaction poller", () => {
     await registerTarget();
     const request = createRpcRequest([
       buildGroupApprovalMessage([
-        buildReaction({
-          id: 8,
-          sender: "+15550000000",
-          created_at: "2026-05-27T21:01:00.000Z",
-        }),
-        buildReaction({
-          id: 9,
-          created_at: "2026-05-27T21:02:00.000Z",
-        }),
+        buildReaction({ id: 8, sender: "+15550000000", created_at: "2026-05-27T21:01:00.000Z" }),
+        buildReaction({ id: 9, created_at: "2026-05-27T21:02:00.000Z" }),
       ]),
     ]);
 
@@ -248,9 +203,7 @@ describe("iMessage approval reaction poller", () => {
     await registerTarget();
     const request = createRpcRequest([buildGroupApprovalMessage()]);
     const logVerboseMessage = vi.fn();
-    const pollParams = buildPollParams(request, {
-      logVerboseMessage,
-    });
+    const pollParams = buildPollParams(request, { logVerboseMessage });
 
     await poll(pollParams);
     await poll(pollParams);

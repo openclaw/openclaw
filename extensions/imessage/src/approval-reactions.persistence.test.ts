@@ -13,11 +13,10 @@ import {
   unregisterIMessageApprovalReactionTarget as unregisterTarget,
 } from "./approval-reactions.js";
 import { getOptionalIMessageRuntime } from "./runtime.js";
+import { pollVote } from "./test-support/approval.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
-const gatewayMocks = vi.hoisted(() => ({
-  resolve: vi.fn(),
-}));
+const gatewayMocks = vi.hoisted(() => ({ resolve: vi.fn() }));
 
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: gatewayMocks.resolve,
@@ -48,9 +47,8 @@ describe("iMessage approval reaction persistence", () => {
     const pollGate = createDeferred<void>();
     const reactionGate = createDeferred<void>();
     const deletionGate = createDeferred<void>();
-    const writes: Promise<void>[] = [];
+    const writes: Record<"poll" | "reaction", Promise<void>[]> = { poll: [], reaction: [] };
     const deletions: Promise<boolean>[] = [];
-    const pollWrites: Promise<void>[] = [];
     const openSpy = vi
       .spyOn(state, "openKeyedStoreV2")
       .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
@@ -59,22 +57,16 @@ describe("iMessage approval reaction persistence", () => {
         const remove = store.delete.bind(store);
         const isPollStore = options.namespace === "imessage.approval-reaction-poll-targets";
         vi.spyOn(store, "register").mockImplementation((...args) => {
-          const write = (async () => {
-            await (isPollStore ? pollGate.promise : reactionGate.promise);
-            await register(...args);
-          })();
-          writes.push(write);
-          if (isPollStore) {
-            pollWrites.push(write);
-          }
+          const write = (isPollStore ? pollGate : reactionGate).promise.then(() =>
+            register(...args),
+          );
+          writes[isPollStore ? "poll" : "reaction"].push(write);
           return write;
         });
         vi.spyOn(store, "delete").mockImplementation((...args) => {
-          const deletion = (async () => {
-            const removed = await remove(...args);
-            await deletionGate.promise;
-            return removed;
-          })();
+          const deletion = remove(...args).then((removed) =>
+            deletionGate.promise.then(() => removed),
+          );
           deletions.push(deletion);
           return deletion;
         });
@@ -84,24 +76,20 @@ describe("iMessage approval reaction persistence", () => {
       accountId: "restart-account",
       conversation: { chatId: 42, chatGuid: "iMessage;+;restart" },
       messageId: "restart-message",
-    };
+      approvalId: "exec-restart",
+      approvalKind,
+      allowedDecisions: ["allow-once", "deny"] as const,
+    } satisfies Parameters<typeof registerTarget>[0];
     const resolveTarget = () => lookupTarget({ ...identity, reactionKey: "👍" });
     const listAccountTargets = () => listTargets({ accountId: identity.accountId });
     const resolution = { approvalId: "exec-restart", approvalKind, decision: "allow-once" };
     const registered = vi.fn();
-    const registration = Promise.resolve(
-      registerTarget({
-        ...identity,
-        approvalId: "exec-restart",
-        approvalKind,
-        allowedDecisions: ["allow-once", "deny"],
-      }),
-    ).then(registered);
+    const registration = registerTarget(identity).then(registered);
     try {
       expect(await resolveTarget()).toEqual(resolution);
       expect(registered).not.toHaveBeenCalled();
       pollGate.resolve();
-      await Promise.all(pollWrites);
+      await Promise.all(writes.poll);
       expect(registered).not.toHaveBeenCalled();
       reactionGate.resolve();
       await registration;
@@ -118,7 +106,7 @@ describe("iMessage approval reaction persistence", () => {
       ]);
       expect(await resolveTarget()).toEqual(resolution);
       const deleted = vi.fn();
-      const deletion = Promise.resolve(unregisterTarget(identity)).then(deleted);
+      const deletion = unregisterTarget(identity).then(deleted);
       expect(await listAccountTargets()).toEqual([]);
       expect(deleted).not.toHaveBeenCalled();
       deletionGate.resolve();
@@ -129,7 +117,7 @@ describe("iMessage approval reaction persistence", () => {
       pollGate.resolve();
       reactionGate.resolve();
       deletionGate.resolve();
-      await Promise.allSettled([...writes, ...deletions]);
+      await Promise.allSettled([...writes.poll, ...writes.reaction, ...deletions]);
       await registration;
       openSpy.mockRestore();
     }
@@ -160,16 +148,11 @@ describe("iMessage approval reaction persistence", () => {
       maybeResolveIMessageApprovalPollVote({
         cfg,
         accountId,
-        message: {
-          sender: approver,
-          chat_guid: chatGuid,
-          is_group: true,
-          poll: {
-            kind: "vote",
-            original_guid: pollGuid,
-            votes: [{ option_id: optionId, participant: approver, event_type: "selected" }],
-          },
-        },
+        message: pollVote(
+          pollGuid,
+          [{ option_id: optionId, participant: approver, event_type: "selected" }],
+          { sender: approver, chat_guid: chatGuid, is_group: true },
+        ),
       });
     await expect(vote()).resolves.toBe(true);
     expect(gatewayMocks.resolve).toHaveBeenCalledExactlyOnceWith({
@@ -214,10 +197,7 @@ describe("iMessage approval reaction persistence", () => {
       await registerTarget(target);
       clearIMessageApprovalReactionTargetsForTest();
       expect(await listTargets(target)).toEqual([
-        expect.objectContaining({
-          approvalId: target.approvalId,
-          messageId: target.messageId,
-        }),
+        expect.objectContaining({ approvalId: target.approvalId, messageId: target.messageId }),
       ]);
     } finally {
       openSpy.mockRestore();
@@ -227,32 +207,28 @@ describe("iMessage approval reaction persistence", () => {
   it.each([
     { name: "decision", approvalKind: "exec", allowedDecisions: ["allow-once", "invalid"] },
     { name: "kind", approvalKind: "unknown", allowedDecisions: ["allow-once"] },
-  ])("rejects persisted targets containing an invalid approval $name", async (invalid) => {
-    const store = requireState().openKeyedStoreV2({
-      namespace: "imessage.approval-reactions",
-      maxEntries: 1000,
-      defaultTtlMs: 24 * 60 * 60 * 1000,
-    });
-    await store.register(
-      "default:handle:+15551230000:corrupt-message",
-      {
-        version: 1,
-        target: {
-          approvalId: "exec-corrupt",
-          approvalKind: invalid.approvalKind,
-          allowedDecisions: invalid.allowedDecisions,
-        },
-      },
-      { ttlMs: 60_000 },
-    );
+  ])(
+    "rejects persisted targets containing an invalid approval $name",
+    async ({ approvalKind, allowedDecisions }) => {
+      const store = requireState().openKeyedStoreV2({
+        namespace: "imessage.approval-reactions",
+        maxEntries: 1000,
+        defaultTtlMs: 24 * 60 * 60 * 1000,
+      });
+      await store.register(
+        "default:handle:+15551230000:corrupt-message",
+        { version: 1, target: { approvalId: "exec-corrupt", approvalKind, allowedDecisions } },
+        { ttlMs: 60_000 },
+      );
 
-    await expect(
-      lookupTarget({
-        accountId: "default",
-        conversation: { handle: "+15551230000" },
-        messageId: "corrupt-message",
-        reactionKey: "👍",
-      }),
-    ).resolves.toBeNull();
-  });
+      await expect(
+        lookupTarget({
+          accountId: "default",
+          conversation: { handle: "+15551230000" },
+          messageId: "corrupt-message",
+          reactionKey: "👍",
+        }),
+      ).resolves.toBeNull();
+    },
+  );
 });

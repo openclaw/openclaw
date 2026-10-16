@@ -1,22 +1,23 @@
-import { buildTypedExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
+import {
+  buildTypedApprovalPresentation,
+  buildTypedExecApprovalPendingReplyPayload,
+} from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listPendingIMessageApprovalReactionPollTargets } from "./approval-reaction-poll-targets.js";
+import { listPendingIMessageApprovalReactionPollTargets as listTargets } from "./approval-reaction-poll-targets.js";
 import {
   addIMessageApprovalReactionHintToStructuredPayload,
   buildIMessageApprovalConversationKeyForTarget,
   clearIMessageApprovalReactionTargetsForTest,
   maybeResolveIMessageApprovalReaction,
-  registerIMessageApprovalReactionTargetForDeliveredPayload,
+  registerIMessageApprovalReactionTargetForDeliveredPayload as bindDelivered,
   registerIMessageApprovalReactionTarget as registerRaw,
   resolveIMessageApprovalReactionTargetWithPersistence as lookupTarget,
 } from "./approval-reactions.js";
 import type { IMessagePayload } from "./monitor/types.js";
+import { resolvedApproval } from "./test-support/approval.js";
 
-const resolverMocks = vi.hoisted(() => ({
-  resolve: vi.fn(),
-  isApprovalNotFoundError: vi.fn(() => false),
-}));
+const resolverMocks = vi.hoisted(() => ({ resolve: vi.fn() }));
 const identity = { accountId: "default", conversation: { handle: "+15551230000" } };
 const deliveryTarget = {
   accountId: "default",
@@ -35,11 +36,7 @@ function prepare(payload: ReplyPayload, approvalKind: "exec" | "plugin" = "exec"
   return addIMessageApprovalReactionHintToStructuredPayload({ payload, approvalKind });
 }
 function resolveTarget(messageId: string) {
-  return lookupTarget({
-    ...identity,
-    messageId,
-    reactionKey: "👎",
-  });
+  return lookupTarget({ ...identity, messageId, reactionKey: "👎" });
 }
 
 type IMessageTargetParams = Parameters<typeof registerRaw>[0];
@@ -60,15 +57,6 @@ function registerTarget(
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: resolverMocks.resolve,
 }));
-vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
-    "openclaw/plugin-sdk/error-runtime",
-  );
-  return {
-    ...actual,
-    isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
-  };
-});
 
 function buildForwardedApproval(
   approvalKind: "exec" | "plugin",
@@ -82,17 +70,7 @@ function buildForwardedApproval(
       `ID: ${approvalId}`,
       `Reply with: /approve ${approvalId} allow-once|deny`,
     ].join("\n"),
-    presentation: {
-      blocks: [
-        {
-          type: "buttons",
-          buttons: allowedDecisions.map((decision) => ({
-            label: decision === "allow-once" ? "Allow Once" : "Deny",
-            action: { type: "approval" as const, approvalId, approvalKind, decision },
-          })),
-        },
-      ],
-    },
+    presentation: buildTypedApprovalPresentation({ approvalId, approvalKind, allowedDecisions }),
     channelData: { execApproval: { approvalId, approvalSlug, approvalKind, allowedDecisions } },
   };
 }
@@ -133,18 +111,7 @@ function resolveReaction(
 describe("iMessage approval reactions", () => {
   beforeEach(() => {
     clearIMessageApprovalReactionTargetsForTest();
-    resolverMocks.resolve.mockReset();
-    resolverMocks.resolve.mockImplementation(
-      async ({ decision }: { decision: "allow-once" | "allow-always" | "deny" }) => ({
-        applied: true,
-        approval:
-          decision === "deny"
-            ? { status: "denied", decision, reason: "user" }
-            : { status: "allowed", decision, reason: "user" },
-      }),
-    );
-    resolverMocks.isApprovalNotFoundError.mockReset();
-    resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
+    resolverMocks.resolve.mockReset().mockImplementation(resolvedApproval);
   });
 
   it("uses typed metadata to prepare shared forwarded prompts", () => {
@@ -171,23 +138,14 @@ describe("iMessage approval reactions", () => {
     }
 
     expect(
-      await registerIMessageApprovalReactionTargetForDeliveredPayload({
+      await bindDelivered({
         ...deliveryTarget,
         payload,
         results: [
           {
             channel: "imessage",
             messageId: "42",
-            meta: {
-              imessageMessageGuid: "p:0/shared-guid",
-              imessageVisibleText: payload.text,
-            },
-            receipt: {
-              primaryPlatformMessageId: "42",
-              platformMessageIds: ["42"],
-              parts: [{ platformMessageId: "42", kind: "text", index: 0 }],
-              sentAt: 1_000,
-            },
+            meta: { imessageMessageGuid: "p:0/shared-guid", imessageVisibleText: payload.text },
           },
         ],
       }),
@@ -237,7 +195,7 @@ describe("iMessage approval reactions", () => {
     }
 
     expect(
-      await registerIMessageApprovalReactionTargetForDeliveredPayload({
+      await bindDelivered({
         ...deliveryTarget,
         payload: prepared,
         results: [
@@ -284,55 +242,44 @@ describe("iMessage approval reactions", () => {
     ).toBeNull();
   });
 
-  it("does not keep pending poll targets when the process clock is invalid", async () => {
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+  it.each([
+    {
+      name: "does not keep pending poll targets when the process clock is invalid",
+      now: Number.NaN,
+      id: "invalid-clock",
+      ttlMs: undefined,
+    },
+    {
+      name: "falls back to the default pending poll target ttl for invalid explicit ttl values",
+      now: 1_800_000_000_000,
+      id: "invalid-ttl",
+      ttlMs: Number.NaN,
+    },
+  ])("$name", async ({ now, id, ttlMs }) => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(now);
+    const approvalId = `exec-${id}`;
     try {
-      expect(
-        await registerTarget({
-          messageId: "msg-invalid-clock",
-          approvalId: "exec-invalid-clock",
-        }),
-      ).toBeNull();
+      const result = await registerTarget({ messageId: `msg-${id}`, approvalId, ttlMs });
+      if (!Number.isFinite(now)) {
+        expect(result).toBeNull();
+      }
     } finally {
       dateNow.mockRestore();
     }
-
-    expect(await listPendingIMessageApprovalReactionPollTargets({ accountId: "default" })).toEqual(
-      [],
+    expect(await listTargets({ accountId: "default" })).toEqual(
+      Number.isFinite(now)
+        ? [expect.objectContaining({ approvalId, expiresAtMs: now + 24 * 60 * 60 * 1000 })]
+        : [],
     );
-  });
-
-  it("falls back to the default pending poll target ttl for invalid explicit ttl values", async () => {
-    const nowMs = 1_800_000_000_000;
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
-    try {
-      await registerTarget({
-        messageId: "msg-invalid-ttl",
-        approvalId: "exec-invalid-ttl",
-        ttlMs: Number.NaN,
-      });
-    } finally {
-      dateNow.mockRestore();
-    }
-
-    expect(await listPendingIMessageApprovalReactionPollTargets({ accountId: "default" })).toEqual([
-      expect.objectContaining({
-        approvalId: "exec-invalid-ttl",
-        expiresAtMs: nowMs + 24 * 60 * 60 * 1000,
-      }),
-    ]);
   });
 
   it("resolves is_from_me tapbacks when the actor is an explicit approver", async () => {
     await registerTarget({ approvalId: "exec-self" });
 
     const gatewayRuntime = { request: vi.fn() } as never;
-    const handled = await resolveReaction(
-      buildTapbackReactionPayload({
-        is_from_me: true,
-      }),
-      { gatewayRuntime },
-    );
+    const handled = await resolveReaction(buildTapbackReactionPayload({ is_from_me: true }), {
+      gatewayRuntime,
+    });
 
     expect(handled).toBe(true);
     expect(resolverMocks.resolve).toHaveBeenCalledWith(
@@ -347,42 +294,31 @@ describe("iMessage approval reactions", () => {
     );
   });
 
-  it("ignores removed tapbacks for approval reactions", async () => {
-    await registerTarget({ approvalId: "exec-1" });
-
-    const handled = await resolveReaction(buildTapbackReactionPayload({ is_reaction_add: false }));
-
-    expect(handled).toBe(false);
-    expect(resolverMocks.resolve).not.toHaveBeenCalled();
-  });
-
-  it("requires explicit approvers for direct approval reactions", async () => {
+  it.each([
+    {
+      name: "ignores removed tapbacks",
+      message: buildTapbackReactionPayload({ is_reaction_add: false }),
+      handled: false,
+    },
+    {
+      name: "requires explicit approvers",
+      message: buildTapbackReactionPayload({}),
+      handled: true,
+      limited: true,
+      options: { cfg: { channels: { imessage: {} } } },
+    },
+    {
+      name: "falls through for legacy text tapbacks",
+      message: { sender: "+15551230000", reacted_to_guid: "approval-message" },
+      handled: false,
+      options: { bodyText: "liked “Exec approval required”" },
+    },
+  ])("$name", async ({ message, handled, options, limited }) => {
     await registerTarget({
       approvalId: "exec-1",
-      allowedDecisions: ["allow-once"],
+      allowedDecisions: limited ? ["allow-once"] : ["allow-once", "deny"],
     });
-
-    const handled = await resolveReaction(buildTapbackReactionPayload({}), {
-      cfg: { channels: { imessage: {} } },
-    });
-
-    expect(handled).toBe(true);
-    expect(resolverMocks.resolve).not.toHaveBeenCalled();
-  });
-
-  it("resolves approvals when the legacy tapback text path is used", async () => {
-    await registerTarget({ approvalId: "exec-legacy" });
-
-    const handled = await resolveReaction(
-      {
-        sender: "+15551230000",
-        reacted_to_guid: "approval-message",
-      } as IMessagePayload,
-      { bodyText: "liked “Exec approval required”" },
-    );
-
-    // Legacy text has no targetGuid and must fall through to ordinary dispatch.
-    expect(handled).toBe(false);
+    expect(await resolveReaction(message, options)).toBe(handled);
     expect(resolverMocks.resolve).not.toHaveBeenCalled();
   });
 });

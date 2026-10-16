@@ -7,6 +7,7 @@ import {
   maybeResolveIMessageApprovalPollVote,
 } from "./approval-polls.js";
 import type { IMessagePayload } from "./monitor/types.js";
+import { pollVote } from "./test-support/approval.js";
 
 const resolverMocks = vi.hoisted(() => ({
   resolve: vi.fn(),
@@ -20,10 +21,7 @@ vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
     "openclaw/plugin-sdk/error-runtime",
   );
-  return {
-    ...actual,
-    isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
-  };
+  return { ...actual, isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError };
 });
 
 const APPROVER = "+15551230000";
@@ -59,7 +57,7 @@ function completeVote(
   votes: ReturnType<typeof voteRecord>[],
   vote?: ReturnType<typeof voteRecord>,
 ) {
-  return { sender: APPROVER, poll: { kind: "vote", original_guid: POLL_GUID, votes, vote } };
+  return pollVote(POLL_GUID, votes, {}, vote);
 }
 
 function buildVote(overrides?: {
@@ -212,12 +210,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   ])("%s", async (_name, sender) => {
     expect(await bind()).toBe(true);
     await expectUnresolved(
-      buildVote({
-        sender,
-        participant: APPROVER,
-        isFromMe: false,
-        destinationCallerId: APPROVER,
-      }),
+      buildVote({ sender, participant: APPROVER, isFromMe: false, destinationCallerId: APPROVER }),
       false,
     );
   });

@@ -2,54 +2,59 @@ import { access, readFile } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const createIMessageRpcClientMock = vi.hoisted(() => vi.fn());
-const runIMessageCliJsonCommandMock = vi.hoisted(() => vi.fn());
-const withIMessageRemoteFileMock = vi.hoisted(() => vi.fn());
+const createClient = vi.hoisted(() => vi.fn());
+const cli = vi.hoisted(() => vi.fn());
+const remoteFile = vi.hoisted(() => vi.fn());
 const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
-  return {
-    ...actual,
-    captureEffectAuthority: () => {
-      const authority = actual.captureEffectAuthority();
-      const prepare = effectGate.prepare;
-      return prepare
-        ? {
-            ...authority,
-            initiate: async <T>(effect: () => T | Promise<T>) => {
-              await prepare();
-              return authority.initiate(effect);
-            },
-          }
-        : authority;
-    },
-  };
+  const { withEffectPreparation } = await import("./test-support/authority.js");
+  return withEffectPreparation(actual, effectGate);
 });
-vi.mock("./cli-output.js", () => ({ runIMessageCliJsonCommand: runIMessageCliJsonCommandMock }));
-vi.mock("./client.js", () => ({ createIMessageRpcClient: createIMessageRpcClientMock }));
-vi.mock("./remote-file.js", () => ({ withIMessageRemoteFile: withIMessageRemoteFileMock }));
-const { imessageActionsRuntime: runtime } = await import("./actions.runtime.js");
+vi.mock("./cli-output.js", () => ({ runIMessageCliJsonCommand: cli }));
+vi.mock("./client.js", () => ({ createIMessageRpcClient: createClient }));
+vi.mock("./remote-file.js", () => ({ withIMessageRemoteFile: remoteFile }));
+const { imessageActionsRuntime: api } = await import("./actions.runtime.js");
 
 const options = { cliPath: "imsg", dbPath: "/tmp/messages.db" };
 const remote = { cliPath: "/gateway/imsg-ssh", remoteHost: "messages-mac" };
 const file = { filename: "photo.png", buffer: Uint8Array.from([1, 2, 3]) };
-const chat = { chatGuid: "chat-guid", options };
-const message = { ...chat, messageId: "message-guid" };
+const chatTarget = { chatGuid: "chat-guid" };
+const messageTarget = { ...chatTarget, messageId: "message-guid" };
+const chat = { ...chatTarget, options };
+const message = { ...messageTarget, options };
 const chatArgs = ["--chat", "chat-guid"];
 const messageArgs = [...chatArgs, "--message", "message-guid"];
 const messageFields = { chat_guid: "chat-guid", message_id: "message-guid" };
+type Options = Parameters<typeof api.sendAttachment>[0]["options"];
 const unsupported = { name: "IMessageRemoteUnsupportedError", code: "IMESSAGE_REMOTE_UNSUPPORTED" };
+function withOptions<P>(
+  params: P,
+  send: (params: NoInfer<P> & { options: Options }) => Promise<unknown>,
+) {
+  return (transport: Options) => send({ ...params, options: transport });
+}
+function wireFields(fields: Record<string, unknown>) {
+  return { ...messageFields, part_index: 0, ...fields };
+}
+function expectRequest(
+  client: ReturnType<typeof rpc>,
+  method: string,
+  fields: Record<string, unknown>,
+) {
+  expect(client.request).toHaveBeenCalledWith(method, fields, { timeoutMs: undefined });
+}
 function rpc(result: Record<string, unknown>) {
   const client = {
     request: vi.fn().mockResolvedValue(result),
     stop: vi.fn().mockResolvedValue(undefined),
   };
-  createIMessageRpcClientMock.mockResolvedValueOnce(client);
+  createClient.mockResolvedValueOnce(client);
   return client;
 }
-type ResolveTarget = Parameters<typeof runtime.resolveChatGuidForTarget>[0]["target"];
+type ResolveTarget = Parameters<typeof api.resolveChatGuidForTarget>[0]["target"];
 function resolve(target: ResolveTarget, cliPath: string, remoteHost?: string) {
-  return runtime.resolveChatGuidForTarget({
+  return api.resolveChatGuidForTarget({
     target,
     options: { cliPath, remoteHost },
     conversationReadOrigin: "delegated",
@@ -58,9 +63,9 @@ function resolve(target: ResolveTarget, cliPath: string, remoteHost?: string) {
 afterEach(() => {
   effectGate.prepare = undefined;
   vi.restoreAllMocks();
-  createIMessageRpcClientMock.mockReset();
-  runIMessageCliJsonCommandMock.mockReset();
-  withIMessageRemoteFileMock.mockReset();
+  createClient.mockReset();
+  cli.mockReset();
+  remoteFile.mockReset();
 });
 
 describe("imessage actions runtime", () => {
@@ -73,11 +78,8 @@ describe("imessage actions runtime", () => {
       await prepared.promise;
       throw refusal;
     };
-    const result = runtime
-      .editMessage({
-        ...message,
-        text: "replacement",
-      })
+    const result = api
+      .editMessage({ ...message, text: "replacement" })
       .catch((error: unknown) => error);
     await Promise.race([
       preparing.promise,
@@ -85,10 +87,10 @@ describe("imessage actions runtime", () => {
         throw new Error("CLI action bypassed authority preparation");
       }),
     ]);
-    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+    expect(cli).not.toHaveBeenCalled();
     prepared.resolve();
     expect(await result).toBe(refusal);
-    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+    expect(cli).not.toHaveBeenCalled();
   });
 
   it("keeps remote edit text and metacharacters inside JSON-RPC params", async () => {
@@ -99,129 +101,94 @@ describe("imessage actions runtime", () => {
       dbPath: "~/Library/Messages/chat.db",
       remoteHost: "bot@messages-mac",
     };
-    await runtime.editMessage({
+    await api.editMessage({
       chatGuid: "iMessage;+;chat with spaces;$()",
       messageId: "message ; $(id)",
       text,
       partIndex: 2,
       options: remoteOptions,
     });
-    expect(createIMessageRpcClientMock).toHaveBeenCalledWith(remoteOptions);
-    expect(client.request).toHaveBeenCalledWith(
-      "message.edit",
-      {
-        chat_guid: "iMessage;+;chat with spaces;$()",
-        message_id: "message ; $(id)",
-        text,
-        backwards_compatibility_message: text,
-        part_index: 2,
-      },
-      { timeoutMs: undefined },
-    );
-    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+    expect(createClient).toHaveBeenCalledWith(remoteOptions);
+    expectRequest(client, "message.edit", {
+      chat_guid: "iMessage;+;chat with spaces;$()",
+      message_id: "message ; $(id)",
+      text,
+      backwards_compatibility_message: text,
+      part_index: 2,
+    });
+    expect(cli).not.toHaveBeenCalled();
     expect(client.stop).toHaveBeenCalledOnce();
   });
 
   it.each([
     {
       method: "tapback",
-      send: (transport: typeof options | typeof remote) =>
-        runtime.sendReaction({
-          ...message,
-          reaction: "like",
-          options: transport,
-        }),
-      fields: {
-        ...messageFields,
-        reaction: "like",
-        part_index: 0,
-      },
+      send: withOptions({ ...messageTarget, reaction: "like" }, api.sendReaction),
+      fields: wireFields({ reaction: "like" }),
       args: ["tapback", ...messageArgs, "--kind", "like", "--part", "0"],
     },
     {
       method: "tapback removal",
       rpcMethod: "tapback",
-      send: (transport: typeof options | typeof remote) =>
-        runtime.sendReaction({
-          ...message,
-          reaction: "love",
-          remove: true,
-          partIndex: 2,
-          options: transport,
-        }),
-      fields: {
-        ...messageFields,
-        reaction: "love",
-        part_index: 2,
-        remove: true,
-      },
+      send: withOptions(
+        { ...messageTarget, reaction: "love", remove: true, partIndex: 2 },
+        api.sendReaction,
+      ),
+      fields: wireFields({ reaction: "love", part_index: 2, remove: true }),
       args: ["tapback", ...messageArgs, "--kind", "love", "--part", "2", "--remove"],
     },
     {
       method: "message.unsend",
-      send: (transport: typeof options | typeof remote) =>
-        runtime.unsendMessage({ ...message, partIndex: 3, options: transport }),
-      fields: { ...messageFields, part_index: 3 },
+      send: withOptions({ ...messageTarget, partIndex: 3 }, api.unsendMessage),
+      fields: wireFields({ part_index: 3 }),
       args: ["unsend", ...messageArgs, "--part", "3"],
     },
     {
       method: "group.removeParticipant",
-      send: (transport: typeof options | typeof remote) =>
-        runtime.removeParticipant({ ...chat, address: "+15550000123", options: transport }),
+      send: withOptions({ ...chatTarget, address: "+15550000123" }, api.removeParticipant),
       fields: { chat_guid: "chat-guid", address: "+15550000123" },
       args: ["chat-remove-member", ...chatArgs, "--address", "+15550000123"],
     },
   ])(
     "preserves local and remote $method wire contracts",
     async ({ method, rpcMethod, send, fields, args }) => {
-      runIMessageCliJsonCommandMock.mockResolvedValue({ ok: true });
+      cli.mockResolvedValue({ ok: true });
       await send(options);
-      expect(runIMessageCliJsonCommandMock).toHaveBeenCalledWith({
-        ...options,
-        timeoutMs: undefined,
-        args,
-      });
+      expect(cli).toHaveBeenCalledWith({ ...options, timeoutMs: undefined, args });
       const client = rpc({ ok: true });
       await send(remote);
-      expect(client.request).toHaveBeenCalledWith(rpcMethod ?? method, fields, {
-        timeoutMs: undefined,
-      });
+      expectRequest(client, rpcMethod ?? method, fields);
       expect(client.stop).toHaveBeenCalledOnce();
-      expect(runIMessageCliJsonCommandMock).toHaveBeenCalledOnce();
+      expect(cli).toHaveBeenCalledOnce();
     },
   );
 
   it("uses poll.vote RPC only for stable option ids on remote accounts", async () => {
     const client = rpc({ guid: "vote-guid", option_text: "Blue" });
     await expect(
-      runtime.sendPollVote({
+      api.sendPollVote({
         ...chat,
         pollGuid: "poll-guid",
         optionId: "option-blue",
         options: remote,
       }),
     ).resolves.toEqual({ messageId: "vote-guid", optionText: "Blue" });
-    expect(client.request).toHaveBeenCalledWith(
-      "poll.vote",
-      { chat_guid: "chat-guid", poll_guid: "poll-guid", option_id: "option-blue" },
-      { timeoutMs: undefined },
-    );
+    expectRequest(client, "poll.vote", {
+      chat_guid: "chat-guid",
+      poll_guid: "poll-guid",
+      option_id: "option-blue",
+    });
     for (const selector of [{ optionIndex: 2 }, { optionText: "Blue" }]) {
       await expect(
-        runtime.sendPollVote({
-          ...chat,
-          pollGuid: "poll-guid",
-          ...selector,
-          options: remote,
-        }),
+        api.sendPollVote({ ...chat, pollGuid: "poll-guid", ...selector, options: remote }),
       ).rejects.toMatchObject(unsupported);
     }
-    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+    expect(cli).not.toHaveBeenCalled();
   });
 
   it("rejects nonzero attachment reply parts on remote accounts", async () => {
     await expect(
-      runtime.sendRichMessage({
+      api.sendRichMessage({
         ...chat,
         text: "reply",
         replyToMessageId: "message-guid",
@@ -230,28 +197,27 @@ describe("imessage actions runtime", () => {
         options: remote,
       }),
     ).rejects.toMatchObject(unsupported);
-    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
-    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+    expect(createClient).not.toHaveBeenCalled();
+    expect(cli).not.toHaveBeenCalled();
   });
 
-  type Options = Parameters<typeof runtime.sendAttachment>[0]["options"];
   it.each([
     {
       method: "send.attachment",
-      send: (actionOptions: Options) =>
-        runtime.sendAttachment({ ...chat, ...file, options: actionOptions }),
+      send: withOptions({ ...chatTarget, ...file }, api.sendAttachment),
       fields: {},
     },
     {
       method: "send",
-      send: (actionOptions: Options) =>
-        runtime.sendRichMessage({
-          ...chat,
+      send: withOptions(
+        {
+          ...chatTarget,
           text: "**caption**",
           replyToMessageId: "message-guid",
-          attachment: { kind: "buffer", ...file },
-          options: actionOptions,
-        }),
+          attachment: { kind: "buffer" as const, ...file },
+        },
+        api.sendRichMessage,
+      ),
       fields: {
         text: "caption",
         transport: "bridge",
@@ -261,30 +227,29 @@ describe("imessage actions runtime", () => {
     },
     {
       method: "group.setIcon",
-      send: (actionOptions: Options) =>
-        runtime.setGroupIcon({ ...chat, ...file, options: actionOptions }),
+      send: withOptions({ ...chatTarget, ...file }, api.setGroupIcon),
       fields: {},
     },
   ])(
     "stages $method files and passes only the remote pathname to RPC",
     async ({ method, send, fields }) => {
       const client = rpc({ guid: "attachment-guid" });
-      withIMessageRemoteFileMock.mockImplementation(
+      remoteFile.mockImplementation(
         async ({ use }: { use: (remotePath: string) => Promise<unknown> }) =>
           await use("/tmp/openclaw-imessage-safe/photo.png"),
       );
       await send(remote);
-      expect(client.request).toHaveBeenCalledWith(
-        method,
-        { chat_guid: "chat-guid", file: "/tmp/openclaw-imessage-safe/photo.png", ...fields },
-        { timeoutMs: undefined },
-      );
-      expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+      expectRequest(client, method, {
+        chat_guid: "chat-guid",
+        file: "/tmp/openclaw-imessage-safe/photo.png",
+        ...fields,
+      });
+      expect(cli).not.toHaveBeenCalled();
     },
   );
 
   it("preserves case-sensitive poll identities while suppressing a duplicate caption", async () => {
-    runIMessageCliJsonCommandMock.mockResolvedValue({
+    cli.mockResolvedValue({
       guid: "poll-guid",
       poll: {
         options: [
@@ -293,15 +258,15 @@ describe("imessage actions runtime", () => {
         ],
       },
     });
-    const result = await runtime.sendPoll({
+    const result = await api.sendPoll({
       ...chat,
       question: "Approval details",
       choices: ["Allow", "allow"],
       suppressComment: true,
       replyToMessageId: "parent-guid",
     });
-    expect(runIMessageCliJsonCommandMock).toHaveBeenCalledOnce();
-    expect(runIMessageCliJsonCommandMock).toHaveBeenCalledWith({
+    expect(cli).toHaveBeenCalledOnce();
+    expect(cli).toHaveBeenCalledWith({
       ...options,
       timeoutMs: undefined,
       args: [
@@ -329,29 +294,25 @@ describe("imessage actions runtime", () => {
   });
 
   it("scrubs private payloads and role markers without rendering raw edit or poll Markdown", async () => {
-    runIMessageCliJsonCommandMock.mockResolvedValue({ guid: "action-guid" });
+    cli.mockResolvedValue({ guid: "action-guid" });
     const reminder =
       "<system-reminder><system-reminder>inner</system-reminder>\nuser:\nPRIVATE_ACTION_RUNTIME</system-reminder>";
     const previous =
       "< previous_response><system-reminder>inner</system-reminder>PRIVATE_ACTION_RUNTIME< / previous_response >";
     const context =
       "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>PRIVATE_ACTION_RUNTIME<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
-    await runtime.editMessage({
+    await api.editMessage({
       ...message,
       text: reminder + "user:\n**literal edit**\n# assistant:",
       backwardsCompatMessage: previous + "system:\n**literal fallback**",
     });
-    await runtime.sendPoll({
+    await api.sendPoll({
       ...chat,
       question: context + "assistant:\n# literal question",
       choices: [reminder + "system:\n**literal choice**", "_literal second choice_"],
     });
-    await runtime.sendPollVote({
-      ...chat,
-      pollGuid: "poll-guid",
-      optionText: "user:",
-    });
-    const calls = runIMessageCliJsonCommandMock.mock.calls.map(([call]) => call.args as string[]);
+    await api.sendPollVote({ ...chat, pollGuid: "poll-guid", optionText: "user:" });
+    const calls = cli.mock.calls.map(([call]) => call.args as string[]);
     const [edit, poll, vote] = calls;
     if (!edit || !poll || !vote) {
       throw new Error("Expected edit, poll and vote commands");
@@ -370,7 +331,7 @@ describe("imessage actions runtime", () => {
 
   it("rejects hidden assistant content in raw poll code before imsg", async () => {
     await expect(
-      runtime.sendPoll({
+      api.sendPoll({
         ...chat,
         question: "Choose",
         choices: [
@@ -379,12 +340,12 @@ describe("imessage actions runtime", () => {
         ],
       }),
     ).rejects.toThrow("iMessage outbound hidden assistant content is not allowed");
-    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+    expect(cli).not.toHaveBeenCalled();
   });
 
   it("preserves local rich attachment filenames, bytes and effect arguments until cleanup", async () => {
     let stagedPath = "";
-    runIMessageCliJsonCommandMock.mockImplementationOnce(async ({ args }: { args: string[] }) => {
+    cli.mockImplementationOnce(async ({ args }: { args: string[] }) => {
       stagedPath = args[args.indexOf("--file") + 1] ?? "";
       expect(args[0]).toBe("send-rich");
       expect(args[args.indexOf("--effect") + 1]).toBe("com.apple.MobileSMS.expressivesend.impact");
@@ -392,7 +353,7 @@ describe("imessage actions runtime", () => {
       await expect(readFile(stagedPath)).resolves.toEqual(Buffer.from(file.buffer));
       return { guid: "p:0/sent-message" };
     });
-    await runtime.sendRichMessage({
+    await api.sendRichMessage({
       ...chat,
       text: "photo",
       replyToMessageId: "parent-guid",
@@ -405,14 +366,14 @@ describe("imessage actions runtime", () => {
 
   it("contains and bounds long untrusted upload names while retaining their extension", async () => {
     let stagedPath = "";
-    runIMessageCliJsonCommandMock.mockImplementationOnce(async ({ args }: { args: string[] }) => {
+    cli.mockImplementationOnce(async ({ args }: { args: string[] }) => {
       stagedPath = args[args.indexOf("--file") + 1] ?? "";
       expect(args[0]).toBe("send-attachment");
       expect(args).toContain("--audio");
       await expect(readFile(stagedPath)).resolves.toEqual(Buffer.from(file.buffer));
       return { guid: "p:0/sent-message" };
     });
-    await runtime.sendAttachment({
+    await api.sendAttachment({
       ...chat,
       ...file,
       filename: "../../..\\..\\" + "📎".repeat(120) + ".pdf",
@@ -426,16 +387,16 @@ describe("imessage actions runtime", () => {
   it("isolates cached chat lists by resolved remote host", async () => {
     rpc({ chats: [{ id: 1, guid: "iMessage;+;host-a" }] });
     rpc({ chats: [{ id: 2, guid: "iMessage;+;host-b" }] });
-    await expect(
-      resolve({ kind: "chat_id", chatId: 1 }, "imsg-host-cache", "host-a"),
-    ).resolves.toBe("iMessage;+;host-a");
-    await expect(
-      resolve({ kind: "chat_id", chatId: 2 }, "imsg-host-cache", "host-b"),
-    ).resolves.toBe("iMessage;+;host-b");
-    await expect(
-      resolve({ kind: "chat_id", chatId: 1 }, "imsg-host-cache", "host-a"),
-    ).resolves.toBe("iMessage;+;host-a");
-    expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(2);
+    for (const [chatId, host, guid] of [
+      [1, "host-a", "iMessage;+;host-a"],
+      [2, "host-b", "iMessage;+;host-b"],
+      [1, "host-a", "iMessage;+;host-a"],
+    ] as const) {
+      await expect(resolve({ kind: "chat_id", chatId }, "imsg-host-cache", host)).resolves.toBe(
+        guid,
+      );
+    }
+    expect(createClient).toHaveBeenCalledTimes(2);
   });
 
   const chatList = [
@@ -464,11 +425,7 @@ describe("imessage actions runtime", () => {
   }[])("resolves $name against chats.list", async ({ name, target, chats, expected }) => {
     const client = rpc({ chats });
     await expect(resolve(target, "imsg-resolution-" + name)).resolves.toBe(expected);
-    expect(client.request).toHaveBeenCalledWith(
-      "chats.list",
-      { limit: 1000 },
-      { timeoutMs: undefined },
-    );
+    expectRequest(client, "chats.list", { limit: 1000 });
     expect(client.stop).toHaveBeenCalledOnce();
   });
 });
