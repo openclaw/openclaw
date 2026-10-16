@@ -19,7 +19,7 @@ import {
   handleChatAttachmentPaste,
 } from "../chat/components/chat-attachments.ts";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
-import { NewSessionDraftController } from "./draft-controller.ts";
+import { NewSessionDraft } from "./draft-controller.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import { closeSessionMenus } from "./new-session-runtime.ts";
@@ -32,7 +32,7 @@ registerCommandPaletteEnglish();
 
 /** Launcher-local prompt and selections; never binds the full page's durable draft or handoff. */
 export class PaletteSessionDraft {
-  private draft: NewSessionDraftController | undefined;
+  private draft: NewSessionDraft | undefined;
   private data: NewSessionRouteData | undefined;
   private presentationScope: ReturnType<typeof gatewayPresentationScope> | undefined;
   private agentPickerOpen = false;
@@ -215,8 +215,7 @@ export class PaletteSessionDraft {
       startTerminal: false,
     };
     if (!this.draft) {
-      this.draft = new NewSessionDraftController(
-        this.host,
+      this.draft = new NewSessionDraft(
         () => ({
           context: this.read().context,
           data: this.data,
@@ -225,6 +224,7 @@ export class PaletteSessionDraft {
         }),
         {
           requestUpdate: () => this.host.requestUpdate(),
+          updateComplete: () => this.host.updateComplete,
           onMessageChange: (message) => this.callbacks.onMessageChange?.(message),
           querySelector: (selector) => this.host.querySelector(selector),
           activeElement: () => this.host.ownerDocument.activeElement,
@@ -244,6 +244,7 @@ export class PaletteSessionDraft {
         },
       );
     }
+    this.draft.connect();
     this.rejectedOpen = undefined;
     this.coldSubmit = undefined;
     this.draft.place.resetDraft();
@@ -289,8 +290,13 @@ export class PaletteSessionDraft {
     this.host.requestUpdate();
   }
 
+  hostConnected() {
+    this.draft?.connect();
+  }
+
   hostUpdate() {
     this.synchronizePresentationScope();
+    this.draft?.synchronize();
   }
 
   private synchronizePresentationScope() {

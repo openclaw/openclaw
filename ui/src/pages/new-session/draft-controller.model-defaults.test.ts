@@ -1,9 +1,9 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import { NewSessionDraftController } from "./draft-controller.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { NewSessionDraft } from "./draft-controller.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
-import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -36,11 +36,11 @@ it.each(["last-used", "configured"] as const)(
     });
     const { context } = fixture;
     Object.assign(context.config.current, { newSessionModelDefaults: policy });
-    const controller = new NewSessionDraftController(
-      new TestReactiveControllerHost(),
+    const controller = new NewSessionDraft(
       () => ({ context, data: undefined, isConnected: true }),
       {
         requestUpdate: vi.fn(),
+        updateComplete: () => Promise.resolve(),
         closeTransientUi: vi.fn(),
         querySelector: () => null,
         activeElement: () => null,
@@ -75,3 +75,45 @@ it.each(["last-used", "configured"] as const)(
     fixture.flow.disconnect();
   },
 );
+
+it("wakes background discovery while connected and retires its listeners with the draft", async () => {
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+  const { context, request } = createDraftFixture({
+    methods: ["system.info", "environments.list"],
+    request: async (method) =>
+      method === "system.info"
+        ? { machineName: "Visible Gateway" }
+        : { profiles: [], environments: [] },
+  });
+  const stopStore = vi.fn();
+  const stopEvents = vi.fn();
+  const subscribe = vi.spyOn(context.gateway, "subscribe").mockReturnValue(stopStore);
+  vi.spyOn(context.gateway, "subscribeEvents").mockReturnValue(stopEvents);
+  const draft = new NewSessionDraft(() => ({ context, data: undefined, isConnected: true }), {
+    requestUpdate: vi.fn(),
+    updateComplete: () => Promise.resolve(),
+    closeTransientUi: vi.fn(),
+    querySelector: () => null,
+    activeElement: () => null,
+    body: () => null,
+    onInvalidate: vi.fn(),
+    onRecoveryReady: vi.fn(),
+  });
+  onTestFinished(() => draft.disconnect());
+  draft.connect();
+  expect(request.mock.calls.some(([method]) => method === "system.info")).toBe(false);
+
+  visibility.mockReturnValue("visible");
+  document.dispatchEvent(new Event("visibilitychange"));
+  await waitForFast(() => expect(draft.gateway.gatewayName).toBe("Visible Gateway"));
+  expect(subscribe).toHaveBeenCalledOnce();
+
+  draft.disconnect();
+  expect(stopStore).toHaveBeenCalledOnce();
+  expect(stopEvents).toHaveBeenCalledOnce();
+  const reads = request.mock.calls.length;
+  document.dispatchEvent(new Event("visibilitychange"));
+  draft.synchronize();
+  expect(request).toHaveBeenCalledTimes(reads);
+  expect(subscribe).toHaveBeenCalledOnce();
+});

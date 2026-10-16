@@ -4,7 +4,7 @@ import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-pal
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import type { ControllerHost } from "../../lib/subscriptions-controller.ts";
-import type { NewSessionDraftController } from "./draft-controller.ts";
+import type { NewSessionDraft } from "./draft-controller.ts";
 import { environmentCloudDisabledReason } from "./hosted-environments.ts";
 import type { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { resolveProjectChip } from "./project-chip.ts";
@@ -16,7 +16,7 @@ registerNewSessionSetupEnglish();
 registerCommandPaletteEnglish();
 
 export type SettingsOptions = {
-  draft: NewSessionDraftController;
+  draft: NewSessionDraft;
   context: ApplicationContext | undefined;
   preferences: PaletteSessionPreferences;
   onAgentPickerOpen: (open: boolean) => void;
