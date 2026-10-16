@@ -7,11 +7,11 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import { isVisibleHistoryNonMessageEventSql } from "./session-accessor.sqlite-history-interval.js";
-import {
-  buildVisibleHistoryProjection,
-  type VisibleHistoryBoundary,
-  type VisibleHistoryProjection,
-} from "./session-accessor.sqlite-history-projection.js";
+import { buildVisibleHistoryProjection } from "./session-accessor.sqlite-history-projection.js";
+import type {
+  VisibleHistoryBoundary,
+  VisibleHistoryProjection,
+} from "./session-accessor.sqlite-history-projection.types.js";
 import {
   getActiveTranscriptKysely,
   type CurrentTranscriptProjection,

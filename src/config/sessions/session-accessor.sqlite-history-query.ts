@@ -36,9 +36,11 @@ import {
   resolveHistoryMessageSequence,
   resolveVisibleHistoryProjection,
   resolveVisibleHistoryRange,
-  type VisibleHistoryBoundary,
-  type VisibleHistoryProjection,
 } from "./session-accessor.sqlite-history-projection.js";
+import type {
+  VisibleHistoryBoundary,
+  VisibleHistoryProjection,
+} from "./session-accessor.sqlite-history-projection.types.js";
 import {
   getActiveTranscriptKysely,
   readSnapshotEventRows,

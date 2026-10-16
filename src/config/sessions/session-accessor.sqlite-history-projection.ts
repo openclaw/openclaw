@@ -13,6 +13,10 @@ import {
   isVisibleHistoryNonMessageEventSql,
   historyNavigationValidSql,
 } from "./session-accessor.sqlite-history-interval.js";
+import type {
+  VisibleHistoryBoundary,
+  VisibleHistoryProjection,
+} from "./session-accessor.sqlite-history-projection.types.js";
 import {
   getActiveTranscriptKysely,
   type CurrentTranscriptProjection,
@@ -26,23 +30,6 @@ import {
 import { isVisibleHistoryNonMessageEvent } from "./session-history-visibility.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
-
-export type VisibleHistoryBoundary = {
-  displayPosition: number;
-  eventId: string;
-  eventSeq: number;
-  messagePosition: number;
-  serializedBytes: number;
-};
-
-export type VisibleHistoryProjection = {
-  boundaries: VisibleHistoryBoundary[];
-  boundariesById: Map<string, VisibleHistoryBoundary>;
-  boundariesBySeq: Map<number, VisibleHistoryBoundary>;
-  displaySource?: string;
-  latestResetRawSeq: number | null;
-  total: number;
-};
 
 type HistoryBoundaryQueryShape = "markers" | "branch" | "reset";
 
