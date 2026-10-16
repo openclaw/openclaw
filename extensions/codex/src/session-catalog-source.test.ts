@@ -1,6 +1,5 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import {
@@ -8,6 +7,7 @@ import {
   observeCodexCatalogClient,
 } from "./session-catalog-events.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
+import { catalogWebSocketOptions } from "./session-catalog-index.test-support.js";
 import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -29,13 +29,9 @@ function thread(overrides: Partial<CodexThread> = {}): CodexThread {
 }
 
 async function fixture() {
-  const options: CodexAppServerStartOptions = {
-    transport: "websocket",
-    command: "codex",
-    args: ["app-server"],
-    url: `wss://catalog-source-${++fixtureId}.example.test/codex`,
+  const options = {
+    ...catalogWebSocketOptions(`wss://catalog-source-${++fixtureId}.example.test/codex`),
     authToken: "synthetic-catalog-source-token",
-    headers: {},
   };
   const inventory = [thread()];
   const a = createClientHarness({

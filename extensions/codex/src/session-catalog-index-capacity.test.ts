@@ -1,66 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CodexThreadListParams } from "./app-server/protocol.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
-import {
-  CodexCatalogPersistence,
-  type CodexCatalogState,
-  type StoredCodexCatalogEntry,
-} from "./session-catalog-index-state.js";
+import { CodexCatalogPersistence } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
+import {
+  catalogRow,
+  completeCatalogState as completeState,
+  memoryCatalogState as memoryState,
+} from "./session-catalog-index.test-support.js";
 
 function row(threadId: string, recencyAt: number, archived = false): CodexCatalogIndexRow {
-  return {
+  return catalogRow(
     threadId,
-    updatedAt: recencyAt,
     recencyAt,
-    archived,
-    nativeMetadata: true,
-    preview: `Investigate the original native request for ${threadId}`,
-    rolloutPath: `/synthetic/sessions/2026/09/17/rollout-${threadId}.jsonl`,
-    page: {
-      sessions: [
-        {
-          threadId,
-          name: `Native session ${threadId}`,
-          cwd: "/workspace/project",
-          source: "cli",
-          status: "notLoaded",
-          archived: false,
-          updatedAt: recencyAt,
-          recencyAt,
-        },
-      ],
+    {
+      name: `Native session ${threadId}`,
+      cwd: "/workspace/project",
+      source: "cli",
+      updatedAt: recencyAt,
+      recencyAt,
     },
-  };
-}
-
-function completeState(rows: CodexCatalogIndexRow[]): CodexCatalogState {
-  const values: StoredCodexCatalogEntry[] = [
-    { version: 1, kind: "complete" },
-    ...rows.map((value) => ({ version: 1 as const, kind: "row" as const, row: value })),
-  ];
-  return {
-    entries: async () =>
-      values.map((value) => ({
-        key: value.kind === "complete" ? "complete" : value.row.threadId,
-        createdAt: 0,
-        value,
-      })),
-    register: vi.fn(async () => {}),
-    delete: vi.fn(async () => false),
-  };
-}
-
-function memoryState() {
-  const values = new Map<string, StoredCodexCatalogEntry>();
-  const state: CodexCatalogState = {
-    entries: async () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
-    register: async (key, value) => {
-      values.set(key, value);
+    {
+      archived,
+      preview: `Investigate the original native request for ${threadId}`,
+      rolloutPath: `/synthetic/sessions/2026/09/17/rollout-${threadId}.jsonl`,
     },
-    delete: async (key) => values.delete(key),
-  };
-  return { values, state };
+  );
 }
 
 describe("resident Codex catalog restore bounds", () => {

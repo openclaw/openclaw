@@ -2,22 +2,11 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import { describeCodexSpawnError } from "./app-server/spawn-error.js";
-import {
-  commandRpcMocks,
-  createCodexSessionCatalogControlFactory,
-} from "./session-catalog.test-helpers.js";
+import { remoteCatalogFactory } from "./session-catalog-resident.test-support.js";
+import { commandRpcMocks } from "./session-catalog.test-helpers.js";
 
 function createFactory() {
-  return createCodexSessionCatalogControlFactory({
-    getPluginConfig: () => ({
-      appServer: {
-        transport: "websocket",
-        url: "wss://retired-catalog.example.test/codex",
-        authToken: "synthetic-catalog-token",
-      },
-    }),
-    getRuntimeConfig: () => undefined,
-  });
+  return remoteCatalogFactory("retired-catalog");
 }
 
 it("leaves explicit homes cold until a catalog request admits them", async () => {

@@ -1,13 +1,10 @@
 import * as terminalText from "openclaw/plugin-sdk/text-chunking";
 import { expect, it, vi } from "vitest";
 import type { CodexThreadListResponse } from "./app-server/protocol.js";
-import type { CodexCatalogState } from "./session-catalog-index-state.js";
+import { completeCatalogState } from "./session-catalog-index.test-support.js";
 import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
-import {
-  commandRpcMocks,
-  createCodexSessionCatalogControlFactory,
-  idleThread,
-} from "./session-catalog.test-helpers.js";
+import { catalogFactory } from "./session-catalog-resident.test-support.js";
+import { commandRpcMocks, idleThread } from "./session-catalog.test-helpers.js";
 
 it("reconciles saved and externally changed names through background DB-only pages without preview projection", async () => {
   const original = ["renamed", "cleared"].map((id) =>
@@ -20,18 +17,7 @@ it("reconciles saved and externally changed names through background DB-only pag
     }),
   );
   const saved = await projectCodexCatalogPage({ data: original });
-  const state: CodexCatalogState = {
-    entries: vi.fn(async () => [
-      { key: "complete", createdAt: 0, value: { version: 1 as const, kind: "complete" as const } },
-      ...saved.rows.map((row) => ({
-        key: row.threadId,
-        createdAt: 0,
-        value: { version: 1 as const, kind: "row" as const, row },
-      })),
-    ]),
-    register: vi.fn(async () => {}),
-    delete: vi.fn(async () => false),
-  };
+  const state = completeCatalogState(saved.rows);
   const renamed = "Offline title ".repeat(60).trim();
   const native = original.map((thread, index) => ({
     ...thread,
@@ -57,11 +43,7 @@ it("reconciles saved and externally changed names through background DB-only pag
       } satisfies CodexThreadListResponse;
     },
   );
-  const factory = createCodexSessionCatalogControlFactory({
-    getPluginConfig: () => ({ supervision: { enabled: true } }),
-    getRuntimeConfig: () => undefined,
-    openResidentState: () => state,
-  });
+  const factory = catalogFactory({ openResidentState: () => state });
   const source = (await factory.homesForAgent("main"))[0]!;
   const control = factory.forRequest("main", source);
   const sanitize = vi.spyOn(terminalText, "sanitizeTerminalText");

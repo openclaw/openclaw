@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  commandRpcMocks,
-  config,
-  createCodexSessionCatalogControlFactory,
-  createCodexTestBindingStore,
-  createGatewayApi,
-  createRuntime,
-  idleThread,
-  registerCodexSessionCatalog,
-} from "./session-catalog.test-helpers.js";
+import { catalogFactory, catalogProvider } from "./session-catalog-resident.test-support.js";
+import { commandRpcMocks, config, idleThread } from "./session-catalog.test-helpers.js";
 
 describe("resident Codex catalog discovery", () => {
   it("keeps recent results resident while discovering older entries beyond a large hidden prefix", async () => {
@@ -39,22 +31,13 @@ describe("resident Codex catalog discovery", () => {
         };
       },
     );
-    const factory = createCodexSessionCatalogControlFactory({
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
+    const factory = catalogFactory({
       getRuntimeConfig: () => config,
       now: () => 1_000,
     });
     const primary = (await factory.homesForAgent("main"))[0]!;
     const home = { ...primary, localSessionsRoot: "/synthetic/sessions" };
-    const { runtime } = createRuntime();
-    const { api, getProvider } = createGatewayApi(runtime, config);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control: { ...factory, homesForAgent: async () => [home] },
-      getRuntimeConfig: () => config,
-    });
-    const provider = getProvider()!;
+    const provider = catalogProvider({ ...factory, homesForAgent: async () => [home] });
     const list = (cursor?: string) =>
       provider.list({
         agentId: "main",

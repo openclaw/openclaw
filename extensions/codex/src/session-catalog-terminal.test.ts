@@ -1,19 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { catalogFactory, catalogProvider } from "./session-catalog-resident.test-support.js";
 import {
   nodeHostMocks,
   tempDirs,
-  registerCodexSessionCatalog,
   config,
   createControl,
-  createRuntime,
-  createGatewayApi,
   fs,
   os,
   path,
   resolveCodexAppServerLocalHomeDir,
-  createCodexTestBindingStore,
   CODEX_LOCAL_SESSION_HOST_ID,
-  createCodexSessionCatalogControlFactory,
   type CodexCatalogHome,
 } from "./session-catalog.test-helpers.js";
 
@@ -33,7 +29,7 @@ describe("Codex catalog terminals", () => {
       }
       process.env.PATH = "";
       nodeHostMocks.userShellPaths.set("codex", binDir);
-      const factory = createCodexSessionCatalogControlFactory({
+      const factory = catalogFactory({
         getPluginConfig: () => undefined,
         getRuntimeConfig: () => config,
       });
@@ -69,19 +65,11 @@ describe("Codex catalog terminals", () => {
           ],
         }),
       });
-      const { runtime } = createRuntime();
-      const { api, getProvider } = createGatewayApi(runtime);
-      registerCodexSessionCatalog({
-        api,
-        bindingStore: createCodexTestBindingStore(),
-        control: {
-          ...factory,
-          homesForAgent: async () => [source],
-          forRequest: () => control,
-        },
-        getRuntimeConfig: () => config,
+      const provider = catalogProvider({
+        ...factory,
+        homesForAgent: async () => [source],
+        forRequest: () => control,
       });
-      const provider = getProvider()!;
       const hosts = await provider.list({});
       expect(hosts).toMatchObject([
         {

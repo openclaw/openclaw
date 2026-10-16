@@ -1,6 +1,7 @@
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODEX_CLI_SESSION_SOURCE_CAPABILITY } from "./node-cli-sessions.js";
+import { catalogProvider } from "./session-catalog-resident.test-support.js";
 import {
   commandRpcMocks,
   pinnedConnectionMocks,
@@ -11,12 +12,8 @@ import {
   CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
   CODEX_CLI_SESSION_RESUME_COMMAND,
   CODEX_NODE_CONTINUE_COMMANDS,
-  registerCodexSessionCatalog,
-  config,
   createControl,
   createRuntime,
-  createGatewayApi,
-  createCodexTestBindingStore,
   transcriptMirrorMocks,
   type PluginRuntime,
   idleThread,
@@ -106,15 +103,9 @@ describe("Codex node catalog sources", () => {
       })),
       invoke,
     });
-    const { api, getProvider } = createGatewayApi(runtime);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control: createControl(),
-      getRuntimeConfig: () => config,
-    });
+    const provider = catalogProvider(createControl(), runtime);
 
-    const hosts = await getProvider()?.list({
+    const hosts = await provider.list({
       hostIds: [...sourceByNode.keys()].map((id) => `node:${id}`),
     });
     const sessionByHost = new Map(hosts?.map((host) => [host.hostId, host.sessions[0]]) ?? []);
@@ -130,7 +121,7 @@ describe("Codex node catalog sources", () => {
     });
     invoke.mockClear();
     await expect(
-      getProvider()?.continueSession?.({
+      provider.continueSession?.({
         hostId: "node:older-node",
         threadId: "thread-older-node",
         clientScopes: ["operator.admin"],
@@ -182,20 +173,14 @@ describe("Codex node catalog sources", () => {
         ],
         invoke,
       });
-      const { api, getProvider } = createGatewayApi(runtime);
-      registerCodexSessionCatalog({
-        api,
-        bindingStore: createCodexTestBindingStore(),
-        control: createControl(),
-        getRuntimeConfig: () => config,
-      });
-      expect(await getProvider()?.list({ hostIds: ["node:source-node"] })).toMatchObject([
+      const provider = catalogProvider(createControl(), runtime);
+      expect(await provider.list({ hostIds: ["node:source-node"] })).toMatchObject([
         { sessions: [{ threadId: "source-thread", canContinue: true }] },
       ]);
       canContinueCodex = sourceSupport;
       invoke.mockClear();
       await expect(
-        getProvider()?.continueSession?.({
+        provider.continueSession?.({
           hostId: "node:source-node",
           threadId: "source-thread",
           clientScopes: ["operator.admin"],

@@ -81,6 +81,26 @@ async function fixture() {
   return { root, file, thread };
 }
 
+async function reconcileAt(
+  index: CodexCatalogIndex,
+  file: string,
+  timestamp: number,
+  turnAt?: number,
+) {
+  if (turnAt !== undefined) {
+    await fs.appendFile(
+      file,
+      line("event_msg", {
+        type: "turn_started",
+        turn_id: "new-turn",
+        started_at: turnAt,
+      }),
+    );
+  }
+  await fs.utimes(file, timestamp, timestamp);
+  await index.reconcile();
+}
+
 describe("native catalog metadata authority", () => {
   it.each([null, createdAt + 100])(
     "moves a file-observed turn ahead of a native timestamp tie (previous recency: %s)",
@@ -98,16 +118,7 @@ describe("native catalog metadata authority", () => {
         peer.id,
         native.id,
       ]);
-      await fs.appendFile(
-        file,
-        line("event_msg", {
-          type: "turn_started",
-          turn_id: "new-turn",
-          started_at: createdAt + 200,
-        }),
-      );
-      await fs.utimes(file, createdAt + 500, createdAt + 500);
-      await index.reconcile();
+      await reconcileAt(index, file, createdAt + 500, createdAt + 200);
       const current = await index.list({ limit: 1 });
       expect(current.sessions[0]).toMatchObject({
         threadId: native.id,
@@ -115,8 +126,7 @@ describe("native catalog metadata authority", () => {
         updatedAt: native.updatedAt,
       });
       expect(current.nextCursor).toBeDefined();
-      await fs.utimes(file, createdAt + 600, createdAt + 600);
-      await index.reconcile();
+      await reconcileAt(index, file, createdAt + 600);
       expect(await index.list({ limit: 1 })).toEqual(current);
       expect(readNative).toHaveBeenCalledOnce();
     },
@@ -136,8 +146,7 @@ describe("native catalog metadata authority", () => {
       file,
       rolloutContents({ ...thread, preview: "New first user request in the selected file" }),
     );
-    await fs.utimes(file, createdAt + 400, createdAt + 400);
-    await index.reconcile();
+    await reconcileAt(index, file, createdAt + 400);
     expect((await index.list({ searchTerm: "new first" })).sessions[0]).toMatchObject({
       cwd: "/workspace/native",
       updatedAt: createdAt + 300,
@@ -195,23 +204,13 @@ describe("native catalog metadata authority", () => {
       "authority",
     ]);
 
-    await fs.utimes(file, createdAt + 500, createdAt + 500);
-    await index.reconcile();
+    await reconcileAt(index, file, createdAt + 500);
     const touched = await index.list({});
     expect(touched.sessions.map((row) => row.threadId)).toEqual(["newer-peer", "authority"]);
     expect(touched.sessions[1]).toMatchObject(selected);
     expect((await index.list({ cwd: selected.cwd })).sessions).toEqual(touched.sessions);
 
-    await fs.appendFile(
-      file,
-      line("event_msg", {
-        type: "turn_started",
-        turn_id: "new-turn",
-        started_at: createdAt + 450,
-      }),
-    );
-    await fs.utimes(file, createdAt + 600, createdAt + 600);
-    await index.reconcile();
+    await reconcileAt(index, file, createdAt + 600, createdAt + 450);
     const started = await index.list({});
     expect(started.sessions.map((row) => row.threadId)).toEqual(["authority", "newer-peer"]);
     expect(started.sessions[0]).toMatchObject({ ...selected, recencyAt: createdAt + 450 });
@@ -244,8 +243,7 @@ describe("native catalog metadata authority", () => {
         createdAt: createdAt + 20,
       }),
     );
-    await fs.utimes(file, createdAt + 200, createdAt + 200);
-    await index.reconcile();
+    await reconcileAt(index, file, createdAt + 200);
     expect((await index.list({ cwd: "/workspace/rollout-moved" })).sessions[0]).toMatchObject({
       source: "vscode",
       sessionId: "rollout-replaced-session",
@@ -263,8 +261,7 @@ describe("native catalog metadata authority", () => {
       updatedAt: createdAt + 300,
     });
     await fs.appendFile(file, line("event_msg", { type: "agent_message", message: "More output" }));
-    await fs.utimes(file, createdAt + 400, createdAt + 400);
-    await index.reconcile();
+    await reconcileAt(index, file, createdAt + 400);
     expect((await index.list({})).sessions[0]).toMatchObject({
       cwd: "/workspace/native-promoted",
       source: "cli",

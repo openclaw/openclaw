@@ -6,15 +6,11 @@ import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import { observeCodexCatalogClient } from "./session-catalog-events.js";
 import {
-  commandRpcMocks,
-  config,
-  createCodexSessionCatalogControlFactory,
-  createCodexTestBindingStore,
-  createGatewayApi,
-  createRuntime,
-  idleThread,
-  registerCodexSessionCatalog,
-} from "./session-catalog.test-helpers.js";
+  catalogFactory,
+  catalogProvider,
+  remoteCatalogFactory,
+} from "./session-catalog-resident.test-support.js";
+import { commandRpcMocks, config, idleThread } from "./session-catalog.test-helpers.js";
 
 describe("Codex catalog failure recovery", () => {
   it("shrinks oversized wire pages and retains the working limit for later refreshes", async () => {
@@ -42,10 +38,7 @@ describe("Codex catalog failure recovery", () => {
     commandRpcMocks.codexControlRequest.mockImplementation((_plugin, method, params, options) =>
       harness.client.request(method, params, options),
     );
-    const factory = createCodexSessionCatalogControlFactory({
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      getRuntimeConfig: () => undefined,
-    });
+    const factory = catalogFactory();
     const control = factory.forRequest("main");
     try {
       await control.initialize();
@@ -92,11 +85,7 @@ describe("Codex catalog failure recovery", () => {
       harness.client.request(method, params, options),
     );
     const warnings = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    const factory = createCodexSessionCatalogControlFactory({
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      getRuntimeConfig: () => undefined,
-      now: () => now,
-    });
+    const factory = catalogFactory({ now: () => now });
     const control = factory.forRequest("main");
     try {
       await expect(control.listPage({})).rejects.toThrow("exceeds 8 MiB");
@@ -135,16 +124,7 @@ describe("Codex catalog failure recovery", () => {
         nextCursor: offset + 64 < native.length ? String(offset + 64) : null,
       };
     });
-    const factory = createCodexSessionCatalogControlFactory({
-      getPluginConfig: () => ({
-        appServer: {
-          transport: "websocket",
-          url: "wss://prefix-recovery.example.test/codex",
-          authToken: "synthetic-catalog-token",
-        },
-      }),
-      getRuntimeConfig: () => undefined,
-    });
+    const factory = remoteCatalogFactory("prefix-recovery");
     const source = (await factory.homesForAgent("main"))[0]!;
     const control = factory.forRequest("main", source);
     const harness = createClientHarness();
@@ -195,8 +175,7 @@ describe("Codex catalog failure recovery", () => {
       let now = 0;
       let recovered = false;
       const failure = new Error("third native page failed");
-      const control = createCodexSessionCatalogControlFactory({
-        getPluginConfig: () => ({ supervision: { enabled: true } }),
+      const control = catalogFactory({
         getRuntimeConfig: () => (hasConfig ? config : undefined),
         now: () => now,
       }).forRequest("main");
@@ -241,21 +220,13 @@ describe("Codex catalog failure recovery", () => {
 
   it("shares cold initialization and keeps host backoff observable to catalog callers", async () => {
     let now = 0;
-    const control = createCodexSessionCatalogControlFactory({
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
+    const control = catalogFactory({
       getRuntimeConfig: () => config,
       now: () => now,
     });
     const home = (await control.homesForAgent("main"))[0]!;
     const request = control.forRequest("main", home);
-    const { api, getProvider } = createGatewayApi(createRuntime().runtime, config);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control,
-      getRuntimeConfig: () => config,
-    });
-    const provider = getProvider()!;
+    const provider = catalogProvider(control);
     const list = (search?: string) =>
       provider.list({ agentId: "main", hostIds: [home.hostId], limitPerHost: 1, search });
     const failed = createDeferred<unknown>();
@@ -327,8 +298,7 @@ describe("Codex catalog failure recovery", () => {
   it.each([-32600, -32602])(
     "does not treat invalid-request error %s as a host outage",
     async (code) => {
-      const control = createCodexSessionCatalogControlFactory({
-        getPluginConfig: () => ({ supervision: { enabled: true } }),
+      const control = catalogFactory({
         getRuntimeConfig: () => config,
       }).forRequest("main");
       const failure = new CodexAppServerRpcError(

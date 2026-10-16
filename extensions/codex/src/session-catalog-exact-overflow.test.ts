@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexThread } from "./app-server/protocol.js";
-import type { CodexCatalogState, StoredCodexCatalogEntry } from "./session-catalog-index-state.js";
+import { memoryCatalogState } from "./session-catalog-index.test-support.js";
 import { lookupNodeCodexCatalogRecord } from "./session-catalog-node-lookup.js";
 import { NODE_INVOKE_TIMEOUT_MS } from "./session-catalog-parsing.js";
 import { nativeCatalogFixture } from "./session-catalog-resident.test-support.js";
@@ -19,14 +19,7 @@ async function remoteFixture(count: number) {
   const native = nativeCatalogFixture(count);
   const target = native.rows.at(-1)!;
   let activeRows: CodexThread[] = native.rows;
-  const stored = new Map<string, StoredCodexCatalogEntry>();
-  const state: CodexCatalogState = {
-    entries: async () => [...stored].map(([key, value]) => ({ key, value, createdAt: 0 })),
-    register: async (key, value) => {
-      stored.set(key, value);
-    },
-    delete: async (key) => stored.delete(key),
-  };
+  const { values: stored, state } = memoryCatalogState();
   const factory = createCodexSessionCatalogControlFactory({
     getPluginConfig: () => ({
       supervision: { enabled: true },

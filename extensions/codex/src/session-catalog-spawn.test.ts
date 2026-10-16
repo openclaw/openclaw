@@ -1,10 +1,8 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { describe, expect, it, vi } from "vitest";
 import { describeCodexSpawnError } from "./app-server/spawn-error.js";
-import {
-  commandRpcMocks,
-  createCodexSessionCatalogControlFactory,
-} from "./session-catalog.test-helpers.js";
+import { catalogFactory, remoteCatalogFactory } from "./session-catalog-resident.test-support.js";
+import { commandRpcMocks } from "./session-catalog.test-helpers.js";
 
 describe("Codex catalog launch failures", () => {
   it.each(["cold", "refresh"])(
@@ -12,16 +10,7 @@ describe("Codex catalog launch failures", () => {
     async (phase) => {
       vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
       const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-      const factory = createCodexSessionCatalogControlFactory({
-        getPluginConfig: () => ({
-          appServer: {
-            transport: "websocket",
-            url: "wss://failed-catalog.example.test/codex",
-            authToken: "synthetic-catalog-token",
-          },
-        }),
-        getRuntimeConfig: () => undefined,
-      });
+      const factory = remoteCatalogFactory("failed-catalog");
       const control = factory.forRequest("main");
       const failure = describeCodexSpawnError(
         Object.assign(new Error("spawn failed"), { code: "EBADARCH", syscall: "spawn" }),
@@ -57,9 +46,8 @@ describe("Codex catalog launch failures", () => {
   );
 
   it("selects the recorded package for passive catalogs even with a user home", async () => {
-    const factory = createCodexSessionCatalogControlFactory({
+    const factory = catalogFactory({
       getPluginConfig: () => ({ appServer: { homeScope: "user" } }),
-      getRuntimeConfig: () => undefined,
     });
     try {
       const home = (await factory.homesForAgent("main"))[0]!;

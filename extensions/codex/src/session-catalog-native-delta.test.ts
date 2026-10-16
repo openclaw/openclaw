@@ -2,11 +2,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as terminalText from "openclaw/plugin-sdk/text-chunking";
 import { expect, it, vi } from "vitest";
 import type { CodexThreadListResponse } from "./app-server/protocol.js";
-import {
-  commandRpcMocks,
-  createCodexSessionCatalogControlFactory,
-  idleThread,
-} from "./session-catalog.test-helpers.js";
+import { catalogFactory, remoteCatalogFactory } from "./session-catalog-resident.test-support.js";
+import { commandRpcMocks, idleThread } from "./session-catalog.test-helpers.js";
 
 it("reconciles remote membership without reparsing unchanged visible or hidden previews", async () => {
   const known = idleThread({
@@ -44,16 +41,7 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
       return { data: native } satisfies CodexThreadListResponse;
     },
   );
-  const factory = createCodexSessionCatalogControlFactory({
-    getPluginConfig: () => ({
-      appServer: {
-        transport: "websocket",
-        url: "wss://remote-catalog.example.test/codex",
-        authToken: "synthetic-remote-catalog-token",
-      },
-    }),
-    getRuntimeConfig: () => undefined,
-  });
+  const factory = remoteCatalogFactory("remote-catalog");
   const source = (await factory.homesForAgent("main"))[0]!;
   expect(source.localSessionsRoot).toBeUndefined();
   const control = factory.forRequest("main", source);
@@ -147,16 +135,7 @@ it("walks remote pages beyond the resident bound without projecting the uncached
     }
     return { data, nextCursor } satisfies CodexThreadListResponse;
   });
-  const factory = createCodexSessionCatalogControlFactory({
-    getPluginConfig: () => ({
-      appServer: {
-        transport: "websocket",
-        url: "wss://bounded-remote-catalog.example.test/codex",
-        authToken: "synthetic-bounded-catalog-token",
-      },
-    }),
-    getRuntimeConfig: () => undefined,
-  });
+  const factory = remoteCatalogFactory("bounded-remote-catalog");
   const source = (await factory.homesForAgent("main"))[0]!;
   const control = factory.forRequest("main", source);
   const tailPreview = vi.fn(() => {
@@ -213,10 +192,7 @@ it("reconciles displayed native metadata and explicit Git clears without activit
     }
     return { data: [native] };
   });
-  const factory = createCodexSessionCatalogControlFactory({
-    getPluginConfig: () => ({ supervision: { enabled: true } }),
-    getRuntimeConfig: () => undefined,
-  });
+  const factory = catalogFactory();
   const source = (await factory.homesForAgent("main"))[0]!;
   const control = factory.forRequest("main", source);
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });

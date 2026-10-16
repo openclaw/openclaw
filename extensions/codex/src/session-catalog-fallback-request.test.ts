@@ -1,12 +1,11 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { nativeCatalogFixture } from "./session-catalog-resident.test-support.js";
+import { catalogFactory, nativeCatalogFixture } from "./session-catalog-resident.test-support.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 import { CodexCatalogVisiblePage, listVisiblePage } from "./session-catalog-visible-page.js";
 import {
   commandRpcMocks,
   config,
-  createCodexSessionCatalogControlFactory,
   idleThread,
   pinnedConnectionMocks,
 } from "./session-catalog.test-helpers.js";
@@ -25,7 +24,7 @@ async function saturatedHome() {
     row.recencyAt = row.updatedAt;
   }
   let now = 0;
-  const factory = createCodexSessionCatalogControlFactory({
+  const factory = catalogFactory({
     getPluginConfig: () => ({
       supervision: { enabled: true },
       appServer: {

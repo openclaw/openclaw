@@ -1,29 +1,17 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
+import { catalogRow } from "./session-catalog-index.test-support.js";
 
 afterEach(() => vi.useRealTimers());
 
 it("keeps post-mutation pages and title filters within the resident CPU budget", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
-  const rows: CodexCatalogIndexRow[] = Array.from({ length: 19_999 }, (_, position) => ({
-    threadId: `thread-${position}`,
-    archived: false,
-    nativeMetadata: true,
-    updatedAt: 20_000 - position,
-    recencyAt: 20_000 - position,
-    page: {
-      sessions: [
-        {
-          threadId: `thread-${position}`,
-          name: `Review the sidebar for project ${position}`,
-          cwd: "/workspace/project",
-          status: "notLoaded",
-          archived: false,
-        },
-      ],
-    },
-  }));
+  const rows = Array.from({ length: 19_999 }, (_, position) =>
+    catalogRow(`thread-${position}`, 20_000 - position, {
+      name: `Review the sidebar for project ${position}`,
+      cwd: "/workspace/project",
+    }),
+  );
   let nativeReads = 0;
   const index = new CodexCatalogIndex({
     homeId: "resident-page-cpu",

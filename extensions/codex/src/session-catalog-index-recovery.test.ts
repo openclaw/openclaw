@@ -14,6 +14,7 @@ import {
 import type { CodexCatalogIndexOptions } from "./session-catalog-index-contract.js";
 import type { CodexCatalogState } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
+import { completeCatalogState } from "./session-catalog-index.test-support.js";
 import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import { writeCatalogRollout } from "./session-catalog-resident.test-support.js";
 import { idleThread } from "./session-catalog.test-helpers.js";
@@ -78,22 +79,7 @@ describe("resident Codex catalog recovery", () => {
     const original = idleThread({ id: "archived-while-offline", source: "cli" });
     const replacement = idleThread({ id: "created-while-offline", source: "cli" });
     const saved = await project([original]);
-    const state: CodexCatalogState = {
-      entries: vi.fn(async () => [
-        {
-          key: "complete",
-          createdAt: 0,
-          value: { version: 1 as const, kind: "complete" as const },
-        },
-        {
-          key: "original",
-          createdAt: 0,
-          value: { version: 1 as const, kind: "row" as const, row: saved.rows[0]! },
-        },
-      ]),
-      register: vi.fn(async () => {}),
-      delete: vi.fn(async () => false),
-    };
+    const state = completeCatalogState([saved.rows[0]!]);
     const native = createDeferred<void>();
     const readNative = vi.fn(async () => {
       await native.promise;
