@@ -3,6 +3,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterDecisionProvider } from "./decision-provider.js";
 
+// mock-isolation: Transport cases supply synthetic responses and origin policy without network access.
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: vi.fn(),
   ssrfPolicyFromHttpBaseUrlAllowedOrigin: (url: string) => ({
