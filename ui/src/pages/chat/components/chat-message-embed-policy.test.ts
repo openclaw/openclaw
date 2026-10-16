@@ -195,7 +195,11 @@ describe("assistant message embed policy", () => {
           { type: "text", text: "Inline canvas result." },
           {
             type: "canvas",
-            preview: createCanvasPreview({ viewId: "cv_inline_sandbox-change" }),
+            preview: createCanvasPreview({
+              viewId: "cv_inline_sandbox-change",
+              title: "Scoped preview",
+              preferredHeight: 320,
+            }),
           },
         ],
       };
@@ -245,8 +249,8 @@ describe("assistant message embed policy", () => {
     expect(widget).toBeInstanceOf(HTMLElement);
     expect(widget).toMatchObject({
       docId: "cv_inline_sandbox-change",
-      title: "Inline demo",
-      preferredHeight: 360,
+      title: "Scoped preview",
+      preferredHeight: 320,
       sessionKey: "agent:main:canvas",
       allowScripts: false,
     });
