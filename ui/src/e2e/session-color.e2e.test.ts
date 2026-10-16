@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -16,6 +17,28 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const button = (scope: Page | Locator, name: string) =>
+  scope.getByRole("button", { name, exact: true });
+const menuItem = (page: Page, name: string) => page.getByRole("menuitem", { name, exact: true });
+const expectAttribute = (locator: Locator, name: string, value: string) =>
+  expect.poll(() => locator.getAttribute(name)).toBe(value);
+const expectFocused = (locator: Locator) =>
+  expect
+    .poll(() =>
+      locator.evaluateAll((elements) =>
+        elements.some((element) => element === document.activeElement),
+      ),
+    )
+    .toBe(true);
+async function press(page: Page, ...keys: string[]) {
+  for (const key of keys) {
+    await page.keyboard.press(key);
+  }
+}
+async function openAppearance(page: Page) {
+  await openSessionMenuSubmenu(page, "Advanced");
+  await openSessionMenuSubmenu(page, "Icon & color");
+}
 
 suite.define(() => {
   it.each(["sidebar", "header", "compact"] as const)(
@@ -59,8 +82,7 @@ suite.define(() => {
             await page.keyboard.press("Enter");
           }
         } else {
-          await openSessionMenuSubmenu(page, "Advanced");
-          await openSessionMenuSubmenu(page, "Icon & color");
+          await openAppearance(page);
         }
         const picker = page.locator(".session-menu__appearance:visible");
         await expect
@@ -95,11 +117,10 @@ suite.define(() => {
           await page.keyboard.press("Tab");
         }
         await expect.poll(() => picker.locator(".session-menu__icon-choice:focus").count()).toBe(1);
-        await page.keyboard.press("ArrowRight");
-        await page.keyboard.press("Enter");
+        await press(page, "ArrowRight", "Enter");
         await waitForPatch(gateway, (params) => params.key === key && params.icon === "🚀");
         await page.keyboard.press("Tab");
-        const reset = picker.getByRole("button", { name: "Reset to default", exact: true });
+        const reset = button(picker, "Reset to default");
         await expect
           .poll(() =>
             reset.evaluate(
@@ -107,13 +128,7 @@ suite.define(() => {
             ),
           )
           .toBe("separator");
-        await expect
-          .poll(() =>
-            reset.evaluateAll((elements) =>
-              elements.some((element) => element === document.activeElement),
-            ),
-          )
-          .toBe(true);
+        await expectFocused(reset);
         await page.keyboard.press("Shift+Tab");
         const iconCount = await picker.locator(".session-menu__icon-choice").count();
         for (let index = 0; index < iconCount && (await focused()) !== "Custom icon…"; index += 1) {
@@ -126,20 +141,12 @@ suite.define(() => {
           .poll(() => custom.evaluate((element) => element === document.activeElement))
           .toBe(true);
         await page.keyboard.insertText("✨");
-        await page.keyboard.press("Tab");
-        await page.keyboard.press("Enter");
+        await press(page, "Tab", "Enter");
         await waitForPatch(gateway, (params) => params.key === key && params.icon === "✨");
-        await page.keyboard.press("Shift+Tab");
-        await page.keyboard.press("Escape");
+        await press(page, "Shift+Tab", "Escape");
         await expect.poll(focused).toBe("Custom icon…");
         await page.keyboard.press("Tab");
-        await expect
-          .poll(() =>
-            reset.evaluateAll((elements) =>
-              elements.some((element) => element === document.activeElement),
-            ),
-          )
-          .toBe(true);
+        await expectFocused(reset);
         await page.keyboard.press("Enter");
         await waitForPatch(
           gateway,
@@ -249,9 +256,8 @@ suite.define(() => {
       expect(await imported.getAttribute("style")).toContain("--session-color-cyan");
 
       await row.click({ button: "right" });
-      await openSessionMenuSubmenu(page, "Advanced");
-      await openSessionMenuSubmenu(page, "Icon & color");
-      await page.getByRole("button", { name: "Purple", exact: true }).click();
+      await openAppearance(page);
+      await button(page, "Purple").click();
       const set = await waitForPatch(
         gateway,
         (params) => params.key === key && params.color === "purple",
@@ -270,46 +276,21 @@ suite.define(() => {
       expect(darkStripe).not.toBe("rgba(0, 0, 0, 0)");
       // Both choices persist in the same open picker, without reopening the menu.
       const picker = page.locator("openclaw-session-menu .session-menu__appearance");
-      await picker.getByRole("button", { name: "book", exact: true }).click();
+      await button(picker, "book").click();
       await waitForPatch(gateway, (params) => params.key === key && params.icon === "book");
-      await expect
-        .poll(() =>
-          picker.getByRole("button", { name: "book", exact: true }).getAttribute("aria-pressed"),
-        )
-        .toBe("true");
-      await expect
-        .poll(() =>
-          picker.getByRole("button", { name: "Purple", exact: true }).getAttribute("aria-pressed"),
-        )
-        .toBe("true");
-      const appearanceSubmenu = sessionMenuSubmenu(
-        page.getByRole("menuitem", { name: "Icon & color", exact: true }),
-      );
-      const appearanceChoices = [
-        picker.getByRole("button", { name: "Purple", exact: true }),
-        picker.getByRole("button", { name: "book", exact: true }),
-      ];
+      await expectAttribute(button(picker, "book"), "aria-pressed", "true");
+      await expectAttribute(button(picker, "Purple"), "aria-pressed", "true");
+      const appearanceSubmenu = sessionMenuSubmenu(menuItem(page, "Icon & color"));
+      const appearanceChoices = [button(picker, "Purple"), button(picker, "book")];
       await shot("after-dark-menu.png", appearanceSubmenu, appearanceChoices);
       await page.emulateMedia({ colorScheme: "light" });
-      await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
+      await expectAttribute(page.locator("html"), "data-theme-mode", "light");
       await expect.poll(stripe).not.toBe(darkStripe);
       await shot("after-light-menu.png", appearanceSubmenu, appearanceChoices);
-      await page.keyboard.press("Escape");
-      await expect
-        .poll(() =>
-          page
-            .getByRole("menuitem", { name: "Icon & color", exact: true })
-            .getAttribute("aria-expanded"),
-        )
-        .toBe("false");
-      await page.keyboard.press("Escape");
-      await expect
-        .poll(() =>
-          page
-            .getByRole("menuitem", { name: "Advanced", exact: true })
-            .getAttribute("aria-expanded"),
-        )
-        .toBe("false");
+      for (const name of ["Icon & color", "Advanced"]) {
+        await page.keyboard.press("Escape");
+        await expectAttribute(menuItem(page, name), "aria-expanded", "false");
+      }
       await page.keyboard.press("Escape");
       await page.locator("openclaw-session-menu").waitFor({ state: "detached" });
 
@@ -338,17 +319,17 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 560, height: 900 });
       await page.locator(".chat-header-session-menu__trigger").click();
-      await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-      await page.getByRole("menuitem", { name: "Icon & color", exact: true }).click();
-      await page.getByRole("button", { name: "Blue", exact: true }).click();
+      await menuItem(page, "Advanced").click();
+      await menuItem(page, "Icon & color").click();
+      await button(page, "Blue").click();
       await waitForPatch(gateway, (params) => params.key === key && params.color === "blue");
-      await expect.poll(() => dot.getAttribute("aria-label")).toBe("Session color: Blue");
+      await expectAttribute(dot, "aria-label", "Session color: Blue");
       await shot(
         "after-compact-menu.png",
         page.locator("openclaw-chat-header-session-menu .chat-header-session-menu__panel"),
-        [page.getByRole("button", { name: "Blue", exact: true })],
+        [button(page, "Blue")],
       );
-      await page.getByRole("button", { name: "Reset to default", exact: true }).click();
+      await button(page, "Reset to default").click();
       await waitForPatch(
         gateway,
         (params) => params.key === key && params.color === null && params.icon === null,

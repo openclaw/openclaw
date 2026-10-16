@@ -8,6 +8,12 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+type Page = Parameters<typeof installMockGateway>[0];
+type Session = ReturnType<typeof sessionRow>;
+const rowFor = (page: Page, key: string) =>
+  page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+const channelVisible = (row: ReturnType<typeof rowFor>, name: string) =>
+  row.locator(".sidebar-recent-session__channel").getByText(name, { exact: true }).isVisible();
 const pageOptions = {
   colorScheme: "dark" as const,
   hasTouch: false,
@@ -15,6 +21,28 @@ const pageOptions = {
   serviceWorkers: "block" as const,
   viewport: { height: 1000, width: 1280 },
 };
+
+async function withSessions(
+  sessions: [Session, ...Session[]],
+  run: (context: {
+    page: Page;
+    gateway: Awaited<ReturnType<typeof installMockGateway>>;
+  }) => Promise<void>,
+) {
+  await suite.withPage(pageOptions, async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", "[]");
+    });
+    const gateway = await installMockGateway(page, {
+      sessionKey: sessions[0].key,
+      sessions,
+      featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+      methodResponses: { "progressCard.get": { card: null } },
+    });
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessions[0].key));
+    await run({ page, gateway });
+  });
+}
 
 suite.define(() => {
   it("distinguishes same-title channel sessions and keeps session contributors separate from chat identity", async () => {
@@ -61,68 +89,35 @@ suite.define(() => {
       },
     });
 
-    await suite.withPage(pageOptions, async ({ page }) => {
-      await page.addInitScript(() => {
-        localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", "[]");
-      });
-      const gateway = await installMockGateway(page, {
-        sessionKey: selected.key,
-        sessions: [selected, group, imessage, direct],
-        featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-        methodResponses: { "progressCard.get": { card: null } },
-      });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected.key));
-      const groupRow = page.locator(`.sidebar-recent-session[data-session-key="${group.key}"]`);
-      const imessageRow = page.locator(
-        `.sidebar-recent-session[data-session-key="${imessage.key}"]`,
-      );
-      await expect
-        .poll(() =>
-          groupRow
-            .locator(".sidebar-recent-session__channel")
-            .getByText("WhatsApp", { exact: true })
-            .isVisible(),
-        )
-        .toBe(true);
+    await withSessions([selected, group, imessage, direct], async ({ page, gateway }) => {
+      const groupRow = rowFor(page, group.key);
+      const imessageRow = rowFor(page, imessage.key);
+      await expect.poll(() => channelVisible(groupRow, "WhatsApp")).toBe(true);
       expect(await groupRow.getByRole("link", { name: /Linked to WhatsApp/ }).count()).toBe(1);
-      expect(
-        await imessageRow
-          .locator(".sidebar-recent-session__channel")
-          .getByText("iMessage", { exact: true })
-          .isVisible(),
-      ).toBe(true);
+      expect(await channelVisible(imessageRow, "iMessage")).toBe(true);
       expect(await imessageRow.getByRole("link", { name: /Linked to iMessage/ }).count()).toBe(1);
 
       await groupRow.hover();
       const card = page.locator(".session-progress-hovercard");
+      const detail = (part: string) => card.locator(`.session-hovercard__${part}`).textContent();
       await card.waitFor({ state: "visible" });
-      await expect
-        .poll(async () => (await card.locator(".session-hovercard__channel").textContent())?.trim())
-        .toBe("Linked to WhatsApp");
-      expect(await card.locator(".session-hovercard__conversation").textContent()).toContain(
-        "Group chat",
-      );
-      expect(await card.locator(".session-hovercard__conversation").textContent()).toContain(
-        "Via personal",
-      );
-      expect(await card.locator(".session-hovercard__header").textContent()).not.toContain("cli");
+      await expect.poll(async () => (await detail("channel"))?.trim()).toBe("Linked to WhatsApp");
+      expect(await detail("conversation")).toContain("Group chat");
+      expect(await detail("conversation")).toContain("Via personal");
+      expect(await detail("header")).not.toContain("cli");
       expect(await card.textContent()).toContain("In this session");
-      expect(await card.locator(".session-hovercard__attribution").textContent()).toContain("cli");
+      expect(await detail("attribution")).toContain("cli");
       expect(await card.textContent()).not.toMatch(/members|120363000001/);
       expect(await card.textContent()).toContain("The picnic is booked for Saturday.");
       await gateway.waitForRequest("progressCard.get", { match: { sessionKey: group.key } });
 
       await imessageRow.hover();
-      await expect
-        .poll(async () => (await card.locator(".session-hovercard__channel").textContent())?.trim())
-        .toBe("Linked to iMessage");
-      expect(await card.locator(".session-hovercard__title").textContent()).toBe("Weekend plans");
+      await expect.poll(async () => (await detail("channel"))?.trim()).toBe("Linked to iMessage");
+      expect(await detail("title")).toBe("Weekend plans");
 
-      await page.locator(`.sidebar-recent-session[data-session-key="${direct.key}"]`).hover();
-      await expect.poll(() => card.locator(".session-hovercard__title").textContent()).toBe("Ada");
-      expect(await card.locator(".session-hovercard__conversation").textContent()).toContain(
-        "+15555550123",
-      );
+      await rowFor(page, direct.key).hover();
+      await expect.poll(() => detail("title")).toBe("Ada");
+      expect(await detail("conversation")).toContain("+15555550123");
       expect(await card.textContent()).not.toContain("@s.whatsapp.net");
     });
   });
@@ -145,22 +140,11 @@ suite.define(() => {
         },
       },
     );
-    await suite.withPage(pageOptions, async ({ page }) => {
-      await page.addInitScript(() => {
-        localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", "[]");
-      });
-      const gateway = await installMockGateway(page, {
-        sessionKey: selected.key,
-        sessions: [selected, linked],
-        featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-        methodResponses: { "progressCard.get": { card: null } },
-      });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected.key));
-      await page.locator(`.sidebar-recent-session[data-session-key="${linked.key}"]`).hover();
+    await withSessions([selected, linked], async ({ page, gateway }) => {
+      await rowFor(page, linked.key).hover();
       const card = page.locator(".session-progress-hovercard");
-      await expect
-        .poll(() => card.locator(".session-hovercard__conversation").textContent())
-        .toContain("Example community #planning");
+      const conversation = () => card.locator(".session-hovercard__conversation").textContent();
+      await expect.poll(conversation).toContain("Example community #planning");
       const revised = {
         ...linked,
         origin: {
@@ -173,12 +157,8 @@ suite.define(() => {
       };
       await gateway.setSessionsListResponse(chatSessionListResponse([selected, revised]));
       await gateway.emitGatewayEvent("sessions.changed", { agentId: "main", reason: "update" });
-      await expect
-        .poll(() => card.locator(".session-hovercard__conversation").textContent())
-        .toContain("Example community #release");
-      expect(await card.locator(".session-hovercard__conversation").textContent()).toContain(
-        "Thread",
-      );
+      await expect.poll(conversation).toContain("Example community #release");
+      expect(await conversation()).toContain("Thread");
       expect(await card.textContent()).not.toContain("#planning");
     });
   });
@@ -196,18 +176,8 @@ suite.define(() => {
       channel: "whatsapp",
       origin,
     });
-    await suite.withPage(pageOptions, async ({ page }) => {
-      await page.addInitScript(() => {
-        localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", "[]");
-      });
-      await installMockGateway(page, {
-        sessionKey: main.key,
-        sessions: [main, dashboard],
-        featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-        methodResponses: { "progressCard.get": { card: null } },
-      });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, main.key));
-      const row = page.locator(`.sidebar-recent-session[data-session-key="${dashboard.key}"]`);
+    await withSessions([main, dashboard], async ({ page }) => {
+      const row = rowFor(page, dashboard.key);
       await row.waitFor({ state: "visible" });
       expect(await row.locator(".sidebar-recent-session__channel").count()).toBe(0);
       await row.hover();

@@ -4,7 +4,7 @@ import { createServer as createHttpServer, type ServerResponse } from "node:http
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { chromium, webkit, type Browser, type Page } from "playwright";
+import { chromium, webkit, type Browser, type BrowserContextOptions, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -50,6 +50,27 @@ let browser: Browser;
 let outDir: string;
 let server: ControlUiE2eProductionServer;
 let buildBPromise: Promise<void> | undefined;
+const researchGateway = {
+  assistantAgentId: "research",
+  defaultAgentId: "research",
+  serverBuildId: buildA,
+};
+
+async function createPage(options: BrowserContextOptions, includeErrorName = true) {
+  const context = await browser.newContext(options);
+  const page = await context.newPage();
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) =>
+    pageErrors.push(includeErrorName ? `${error.name}:${error.message}` : error.message),
+  );
+  return { context, page, pageErrors };
+}
+
+async function diagnose(page: Page, pageErrors: string[], error: unknown, label: string) {
+  if (error instanceof Error) {
+    await captureControlUiE2eFailureDiagnostics(page, { error, label, pageErrors });
+  }
+}
 
 async function stageBuildB(destination: string): Promise<void> {
   const pristineDir = `${outDir}-build-b`;
@@ -191,37 +212,26 @@ async function holdReplacementWorkerInstalling(buildDir: string, gateUrl: string
 }
 
 async function ensureControlledPage(page: Page, pageErrors: string[], expectedBuildId: string) {
-  const registration = await page.evaluate(async (workerBuildId) => {
-    const ready = navigator.serviceWorker.ready.then((value) => ({
-      activeState: value.active?.state ?? null,
-      controlled: navigator.serviceWorker.controller !== null,
-      error: null,
-    }));
+  const registration = await page.evaluate(async () => {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<{ activeState: null; controlled: boolean; error: string }>(
-      (resolve) => {
-        // Diagnostics must not await a worker API or fetch before settling the
-        // deadline; either can be the unavailable resource being diagnosed.
-        timer = setTimeout(
-          () =>
-            resolve({
-              activeState: null,
-              controlled: navigator.serviceWorker.controller !== null,
-              error: "Worker readiness timed out for " + workerBuildId,
-            }),
-          10_000,
-        );
-      },
-    );
     try {
-      return await Promise.race([ready, timeout]);
+      return await Promise.race([
+        navigator.serviceWorker.ready.then(() => ({
+          controlled: navigator.serviceWorker.controller !== null,
+          timedOut: false,
+        })),
+        // Settle diagnostics without waiting on the unavailable worker or network.
+        new Promise<{ controlled: false; timedOut: true }>((resolve) => {
+          timer = setTimeout(() => resolve({ controlled: false, timedOut: true }), 10_000);
+        }),
+      ]);
     } finally {
       clearTimeout(timer);
     }
-  }, expectedBuildId);
-  if (registration.error) {
+  });
+  if (registration.timedOut) {
     throw new Error(
-      `Service worker did not become ready: ${registration.error}; page errors: ${JSON.stringify(pageErrors)}`,
+      `Service worker did not become ready: Worker readiness timed out for ${expectedBuildId}; page errors: ${JSON.stringify(pageErrors)}`,
     );
   }
   await page.waitForFunction(async () => {
@@ -229,11 +239,7 @@ async function ensureControlledPage(page: Page, pageErrors: string[], expectedBu
     return value.active?.state === "activated";
   });
   if (!registration.controlled) {
-    // Reload once so the freshly activated worker controls the page. The
-    // reload may land on a router deep link like /chat/research; the preview
-    // server mirrors the Gateway's depth-insensitive /assets/ resolution, so
-    // that boots correctly. (A racy replaceState("/") used to canonicalize
-    // the URL here and could interleave with the router's own redirect.)
+    // Reload under the worker without racing the router with a replaceState("/").
     await page.reload();
   }
   await page.waitForFunction(() => navigator.serviceWorker?.controller?.state === "activated");
@@ -297,37 +303,18 @@ describe("Control UI service-worker production update E2E", () => {
   });
 
   it("boots a document loaded on a deep link (Gateway asset-path contract)", async () => {
-    // The built index.html references ./assets/* relatively, so a document at
-    // /chat/research requests /chat/assets/*. The Gateway resolves /assets/
-    // at any depth (src/gateway/control-ui.ts); the preview server must honor
-    // the same contract or reloads on deep links serve HTML as the module and
-    // the app silently never boots.
-    const context = await browser.newContext({ serviceWorkers: "block" });
-    const page = await context.newPage();
-    const pageErrors: string[] = [];
-    page.on("pageerror", (error) => pageErrors.push(`${error.name}:${error.message}`));
-    await installMockGateway(page, {
-      assistantAgentId: "research",
-      defaultAgentId: "research",
-      serverBuildId: buildA,
-    });
+    // Relative entry scripts need the Gateway's depth-insensitive /assets/ resolution.
+    const { context, page, pageErrors } = await createPage({ serviceWorkers: "block" });
+    await installMockGateway(page, researchGateway);
     try {
       expect((await page.goto(`${server.baseUrl}chat/research`))?.status()).toBe(200);
       await page.waitForFunction(
         () => window.openclawControlUi?.snapshot().ready === true,
         undefined,
-        {
-          timeout: controlUiE2eWaitTimeoutMs,
-        },
+        { timeout: controlUiE2eWaitTimeoutMs },
       );
     } catch (error) {
-      if (error instanceof Error) {
-        await captureControlUiE2eFailureDiagnostics(page, {
-          error,
-          label: "deep-link-boot",
-          pageErrors,
-        });
-      }
+      await diagnose(page, pageErrors, error, "deep-link-boot");
       throw error;
     } finally {
       await context.close();
@@ -343,9 +330,7 @@ describe("Control UI service-worker production update E2E", () => {
       outDir,
       buildA,
       createControlUiMockBootstrapConfig({
-        assistantAgentId: "research",
-        defaultAgentId: "research",
-        serverBuildId: buildA,
+        ...researchGateway,
         terminalEnabled: true,
       }),
     );
@@ -375,12 +360,9 @@ describe("Control UI service-worker production update E2E", () => {
   it.each(["chat", "config"] as const)(
     "recovers a missed worker activation without losing a %s draft",
     async (mode) => {
-      const context = await browser.newContext({ serviceWorkers: "allow" });
-      const page = await context.newPage();
+      const { context, page, pageErrors } = await createPage({ serviceWorkers: "allow" }, false);
       await prepareOnlineLoopback(page);
       page.setDefaultTimeout(15_000);
-      const pageErrors: string[] = [];
-      page.on("pageerror", (error) => pageErrors.push(error.message));
       await page.addInitScript(() => {
         // Model missing one-shot notifications, not fake worker activation or reload.
         for (const type of ["message", "controllerchange"]) {
@@ -392,9 +374,7 @@ describe("Control UI service-worker production update E2E", () => {
         }
       });
       const gateway = await installMockGateway(page, {
-        assistantAgentId: "research",
-        defaultAgentId: "research",
-        serverBuildId: buildA,
+        ...researchGateway,
         terminalEnabled: true,
         methodResponses: {
           "config.get": {
@@ -507,13 +487,7 @@ describe("Control UI service-worker production update E2E", () => {
             .toEqual({ count: 1 });
         }
       } catch (error) {
-        if (error instanceof Error) {
-          await captureControlUiE2eFailureDiagnostics(page, {
-            error,
-            label: "worker-missed-activation",
-            pageErrors,
-          });
-        }
+        await diagnose(page, pageErrors, error, "worker-missed-activation");
         throw error;
       } finally {
         await context.close();
@@ -527,7 +501,7 @@ describe("Control UI service-worker production update E2E", () => {
   );
 
   it("refreshes a same-version build on reconnect before restoring an owned terminal", async () => {
-    const context = await browser.newContext({
+    const { context, page, pageErrors } = await createPage({
       locale: "en-US",
       serviceWorkers: "allow",
       viewport: { height: 720, width: 1280 },
@@ -535,13 +509,8 @@ describe("Control UI service-worker production update E2E", () => {
         ? { recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } } }
         : {}),
     });
-    const page = await context.newPage();
-    const pageErrors: string[] = [];
-    page.on("pageerror", (error) => pageErrors.push(`${error.name}:${error.message}`));
     const gateway = await installMockGateway(page, {
-      assistantAgentId: "research",
-      defaultAgentId: "research",
-      serverBuildId: buildA,
+      ...researchGateway,
       serverVersion: "2026.7.10",
       featureMethods: ["terminal.open", "terminal.attach"],
       methodResponses: {
@@ -747,15 +716,7 @@ describe("Control UI service-worker production update E2E", () => {
         });
       }
     } catch (error) {
-      // Boot/readiness stalls otherwise fail as all-null poll snapshots with
-      // no CI evidence; capture page state before the context closes.
-      if (error instanceof Error) {
-        await captureControlUiE2eFailureDiagnostics(page, {
-          error,
-          label: "service-worker-update-reconnect",
-          pageErrors,
-        });
-      }
+      await diagnose(page, pageErrors, error, "service-worker-update-reconnect");
       throw error;
     } finally {
       await installGate?.close();
