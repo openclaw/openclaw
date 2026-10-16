@@ -3,32 +3,48 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   realpathSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const helperPath = "scripts/lib/restart-mac-gateway.sh";
 const restartScriptPath = "scripts/restart-mac.sh";
-const tempRoots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const script = readFileSync(restartScriptPath, "utf8");
+const fail = 'fail() { printf "ERROR: %s\\n" "$*" >&2; exit 1; }';
+const log = 'log() { printf "%s\\n" "$*"; }';
 
-function makeTempRoot(prefix: string) {
-  const root = mkdtempSync(join(tmpdir(), prefix));
-  tempRoots.push(root);
-  return root;
+function makeTempRoot(prefix = "openclaw-restart-mac-test-") {
+  return tempDirs.make(prefix);
 }
 
-function writeHarness(root: string, name: string, lines: string[]) {
-  const harnessPath = join(root, name);
+function block(start: string, end: string) {
+  return script.slice(script.indexOf(start), script.indexOf(end));
+}
+
+function runHarness(root: string, lines: string[], env = {}, args: string[] = [], bash = "bash") {
+  const harnessPath = join(root, "harness.sh");
   writeFileSync(harnessPath, lines.join("\n"));
-  chmodSync(harnessPath, 0o755);
-  return harnessPath;
+  return spawnSync(bash, [harnessPath, ...args], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  });
+}
+
+function fakeTools(root: string, tools: Record<string, string>) {
+  const binDir = join(root, "bin");
+  mkdirSync(binDir);
+  for (const [name, body] of Object.entries(tools)) {
+    const file = join(binDir, name);
+    writeFileSync(file, body);
+    chmodSync(file, 0o755);
+  }
+  return { PATH: `${binDir}:${process.env.PATH ?? ""}` };
 }
 
 function shellQuote(value: string): string {
@@ -36,70 +52,43 @@ function shellQuote(value: string): string {
 }
 
 function runGatewayPortCheck(fakeLsof: string) {
-  const root = makeTempRoot("openclaw-restart-mac-test-");
-
-  const binDir = join(root, "bin");
-  mkdirSync(binDir);
-  const lsofPath = join(binDir, "lsof");
-  writeFileSync(lsofPath, fakeLsof);
-  chmodSync(lsofPath, 0o755);
+  const root = makeTempRoot();
 
   return spawnSync(
     "bash",
     ["-c", `source ${shellQuote(helperPath)}; verify_gateway_port_listening 18789`],
     {
       encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${binDir}:${process.env.PATH ?? ""}`,
-      },
+      env: { ...process.env, ...fakeTools(root, { lsof: fakeLsof }) },
     },
   );
 }
 
 function runCleanupFunction(fakePs: string) {
-  const root = makeTempRoot("openclaw-restart-mac-test-");
-
-  const binDir = join(root, "bin");
+  const root = makeTempRoot();
   const killCallsPath = join(root, "kill-calls.txt");
-  mkdirSync(binDir);
-  for (const [name, body] of [
-    ["ps", fakePs],
-    ["sleep", "#!/usr/bin/env bash\nexit 0\n"],
-  ] as const) {
-    const toolPath = join(binDir, name);
-    writeFileSync(toolPath, body);
-    chmodSync(toolPath, 0o755);
-  }
-
-  const cleanupFunction = script.slice(
-    script.indexOf("kill_all_openclaw()"),
-    script.indexOf("stop_launch_agent()"),
-  );
-  const harnessPath = writeHarness(root, "cleanup-harness.sh", [
-    "#!/usr/bin/env bash",
-    cleanupFunction,
-    'ROOT_DIR="/worktree"',
-    'APP_BUNDLE=""',
-    'APP_EXECUTABLE_RELATIVE_PATH="Contents/MacOS/OpenClaw"',
-    'DEBUG_PROCESS_PATTERN="/worktree/apps/macos/.build/debug/OpenClaw"',
-    'LOCAL_PROCESS_PATTERN="/worktree/apps/macos/.build-local/debug/OpenClaw"',
-    'RELEASE_PROCESS_PATTERN="/worktree/apps/macos/.build/release/OpenClaw"',
-    "kill() {",
-    '  printf "%s\\n" "$*" >> "$OPENCLAW_TEST_KILL_CALLS"',
-    "  return 0",
-    "}",
-    "kill_all_openclaw",
-  ]);
-
-  const result = spawnSync("bash", [harnessPath], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
+  const result = runHarness(
+    root,
+    [
+      "#!/usr/bin/env bash",
+      block("kill_all_openclaw()", "stop_launch_agent()"),
+      'ROOT_DIR="/worktree"',
+      'APP_BUNDLE=""',
+      'APP_EXECUTABLE_RELATIVE_PATH="Contents/MacOS/OpenClaw"',
+      'DEBUG_PROCESS_PATTERN="/worktree/apps/macos/.build/debug/OpenClaw"',
+      'LOCAL_PROCESS_PATTERN="/worktree/apps/macos/.build-local/debug/OpenClaw"',
+      'RELEASE_PROCESS_PATTERN="/worktree/apps/macos/.build/release/OpenClaw"',
+      "kill() {",
+      '  printf "%s\\n" "$*" >> "$OPENCLAW_TEST_KILL_CALLS"',
+      "  return 0",
+      "}",
+      "kill_all_openclaw",
+    ],
+    {
       OPENCLAW_TEST_KILL_CALLS: killCallsPath,
-      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      ...fakeTools(root, { ps: fakePs, sleep: "#!/usr/bin/env bash\nexit 0\n" }),
     },
-  });
+  );
   const killCalls = existsSync(killCallsPath) ? readFileSync(killCallsPath, "utf8") : "";
   return { killCalls, result };
 }
@@ -119,179 +108,133 @@ function runManagedSupervisorClassifier(
       .join("\n"),
   );
 
-  const classifierFunctions = script.slice(
-    script.indexOf("print_managed_openclaw_supervisor_label()"),
-    script.indexOf("kill_managed_openclaw()"),
-  );
-  const harnessPath = writeHarness(root, "supervisor-harness.sh", [
-    "#!/usr/bin/env bash",
-    "set -euo pipefail",
-    classifierFunctions,
-    "loaded_launch_jobs() {",
-    '  [[ "${OPENCLAW_TEST_FAIL_ENUMERATION:-0}" != "1" ]] || return 1',
-    "  cut -d'|' -f1,2 \"$OPENCLAW_TEST_LOADED_JOBS\"",
-    "}",
-    "launch_job_snapshot() {",
-    '  grep "^$1|$2|" "$OPENCLAW_TEST_LOADED_JOBS" |',
-    "    awk -F'|' '{ print \"program = \" $3; print \"properties = \" $4 }'",
-    "}",
-    'TARGET_EXECUTABLE="/worktree/dist/OpenClaw.app/Contents/MacOS/OpenClaw"',
-    'INSTALLED_EXECUTABLE="/Applications/OpenClaw.app/Contents/MacOS/OpenClaw"',
-    "managed_openclaw_supervisor_labels",
-  ]);
-  return spawnSync("bash", [harnessPath], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
+  return runHarness(
+    root,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      block("print_managed_openclaw_supervisor_label()", "kill_managed_openclaw()"),
+      "loaded_launch_jobs() {",
+      '  [[ "${OPENCLAW_TEST_FAIL_ENUMERATION:-0}" != "1" ]] || return 1',
+      "  cut -d'|' -f1,2 \"$OPENCLAW_TEST_LOADED_JOBS\"",
+      "}",
+      "launch_job_snapshot() {",
+      '  grep "^$1|$2|" "$OPENCLAW_TEST_LOADED_JOBS" |',
+      "    awk -F'|' '{ print \"program = \" $3; print \"properties = \" $4 }'",
+      "}",
+      'TARGET_EXECUTABLE="/worktree/dist/OpenClaw.app/Contents/MacOS/OpenClaw"',
+      'INSTALLED_EXECUTABLE="/Applications/OpenClaw.app/Contents/MacOS/OpenClaw"',
+      "managed_openclaw_supervisor_labels",
+    ],
+    {
       OPENCLAW_TEST_FAIL_ENUMERATION: options.failEnumeration ? "1" : "0",
       OPENCLAW_TEST_LOADED_JOBS: recordsPath,
     },
-  });
+  );
 }
 
 function runCanonicalizeAppBundle(appBundle: string) {
-  const root = makeTempRoot("openclaw-restart-mac-test-");
-
-  const canonicalizeFunction = script.slice(
-    script.indexOf("canonicalize_app_bundle()"),
-    script.indexOf("trap cleanup"),
-  );
-  const harnessPath = writeHarness(root, "canonicalize-harness.sh", [
-    "#!/usr/bin/env bash",
-    "set -euo pipefail",
-    canonicalizeFunction,
-    'APP_BUNDLE="$1"',
-    "fail() {",
-    "  printf 'ERROR: %s\\n' \"$*\" >&2",
-    "  exit 1",
-    "}",
-    "canonicalize_app_bundle",
-    'printf "%s\\n" "$APP_BUNDLE"',
-  ]);
-
-  return {
-    result: spawnSync("bash", [harnessPath, appBundle], { cwd: root, encoding: "utf8" }),
+  const root = makeTempRoot();
+  return runHarness(
     root,
-  };
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      block("canonicalize_app_bundle()", "trap cleanup"),
+      'APP_BUNDLE="$1"',
+      fail,
+      "canonicalize_app_bundle",
+      'printf "%s\\n" "$APP_BUNDLE"',
+    ],
+    {},
+    [appBundle],
+  );
 }
 
 function runRestartArgParser(...args: string[]) {
-  const root = makeTempRoot("openclaw-restart-mac-test-");
-
-  const parserBlock = script.slice(
-    script.indexOf('for arg in "$@"; do'),
-    script.indexOf('if [[ "$NO_SIGN" -eq 1 && "$SIGN" -eq 1 ]]'),
+  return runHarness(
+    makeTempRoot(),
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      "WAIT_FOR_LOCK=0",
+      "NO_SIGN=0",
+      "SIGN=0",
+      "AUTO_DETECT_SIGNING=1",
+      "ATTACH_ONLY=1",
+      "BACKGROUND_ONLY=0",
+      "TARGET_ONLY=0",
+      log,
+      fail,
+      block('for arg in "$@"; do', 'if [[ "$NO_SIGN" -eq 1 && "$SIGN" -eq 1 ]]'),
+      'printf "wait=%s no_sign=%s sign=%s attach_only=%s background_only=%s target_only=%s\\n" "$WAIT_FOR_LOCK" "$NO_SIGN" "$SIGN" "$ATTACH_ONLY" "$BACKGROUND_ONLY" "$TARGET_ONLY"',
+    ],
+    {},
+    args,
   );
-  const harnessPath = writeHarness(root, "arg-parser-harness.sh", [
-    "#!/usr/bin/env bash",
-    "set -euo pipefail",
-    "WAIT_FOR_LOCK=0",
-    "NO_SIGN=0",
-    "SIGN=0",
-    "AUTO_DETECT_SIGNING=1",
-    "ATTACH_ONLY=1",
-    "BACKGROUND_ONLY=0",
-    "TARGET_ONLY=0",
-    'log() { printf "%s\\n" "$*"; }',
-    'fail() { printf "ERROR: %s\\n" "$*" >&2; exit 1; }',
-    parserBlock,
-    'printf "wait=%s no_sign=%s sign=%s attach_only=%s background_only=%s target_only=%s\\n" "$WAIT_FOR_LOCK" "$NO_SIGN" "$SIGN" "$ATTACH_ONLY" "$BACKGROUND_ONLY" "$TARGET_ONLY"',
-  ]);
-
-  return spawnSync("bash", [harnessPath, ...args], { encoding: "utf8" });
 }
 
 function runSigningEnvironmentBlock(signIdentity: string) {
-  const root = makeTempRoot("openclaw-restart-mac-signing-test-");
   const start = script.indexOf('if [ "$NO_SIGN" -eq 1 ]; then');
   const signingBlock = script.slice(start, script.indexOf("# 3) Package and sign", start));
-  const harnessPath = writeHarness(root, "signing-environment-harness.sh", [
-    "#!/usr/bin/env bash",
-    "set -euo pipefail",
-    "NO_SIGN=0",
-    "SIGN=1",
-    "check_signing_keys() { return 0; }",
-    'fail() { printf "ERROR: %s\\n" "$*" >&2; exit 1; }',
-    signingBlock,
-    'printf "%s\\n" "${SIGN_IDENTITY-<unset>}"',
-  ]);
-  return spawnSync("bash", [harnessPath], {
-    encoding: "utf8",
-    env: { ...process.env, SIGN_IDENTITY: signIdentity },
-  });
+  return runHarness(
+    makeTempRoot(),
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      "NO_SIGN=0",
+      "SIGN=1",
+      "check_signing_keys() { return 0; }",
+      fail,
+      signingBlock,
+      'printf "%s\\n" "${SIGN_IDENTITY-<unset>}"',
+    ],
+    { SIGN_IDENTITY: signIdentity },
+  );
 }
 
 function runProfileGuard(profile: string) {
-  const root = makeTempRoot("openclaw-restart-mac-profile-test-");
   const start = script.indexOf('if [[ -n "${OPENCLAW_PROFILE:-}" ]]');
   const guardBlock = script.slice(start, script.indexOf("canonicalize_app_bundle", start));
-  const harnessPath = writeHarness(root, "profile-guard.sh", [
-    "#!/bin/bash",
-    "set -euo pipefail",
-    'fail() { printf "ERROR: %s\\n" "$*" >&2; exit 1; }',
-    guardBlock,
-    'printf "safe\\n"',
-  ]);
-  return spawnSync("/bin/bash", [harnessPath], {
-    encoding: "utf8",
-    env: { ...process.env, OPENCLAW_PROFILE: profile },
-  });
+  return runHarness(
+    makeTempRoot(),
+    ["#!/bin/bash", "set -euo pipefail", fail, guardBlock, 'printf "safe\\n"'],
+    { OPENCLAW_PROFILE: profile },
+    [],
+    "/bin/bash",
+  );
 }
 
 function runRestartLockHarness(lockDir: string) {
-  const root = makeTempRoot("openclaw-restart-mac-test-");
-
-  const lockBlock = script.slice(
-    script.indexOf("cleanup()"),
-    script.indexOf("check_signing_keys()"),
-  );
-  const harnessPath = writeHarness(root, "lock-harness.sh", [
+  return runHarness(makeTempRoot(), [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `LOCK_DIR=${shellQuote(lockDir)}`,
     'LOCK_PID_FILE="${LOCK_DIR}/pid"',
     "LOCK_HELD=0",
     "WAIT_FOR_LOCK=0",
-    'log() { printf "%s\\n" "$*"; }',
-    lockBlock,
+    log,
+    block("cleanup()", "check_signing_keys()"),
     "trap cleanup EXIT",
     "acquire_lock",
   ]);
-
-  return spawnSync("bash", [harnessPath], { encoding: "utf8" });
 }
 
 function runForeignProcessClassifier(fakePs: string) {
-  const root = makeTempRoot("openclaw-restart-mac-test-");
-  const binDir = join(root, "bin");
-  mkdirSync(binDir);
-  const psPath = join(binDir, "ps");
-  writeFileSync(psPath, fakePs);
-  chmodSync(psPath, 0o755);
-
-  const functions = script.slice(
-    script.indexOf("process_pids_matching()"),
-    script.indexOf("stop_launch_agent()"),
+  const root = makeTempRoot();
+  return runHarness(
+    root,
+    [
+      "#!/usr/bin/env bash",
+      block("process_pids_matching()", "stop_launch_agent()"),
+      'APP_EXECUTABLE_RELATIVE_PATH="Contents/MacOS/OpenClaw"',
+      'TARGET_EXECUTABLE="/Users/steipete/openclaw/dist/OpenClaw.app/Contents/MacOS/OpenClaw"',
+      'INSTALLED_EXECUTABLE="/Applications/OpenClaw.app/Contents/MacOS/OpenClaw"',
+      "foreign_openclaw_process_pids",
+    ],
+    fakeTools(root, { ps: fakePs }),
   );
-  const harnessPath = writeHarness(root, "foreign-process-harness.sh", [
-    "#!/usr/bin/env bash",
-    functions,
-    'APP_EXECUTABLE_RELATIVE_PATH="Contents/MacOS/OpenClaw"',
-    'TARGET_EXECUTABLE="/Users/steipete/openclaw/dist/OpenClaw.app/Contents/MacOS/OpenClaw"',
-    'INSTALLED_EXECUTABLE="/Applications/OpenClaw.app/Contents/MacOS/OpenClaw"',
-    "foreign_openclaw_process_pids",
-  ]);
-  return spawnSync("bash", [harnessPath], {
-    encoding: "utf8",
-    env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
-  });
 }
-
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { force: true, recursive: true });
-  }
-});
 
 describe("scripts/restart-mac.sh", () => {
   it("preserves an explicit signing identity through signed packaging", () => {
@@ -536,7 +479,7 @@ describe("scripts/restart-mac.sh", () => {
     const appBundle = join(root, "dist", "OpenClaw.app");
     mkdirSync(appBundle, { recursive: true });
 
-    const { result } = runCanonicalizeAppBundle(`${appBundle}/../OpenClaw.app/`);
+    const result = runCanonicalizeAppBundle(`${appBundle}/../OpenClaw.app/`);
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(realpathSync(appBundle));
