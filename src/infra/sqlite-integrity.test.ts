@@ -32,6 +32,7 @@ function caught(run: () => unknown): unknown {
   } catch (error) {
     return error;
   }
+  return undefined;
 }
 
 function taskOrphans(parent = "task_id", child = "task_id", action = "CASCADE", extra = "") {

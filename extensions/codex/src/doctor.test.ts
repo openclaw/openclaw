@@ -128,10 +128,10 @@ fs.writeSync(1, "codex-cli ${CODEX_APP_SERVER_VERSION}\\n");
       },
     );
     expect(result, result.stderr || result.stdout).toMatchObject({
-      error: undefined,
       signal: null,
       status: 0,
     });
+    expect(result.error).toBeUndefined();
     expect(JSON.parse(result.stdout)).toEqual({
       ok: true,
       findings: [],

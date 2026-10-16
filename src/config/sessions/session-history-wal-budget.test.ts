@@ -19,6 +19,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -413,7 +414,7 @@ it("retries retained WAL after a complete passive checkpoint and reader release 
     const after = await measure();
     expect(after.databaseWalBytes).toBe(0);
     expect(after.totalBytes).toBeLessThan(before.totalBytes);
-    expect(readTraffic(database.db)).toEqual(new Uint8Array(payload));
+    expect(readTraffic(requireNativeSqliteDatabase(database.db))).toEqual(new Uint8Array(payload));
   } finally {
     reader.close();
   }

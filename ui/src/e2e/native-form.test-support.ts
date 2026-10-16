@@ -9,13 +9,6 @@ export function nativeForm(root: Page | Locator) {
     field,
     heading: (name: string) => root.getByRole("heading", { name, exact: true }),
     text: (text: string) => root.getByText(text, { exact: true }),
-    async expectValues(expected: Record<string, string>) {
-      const actual: Record<string, string> = {};
-      for (const name of Object.keys(expected)) {
-        actual[name] = await field(name).inputValue();
-      }
-      expect(actual).toMatchObject(expected);
-    },
   };
 }
 

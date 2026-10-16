@@ -1,8 +1,9 @@
-import type { Page } from "playwright";
+import path from "node:path";
 import { expect, it } from "vitest";
 import type { WebSearchStatusResult } from "../../../packages/gateway-protocol/src/schema/web-search.ts";
-import type { ChannelsPairingListResult } from "../api/types.ts";
+import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -13,37 +14,9 @@ import {
   createNativeEmbedLayoutMethodResponses,
   installExistingNativeDeviceSettings,
 } from "./native-embed-fixtures.test-support.ts";
-import { nativeForm } from "./native-form.test-support.ts";
 import { installNativeEmbed, installNativeWebChrome } from "./native-nav.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI native embed settings E2E" });
-const phoneOptions = {
-  viewport: { width: 375, height: 812 },
-  hasTouch: true,
-  serviceWorkers: "block",
-} as const;
-const desktopChrome = ".shell-nav, openclaw-app-topbar, openclaw-macos-titlebar-controls";
-const forbiddenEmbeddedUi = [
-  desktopChrome,
-  ".shell-chrome-controls, .settings-sidebar__footer, openclaw-keyboard-shortcuts-dialog",
-  "resizable-divider:visible, .assistant-panel:visible, .debug-overlay:visible",
-  "openclaw-assistant-panel-content, openclaw-debug-overlay-content",
-].join(", ");
-async function visit(page: Page, route: RouteId) {
-  const pathname = route === "cron" ? "/cron" : pathForRoute(route);
-  expect((await page.goto(new URL(pathname, suite.server.baseUrl).href))?.status()).toBe(200);
-  await waitForControlUiRoute(page, { routeId: route });
-}
-async function back(page: Page, route: RouteId = "settings") {
-  await page.locator(".native-embed-header__back").click();
-  await waitForControlUiRoute(page, { routeId: route, pathname: pathForRoute(route) });
-}
-function layoutFits(page: Page) {
-  return page.locator("main.content").evaluate((main) => ({
-    viewport: document.documentElement.scrollWidth <= window.innerWidth,
-    content: main.scrollWidth <= main.clientWidth,
-  }));
-}
 const routes = [
   "custodian",
   "profile",
@@ -91,111 +64,159 @@ suite.define(() => {
     { from: "skills", route: "skill-workshop", title: "Skill workshop", tab: "Skill workshop" },
   ] as const) {
     it(`returns from embedded ${destination.route} through its page link and direct entry`, async () => {
-      await suite.withPage(phoneOptions, async ({ page }) => {
-        await installNativeEmbed(page, { platform: "ios", formFactor: "phone" });
-        await installMockGateway(page, {
-          operatorScopes: ["operator.admin", "operator.read", "operator.write"],
-          methodResponses: {
-            "migrations.memory.plan": {
-              agentId: "main",
-              workspace: "/tmp/synthetic-workspace",
-              providers: [],
+      await suite.withPage(
+        { viewport: { width: 375, height: 812 }, hasTouch: true, serviceWorkers: "block" },
+        async ({ page }) => {
+          await installNativeEmbed(page, { platform: "ios", formFactor: "phone" });
+          await installMockGateway(page, {
+            operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+            methodResponses: {
+              "doctor.memory.status": {
+                agentId: "main",
+                provider: "none",
+                embedding: { ok: false, checked: false },
+              },
+              "migrations.memory.plan": {
+                agentId: "main",
+                workspace: "/tmp/synthetic-workspace",
+                providers: [],
+              },
             },
-          },
-        });
-        await visit(page, destination.from);
-        await page.getByRole("tab", { name: destination.tab, exact: true }).click();
-        if (destination.from === "memory") {
-          await page.locator('a[href="/memory-import"]').click();
-        }
-        await waitForControlUiRoute(page, { routeId: destination.route });
-        const header = nativeForm(page.locator(".native-embed-header"));
-        await header.heading(destination.title).waitFor();
-        expect(await page.locator(".shell-nav, openclaw-app-topbar").count()).toBe(0);
-        // Memory's document link uses the parent fallback; hub tabs use app history.
-        await back(page, destination.from);
+          });
+          await page.goto(new URL(pathForRoute(destination.from), suite.server.baseUrl).toString());
+          await waitForControlUiRoute(page, { routeId: destination.from });
+          if (destination.from === "memory") {
+            await page.getByRole("tab", { name: destination.tab, exact: true }).click();
+            await page.locator('a[href="/memory-import"]').click();
+          } else {
+            await page.getByRole("tab", { name: destination.tab, exact: true }).click();
+          }
+          await waitForControlUiRoute(page, { routeId: destination.route });
+          const header = page.locator(".native-embed-header");
+          await header.getByRole("heading", { name: destination.title, exact: true }).waitFor();
+          expect(await page.locator(".shell-nav, openclaw-app-topbar").count()).toBe(0);
+          await header.getByRole("button", { name: "Back", exact: true }).click();
+          // Memory's document link uses the parent fallback; hub tabs use app history.
+          await waitForControlUiRoute(page, {
+            routeId: destination.from,
+            pathname: pathForRoute(destination.from),
+          });
 
-        await visit(page, destination.route);
-        await header.heading(destination.title).waitFor();
-        const parent = destination.from === "memory" ? "memory" : "settings";
-        await back(page, parent);
-        if (parent === "memory") {
-          await back(page);
-        }
-      });
+          await page.goto(
+            new URL(pathForRoute(destination.route), suite.server.baseUrl).toString(),
+          );
+          await waitForControlUiRoute(page, { routeId: destination.route });
+          await header.getByRole("heading", { name: destination.title, exact: true }).waitFor();
+          await header.getByRole("button", { name: "Back", exact: true }).click();
+          const parent = destination.from === "memory" ? "memory" : "settings";
+          await waitForControlUiRoute(page, { routeId: parent, pathname: pathForRoute(parent) });
+          if (parent === "memory") {
+            await header.getByRole("button", { name: "Back", exact: true }).click();
+            await waitForControlUiRoute(page, { routeId: "settings", pathname: "/settings" });
+          }
+        },
+      );
     });
   }
 
   it("keeps embedded Back and settings navigation usable while offline", async () => {
-    await suite.withPage(phoneOptions, async ({ page }) => {
-      await installNativeEmbed(page, { platform: "ios", formFactor: "phone" });
-      const gateway = await installMockGateway(page, {
-        operatorScopes: ["operator.admin", "operator.read"],
-      });
-      await visit(page, "talk");
-      await page.locator(".native-embed-header__back").waitFor();
-      await gateway.setOnline(false);
-      await page.locator("openclaw-router-outlet[inert]").waitFor({ state: "attached" });
-      await back(page);
-      await page
-        .locator(".native-embed-header")
-        .getByRole("button", { name: /reconnecting.*retry/i })
-        .waitFor();
-      await page.locator('.settings-embed-list a[href="/settings/appearance"]').click();
-      await waitForControlUiRoute(page, { routeId: "appearance" });
-      await back(page);
-    });
+    await suite.withPage(
+      { viewport: { width: 375, height: 812 }, hasTouch: true, serviceWorkers: "block" },
+      async ({ page }) => {
+        await installNativeEmbed(page, { platform: "ios", formFactor: "phone" });
+        const gateway = await installMockGateway(page, {
+          operatorScopes: ["operator.admin", "operator.read"],
+        });
+        await page.goto(new URL("settings/talk", suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { routeId: "talk" });
+        await page.locator(".native-embed-header__back").waitFor();
+        await gateway.setOnline(false);
+        await page.locator("openclaw-router-outlet[inert]").waitFor({ state: "attached" });
+        await page.locator(".native-embed-header__back").click();
+        await waitForControlUiRoute(page, { routeId: "settings", pathname: "/settings" });
+        await page
+          .locator(".native-embed-header")
+          .getByRole("button", { name: /reconnecting.*retry/i })
+          .waitFor();
+        await page.locator('.settings-embed-list a[href="/settings/appearance"]').click();
+        await waitForControlUiRoute(page, { routeId: "appearance" });
+        await page.locator(".native-embed-header__back").click();
+        await waitForControlUiRoute(page, { routeId: "settings" });
+      },
+    );
   });
 
   it("keeps native device capability visibility and overrides native web chrome", async () => {
-    await suite.withPage(phoneOptions, async ({ page }) => {
-      await installNativeWebChrome(page);
-      await installNativeEmbed(page, { platform: "macos", formFactor: "phone" });
-      await installExistingNativeDeviceSettings(page);
-      await installMockGateway(page, { operatorScopes: ["operator.read"] });
-      await visit(page, "settings");
-      const list = page.locator(".settings-embed-list");
-      const fields = page.locator(
-        'input:not([type="hidden"], [type="checkbox"], [type="radio"]), select, textarea',
-      );
-      await list.locator('a[href="/settings/device"]').waitFor();
-      expect(await list.locator('a[href="/settings/security"]').count()).toBe(0);
-      for (const route of ["device", "device-permissions", "talk", "updates"] as const) {
-        await list.locator(`a[href="${pathForRoute(route)}"]`).click();
-        await waitForControlUiRoute(page, { routeId: route });
-        expect(await page.locator(desktopChrome).count()).toBe(0);
-        expect(await layoutFits(page)).toMatchObject({ content: true });
-        expect(
-          await fields.evaluateAll((inputs) =>
-            inputs
-              .filter((field) => field.getBoundingClientRect().width > 0)
-              .every((field) => Number.parseFloat(getComputedStyle(field).fontSize) >= 16),
-          ),
-        ).toBe(true);
-        await back(page);
-      }
-    });
-  });
-  it("preserves normal desktop chrome without embed flags", async () => {
     await suite.withPage(
-      { viewport: { width: 1440, height: 900 }, serviceWorkers: "block" },
+      { viewport: { width: 375, height: 812 }, hasTouch: true, serviceWorkers: "block" },
       async ({ page }) => {
-        await installMockGateway(page, { operatorScopes: ["operator.admin", "operator.read"] });
-        await visit(page, "appearance");
-        await page.locator(".shell--settings .settings-sidebar").waitFor();
-        expect(await page.locator(".shell-nav").isVisible()).toBe(true);
-        expect(await page.locator("openclaw-app-topbar").count()).toBe(1);
-        expect(
-          await page
-            .locator(".shell--embed, .native-embed-header, html.openclaw-native-embed")
-            .count(),
-        ).toBe(0);
+        await installNativeWebChrome(page);
+        await installNativeEmbed(page, { platform: "macos", formFactor: "phone" });
+        await installExistingNativeDeviceSettings(page);
+        await installMockGateway(page, { operatorScopes: ["operator.read"] });
+        await page.goto(new URL("settings", suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { routeId: "settings" });
+        const list = page.locator(".settings-embed-list");
+        await list.locator('a[href="/settings/device"]').waitFor();
+        expect(await list.locator('a[href="/settings/security"]').count()).toBe(0);
+        for (const route of ["device", "device-permissions", "talk", "updates"] as const) {
+          await list.locator(`a[href="${pathForRoute(route)}"]`).click();
+          await waitForControlUiRoute(page, { routeId: route });
+          expect(
+            await page
+              .locator(".shell-nav, openclaw-app-topbar, openclaw-macos-titlebar-controls")
+              .count(),
+          ).toBe(0);
+          expect(
+            await page
+              .locator("main.content")
+              .evaluate((main) => main.scrollWidth <= main.clientWidth),
+          ).toBe(true);
+          expect(
+            await page
+              .locator(
+                'input:not([type="hidden"], [type="checkbox"], [type="radio"]), select, textarea',
+              )
+              .evaluateAll((fields) =>
+                fields
+                  .filter((field) => field.getBoundingClientRect().width > 0)
+                  .every((field) => Number.parseFloat(getComputedStyle(field).fontSize) >= 16),
+              ),
+          ).toBe(true);
+          await page.locator(".native-embed-header__back").click();
+          await waitForControlUiRoute(page, { routeId: "settings" });
+        }
       },
     );
+  });
+  it("preserves normal desktop chrome for absent and malformed embed flags", async () => {
+    for (const flag of [undefined, { platform: "ios", formFactor: "watch" }]) {
+      await suite.withPage(
+        { viewport: { width: 1440, height: 900 }, serviceWorkers: "block" },
+        async ({ page }) => {
+          await page.addInitScript(
+            (host) => Object.assign(window, { __OPENCLAW_NATIVE_EMBED__: host }),
+            flag,
+          );
+          await installMockGateway(page, { operatorScopes: ["operator.admin", "operator.read"] });
+          await page.goto(new URL("settings/appearance", suite.server.baseUrl).toString());
+          await waitForControlUiRoute(page, { routeId: "appearance" });
+          await page.locator(".shell--settings .settings-sidebar").waitFor();
+          expect(await page.locator(".shell-nav").isVisible()).toBe(true);
+          expect(await page.locator("openclaw-app-topbar").count()).toBe(1);
+          expect(
+            await page
+              .locator(".shell--embed, .native-embed-header, html.openclaw-native-embed")
+              .count(),
+          ).toBe(0);
+        },
+      );
+    }
   });
   for (const viewport of viewports) {
     for (const colorScheme of ["light", "dark"] as const) {
       it(`renders settings at ${viewport.width}px in ${colorScheme}`, async () => {
+        const artifactDir = createControlUiE2eArtifactDir("native-embed-settings");
         await suite.withPage(
           { viewport, colorScheme, hasTouch: true, locale: "en-US", serviceWorkers: "block" },
           async ({ page }) => {
@@ -203,6 +224,14 @@ suite.define(() => {
             await installExistingNativeDeviceSettings(page);
             const methodResponses = {
               ...createNativeEmbedLayoutMethodResponses(),
+              "channels.status": {
+                ts: 0,
+                channels: {},
+                channelAccounts: {},
+                channelOrder: [],
+                channelLabels: {},
+                channelDefaultAccountId: {},
+              } satisfies ChannelsStatusSnapshot,
               "channels.pairing.list": {
                 accounts: [],
                 requests: [],
@@ -213,7 +242,12 @@ suite.define(() => {
                 enabled: true,
                 provider: null,
                 agentId: "main",
-                model: { provider: "openai", id: "gpt-5.6-luna", runtime: "openclaw" },
+                model: {
+                  provider: "openai",
+                  id: "gpt-5.6-luna",
+                  runtime: "openclaw",
+                  runtimeLabel: "OpenClaw",
+                },
                 route: {
                   kind: "managed",
                   provider: "parallel-free",
@@ -241,7 +275,6 @@ suite.define(() => {
               featureMethods: [
                 ...defaultControlUiFeatureMethods,
                 ...Object.keys(methodResponses),
-                "channels.status",
                 "secrets.store.set",
                 "secrets.store.delete",
               ],
@@ -254,26 +287,58 @@ suite.define(() => {
               ],
             });
             for (const route of ["settings", ...routes] as const) {
-              await visit(page, route);
+              const pathname =
+                route === "settings"
+                  ? "/settings"
+                  : route === "cron"
+                    ? "/cron"
+                    : pathForRoute(route);
+              expect(
+                (await page.goto(new URL(pathname, suite.server.baseUrl).toString()))?.status(),
+              ).toBe(200);
+              await waitForControlUiRoute(page, { routeId: route });
               await page.locator("html.openclaw-native-embed .shell--embed").waitFor();
               await page
                 .locator(".native-embed-header openclaw-settings-save-indicator")
                 .waitFor({ state: "attached" });
-              expect(await page.locator(forbiddenEmbeddedUi).count()).toBe(0);
+              expect(
+                await page
+                  .locator(
+                    ".shell-nav, openclaw-app-topbar, .shell-chrome-controls, .settings-sidebar__footer, openclaw-macos-titlebar-controls, openclaw-keyboard-shortcuts-dialog",
+                  )
+                  .count(),
+              ).toBe(0);
+              expect(
+                await page
+                  .locator(
+                    "resizable-divider:visible, .assistant-panel:visible, .debug-overlay:visible",
+                  )
+                  .count(),
+              ).toBe(0);
+              expect(
+                await page
+                  .locator("openclaw-assistant-panel-content, openclaw-debug-overlay-content")
+                  .count(),
+              ).toBe(0);
               if (route === "settings") {
                 const list = page.locator(".settings-embed-list");
                 await list.locator("a").first().waitFor();
                 expect(
-                  await list.locator("a").evaluateAll((links) => ({
-                    hrefs: links.map((link) => link.getAttribute("href")),
-                    touchTargets: links.every((link) => link.getBoundingClientRect().height >= 44),
-                  })),
-                ).toEqual({
-                  hrefs: routes
+                  await list
+                    .locator("a")
+                    .evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
+                ).toEqual(
+                  routes
                     .filter((id) => id !== "skills" && id !== "cron")
                     .map((id) => pathForRoute(id)),
-                  touchTargets: true,
-                });
+                );
+                expect(
+                  await list
+                    .locator("a")
+                    .evaluateAll((links) =>
+                      links.every((link) => link.getBoundingClientRect().height >= 44),
+                    ),
+                ).toBe(true);
               } else {
                 await page.locator(".native-embed-header .page-title").waitFor();
                 await page.locator("openclaw-router-outlet").waitFor();
@@ -308,13 +373,36 @@ suite.define(() => {
               if (route === "cron") {
                 await page.getByText("Healthy automation", { exact: true }).first().waitFor();
               }
-              expect(await layoutFits(page), route).toEqual({ viewport: true, content: true });
+              expect(
+                await page.evaluate(
+                  () => document.documentElement.scrollWidth <= window.innerWidth,
+                ),
+                route,
+              ).toBe(true);
+              expect(
+                await page
+                  .locator("main.content")
+                  .evaluate((main) => main.scrollWidth <= main.clientWidth),
+                route,
+              ).toBe(true);
+              if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+                await page.screenshot({
+                  animations: "disabled",
+                  fullPage: true,
+                  path: path.join(
+                    artifactDir,
+                    `${route}-${viewport.width}x${viewport.height}-${colorScheme}.png`,
+                  ),
+                });
+              }
               if (route !== "settings") {
-                await back(page);
+                await page.locator(".native-embed-header__back").click();
+                await waitForControlUiRoute(page, { routeId: "settings", pathname: "/settings" });
                 if (route === "appearance") {
                   await page.locator('.settings-embed-list a[href="/settings/appearance"]').click();
                   await waitForControlUiRoute(page, { routeId: "appearance" });
-                  await back(page);
+                  await page.locator(".native-embed-header__back").click();
+                  await waitForControlUiRoute(page, { routeId: "settings", pathname: "/settings" });
                 }
               }
             }

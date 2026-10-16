@@ -202,7 +202,8 @@ async function createFixture(state: OpenClawTestState) {
     },
     unexpectedRequests,
     createClient,
-    localClient: () => createClient({ ...accountPolicy(), ownerOrigin: { kind: "local" } }),
+    localClient: () =>
+      createClient({ ...accountPolicy(), ownerOrigin: { kind: "local" as const } }),
     revoke: () => permission.abort(new Error("scheduled message permission revoked")),
     setDefaultAccount: async (accountId: string) => {
       cfg = {

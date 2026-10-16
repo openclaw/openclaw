@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.js";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { withinTest } from "../helpers/promise.js";
 
@@ -63,7 +64,7 @@ async function listenGateway(params: {
   wss = new WebSocketServer({ server });
   wss.on("connection", (ws: WebSocket) => {
     ws.on("message", (data) => {
-      const frame = JSON.parse(data.toString()) as GatewayFrame;
+      const frame = JSON.parse(rawDataToString(data)) as GatewayFrame;
       if (frame.type !== "req") {
         return;
       }

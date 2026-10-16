@@ -149,10 +149,10 @@ describe("Bedrock tool-result replay", () => {
         ]),
       ],
     } as never);
-    const messages = input.messages as Array<Record<string, unknown>>;
+    const messages = input.messages;
 
     expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatchObject({
+    expect(messages?.[0]).toMatchObject({
       role: ConversationRole.USER,
       content: [
         {
@@ -172,10 +172,10 @@ describe("Bedrock tool-result replay", () => {
         toolResult("call_text", "read", [{ type: "text", text: "actual tool output" }]),
       ],
     } as never);
-    const messages = input.messages as Array<Record<string, unknown>>;
+    const messages = input.messages;
 
     expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatchObject({
+    expect(messages?.[0]).toMatchObject({
       role: ConversationRole.USER,
       content: [
         { toolResult: { toolUseId: "call_husk", content: [{ text: "(no output)" }] } },

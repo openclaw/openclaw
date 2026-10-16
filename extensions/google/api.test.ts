@@ -86,7 +86,7 @@ describe("google generative ai helpers", () => {
   });
 
   it("normalizes google-vertex model ids without rewriting the OpenAI-compatible baseUrl", () => {
-    const config = {
+    const config: Parameters<typeof normalizeGoogleProviderConfig>[1] = {
       api: "openai-completions",
       baseUrl: vertexOpenAi,
       models: [

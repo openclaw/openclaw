@@ -92,7 +92,11 @@ it.each([undefined, "override"])("builds the request with API key override %s", 
     "x-other": "1",
   });
 
-  const body = JSON.parse(seenInit?.body?.toString() ?? "");
+  const bodyText = seenInit?.body;
+  if (typeof bodyText !== "string") {
+    throw new Error("Expected a JSON string request body");
+  }
+  const body = JSON.parse(bodyText);
   expect(body.contents?.[0]?.parts).toMatchObject([
     { text: "Describe the video." },
     { inline_data: { mime_type: "video/mp4", data: mediaRequest.buffer.toString("base64") } },

@@ -18,6 +18,7 @@ const skillsMocks = vi.hoisted(() => ({
   loadWorkspaceSkills: vi.fn(),
 }));
 
+// mock-isolation: Keep package-manager commands synthetic; never invoke host installers.
 vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommand(...args),
 }));

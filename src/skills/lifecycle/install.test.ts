@@ -28,6 +28,7 @@ import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { installSkill, installSkillDependencies } from "./install.js";
 
+// mock-isolation: Keep package-manager commands synthetic; never invoke host installers.
 vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommand(...args),
 }));

@@ -13,7 +13,6 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
-import type { PluginHookSkillChangedEvent } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
@@ -553,7 +552,7 @@ describe("skill archive install", () => {
       const { workspaceDir, extractedRoot, install } = await fixture(
         versionedSkillFileContent("Before Update", "1.0.0"),
       );
-      const handler = vi.fn<(event: PluginHookSkillChangedEvent) => void>();
+      const handler = vi.fn<(...args: unknown[]) => void>();
       initializeGlobalHookRunner(
         createMockPluginRegistry([{ hookName: "skill_changed", handler }]),
       );

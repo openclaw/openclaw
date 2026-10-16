@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { createProcessAdapterEvents } from "../../process/supervisor/adapters/process-events.js";
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
@@ -153,8 +153,8 @@ describe("CLI execution cancellation", () => {
   let supervisor: ReturnType<typeof createProcessSupervisor>;
   let context: PreparedCliRunContext;
   let controller: AbortController;
-  let spawn: ReturnType<typeof vi.spyOn<typeof supervisor, "spawn">>;
-  let cancel: ReturnType<typeof vi.spyOn<typeof supervisor, "cancel">>;
+  let spawn: MockInstance<typeof supervisor.spawn>;
+  let cancel: MockInstance<typeof supervisor.cancel>;
 
   beforeEach(() => {
     createChildAdapterMock.mockReset();
