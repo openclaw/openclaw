@@ -7,7 +7,8 @@ const RECALL_INTENT_PATTERNS = [
   /\b(?:we|you|i)\s+(?:discussed|decided|agreed|said|talked about|chose)\b/iu,
   /\b(?:previous|earlier|past)\s+(?:decision|conversation|chat|discussion)\b/iu,
   /\b(?:yesterday|the other day|last (?:week|month|year)|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b/iu,
-  /\bwhat did (?:we|you|i)\b/iu,
+  // Bound object words so matching cannot cross clauses into unrelated "did we" text.
+  /\b(?:what|which)(?:\s+[\p{L}\p{N}_'’-]+){0,4}\s+did\s+(?:we|you|i)\b/iu,
   /\bwhat (?:do|did) i usually\b/iu,
   /\b(?:what|which|when|where|why|how)\s+(?:did|have|had)\s+(?:we|you|i)\s+(?:decide|choose|discuss|agree|say|mention|talk|use|do)\b/iu,
   /\b(?:did|have|had)\s+(?:we|you|i)\s+(?:decide|choose|discuss|agree|say|mention|talk)\b/iu,
