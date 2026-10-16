@@ -21,7 +21,7 @@ No release stored runtime pins in PostgreSQL shared state, so PostgreSQL install
 
 ## Configure PostgreSQL
 
-Use a PostgreSQL database dedicated to OpenClaw and a role that can create schemas
+Use a PostgreSQL database and a role that can create schemas
 and tables. PostgreSQL 16 or newer and UTF8 server and client encoding are required;
 admission checks these once per physical store load. No extensions are installed
 by the engine. Put its connection DSN in a secret, then configure a SecretRef:
@@ -236,9 +236,36 @@ or Homebrew: those paths bypass `openclaw update` engine compatibility checks.
 An old SQLite capture is historical and does not contain later PostgreSQL writes.
 See the [CLI reference](/cli#database).
 
+## Several Gateways on one PostgreSQL server
+
+Several independent installations can share one PostgreSQL server and database.
+Give each installation its own state directory and a distinct
+`database.postgres.schemaPrefix`, such as `installation_a` and `installation_b`.
+Each store gets a separate anchor UUID and namespace; its writer advisory lock
+uses that UUID. Keep each local anchor with its matching PostgreSQL namespace.
+Pairing one installation's anchor with another installation's namespace refuses
+admission. Changing the configured prefix does not move an existing anchor.
+
+Sharing one installation's data across active Gateways is not supported: each
+store has one live owner. Namespace isolation does not provide distributed
+ownership or coordination for a shared installation.
+
+Install search extensions once per database, as described in
+[Search on PostgreSQL](#search-on-postgresql). All installations can use the same
+`unaccent`, `pg_trgm`, and `vector` installation in `public` (or the explicitly
+declared extension schema); admission checks existing extensions and never
+recreates them. Text-search configurations, generated columns, indexes, vector
+projections, and functions belong to each store namespace.
+
+The runtime role needs `CONNECT` on the database and `CREATE` on the database to
+bootstrap namespaces, plus ownership/access to its store objects and `USAGE` on
+the extension schema. A database administrator may need to install extensions.
+Use separate roles and schema grants when installations also need a PostgreSQL
+permission boundary; schema prefixes alone do not restrict a role's access.
+
 ## Isolation and durability
 
-One Gateway owns each store. PostgreSQL does not enable multiple active Gateways,
+One Gateway owns each store. PostgreSQL does not enable multiple active owners of one store,
 external writers, replication management, or connection-pool management.
 
 Writers use `READ COMMITTED` and a transaction-scoped advisory lock derived from
