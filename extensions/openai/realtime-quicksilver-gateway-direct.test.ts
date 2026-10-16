@@ -9,6 +9,29 @@ import {
 import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 import { emitSideband, FakeSocket, parseSent } from "./realtime-quicksilver.test-helpers.js";
 
+type BridgeConfig = ConstructorParameters<typeof OpenAIQuicksilverGatewayBridge>[0];
+function createBridge(overrides: Partial<BridgeConfig>) {
+  return new OpenAIQuicksilverGatewayBridge(
+    {
+      providerConfig: {},
+      model: "gpt-live-1",
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      resolveAuth: async () => ({ type: "api-key", token: "test-api-key" }),
+      ...overrides,
+    },
+    openAIRealtimeHost,
+  );
+}
+
+function readAudio(socket: FakeSocket) {
+  return parseSent(socket)
+    .filter((event) => event.type === "session.input_audio.append")
+    .map((event) => Buffer.from(String(event.audio), "base64"));
+}
+
 describe("GPT-Live Gateway direct transport", () => {
   it("retains opening and backoff capture until the retry is adopted exactly once", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
@@ -20,31 +43,21 @@ describe("GPT-Live Gateway direct transport", () => {
       return socket;
     });
     const onReady = vi.fn();
-    const bridge = new OpenAIQuicksilverGatewayBridge(
-      {
-        providerConfig: {},
-        model: "gpt-live-1",
-        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
-        onReady,
-        runAgentConsult: async () => ({ text: "Done" }),
-        logger: { debug: vi.fn(), warn: vi.fn() },
-        resolveAuth: async () => ({ type: "api-key", token: "test-api-key" }),
-        mediaSocketFactory: (...args) => {
-          const socket = createSocket(...args);
-          const captured: Buffer[] = [];
-          capturedByAttempt.push(captured);
-          const sendAudio = socket.sendAudio.bind(socket);
-          socket.sendAudio = (audio) => {
-            captured.push(Buffer.from(audio));
-            sendAudio(audio);
-          };
-          return socket;
-        },
+    const bridge = createBridge({
+      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+      onReady,
+      mediaSocketFactory: (...args) => {
+        const socket = createSocket(...args);
+        const captured: Buffer[] = [];
+        capturedByAttempt.push(captured);
+        const sendAudio = socket.sendAudio.bind(socket);
+        socket.sendAudio = (audio) => {
+          captured.push(Buffer.from(audio));
+          sendAudio(audio);
+        };
+        return socket;
       },
-      openAIRealtimeHost,
-    );
+    });
     const frames = [1, 2, 3, 4, 5].map((value) =>
       Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES, value),
     );
@@ -84,9 +97,7 @@ describe("GPT-Live Gateway direct transport", () => {
       expect(capturedByAttempt).toEqual([[], [Buffer.concat(frames.slice(0, 4))]]);
       capture(frames[4]!);
       await vi.advanceTimersByTimeAsync(100);
-      const sentAudio = parseSent(adopted)
-        .filter((event) => event.type === "session.input_audio.append")
-        .map((event) => Buffer.from(String(event.audio), "base64"));
+      const sentAudio = readAudio(adopted);
       expect(sentAudio).toEqual([...frames, Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES)]);
       expect(capturedByAttempt).toEqual([[], [Buffer.concat(frames.slice(0, 4)), frames[4]]]);
       expect(sockets[0]!.sent).toEqual([]);
@@ -107,23 +118,13 @@ describe("GPT-Live Gateway direct transport", () => {
     async () => {
       let socket: FakeSocket | undefined;
       const onReady = vi.fn();
-      const bridge = new OpenAIQuicksilverGatewayBridge(
-        {
-          providerConfig: {},
-          model: "gpt-live-1",
-          onAudio: vi.fn(),
-          onClearAudio: vi.fn(),
-          onReady,
-          runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-          logger: { debug: vi.fn(), warn: vi.fn() },
-          resolveAuth: async () => ({ type: "api-key", token: "test-api-key" }),
-          mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
-            socket = new FakeSocket();
-            return socket;
-          }),
-        },
-        openAIRealtimeHost,
-      );
+      const bridge = createBridge({
+        onReady,
+        mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
+          socket = new FakeSocket();
+          return socket;
+        }),
+      });
       const connection = bridge.connect();
       await vi.waitFor(() => expect(socket?.sent).toHaveLength(1));
       const connectedSocket = socket!;
@@ -133,30 +134,27 @@ describe("GPT-Live Gateway direct transport", () => {
       const capture = Buffer.concat([...frames, Buffer.from([3, 4])]);
       bridge.sendAudio(capture);
       capture.fill(0);
-      const readAudio = () =>
-        parseSent(connectedSocket)
-          .filter((event) => event.type === "session.input_audio.append")
-          .map((event) => Buffer.from(String(event.audio), "base64"));
+      const audio = () => readAudio(connectedSocket);
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       const timerNow = performance.now.bind(performance);
       let suspensionMs = 0;
       const now = vi.spyOn(performance, "now").mockImplementation(() => timerNow() + suspensionMs);
       try {
-        expect(readAudio()).toEqual([]);
+        expect(audio()).toEqual([]);
         emitSideband(connectedSocket, { type: "session.started", session: {} });
         await connection;
         expect(bridge.pacesInputAudio).toBe(true);
         expect(onReady).toHaveBeenCalledOnce();
-        expect(readAudio()).toEqual([frames[0]]);
+        expect(audio()).toEqual([frames[0]]);
         suspensionMs = 5_000;
         await vi.advanceTimersByTimeAsync(20);
-        expect(readAudio()).toEqual(frames);
+        expect(audio()).toEqual(frames);
         await vi.advanceTimersByTimeAsync(20);
         const partial = Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
         partial.set([3, 4]);
-        expect(readAudio()).toEqual([...frames, partial]);
+        expect(audio()).toEqual([...frames, partial]);
         await vi.advanceTimersByTimeAsync(40);
-        expect(readAudio()).toEqual([
+        expect(audio()).toEqual([
           ...frames,
           partial,
           Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES),
@@ -188,26 +186,17 @@ describe("GPT-Live Gateway direct transport", () => {
       socket = new FakeSocket();
       return socket;
     });
-    const bridge = new OpenAIQuicksilverGatewayBridge(
-      {
-        providerConfig: {},
-        model: "gpt-live-1",
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
-        onClose,
-        onTranscript: (_role, _text, final) => {
-          if (final) {
-            void bridge.close();
-          }
-        },
-        runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-        logger,
-        resolveAuth: async () => ({ type: "api-key", token: "test-api-key" }),
-        createPeer,
-        mediaSocketFactory: fakeQuicksilverMediaSocket(webSocketFactory),
+    const bridge = createBridge({
+      onClose,
+      onTranscript: (_role, _text, final) => {
+        if (final) {
+          void bridge.close();
+        }
       },
-      openAIRealtimeHost,
-    );
+      logger,
+      createPeer,
+      mediaSocketFactory: fakeQuicksilverMediaSocket(webSocketFactory),
+    });
     try {
       const connection = bridge.connect();
       await vi.waitFor(() => expect(socket?.sent).toHaveLength(1));
@@ -247,24 +236,17 @@ describe("GPT-Live Gateway direct transport", () => {
       const onAudio = vi.fn();
       const runAgentConsult = vi.fn(async () => ({ text: "must not start" }));
       const logger = { debug: vi.fn(), warn: vi.fn() };
-      const bridge = new OpenAIQuicksilverGatewayBridge(
-        {
-          providerConfig: {},
-          model: "gpt-live-1",
-          onAudio,
-          onClearAudio: vi.fn(),
-          onClose,
-          onTranscript,
-          runAgentConsult,
-          logger,
-          resolveAuth: async () => ({ type: "api-key", token: "test-api-key" }),
-          mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
-            socket = new FakeSocket();
-            return socket;
-          }),
-        },
-        openAIRealtimeHost,
-      );
+      const bridge = createBridge({
+        onAudio,
+        onClose,
+        onTranscript,
+        runAgentConsult,
+        logger,
+        mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
+          socket = new FakeSocket();
+          return socket;
+        }),
+      });
       const reservations = Array.from({ length: 7 }, () => ({}));
       const nextReservation = {};
       let closing: void | Promise<void> = undefined;
@@ -357,33 +339,27 @@ describe("GPT-Live Gateway direct transport", () => {
       vi.fn(async () => ({ text: "Delegated result" })),
       { claimAppend: vi.fn(() => true) },
     );
-    const bridge = new OpenAIQuicksilverGatewayBridge(
-      {
-        providerConfig: {},
-        model: "gpt-live-test-canary",
-        voice: "marin",
-        instructions: "Speak briefly.",
-        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-        onAudio,
-        onClearAudio: vi.fn(),
-        onClose,
-        onReady,
-        runAgentConsult,
-        handleDelegationInput: () => "consult",
-        logger: { debug: vi.fn(), warn: vi.fn() },
-        resolveAuth: vi.fn(async () => ({
-          type: "api-key" as const,
-          token: "platform-key",
-        })),
-        createPeer,
-        fetchImpl: fetchImpl as typeof fetch,
-        mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
-          socket = new FakeSocket();
-          return socket;
-        }),
-      },
-      openAIRealtimeHost,
-    );
+    const bridge = createBridge({
+      model: "gpt-live-test-canary",
+      voice: "marin",
+      instructions: "Speak briefly.",
+      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+      onAudio,
+      onClose,
+      onReady,
+      runAgentConsult,
+      handleDelegationInput: () => "consult",
+      resolveAuth: vi.fn(async () => ({
+        type: "api-key" as const,
+        token: "platform-key",
+      })),
+      createPeer,
+      fetchImpl: fetchImpl as typeof fetch,
+      mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
+        socket = new FakeSocket();
+        return socket;
+      }),
+    });
 
     try {
       const connection = bridge.connect();
@@ -453,30 +429,22 @@ describe("GPT-Live Gateway direct transport", () => {
   it("rejects startup when onReady closes the bridge reentrantly", async () => {
     let socket: FakeSocket | undefined;
     const bridgeRef: { current?: OpenAIQuicksilverGatewayBridge } = {};
-    const bridge = new OpenAIQuicksilverGatewayBridge(
-      {
-        providerConfig: {},
-        model: "gpt-live-test-canary",
-        voice: "marin",
-        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
-        onReady: () => {
-          void bridgeRef.current?.close();
-        },
-        runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-        logger: { debug: vi.fn(), warn: vi.fn() },
-        resolveAuth: vi.fn(async () => ({
-          type: "api-key" as const,
-          token: "platform-key",
-        })),
-        mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
-          socket = new FakeSocket();
-          return socket;
-        }),
+    const bridge = createBridge({
+      model: "gpt-live-test-canary",
+      voice: "marin",
+      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+      onReady: () => {
+        void bridgeRef.current?.close();
       },
-      openAIRealtimeHost,
-    );
+      resolveAuth: vi.fn(async () => ({
+        type: "api-key" as const,
+        token: "platform-key",
+      })),
+      mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
+        socket = new FakeSocket();
+        return socket;
+      }),
+    });
     bridgeRef.current = bridge;
 
     const connection = bridge.connect();
