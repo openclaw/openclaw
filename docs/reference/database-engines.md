@@ -70,14 +70,11 @@ including session transcripts and agent memory, still use SQLite, as do other
 stores without PostgreSQL support. Incognito storage remains memory-only.
 The supported PostgreSQL families are:
 
-- **Shared state:** runtime storage, SQLite-to-PostgreSQL database ports, and
+- **Shared state:** runtime storage, bidirectional database ports, and
   matched backups. The provider covers the selected `state/openclaw.sqlite` and
   retained Voice Call state roots, including explicitly configured store paths
   and disabled plugin entries. Matrix account/token roots are excluded from this
   provider; their discovery and custody belong to the Matrix account-root lane.
-  PostgreSQL-to-SQLite and backup/restore conformance remain pending PostgreSQL
-  maintenance custody support; do not use these paths for recovery until that
-  support is available.
 - **Workboard:** runtime storage, bidirectional database ports, and matched backups.
 - **Logbook:** runtime frames, batches, observations, cards, and standups;
   bidirectional database ports; and matched backups. Frame images remain local
@@ -94,9 +91,8 @@ connection or admission fails.
 Doctor can acquire offline maintenance custody and run data-only state migrations
 on PostgreSQL. A live or unverifiable Gateway owner still prevents maintenance;
 state writes use the existing PostgreSQL writer advisory lock. State schema
-migrations remain blocked until PostgreSQL state-family backup support is
-available. Keep the current database and retry with a version that supports those
-backups.
+migrations remain a separate Doctor capability: the schema-migration runner
+still requires PostgreSQL-aware migration backup and repair integration.
 
 Use `openclaw database port` to move existing supported data between engines.
 Changing `database.engine` alone does not migrate existing data. Omitting
@@ -190,8 +186,8 @@ openclaw database port --to postgres
 
 Port, backup, restore, and fingerprint operations share one database-family
 provider registry. Each provider resolves its stores and supplies the generated
-schema descriptor and expected PostgreSQL catalog. **Workboard, Logbook, and Team Reports
-are registered families.** State, agent, and Matrix-root
+schema descriptor and expected PostgreSQL catalog. **Shared state, Workboard,
+Logbook, and Team Reports are registered families.** Agent and Matrix-root
 support are not enabled by this registry yet. An unrecognized PostgreSQL anchor
 refuses the operation and names the supported families.
 For separately installed plugins such as Team Reports, operations load the
@@ -199,9 +195,11 @@ selected installed plugin's schema and admission API. Keep the matching plugin
 installed for port, backup, and restore. Preflight does not require absent
 optional plugins.
 
-The command inventories all existing registered Workboard, Logbook, and Team Reports stores,
-including disabled plugin stores. It does not create missing stores or port
-shared state, agent databases, or safety journals. A dry run checks read-only
+The command inventories existing shared state, Workboard, Logbook, and Team Reports stores,
+including disabled plugin stores. A real SQLite-to-PostgreSQL port initializes
+missing shared state before capture so the config writer uses the same selected
+store after the switch. It does not create missing plugin stores or port agent
+databases. A dry run checks read-only
 prerequisites and reports checks that still require private migration, copying,
 or a PostgreSQL privilege probe. It creates no manifest, migrated copy, or target
 namespace. Add `--json` for machine-readable results without connection strings

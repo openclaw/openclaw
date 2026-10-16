@@ -108,11 +108,12 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
       "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
     )
     .get();
+  // SQLite may publish the current header without a redundant content-version row.
   if (
     meta?.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION ||
     meta.role !== "global" ||
     meta.agent_id !== null ||
-    content?.value_json !== String(OPENCLAW_STATE_SCHEMA_VERSION)
+    (content !== undefined && content.value_json !== String(OPENCLAW_STATE_SCHEMA_VERSION))
   ) {
     throw new Error(`PostgreSQL state metadata mismatch. ${recovery}`);
   }

@@ -1,6 +1,6 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
-import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
@@ -26,7 +26,6 @@ serveOwnedWorkerTasks(
     let sourceAdmitted: true | undefined;
     let nativeCleanupFailure: OpenClawStateReadReply["nativeCleanupFailure"];
     try {
-      installDatabaseEngineSelection({ input: input.context.databaseEngineInput });
       const leaseReader =
         input.command.type === "gatewayOwnerLease.read"
           ? await import("../infra/gateway-owner-lease.worker.js")
@@ -155,9 +154,12 @@ serveOwnedWorkerTasks(
         );
         return { ok: true, sourceAdmitted: true, ...result };
       };
-      const reply = await withSqliteReaderOwner(
-        { operation: input.command.type, ownerKind: "worker" },
-        () => runWithSqliteWorkerStateContext(input.context, executeRead),
+      const reply = await withDatabaseEngineSelection(
+        { input: input.context.databaseEngineInput },
+        () =>
+          withSqliteReaderOwner({ operation: input.command.type, ownerKind: "worker" }, () =>
+            runWithSqliteWorkerStateContext(input.context, executeRead),
+          ),
       );
       if (
         !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources &&
