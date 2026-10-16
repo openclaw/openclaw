@@ -7128,7 +7128,6 @@
 ["src/gateway/server-methods/users-personal-file.test.ts","../../agents/workspace-access.js","bbfd5e87274fb7571d1396fdbea9bc0ed0dc6330ee966ab8a7b935c31f7c748a",1]
 ["src/gateway/server-methods/users.test.ts","../../state/user-profile-email.js","d0f969c2fc1ea7ea324217e56412047ff1479422377ef8e00cdbf56ba6f745aa",1]
 ["src/gateway/server-methods/users.test.ts","../../state/user-profile-writes.js","1ba293caeb4cdeb9f5333d8009707482433feda5b9c9ab9c4a3f5b00c4bca298",1]
-["src/gateway/server-methods/web-search-status.auth.test.ts","../../agents/auth-profiles/external-cli-sync.js","a5a7feb4465320d5b93cfc2970e800e2ec9dea406ed536658bfa533ae4df59c3",1]
 ["src/gateway/server-methods/web-search-status.auth.test.ts","../../agents/auth-profiles/oauth-shared.js","7300f97d73586b3d4d771faef50833f402640f9390ac62cbde3c2cc72470fde0",1]
 ["src/gateway/server-methods/web-search-status.auth.test.ts","../../agents/auth-profiles/store.js","27301b152118d50a5139c399dcdd11f8fd03eec4b4c82a37a7b0dfa002408cd5",1]
 ["src/gateway/server-methods/web-search-status.auth.test.ts","../../agents/model-auth.js","3a86cc1ec17d431c548729f7afbffd3bfd48d0c7e25bc4f2b1f4f1b8839b4d3b",1]

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   catalog: vi.fn(),
 }));
 vi.mock("../../agents/model-auth.js", () => ({}));
+// mock-isolation: Status health must not read machine CLI credential files.
 vi.mock("../../agents/auth-profiles/external-cli-sync.js", () => ({
   readExternalCliBootstrapCredential: () => null,
 }));
