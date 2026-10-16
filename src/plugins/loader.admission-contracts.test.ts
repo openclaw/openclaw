@@ -18,6 +18,8 @@ import {
   isolatedLoaderEnv,
   requireTool,
   writeJson,
+  expectPlugin,
+  expectOnlyPlugin,
 } from "./loader-suite.test-support.js";
 import {
   loadOpenClawPluginCliRegistry,
@@ -84,8 +86,7 @@ module.exports = { id: "admission-contract", register() {} };`,
     autoEnabledReasons: { [plugin.id]: ["reason without effective enablement"] },
   };
   const registry = await loadOpenClawPluginCliRegistry(options);
-  expect(registry.plugins).toHaveLength(1);
-  expect(registry.plugins[0]).toMatchObject({
+  expectOnlyPlugin(registry, {
     id: plugin.id,
     enabled: false,
     activated: false,
@@ -145,9 +146,7 @@ module.exports = { plugin: channel };`,
     activate: false,
     cache: false,
   });
-  expect(registry.plugins.map(({ id, status }) => ({ id, status }))).toEqual([
-    { id: plugin.id, status: "loaded" },
-  ]);
+  expectOnlyPlugin(registry, { id: plugin.id, status: "loaded" });
   expect(registry.channelSetups.map(({ plugin: channel }) => channel.id)).toEqual([
     "admission-channel",
   ]);
@@ -204,9 +203,7 @@ it("keeps system routing bound to the replacement lifecycle owner", async () => 
     previousRegistry: previous,
     runtimeSideEffects: true,
   });
-  expect(registry.plugins).toContainEqual(
-    expect.objectContaining({ id: plugin.id, status: "loaded" }),
-  );
+  expectPlugin(registry, { id: plugin.id, status: "loaded" });
   const start = () => startPluginServices({ registry, config });
   const services = await withPluginRegistryPreparationScope(registry, start);
   try {
@@ -244,8 +241,7 @@ it.each(["cached-discovery", "retained-discovery"] as const)(
     });
     const config: OpenClawConfig = {
       plugins: {
-        allow: [plugin.id],
-        load: { paths: [plugin.file] },
+        ...pluginConfig(plugin).plugins,
         slots: { memory: "none", contextEngine: plugin.id },
       },
     };
@@ -306,9 +302,7 @@ describe("registry load modes", () => {
     const full = loadPluginRegistryHandle(options);
 
     expect(full.providers.map(({ provider }) => provider.id)).toEqual(["mode-provider"]);
-    expect(validation.plugins).toContainEqual(
-      expect.objectContaining({ id: plugin.id, status: "loaded" }),
-    );
+    expectPlugin(validation, { id: plugin.id, status: "loaded" });
     expect(validation.providers).toEqual([]);
     expect(loadPluginRegistryHandle(options)).toBe(full);
     expect(loadPluginRegistryHandle({ ...options, mode: "full" })).toBe(full);
@@ -347,11 +341,7 @@ describe("registration config snapshot", () => {
     const source: OpenClawConfig = {
       agents: { entries: { ops: { name: "registration snapshot" } } },
       gateway: { auth: { mode: "token", token: "${GATEWAY_TOKEN}" } },
-      plugins: {
-        allow: [plugin.id],
-        load: { paths: [plugin.file] },
-        slots: { memory: "none" },
-      },
+      plugins: pluginConfig(plugin).plugins,
     };
     const runtime = structuredClone(source);
     runtime.gateway!.auth!.token = "synthetic-resolved-token";

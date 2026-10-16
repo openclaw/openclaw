@@ -16,21 +16,31 @@ import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
 
-function migrationFixture(name: string) {
+function migrationFixture(name: string, bundled = false) {
   const rootDir = makeTrackedTempDir(`openclaw-session-surface-${name}`, tempDirs);
   const stateDir = path.join(rootDir, "state");
   const bundledDir = path.join(rootDir, "bundled-disabled");
   fs.mkdirSync(bundledDir, { recursive: true });
+  if (bundled) {
+    fs.mkdirSync(stateDir);
+  }
   const env: NodeJS.ProcessEnv = {
     HOME: rootDir,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: bundled ? "" : "1",
+    ...(bundled ? { OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1" } : {}),
     OPENCLAW_VERSION: "2026.8.1",
     VITEST: "true",
   };
   const writeOwner = (pluginId: string, channelId: string) =>
-    writeSessionSurfacePlugin({ rootDir, stateDir, pluginId, channelId });
+    writeSessionSurfacePlugin({
+      rootDir,
+      stateDir,
+      pluginId,
+      channelId,
+      ...(bundled ? { bundledDir } : {}),
+    });
   const persist = async (
     config: OpenClawConfig,
     owners: Record<string, ReturnType<typeof writeOwner>>,
@@ -86,6 +96,7 @@ function writeSessionSurfacePlugin(params: {
   pluginId: string;
   channelId: string;
   bundledDir?: string;
+  legacySurface?: false;
 }) {
   const packageName = `@fixture/${params.pluginId}`;
   const pluginDir = params.bundledDir
@@ -98,14 +109,20 @@ function writeSessionSurfacePlugin(params: {
       });
   fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
   const marker = (name: string) => path.join(params.rootDir, `${params.pluginId}-${name}.marker`);
+  const writeModule = (name: string, source: string) =>
+    fs.writeFileSync(path.join(pluginDir, "dist", name), source, "utf8");
   writeJson(path.join(pluginDir, "package.json"), {
     name: packageName,
     version: "1.0.0",
     type: "module",
     openclaw: {
       extensions: ["./dist/index.js"],
-      setupEntry: "./dist/setup-entry.js",
-      setupFeatures: { legacySessionSurfaces: true },
+      ...(params.legacySurface === false
+        ? {}
+        : {
+            setupEntry: "./dist/setup-entry.js",
+            setupFeatures: { legacySessionSurfaces: true },
+          }),
       channel: {
         id: params.channelId,
         ...(params.bundledDir
@@ -121,24 +138,34 @@ function writeSessionSurfacePlugin(params: {
     channels: [params.channelId],
     configSchema: { type: "object" },
   });
-  fs.writeFileSync(
-    path.join(pluginDir, "dist", "index.js"),
+  writeModule(
+    "index.js",
     `import fs from "node:fs";
 fs.writeFileSync(${JSON.stringify(marker("full"))}, "loaded\\n");
 export default { register() {} };
 `,
-    "utf8",
   );
-  fs.writeFileSync(
-    path.join(pluginDir, "dist", "setup-plugin.js"),
+  if (params.bundledDir) {
+    writeModule(
+      "auth-presence.js",
+      `import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(marker("auth-probe"))}, "loaded");
+export function hasAuth() { return false; }
+`,
+    );
+  }
+  if (params.legacySurface === false) {
+    return { pluginDir, marker };
+  }
+  writeModule(
+    "setup-plugin.js",
     `import fs from "node:fs";
 fs.writeFileSync(${JSON.stringify(marker("setup-plugin"))}, "loaded\\n");
 export const setupPlugin = { id: ${JSON.stringify(params.channelId)} };
 `,
-    "utf8",
   );
-  fs.writeFileSync(
-    path.join(pluginDir, "dist", "legacy-session-surface.js"),
+  writeModule(
+    "legacy-session-surface.js",
     `import fs from "node:fs";
 fs.writeFileSync(${JSON.stringify(marker("sidecar"))}, "loaded\\n");
 export const legacySessionSurface = {
@@ -150,10 +177,9 @@ export const legacySessionSurface = {
   },
 };
 `,
-    "utf8",
   );
-  fs.writeFileSync(
-    path.join(pluginDir, "dist", "setup-entry.js"),
+  writeModule(
+    "setup-entry.js",
     `import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 export default defineBundledChannelSetupEntry({
   importMetaUrl: import.meta.url,
@@ -165,44 +191,25 @@ export default defineBundledChannelSetupEntry({
   },
 });
 `,
-    "utf8",
   );
-  if (params.bundledDir) {
-    fs.writeFileSync(
-      path.join(pluginDir, "dist", "auth-presence.js"),
-      `import fs from "node:fs";
-fs.writeFileSync(${JSON.stringify(marker("auth-probe"))}, "loaded");
-export function hasAuth() { return false; }
-`,
-    );
-  }
   return { pluginDir, marker };
+}
+
+function importedSurfaces(fixture: ReturnType<typeof writeSessionSurfacePlugin>) {
+  return ["sidecar", "setup-plugin", "full"].map((name) => fs.existsSync(fixture.marker(name)));
 }
 
 describe("installed channel legacy session surfaces", () => {
   it("loads an eligible bundled migration owner without probing its authentication", () => {
-    const rootDir = makeTrackedTempDir("openclaw-session-surface-bundled", tempDirs);
-    const stateDir = path.join(rootDir, "state");
-    fs.mkdirSync(stateDir);
-    const bundledDir = path.join(rootDir, "bundled");
-    const fixture = writeSessionSurfacePlugin({
-      stateDir,
-      rootDir,
-      bundledDir,
-      pluginId: "bundled-session-owner",
-      channelId: "bundled-chat",
-    });
-    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
-    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "");
-    vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
-    const env = {
-      HOME: rootDir,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "",
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      VITEST: "true",
-    } as NodeJS.ProcessEnv;
+    const { env, writeOwner } = migrationFixture("bundled", true);
+    const fixture = writeOwner("bundled-session-owner", "bundled-chat");
+    for (const key of [
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+      "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
+    ]) {
+      vi.stubEnv(key, env[key]);
+    }
     const prepared = prepareLegacySessionSurfaces({ config: {}, env });
 
     expect(prepared.failures).toEqual([]);
@@ -213,42 +220,21 @@ describe("installed channel legacy session surfaces", () => {
         agentId: "main",
       }),
     ).toBe("agent:main:bundled-chat:group:room");
-    expect(fs.existsSync(fixture.marker("sidecar"))).toBe(true);
-    expect(fs.existsSync(fixture.marker("setup-plugin"))).toBe(false);
-    expect(fs.existsSync(fixture.marker("full"))).toBe(false);
+    expect(importedSurfaces(fixture)).toEqual([true, false, false]);
     expect(fs.existsSync(fixture.marker("auth-probe"))).toBe(false);
   });
 
   it("loads only the selected setup sidecar and canonicalizes its legacy group key", async () => {
     const { rootDir, stateDir, bundledDir, env, writeOwner, persist, migrate } =
       migrationFixture("selected");
-    const unrelatedDir = path.join(bundledDir, "unrelated-channel");
-    const authProbeMarker = path.join(rootDir, "unrelated-auth-probe.marker");
-    fs.mkdirSync(unrelatedDir);
-    writeJson(path.join(unrelatedDir, "package.json"), {
-      name: "@fixture/unrelated-channel",
-      type: "module",
-      openclaw: {
-        extensions: ["./index.js"],
-        channel: {
-          id: "unrelated-channel",
-          persistedAuthState: { specifier: "./auth-presence.js", exportName: "hasAuth" },
-        },
-      },
+    const unrelated = writeSessionSurfacePlugin({
+      rootDir,
+      stateDir,
+      bundledDir,
+      pluginId: "unrelated-channel",
+      channelId: "unrelated-channel",
+      legacySurface: false,
     });
-    writeJson(path.join(unrelatedDir, "openclaw.plugin.json"), {
-      id: "unrelated-channel",
-      channels: ["unrelated-channel"],
-      configSchema: { type: "object" },
-    });
-    fs.writeFileSync(path.join(unrelatedDir, "index.js"), "export default { register() {} };\n");
-    fs.writeFileSync(
-      path.join(unrelatedDir, "auth-presence.js"),
-      `import fs from "node:fs";
-fs.writeFileSync(${JSON.stringify(authProbeMarker)}, "loaded");
-export function hasAuth() { return false; }
-`,
-    );
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "");
     const selected = writeOwner("fixture-session-owner", "fixture-chat");
@@ -288,12 +274,10 @@ export function hasAuth() { return false; }
       packageManifest: { setupFeatures: { legacySessionSurfaces: true } },
     });
     const prepared = prepareLegacySessionSurfaces({ config, env });
-    expect(fs.existsSync(authProbeMarker)).toBe(false);
+    expect(fs.existsSync(unrelated.marker("auth-probe"))).toBe(false);
     expect(prepared.failures).toEqual([]);
     expect(prepared.surfaces).toHaveLength(1);
-    expect(Object.isFrozen(prepared)).toBe(true);
-    expect(Object.isFrozen(prepared.surfaces)).toBe(true);
-    expect(Object.isFrozen(prepared.failures)).toBe(true);
+    expect([prepared, prepared.surfaces, prepared.failures].every(Object.isFrozen)).toBe(true);
     const { result, migrated } = await migrate(config, "fixture-group:Legacy-Room", "legacy-group");
 
     expect(result.warnings).toEqual([]);
@@ -302,12 +286,8 @@ export function hasAuth() { return false; }
     expect(migrated["agent:main:fixture-chat:group:legacy-room"]).toMatchObject({
       sessionId: "legacy-group",
     });
-    expect(fs.existsSync(selected.marker("sidecar"))).toBe(true);
-    expect(fs.existsSync(selected.marker("setup-plugin"))).toBe(false);
-    expect(fs.existsSync(selected.marker("full"))).toBe(false);
-    expect(fs.existsSync(blocked.marker("sidecar"))).toBe(false);
-    expect(fs.existsSync(blocked.marker("setup-plugin"))).toBe(false);
-    expect(fs.existsSync(blocked.marker("full"))).toBe(false);
+    expect(importedSurfaces(selected)).toEqual([true, false, false]);
+    expect(importedSurfaces(blocked)).toEqual([false, false, false]);
   });
 
   it("loads an explicitly enabled owner without a channel presence signal", async () => {
@@ -331,9 +311,7 @@ export function hasAuth() { return false; }
     expect(migrated["agent:main:enabled-only-chat:group:enabled-only"]).toMatchObject({
       sessionId: "enabled-only-group",
     });
-    expect(fs.existsSync(fixture.marker("sidecar"))).toBe(true);
-    expect(fs.existsSync(fixture.marker("setup-plugin"))).toBe(false);
-    expect(fs.existsSync(fixture.marker("full"))).toBe(false);
+    expect(importedSurfaces(fixture)).toEqual([true, false, false]);
   });
 
   it("defers reinterpretation when a selected owner's sidecar has no canonicalizer", async () => {
@@ -363,15 +341,11 @@ export const legacySessionSurface = {
       "deferred-group",
     );
 
-    expect(result.warnings).toContainEqual(
-      expect.stringContaining(
-        'Deferred legacy session-key migration for channel owner "broken-session-owner"',
+    expect(result.warnings).toEqual([
+      expect.stringMatching(
+        /Deferred legacy session-key migration for channel owner "broken-session-owner".*must declare canonicalizeLegacySessionKey/,
       ),
-    );
-    expect(result.warnings).toContainEqual(
-      expect.stringContaining("must declare canonicalizeLegacySessionKey"),
-    );
-    expect(result.warnings).toHaveLength(1);
+    ]);
     expect(preserved["fixture-group:Keep-Raw"]).toMatchObject({
       sessionId: "deferred-group",
     });

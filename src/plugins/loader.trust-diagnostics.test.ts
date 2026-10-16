@@ -13,7 +13,7 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
-import { writeJson } from "./loader-suite.test-support.js";
+import { pluginConfig, writeJson } from "./loader-suite.test-support.js";
 import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -52,10 +52,23 @@ const agentMail = { pluginId: "agentmail", packageName: "@agentmail/agentmail", 
 function trustCase(
   name: string,
   reason: string,
-  trusted: boolean,
   options: Omit<TrustCase, "name" | "reason" | "trusted"> = {},
 ): TrustCase {
-  return { name, reason, trusted, ...options };
+  return { name, reason, trusted: reason === "trusted-official", ...options };
+}
+
+function packagedPlugin(
+  definition: Parameters<typeof writePlugin>[0],
+  name: string,
+  version = "1.0.0",
+) {
+  const plugin = writePlugin({ filename: "index.cjs", ...definition });
+  writePluginMetadata({
+    dir: plugin.dir,
+    id: plugin.id,
+    packageJson: { name, version, openclaw: { extensions: ["./index.cjs"] } },
+  });
+  return plugin;
 }
 
 afterEach(async () => {
@@ -72,20 +85,15 @@ afterAll(cleanupPluginLoaderFixturesForTest);
 describe("recorded plugin trust diagnostics", () => {
   it("warns once across registry reloads and again for changed provenance or a restarted Gateway", async () => {
     useNoBundledPlugins();
-    const first = writePlugin({ id: "unverified-reload", filename: "index.cjs", registration: "" });
-    const replacement = writePlugin({ id: first.id, filename: "index.cjs", registration: "" });
+    const first = packagedPlugin(
+      { id: "unverified-reload", registration: "" },
+      "@vendor/unverified-reload",
+    );
+    const replacement = packagedPlugin(
+      { id: first.id, registration: "" },
+      "@vendor/unverified-reload",
+    );
     const other = writePlugin({ id: "unverified-other", registration: "" });
-    for (const plugin of [first, replacement]) {
-      writePluginMetadata({
-        dir: plugin.dir,
-        id: plugin.id,
-        packageJson: {
-          name: `@vendor/${plugin.id}`,
-          version: "1.0.0",
-          openclaw: { extensions: ["./index.cjs"] },
-        },
-      });
-    }
     const warn = vi.fn();
     const load = (plugin = first, activate = true, install?: PluginInstallRecord) => {
       const registry = loadOpenClawPlugins({
@@ -148,21 +156,21 @@ describe("recorded plugin trust diagnostics", () => {
   });
 
   it.each([
-    trustCase("official install through a symlinked state root", "trusted-official", true, {
+    trustCase("official install through a symlinked state root", "trusted-official", {
       symlinkedStateRoot: true,
     }),
-    trustCase("legacy ClawHub spec", "provenance-missing", false, {
+    trustCase("legacy ClawHub spec", "provenance-missing", {
       override: { source: "clawhub", spec: `clawhub:${defaultPackageName}@2026.8.2` },
       repair: true,
     }),
-    trustCase("missing provenance", "provenance-missing", false, { override: { spec: undefined } }),
-    trustCase("conflicting identity", "provenance-invalid", false, {
+    trustCase("missing provenance", "provenance-missing", { override: { spec: undefined } }),
+    trustCase("conflicting identity", "provenance-invalid", {
       override: { resolvedName: "@vendor/diffs" },
     }),
-    trustCase("local npm archive", "origin-path", false, {
+    trustCase("local npm archive", "origin-path", {
       override: { artifactKind: "npm-pack" },
     }),
-    trustCase("official AgentMail ClawHub install", "trusted-official", true, {
+    trustCase("official AgentMail ClawHub install", "trusted-official", {
       ...agentMail,
       override: {
         source: "clawhub",
@@ -172,28 +180,23 @@ describe("recorded plugin trust diagnostics", () => {
         clawhubChannel: "official",
       },
     }),
-    trustCase("legacy AgentMail ClawHub install", "provenance-missing", false, {
+    trustCase("legacy AgentMail ClawHub install", "provenance-missing", {
       ...agentMail,
       override: { source: "clawhub", spec: "clawhub:@agentmail/agentmail@0.2.1" },
       repair: true,
       repairTrusted: false,
     }),
-    trustCase(
-      "legacy AgentMail ClawHub install with matching integrity",
-      "provenance-missing",
-      false,
-      {
-        ...agentMail,
-        override: {
-          source: "clawhub",
-          spec: "clawhub:@agentmail/agentmail@0.2.1",
-          integrity: agentMailIntegrity,
-        },
-        repair: true,
-        repairTrusted: true,
+    trustCase("legacy AgentMail ClawHub install with matching integrity", "provenance-missing", {
+      ...agentMail,
+      override: {
+        source: "clawhub",
+        spec: "clawhub:@agentmail/agentmail@0.2.1",
+        integrity: agentMailIntegrity,
       },
-    ),
-    trustCase("unendorsed AgentMail npm namesake", "provenance-invalid", false, agentMail),
+      repair: true,
+      repairTrusted: true,
+    }),
+    trustCase("unendorsed AgentMail npm namesake", "provenance-invalid", agentMail),
   ])(
     "inspection and registration agree for $name",
     async ({
@@ -209,24 +212,18 @@ describe("recorded plugin trust diagnostics", () => {
     }) => {
       useNoBundledPlugins();
       const stateDir = fs.realpathSync(makePluginLoaderTempDir());
-      const plugin = writePlugin({
-        id: pluginId,
-        dir: path.join(stateDir, "extensions", pluginId),
-        filename: "index.cjs",
-        body: `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
+      const plugin = packagedPlugin(
+        {
+          id: pluginId,
+          dir: path.join(stateDir, "extensions", pluginId),
+          registration: `
           api.runtime.state.openKeyedStore({ namespace: "proof", maxEntries: 2 });
           api.runtime.state.openChannelIngressQueue({ accountId: "default" });
-        } };`,
-      });
-      writePluginMetadata({
-        dir: plugin.dir,
-        id: plugin.id,
-        packageJson: {
-          name: packageName,
-          version,
-          openclaw: { extensions: ["./index.cjs"] },
+        `,
         },
-      });
+        packageName,
+        version,
+      );
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
         let installPath = plugin.dir;
         if (symlinkedStateRoot) {
@@ -370,13 +367,7 @@ describe("recorded plugin trust diagnostics", () => {
         runId: "unexpected-hook-run",
       }));
       const registry = loadOpenClawPlugins({
-        config: {
-          plugins: {
-            allow: plugins.map(({ id }) => id),
-            load: { paths: plugins.map(({ file }) => file) },
-            slots: { memory: "none" },
-          },
-        },
+        config: pluginConfig(...plugins),
         cache: false,
         runtimeOptions: { hooks: { dispatchHookAgentTurn } },
       });

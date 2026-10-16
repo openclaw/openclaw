@@ -20,7 +20,12 @@ import type {
 import { isPluginRegistryLoadInFlight, resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
-import { pluginConfig, isolatedLoaderEnv, writeJson } from "./loader-suite.test-support.js";
+import {
+  pluginConfig,
+  isolatedLoaderEnv,
+  writeJson,
+  expectPlugin,
+} from "./loader-suite.test-support.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -51,6 +56,15 @@ const families = [
   "realtimeVoiceProviders",
 ] as const;
 const contextSymbol = Symbol.for("fixture.capability-context");
+const providerRequest = { cfg: {}, providerConfig: {}, timeoutMs: 1000 };
+
+function forbidBroadRuntime(message: string) {
+  return vi
+    .spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics")
+    .mockImplementation(() => {
+      throw new Error(message);
+    });
+}
 
 function createContext(): PluginCapabilityCatalogHostContext {
   const unavailable = () => {
@@ -90,12 +104,7 @@ async function withFactoryPlugin(
     id: "factory-owner",
     dir: path.join(root, "plugin"),
     filename: "index.cjs",
-    body: `module.exports = {
-      id: "factory-owner",
-      register(api) {
-        ${register}
-      }
-    };`,
+    registration: register,
   });
   if (manifest) {
     writeJson(path.join(plugin.dir, "openclaw.plugin.json"), {
@@ -104,17 +113,8 @@ async function withFactoryPlugin(
       ...manifest,
     });
   }
-  await withEnvAsync(
-    isolatedLoaderEnv(root),
-    async () =>
-      await run(
-        {
-          config: pluginConfig(plugin),
-          pluginSdkResolution: "src",
-          activate: false,
-        },
-        root,
-      ),
+  await withEnvAsync(isolatedLoaderEnv(root), async () =>
+    run({ config: pluginConfig(plugin), pluginSdkResolution: "src", activate: false }, root),
   );
 }
 
@@ -179,11 +179,9 @@ it("retains the creating cache generation when broad services initialize later",
 describe("capability factory registration", () => {
   it("composes native capability factories with a restricted runtime", async () => {
     await withFactoryPlugin(registerFactories, (options) => {
-      const resolveRuntime = vi
-        .spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics")
-        .mockImplementation(() => {
-          throw new Error("restricted registration must not load the broad runtime");
-        });
+      const resolveRuntime = forbidBroadRuntime(
+        "restricted registration must not load the broad runtime",
+      );
       const registry = loadOpenClawPluginsWithInternalOverrides(
         { ...options, cache: false },
         {
@@ -201,9 +199,7 @@ describe("capability factory registration", () => {
           moduleLoader: { installNativeSdkResolver: false, loaderFilename: import.meta.url },
         },
       );
-      expect(registry.plugins).toContainEqual(
-        expect.objectContaining({ id: "factory-owner", status: "loaded" }),
-      );
+      expectPlugin(registry, { id: "factory-owner", status: "loaded" });
       expect(registryContainsRuntimePluginIds(registry, ["factory-owner"])).toBe(true);
       expect(registry.services.map((entry) => entry.service.id)).toEqual(["factory-lifecycle"]);
       for (const family of families) {
@@ -218,13 +214,7 @@ describe("capability factory registration", () => {
           set: undefined,
         });
       }
-      expect(
-        registry.speechProviders[0]!.provider.isConfigured({
-          cfg: {},
-          providerConfig: {},
-          timeoutMs: 1000,
-        }),
-      ).toBe(true);
+      expect(registry.speechProviders[0]!.provider.isConfigured(providerRequest)).toBe(true);
       expect(resolveRuntime).not.toHaveBeenCalled();
     });
   });
@@ -262,12 +252,9 @@ describe("capability factory registration", () => {
         const bound = getPluginRuntimeLoadContext(registry)!;
         const prepared = { ...authored, manifestRegistry: bound.manifestRegistry };
         expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBe(registry);
-        expect(loadOpenClawPlugins(prepared) === registry).toBe(true);
-        expect(resolveCompatibleRuntimePluginRegistry(authored) === registry).toBe(true);
-        expect(resolveCompatibleRuntimePluginRegistry(prepared) === registry).toBe(true);
-        expect(registrations).toBe(1);
+        expect(loadOpenClawPlugins(prepared)).toBe(registry);
         expect(loadOpenClawPlugins(authored)).toBe(registry);
-        expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBe(registry);
+        expect(registrations).toBe(1);
         const changedManifest = {
           ...bound.manifestRegistry!,
           plugins: bound.manifestRegistry!.plugins.map((plugin) =>
@@ -319,10 +306,9 @@ describe("capability factory registration", () => {
     await withFactoryPlugin(
       register,
       (options, root) => {
-        const resolveRuntime = vi.spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics");
-        resolveRuntime.mockImplementation(() => {
-          throw new Error("cold external auth must use native factory composition");
-        });
+        const resolveRuntime = forbidBroadRuntime(
+          "cold external auth must use native factory composition",
+        );
         const agentDir = path.join(root, "state", "agents", "main", "agent");
         const store = loadAuthProfileStoreForRuntime(agentDir, {
           config: options.config,
@@ -398,13 +384,11 @@ describe("capability factory registration", () => {
           ...options,
           capabilityCatalogContext: createContext(),
         });
-        expect(registry.plugins).toContainEqual(
-          expect.objectContaining({
-            id: "factory-owner",
-            status: "error",
-            error: expect.stringContaining("must be synchronous"),
-          }),
-        );
+        expectPlugin(registry, {
+          id: "factory-owner",
+          status: "error",
+          error: expect.stringContaining("must be synchronous"),
+        });
         for (const family of families) {
           expect(registry[family]).toEqual([]);
         }
@@ -453,7 +437,7 @@ it.each([false, true])(
               capabilityCatalog: { family: "speechProviders", context: createContext() },
             }),
           );
-        const context = { cfg: {}, providerConfig: {}, timeoutMs: 1000 };
+        const context = providerRequest;
         try {
           const retained = priorSuccess ? load().speechProviders[0]?.provider : undefined;
           const stream = await retained?.streamSynthesize?.({
