@@ -1108,7 +1108,7 @@ describe("createGatewayCloseHandler", () => {
     const chatRunState = createChatRunState();
     const run = chatRunState.getOrCreate("run-1");
     run.buffer = "partial reply";
-    run.sentChatDelta = true;
+    run.deltaSentAt = Date.now();
     run.assistantScope = {
       itemId: "assistant-1",
       prefix: "",
@@ -1118,7 +1118,7 @@ describe("createGatewayCloseHandler", () => {
     chatRunState.takeBufferDelta("run-1", "par");
     run.agentText = {
       assistant: {
-        sent: true,
+        lastSentAt: Date.now(),
         bufferedEvent: { sessionKey: "session-1", payload: {} as never },
       },
     };

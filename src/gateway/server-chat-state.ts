@@ -76,7 +76,7 @@ export type ChatRunPlanSnapshot = {
 };
 
 type ChatRunAgentTextState = {
-  sent?: true;
+  lastSentAt?: number;
   bufferedEvent?: BufferedAgentEvent;
   snapshot?: { text: string; itemId?: string };
 };
@@ -100,7 +100,7 @@ type ChatRunRecord = assistantText.ChatRunBufferState & {
   planSnapshot?: ChatRunPlanSnapshot;
   progressSnapshot?: ChatRunProgressSnapshot;
   canvasBlocks?: ChatCanvasBlock[];
-  sentChatDelta?: true;
+  deltaSentAt?: number;
   agentText?: Partial<
     Record<"assistant" | "thinking" | "preamble" | "answer_candidate", ChatRunAgentTextState>
   >;
@@ -230,7 +230,7 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     delete record.planSnapshot;
     delete record.progressSnapshot;
     delete record.canvasBlocks;
-    delete record.sentChatDelta;
+    delete record.deltaSentAt;
     delete record.assistantScope;
     delete record.assistantScopeOffset;
     delete record.assistantOccurrenceId;

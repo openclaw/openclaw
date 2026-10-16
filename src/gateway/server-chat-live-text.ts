@@ -237,8 +237,6 @@ export function scheduleLiveTextFlush(
     existing.flush = flush;
     return;
   }
-  // The first unsent update owns a full window, including after an idle gap.
-  // Later appends share its deadline instead of inheriting the last send's age.
   const timer = setSafeTimeout(() => {
     const pending = run.pendingTextFlushes?.[stream];
     if (!pending || pending.timer !== timer) {

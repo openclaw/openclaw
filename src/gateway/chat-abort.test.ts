@@ -64,11 +64,11 @@ function createOps(params: {
   chatRunState.updateBuffer(runId, { delta: buffer ?? "" });
   chatRunState.takeBufferDelta(runId, buffer ?? "");
   Object.assign(chatRunState.getOrCreate(runId), {
-    sentChatDelta: true,
+    deltaSentAt: Date.now(),
     assistantScope: { itemId: "assistant-1", prefix: "", boundaryNewlines: 0, separatorLength: 0 },
     agentText: {
       assistant: {
-        sent: true,
+        lastSentAt: Date.now(),
         bufferedEvent: {
           payload: {
             runId,
@@ -417,7 +417,7 @@ describe("abortChatRunById", () => {
 
     expectRunAborted({ result, entry, ops, runId });
     expect(ops.chatRunState.runs.get(runId)?.buffer).toBeUndefined();
-    expect(ops.chatRunState.runs.get(runId)?.sentChatDelta).toBeUndefined();
+    expect(ops.chatRunState.runs.get(runId)?.deltaSentAt).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.assistantScope).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.display).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.agentText).toBeUndefined();

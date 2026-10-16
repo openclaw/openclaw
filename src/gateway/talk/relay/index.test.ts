@@ -1152,7 +1152,7 @@ describe("talk realtime gateway relay", () => {
       buffer: "partial answer",
       agentText: {
         assistant: {
-          sent: true,
+          lastSentAt: Date.now(),
           bufferedEvent: {
             payload: {
               runId: "run-1",
