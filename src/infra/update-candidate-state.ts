@@ -366,8 +366,8 @@ export async function readUpdateStateSchemaVersionsInProcess(
     if (file === shared && input.config.database?.engine === "postgres") {
       const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
       const result = await readUpdatePostgresState(input, files);
-      for (const [key, discovery] of result.files) {
-        files.set(key, discovery);
+      for (const [key, entry] of result.files) {
+        files.set(key, entry);
       }
       inspected.set(identity, result.version);
       continue;
@@ -446,6 +446,7 @@ export async function readUpdateDatabaseGenerationsIsolated(
     signal?: AbortSignal;
     acquisition?: UpdateRecoveryCaptureAcquisition;
     retryAdvice?: boolean;
+    pluginOwners?: import("./database-engine/port-provider-descriptor.js").DatabasePortPluginOwners;
   } = {},
 ): Promise<UpdateDatabaseGenerations> {
   const scope = getOpenClawDatabaseMaintenanceScope();
@@ -472,6 +473,7 @@ export async function readUpdateDatabaseGenerationsIsolated(
         input: {
           mode: "database-generations",
           paths,
+          ...(options.pluginOwners ? { pluginOwners: options.pluginOwners } : {}),
           stateDir: resolveStateDir(sourceEnv),
           config: {},
         },

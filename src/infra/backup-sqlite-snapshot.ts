@@ -204,8 +204,8 @@ export async function discoverBackupDatabasePaths(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<string[]> {
   if (isMainThread && params.config.database?.engine === "postgres") {
-    const { discoverPostgresBackupPaths } = await import("./backup-database-discovery.js");
-    return discoverPostgresBackupPaths(params);
+    const { preparePostgresBackupDiscovery } = await import("./backup-database-discovery.js");
+    return (await preparePostgresBackupDiscovery(params)).paths;
   }
   const discovered = await collectStateDatabasePaths(params);
   const paths = [...discovered.values()].flatMap((database) => database.spellings);

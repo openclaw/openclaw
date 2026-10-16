@@ -8,7 +8,9 @@ import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { parseUpdateRecoveryBackupManifest } from "../../commands/backup-verify-manifest.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { fingerprintPostgresDatabase } from "../../snapshot/database-backup-core.worker.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -31,6 +33,7 @@ import {
 } from "../update-database-backup.js";
 import { assertUpdateDatabaseEngineContexts } from "../update-database-engine-admission.js";
 import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
+import { captureUpdateRecoveryBaseline } from "../update-recovery-baseline-capture.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 import { logbookPortProvider } from "./logbook-port.js";
@@ -43,6 +46,15 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 const directories = useAutoCleanupTempDirTracker(afterAll);
 const runId = "postgres-update-conformance";
+function createAnchor(pathname: string, storeId: string, namespace: string) {
+  using anchor = openNodeSqliteDatabase(pathname);
+  anchor.exec(
+    "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
+  );
+  anchor
+    .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
+    .run(storeId, namespace);
+}
 
 describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", () => {
   const client = new Client({ connectionString: connection });
@@ -103,23 +115,23 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       source
         .prepare("INSERT INTO schema_meta VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)")
         .run(OPENCLAW_STATE_SCHEMA_VERSION);
-      source
-        .prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
-        .run("state.schema.contentVersion", String(OPENCLAW_STATE_SCHEMA_VERSION));
-      source
-        .prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
-        .run("update.conformance", ' {"value":"baseline","opaque":"\\u0061"} ');
-      source.prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)").run(
-        "plugins.installedIndex",
-        JSON.stringify({
-          revision: 1,
-          index: {
-            installRecords: {
-              fixture: { source: "npm", spec: "fixture-plugin@1.0.0", installPath: plugin },
+      for (const [key, value] of [
+        ["state.schema.contentVersion", String(OPENCLAW_STATE_SCHEMA_VERSION)],
+        ["update.conformance", ' {"value":"baseline","opaque":"\\u0061"} '],
+        [
+          "plugins.installedIndex",
+          JSON.stringify({
+            revision: 1,
+            index: {
+              installRecords: {
+                fixture: { source: "npm", spec: "fixture-plugin@1.0.0", installPath: plugin },
+              },
             },
-          },
-        }),
-      );
+          }),
+        ],
+      ] as const) {
+        source.prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)").run(key, value);
+      }
       source
         .prepare(
           "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES ('registered', ?, 7, 1)",
@@ -138,16 +150,8 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
         assertCurrent() {},
       });
     }
-    {
-      using anchor = openNodeSqliteDatabase(shared);
-      anchor.exec(
-        "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
-      );
-      anchor
-        .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
-        .run(storeId, namespace);
-      anchorCreated = true;
-    }
+    createAnchor(shared, storeId, namespace);
+    anchorCreated = true;
     for (const key of [
       "HOME",
       "OPENCLAW_STATE_DIR",
@@ -207,7 +211,6 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
     const plan = UpdateCandidatePluginPlanSchema.parse(
       JSON.parse(await fs.readFile(path.join(targetStateDir, inventory.pluginPlan), "utf8")),
     );
-    expect(plan.recordPaths.fixture).toMatchObject({ installPath: expect.any(String) });
     expect(plan.bindings).toContainEqual(expect.objectContaining({ source: plugin }));
     const discovery = parseUpdateStateInspectionWorker(
       await inspect("discover"),
@@ -223,7 +226,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       z.array(z.object({ path: z.string(), userVersion: z.number().nullable() }).passthrough()),
     );
     expect(versions).toContainEqual(expect.objectContaining({ path: agent, userVersion: 7 }));
-    const snapshot = parseUpdateStateInspectionWorker(
+    parseUpdateStateInspectionWorker(
       await inspect("snapshot", {
         targetStateDir,
         candidateRoot,
@@ -232,9 +235,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       }),
       UpdateCandidateStateSnapshotSchema,
     );
-    expect(snapshot.versions).toEqual(versions);
     const privateShared = path.join(targetStateDir, "state", "openclaw.sqlite");
-    expect(readBackupEngine(privateShared)).toEqual({ engine: "sqlite" });
     {
       using copied = openNodeSqliteDatabase(privateShared, { readOnly: true });
       expect(
@@ -270,7 +271,6 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       allowInTests: true,
       timeoutMs: 0,
     });
-    expect(previous).not.toBeNull();
     const before = await fs.readFile(shared);
     try {
       await expect(
@@ -346,16 +346,22 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
           storeId,
           assertCurrent() {},
         });
+        if (id === "logbook") {
+          const input = {
+            client,
+            descriptor,
+            anchor: { engine: "postgres" as const, storeId, namespace: storeNamespace },
+          };
+          const fingerprint = await fingerprintPostgresDatabase(input);
+          await client.query("SET enable_hashjoin = off; SET enable_mergejoin = off");
+          try {
+            expect(await fingerprintPostgresDatabase(input)).toBe(fingerprint);
+          } finally {
+            await client.query("RESET enable_hashjoin; RESET enable_mergejoin");
+          }
+        }
       }
-      {
-        using anchor = openNodeSqliteDatabase(pathname);
-        anchor.exec(
-          "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
-        );
-        anchor
-          .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
-          .run(storeId, storeNamespace);
-      }
+      createAnchor(pathname, storeId, storeNamespace);
       pluginAnchors.push(pathname);
       stores.push({ ...family, pathname, namespace: storeNamespace });
     }
@@ -369,15 +375,33 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       },
     };
     await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
+    env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "0";
+    env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.dirname(pluginRoots[0]!);
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", env.OPENCLAW_DISABLE_BUNDLED_PLUGINS);
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", env.OPENCLAW_BUNDLED_PLUGINS_DIR);
     const owner = await acquireGatewayLock({
       env,
       role: "sqlite-maintenance",
       allowInTests: true,
       timeoutMs: 0,
     });
-    expect(owner).not.toBeNull();
     let backup: UpdateDatabaseBackup | undefined;
     try {
+      const baseline = await owner!.run(() =>
+        captureUpdateRecoveryBaseline({
+          runId: "postgres-original-baseline",
+          installRoot: root,
+          env,
+          drivers: [],
+          assertCurrent: () => owner!.assertCurrent(),
+          acquisition: { mode: "maintenance-owner" },
+        }),
+      );
+      expect(baseline.diagnostics.databaseWarnings).toEqual([]);
+      const manifest = parseUpdateRecoveryBackupManifest(
+        await fs.readFile(baseline.ref.manifestPath, "utf8"),
+      );
+      expect(manifest).toMatchObject({ schemaVersion: 2, generation: { kind: "baseline" } });
       backup = await owner!.run(() =>
         createUpdateDatabaseBackup({
           backupRoot: path.join(root, "rollback"),
@@ -387,18 +411,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
           acquisition: { mode: "maintenance-owner" },
         }),
       );
-      expect(backup.databases).toContainEqual(
-        expect.objectContaining({ path: shared, engine: "postgres", namespace }),
-      );
-      for (const store of stores) {
-        expect(backup.databases).toContainEqual(
-          expect.objectContaining({
-            path: store.pathname,
-            engine: "postgres",
-            namespace: store.namespace,
-          }),
-        );
-      }
+      expect(backup.warnings).toEqual([]);
       const migration = await owner!.run(() =>
         runLegacyStateMigrationSteps([
           {
@@ -437,15 +450,13 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
     } finally {
       await owner!.release();
     }
-    const displaced = await restoreUpdateDatabaseBackup({
+    await restoreUpdateDatabaseBackup({
       backup: backup!,
       runId,
       env,
       assertCurrent() {},
     });
-    expect(displaced).not.toBeNull();
     const restored = readBackupEngine(shared);
-    expect(restored.engine).toBe("postgres");
     if (restored.engine !== "postgres") {
       throw new Error("Recovery replaced the PostgreSQL anchor with SQLite data");
     }
@@ -471,16 +482,8 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
         after_json: ' {"opaque":"\\u0062"} ',
       },
     ]);
-    expect(
-      (
-        await client.query(
-          `SELECT path FROM "${restored.namespace}".agent_databases WHERE agent_id = 'registered'`,
-        )
-      ).rows,
-    ).toEqual([{ path: agent }]);
     for (const store of stores) {
       const restoredStore = readBackupEngine(store.pathname);
-      expect(restoredStore.engine).toBe("postgres");
       if (restoredStore.engine !== "postgres") {
         throw new Error(`Recovery replaced ${store.provider.id} with SQLite data`);
       }

@@ -1,19 +1,28 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { withArtifactPreservingStateReads } from "../../state/artifact-preserving-state-reads.js";
+import type { DatabasePortProvider } from "./port-descriptor.js";
 import { requireDatabasePortProvider } from "./port-provider.js";
+
+export type DatabasePortPluginOwners = Record<
+  string,
+  NonNullable<Parameters<DatabasePortProvider["loadDescriptor"]>[0]>
+>;
 
 /** Offline operations retain the selected plugin's source/build family for owner callbacks. */
 export async function loadDatabasePortDescriptor(
   id: string,
   config: OpenClawConfig = {},
-  version?: number,
+  options: { version?: number; pluginOwners?: DatabasePortPluginOwners } = {},
 ) {
+  const { pluginOwners, version } = options;
   const provider = requireDatabasePortProvider(id);
   const owner = provider.requiresPluginOwner
-    ? withArtifactPreservingStateReads(() =>
-        resolvePluginMetadataSnapshot({ config }).byPluginId.get(id),
-      )
+    ? pluginOwners
+      ? pluginOwners[id]
+      : withArtifactPreservingStateReads(() =>
+          resolvePluginMetadataSnapshot({ config }).byPluginId.get(id),
+        )
     : undefined;
   return provider.loadDescriptor(owner, version);
 }

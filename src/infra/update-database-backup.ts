@@ -58,6 +58,17 @@ export const UpdateDatabaseBackupSchema = z.object({
       exportDirectory: z.string().optional(),
     }),
   ),
+  pluginOwners: z
+    .record(
+      z.string(),
+      z.object({
+        id: z.string(),
+        rootDir: z.string(),
+        source: z.string(),
+        origin: z.enum(["bundled", "global", "workspace", "config"]),
+      }),
+    )
+    .optional(),
   missingPaths: z.array(z.string()),
   sourcePaths: z.array(z.string()),
   sourceGenerations: z.record(z.string(), z.string().nullable()),
@@ -87,6 +98,7 @@ type BackupInput = {
   /** Native migration owns the stopped Gateway until Doctor takes custody. */
   stopped?: boolean;
   postgresOffline?: boolean;
+  pluginOwners?: UpdateDatabaseBackup["pluginOwners"];
 };
 type InspectionPlan = z.infer<typeof UpdateStateSchemaInspectionPlanSchema>;
 
@@ -94,7 +106,6 @@ async function loadUpdateDatabaseBackupRuntime() {
   const [{ discoverBackupDatabasePaths }, { readBackupEngine }] = await Promise.all([
     import("./backup-sqlite-snapshot.js"),
     import("../snapshot/database-backup.js"),
-    import("./update-database-restore-postgres.js"),
   ]);
   return { discoverBackupDatabasePaths, readBackupEngine };
 }
@@ -311,7 +322,9 @@ export async function createUpdateDatabaseBackupInProcess(
   );
   const readGeneration = async (file: string) => {
     try {
-      return (await readUpdatePhysicalDatabaseGenerations([file]))[file] ?? undefined;
+      return (
+        (await readUpdatePhysicalDatabaseGenerations([file], input.pluginOwners))[file] ?? undefined
+      );
     } catch (error) {
       warnings.push(
         `Database write generation unavailable for ${file}: ${formatErrorMessageWithCode(error)}`,
@@ -371,6 +384,7 @@ export async function createUpdateDatabaseBackupInProcess(
         directory: exportDirectory,
         profile: "exact",
         config: input.config,
+        pluginOwners: input.pluginOwners,
         assertCurrent: () => {},
       });
       postgres = { ...engine, exportDirectory };
@@ -413,6 +427,7 @@ export async function createUpdateDatabaseBackupInProcess(
     sourceGenerations,
     databaseOwners: inventory.databaseOwners,
     warnings,
+    ...(input.pluginOwners ? { pluginOwners: input.pluginOwners } : {}),
   };
 }
 
@@ -436,7 +451,11 @@ export async function createUpdateDatabaseBackup({
   const controller = new AbortController();
   const { discoverBackupDatabasePaths, readBackupEngine } =
     await prepareUpdateDatabaseBackupRuntime();
-  const postgresPaths = (await discoverBackupDatabasePaths(input)).filter(
+  const prepared =
+    input.config.database?.engine === "postgres"
+      ? await (await import("./backup-database-discovery.js")).preparePostgresBackupDiscovery(input)
+      : { paths: await discoverBackupDatabasePaths(input), pluginOwners: undefined };
+  const postgresPaths = prepared.paths.filter(
     (file) => readBackupEngine(file).engine === "postgres",
   );
   const additionalPaths = [...(input.additionalPaths ?? []), ...postgresPaths].map((file) =>
@@ -458,6 +477,7 @@ export async function createUpdateDatabaseBackup({
       // Each SQLite reader owns its token-protected scratch beneath this private backup directory.
       const workerInput = {
         ...input,
+        ...(prepared.pluginOwners ? { pluginOwners: prepared.pluginOwners } : {}),
         preserveSourceArtifacts: input.stopped || input.preserveSourceArtifacts,
         additionalPaths,
         additionalFiles,

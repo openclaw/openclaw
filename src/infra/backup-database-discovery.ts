@@ -1,15 +1,19 @@
 import { parentPort, workerData } from "node:worker_threads";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { discoverBackupDatabasePaths } from "./backup-sqlite-snapshot.js";
 import { resolveDatabaseEngineInput } from "./database-engine/config.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
+import type { DatabasePortPluginOwners } from "./database-engine/port-provider-descriptor.js";
+import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 
 type Input = Parameters<typeof discoverBackupDatabasePaths>[0];
+type Reply = { paths: string[]; pluginOwners: DatabasePortPluginOwners };
 
 /** Plugin discovery may read shared state, so PostgreSQL discovery belongs in a worker. */
-export async function discoverPostgresBackupPaths(input: Input) {
-  const pool = new WorkerTaskPool<Input, string[]>({
-    workerUrl: new URL(import.meta.url),
+export async function preparePostgresBackupDiscovery(input: Input) {
+  const pool = new WorkerTaskPool<Input, Reply>({
+    workerUrl: captureRuntimeWorkerSource(new URL(import.meta.url)).moduleUrl,
     maxWorkers: 1,
     workerOptions: { workerData: { databaseDiscovery: true } },
   });
@@ -23,15 +27,22 @@ export async function discoverPostgresBackupPaths(input: Input) {
 
 if (parentPort && workerData?.databaseDiscovery === true) {
   const { serveWorkerTasks } = await import("./worker-task-server.js");
-  serveWorkerTasks<string[]>(async (value) => {
+  serveWorkerTasks<Reply>(async (value) => {
     // SAFETY: The private discovery host supplies this typed, serializable input.
     const input = value as Input;
     const selected = await resolveDatabaseEngineInput(input.config, {
       ...process.env,
       ...input.env,
     });
-    return withDatabaseEngineSelection({ input: selected }, () =>
-      discoverBackupDatabasePaths(input),
-    );
+    return withDatabaseEngineSelection({ input: selected }, async () => {
+      const paths = await discoverBackupDatabasePaths(input);
+      const pluginOwners = Object.fromEntries(
+        resolvePluginMetadataSnapshot(input).plugins.map(({ id, rootDir, source, origin }) => [
+          id,
+          { id, rootDir, source, origin },
+        ]),
+      );
+      return { paths, pluginOwners };
+    });
   });
 }
