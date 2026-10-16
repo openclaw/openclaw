@@ -550,7 +550,6 @@ extensions/msteams/src/feedback-invoke.ts	2
 extensions/msteams/src/file-consent.ts	1
 extensions/msteams/src/graph.ts	2
 extensions/msteams/src/inbound.ts	1
-extensions/msteams/src/monitor-handler/inbound-dispatch.ts	1
 extensions/msteams/src/monitor-handler/inbound-facts.ts	1
 extensions/msteams/src/monitor.ts	5
 extensions/msteams/src/msteams-ingress.ts	1
