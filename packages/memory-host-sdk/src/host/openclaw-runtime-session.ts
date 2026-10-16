@@ -218,6 +218,7 @@ export {
 } from "../../../../src/plugin-sdk/session-store-runtime.js";
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
+export { prepareAssistantTranscriptText } from "../../../../src/shared/chat-message-content.js";
 
 /**
  * Returns an opaque revision that changes for every canonical transcript mutation.

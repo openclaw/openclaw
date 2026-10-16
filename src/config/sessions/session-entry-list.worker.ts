@@ -1,4 +1,4 @@
-import { jsonExtractText } from "../../infra/database-engine/json-values.js";
+import { jsonExtractText, jsonPathValue } from "../../infra/database-engine/json-values.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
@@ -86,7 +86,18 @@ export function readSessionEntryList(
               .distinct()
               .where("input.consumed_event_id", "is", null)
               // Queued inputs without live custody become interrupted in the history owner.
-              .where("input.state", "in", ["queued", "interrupted"]),
+              .where("input.state", "in", ["queued", "interrupted"])
+              .where((eb) =>
+                eb(
+                  jsonPathValue(
+                    database.db,
+                    eb.ref("input.message_json"),
+                    eb.val("$.__openclaw.sessionSendDelivery"),
+                  ),
+                  "is not",
+                  null,
+                ),
+              ),
           ).rows.map((row) => row.session_key);
           return keys.length ? readSelectedSessionEntriesInDatabase(database, keys) : [];
         }

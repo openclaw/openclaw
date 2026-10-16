@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
-import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
+import {
+  isStandaloneRuntimeExecutable,
+  resolveOpenClawCliInvocation,
+} from "../../../cli-invocation.mjs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveBrewOpenClawPath } from "../../infra/brew.js";
 import { hasErrnoCode } from "../../infra/errors.js";
@@ -529,7 +532,8 @@ export async function tryWriteCompletionCache(
   nodeRunner = resolveNodeRunner(),
 ): Promise<"completed" | "failed" | "skipped"> {
   const binPath = path.join(root, "openclaw.mjs");
-  if (!(await pathExists(binPath))) {
+  const standalone = isStandaloneRuntimeExecutable(nodeRunner);
+  if (!standalone && !(await pathExists(binPath))) {
     return "skipped";
   }
 
@@ -537,7 +541,7 @@ export async function tryWriteCompletionCache(
   try {
     const invocation = resolveOpenClawCliInvocation({
       execPath: nodeRunner,
-      entryPath: binPath,
+      entryPath: standalone ? undefined : binPath,
       execArgv: [],
       args: ["completion", "--write-state"],
     });

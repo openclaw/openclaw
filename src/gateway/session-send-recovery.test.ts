@@ -41,7 +41,7 @@ vi.mock("../config/sessions/session-entry-read-maintenance.js", async (importOri
 }));
 vi.mock("../config/sessions/session-pending-input-history.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-pending-input-history.js")>()),
-  listSessionPendingInputs: io.pending,
+  readSessionSendRecoveryPage: io.pending,
 }));
 vi.mock("../config/sessions/session-pending-input-source.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-pending-input-source.js")>()),

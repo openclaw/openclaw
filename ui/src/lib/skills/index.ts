@@ -35,14 +35,9 @@ export type SkillsState = {
   skillsLoading: boolean;
   skillsReport: SkillStatusReport | null;
   skillsError: string | null;
-  skillsFilter: string;
-  skillsStatusFilter: "all" | "ready" | "needs-setup" | "disabled";
-  skillsDetailKey: string | null;
-  skillsDetailTab: "overview" | "card";
   skillOperation: SkillOperation;
   skillEdits: Record<string, string>;
   skillMessages: Record<string, SkillMessage>;
-  clawhubSearchQuery: string;
   clawhubSearchResults: ClawHubSearchResult[] | null;
   clawhubSearchLoading: boolean;
   clawhubSearchError: string | null;

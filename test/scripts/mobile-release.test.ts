@@ -317,9 +317,13 @@ function advanceMain(f: ReturnType<typeof fixture>): string {
 }
 
 describe("mobile release CLI", () => {
-  it.each(["play-store", "internal"])(
-    "builds Android %s from the saved plan without changing Git or pinned metadata",
-    (destination) => {
+  it.each([
+    { destination: "play-store", event: "local" },
+    { destination: "play-store", event: "schedule" },
+    { destination: "internal", event: "schedule" },
+  ])(
+    "builds Android $destination on $event from the saved plan without changing Git or pinned metadata",
+    ({ destination, event }) => {
       const f = fixture("android");
       const pinned = [
         "apps/android/version.json",
@@ -335,12 +339,6 @@ describe("mobile release CLI", () => {
         GITHUB_SHA: f.base,
       };
       if (destination === "internal") {
-        const rejected = f.invoke("run", ["--destination", "play-store"], ci);
-        expect(rejected.status).toBe(1);
-        expect(rejected.stderr).toContain("scheduled events are accepted only");
-        expect(fs.existsSync(f.uploadAudit)).toBe(false);
-      }
-      if (destination === "internal") {
         const rejected = f.invoke("run", ["--destination", destination], {
           ...ci,
           FIXTURE_FIREBASE_PREFLIGHT_FAIL: "1",
@@ -352,7 +350,11 @@ describe("mobile release CLI", () => {
       const result = f.invoke(
         "run",
         destination === "internal" ? ["--destination", destination] : [],
-        destination === "internal" ? { ...ci, FIXTURE_FIREBASE_FAIL: "1" } : {},
+        destination === "internal"
+          ? { ...ci, FIXTURE_FIREBASE_FAIL: "1" }
+          : event === "schedule"
+            ? ci
+            : {},
       );
       if (destination === "internal") {
         expect(result.status).toBe(1);
@@ -425,59 +427,65 @@ describe("mobile release CLI", () => {
     },
   );
 
-  it("uploads the detached dispatch source with generated notes and leaves advanced main untouched", () => {
-    const f = fixture();
-    const advanced = advanceMain(f);
-    const stale = f.invoke("run");
-    expect(stale.status).toBe(1);
-    expect(stale.stderr).toContain("Local main differs from origin/main");
-    expect(fs.existsSync(f.uploadAudit)).toBe(false);
-    git(f.root, "checkout", "--detach", f.base);
-    const ci = {
-      GITHUB_ACTIONS: "true",
-      GITHUB_RUN_ATTEMPT: "1",
-      GITHUB_REF: "refs/heads/main",
-      GITHUB_SHA: f.base,
-    };
-    const result = f.invoke("run", [], ci);
-    expect(result.status, result.stderr).toBe(0);
-    const invalidDispatches: Record<string, string>[] = [
-      { GITHUB_SHA: advanced },
-      { GITHUB_REF: "refs/heads/feature" },
-      { GITHUB_REPOSITORY: "example/fork" },
-      { GITHUB_EVENT_NAME: "push" },
-    ];
-    for (const overrides of invalidDispatches) {
-      const rejected = f.invoke("run", [], { ...ci, ...overrides });
-      expect(rejected.status, rejected.stderr).toBe(1);
-      expect(rejected.stderr).toContain("exact workflow_dispatch commit on openclaw/openclaw main");
-      expect(f.audit()).toHaveLength(1);
+  it.each(["workflow_dispatch", "schedule"])(
+    "uploads the detached %s source with generated notes and leaves advanced main untouched",
+    (event) => {
+      const f = fixture();
+      const advanced = advanceMain(f);
+      const stale = f.invoke("run");
+      expect(stale.status).toBe(1);
+      expect(stale.stderr).toContain("Local main differs from origin/main");
+      expect(fs.existsSync(f.uploadAudit)).toBe(false);
+      git(f.root, "checkout", "--detach", f.base);
+      const ci = {
+        GITHUB_ACTIONS: "true",
+        GITHUB_EVENT_NAME: event,
+        GITHUB_RUN_ATTEMPT: "1",
+        GITHUB_REF: "refs/heads/main",
+        GITHUB_SHA: f.base,
+      };
+      const result = f.invoke("run", [], ci);
+      expect(result.status, result.stderr).toBe(0);
+      const invalidDispatches: Record<string, string>[] = [
+        { GITHUB_SHA: advanced },
+        { GITHUB_REF: "refs/heads/feature" },
+        { GITHUB_REPOSITORY: "example/fork" },
+        { GITHUB_EVENT_NAME: "push" },
+      ];
+      for (const overrides of invalidDispatches) {
+        const rejected = f.invoke("run", [], { ...ci, ...overrides });
+        expect(rejected.status, rejected.stderr).toBe(1);
+        expect(rejected.stderr).toContain(
+          "exact workflow_dispatch or schedule commit on openclaw/openclaw main",
+        );
+        expect(f.audit()).toHaveLength(1);
+        expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
+      }
+      expect(f.audit()).toEqual([
+        expect.objectContaining({
+          sha: f.base,
+          stampedSha: f.base,
+          status: "",
+          remoteMain: advanced,
+          metadata: "# iOS releases\n\n## Unreleased\n\nHistorical notes.\n",
+          notes: "Bug fixes and improvements.",
+          stageOnly: false,
+        }),
+      ]);
+      expect(git(f.remote, "rev-parse", "main")).toBe(advanced);
+      expect(git(f.remote, "rev-parse", uploadRef)).toBe(f.base);
+      expect(git(f.root, "rev-parse", "HEAD")).toBe(f.base);
       expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
-    }
-    expect(f.audit()).toEqual([
-      expect.objectContaining({
-        sha: f.base,
-        stampedSha: f.base,
-        status: "",
-        remoteMain: advanced,
-        metadata: "# iOS releases\n\n## Unreleased\n\nHistorical notes.\n",
-        notes: "Bug fixes and improvements.",
-        stageOnly: false,
-      }),
-    ]);
-    expect(git(f.remote, "rev-parse", "main")).toBe(advanced);
-    expect(git(f.remote, "rev-parse", uploadRef)).toBe(f.base);
-    expect(git(f.root, "rev-parse", "HEAD")).toBe(f.base);
-    expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
-    expect(fs.existsSync(path.join(f.recovery, "release-notes.json"))).toBe(true);
-    expect(fs.existsSync(path.join(f.recovery, "release.bundle"))).toBe(false);
-    expect(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/heads")).toBe(
-      "refs/heads/main",
-    );
-    const repeated = f.invoke("run", [], { GITHUB_ACTIONS: "true", GITHUB_RUN_ATTEMPT: "2" });
-    expect(repeated.stderr).toContain("Do not rerun the upload job");
-    expect(f.audit()).toHaveLength(1);
-  });
+      expect(fs.existsSync(path.join(f.recovery, "release-notes.json"))).toBe(true);
+      expect(fs.existsSync(path.join(f.recovery, "release.bundle"))).toBe(false);
+      expect(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/heads")).toBe(
+        "refs/heads/main",
+      );
+      const repeated = f.invoke("run", [], { GITHUB_ACTIONS: "true", GITHUB_RUN_ATTEMPT: "2" });
+      expect(repeated.stderr).toContain("Do not rerun the upload job");
+      expect(f.audit()).toHaveLength(1);
+    },
+  );
 
   it("retains safe screenshot diagnostics before archive and refuses staging without an upload", () => {
     const f = fixture();
@@ -580,7 +588,7 @@ describe("mobile release CLI", () => {
     },
   );
 
-  it("admits scheduled TestFlight on the exact main source and rejects scheduled store uploads", () => {
+  it("admits scheduled TestFlight on the exact main source", () => {
     const f = fixture("ios", { groupId: "external-fixture", builds: [], pendingBuild: null });
     const ci = {
       GITHUB_ACTIONS: "true",
@@ -589,8 +597,6 @@ describe("mobile release CLI", () => {
       GITHUB_REF: "refs/heads/main",
       GITHUB_SHA: f.base,
     };
-    expect(f.invoke("run", [], ci).status).toBe(1);
-    expect(fs.existsSync(f.uploadAudit)).toBe(false);
     const result = f.invoke("run", ["--destination", "testflight"], ci);
     expect(result.status, result.stderr).toBe(0);
     expect(f.audit()).toEqual([

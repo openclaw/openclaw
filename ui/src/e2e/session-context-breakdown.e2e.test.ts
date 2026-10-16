@@ -2,7 +2,6 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionSystemPromptReport } from "../../../src/config/sessions/session-system-prompt-report.js";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -92,7 +91,8 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("chat.startup");
       if (width <= 900) {
-        await selectChatLayoutAction(page, "Details");
+        await page.locator(".chat-header-session-menu__trigger").click();
+        await page.getByRole("menuitem", { name: "Session details", exact: true }).click();
       } else {
         await page.getByRole("button", { name: "Details", exact: true }).click();
       }

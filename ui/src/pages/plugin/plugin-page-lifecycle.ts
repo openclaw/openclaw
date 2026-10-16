@@ -26,7 +26,6 @@ import { pluginTabKey } from "./route.ts";
  */
 type BundledPluginTabView = {
   render: (props: LogbookProps) => JSX.Element;
-  stop: (host: object) => void;
 };
 
 type BundledPluginTabViewState =
@@ -60,11 +59,8 @@ const EXTERNAL_AUTH_PROBE_TIMEOUT_MS = 5_000;
 // Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 export const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
   "logbook/logbook": async () => {
-    const [{ Logbook }, { stopLogbookPolling }] = await Promise.all([
-      import("./logbook-view.tsx"),
-      import("./logbook-controller.ts"),
-    ]);
-    return { render: Logbook, stop: stopLogbookPolling };
+    const { Logbook } = await import("./logbook-view.tsx");
+    return { render: Logbook };
   },
 };
 
@@ -532,11 +528,7 @@ export class PluginPageLifecycle {
   }
 
   private replaceBundledViewHost() {
-    if (this.bundledViewState.status === "ready") {
-      this.bundledViewState.view.stop(this.bundledViewHost);
-    }
-    // Async controller work is keyed by host. A new host makes every completion
-    // from the retired connection epoch unreachable without coupling plugins to the renderer.
+    // A new key retires the bundled view's owner and all of its pending work.
     this.bundledViewHost = {};
   }
 
