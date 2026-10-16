@@ -230,8 +230,11 @@ export async function runCiGitStep(options: {
     `linux:${options.scenario ?? "configured"}`,
     options.signal,
     (root) => {
-      const write = (file: string, content: string) =>
-        writeFileSync(path.join(root, file), content);
+      const write = (file: string, content: string) => {
+        const target = path.resolve(root, file);
+        mkdirSync(path.dirname(target), { recursive: true });
+        writeFileSync(target, content);
+      };
       const actions = path.join(root, "trusted-actions");
       if (options.performance) {
         performanceFixture = preparePerformanceFixture(root, options.performance);
@@ -286,12 +289,11 @@ export async function runCiGitStep(options: {
         mkdirSync(path.join(workspace, "clawhub-source/.git"), { recursive: true });
         const publish = path.join(workspace, "publish");
         if (options.publishPath === "file") {
-          writeFileSync(publish, "previous publish path\n");
+          write(publish, "previous publish path\n");
         } else if (options.publishPath === "symlink") {
           symlinkSync(root, publish, "junction");
         } else if (options.publishPath === "directory") {
-          mkdirSync(publish);
-          writeFileSync(path.join(publish, ".previous-checkout"), "stale\n");
+          write(path.join(publish, ".previous-checkout"), "stale\n");
         }
       }
       if (externalOwner) {
@@ -303,18 +305,16 @@ export async function runCiGitStep(options: {
             ? [path.join(workspace, step["working-directory"])]
             : []),
         ]) {
-          mkdirSync(path.join(directory, ".git"), { recursive: true });
-          writeFileSync(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n");
+          write(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n");
         }
         if (pluginRelease) {
-          writeFileSync(path.join(workspace, "package.json"), '{"version":"2026.8.33"}\n');
+          write(path.join(workspace, "package.json"), '{"version":"2026.8.33"}\n');
         }
       }
       if (options.startupDelay?.tree) {
         write("tree-start-delay-1.json", String(options.startupDelay.tree));
       }
       for (const action of ["git-owner", "ensure-base-commit"]) {
-        mkdirSync(path.join(actions, action), { recursive: true });
         const name = action === "git-owner" ? "owner.py" : "policy.py";
         let source = renderGitTestClock(
           action === "git-owner" ? ownerSource : basePolicySource,
@@ -384,7 +384,6 @@ def main():`,
         write(`trusted-actions/${action}/${name}`, source);
       }
       if (publisher) {
-        mkdirSync(path.join(actions, "publish-generated-pr"), { recursive: true });
         write(
           "trusted-actions/publish-generated-pr/policy.py",
           renderGitTestClock(publisherPolicySource, clock),
@@ -398,14 +397,13 @@ def main():`,
       if (["android", "clawhub"].includes(env.CHECKOUT_KIND ?? "")) {
         const checkout =
           env.CHECKOUT_KIND === "clawhub" ? path.join(workspace, "clawhub-source") : workspace;
-        mkdirSync(checkout, { recursive: true });
-        writeFileSync(path.join(checkout, ".previous-checkout"), "stale\n");
+        write(path.join(checkout, ".previous-checkout"), "stale\n");
       }
       if (options.poisonPython) {
         env.PYTHONPATH = workspace;
         const poison = `from pathlib import Path\nPath(${JSON.stringify(path.join(root, "python-injected"))}).write_text("injected")\nraise RuntimeError("candidate Python startup executed")\n`;
         for (const name of ["sitecustomize.py", "subprocess.py"]) {
-          writeFileSync(path.join(workspace, name), poison);
+          write(path.join(workspace, name), poison);
         }
       }
       const revisions = {

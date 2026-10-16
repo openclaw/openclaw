@@ -1,5 +1,4 @@
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   beforeAll,
   expect,
@@ -53,20 +52,17 @@ function runCheckout(
   return runCiGitStep({ signal, job, fetchResults, ...options });
 }
 
-const resetProfiles = [
-  {
-    job: "android",
-    step: "Checkout",
-    target: `+${candidate}:refs/remotes/origin/ci-target`,
-    remote: "fixture/checkout",
-  },
-  {
-    job: "check-docs",
-    step: "Checkout ClawHub docs source",
-    target: "+refs/heads/main:refs/remotes/origin/checkout",
-    remote: "openclaw/clawhub",
-  },
-];
+const resetProfiles = (
+  [
+    ["android", "Checkout", `+${candidate}:refs/remotes/origin/ci-target`, "fixture/checkout"],
+    [
+      "check-docs",
+      "Checkout ClawHub docs source",
+      "+refs/heads/main:refs/remotes/origin/checkout",
+      "openclaw/clawhub",
+    ],
+  ] as const
+).map(([job, step, target, remote]) => ({ job, step, target, remote }));
 const resetCases = [
   fetchCase("leader exit", 0, 0),
   fetchCase("timeout recovery", 0, "hang", 0),
@@ -111,15 +107,17 @@ linuxIt.for([
   "skills preserves exact-SHA retries without a fallback ($label)",
   async ({ fetchResults, code, attempts }, { signal }) => {
     const report = await runCiGitStep({ signal, job: "skills-python", fetchResults });
-    expect(report.code).toBe(code);
-    expect(report.fetches).toHaveLength(attempts);
+    expect(report).toMatchObject({
+      code,
+      fetches: length(attempts),
+      checkouts: length(code === 0 ? 1 : 0),
+    });
     expect(
       report.fetches.every(
         ({ args }) =>
           args.includes(`+${candidate}:refs/remotes/origin/checkout`) && args.includes("--depth=1"),
       ),
     ).toBe(true);
-    expect(report.checkouts).toHaveLength(code === 0 ? 1 : 0);
     expect(report.boundaries.some(({ name }) => name === "delete")).toBe(false);
   },
 );
@@ -131,8 +129,7 @@ linuxIt.for([
   "Android resets only after safely joined $phase failure",
   async ({ fetchResults, checkoutResults, firstCheckout }, { signal }) => {
     const report = await runCiGitStep({ signal, job: "android", fetchResults, checkoutResults });
-    expect(report.code).toBe(0);
-    expect(report.readyAttempts).toEqual([1, 2]);
+    expect(report).toMatchObject({ code: 0, readyAttempts: [1, 2] });
     expect(lastArgs(report.fetches)).toEqual([
       `+${candidate}:refs/remotes/origin/ci-target`,
       `+${candidate}:refs/remotes/origin/ci-target`,
@@ -260,9 +257,7 @@ linuxIt.for(preflightCases)(
   "preflight fails closed: $label",
   async ({ env, fetchResults, code }, { signal }) => {
     const report = await runCiGitStep({ signal, job: "preflight", env, fetchResults });
-    expect(report.code).toBe(code);
-    expect(report.fetches).toHaveLength(fetchResults.length);
-    expect(report.checkouts).toEqual([]);
+    expect(report).toMatchObject({ code, fetches: length(fetchResults.length), checkouts: [] });
   },
 );
 
@@ -308,8 +303,7 @@ linuxIt.for(
       prepare: true,
       poisonPython: true,
     });
-    expect(report.code).toBe(code);
-    expect(report.fetches).toHaveLength(1);
+    expect(report).toMatchObject({ code, fetches: length(1) });
     expect(report.fetches[0]?.args).toEqual(expect.arrayContaining([target, "--depth=2"]));
     if (step === "Resolve exact diff base") {
       expect(report.githubOutput).toBe(code === 0 ? `sha=${base}\nhead_sha=${merge}\n` : "");
@@ -356,38 +350,31 @@ posixIt("fetches the CI harness without a second full-repository snapshot", asyn
   const harnessCommands = report.commands.filter(
     ({ tool, cwd }) => tool === "git" && cwd === harnessDirectory,
   );
-  // The harness supplies only .github/actions: narrowing must be in place before the
-  // fetch runs, so it never downloads the blobs the sparse checkout discards.
   expect(harnessCommands.map(({ args }) => args[0])).toEqual(
     command("init remote sparse-checkout fetch checkout"),
   );
-  const harnessFetch = expectDefined(
-    harnessCommands.find(({ args }) => args[0] === "fetch"),
-    "harness fetch",
+  expect(harnessCommands.find(({ args }) => args[0] === "fetch")?.args).toEqual(
+    expect.arrayContaining(["--filter=blob:none", `+${harness}:refs/remotes/origin/ci-harness`]),
   );
-  expect(harnessFetch.args).toEqual(expect.arrayContaining(["--filter=blob:none"]));
-  expect(harnessFetch.args.at(-1)).toBe(`+${harness}:refs/remotes/origin/ci-harness`);
-  const sparseCheckout = expectDefined(
-    harnessCommands.find(({ args }) => args[0] === "sparse-checkout"),
-    "harness sparse checkout",
+  expect(harnessCommands.find(({ args }) => args[0] === "fetch")?.args.at(-1)).toBe(
+    `+${harness}:refs/remotes/origin/ci-harness`,
   );
-  for (const file of [
-    "scripts/ci-npm-lock-admission.mjs",
-    "scripts/generate-npm-package-lock.mjs",
-    "scripts/generate-npm-package-lock.mts",
-    "scripts/changed-lanes.mts",
-    "scripts/lib/merge-head-diff-base.mjs",
-    "scripts/stage-openclaw-bun.sh",
-    "scripts/lib/openclaw-bun.json",
-  ]) {
-    expect(sparseCheckout.args).toContain(`/${file}`);
-  }
-  // The selected checkout still needs real file contents, so it must stay unfiltered.
-  const workspaceFetch = expectDefined(
-    report.fetches.find(({ cwd }) => cwd === report.workspace),
-    "workspace fetch",
+  expect(harnessCommands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual(
+    expect.arrayContaining(
+      [
+        "scripts/ci-npm-lock-admission.mjs",
+        "scripts/generate-npm-package-lock.mjs",
+        "scripts/generate-npm-package-lock.mts",
+        "scripts/changed-lanes.mts",
+        "scripts/lib/merge-head-diff-base.mjs",
+        "scripts/stage-openclaw-bun.sh",
+        "scripts/lib/openclaw-bun.json",
+      ].map((file) => `/${file}`),
+    ),
   );
-  expect(workspaceFetch.args).not.toContain("--filter=blob:none");
+  expect(report.fetches.find(({ cwd }) => cwd === report.workspace)).toMatchObject({
+    args: expect.not.arrayContaining(["--filter=blob:none"]),
+  });
 });
 
 type QaGitCase = {
@@ -405,14 +392,9 @@ const qaMainFetch = command("fetch --no-tags origin +refs/heads/main:refs/remote
 const qaBootstrapFetch = command("fetch --no-tags --no-recurse-submodules --depth=1 origin");
 const qaValidation = { job: "validate_selected_ref", step: "Validate selected ref" };
 const qaPlan = { job: "plan_qa_profile", readbacks: ["HEAD"] };
-function releaseValidation(
-  label: string,
-  input: string,
-  remote: string,
-  reason: string,
-): QaGitCase {
+function releaseValidation(input: string, remote: string, reason: string): QaGitCase {
   return {
-    label,
+    label: reason,
     ...qaValidation,
     env: { INPUT_REF: input },
     fetches: [qaMainFetch, command("fetch --no-tags origin", `+${input}:${remote}`)],
@@ -437,14 +419,8 @@ const qaGitCases: QaGitCase[] = [
     readbacks: ["HEAD", `${candidate}^1`],
     reason: "main-ancestor",
   },
+  releaseValidation("refs/tags/v2026.8.1", "refs/tags/v2026.8.1", "release-tag"),
   releaseValidation(
-    "release tag validation",
-    "refs/tags/v2026.8.1",
-    "refs/tags/v2026.8.1",
-    "release-tag",
-  ),
-  releaseValidation(
-    "release branch validation",
     "refs/heads/release/2026.8.1",
     "refs/remotes/origin/release/2026.8.1",
     "release-branch-head",
@@ -470,8 +446,6 @@ function runQaGitCase(signal: AbortSignal, profile: QaGitCase, fetchResults: Fet
       step: profile.step,
     },
     fetchResults,
-    // Keep real command deadlines and ready descendant cleanup; these boundary
-    // checks do not need the TERM grace covered by the owner lifecycle tests.
     realClock: true,
     realDrain: false,
     poisonPython: true,
@@ -502,21 +476,23 @@ posixIt.for(qaGitCases)(
       profile,
       profile.fetches.map(() => 0),
     );
-    expect(report.code, report.output).toBe(0);
-    expect(report.readyAttempts).toEqual(profile.fetches.map((_, index) => index + 1));
+    expect(report).toMatchObject({
+      code: 0,
+      readyAttempts: attempts(profile.fetches),
+      githubEnv: "",
+      githubPath: "",
+    });
     expect(argsOf(report.fetches)).toEqual(profile.fetches);
     const cwd = profile.selected ? path.join(report.workspace, "selected") : report.workspace;
     expect(
       report.fetches.every((fetch) => fetch.cwd === cwd && fetch.configuration?.length === 0),
     ).toBe(true);
-    expect(
-      report.commands
-        .filter(({ args }) => args[0] === "rev-parse")
-        .map(({ args, cwd: commandCwd }) => ({ args, cwd: commandCwd })),
-    ).toEqual(profile.readbacks.map((ref) => ({ args: ["rev-parse", ref], cwd })));
-    expect(
-      report.checkouts.map(({ args, cwd: commandCwd }) => ({ args, cwd: commandCwd })),
-    ).toEqual(profile.checkout ? [{ args: ["checkout", "--detach", profile.checkout], cwd }] : []);
+    expect(locations(report.commands.filter(({ args }) => args[0] === "rev-parse"))).toEqual(
+      profile.readbacks.map((ref) => ({ args: ["rev-parse", ref], cwd })),
+    );
+    expect(locations(report.checkouts)).toEqual(
+      profile.checkout ? [{ args: ["checkout", "--detach", profile.checkout], cwd }] : [],
+    );
     if (profile.step === "Checkout selected ref") {
       expect(report.commands.map(({ args }) => args[0])).toEqual(
         command("init remote fetch checkout rev-parse"),
@@ -535,7 +511,6 @@ posixIt.for(qaGitCases)(
       expect(report.githubSummary).toContain(`Trust reason: \`${profile.reason}\``);
       expect(report.githubSummary).toContain(`Protocol base: \`${base}\``);
     }
-    expect(report).toMatchObject({ githubEnv: "", githubPath: "" });
   },
 );
 
@@ -543,15 +518,12 @@ posixIt.for(qaGitCases.filter(({ label, reason }) => !reason || label === "main 
   "QA Git owner stops without downstream work after cleanup failure: $label",
   async (profile, { signal }) => {
     const report = await runQaGitCase(signal, profile, ["cleanup-failure"]);
-    expect(report.code, report.output).toBe(125);
-    expect(report.readyAttempts).toEqual([1]);
+    expect(report).toMatchObject({ code: 125, readyAttempts: [1], checkouts: [], ...noOutputs });
     expect(argsOf(report.fetches)).toEqual([profile.fetches[0]]);
     expect(report.commands.at(-1)?.args[0]).toBe("fetch");
-    expect(report.checkouts).toEqual([]);
-    expect(
-      report.commands.filter(({ args }) => args[0] === "rev-parse").map(({ args }) => args),
-    ).toEqual(profile.reason ? [["rev-parse", "HEAD"]] : []);
-    expect(report).toMatchObject(noOutputs);
+    expect(argsOf(report.commands.filter(({ args }) => args[0] === "rev-parse"))).toEqual(
+      profile.reason ? [["rev-parse", "HEAD"]] : [],
+    );
     expect(report.output).toContain("Git ownership/setup failed");
   },
 );
@@ -625,8 +597,12 @@ posixIt.for([
       mergeBase: { ancestor: !release, revision: base },
     });
     const code = failure === "cleanup-failure" ? 125 : failure || (mismatch ? 1 : 0);
-    expect(report.code, report.output).toBe(code);
-    expect(report.readyAttempts).toEqual(fetches.map((_, index) => index + 1));
+    expect(report).toMatchObject({
+      code,
+      readyAttempts: attempts(fetches),
+      githubEnv: "",
+      githubPath: "",
+    });
     expect(argsOf(report.fetches)).toEqual(fetches);
     expect(
       report.fetches.every(
@@ -673,7 +649,6 @@ posixIt.for([
           ? `${baseline ? `baseline: \`baseline\`\nbaseline SHA: \`${base}\`\nbaseline trust reason: \`main-ancestor\`\n` : ""}candidate: \`candidate\`\ncandidate SHA: \`${candidate}\`\ncandidate trust reason: \`main-ancestor\`\n`
           : `Validated ref: \`${release ? mantisReleaseRef : "main"}\`\nResolved SHA: \`${candidate}\`\nTrust reason: \`${reason}\`\n`,
     );
-    expect(report).toMatchObject({ githubEnv: "", githubPath: "" });
     if (failure === "cleanup-failure") {
       expect(report.output).toContain("Git ownership/setup failed");
     }
@@ -716,8 +691,6 @@ posixIt.for([
       },
       fetchResults: [],
       worktreeResults: failure ? ["cleanup-failure"] : lanes.map(() => 0),
-      // The runner hands off the earlier allocation's output; keep setup logs
-      // inside this fixture's fresh invocation directory.
       stepOutputs:
         workflow === "web-ui-chat-proof"
           ? { prepare_evidence: { output_dir: "${RUNNER_TEMP}" } }
@@ -727,46 +700,42 @@ posixIt.for([
       poisonPython: true,
       env: { BASELINE_SHA: base, CANDIDATE_SHA: candidate },
     });
-    expect(report.code, report.output).toBe(failure ? 125 : 0);
     const attempted = failure ? lanes.slice(0, 1) : lanes;
-    expect(report.readyAttempts).toEqual(attempted.map((_, index) => index + 1));
+    expect(report).toMatchObject({
+      code: failure ? 125 : 0,
+      readyAttempts: attempts(attempted),
+      clones: [],
+      fetches: [],
+      ...noOutputs,
+    });
     const lanePath = (lane: string) => `.artifacts/qa-e2e/mantis/${workflow}-worktrees/${lane}`;
+    const record = (tool: string, args: string[]) => ({ tool, cwd: report.workspace, args });
     expect(report.worktrees).toEqual(
       attempted.map((lane) => ({
-        tool: "git",
-        cwd: report.workspace,
-        configuration: [],
-        args: command(
-          "worktree add --detach",
-          lanePath(lane),
-          lane === "baseline" ? base : candidate,
+        ...record(
+          "git",
+          command("worktree add --detach", lanePath(lane), lane === "baseline" ? base : candidate),
         ),
+        configuration: [],
       })),
     );
     expect(report.commands.filter(({ tool }) => tool === "pnpm")).toEqual(
       failure
         ? []
         : lanes.flatMap((lane) => [
-            {
-              tool: "pnpm",
-              cwd: report.workspace,
-              args: [
-                "--dir",
-                lanePath(lane),
-                "install",
-                "--frozen-lockfile",
-                ...(offline ? ["--prefer-offline"] : []),
-              ],
-            },
-            ...(build
-              ? [{ tool: "pnpm", cwd: report.workspace, args: ["--dir", lanePath(lane), "build"] }]
-              : []),
+            record("pnpm", [
+              "--dir",
+              lanePath(lane),
+              "install",
+              "--frozen-lockfile",
+              ...(offline ? ["--prefer-offline"] : []),
+            ]),
+            ...(build ? [record("pnpm", ["--dir", lanePath(lane), "build"])] : []),
           ]),
     );
     expect(report.commands).toHaveLength(
       attempted.length + (failure ? 0 : lanes.length * (build ? 2 : 1)),
     );
-    expect(report).toMatchObject({ clones: [], fetches: [] });
     expect(boundaryNames(report)).toEqual([
       ...attempted.map((_, index) => `worktree:${index + 1}`),
       ...(failure
@@ -774,7 +743,6 @@ posixIt.for([
         : lanes.flatMap(() => (build ? ["consumer:pnpm", "consumer:pnpm"] : ["consumer:pnpm"]))),
       "exit",
     ]);
-    expect(report).toMatchObject(noOutputs);
     if (failure) {
       expect(report.output).toContain("Git ownership/setup failed");
     }
@@ -783,11 +751,11 @@ posixIt.for([
 
 const newer = "d".repeat(40);
 const sourceObject = "refs/remotes/origin/main:.openclaw-sync/source.json";
-const fetch = ["fetch", "origin", "main:refs/remotes/origin/main"];
+const fetch = command("fetch origin main:refs/remotes/origin/main");
 const show = ["show", sourceObject];
-const rebase = ["rebase", "-X", "theirs", "origin/main"];
-const push = ["push", "origin", "HEAD:main"];
-const abort = ["rebase", "--abort"];
+const rebase = command("rebase -X theirs origin/main");
+const push = command("push origin HEAD:main");
+const abort = command("rebase --abort");
 const diff = command("diff --quiet -- docs .openclaw-sync package.json package-lock.json");
 const dependencyReads = [
   ["show", "refs/remotes/origin/main:package.json"],
@@ -819,6 +787,9 @@ function runDocs(
 }
 
 type GitReport = Awaited<ReturnType<typeof runCiGitStep>>;
+const attempts = (entries: readonly unknown[]) => entries.map((_, index) => index + 1);
+const locations = (commands: GitReport["commands"]) =>
+  commands.map(({ args, cwd }) => ({ args, cwd }));
 const argsOf = (commands: GitReport["commands"]) => commands.map(({ args }) => args);
 const lastArgs = (commands: GitReport["commands"]) => commands.map(({ args }) => args.at(-1));
 const boundaryNames = (report: GitReport) => report.boundaries.map(({ name }) => name);
@@ -841,8 +812,7 @@ posixIt.for(["directory", "file", "symlink"] as const)(
       cloneResults: [23, 0],
       publishPath,
     });
-    expect(report.code, report.output).toBe(0);
-    expect(report.readyAttempts).toEqual([1, 2]);
+    expect(report).toMatchObject({ code: 0, readyAttempts: [1, 2] });
     expect(gitArgs(report)).toEqual(
       [1, 2].map(() => [
         "clone",
@@ -863,8 +833,7 @@ posixIt(
     const report = await runDocs(signal, docsClone, {
       cloneResults: ["cleanup-failure"],
     });
-    expect(report.code, report.output).toBe(125);
-    expect(report.clones).toHaveLength(1);
+    expect(report).toMatchObject({ code: 125, clones: length(1) });
     expect(boundaryNames(report)).toEqual(["delete", "clone:1", "exit"]);
     expect(backoffs(report)).toEqual([]);
     expect(report.output).toContain("Git ownership/setup failed");
@@ -923,7 +892,6 @@ posixIt.for([
     ]);
     expect(backoffs(report)).toEqual([2]);
     expect(report.output).toContain("Publish sync attempt 1 failed; retrying.");
-    expect(report.pushes).toHaveLength(operation === "push" ? 2 : 1);
     expect(report.commands.filter(({ tool }) => tool === "npm")).toHaveLength(lockChange ? 2 : 1);
     if (operation === "push" && !lockChange) {
       expect(report.output).toContain("Reused 1 unchanged successful page check(s).");
@@ -968,7 +936,6 @@ posixIt.for(["advisory fetch", "fetch", "rebase", "manifest", "lock", "push"] as
     expect(report.code, report.output).toBe(125);
     const stop = { "advisory fetch": 2, fetch: 8, rebase: 10, manifest: 11, lock: 12, push: 13 };
     expect(gitArgs(report)).toEqual([...committed, ...publishAttempt].slice(0, stop[operation]));
-    expect(report.rebases.some(({ args }) => args.includes("--abort"))).toBe(false);
     expect(backoffs(report)).toEqual([]);
     expect(report.output).toContain("Git ownership/setup failed");
     expect(report.output).not.toContain("retrying");
@@ -1098,8 +1065,6 @@ posixIt.for([
     ]);
     expect(report.commands.filter(({ tool }) => tool === "node")).toHaveLength(validates ? 1 : 0);
     expect(report.output).toContain(error);
-    expect(report.pushes).toEqual([]);
-    expect(argsOf(report.rebases)).toEqual([rebase]);
     expect(backoffs(report)).toEqual([]);
   },
 );
@@ -1214,7 +1179,7 @@ posixIt.for([0, 128, 125])(
       ["rev-parse", "HEAD"],
       ["rev-parse", `${candidate}^`],
     ]);
-    expect(report.commands.filter(({ tool }) => tool === "gh")).toEqual([]);
+    expect(toolArgs(report, "gh")).toEqual([]);
     expect(report.githubOutput).toBe(agentOutput(code === 0 ? base : candidate));
   },
 );
@@ -1240,7 +1205,7 @@ posixIt.for([false, true])(
       ...(cancel ? { scenario: "cancel-SIGTERM", cooperativeTrees: true, realClock: true } : {}),
     });
     expectGit(report, cancel ? 143 : 125, [agentFetch]);
-    expect(report.commands.filter(({ tool }) => tool === "gh")).toEqual([]);
+    expect(toolArgs(report, "gh")).toEqual([]);
     expect(report.githubOutput).toBe("");
     expect(backoffs(report)).toEqual([]);
     expect(report.output).not.toContain("retrying");
@@ -1251,7 +1216,7 @@ posixIt("Docs Agent superseded gate drains before false output without gh", asyn
   const report = await runDocsAgent(signal, agentGate, { revisions: { "origin/main": moved } });
   expectGit(report, 0, [agentFetch, ["rev-parse", "origin/main"]]);
   expect(report.githubOutput).toBe("run_agent=false\n");
-  expect(report.commands.filter(({ tool }) => tool === "gh")).toEqual([]);
+  expect(toolArgs(report, "gh")).toEqual([]);
   expect(report.output).toContain(
     `CI run is superseded by ${moved}; skipping docs agent for ${candidate}.`,
   );
