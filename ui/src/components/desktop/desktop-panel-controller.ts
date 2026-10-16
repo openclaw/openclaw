@@ -31,7 +31,7 @@ import {
 import * as desktopAuth from "./desktop-panel-credentials.ts";
 import { desktopPanelLayout } from "./desktop-panel-layout.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
-import { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
+import type { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
 import { DesktopSessionController } from "./desktop-session-controller.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
@@ -61,6 +61,7 @@ export class DesktopPanelController extends SolidPanelController {
     | ((target: Extract<ControlUiFocusBuildTarget, { kind: "desktop" }>) => void)
     | null = null;
   fullscreenMode!: DesktopFullscreen;
+  pictureInPicture!: DesktopPictureInPicture;
   launcher!: DesktopAppLauncher;
 
   /** Browser tests replace the transport without opening a real RFB socket. */
@@ -86,7 +87,6 @@ export class DesktopPanelController extends SolidPanelController {
     () => this.state === "connected",
     () => void this.connectEnvironment(this.environmentId, this.controlling),
   );
-  private readonly pictureInPicture = new DesktopPictureInPicture(this, () => this.state);
   private credentials: DesktopCredentials | undefined;
   private credentialAuth: "vnc-password" | "ard-account" | undefined;
   private pendingConnection: PendingDesktopConnection | null = null;
@@ -316,7 +316,10 @@ export class DesktopPanelController extends SolidPanelController {
 
   private disconnectConnection(retainViewer = false): void {
     this.audio.close();
-    this.pictureInPicture.close();
+    // Native close can precede Solid mounting; each Solid owner handles its disposal.
+    if (this.isConnected) {
+      this.pictureInPicture.close();
+    }
     this.operationId += 1;
     this.pendingConnection = null;
     this.connection.begin(retainViewer);
@@ -324,7 +327,6 @@ export class DesktopPanelController extends SolidPanelController {
     if (!retainViewer) {
       this.sessionSource.invalidate();
       this.loading = false;
-      // Disposal invalidates launch work through the Solid owner without publishing feedback.
       if (this.isConnected) {
         this.launcher.clear();
       }
@@ -681,7 +683,6 @@ export class DesktopPanelController extends SolidPanelController {
             if ((this.state === "inventory-error" && this.documentMode) || !this.environmentId) {
               if (this.sourceSelection !== "picker") {
                 this.sourceSelection = "pending";
-                this.invalidate();
               }
               this.state = "picker";
               this.invalidate();

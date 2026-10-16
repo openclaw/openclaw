@@ -190,7 +190,7 @@ beforeEach(() => {
   vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(
     discoverRealtimeTalkInputsMock,
   );
-  vi.spyOn(realtimeTalkInput.RealtimeTalkInputController.prototype, "open").mockImplementation(
+  vi.spyOn(realtimeTalkInput.RealtimeTalkInputOwner.prototype, "open").mockImplementation(
     openMicrophoneMock,
   );
 });

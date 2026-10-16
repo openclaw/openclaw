@@ -79,10 +79,7 @@ export function useSessionMenuEntries(
     (action) => actions.runAction(action),
   );
   const details = useSessionMenuDetails(actions, readState, disabled, revision);
-  const multipleOwners = createMemo(() => {
-    revision();
-    return actions.ownerMenu.multipleOwners;
-  });
+  const multipleOwners = actions.ownerMenu.multipleOwners;
   const involvementAvailable = createMemo(() => {
     revision();
     return actions.involvementAvailable;

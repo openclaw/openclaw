@@ -621,7 +621,10 @@ function ApprovalContent(props: {
     <>
       <div class="approval-page__status" aria-live="polite" aria-atomic="true">
         <span
-          class={`approval-page__status-dot approval-page__status-dot--${props.approval.status}`}
+          class={[
+            "approval-page__status-dot",
+            `approval-page__status-dot--${props.approval.status}`,
+          ]}
           aria-hidden="true"
         />
         {pending() ? t("approvalPage.pending") : terminalTitle(props.approval, origin())}

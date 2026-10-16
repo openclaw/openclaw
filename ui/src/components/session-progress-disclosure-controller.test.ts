@@ -8,7 +8,7 @@ import {
   observeTranscript,
   renderProgressCard as render,
 } from "./session-progress-card.test-support.tsx";
-import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-controller.ts";
+import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-binding.ts";
 
 const containers: HTMLDivElement[] = [];
 function createContainer() {

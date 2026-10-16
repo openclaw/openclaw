@@ -47,10 +47,12 @@ export async function withDatabasePortConnection<T>(
   config: OpenClawConfig,
   run: (client: Client) => Promise<T>,
 ): Promise<T> {
-  const { resolveDatabaseEngineInput } = await import("./config.js");
-  const input = await resolveDatabaseEngineInput(config);
+  const { resolveDatabaseEngineSelection } = await import("./config.js");
+  const input = (await resolveDatabaseEngineSelection(config)).postgres;
   if (!input) {
-    throw new Error("PostgreSQL requires database.engine=postgres and a resolvable connection.");
+    throw new Error(
+      "PostgreSQL requires an effective postgres family and a resolvable connection.",
+    );
   }
   const { Client } = await import("pg");
   const client = new Client({ connectionString: input.connection });

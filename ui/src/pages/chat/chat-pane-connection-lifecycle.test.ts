@@ -227,6 +227,7 @@ describe("chat pane connection lifecycle", () => {
     lifecycle.render = () => ({
       layout: null,
       capabilityDialogs: undefined,
+      providerReviewSource: undefined,
     });
     const shell = document.createElement("openclaw-app-shell");
     const presentations: Array<{ paneCount: number; conversationPresented: boolean }> = [];
@@ -260,6 +261,7 @@ describe("chat pane connection lifecycle", () => {
     lifecycle.render = () => ({
       layout: null,
       capabilityDialogs: undefined,
+      providerReviewSource: undefined,
     });
     connectPaneTestView(lifecycle);
     await lifecycle.updateComplete;

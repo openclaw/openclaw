@@ -1,6 +1,6 @@
 import { openRealtimeTalkCamera } from "./input.ts";
 
-type RealtimeTalkCameraControllerOptions = {
+type RealtimeTalkCameraOwnerOptions = {
   getDeviceId: () => string | undefined;
   setDeviceId: (deviceId: string | undefined) => void;
   isClosed: () => boolean;
@@ -9,13 +9,13 @@ type RealtimeTalkCameraControllerOptions = {
   onReleased?: () => void;
 };
 
-export class RealtimeTalkCameraController {
+export class RealtimeTalkCameraOwner {
   stream: MediaStream | null = null;
   video: HTMLVideoElement | null = null;
   private setupController: AbortController | null = null;
   private readonly handleTrackEnded = () => this.release();
 
-  constructor(private readonly options: RealtimeTalkCameraControllerOptions) {}
+  constructor(private readonly options: RealtimeTalkCameraOwnerOptions) {}
 
   async setEnabled(enabled: boolean): Promise<void> {
     if (!enabled) {

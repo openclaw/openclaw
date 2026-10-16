@@ -125,6 +125,7 @@ describe("chat pane retained presentation lifecycle", () => {
       mounted.render = () => ({
         layout: null,
         capabilityDialogs: undefined,
+        providerReviewSource: undefined,
       });
       mounted.active = true;
       const composer = document.createElement("div");

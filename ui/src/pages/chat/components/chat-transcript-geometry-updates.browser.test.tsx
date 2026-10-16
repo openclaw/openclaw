@@ -62,6 +62,7 @@ class GeometryPane extends ChatPaneRuntime {
       layout: { component: GeometryLayout, props: layout },
       dialog: undefined,
       capabilityDialogs: undefined,
+      providerReviewSource: undefined,
     };
   }
 }

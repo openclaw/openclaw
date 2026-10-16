@@ -3,10 +3,17 @@ import { createDesktopFullscreen } from "../desktop-fullscreen.ts";
 import { usePanelController } from "../solid-panel-controller.ts";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
 import type { DesktopPanelController } from "./desktop-panel-controller.ts";
+import { createDesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
 import { DesktopPresentation } from "./desktop-presentation.tsx";
 
 export function DesktopPanelContent(props: { controller: DesktopPanelController }) {
   const controller = untrack(() => props.controller);
+  controller.pictureInPicture = createDesktopPictureInPicture(controller, () => {
+    const target = controller.launchTarget;
+    return controller.available && target.state === "connected" && target.presented
+      ? controller.renderRoot.querySelector<HTMLCanvasElement>(".desktop-surface canvas")
+      : null;
+  });
   controller.launcher = createDesktopAppLauncher(() => controller.launchTarget);
   const fullscreen = createDesktopFullscreen(controller.ownerDocument);
   controller.fullscreenMode = fullscreen;

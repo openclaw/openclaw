@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import { AGENT_SCHEMA_COMPATIBILITY } from "./openclaw-agent-db-schema-compatibility.js";

@@ -1,4 +1,5 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
+import { createMemo, createStore, onCleanup, untrack } from "solid-js";
 import {
   BOARD_GRID_COLUMNS,
   BOARD_GRID_GAP,
@@ -9,22 +10,16 @@ import {
   nudge,
   previewDrag,
   resize,
-  type BoardGridDirection,
   type BoardGridItem,
 } from "../../lib/board/grid.ts";
-import type { BoardOp, BoardSnapshot, BoardTab, BoardWidget } from "../../lib/board/types.ts";
-import type {
-  BoardGrantDecision,
-  BoardViewCallbacks,
-  BoardWidgetFrameUrl,
-} from "../../lib/board/view-types.ts";
+import type { BoardOp, BoardSnapshot, BoardWidget } from "../../lib/board/types.ts";
+import type { BoardViewCallbacks, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { orderedBoardTabs } from "./board-tabs.tsx";
 import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
 
 type BoardPointerGesture = {
-  dropValid: boolean;
   mode: "move" | "resize";
   name: string;
   originClientX: number;
@@ -63,163 +58,165 @@ export type BoardViewMethods = {
 };
 export type BoardViewElement = SolidBridgeElement<BoardViewProps, BoardViewMethods>;
 
-// Local interaction state is synchronous: pointerup consumes the final pointermove,
-// and a second mutation is rejected before Solid's next rendering commit.
-export class BoardViewState {
-  previewItems: BoardGridItem[] | null = null;
-  gestureName = "";
-  hoverTabId = "";
-  announcement = "";
-  announcementRevision = 0;
-  actionError = "";
-  focusName = "";
-  mutationPending = false;
-  initialLoading = true;
-  gesture: BoardPointerGesture | null = null;
-  private mutationRequestId = 0;
-  readonly visitedTabs = new Set<string>();
-  readonly contentHeights = new Map<string, number>();
-  private previous?: BoardViewProps;
+export function createBoardViewState(props: BoardViewProps, host: BoardViewElement) {
+  // Pointer identity and mutation admission must be visible within the same event turn.
+  let gesture: BoardPointerGesture | null = null;
+  let grid: HTMLElement | undefined;
+  let mutationPending = false;
+  let mutationRequestId = 0;
+  let previous: BoardViewProps | undefined;
+  const visitedTabs = new Set<string>();
+  const tabs = createMemo(() => orderedBoardTabs(props.snapshot?.tabs ?? []));
+  const activeTab = createMemo(
+    () => tabs().find((tab) => tab.tabId === props.activeTabId) ?? tabs()[0],
+  );
+  const initialHeights: Record<string, { height: number; revision: number }> = {};
+  const initial = {
+    previewItems: new Array<BoardGridItem>(),
+    gesture: { name: "", mode: "" },
+    hoverTabId: "",
+    announcement: "",
+    announcementRevision: 0,
+    actionError: "",
+    focusName: "",
+    mutationPending: false,
+    initialLoading: true,
+    contentHeights: initialHeights,
+  };
+  type Presentation = typeof initial;
+  const [presentation, update] = createStore(sync, initial);
+  const contentHeights = { get: (name: string) => presentation.contentHeights[name]?.height };
+  onCleanup(stopGesture);
 
-  constructor(
-    readonly props: BoardViewProps,
-    readonly host: BoardViewElement,
-    readonly requestUpdate: () => void,
-  ) {}
-
-  sync(): void {
-    const previous = this.previous;
-    const next = this.props;
-    this.previous = { ...next };
-    const snapshotChanged = previous?.snapshot !== next.snapshot;
+  function sync(local: Presentation): void {
+    const before = previous;
+    previous = { ...props };
+    const snapshotChanged = before?.snapshot !== props.snapshot;
     const ownerChanged =
-      previous?.session.agentId !== next.session.agentId ||
-      previous?.session.sessionKey !== next.session.sessionKey ||
-      previous?.snapshot?.sessionKey !== next.snapshot?.sessionKey;
+      before?.session.agentId !== props.session.agentId ||
+      before?.session.sessionKey !== props.session.sessionKey ||
+      before?.snapshot?.sessionKey !== props.snapshot?.sessionKey;
     if (ownerChanged) {
-      this.actionError = "";
-      this.initialLoading = true;
-      this.host.scrollTop = 0;
-      this.visitedTabs.clear();
-      this.contentHeights.clear();
-      this.mutationRequestId += 1;
-      this.mutationPending = false;
-      this.focusName = "";
+      local.initialLoading = true;
+      host.scrollTop = 0;
+      visitedTabs.clear();
+      local.contentHeights = {};
+      mutationRequestId += 1;
+      mutationPending = local.mutationPending = false;
+    }
+    // Recovery reads can publish unchanged state after a failed mutation.
+    if (ownerChanged || before?.snapshot?.revision !== props.snapshot?.revision) {
+      local.actionError = "";
     }
     if (snapshotChanged) {
-      // Recovery reads can publish unchanged state after a failed mutation.
-      if (previous?.snapshot?.revision !== next.snapshot?.revision) {
-        this.actionError = "";
-      }
-      const previousByName = new Map(
-        previous?.snapshot?.widgets.map((widget) => [widget.name, widget]),
-      );
-      const currentByName = new Map(next.snapshot?.widgets.map((widget) => [widget.name, widget]));
-      for (const name of this.contentHeights.keys()) {
+      const currentByName = new Map(props.snapshot?.widgets.map((widget) => [widget.name, widget]));
+      for (const name of Object.keys(local.contentHeights)) {
         const current = currentByName.get(name);
         if (
           !current ||
           current.contentKind !== "html" ||
-          previousByName.get(name)?.revision !== current.revision
+          local.contentHeights[name]?.revision !== current.revision
         ) {
-          this.contentHeights.delete(name);
+          delete local.contentHeights[name];
         }
       }
-      const tabIds = new Set(next.snapshot?.tabs.map((tab) => tab.tabId));
-      for (const tabId of this.visitedTabs) {
+      const tabIds = new Set(props.snapshot?.tabs.map((tab) => tab.tabId));
+      for (const tabId of visitedTabs) {
         if (!tabIds.has(tabId)) {
-          this.visitedTabs.delete(tabId);
+          visitedTabs.delete(tabId);
         }
       }
     }
-    if (previous?.activeTabId !== next.activeTabId) {
-      this.focusName = "";
+    if (ownerChanged || before?.activeTabId !== props.activeTabId) {
+      local.focusName = "";
     }
     if (
-      this.gesture &&
+      gesture &&
       (snapshotChanged ||
-        previous?.activeTabId !== next.activeTabId ||
-        previous?.pageWidgetName !== next.pageWidgetName ||
-        !next.active)
+        before?.activeTabId !== props.activeTabId ||
+        before?.pageWidgetName !== props.pageWidgetName ||
+        !props.active)
     ) {
-      this.cancelGesture();
+      clearGesture(local);
     }
   }
 
-  disconnect(): void {
-    this.cancelGesture();
-  }
-
-  async teardown(): Promise<void> {
-    this.cancelGesture();
+  async function teardown(): Promise<void> {
+    update(clearGesture);
     await Promise.all(
-      [...this.host.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.teardown()),
+      [...host.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.teardown()),
     );
   }
 
-  readonly reconcileInitialPresentation = (): void => {
-    if (!this.initialLoading || !this.props.snapshot) {
-      return;
-    }
-    const cells = [...this.host.querySelectorAll("openclaw-board-widget-cell")].filter(
-      (cell) => !cell.hidden,
-    );
-    if (cells.every((cell) => cell.presentationReady)) {
-      this.initialLoading = false;
-      this.requestUpdate();
-    }
-  };
-  activeTab(tabs: readonly BoardTab[]): BoardTab | undefined {
-    return tabs.find((tab) => tab.tabId === this.props.activeTabId) ?? tabs[0];
+  // Readiness is sampled after a cell commit; this callback owns no subscription.
+  const reconcileInitialPresentation = (): void =>
+    untrack(() => {
+      if (
+        presentation.initialLoading &&
+        props.snapshot &&
+        [...host.querySelectorAll("openclaw-board-widget-cell")].every(
+          (cell) => cell.hidden || cell.presentationReady,
+        )
+      ) {
+        update((local) => {
+          local.initialLoading = false;
+        });
+      }
+    });
+  function announce(message: string): void {
+    update((local) => {
+      local.announcement = message;
+      local.announcementRevision += 1;
+    });
   }
 
-  private announce(message: string): void {
-    this.announcement = message;
-    this.announcementRevision += 1;
-    this.requestUpdate();
-  }
-
-  private async applyOps(ops: BoardOp[], announcement: string): Promise<void> {
-    if (!this.props.callbacks) {
+  async function applyOps(ops: BoardOp[], announcement: string): Promise<void> {
+    if (!props.callbacks) {
       return;
     }
-    if (this.mutationPending) {
+    if (mutationPending) {
       throw new Error(t("board.actionInProgress"));
     }
-    const sessionKey = this.props.snapshot?.sessionKey;
-    const requestId = this.mutationRequestId + 1;
-    this.mutationRequestId = requestId;
-    this.mutationPending = true;
-    this.actionError = "";
-    this.requestUpdate();
+    const sessionKey = props.snapshot?.sessionKey;
+    const requestId = ++mutationRequestId;
+    mutationPending = true;
+    update((local) => {
+      local.actionError = "";
+      local.mutationPending = true;
+    });
     try {
-      await this.props.callbacks.applyOps(ops);
-      if (requestId === this.mutationRequestId && sessionKey === this.props.snapshot?.sessionKey) {
-        this.announce(announcement);
+      await props.callbacks.applyOps(ops);
+      if (requestId === mutationRequestId && sessionKey === props.snapshot?.sessionKey) {
+        announce(announcement);
       }
     } catch (error) {
-      if (requestId === this.mutationRequestId && sessionKey === this.props.snapshot?.sessionKey) {
-        this.actionError = t("board.actionFailed");
-        this.announce(this.actionError);
+      if (requestId === mutationRequestId && sessionKey === props.snapshot?.sessionKey) {
+        const errorText = t("board.actionFailed");
+        update((local) => {
+          local.actionError = errorText;
+        });
+        announce(errorText);
       }
       throw error;
     } finally {
-      if (requestId === this.mutationRequestId) {
-        this.mutationPending = false;
-        this.requestUpdate();
+      if (requestId === mutationRequestId) {
+        mutationPending = false;
+        update((local) => {
+          local.mutationPending = false;
+        });
       }
     }
   }
 
-  private nextPosition(tabId: string): number {
-    const positions = this.props.snapshot?.widgets
+  function nextPosition(tabId: string): number {
+    const positions = props.snapshot?.widgets
       .filter((widget) => widget.tabId === tabId)
       .map((widget) => widget.position) ?? [0];
     return Math.max(-1, ...positions) + 1;
   }
 
-  private moveWidget(widget: BoardWidget, position: number, tabId?: string): Promise<void> {
-    return this.applyOps(
+  function moveWidget(widget: BoardWidget, position: number, tabId?: string): Promise<void> {
+    return applyOps(
       [
         {
           kind: "widget_move",
@@ -232,27 +229,27 @@ export class BoardViewState {
     );
   }
 
-  readonly cellCallbacks: BoardWidgetCellCallbacks = {
-    appViewGeneration: () => this.props.callbacks?.appViewGeneration ?? 0,
-    grant: async (name: string, decision: BoardGrantDecision) => {
-      if (!this.props.callbacks) {
+  const cellCallbacks: BoardWidgetCellCallbacks = {
+    appViewGeneration: () => props.callbacks?.appViewGeneration ?? 0,
+    grant: async (name, decision) => {
+      if (!props.callbacks) {
         return;
       }
-      const sessionKey = this.props.snapshot?.sessionKey;
-      await this.props.callbacks.grant(name, decision);
-      if (sessionKey === this.props.snapshot?.sessionKey) {
-        this.announce(
+      const sessionKey = props.snapshot?.sessionKey;
+      await props.callbacks.grant(name, decision);
+      if (sessionKey === props.snapshot?.sessionKey) {
+        announce(
           decision === "granted"
             ? t("board.announcement.granted")
             : t("board.announcement.rejected"),
         );
       }
     },
-    movePointerDown: (widget, event) => this.beginGesture("move", widget, event),
-    resizePointerDown: (widget, event) => this.beginGesture("resize", widget, event),
-    moveToTab: (widget, tabId) => this.moveWidget(widget, this.nextPosition(tabId), tabId),
+    movePointerDown: (widget, event) => beginGesture("move", widget, event),
+    resizePointerDown: (widget, event) => beginGesture("resize", widget, event),
+    moveToTab: (widget, tabId) => moveWidget(widget, nextPosition(tabId), tabId),
     resizeTo: async (widget, w, h) =>
-      this.applyOps(
+      applyOps(
         [{ kind: "widget_resize", name: widget.name, sizeW: w, sizeH: h, heightMode: "fixed" }],
         t("board.announcement.resized", { title: widget.title || widget.name }),
       ),
@@ -263,11 +260,11 @@ export class BoardViewState {
         mode === "fixed"
           ? effectiveBoardWidgetRows(
               widget,
-              this.contentHeights.get(widget.name),
-              widget.name === this.props.pageWidgetName ? 0 : boardChromeRowPx(),
+              contentHeights.get(widget.name),
+              widget.name === props.pageWidgetName ? 0 : boardChromeRowPx(),
             )
           : widget.sizeH;
-      await this.applyOps(
+      await applyOps(
         [
           {
             kind: "widget_resize",
@@ -281,75 +278,105 @@ export class BoardViewState {
       );
     },
     reportContentHeight: (name, height) => {
-      const widget = this.props.snapshot?.widgets.find((candidate) => candidate.name === name);
+      const widget = props.snapshot?.widgets.find((candidate) => candidate.name === name);
       if (!widget || widget.contentKind !== "html") {
         return;
       }
       // Any pixel change matters: the cell renders the exact reported height,
       // not just the quantized row span.
-      if (this.contentHeights.get(name) !== height) {
-        this.contentHeights.set(name, height);
-        this.requestUpdate();
-      }
+      update((local) => {
+        if (local.contentHeights[name]?.height !== height) {
+          local.contentHeights[name] = { height, revision: widget.revision };
+        }
+      });
     },
     remove: async (widget) =>
-      this.applyOps(
+      applyOps(
         [{ kind: "widget_remove", name: widget.name }],
         t("board.announcement.removed", { title: widget.title || widget.name }),
       ),
-    nudge: async (widget, direction) => this.nudgeWidget(widget, direction),
-    focus: (widget, direction) => this.focusWidget(widget, direction),
-    focusChanged: (name) => {
-      this.focusName = name;
-      this.requestUpdate();
+    nudge: async (widget, direction) => {
+      const snapshot = props.snapshot;
+      if (!snapshot) {
+        return;
+      }
+      const items = boardWidgetGridItems(orderedWidgets(snapshot, widget.tabId), contentHeights);
+      const moved = nudge(items, widget.name, direction).find((item) => item.name === widget.name);
+      if (!moved || moved.order === widget.position) {
+        return;
+      }
+      await moveWidget(widget, moved.order);
     },
-    frameLoadFailed: async (name) => this.props.callbacks?.frameLoadFailed?.(name),
+    focus: (widget, direction) => {
+      const snapshot = props.snapshot;
+      if (!snapshot) {
+        return;
+      }
+      const widgets = orderedWidgets(snapshot, widget.tabId);
+      const index = widgets.findIndex((entry) => entry.name === widget.name);
+      if (index < 0) {
+        return;
+      }
+      const offset = direction === "left" || direction === "up" ? -1 : 1;
+      const target = widgets[Math.max(0, Math.min(index + offset, widgets.length - 1))];
+      if (!target || target.name === widget.name) {
+        return;
+      }
+      update((local) => {
+        local.focusName = target.name;
+      });
+      queueMicrotask(() => {
+        const cell = [...host.querySelectorAll("openclaw-board-widget-cell")].find(
+          (entry) => entry.widget?.name === target.name,
+        );
+        cell?.querySelector<HTMLElement>(".board-widget")?.focus();
+      });
+    },
+    focusChanged: (name) => {
+      update((local) => {
+        local.focusName = name;
+      });
+    },
+    frameLoadFailed: async (name) => props.callbacks?.frameLoadFailed?.(name),
     widgetAppView: async (name, revision) =>
-      (await this.props.callbacks?.widgetAppView?.(name, revision)) ?? {
+      (await props.callbacks?.widgetAppView?.(name, revision)) ?? {
         status: "stale",
         error: "MCP App view unavailable",
       },
     refreshWidgetAppView: async (name, revision) =>
-      (await this.props.callbacks?.refreshWidgetAppView?.(name, revision)) ?? {
+      (await props.callbacks?.refreshWidgetAppView?.(name, revision)) ?? {
         status: "stale",
         error: "MCP App view unavailable",
       },
   };
 
-  selectPageWidgetMenuItem(name: string, revision: number, value: string): void {
-    const widget = this.props.snapshot?.widgets.find((entry) => entry.name === name);
+  function selectPageWidgetMenuItem(name: string, revision: number, value: string): void {
+    const widget = props.snapshot?.widgets.find((entry) => entry.name === name);
     if (
-      !this.props.active ||
-      !this.props.canMutate ||
-      this.props.pageWidgetName !== name ||
+      !props.active ||
+      !props.canMutate ||
+      props.pageWidgetName !== name ||
       widget?.revision !== revision ||
-      widget.tabId !== this.props.activeTabId
+      widget.tabId !== props.activeTabId
     ) {
       return;
     }
-    const cell = [...this.host.querySelectorAll("openclaw-board-widget-cell")].find(
+    const cell = [...host.querySelectorAll("openclaw-board-widget-cell")].find(
       (entry) => entry.pageChrome && entry.widget === widget,
     );
     cell?.selectMenuItem(value);
   }
 
-  private beginGesture(
+  function beginGesture(
     mode: BoardPointerGesture["mode"],
     widget: BoardWidget,
     event: PointerEvent,
   ): void {
-    if (
-      !this.props.active ||
-      !this.props.canMutate ||
-      event.button !== 0 ||
-      this.gesture ||
-      this.mutationPending
-    ) {
+    if (!props.active || !props.canMutate || event.button !== 0 || gesture || mutationPending) {
       return;
     }
-    const snapshot = this.props.snapshot;
-    const tabs = snapshot ? orderedBoardTabs(snapshot.tabs) : [];
-    const tab = this.activeTab(tabs);
+    const snapshot = props.snapshot;
+    const tab = activeTab();
     if (!snapshot || !tab) {
       return;
     }
@@ -362,9 +389,8 @@ export class BoardViewState {
     } catch {
       // Synthetic pointers and detached test targets cannot be captured.
     }
-    const items = boardWidgetGridItems(orderedWidgets(snapshot, tab.tabId), this.contentHeights);
-    this.gesture = {
-      dropValid: false,
+    const items = boardWidgetGridItems(orderedWidgets(snapshot, tab.tabId), contentHeights);
+    gesture = {
       mode,
       name: widget.name,
       originClientX: event.clientX,
@@ -372,185 +398,157 @@ export class BoardViewState {
       originW: widget.sizeW,
       originH: effectiveBoardWidgetRows(
         widget,
-        this.contentHeights.get(widget.name),
+        contentHeights.get(widget.name),
         boardChromeRowPx(),
       ),
       pointerId: event.pointerId,
       items,
     };
-    this.previewItems = items;
-    this.gestureName = widget.name;
-    window.addEventListener("pointermove", this.handlePointerMove);
-    window.addEventListener("pointerup", this.handlePointerUp);
-    window.addEventListener("pointercancel", this.handlePointerCancel);
-    this.requestUpdate();
+    update((local) => {
+      local.previewItems = items;
+      local.gesture = { name: widget.name, mode };
+    });
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerCancel);
   }
 
-  private readonly handlePointerMove = (event: PointerEvent): void => {
-    this.requestUpdate();
-    const gesture = this.gesture;
-    if (!gesture || event.pointerId !== gesture.pointerId) {
-      return;
-    }
-    if (gesture.mode === "move") {
-      const tabTarget = document
-        .elementFromPoint(event.clientX, event.clientY)
-        ?.closest<HTMLElement>("[data-board-tab-id]");
-      const candidateTabId =
-        tabTarget?.closest("openclaw-board-view") === this.host
-          ? (tabTarget?.dataset.boardTabId ?? "")
+  function pointerPreview(
+    event: PointerEvent,
+    active: BoardPointerGesture,
+    items: readonly BoardGridItem[],
+  ) {
+    const pointer =
+      active.mode === "move" ? document.elementFromPoint(event.clientX, event.clientY) : null;
+    const tabTarget = pointer?.closest<HTMLElement>("[data-board-tab-id]");
+    if (
+      active.mode === "move" &&
+      (tabTarget || !grid || pointer?.closest(".board-grid") !== grid)
+    ) {
+      const tabId =
+        tabTarget?.closest("openclaw-board-view") === host ? tabTarget.dataset.boardTabId : "";
+      const hoverTabId =
+        tabId && tabId !== activeTab()?.tabId && tabs().some((tab) => tab.tabId === tabId)
+          ? tabId
           : "";
-      const candidateIsValid =
-        candidateTabId !== "" &&
-        (this.props.snapshot?.tabs.some((tab) => tab.tabId === candidateTabId) ?? false);
-      const currentTabId = this.props.snapshot
-        ? this.activeTab(orderedBoardTabs(this.props.snapshot.tabs))?.tabId
-        : this.props.activeTabId;
-      this.hoverTabId = candidateIsValid && candidateTabId !== currentTabId ? candidateTabId : "";
-      if (tabTarget) {
-        this.previewItems = gesture.items;
-        gesture.dropValid = this.hoverTabId !== "";
-        return;
-      }
-      const grid = this.host.querySelector<HTMLElement>(".board-grid");
-      const pointerElement = document.elementFromPoint(event.clientX, event.clientY);
-      if (!grid || pointerElement?.closest(".board-grid") !== grid) {
-        this.hoverTabId = "";
-        this.previewItems = gesture.items;
-        gesture.dropValid = false;
-        return;
-      }
-      gesture.dropValid = true;
-      const bounds = grid.getBoundingClientRect();
-      const columnWidth = Math.max(
-        1,
-        (bounds.width - BOARD_GRID_GAP * (BOARD_GRID_COLUMNS - 1)) / BOARD_GRID_COLUMNS,
-      );
-      // Resolve both the visible target and reorder against the current preview;
-      // a card moving under the pointer must not undo the drop on pointerup.
-      const items = this.previewItems ?? gesture.items;
-      const targetName = pointerElement?.closest<
-        HTMLElementTagNameMap["openclaw-board-widget-cell"]
-      >("openclaw-board-widget-cell")?.widget?.name;
-      this.previewItems = previewDrag(items, gesture.name, {
-        name: targetName,
-        x: Math.floor((event.clientX - bounds.left) / (columnWidth + BOARD_GRID_GAP)),
-        y: Math.floor((event.clientY - bounds.top) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP)),
-      });
-      return;
+      return tabTarget && hoverTabId ? { hoverTabId, items: active.items } : undefined;
     }
-
-    const grid = this.host.querySelector<HTMLElement>(".board-grid");
     const bounds = grid?.getBoundingClientRect();
     const columnWidth = bounds
       ? Math.max(1, (bounds.width - BOARD_GRID_GAP * (BOARD_GRID_COLUMNS - 1)) / BOARD_GRID_COLUMNS)
       : BOARD_GRID_ROW_HEIGHT;
-    const deltaW = Math.round(
-      (event.clientX - gesture.originClientX) / (columnWidth + BOARD_GRID_GAP),
-    );
-    const deltaH = Math.round(
-      (event.clientY - gesture.originClientY) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP),
-    );
-    this.previewItems = resize(
-      gesture.items,
-      gesture.name,
-      gesture.originW + deltaW,
-      gesture.originH + deltaH,
-    );
-  };
-
-  private readonly handlePointerUp = (event: PointerEvent): void => {
-    const gesture = this.gesture;
-    if (!gesture || event.pointerId !== gesture.pointerId) {
-      return;
+    if (active.mode === "resize") {
+      return {
+        hoverTabId: "",
+        items: resize(
+          active.items,
+          active.name,
+          active.originW +
+            Math.round((event.clientX - active.originClientX) / (columnWidth + BOARD_GRID_GAP)),
+          active.originH +
+            Math.round(
+              (event.clientY - active.originClientY) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP),
+            ),
+        ),
+      };
     }
-    this.handlePointerMove(event);
-    const previewItems = this.previewItems;
-    const hoverTabId = this.hoverTabId;
-    this.cancelGesture();
-    const widget = this.props.snapshot?.widgets.find((entry) => entry.name === gesture.name);
-    if (!widget) {
-      return;
+    if (!bounds) {
+      return undefined;
     }
-    if (gesture.mode === "move") {
-      if (!gesture.dropValid) {
-        return;
-      }
-      const position = hoverTabId
-        ? this.nextPosition(hoverTabId)
-        : (previewItems?.find((item) => item.name === gesture.name)?.order ?? widget.position);
-      if (!hoverTabId && position === widget.position) {
-        return;
-      }
-      void this.moveWidget(widget, position, hoverTabId || undefined).catch(() => undefined);
-      return;
-    }
-    const resized = previewItems?.find((item) => item.name === gesture.name);
-    if (resized && (resized.w !== gesture.originW || resized.h !== gesture.originH)) {
-      void this.cellCallbacks.resizeTo(widget, resized.w, resized.h).catch(() => undefined);
-    }
-  };
-
-  private readonly handlePointerCancel = (event: PointerEvent): void => {
-    if (this.gesture && event.pointerId === this.gesture.pointerId) {
-      this.cancelGesture();
-    }
-  };
-
-  private cancelGesture(): void {
-    window.removeEventListener("pointermove", this.handlePointerMove);
-    window.removeEventListener("pointerup", this.handlePointerUp);
-    window.removeEventListener("pointercancel", this.handlePointerCancel);
-    this.gesture = null;
-    this.previewItems = null;
-    this.gestureName = "";
-    this.hoverTabId = "";
-    this.requestUpdate();
+    // Reorder against the current preview so a moved card cannot undo its drop.
+    const targetName = pointer?.closest<HTMLElementTagNameMap["openclaw-board-widget-cell"]>(
+      "openclaw-board-widget-cell",
+    )?.widget?.name;
+    return {
+      hoverTabId: "",
+      items: previewDrag(items, active.name, {
+        name: targetName,
+        x: Math.floor((event.clientX - bounds.left) / (columnWidth + BOARD_GRID_GAP)),
+        y: Math.floor((event.clientY - bounds.top) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP)),
+      }),
+    };
   }
 
-  private async nudgeWidget(widget: BoardWidget, direction: BoardGridDirection): Promise<void> {
-    const snapshot = this.props.snapshot;
-    if (!snapshot) {
-      return;
+  const handlePointerMove = (event: PointerEvent): void => {
+    if (gesture && event.pointerId === gesture.pointerId) {
+      const active = gesture;
+      update((local) => {
+        const next = pointerPreview(event, active, local.previewItems) ?? {
+          items: active.items,
+          hoverTabId: "",
+        };
+        local.previewItems = next.items;
+        local.hoverTabId = next.hoverTabId;
+      });
     }
-    const items = boardWidgetGridItems(orderedWidgets(snapshot, widget.tabId), this.contentHeights);
-    const moved = nudge(items, widget.name, direction).find((item) => item.name === widget.name);
-    if (!moved || moved.order === widget.position) {
-      return;
-    }
-    await this.moveWidget(widget, moved.order);
-  }
+  };
 
-  private focusWidget(widget: BoardWidget, direction: BoardGridDirection): void {
-    const snapshot = this.props.snapshot;
-    if (!snapshot) {
+  const handlePointerUp = (event: PointerEvent): void => {
+    const active = gesture;
+    if (!active || event.pointerId !== active.pointerId) {
       return;
     }
-    const widgets = orderedWidgets(snapshot, widget.tabId);
-    const index = widgets.findIndex((entry) => entry.name === widget.name);
-    if (index < 0) {
-      return;
-    }
-    const offset = direction === "left" || direction === "up" ? -1 : 1;
-    const target = widgets[Math.max(0, Math.min(index + offset, widgets.length - 1))];
-    if (!target || target.name === widget.name) {
-      return;
-    }
-    this.focusName = target.name;
-    this.requestUpdate();
-    queueMicrotask(() => {
-      const cell = [...this.host.querySelectorAll("openclaw-board-widget-cell")].find(
-        (entry) => entry.widget?.name === target.name,
-      );
-      cell?.querySelector<HTMLElement>(".board-widget")?.focus();
+    update((local) => {
+      const result = pointerPreview(event, active, local.previewItems);
+      clearGesture(local);
+      const widget = props.snapshot?.widgets.find((entry) => entry.name === active.name);
+      if (!widget || !result) {
+        return;
+      }
+      if (active.mode === "move") {
+        const position = result.hoverTabId
+          ? nextPosition(result.hoverTabId)
+          : (result.items.find((item) => item.name === active.name)?.order ?? widget.position);
+        if (!result.hoverTabId && position === widget.position) {
+          return;
+        }
+        void moveWidget(widget, position, result.hoverTabId || undefined).catch(() => undefined);
+        return;
+      }
+      const resized = result.items.find((item) => item.name === active.name);
+      if (resized && (resized.w !== active.originW || resized.h !== active.originH)) {
+        void cellCallbacks.resizeTo(widget, resized.w, resized.h).catch(() => undefined);
+      }
     });
+  };
+
+  const handlePointerCancel = (event: PointerEvent): void => {
+    if (gesture && event.pointerId === gesture.pointerId) {
+      update(clearGesture);
+    }
+  };
+
+  function stopGesture(): void {
+    window.removeEventListener("pointermove", handlePointerMove);
+    window.removeEventListener("pointerup", handlePointerUp);
+    window.removeEventListener("pointercancel", handlePointerCancel);
+    gesture = null;
   }
 
-  readonly selectTab = (tabId: string): void => {
-    const tabs = this.props.snapshot ? orderedBoardTabs(this.props.snapshot.tabs) : [];
-    const currentTabId = this.activeTab(tabs)?.tabId ?? this.props.activeTabId;
-    if (tabId !== currentTabId && tabs.some((tab) => tab.tabId === tabId)) {
-      this.props.callbacks?.selectTab(tabId);
+  function clearGesture(local: Presentation): void {
+    stopGesture();
+    local.gesture = { name: "", mode: "" };
+    local.hoverTabId = "";
+  }
+
+  const selectTab = (tabId: string): void => {
+    if (tabId !== activeTab()?.tabId && tabs().some((tab) => tab.tabId === tabId)) {
+      props.callbacks?.selectTab(tabId);
     }
+  };
+  return {
+    presentation,
+    visitedTabs,
+    contentHeights,
+    cellCallbacks,
+    tabs,
+    activeTab,
+    reconcileInitialPresentation,
+    selectPageWidgetMenuItem,
+    teardown,
+    selectTab,
+    gridRef: (element: HTMLElement) => {
+      grid = element;
+    },
   };
 }

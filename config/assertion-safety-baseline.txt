@@ -391,7 +391,7 @@ extensions/irc/src/setup-surface.ts	24
 extensions/kilocode/provider-models.ts	3
 extensions/kimi-coding/provider-policy-api.ts	2
 extensions/line/src/accounts.ts	3
-extensions/line/src/actions.ts	4
+extensions/line/src/actions.ts	3
 extensions/line/src/auto-reply-delivery.ts	1
 extensions/line/src/flex-templates/basic-cards.ts	2
 extensions/line/src/flex-templates/media-control-cards.ts	1
@@ -2097,7 +2097,7 @@ src/infra/sqlite-files.ts	1
 src/infra/sqlite-index-schema.ts	1
 src/infra/sqlite-integrity.ts	2
 src/infra/sqlite-readonly-location.ts	3
-src/infra/sqlite-schema-contract.ts	7
+src/infra/sqlite-schema-contract.ts	3
 src/infra/sqlite-snapshot.ts	2
 src/infra/sqlite-strict.ts	6
 src/infra/sqlite-wal.ts	3

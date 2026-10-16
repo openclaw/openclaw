@@ -49,7 +49,7 @@ import {
 import { createEmbeddedRunHandle } from "../runs.test-support.js";
 import { resolveEmbeddedRunModelSetup } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
-import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import { prepareEmbeddedRunRuntime } from "./runtime.js";
 import { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 
 // Installation is outside this composition. Selection, concrete model resolution,

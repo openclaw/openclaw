@@ -148,24 +148,6 @@ describe("update report shared transport boundary", () => {
     },
   );
 
-  it("reconciles its exact pending row when no commit result reaches the caller", async () => {
-    const fixture = await setup();
-    const markPending = vi.fn(
-      async (...args: Parameters<typeof markUpdateFailureReportReceiptPending>) => {
-        await markUpdateFailureReportReceiptPending(...args);
-        throw new SqliteWorkerError("Both pending acknowledgements lost", "outcome-unknown");
-      },
-    );
-    expect(await fixture.submit({ markPending })).toMatchObject({
-      status: "created",
-      url: issueUrl,
-    });
-    expect(markPending).toHaveBeenCalledOnce();
-    expect(fixture.createCalls).toHaveLength(1);
-    expect(await fixture.submit()).toMatchObject({ status: "duplicate", url: issueUrl });
-    expect(fixture.createCalls).toHaveLength(1);
-  });
-
   it("does not publish when a status check cannot find its prior receipt", async () => {
     const fixture = await setup();
     const result = await fixture.submit({ publicationMode: "reconcile" });

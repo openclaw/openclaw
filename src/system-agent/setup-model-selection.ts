@@ -118,11 +118,10 @@ export async function createSystemAgentModelSelectionUpdater(
     }
     const selectedModel = selection.authProfileId ? `${key}@${selection.authProfileId}` : key;
     if (selection.modelTarget === "utility") {
-      if (writesAgent && agent) {
-        agent.utilityModel = selectedModel;
-      } else {
-        agentDefaults.utilityModel = selectedModel;
-      }
+      const owner = writesAgent && agent ? agent : agentDefaults;
+      const existing = owner.utilityModel;
+      owner.utilityModel =
+        typeof existing === "object" ? { ...existing, primary: selectedModel } : selectedModel;
     } else {
       agentScope.setAgentEffectiveModelPrimary(nextConfig, agentId, selectedModel, {
         forceAgent: Boolean(targetAgentId),

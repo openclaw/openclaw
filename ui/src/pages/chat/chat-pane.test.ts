@@ -122,6 +122,7 @@ describe("chat pane retained presentation", () => {
     lifecycle.render = () => ({
       layout: null,
       capabilityDialogs: undefined,
+      providerReviewSource: undefined,
     });
     connectPaneTestView(lifecycle);
     await lifecycle.updateComplete;

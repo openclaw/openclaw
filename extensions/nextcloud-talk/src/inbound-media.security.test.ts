@@ -6,7 +6,6 @@ import {
   createAccount,
   createMessage,
   createRuntimeEnv,
-  installRuntime,
   requireFirstMockArg,
 } from "./inbound-media.test-fixtures.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
@@ -69,7 +68,6 @@ vi.mock("./room-info.js", async () => {
 describe("nextcloud-talk inbound media security", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    installRuntime();
     resolveNextcloudTalkRoomKindMock.mockResolvedValue("direct");
     resolveDefaultGroupPolicyMock.mockReturnValue("allowlist");
     resolveAllowlistProviderRuntimeGroupPolicyMock.mockReturnValue({
