@@ -86,18 +86,18 @@ describe("yielded run settlement", () => {
     if (visibility) {
       await appendTranscriptMessage(target, {
         now: T0 - 5 * MINUTE_MS + 1,
-        message: { role: "assistant", content: visibility.earlierReply },
-      });
-      await appendTranscriptMessage(target, {
-        now: T0 - 5 * MINUTE_MS + 2,
         message: {
           role: "assistant",
           content: [{ type: "toolCall", id: "progress-1", name: "read", arguments: {} }],
         },
       });
       await appendTranscriptMessage(target, {
-        now: T0 - 5 * MINUTE_MS + 3,
+        now: T0 - 5 * MINUTE_MS + 2,
         message: { role: "toolResult", toolCallId: "progress-1", content: "intermediate data" },
+      });
+      await appendTranscriptMessage(target, {
+        now: T0 - 5 * MINUTE_MS + 3,
+        message: { role: "assistant", content: visibility.earlierReply },
       });
     }
     await appendTranscriptMessage(target, {
