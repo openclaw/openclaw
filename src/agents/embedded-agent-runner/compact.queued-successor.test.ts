@@ -160,7 +160,7 @@ beforeEach(async () => {
   workspaceDir = await realpath(tempDirs.make("openclaw-queued-successor-"));
   resetCompactHooksHarnessMocks(workspaceDir);
   setRuntimeConfigSnapshot({});
-  maintain.mockClear();
+  maintain.mockReset();
   hookRunner.hasHooks.mockReturnValue(true);
   resolveContextEngineMock.mockResolvedValue({
     info: { id: "test-engine", name: "Test engine", ownsCompaction: true },
@@ -172,6 +172,42 @@ beforeEach(async () => {
 });
 
 describe("queued compaction successor ownership", () => {
+  it.each(["compact", "maintain"] as const)(
+    "does not dispatch plugin %s after its writer is replaced",
+    async (effect) => {
+      const pluginStore = ["retained history"];
+      const replaceWriter = async () => {
+        await patchSessionEntryCore(target(), () => ({ activeWriterRunId: "replacement-writer" }));
+      };
+      contextEngineCompactMock.mockImplementationOnce(async () => {
+        if (effect === "compact") {
+          pluginStore.length = 0;
+        }
+        return completed(sessionId);
+      });
+      if (effect === "compact") {
+        hookRunner.runBeforeCompaction.mockImplementationOnce(replaceWriter);
+      } else {
+        maintain.mockImplementationOnce(async () => {
+          pluginStore.length = 0;
+          return { changed: true, bytesFreed: 1, rewrittenEntries: 1 };
+        });
+      }
+
+      await compact(
+        backendCompactParams(),
+        effect === "maintain" ? { onHostCompactionCommitted: replaceWriter } : {},
+      ).catch(() => undefined);
+
+      expect(pluginStore).toEqual(["retained history"]);
+      expect(loadSessionEntry(target())?.activeWriterRunId).toBe("replacement-writer");
+      expect(maintain).not.toHaveBeenCalled();
+      if (effect === "compact") {
+        expect(contextEngineCompactMock).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each([false, true])(
     "hydrates post-compaction history only for a requested rewrite (rewrite=%s)",
     async (rewrite) => {

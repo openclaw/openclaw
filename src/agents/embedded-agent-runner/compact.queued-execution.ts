@@ -218,6 +218,19 @@ export async function executeQueuedContextEngineCompaction(input: {
         assertSource();
       },
     );
+    const assertPluginWriterActive = async (
+      target: SessionTranscriptRuntimeTarget,
+      owner: typeof expectedEntry,
+    ) => {
+      // Plugin-owned stores do not participate in the host transcript transaction.
+      requireCompactionWriterEntry(
+        await readSessionEntryReadOnlyInWorker(
+          { ...target, readConsistency: "latest" },
+          assertCallerActive,
+        ),
+        owner,
+      );
+    };
     const createTranscriptWriteContext = (
       target: SessionTranscriptRuntimeTarget,
       owner: typeof expectedEntry,
@@ -344,6 +357,9 @@ export async function executeQueuedContextEngineCompaction(input: {
               expectedEntry,
               backendParams.abortSignal,
             );
+            if (contextEngine.info.id !== "legacy") {
+              await assertPluginWriterActive(runtimeTarget, expectedEntry);
+            }
             writeContext.assertCommitAllowed();
             const clearClaim = setTranscriptBytePreflightClaim(
               backendParams.runtimeContext,
@@ -485,6 +501,9 @@ export async function executeQueuedContextEngineCompaction(input: {
             expected,
             params.abortSignal,
           );
+          if (contextEngine.info.id !== "legacy") {
+            await assertPluginWriterActive(postCompactionSessionTarget, expected);
+          }
           const maintenance = runContextEngineMaintenance({
             contextEngine,
             sessionId: postCompactionSessionId,
