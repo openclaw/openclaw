@@ -1,4 +1,3 @@
-// Exercises agent harness registration, ownership metadata, and selection handoff.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -56,8 +55,6 @@ vi.mock("../../plugins/provider-model-routes.js", () => ({
   resolveProviderModelRoutes: () => null,
 }));
 
-const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
-
 beforeEach(() => {
   clearAgentHarnesses();
   warn.mockClear();
@@ -66,18 +63,14 @@ beforeEach(() => {
 
 afterEach(() => {
   clearAgentHarnesses();
-  if (originalRuntime == null) {
-    delete process.env.OPENCLAW_AGENT_RUNTIME;
-  } else {
-    process.env.OPENCLAW_AGENT_RUNTIME = originalRuntime;
-  }
+  vi.unstubAllEnvs();
 });
 
 function makeHarness(
   id: string,
   options: {
     priority?: number;
-    providers?: string[];
+    providers?: readonly string[];
   } = {},
 ): AgentHarness {
   // Test harnesses keep support decisions provider-scoped so selection tests
@@ -180,39 +173,26 @@ describe("agent harness registry", () => {
     }
   });
 
-  it("rejects the built-in runtime id before mutating the registry", () => {
-    expect(() =>
-      registerAgentHarness(makeHarness("openclaw"), { ownerPluginId: "untrusted-plugin" }),
-    ).toThrow('agent harness id "openclaw" is reserved for the built-in runtime');
-    expect(listRegisteredAgentHarnesses()).toEqual([]);
-  });
-
-  it("resolves native compaction only from the exact registry-owned Codex harness", () => {
-    const nativeCompaction = vi.fn(async () => ({ ok: true, compacted: true }));
-    registerAgentHarness(makeHarness("codex"), {
-      ownerPluginId: "codex",
-      nativeCompaction,
-    });
-    const registered = getRegisteredAgentHarness("codex")?.harness;
-
-    expect(registered).toBeDefined();
-    expect(resolveCodexAgentHarnessNativeCompaction(registered as AgentHarness)).toBe(
-      nativeCompaction,
-    );
-    expect(() => resolveCodexAgentHarnessNativeCompaction(makeHarness("codex"))).toThrow(
-      "Agent harness codex changed during native compaction resolution",
-    );
-  });
-
-  it("rejects native compaction registered by a foreign harness owner", () => {
-    expect(() =>
-      registerAgentHarness(makeHarness("codex"), {
-        ownerPluginId: "copilot",
-        nativeCompaction: vi.fn(async () => ({ ok: true, compacted: true })),
-      }),
-    ).toThrow("native compaction requires the registry-owned Codex harness");
-    expect(listRegisteredAgentHarnesses()).toEqual([]);
-  });
+  it.each([
+    [
+      "openclaw",
+      "untrusted-plugin",
+      false,
+      'agent harness id "openclaw" is reserved for the built-in runtime',
+    ],
+    ["codex", "copilot", true, "native compaction requires the registry-owned Codex harness"],
+  ] as const)(
+    "rejects registration of %s by %s before mutation",
+    (id, ownerPluginId, compact, message) => {
+      expect(() =>
+        registerAgentHarness(makeHarness(id), {
+          ownerPluginId,
+          ...(compact ? { nativeCompaction: async () => ({ ok: true, compacted: true }) } : {}),
+        }),
+      ).toThrow(message);
+      expect(listRegisteredAgentHarnesses()).toEqual([]);
+    },
+  );
 
   it.each(["active", "request"] as const)(
     "rejects retired %s harnesses without falling through to another registry",
@@ -232,15 +212,20 @@ describe("agent harness registry", () => {
           registerAgentHarness({ ...makeHarness("codex"), dispose, reset }, { nativeCompaction }),
         );
         const registered = inContext(() => getRegisteredAgentHarness("codex"))!;
-        const read = () => {
-          expect(getRegisteredAgentHarness("codex")).toEqual(registered);
-          expect(listRegisteredAgentHarnesses()).toEqual([registered]);
+        expect(registered).toBeDefined();
+        inContext(() => {
+          expect([getRegisteredAgentHarness("codex"), listRegisteredAgentHarnesses()]).toEqual([
+            registered,
+            [registered],
+          ]);
           expect(resolveAgentHarnessOwnerPluginId(registered.harness)).toBe("codex");
           expect(resolveCodexAgentHarnessNativeCompaction(registered.harness)).toBe(
             nativeCompaction,
           );
-        };
-        inContext(read);
+          expect(() => resolveCodexAgentHarnessNativeCompaction(makeHarness("codex"))).toThrow(
+            "Agent harness codex changed during native compaction resolution",
+          );
+        });
         await inContext(() => resetRegisteredAgentHarnessSessions({ reason: "reset" }));
         await inContext(disposeRegisteredAgentHarnesses);
         expect(reset).toHaveBeenCalledOnce();
@@ -282,20 +267,19 @@ describe("agent harness registry", () => {
   it("uses builder ownership and preserves a harness registered by another plugin", () => {
     const building = createEmptyPluginRegistry();
     const original = makeHarness("shared");
-    building.agentHarnesses.push({
+    const registration: (typeof building.agentHarnesses)[number] = {
       pluginId: "first-plugin",
       source: "runtime",
       harness: original,
-    });
+    };
+    building.agentHarnesses.push(registration);
 
     expect(() =>
       withPluginRegistrationContext(building, "failing-plugin", () => {
         registerAgentHarness(makeHarness("shared"));
       }),
     ).toThrow("agent harness shared already registered by first-plugin");
-    expect(building.agentHarnesses).toEqual([
-      { pluginId: "first-plugin", source: "runtime", harness: original },
-    ]);
+    expect(building.agentHarnesses).toEqual([registration]);
 
     withPluginRegistrationContext(building, "builder-plugin", () => {
       registerAgentHarness(makeHarness("owned"));
@@ -304,9 +288,7 @@ describe("agent harness registry", () => {
   });
 
   it("keeps model-specific harnesses behind plugin registration in auto mode", () => {
-    // Auto mode should not select a model-specific runtime until the owning
-    // plugin has registered its harness in this process.
-    process.env.OPENCLAW_AGENT_RUNTIME = "auto";
+    vi.stubEnv("OPENCLAW_AGENT_RUNTIME", "auto");
 
     expect(selectAgentHarness({ provider: "plugin-models", modelId: "custom-1" }).id).toBe(
       "openclaw",
@@ -321,36 +303,15 @@ describe("agent harness registry", () => {
     );
   });
 
-  it("honors explicit provider OpenClaw runtime policy", () => {
-    registerAgentHarness(makeHarness("plugin-harness", { priority: 200 }), {
-      ownerPluginId: "plugin-a",
-    });
-
-    expect(
-      selectAgentHarness({
-        provider: "codex",
-        modelId: "gpt-5.4",
-        config: providerRuntimeConfig("codex", "openclaw"),
-      }).id,
-    ).toBe("openclaw");
-  });
-
-  it("honors explicit provider plugin runtime policy when the plugin harness is registered", () => {
-    registerAgentHarness(makeHarness("custom", { providers: ["anthropic"] }), {
-      ownerPluginId: "plugin-a",
-    });
-    const config = providerRuntimeConfig("anthropic", "custom");
-
-    expect(
-      selectAgentHarness({
-        provider: "anthropic",
-        modelId: "sonnet-4.6",
-        config,
-      }).id,
-    ).toBe("custom");
-    expect(resolveProviderRefOwnership).toHaveBeenCalledWith({
-      provider: "anthropic",
-      config,
-    });
+  it.each([
+    ["codex", "gpt-5.4", "openclaw", "plugin-harness", { priority: 200 }],
+    ["anthropic", "sonnet-4.6", "custom", "custom", { providers: ["anthropic"] }],
+  ] as const)("honors %s provider policy for %s", (provider, modelId, runtime, id, options) => {
+    registerAgentHarness(makeHarness(id, options), { ownerPluginId: "plugin-a" });
+    const config = providerRuntimeConfig(provider, runtime);
+    expect(selectAgentHarness({ provider, modelId, config }).id).toBe(runtime);
+    if (provider === "anthropic") {
+      expect(resolveProviderRefOwnership).toHaveBeenCalledWith({ provider, config });
+    }
   });
 });

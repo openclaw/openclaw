@@ -1,4 +1,3 @@
-// Verifies harness ownership, payload availability, and run-owned registry lookup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginMetadataSnapshot,
@@ -40,8 +39,39 @@ function ensureHarness(overrides: Partial<Parameters<typeof ensurePlugin>[0]>) {
   });
 }
 
+function availability(overrides: Partial<Parameters<typeof resolveAvailability>[0]> = {}) {
+  return resolveAvailability({
+    workspaceDir: "/tmp/workspace",
+    runtime: "codex",
+    provider: "openai",
+    payloadFailures: [],
+    payloadCheckedPluginIds: [],
+    selectedPluginRootDirs: new Map(),
+    ...overrides,
+  });
+}
+
+function metadataScope(overrides: Partial<Parameters<typeof createMetadataScope>[0]>) {
+  return createMetadataScope({
+    workspaceDir: "/tmp/workspace",
+    config: { plugins: { slots: { memory: "none" } } },
+    selections: [],
+    ...overrides,
+  });
+}
+
+function resolveScope(
+  scope: ReturnType<typeof metadataScope>,
+  plugins: ReturnType<typeof installedProviderRecord>[],
+) {
+  return scope.resolve({ index: { plugins } as never });
+}
+
 async function unavailable(overrides: Parameters<typeof ensureHarness>[0]) {
-  const error = await ensureHarness(overrides).catch((cause: unknown) => cause);
+  const error = await ensureHarness({
+    agentHarnessRuntimeOverride: "custom-harness",
+    ...overrides,
+  }).catch((cause: unknown) => cause);
   expect(error).toBeInstanceOf(Error);
   if (!(error instanceof Error)) {
     throw new Error("Expected unavailable harness");
@@ -49,20 +79,38 @@ async function unavailable(overrides: Parameters<typeof ensureHarness>[0]) {
   return error.message;
 }
 
-function customOwnerRegistry(config: OpenClawConfig = { plugins: { allow: ["telegram"] } }) {
+function preparedRegistry(
+  config: OpenClawConfig = {},
+  manifestRegistry: ReturnType<typeof makeRegistry> = makeRegistry([]),
+) {
   const registry = createEmptyPluginRegistry();
-  attachPreparedPluginFacts(
+  prepareOwnedPluginLoadContext(
+    {
+      config,
+      workspaceDir: "/tmp/workspace",
+      loadRuntimePlugins: true,
+      runtimePluginSelections: [],
+    },
+    {},
     registry,
-    config,
-    makeRegistry([
-      {
-        id: "custom-owner",
-        channels: [],
-        activation: { onAgentHarnesses: ["custom-harness"] },
-      },
-    ]),
+    createPluginMetadataSnapshot({ config, manifestRegistry }),
   );
   return registry;
+}
+
+function harnessManifests(
+  ids: string[],
+  runtime = "custom-harness",
+  origin: Parameters<typeof makeRegistry>[0][number]["origin"] = "config",
+) {
+  return makeRegistry(
+    ids.map((id) => ({
+      id,
+      channels: [],
+      origin,
+      activation: { onAgentHarnesses: [runtime] },
+    })),
+  );
 }
 
 const mocks = vi.hoisted(() => ({
@@ -76,13 +124,13 @@ function installedProviderRecord(
   pluginId: string,
   options: {
     providers?: string[];
-    contracts?: Record<string, string[]>;
     modelSupportPrefixes?: string[];
+    agentHarnesses?: string[];
   } = {},
 ) {
   return {
     pluginId,
-    startup: { sidecar: false, memory: false, agentHarnesses: [] },
+    startup: { sidecar: false, memory: false, agentHarnesses: options.agentHarnesses ?? [] },
     contributions: {
       providers: options.providers ?? [],
       modelCatalogProviders: [],
@@ -92,7 +140,7 @@ function installedProviderRecord(
       channels: [],
       channelConfigs: [],
       commandAliases: [],
-      contracts: options.contracts ?? {},
+      contracts: {},
     },
     compat: [],
   };
@@ -121,24 +169,6 @@ function createMemoryPlanMetadataSnapshot() {
     }),
   );
   return restorePluginMetadataSnapshot(snapshot);
-}
-
-function attachPreparedPluginFacts(
-  pluginRegistry: ReturnType<typeof createEmptyPluginRegistry>,
-  config: OpenClawConfig,
-  manifestRegistry: ReturnType<typeof makeRegistry>,
-) {
-  prepareOwnedPluginLoadContext(
-    {
-      config,
-      workspaceDir: "/tmp/workspace",
-      loadRuntimePlugins: true,
-      runtimePluginSelections: [],
-    },
-    {},
-    pluginRegistry,
-    createPluginMetadataSnapshot({ config, manifestRegistry }),
-  );
 }
 
 vi.mock("../../plugins/providers.js", () => ({
@@ -175,46 +205,24 @@ describe("harness runtime plugins", () => {
       },
     },
   ])("keeps a missing explicit Codex $name fatal with remediation", async ({ selection }) => {
-    const pluginRegistry = createEmptyPluginRegistry();
-    attachPreparedPluginFacts(pluginRegistry, {}, makeRegistry([]));
-
     const error = await unavailable({
       provider: "openai",
       modelId: "gpt-5.5",
       ...selection,
-      pluginRegistry,
+      agentHarnessRuntimeOverride: undefined,
+      pluginRegistry: preparedRegistry(),
     });
     expect(error).toContain("(reason=owner-plugin-not-activatable, ownerPluginId=codex)");
     expect(error).toContain('Owner plugin "codex" is absent from this prepared plugin generation.');
     expect(error).toContain('Run "openclaw doctor --fix"');
   });
 
-  it.each([
-    {
-      name: "global disablement",
-      plugins: { enabled: false },
-      expectedReason: "plugins disabled",
-    },
-    {
-      name: "a restrictive allowlist",
-      plugins: { allow: ["telegram"] },
-      expectedReason: "not in allowlist",
-    },
-    {
-      name: "a denylist",
-      plugins: { deny: ["codex"] },
-      expectedReason: "blocked by denylist",
-    },
-    {
-      name: "an explicitly disabled owner",
-      plugins: { entries: { codex: { enabled: false } } },
-      expectedReason: "disabled in config",
-    },
-  ] satisfies Array<{
-    name: string;
-    plugins: NonNullable<OpenClawConfig["plugins"]>;
-    expectedReason: string;
-  }>)("reports $name without a prepared registry context", async ({ plugins, expectedReason }) => {
+  it.each<[NonNullable<OpenClawConfig["plugins"]>, string]>([
+    [{ enabled: false }, "plugins disabled"],
+    [{ allow: ["telegram"] }, "not in allowlist"],
+    [{ deny: ["codex"] }, "blocked by denylist"],
+    [{ entries: { codex: { enabled: false } } }, "disabled in config"],
+  ])("reports %j as %s without a prepared registry context", async (plugins, expectedReason) => {
     const error = await unavailable({
       provider: "openai",
       modelId: "gpt-5.5",
@@ -229,89 +237,48 @@ describe("harness runtime plugins", () => {
     const config = {
       plugins: { allow: ["ready-owner"], entries: { "ready-owner": { enabled: true } } },
     } satisfies OpenClawConfig;
-    const pluginRegistry = createEmptyPluginRegistry();
-    attachPreparedPluginFacts(
-      pluginRegistry,
+    const pluginRegistry = preparedRegistry(
       config,
-      makeRegistry(
-        ["blocked-owner-0", "blocked-owner-1", "blocked-owner-2", "ready-owner"].map((id) => ({
-          id,
-          channels: [],
-          origin: "bundled" as const,
-          activation: { onAgentHarnesses: ["custom-harness"] },
-        })),
+      harnessManifests(
+        ["blocked-owner-0", "blocked-owner-1", "blocked-owner-2", "ready-owner"],
+        "custom-harness",
+        "bundled",
       ),
     );
-
-    const error = await unavailable({
-      config,
-      agentHarnessRuntimeOverride: "custom-harness",
-      pluginRegistry,
-    });
+    const error = await unavailable({ config, pluginRegistry });
     expect(error).toContain("reason=owner-plugin-degraded");
     expect(error).toContain('Owner plugin "blocked-owner-0" is not activatable');
     expect(error).toContain("ownerPluginIds=");
   });
 
-  it("reports the prepared owner's loader failure before activation policy", async () => {
-    const pluginRegistry = customOwnerRegistry();
-    pluginRegistry.plugins.push(
-      createPluginRecord({
-        id: "custom-owner",
-        status: "error",
-        failurePhase: "register",
-        error: "registration exploded",
-      }),
+  it.each([
+    { status: "error", failurePhase: "register", error: "registration exploded" },
+    { status: "loaded" },
+  ] as const)("reports the prepared owner's $status before activation policy", async (record) => {
+    const pluginRegistry = preparedRegistry(
+      { plugins: { allow: ["telegram"] } },
+      harnessManifests(["custom-owner"]),
     );
-
-    const error = await unavailable({
-      agentHarnessRuntimeOverride: "custom-harness",
-      pluginRegistry,
-    });
+    pluginRegistry.plugins.push(createPluginRecord({ id: "custom-owner", ...record }));
+    const error = await unavailable({ pluginRegistry });
     expect(error).toContain("(reason=owner-plugin-degraded, ownerPluginId=custom-owner)");
-    expect(error).toContain('Owner plugin "custom-owner" failed during register.');
-    expect(error).toContain('Run "openclaw plugins inspect custom-owner --runtime --json"');
+    expect(error).toContain(
+      record.status === "error"
+        ? 'Owner plugin "custom-owner" failed during register.'
+        : 'Owner plugin "custom-owner" loaded but did not register agent harness "custom-harness".',
+    );
     expect(error).not.toContain("not in allowlist");
+    expect(error).toContain('Run "openclaw plugins inspect custom-owner --runtime --json"');
     expect(error).not.toContain("registration exploded");
     expect(formatForLog(error)).toContain(
       'Run "openclaw plugins inspect custom-owner --runtime --json"',
     );
   });
 
-  it("reports a loaded owner that omitted the selected harness registration", async () => {
-    const pluginRegistry = customOwnerRegistry();
-    pluginRegistry.plugins.push(createPluginRecord({ id: "custom-owner", status: "loaded" }));
-
-    const error = await unavailable({
-      agentHarnessRuntimeOverride: "custom-harness",
-      pluginRegistry,
-    });
-    expect(error).toContain("(reason=owner-plugin-degraded, ownerPluginId=custom-owner)");
-    expect(error).toContain(
-      'Owner plugin "custom-owner" loaded but did not register agent harness "custom-harness".',
-    );
-    expect(error).not.toContain("not in allowlist");
-    expect(formatForLog(error)).toContain(
-      'Run "openclaw plugins inspect custom-owner --runtime --json"',
-    );
-  });
-
   it("reports an activated config owner missing from the prepared registry as degraded", async () => {
-    const pluginRegistry = createEmptyPluginRegistry();
-    const manifestRegistry = makeRegistry([
-      {
-        id: "custom-owner",
-        channels: [],
-        activation: { onAgentHarnesses: ["custom-harness"] },
-      },
-    ]);
-    const owner = manifestRegistry.plugins[0]!;
-    owner.origin = "config";
-    attachPreparedPluginFacts(pluginRegistry, {}, manifestRegistry);
-
+    const manifestRegistry = harnessManifests(["custom-owner"]);
     const error = await unavailable({
-      agentHarnessRuntimeOverride: "custom-harness",
-      pluginRegistry,
+      pluginRegistry: preparedRegistry({}, manifestRegistry),
     });
     expect(error).toContain("(reason=owner-plugin-degraded, ownerPluginId=custom-owner)");
     expect(error).toContain("The owner plugin did not register.");
@@ -326,15 +293,12 @@ describe("harness runtime plugins", () => {
   });
 
   it("keeps the built-in OpenClaw harness independent from plugin registration", async () => {
-    const pluginRegistry = createEmptyPluginRegistry();
-    attachPreparedPluginFacts(pluginRegistry, { plugins: { enabled: false } }, makeRegistry([]));
-
     await expect(
       ensureHarness({
         provider: "openai",
         modelId: "gpt-5.5",
         agentHarnessRuntimeOverride: "openclaw",
-        pluginRegistry,
+        pluginRegistry: preparedRegistry({ plugins: { enabled: false } }),
       }),
     ).resolves.toBeUndefined();
   });
@@ -352,17 +316,12 @@ describe("harness runtime plugins", () => {
       plugins: { slots: { memory: "none" } },
     };
     const selections = [{ provider: "openai", modelId: "gpt-5.6-sol", runtime: "openclaw" }];
-    const scope = createMetadataScope({ workspaceDir: "/tmp/workspace", config, selections });
-    const codexRecord = {
-      ...installedProviderRecord("codex"),
-      startup: { sidecar: false, memory: false, agentHarnesses: ["codex"] },
-    };
+    const scope = metadataScope({ config, selections });
     expect(
-      scope.resolve({
-        index: {
-          plugins: [installedProviderRecord("openai", { providers: ["openai"] }), codexRecord],
-        } as never,
-      }),
+      resolveScope(scope, [
+        installedProviderRecord("openai", { providers: ["openai"] }),
+        installedProviderRecord("codex", { agentHarnesses: ["codex"] }),
+      ]),
     ).toEqual(["codex", "openai"]);
     const plan = runtimePlan({
       config,
@@ -395,43 +354,27 @@ describe("harness runtime plugins", () => {
   });
 
   it("retains shorthand model owners while resolving the fallback provider", () => {
-    const scope = createMetadataScope({
-      workspaceDir: "/tmp/workspace",
-      config: { plugins: { slots: { memory: "none" } } },
+    const scope = metadataScope({
       selections: [{ provider: "fallback-provider", modelId: "magic-model" }],
       shorthandModelIds: ["magic-model"],
     });
     expect(
-      scope.resolve({
-        index: {
-          plugins: [
-            installedProviderRecord("fallback-provider", {
-              providers: ["fallback-provider"],
-            }),
-            installedProviderRecord("magic-model-owner", {
-              modelSupportPrefixes: ["magic-"],
-            }),
-          ],
-        } as never,
-      }),
+      resolveScope(scope, [
+        installedProviderRecord("fallback-provider", { providers: ["fallback-provider"] }),
+        installedProviderRecord("magic-model-owner", { modelSupportPrefixes: ["magic-"] }),
+      ]),
     ).toEqual(["fallback-provider", "magic-model-owner"]);
   });
 
   it("keeps metadata unscoped for ambiguous indirect provider ownership", () => {
-    const scope = createMetadataScope({
-      workspaceDir: "/tmp/workspace",
-      config: { plugins: { slots: { memory: "none" } } },
+    const scope = metadataScope({
       selections: [{ provider: "provider-alias", modelId: "selected-model" }],
     });
     expect(
-      scope.resolve({
-        index: {
-          plugins: [
-            installedProviderRecord("first-owner", { providers: ["provider-alias"] }),
-            installedProviderRecord("second-owner", { providers: ["provider-alias"] }),
-          ],
-        } as never,
-      }),
+      resolveScope(scope, [
+        installedProviderRecord("first-owner", { providers: ["provider-alias"] }),
+        installedProviderRecord("second-owner", { providers: ["provider-alias"] }),
+      ]),
     ).toBeUndefined();
   });
 
@@ -443,7 +386,6 @@ describe("harness runtime plugins", () => {
       config: { plugins: { allow: ["openai"] } },
       selections: [{ provider: "openai", modelId: "gpt-5" }],
     });
-
     expect(plan.pluginIds).toEqual(["openai"]);
     expect(plan.config?.plugins?.entries?.openai).toEqual({ enabled: true });
   });
@@ -453,82 +395,51 @@ describe("harness runtime plugins", () => {
       config: { plugins: { slots: { contextEngine: "custom-context-engine" } } },
       basePluginIds: [],
     });
-
     expect(plan.pluginIds).toEqual(["custom-context-engine"]);
     expect(plan.config?.plugins?.allow).toEqual(["custom-context-engine"]);
     expect(plan.config?.plugins?.entries?.["custom-context-engine"]).toEqual({ enabled: true });
   });
 
   it.each([
-    { basePluginIds: [], allowed: ["catalog-provider"], expected: [] },
-    {
-      basePluginIds: ["catalog-provider"],
-      allowed: ["catalog-provider"],
-      expected: ["catalog-provider"],
-    },
-    { basePluginIds: ["catalog-provider"], allowed: ["other-provider"], expected: [] },
-  ])(
-    "keeps catalog scope $basePluginIds within allowlist $allowed",
-    ({ basePluginIds, allowed, expected }) => {
-      const config: OpenClawConfig = {
-        plugins: {
-          allow: [...allowed, "memory-lancedb", "custom-context-engine", "codex"],
-          slots: { memory: "memory-lancedb", contextEngine: "custom-context-engine" },
-        },
-      };
-      const plan = runtimePlan({
-        metadataSnapshot: createPluginMetadataSnapshot({
-          manifestRegistry: makeRegistry([
-            {
-              id: "codex",
-              channels: [],
-              origin: "bundled",
-              activation: { onAgentHarnesses: ["codex"] },
-            },
-          ]),
-        }),
-        config,
-        basePluginIds,
-        selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
-        purpose: "model-catalog",
-      });
+    [[], ["catalog-provider"], []],
+    [["catalog-provider"], ["catalog-provider"], ["catalog-provider"]],
+    [["catalog-provider"], ["other-provider"], []],
+  ])("keeps catalog scope %j within allowlist %j", (basePluginIds, allowed, expected) => {
+    const config: OpenClawConfig = {
+      plugins: {
+        allow: [...allowed, "memory-lancedb", "custom-context-engine", "codex"],
+        slots: { memory: "memory-lancedb", contextEngine: "custom-context-engine" },
+      },
+    };
+    const plan = runtimePlan({
+      metadataSnapshot: createPluginMetadataSnapshot({
+        manifestRegistry: harnessManifests(["codex"], "codex", "bundled"),
+      }),
+      config,
+      basePluginIds,
+      selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
+      purpose: "model-catalog",
+    });
+    expect(plan.pluginIds).toEqual(expected);
+    expect(plan.config?.plugins?.entries).toBeUndefined();
+    expect(plan.config?.plugins?.slots).toEqual(config.plugins?.slots);
+  });
 
-      expect(plan.pluginIds).toEqual(expected);
-      expect(plan.config?.plugins?.entries).toBeUndefined();
-      expect(plan.config?.plugins?.slots).toEqual(config.plugins?.slots);
-    },
-  );
-
-  const memorySelectionCases: Array<[string, OpenClawConfig, string[]]> = [
-    ["implicit configuration", {}, []],
-    ["selected default slot", { plugins: { slots: { memory: "memory-core" } } }, ["memory-core"]],
-    [
-      "enabled default plugin",
-      { plugins: { entries: { "memory-core": { enabled: true } } } },
-      ["memory-core"],
-    ],
-    ["disabled slot", { plugins: { slots: { memory: "none" } } }, []],
-    [
-      "disabled default plugin",
-      { plugins: { entries: { "memory-core": { enabled: false } } } },
-      [],
-    ],
-  ];
-
-  it.each(memorySelectionCases)(
-    "preserves config-owned memory selection for %s",
-    (_name, config, expectedPluginIds) => {
-      const plan = runtimePlan({
-        config,
-      });
-
-      expect(plan.pluginIds ?? []).toEqual(expectedPluginIds);
-      expect(plan.config).toMatchObject(config);
-      for (const pluginId of expectedPluginIds) {
-        expect(plan.config?.plugins?.entries?.[pluginId]).toEqual({ enabled: true });
-      }
-    },
-  );
+  it.each<[OpenClawConfig["plugins"], string[]]>([
+    [undefined, []],
+    [{ slots: { memory: "memory-core" } }, ["memory-core"]],
+    [{ entries: { "memory-core": { enabled: true } } }, ["memory-core"]],
+    [{ slots: { memory: "none" } }, []],
+    [{ entries: { "memory-core": { enabled: false } } }, []],
+  ])("preserves config-owned memory selection for %j", (plugins, expectedPluginIds) => {
+    const config = plugins ? { plugins } : {};
+    const plan = runtimePlan({ config });
+    expect(plan.pluginIds ?? []).toEqual(expectedPluginIds);
+    expect(plan.config).toMatchObject(config);
+    for (const pluginId of expectedPluginIds) {
+      expect(plan.config?.plugins?.entries?.[pluginId]).toEqual({ enabled: true });
+    }
+  });
 
   it("reuses prepared memory aliases while applying current activation policy", () => {
     const config: OpenClawConfig = { plugins: { slots: { memory: "fixture-memory" } } };
@@ -606,26 +517,20 @@ describe("harness runtime plugins", () => {
     expect(plan.config?.plugins?.entries?.["custom-harness-plugin"]).toEqual({ enabled: true });
   });
 
-  it("preserves startup-scoped plugins when selected owners synthesize an allowlist", () => {
+  it.each<[NonNullable<OpenClawConfig["plugins"]>, string[], string[]]>([
+    [
+      { slots: { memory: "memory-core" } },
+      ["codex", "memory-core", "telegram"],
+      ["telegram", "memory-core", "codex"],
+    ],
+    [{ allow: ["codex"] }, ["codex"], ["codex"]],
+  ])("preserves startup scope under activation policy %j", (plugins, pluginIds, allow) => {
     const plan = runtimePlan({
-      config: { plugins: { slots: { memory: "memory-core" } } },
+      config: { plugins },
       basePluginIds: ["telegram"],
       selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
     });
-
-    expect(plan.pluginIds).toEqual(["codex", "memory-core", "telegram"]);
-    expect(plan.config?.plugins?.allow).toEqual(["telegram", "memory-core", "codex"]);
-  });
-
-  it("does not restore stale startup plugins excluded by a restrictive reload allowlist", () => {
-    const plan = runtimePlan({
-      config: { plugins: { allow: ["codex"] } },
-      basePluginIds: ["telegram"],
-      selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
-    });
-
-    expect(plan.pluginIds).toEqual(["codex"]);
-    expect(plan.config?.plugins?.allow).toEqual(["codex"]);
+    expect(plan).toMatchObject({ pluginIds, config: { plugins: { allow } } });
   });
 
   it("retains safe provider-owner dependencies for an explicitly allowed Codex harness", () => {
@@ -635,7 +540,6 @@ describe("harness runtime plugins", () => {
       config: { plugins: { allow: ["codex"] } },
       selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
     });
-
     expect(plan.pluginIds).toEqual(["codex", "openai"]);
     expect(plan.config?.plugins?.allow).toEqual(["codex", "openai"]);
     expect(plan.config?.plugins?.entries).toMatchObject({
@@ -646,17 +550,7 @@ describe("harness runtime plugins", () => {
 
   it("reports a harness unavailable when no enabled owner plugin can activate", () => {
     mocks.resolveManifestActivationPlan.mockReturnValueOnce({ entries: [] });
-
-    expect(
-      resolveAvailability({
-        workspaceDir: "/tmp/workspace",
-        runtime: "codex",
-        provider: "openai",
-        payloadFailures: [],
-        payloadCheckedPluginIds: [],
-        selectedPluginRootDirs: new Map(),
-      }),
-    ).toEqual({
+    expect(availability()).toEqual({
       status: "unavailable",
       ownerPluginIds: [],
       reason: "owner-plugin-not-activatable",
@@ -664,49 +558,34 @@ describe("harness runtime plugins", () => {
     });
   });
 
-  it("reports a quarantined owner payload and ignores stale artifacts", () => {
-    const base = {
-      runtime: "codex",
-      provider: "openai",
-      payloadCheckedPluginIds: ["codex"],
-      selectedPluginRootDirs: new Map([["codex", "/tmp/plugins/codex"]]),
-    };
-    expect(
-      resolveAvailability({
-        workspaceDir: "/tmp/workspace",
-        ...base,
+  it.each([
+    ["codex", { status: "unavailable", reason: "owner-plugin-degraded" }],
+    ["stale-codex", { status: "available", ownerPluginIds: ["codex"] }],
+  ] as const)(
+    "checks quarantine against selected root, not %s artifacts",
+    (directory, expected) => {
+      const result = availability({
+        payloadCheckedPluginIds: ["codex"],
+        selectedPluginRootDirs: new Map([["codex", "/tmp/plugins/codex"]]),
         payloadFailures: [
           {
             pluginId: "codex",
-            installPath: "/tmp/plugins/codex",
+            installPath: `/tmp/plugins/${directory}`,
             reason: "missing-package-dir",
           },
         ],
-      }),
-    ).toMatchObject({ status: "unavailable", reason: "owner-plugin-degraded" });
-    expect(
-      resolveAvailability({
-        workspaceDir: "/tmp/workspace",
-        ...base,
-        payloadFailures: [
-          {
-            pluginId: "codex",
-            installPath: "/tmp/plugins/stale-codex",
-            reason: "missing-package-dir",
-          },
-        ],
-      }),
-    ).toEqual({ status: "available", ownerPluginIds: ["codex"] });
-  });
+      });
+      if (directory === "stale-codex") {
+        expect(result).toEqual(expected);
+      } else {
+        expect(result).toMatchObject(expected);
+      }
+    },
+  );
 
   it("reports an owner whose payload was not checked", () => {
     expect(
-      resolveAvailability({
-        workspaceDir: "/tmp/workspace",
-        runtime: "codex",
-        provider: "openai",
-        payloadFailures: [],
-        payloadCheckedPluginIds: [],
+      availability({
         selectedPluginRootDirs: new Map([["codex", "/tmp/plugins/codex"]]),
       }),
     ).toMatchObject({ status: "unavailable", reason: "owner-plugin-unverified" });

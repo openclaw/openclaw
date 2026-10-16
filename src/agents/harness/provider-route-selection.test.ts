@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -12,32 +12,55 @@ import { prepareAgentRuntimeAuth } from "../runtime-plan/prepare-auth.js";
 import { registerAgentHarness } from "./registry.js";
 import { selectAgentHarness, selectAgentHarnessForPreparedModelProviders } from "./selection.js";
 import { projectPreparedModelProvider } from "./support.js";
+import type { AgentHarness } from "./types.js";
 
 let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 
 beforeEach(() => {
   registrySnapshot = captureActivePluginRegistrySnapshot();
   setActivePluginRegistry(createEmptyPluginRegistry());
-  registerAgentHarness(
-    {
-      id: "codex",
-      label: "Codex route fixture",
-      supports: (context) =>
-        context.modelProvider?.runtimePolicy?.compatibleIds.includes("codex")
-          ? { supported: true, priority: 100 }
-          : { supported: false, reason: "Codex cannot reproduce the prepared provider route" },
-      async runAttempt() {
-        throw new Error("Selection proof does not execute inference");
-      },
-    },
-    { ownerPluginId: "codex" },
+  registerHarness(
+    "codex",
+    (context) =>
+      context.modelProvider?.runtimePolicy?.compatibleIds.includes("codex")
+        ? { supported: true, priority: 100 }
+        : { supported: false, reason: "Codex cannot reproduce the prepared provider route" },
+    "codex",
   );
 });
 
 afterEach(() => restoreActivePluginRegistrySnapshot(registrySnapshot));
 
+function registerHarness(id: string, supports: AgentHarness["supports"], ownerPluginId?: string) {
+  registerAgentHarness(
+    {
+      id,
+      label: id,
+      supports,
+      runAttempt: () => Promise.reject(new Error("Selection proof does not execute inference")),
+    },
+    { ownerPluginId },
+  );
+}
+
+function providerConfig(provider: string, definition: ModelProviderConfig): OpenClawConfig {
+  return {
+    agents: { entries: { assistant: {} } },
+    models: { providers: { [provider]: definition } },
+  };
+}
+
+function selection(cfg: OpenClawConfig, modelId = "gpt-5.5", provider = "openai") {
+  return { provider, modelId, agentId: "assistant", config: cfg };
+}
+
 function config(pinPrimary: boolean): OpenClawConfig {
   return {
+    ...providerConfig("openai", {
+      baseUrl: "https://api.openai.com/v1",
+      api: "openai-completions",
+      models: [],
+    }),
     agents: {
       entries: { assistant: {} },
       defaults: {
@@ -46,36 +69,23 @@ function config(pinPrimary: boolean): OpenClawConfig {
         heartbeat: { model: "openai/gpt-5.4-mini" },
       },
     },
-    models: {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-completions",
-          models: [],
-        },
-      },
-    },
   };
 }
 
 function authStore(subscription: boolean): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      "openai:platform": { type: "api_key", provider: "openai", key: "fixture-key" },
-      ...(subscription
-        ? {
-            "openai:chatgpt": {
-              type: "oauth" as const,
-              provider: "openai",
-              access: "fixture-access",
-              refresh: "fixture-refresh",
-              expires: Date.now() + 60_000,
-            },
-          }
-        : {}),
-    },
+  const profiles: AuthProfileStore["profiles"] = {
+    "openai:platform": { type: "api_key", provider: "openai", key: "fixture-key" },
   };
+  if (subscription) {
+    profiles["openai:chatgpt"] = {
+      type: "oauth",
+      provider: "openai",
+      access: "fixture-access",
+      refresh: "fixture-refresh",
+      expires: Date.now() + 60_000,
+    };
+  }
+  return { version: 1, profiles };
 }
 
 describe("registered provider route selection", () => {
@@ -88,19 +98,13 @@ describe("registered provider route selection", () => {
   ] as const)(
     "uses the selected model transport for %s",
     (_label, selectedRows, modelId, harness) => {
-      registerAgentHarness({
-        id: "custom-responses",
-        label: "Custom Responses harness",
-        supports: ({ modelProvider }) =>
-          modelProvider?.api === "openai-responses" &&
-          modelProvider.baseUrl === "https://responses.example/v1" &&
-          modelProvider.requestTransportOverrides === "none"
-            ? { supported: true, priority: 100 }
-            : { supported: false, reason: "Selected transport is not supported" },
-        async runAttempt() {
-          throw new Error("Selection proof does not execute inference");
-        },
-      });
+      registerHarness("custom-responses", ({ modelProvider }) =>
+        modelProvider?.api === "openai-responses" &&
+        modelProvider.baseUrl === "https://responses.example/v1" &&
+        modelProvider.requestTransportOverrides === "none"
+          ? { supported: true, priority: 100 }
+          : { supported: false, reason: "Selected transport is not supported" },
+      );
       const exact: ModelDefinitionConfig = {
         id: "Model",
         name: "Configured model",
@@ -122,26 +126,12 @@ describe("registered provider route selection", () => {
         },
         duplicate: { ...exact, api: "openai-completions" },
       };
-      const cfg: OpenClawConfig = {
-        agents: { entries: { assistant: {} } },
-        models: {
-          providers: {
-            custom: {
-              api: "openai-responses",
-              baseUrl: "https://responses.example/v1",
-              models: selectedRows.map((row) => rows[row]),
-            },
-          },
-        },
-      };
-      expect(
-        selectAgentHarness({
-          provider: "custom",
-          modelId,
-          agentId: "assistant",
-          config: cfg,
-        }).id,
-      ).toBe(harness);
+      const cfg = providerConfig("custom", {
+        api: "openai-responses",
+        baseUrl: "https://responses.example/v1",
+        models: selectedRows.map((row) => rows[row]),
+      });
+      expect(selectAgentHarness(selection(cfg, modelId, "custom")).id).toBe(harness);
     },
   );
 
@@ -152,15 +142,10 @@ describe("registered provider route selection", () => {
   ] as const)(
     "keeps %s on its supported route",
     (_label, pinPrimary, subscription, modelId, harness, profile, requirement) => {
-      const selection = {
-        provider: "openai",
-        modelId,
-        config: config(pinPrimary),
-        agentId: "assistant",
-      };
-      expect(selectAgentHarness(selection).id).toBe(harness);
+      const selected = selection(config(pinPrimary), modelId);
+      expect(selectAgentHarness(selected).id).toBe(harness);
       const prepared = prepareAgentRuntimeAuth({
-        ...selection,
+        ...selected,
         env: {},
         authProfileStore: authStore(subscription),
       });
@@ -169,12 +154,9 @@ describe("registered provider route selection", () => {
         modelRoute: { authRequirement: requirement },
       });
       const finalized = selectAgentHarnessForPreparedModelProviders({
-        ...selection,
-        modelProviders: prepared.attempts.map((attempt) =>
-          projectPreparedModelProvider({
-            plan: attempt.plan,
-            attemptKind: attempt.kind,
-          }),
+        ...selected,
+        modelProviders: prepared.attempts.map(({ plan, kind: attemptKind }) =>
+          projectPreparedModelProvider({ plan, attemptKind }),
         ),
       });
       expect(finalized.id).toBe(harness);
@@ -184,10 +166,7 @@ describe("registered provider route selection", () => {
   it("does not replace a required API profile to satisfy an explicit Codex runtime", () => {
     expect(() =>
       prepareAgentRuntimeAuth({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        config: config(true),
-        agentId: "assistant",
+        ...selection(config(true)),
         env: {},
         authProfileStore: authStore(true),
         sessionAuthProfileId: "openai:platform",
