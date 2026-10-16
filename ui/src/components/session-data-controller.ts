@@ -276,6 +276,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
       this.host.contextualSidebar,
       this.host.sidebarAgentsMode,
       this.host.connected,
+      this.filteredSessionScope,
     ];
   }
 
@@ -413,9 +414,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
     applySessionCatalogContinuation(this, event.detail);
   };
 
-  private readonly handleSessionCatalogPageActivation = () => {
-    scheduleSessionCatalogRefresh(this);
-  };
+  private readonly handleSessionCatalogPageActivation = () => scheduleSessionCatalogRefresh(this);
 
   invalidateSessionCatalogs = invalidateSessionCatalogData.bind(null, this);
 
