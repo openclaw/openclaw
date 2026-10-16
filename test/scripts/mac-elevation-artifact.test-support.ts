@@ -233,7 +233,6 @@ plutil() {
     TEST_CALLS: calls,
     TEST_FILE_CALLS: fileCalls,
     TEST_FORBIDDEN: forbidden,
-    TEST_FAULT: "",
   };
   const run = async (args: string[], fault = "") => {
     const result = await mac.run("/bin/bash", args, {

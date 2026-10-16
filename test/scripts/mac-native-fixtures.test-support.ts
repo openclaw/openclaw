@@ -16,13 +16,11 @@ export async function runMacFixtureTool(
     cwd: root,
     env: { HOME: root, TMPDIR: root, PATH: systemPath },
   });
-  expect(result.error, `${command}: ${result.stderr}`).toBeUndefined();
-  expect(result.status, `${command}: ${result.stderr}`).toBe(0);
+  expect(result, `${command}: ${result.stderr}`).toMatchObject({ error: undefined, status: 0 });
   return result.stdout.trim();
 }
 
 type PreparedNativeFixtures = Awaited<ReturnType<typeof compileMacNativeFixtures>>;
-type NativeFixtures = PreparedNativeFixtures["binaries"];
 let nativeFixtures: Promise<PreparedNativeFixtures> | undefined;
 
 export async function macObjectFixture(
@@ -72,10 +70,7 @@ export async function singleSliceMacFat64(
   return bytes;
 }
 
-export async function compiledMacNativeFixtures(
-  root: string,
-  mac: MacScriptFixture,
-): Promise<NativeFixtures> {
+export async function compiledMacNativeFixtures(root: string, mac: MacScriptFixture) {
   return (await prepareMacNativeFixtures(root, mac)).binaries;
 }
 

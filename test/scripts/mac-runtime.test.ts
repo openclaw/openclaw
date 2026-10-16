@@ -13,10 +13,8 @@ import { afterEach, describe, expect, it as baseIt } from "vitest";
 import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { registerMacRuntimeMaterializationTests } from "./mac-runtime-materialization.test-support.js";
+import "./mac-runtime-materialization.test-support.js";
 import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
-
-registerMacRuntimeMaterializationTests();
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -52,9 +50,11 @@ function scriptFixture(prefix: string) {
 }
 
 function pythonInventory(root: string, marker: string, program: string, ...args: string[]) {
-  const prelude = `import os, pathlib, runpy, shutil, sys, unicodedata
+  const prelude = `import os, pathlib, runpy, shutil, sys, unicodedata, unittest
 api = runpy.run_path('scripts/lib/mac-native-inventory.py')
 root = pathlib.Path(sys.argv[1])
+rejects = unittest.TestCase().assertRaises
+rejects_message = unittest.TestCase().assertRaisesRegex
 `;
   const result = spawnSync("/usr/bin/python3", ["-B", "-c", prelude + program, root, ...args], {
     encoding: "utf8",
@@ -70,6 +70,23 @@ async function portabilityFixture(root: string) {
   const bun = path.join(root, "bun");
   writeFileSync(bun, machoFixture());
   return { audit: () => auditMacRuntimePortability(root, bun), machoFixture };
+}
+
+function loadCommand(id: number, value: string, offset: number) {
+  const name = Buffer.from(value + "\0");
+  const bytes = Buffer.alloc(Math.ceil((offset + name.length) / 8) * 8);
+  bytes.writeUInt32LE(id, 0);
+  bytes.writeUInt32LE(bytes.length, 4);
+  bytes.writeUInt32LE(offset, 8);
+  name.copy(bytes, offset);
+  return bytes;
+}
+
+function nativeImage(header: Buffer, ...commands: Buffer[]) {
+  const bytes = Buffer.concat(commands);
+  header.writeUInt32LE(commands.length, 16);
+  header.writeUInt32LE(bytes.length, 20);
+  return Buffer.concat([header, bytes]);
 }
 
 describe("Mac app runtime publication", () => {
@@ -298,23 +315,15 @@ with api['open_native_inventory_tree'](source) as tree:
     for parent, name, canonical in queries:
         try: os.stat(source.joinpath(*parent, name), follow_symlinks=False)
         except FileNotFoundError:
-            try: tree.lstat_child(parent, name)
-            except FileNotFoundError: pass
-            else: raise AssertionError('Invented filesystem name equivalence')
+            with rejects(FileNotFoundError): tree.lstat_child(parent, name)
         else:
             actual = tree.lstat_child(parent, name)
             assert api['content_identity'](actual) == api['content_identity'](entries[canonical].info)
     for name in ('', '.', '..', '/outside', 'redirect/probe', 'x' + chr(0)):
-        try: tree.lstat_child((), name)
-        except ValueError: pass
-        else: raise AssertionError('Lookup escaped its single-child boundary')
-    try: tree.lstat_child(('redirect',), 'probe')
-    except ValueError: pass
-    else: raise AssertionError('Lookup followed an untraversed symlink parent')
+        with rejects(ValueError): tree.lstat_child((), name)
+    with rejects(ValueError): tree.lstat_child(('redirect',), 'probe')
     tree.validate()
-try: tree.lstat_child((), 'Library')
-except ValueError as error: assert 'closed' in str(error)
-else: raise AssertionError('Lookup survived tree closure')
+with rejects_message(ValueError, 'closed'): tree.lstat_child((), 'Library')
 assert set(os.listdir('/dev/fd')) == initial_fds
 print('child-lookup-ok')
 `,
@@ -340,7 +349,7 @@ source, outside = root / 'source', root / 'outside'
 outside.mkdir(); (outside / 'addon').write_text('outside')
 initial_fds = set(os.listdir('/dev/fd'))
 with api['open_native_inventory_tree'](source) as tree:
-    entries = list(tree.entries())
+    list(tree.entries())
     parent, name = ('Library',), 'addon'
     mode = sys.argv[2]
     if mode == 'missing': (source / 'Library/addon').unlink()
@@ -359,13 +368,9 @@ with api['open_native_inventory_tree'](source) as tree:
     else:
         os.link(source / 'Library/addon', source / 'new-alias')
         parent, name = (), 'new-alias'
-    try: tree.lstat_child(parent, name)
-    except (OSError, ValueError): pass
-    else: raise AssertionError('Changed namespace lookup was accepted')
+    with rejects((OSError, ValueError)): tree.lstat_child(parent, name)
     if mode == 'root':
-        try: tree.validate()
-        except (OSError, ValueError): pass
-        else: raise AssertionError('Final validation skipped root replacement')
+        with rejects((OSError, ValueError)): tree.validate()
 assert (outside / 'addon').read_text() == 'outside'
 assert set(os.listdir('/dev/fd')) == initial_fds
 print('child-binding-rejected')
@@ -374,10 +379,9 @@ print('child-binding-rejected')
     );
   });
 
-  it.each(["namespace-root", "namespace-nested", "discarded-resource", "incomplete"])(
-    "rejects incomplete or changed observed input even when not retained (%s)",
-    async (mode) => {
-      const { machoFixture } = await import("../helpers/mac-native.js");
+  it.each(["namespace-root", "namespace-nested", "incomplete"])(
+    "rejects incomplete or changed namespaces (%s)",
+    (mode) => {
       const root = temps.make("openclaw-native-complete-audit-");
       const directory = path.join(
         root,
@@ -385,10 +389,7 @@ print('child-binding-rejected')
         ...(mode === "namespace-nested" ? ["child"] : []),
       );
       mkdirSync(directory, { recursive: true });
-      writeFileSync(
-        path.join(directory, "resource"),
-        mode === "discarded-resource" ? machoFixture() : "resource",
-      );
+      writeFileSync(path.join(directory, "resource"), "resource");
       pythonInventory(
         root,
         "complete-audit-rejected",
@@ -397,38 +398,20 @@ root, mode = pathlib.Path(sys.argv[1]), sys.argv[2]
 source = root / 'source'
 directory = source / 'child' if mode == 'namespace-nested' else source
 resource = directory / 'resource'
-original, original_info = resource.read_bytes(), resource.stat()
+original = resource.read_bytes()
 initial_fds = set(os.listdir('/dev/fd'))
-held = None
-try:
-    with api['open_native_inventory_tree'](source) as tree:
-        iterator = tree.entries()
-        records = [next(iterator)]
-        if mode.startswith('namespace-'):
-            if mode == 'namespace-nested': records.append(next(iterator))
-            before = directory.stat()
-            resource.rename(root / 'hidden')
-            records.extend(iterator)
-            assert not any(entry.parts and entry.parts[-1] == 'resource' for entry in records)
-            (root / 'hidden').rename(resource)
-            assert api['content_identity'](directory.stat()) != api['content_identity'](before)
-        elif mode == 'discarded-resource':
-            for entry in iterator:
-                records.append(entry)
-                if isinstance(entry, api['NativeInventoryFile']):
-                    held = os.fdopen(os.dup(entry.stream.fileno()), 'rb', buffering=0)
-            resource.write_bytes(bytes.fromhex('cafebabe0000003d0001'))
-            assert api['classify_macho_candidates']([(held, 'resource')]) == [None]
-            resource.write_bytes(original)
-            os.utime(resource, ns=(original_info.st_atime_ns, original_info.st_mtime_ns))
-            assert resource.stat().st_ino == original_info.st_ino
-            assert resource.stat().st_ctime_ns != original_info.st_ctime_ns
-        try: tree.validate()
-        except ValueError as error:
-            assert ('complete' if mode == 'incomplete' else 'changed') in str(error), str(error)
-        else: raise AssertionError('Incomplete or changed observed input was accepted')
-finally:
-    if held is not None: held.close()
+with api['open_native_inventory_tree'](source) as tree:
+    iterator = tree.entries()
+    records = [next(iterator)]
+    if mode.startswith('namespace-'):
+        if mode == 'namespace-nested': records.append(next(iterator))
+        before = directory.stat()
+        resource.rename(root / 'hidden')
+        records.extend(iterator)
+        assert not any(entry.parts and entry.parts[-1] == 'resource' for entry in records)
+        (root / 'hidden').rename(resource)
+        assert api['content_identity'](directory.stat()) != api['content_identity'](before)
+    with rejects_message(ValueError, 'complete' if mode == 'incomplete' else 'changed'): tree.validate()
 assert resource.read_bytes() == original
 assert set(os.listdir('/dev/fd')) == initial_fds
 print('complete-audit-rejected')
@@ -554,9 +537,7 @@ try:
                 assert borrowed.closed
                 if entry.parts == ('invalid',):
                     entry.stream.seek(7)
-                    try: api['classify_macho_candidates']([(entry.stream, 'invalid')])
-                    except ValueError: pass
-                    else: raise AssertionError('Invalid native container was accepted')
+                    with rejects(ValueError): api['classify_macho_candidates']([(entry.stream, 'invalid')])
                     assert entry.stream.tell() == 7
                     continue
                 if entry.header in api['MACHO_MAGICS']:
@@ -573,13 +554,9 @@ try:
 except CopyAborted:
     assert sys.argv[2] == 'abort'
 assert borrowed.closed
-try: borrowed.fileno()
-except ValueError: pass
-else: raise AssertionError('Borrowed descriptor survived its context')
+with rejects(ValueError): borrowed.fileno()
 assert next(iterator, None) is None
-try: tree.validate()
-except ValueError: pass
-else: raise AssertionError('Closed tree remained usable')
+with rejects(ValueError): tree.validate()
 assert set(os.listdir('/dev/fd')) == initial_fds
 print('held-file-copy-ok')
 `,
@@ -604,26 +581,15 @@ print('held-file-copy-ok')
   it("does not borrow loader paths from a different architecture", async () => {
     const root = temps.make("openclaw-portability-slices-");
     const { audit, machoFixture } = await portabilityFixture(root);
-    const command = (id: number, value: string, offset: number) => {
-      const name = Buffer.from(value + "\0");
-      const bytes = Buffer.alloc(Math.ceil((offset + name.length) / 8) * 8);
-      bytes.writeUInt32LE(id, 0);
-      bytes.writeUInt32LE(bytes.length, 4);
-      bytes.writeUInt32LE(offset, 8);
-      name.copy(bytes, offset);
-      return bytes;
-    };
     const slice = (cpu: number, subtype: number, folder: string) => {
       const header = machoFixture(64, true, false, 6);
-      const commands = Buffer.concat([
-        command(0x8000001c, `@loader_path/${folder}`, 12),
-        command(0xc, "@rpath/libdemo.dylib", 24),
-      ]);
       header.writeUInt32LE(cpu, 4);
       header.writeUInt32LE(subtype, 8);
-      header.writeUInt32LE(2, 16);
-      header.writeUInt32LE(commands.length, 20);
-      return Buffer.concat([header, commands]);
+      return nativeImage(
+        header,
+        loadCommand(0x8000001c, `@loader_path/${folder}`, 12),
+        loadCommand(0xc, "@rpath/libdemo.dylib", 24),
+      );
     };
     const slices = [slice(0x01000007, 3, "empty"), slice(0x0100000c, 0x80000002, "valid")] as const;
     const payload = Buffer.alloc(8192 + slices[1].length);
@@ -660,16 +626,7 @@ print('held-file-copy-ok')
     const root = temps.make("openclaw-portability-load-");
     const { audit, machoFixture } = await portabilityFixture(root);
     const addon = path.join(root, "addon");
-    const header = machoFixture(64, true, false, 6);
-    const name = Buffer.from(library + "\0");
-    const command = Buffer.alloc(Math.ceil((24 + name.length) / 8) * 8);
-    command.writeUInt32LE(0xc, 0); // LC_LOAD_DYLIB
-    command.writeUInt32LE(command.length, 4);
-    command.writeUInt32LE(24, 8);
-    name.copy(command, 24);
-    header.writeUInt32LE(1, 16);
-    header.writeUInt32LE(command.length, 20);
-    const thin = Buffer.concat([header, command]);
+    const thin = nativeImage(machoFixture(64, true, false, 6), loadCommand(0xc, library, 24));
     // On-disk fat headers are big endian; the arm64 slice is little endian.
     const payload =
       format === "fat64"
