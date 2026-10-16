@@ -178,6 +178,7 @@ describe("queued compaction successor ownership", () => {
       const pluginStore = ["retained history"];
       const replaceWriter = async () => {
         await patchSessionEntryCore(target(), () => ({ activeWriterRunId: "replacement-writer" }));
+        return undefined;
       };
       contextEngineCompactMock.mockImplementationOnce(async () => {
         if (effect === "compact") {
