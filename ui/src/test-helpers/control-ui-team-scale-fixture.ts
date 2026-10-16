@@ -177,6 +177,8 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   const pinnedRows = sessions.slice(-counts.pinned);
   const pinnedKeys = pinnedRows.map((row) => row.key);
   const selectedSessionKey = pinnedKeys[0]!;
+  pinnedRows[0]!.sharingRole = "admin";
+  pinnedRows[0]!.visibility = "shared";
   if (options.liveRun) {
     Object.assign(pinnedRows[0]!, {
       hasActiveRun: true,
