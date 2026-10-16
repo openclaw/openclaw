@@ -13,6 +13,51 @@ const initial: SessionEntry = {
   model: "claude-opus-4-6",
 };
 
+const interruptedAndRecoveryRuns = [
+  { runId: "interrupted-run", lifecycleGeneration: "generation-1" },
+  { runId: "recovery-run", lifecycleGeneration: "generation-1" },
+];
+
+function snapshot(
+  entry: SessionEntry,
+  updatedAt: number,
+  patch: Partial<SessionEntry> = {},
+): SessionEntry {
+  return { ...entry, updatedAt, ...patch };
+}
+
+function modelSelection(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return {
+    ...initial,
+    providerOverride: "openai",
+    modelOverride: "gpt-5.4",
+    modelOverrideSource: "user",
+    ...overrides,
+  };
+}
+
+function recovery(
+  state: Partial<NonNullable<SessionEntry["mainRestartRecovery"]>> = {},
+  entry: Partial<SessionEntry> = {},
+): SessionEntry {
+  return {
+    ...initial,
+    abortedLastRun: true,
+    mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 1, ...state },
+    ...entry,
+  };
+}
+
+function clearedRecovery(entry: SessionEntry, overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return {
+    ...entry,
+    updatedAt: 2,
+    abortedLastRun: false,
+    mainRestartRecovery: undefined,
+    ...overrides,
+  };
+}
+
 describe("session snapshot merge", () => {
   it("projects same-provider model changes as an atomic pair", () => {
     const next = { ...initial, model: "claude-sonnet-4-6", updatedAt: 2 };
@@ -90,9 +135,7 @@ describe("session snapshot merge", () => {
         activeModel: "openai/gpt-fallback",
       },
     };
-    const next = {
-      ...initialOverride,
-      updatedAt: 2,
+    const next = snapshot(initialOverride, 2, {
       providerOverride: undefined,
       modelOverride: undefined,
       modelOverrideSource: undefined,
@@ -102,10 +145,8 @@ describe("session snapshot merge", () => {
       authProfileOverrideSource: undefined,
       fallbackNotice: undefined,
       liveModelSwitchPending: true,
-    };
-    const current: SessionEntry = {
-      ...initialOverride,
-      updatedAt: 3,
+    });
+    const current = snapshot(initialOverride, 3, {
       modelOverride: "gpt-new",
       modelOverrideSource: "user",
       authProfileOverride: "openai:user",
@@ -115,7 +156,7 @@ describe("session snapshot merge", () => {
         selectedModel: "openai/gpt-new",
         activeModel: "openai/gpt-fallback",
       },
-    };
+    });
 
     expect(mergeSessionSnapshotChanges({ initial: initialOverride, next, current })).toEqual(
       current,
@@ -123,18 +164,10 @@ describe("session snapshot merge", () => {
   });
 
   it("re-arms a winning explicit model switch after the prior signal clears", () => {
-    const initialOverride: SessionEntry = {
-      ...initial,
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      modelOverrideSource: "user",
+    const initialOverride = modelSelection({
       liveModelSwitchPending: true,
-    };
-    const next: SessionEntry = {
-      ...initialOverride,
-      updatedAt: 2,
-      modelOverride: "gpt-5.5",
-    };
+    });
+    const next = { ...initialOverride, updatedAt: 2, modelOverride: "gpt-5.5" };
     const current = { ...initialOverride, updatedAt: 3 };
     delete current.liveModelSwitchPending;
 
@@ -154,24 +187,14 @@ describe("session snapshot merge", () => {
   });
 
   it("preserves concurrently consumed unchanged model-dependent state", () => {
-    const initialOverride: SessionEntry = {
-      ...initial,
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      modelOverrideSource: "user",
+    const initialOverride = modelSelection({
       liveModelSwitchPending: true,
       thinkingLevel: "high",
-    };
-    const next: SessionEntry = {
-      ...initialOverride,
-      updatedAt: 2,
-      modelOverride: "gpt-5.5",
-    };
-    const current: SessionEntry = {
-      ...initialOverride,
-      updatedAt: 3,
+    });
+    const next = { ...initialOverride, updatedAt: 2, modelOverride: "gpt-5.5" };
+    const current = snapshot(initialOverride, 3, {
       thinkingLevel: "low",
-    };
+    });
     delete current.liveModelSwitchPending;
 
     const merged = mergeSessionSnapshotChanges({ initial: initialOverride, next, current });
@@ -184,11 +207,7 @@ describe("session snapshot merge", () => {
   });
 
   it("clears stale model-dependent state with the winning model selection", () => {
-    const initialOverride: SessionEntry = {
-      ...initial,
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      modelOverrideSource: "user",
+    const initialOverride = modelSelection({
       modelProvider: "openai",
       model: "gpt-5.4",
       fallbackNotice: {
@@ -218,10 +237,8 @@ describe("session snapshot merge", () => {
         messageCount: 1,
         unwindowedMessageCount: 1,
       },
-    };
-    const next: SessionEntry = {
-      ...initialOverride,
-      updatedAt: 2,
+    });
+    const next = snapshot(initialOverride, 2, {
       modelOverride: "gpt-5.5",
       modelProvider: undefined,
       model: undefined,
@@ -229,10 +246,8 @@ describe("session snapshot merge", () => {
       contextTokens: undefined,
       contextTokensSource: undefined,
       contextBudgetStatus: undefined,
-    };
-    const current: SessionEntry = {
-      ...initialOverride,
-      updatedAt: 3,
+    });
+    const current = snapshot(initialOverride, 3, {
       modelProvider: "openai",
       model: "gpt-5.4-mini",
       fallbackNotice: {
@@ -242,7 +257,7 @@ describe("session snapshot merge", () => {
       },
       contextTokens: 80_000,
       contextTokensSource: "runtime",
-    };
+    });
 
     const merged = mergeSessionSnapshotChanges({ initial: initialOverride, next, current });
 
@@ -260,13 +275,9 @@ describe("session snapshot merge", () => {
   });
 
   it("does not reject a model switch after concurrent runtime metadata refresh", () => {
-    const initialOverride: SessionEntry = {
-      ...initial,
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      modelOverrideSource: "user",
+    const initialOverride = modelSelection({
       contextTokens: 100_000,
-    };
+    });
     const next: SessionEntry = {
       ...initialOverride,
       modelOverride: "gpt-5.5",
@@ -274,12 +285,10 @@ describe("session snapshot merge", () => {
       model: undefined,
       contextTokens: undefined,
     };
-    const current: SessionEntry = {
-      ...initialOverride,
-      updatedAt: 3,
+    const current = snapshot(initialOverride, 3, {
       model: "gpt-5.4-mini",
       contextTokens: 80_000,
-    };
+    });
 
     expect(
       sessionSnapshotTouchedFieldsConflict({
@@ -292,23 +301,17 @@ describe("session snapshot merge", () => {
   });
 
   it("rejects a model switch after a concurrent thinking override", () => {
-    const initialOverride: SessionEntry = {
-      ...initial,
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      modelOverrideSource: "user",
+    const initialOverride = modelSelection({
       thinkingLevel: "xhigh",
-    };
+    });
     const next: SessionEntry = {
       ...initialOverride,
       modelOverride: "gpt-5.5",
       thinkingLevel: "high",
     };
-    const current: SessionEntry = {
-      ...initialOverride,
-      updatedAt: 3,
+    const current = snapshot(initialOverride, 3, {
       thinkingLevel: "low",
-    };
+    });
 
     expect(
       sessionSnapshotTouchedFieldsConflict({
@@ -321,9 +324,7 @@ describe("session snapshot merge", () => {
   });
 
   it("blocks stale model-dependent state after a concurrent selection", () => {
-    const next: SessionEntry = {
-      ...initial,
-      updatedAt: 2,
+    const next = snapshot(initial, 2, {
       modelProvider: "openai",
       model: "gpt-5.4",
       fallbackNotice: {
@@ -333,14 +334,12 @@ describe("session snapshot merge", () => {
       },
       contextTokens: 100_000,
       thinkingLevel: "medium",
-    };
-    const current: SessionEntry = {
-      ...initial,
-      updatedAt: 3,
+    });
+    const current = snapshot(initial, 3, {
       providerOverride: "openai",
       modelOverride: "gpt-5.5",
       modelOverrideSource: "user",
-    };
+    });
 
     expect(mergeSessionSnapshotChanges({ initial, next, current })).toEqual(current);
   });
@@ -357,12 +356,8 @@ describe("session snapshot merge", () => {
   });
 
   it("preserves the recovery aggregate when a restart marker wins a stale healthy clear", () => {
-    const initialRecovery: SessionEntry = {
-      ...initial,
-      abortedLastRun: true,
-      restartRecoveryRuns: [{ runId: "run-1", lifecycleGeneration: "generation-1" }],
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
+    const initialRecovery = recovery(
+      {
         revision: 2,
         chargedAttempts: 0,
         foregroundClaims: {
@@ -370,22 +365,19 @@ describe("session snapshot merge", () => {
           tokens: ["owner-1"],
         },
       },
-    };
-    const next: SessionEntry = {
-      ...initialRecovery,
-      updatedAt: 2,
-      abortedLastRun: false,
+      {
+        restartRecoveryRuns: [{ runId: "run-1", lifecycleGeneration: "generation-1" }],
+      },
+    );
+    const next = clearedRecovery(initialRecovery, {
       restartRecoveryRuns: undefined,
-      mainRestartRecovery: undefined,
-    };
-    const current: SessionEntry = {
-      ...initialRecovery,
-      updatedAt: 3,
+    });
+    const current = snapshot(initialRecovery, 3, {
       restartRecoveryRuns: [
         ...(initialRecovery.restartRecoveryRuns ?? []),
         { runId: "run-1", lifecycleGeneration: "generation-2" },
       ],
-    };
+    });
 
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
@@ -395,31 +387,21 @@ describe("session snapshot merge", () => {
   });
 
   it("preserves the safe-tools guard when a newer recovery owner wins a stale clear", () => {
-    const initialRecovery: SessionEntry = {
-      ...initial,
-      abortedLastRun: true,
-      restartRecoveryForceSafeTools: true,
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 1,
-        chargedAttempts: 1,
+    const initialRecovery = recovery(
+      {},
+      {
+        restartRecoveryForceSafeTools: true,
       },
-    };
-    const next: SessionEntry = {
-      ...initialRecovery,
-      updatedAt: 2,
-      abortedLastRun: false,
+    );
+    const next = clearedRecovery(initialRecovery, {
       restartRecoveryForceSafeTools: undefined,
-      mainRestartRecovery: undefined,
-    };
-    const current: SessionEntry = {
-      ...initialRecovery,
-      updatedAt: 3,
+    });
+    const current = snapshot(initialRecovery, 3, {
       mainRestartRecovery: {
         ...initialRecovery.mainRestartRecovery!,
         revision: 2,
       },
-    };
+    });
 
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
@@ -429,34 +411,23 @@ describe("session snapshot merge", () => {
   });
 
   it("preserves recovery state when the safe-tools guard is acquired during fence cleanup", () => {
-    const initialRecovery: SessionEntry = {
-      ...initial,
-      abortedLastRun: true,
-      restartRecoveryRuns: [
-        { runId: "interrupted-run", lifecycleGeneration: "generation-1" },
-        { runId: "recovery-run", lifecycleGeneration: "generation-1" },
-      ],
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
+    const initialRecovery = recovery(
+      {
         revision: 3,
-        chargedAttempts: 1,
       },
-    };
-    const next: SessionEntry = {
-      ...initialRecovery,
-      updatedAt: 2,
-      abortedLastRun: false,
+      {
+        restartRecoveryRuns: interruptedAndRecoveryRuns,
+      },
+    );
+    const next = clearedRecovery(initialRecovery, {
       restartRecoveryRuns: undefined,
       restartRecoveryForceSafeTools: undefined,
-      mainRestartRecovery: undefined,
-    };
-    const current: SessionEntry = {
-      ...structuredClone(initialRecovery),
-      updatedAt: 3,
+    });
+    const current = snapshot(structuredClone(initialRecovery), 3, {
       abortedLastRun: false,
       restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "generation-1" }],
       restartRecoveryForceSafeTools: true,
-    };
+    });
 
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
@@ -466,32 +437,21 @@ describe("session snapshot merge", () => {
   });
 
   it("clears recovery after lifecycle settlement consumes its run fence", () => {
-    const initialRecovery: SessionEntry = {
-      ...initial,
-      abortedLastRun: true,
-      restartRecoveryRuns: [
-        { runId: "interrupted-run", lifecycleGeneration: "generation-1" },
-        { runId: "recovery-run", lifecycleGeneration: "generation-1" },
-      ],
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
+    const initialRecovery = recovery(
+      {
         revision: 3,
-        chargedAttempts: 1,
       },
-    };
-    const next: SessionEntry = {
-      ...initialRecovery,
-      updatedAt: 2,
-      abortedLastRun: false,
+      {
+        restartRecoveryRuns: interruptedAndRecoveryRuns,
+      },
+    );
+    const next = clearedRecovery(initialRecovery, {
       restartRecoveryRuns: undefined,
-      mainRestartRecovery: undefined,
-    };
-    const current: SessionEntry = {
-      ...structuredClone(initialRecovery),
-      updatedAt: 3,
+    });
+    const current = snapshot(structuredClone(initialRecovery), 3, {
       abortedLastRun: false,
       restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "generation-1" }],
-    };
+    });
 
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
@@ -501,24 +461,9 @@ describe("session snapshot merge", () => {
   });
 
   it("preserves every concurrent owner and interruption until lifecycle settlement", () => {
-    const initialRecovery: SessionEntry = {
-      ...initial,
-      abortedLastRun: true,
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 1,
-        chargedAttempts: 1,
-      },
-    };
-    const next: SessionEntry = {
-      ...initialRecovery,
-      updatedAt: 2,
-      abortedLastRun: false,
-      mainRestartRecovery: undefined,
-    };
-    const current: SessionEntry = {
-      ...initialRecovery,
-      updatedAt: 3,
+    const initialRecovery = recovery({});
+    const next = clearedRecovery(initialRecovery);
+    const current = snapshot(initialRecovery, 3, {
       mainRestartRecovery: {
         ...initialRecovery.mainRestartRecovery!,
         revision: 3,
@@ -527,7 +472,7 @@ describe("session snapshot merge", () => {
           tokens: ["owner-1", "owner-2"],
         },
       },
-    };
+    });
 
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
@@ -538,26 +483,15 @@ describe("session snapshot merge", () => {
   });
 
   it("reasserts a terminal abort after another owner marks the session healthy", () => {
-    const initialRecovery: SessionEntry = {
-      ...initial,
-      abortedLastRun: true,
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 3,
-        chargedAttempts: 1,
-        foregroundClaims: {
-          lifecycleGeneration: "generation-1",
-          tokens: ["owner-1", "owner-2"],
-        },
+    const initialRecovery = recovery({
+      revision: 3,
+      foregroundClaims: {
+        lifecycleGeneration: "generation-1",
+        tokens: ["owner-1", "owner-2"],
       },
-    };
-    const next: SessionEntry = {
-      ...structuredClone(initialRecovery),
-      updatedAt: 2,
-    };
-    const current: SessionEntry = {
-      ...structuredClone(initialRecovery),
-      updatedAt: 3,
+    });
+    const next = snapshot(structuredClone(initialRecovery), 2);
+    const current = snapshot(structuredClone(initialRecovery), 3, {
       abortedLastRun: false,
       mainRestartRecovery: {
         ...initialRecovery.mainRestartRecovery!,
@@ -567,7 +501,7 @@ describe("session snapshot merge", () => {
           tokens: ["owner-2"],
         },
       },
-    };
+    });
 
     const merged = mergeSessionSnapshotChanges({
       initial: initialRecovery,
@@ -581,22 +515,15 @@ describe("session snapshot merge", () => {
   });
 
   it("does not attach a stale terminal abort to a replacement recovery cycle", () => {
-    const initialRecovery: SessionEntry = {
-      ...initial,
-      abortedLastRun: true,
-      mainRestartRecovery: {
-        cycleId: "cycle-old",
-        revision: 2,
-        chargedAttempts: 1,
-        foregroundClaims: {
-          lifecycleGeneration: "generation-old",
-          tokens: ["old-owner"],
-        },
+    const initialRecovery = recovery({
+      cycleId: "cycle-old",
+      revision: 2,
+      foregroundClaims: {
+        lifecycleGeneration: "generation-old",
+        tokens: ["old-owner"],
       },
-    };
-    const current: SessionEntry = {
-      ...structuredClone(initialRecovery),
-      updatedAt: 3,
+    });
+    const current = snapshot(structuredClone(initialRecovery), 3, {
       abortedLastRun: false,
       mainRestartRecovery: {
         cycleId: "cycle-new",
@@ -607,7 +534,7 @@ describe("session snapshot merge", () => {
           tokens: ["new-owner"],
         },
       },
-    };
+    });
 
     const merged = mergeSessionSnapshotChanges({
       initial: initialRecovery,
@@ -621,18 +548,10 @@ describe("session snapshot merge", () => {
   });
 
   it("preserves a concurrent foreground claim over a partial recovery update", () => {
-    const initialRecovery: SessionEntry = {
-      ...initial,
-      abortedLastRun: true,
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 1,
-        chargedAttempts: 0,
-      },
-    };
-    const next: SessionEntry = {
-      ...initialRecovery,
-      updatedAt: 2,
+    const initialRecovery = recovery({
+      chargedAttempts: 0,
+    });
+    const next = snapshot(initialRecovery, 2, {
       mainRestartRecovery: {
         ...initialRecovery.mainRestartRecovery!,
         revision: 2,
@@ -643,10 +562,8 @@ describe("session snapshot merge", () => {
           lifecycleGeneration: "generation-1",
         },
       },
-    };
-    const current: SessionEntry = {
-      ...initialRecovery,
-      updatedAt: 3,
+    });
+    const current = snapshot(initialRecovery, 3, {
       mainRestartRecovery: {
         ...initialRecovery.mainRestartRecovery!,
         revision: 2,
@@ -655,7 +572,7 @@ describe("session snapshot merge", () => {
           tokens: ["owner-1"],
         },
       },
-    };
+    });
 
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 

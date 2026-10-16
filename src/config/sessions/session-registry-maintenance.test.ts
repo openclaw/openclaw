@@ -1,4 +1,3 @@
-// Session registry maintenance tests cover the task-owned cron-run pruning seam.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -28,6 +27,20 @@ afterAll(async () => {
   closeOpenClawStateDatabaseForTest();
   await fixtureSuite.cleanup();
 });
+
+function maintain(
+  storePath: string,
+  options: Partial<Parameters<typeof runSessionRegistryMaintenanceForStore>[0]> = {},
+) {
+  return runSessionRegistryMaintenanceForStore({
+    agentId: "main",
+    storePath,
+    apply: true,
+    retentionMs: 7 * DAY_MS,
+    runningCronJobIds: new Set(),
+    ...options,
+  });
+}
 
 function sessionEntry(sessionId: string, updatedAt: number): SessionEntry {
   return { sessionId, updatedAt, delivery: { kind: "none" } };
@@ -97,11 +110,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
           await consume(page, assertCurrent);
         }),
       );
-    const result = await runSessionRegistryMaintenanceForStore({
-      agentId: "main",
-      storePath,
-      apply: true,
-      retentionMs: 7 * DAY_MS,
+    const result = await maintain(storePath, {
       runningCronJobIds: new Set(["running"]),
     }).finally(() => reader.mockRestore());
     expect(seen).toBe(67);
@@ -120,20 +129,13 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     const storePath = await createStore({
       [sessionKey]: sessionEntry("deadline-recent", now),
     });
-    const options = {
-      agentId: "main",
-      storePath,
-      apply: true,
-      retentionMs: 7 * DAY_MS,
-      runningCronJobIds: new Set<string>(),
-    };
-    const retained = await runSessionRegistryMaintenanceForStore(options);
+    const retained = await maintain(storePath);
     expect(retained.nextSweepAtMs).toBe(now + 7 * DAY_MS + 1);
     await replaceSessionEntry(
       { sessionKey, storePath },
       sessionEntry("deadline-recent", now - 8 * DAY_MS),
     );
-    const removed = await runSessionRegistryMaintenanceForStore(options);
+    const removed = await maintain(storePath);
     expect(removed).toEqual({ pruned: 1, preservedRunning: 0, nextSweepAtMs: null });
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
   });
@@ -153,12 +155,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
       });
     try {
       await expect(
-        runSessionRegistryMaintenanceForStore({
-          agentId: "main",
-          storePath,
-          apply: true,
-          retentionMs: 7 * DAY_MS,
-          runningCronJobIds: new Set(),
+        maintain(storePath, {
           assertCurrent() {
             if (!current) {
               throw new Error("maintenance owner retired");
@@ -195,13 +192,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
         return apply(params);
       });
     try {
-      const result = await runSessionRegistryMaintenanceForStore({
-        agentId: "main",
-        storePath,
-        apply: true,
-        retentionMs: 7 * DAY_MS,
-        runningCronJobIds: new Set(),
-      });
+      const result = await maintain(storePath);
       expect(mutation).toHaveBeenCalledOnce();
       expect(result).toMatchObject({ preservedRunning: 0, pruned: 0 });
       expect(loadSessionEntry(scope)).toEqual(changedEntry);
@@ -217,13 +208,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     const storePath = path.join(dir, "sessions.json");
     const sqlitePath = resolveRequiredSqlitePath(storePath);
 
-    const result = await runSessionRegistryMaintenanceForStore({
-      agentId: "main",
-      apply: true,
-      retentionMs: 7 * DAY_MS,
-      runningCronJobIds: new Set(),
-      storePath,
-    });
+    const result = await maintain(storePath);
 
     expect(result).toEqual({
       preservedRunning: 0,
@@ -249,13 +234,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
       { type: "proof-event", data: "cron transcript must survive pruning" },
     );
 
-    const result = await runSessionRegistryMaintenanceForStore({
-      agentId: "main",
-      apply: true,
-      retentionMs: 7 * DAY_MS,
-      runningCronJobIds: new Set(),
-      storePath,
-    });
+    const result = await maintain(storePath);
 
     expect(result).toEqual({
       preservedRunning: 0,
@@ -313,12 +292,8 @@ describe("runSessionRegistryMaintenanceForStore", () => {
           return await consume(entries, assertCurrent);
         }),
       );
-    const result = await runSessionRegistryMaintenanceForStore({
-      agentId: "main",
+    const result = await maintain(storePath, {
       apply: false,
-      retentionMs: 7 * DAY_MS,
-      runningCronJobIds: new Set(),
-      storePath,
     }).finally(() => reader.mockRestore());
 
     expect(result).toMatchObject({ preservedRunning: 0, pruned: 1 });
@@ -349,12 +324,8 @@ describe("runSessionRegistryMaintenanceForStore", () => {
       [recentKey]: sessionEntry("recent-run", now),
     });
 
-    const result = await runSessionRegistryMaintenanceForStore({
-      agentId: "main",
-      apply: true,
-      retentionMs: 7 * DAY_MS,
+    const result = await maintain(storePath, {
       runningCronJobIds: new Set(["running-job"]),
-      storePath,
     });
 
     expect(result).toMatchObject({
@@ -392,13 +363,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
 
     try {
       const before = Date.now();
-      const activeResult = await runSessionRegistryMaintenanceForStore({
-        agentId: "main",
-        apply: true,
-        retentionMs: 7 * DAY_MS,
-        runningCronJobIds: new Set(),
-        storePath,
-      });
+      const activeResult = await maintain(storePath);
       expect(activeResult.pruned).toBe(0);
       expect(activeResult.nextSweepAtMs).toBeGreaterThanOrEqual(before + 60_000);
       expect(loadSessionEntry({ sessionKey, storePath })).toBeDefined();
@@ -406,13 +371,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
       admission.release();
     }
 
-    const releasedResult = await runSessionRegistryMaintenanceForStore({
-      agentId: "main",
-      apply: true,
-      retentionMs: 7 * DAY_MS,
-      runningCronJobIds: new Set(),
-      storePath,
-    });
+    const releasedResult = await maintain(storePath);
     expect(releasedResult.pruned).toBe(1);
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
   });

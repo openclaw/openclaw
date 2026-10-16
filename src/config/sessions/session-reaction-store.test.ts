@@ -53,6 +53,11 @@ const reaction = {
   expectedSessionId: "session-a",
 };
 
+const alice = { id: "alice", label: "Alice" };
+const aliceReaction = (emoji: string) => ({ emoji, count: 1, identities: [alice] });
+const react = (overrides: Partial<Parameters<typeof setSessionReactionAsync>[1]> = {}) =>
+  setSessionReactionAsync(scope, { ...reaction, ...overrides });
+
 beforeAll(() => {
   root = tempDirs.make("openclaw-session-reactions-");
 });
@@ -124,8 +129,8 @@ describe("session reaction store", () => {
     await seedMessages("session-a", [reaction.messageId]);
     const methods = observeCallerSql();
     try {
-      expect(await setSessionReactionAsync(scope, reaction)).toEqual({
-        reactions: [{ emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] }],
+      expect(await react()).toEqual({
+        reactions: [aliceReaction("👍")],
         newestRemainingEmoji: "👍",
         changed: true,
       });
@@ -138,7 +143,7 @@ describe("session reaction store", () => {
       }
     }
     expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual([
-      { emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] },
+      aliceReaction("👍"),
     ]);
   });
 
@@ -151,8 +156,7 @@ describe("session reaction store", () => {
       return callback(request, grant);
     });
     await expect(
-      setSessionReactionAsync(scope, {
-        ...reaction,
+      react({
         assertCurrent() {
           if (!current) {
             throw new Error("Reaction authority revoked");
@@ -166,39 +170,38 @@ describe("session reaction store", () => {
 
   it("toggles idempotently and summarizes emoji and identities in first-created order", async () => {
     expect(listSessionReactions(scope, { sessionId: "session-a" })).toEqual({});
-    const first = await setSessionReactionAsync(scope, reaction);
+    const first = await react();
     expect(first).toEqual({
-      reactions: [{ emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] }],
+      reactions: [aliceReaction("👍")],
       newestRemainingEmoji: "👍",
       changed: true,
     });
-    expect(await setSessionReactionAsync(scope, reaction)).toEqual({ ...first, changed: false });
+    expect(await react()).toEqual({ ...first, changed: false });
     stampReaction("👍", "alice", 100);
-    await setSessionReactionAsync(scope, { ...reaction, emoji: "🎉" });
+    await react({ emoji: "🎉" });
     stampReaction("🎉", "alice", 200);
     const updated = (
-      await setSessionReactionAsync(scope, {
-        ...reaction,
+      await react({
         identityId: "bob",
         identityLabel: undefined,
       })
     ).reactions;
     stampReaction("👍", "bob", 300);
     expect(updated).toEqual([
-      { emoji: "👍", count: 2, identities: [{ id: "alice", label: "Alice" }, { id: "bob" }] },
-      { emoji: "🎉", count: 1, identities: [{ id: "alice", label: "Alice" }] },
+      { emoji: "👍", count: 2, identities: [alice, { id: "bob" }] },
+      aliceReaction("🎉"),
     ]);
-    await setSessionReactionAsync(scope, { ...reaction, messageId: "message-b", emoji: "👀" });
+    await react({ messageId: "message-b", emoji: "👀" });
     expect(listSessionReactions(scope, { sessionId: "session-a" })).toEqual({
       "message-a": updated,
-      "message-b": [{ emoji: "👀", count: 1, identities: [{ id: "alice", label: "Alice" }] }],
+      "message-b": [aliceReaction("👀")],
     });
-    const removed = (await setSessionReactionAsync(scope, { ...reaction, remove: true })).reactions;
+    const removed = (await react({ remove: true })).reactions;
     expect(removed).toEqual([
-      { emoji: "🎉", count: 1, identities: [{ id: "alice", label: "Alice" }] },
+      aliceReaction("🎉"),
       { emoji: "👍", count: 1, identities: [{ id: "bob" }] },
     ]);
-    expect(await setSessionReactionAsync(scope, { ...reaction, remove: true })).toEqual({
+    expect(await react({ remove: true })).toEqual({
       reactions: removed,
       newestRemainingEmoji: "👍",
       changed: false,
@@ -243,7 +246,7 @@ describe("session reaction store", () => {
       ["🎉", "alice", 200],
       ["👍", "bob", 300],
     ] as const) {
-      await setSessionReactionAsync(scope, { ...reaction, emoji, identityId });
+      await react({ emoji, identityId });
       stampReaction(emoji, identityId, createdAt);
     }
     const removal = {
@@ -265,25 +268,16 @@ describe("session reaction store", () => {
 
   it("caps distinct emoji per identity and message while allowing no-ops and removal", async () => {
     for (let index = 0; index < 20; index++) {
-      await setSessionReactionAsync(scope, {
-        ...reaction,
+      await react({
         emoji: String.fromCodePoint(0x1f600 + index),
       });
     }
-    await expect(setSessionReactionAsync(scope, reaction)).rejects.toThrow(
-      SessionReactionLimitError,
-    );
-    await expect(
-      setSessionReactionAsync(scope, { ...reaction, emoji: "😀" }),
-    ).resolves.toMatchObject({ changed: false });
-    await expect(
-      setSessionReactionAsync(scope, { ...reaction, identityId: "bob" }),
-    ).resolves.toMatchObject({ changed: true });
-    await expect(
-      setSessionReactionAsync(scope, { ...reaction, messageId: "message-b" }),
-    ).resolves.toMatchObject({ changed: true });
-    await setSessionReactionAsync(scope, { ...reaction, emoji: "😀", remove: true });
-    await expect(setSessionReactionAsync(scope, reaction)).resolves.toMatchObject({
+    await expect(react()).rejects.toThrow(SessionReactionLimitError);
+    await expect(react({ emoji: "😀" })).resolves.toMatchObject({ changed: false });
+    await expect(react({ identityId: "bob" })).resolves.toMatchObject({ changed: true });
+    await expect(react({ messageId: "message-b" })).resolves.toMatchObject({ changed: true });
+    await react({ emoji: "😀", remove: true });
+    await expect(react()).resolves.toMatchObject({
       changed: true,
     });
   });
@@ -367,17 +361,15 @@ describe("session reaction store", () => {
   );
 
   it("rejects stale session instances and clears reactions on replacement and node deletion", async () => {
-    await setSessionReactionAsync(scope, reaction);
-    await expect(
-      setSessionReactionAsync(scope, { ...reaction, expectedSessionId: "session-b" }),
-    ).rejects.toThrow(SessionWorkStartInvalidatedError);
+    await react();
+    await expect(react({ expectedSessionId: "session-b" })).rejects.toThrow(
+      SessionWorkStartInvalidatedError,
+    );
     await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 2 });
     await seedMessages("session-b", ["message-a"]);
     expect(listSessionReactions(scope, { sessionId: "session-a" })).toEqual({});
-    await expect(setSessionReactionAsync(scope, reaction)).rejects.toThrow(
-      SessionWorkStartInvalidatedError,
-    );
-    await setSessionReactionAsync(scope, { ...reaction, expectedSessionId: "session-b" });
+    await expect(react()).rejects.toThrow(SessionWorkStartInvalidatedError);
+    await react({ expectedSessionId: "session-b" });
     runOpenClawAgentWriteTransaction((database) => {
       executeSqliteQuerySync(
         database.db,
@@ -390,26 +382,24 @@ describe("session reaction store", () => {
   });
 
   it("refuses to add a reaction for a message deleted since the caller's read", async () => {
-    await setSessionReactionAsync(scope, { ...reaction, messageId: "message-b" });
+    await react({ messageId: "message-b" });
     // The handler read message-a asynchronously; a rewrite removes it before the write.
     await seedMessages("session-a", ["message-b"]);
-    await expect(setSessionReactionAsync(scope, reaction)).rejects.toThrow(
-      SessionReactionMessageMissingError,
-    );
-    expect(await setSessionReactionAsync(scope, { ...reaction, remove: true })).toEqual({
+    await expect(react()).rejects.toThrow(SessionReactionMessageMissingError);
+    expect(await react({ remove: true })).toEqual({
       reactions: [],
       newestRemainingEmoji: undefined,
       changed: false,
     });
     expect(listSessionReactions(scope, { sessionId: "session-a" })).toEqual({
-      "message-b": [{ emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] }],
+      "message-b": [aliceReaction("👍")],
     });
   });
 
   it("preserves reaction rows when logical nodes are repaired into a canonical node", async () => {
     const destination = { ...scope, sessionKey: `${scope.sessionKey}-canonical` };
     await upsertSessionEntryCore(destination, { sessionId: "session-a", updatedAt: 1 });
-    await setSessionReactionAsync(scope, reaction);
+    await react();
     runOpenClawAgentWriteTransaction((database) => {
       copySessionNodeArtifactsForRepair(
         database,
@@ -425,7 +415,7 @@ describe("session reaction store", () => {
       );
     }, scope);
     expect(listSessionReactions(destination, { sessionId: "session-a" })).toEqual({
-      "message-a": [{ emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] }],
+      "message-a": [aliceReaction("👍")],
     });
   });
 

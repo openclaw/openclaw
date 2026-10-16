@@ -70,6 +70,10 @@ import { bindSqliteWorkerBackend } from "./session-sharing-store.worker.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
+function memberRow(identityId: string, addedAt: number, addedBy = "owner") {
+  return { identityId, addedBy, addedAt };
+}
+
 it("lists current membership evidence while transcript reads wait", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     await captureRuntimeConfigAsyncReader()();
@@ -79,16 +83,8 @@ it("lists current membership evidence while transcript reads wait", async () => 
       fallbackEntry: entry,
       skipMaintenance: true,
     });
-    await addSessionMember(scope, {
-      identityId: "zoe",
-      addedBy: "actor-evidence:unknown",
-      addedAt: 2,
-    });
-    await addSessionMember(scope, {
-      identityId: "alice",
-      addedBy: "actor-evidence:unattributed",
-      addedAt: 3,
-    });
+    await addSessionMember(scope, memberRow("zoe", 2, "actor-evidence:unknown"));
+    await addSessionMember(scope, memberRow("alice", 3, "actor-evidence:unattributed"));
     const requestContext = context(vi.fn());
     await initializeSessionReadContext(requestContext);
     await getSessionRowProjection(requestContext)!.ensureMaterialized();
@@ -152,11 +148,11 @@ it("lists current membership evidence while transcript reads wait", async () => 
       historyRun.mockRestore();
     }
     expect(await historyRead).toBe(true);
-    await addSessionMember(scope, { identityId: "bob", addedBy: "owner", addedAt: 4 });
+    await addSessionMember(scope, memberRow("bob", 4));
     expect((await readSessionMembersInWorker(scope)).members).toEqual([
-      { identityId: "alice", addedBy: "actor-evidence:unattributed", addedAt: 3 },
-      { identityId: "bob", addedBy: "owner", addedAt: 4 },
-      { identityId: "zoe", addedBy: "actor-evidence:unknown", addedAt: 2 },
+      memberRow("alice", 3, "actor-evidence:unattributed"),
+      memberRow("bob", 4),
+      memberRow("zoe", 2, "actor-evidence:unknown"),
     ]);
     const missing = { agentId: "missing", sessionKey: "agent:missing:main" };
     expect((await readSessionMembersInWorker(missing)).members).toEqual([]);
@@ -172,20 +168,12 @@ it("retains the physical owner and logical partition of a shared member store", 
     });
     const scope = { agentId: "other", sessionKey: "agent:other:members", storePath: database.path };
     await upsertSessionEntryCore(scope, { sessionId: "other-members", updatedAt: 1 });
-    await addSessionMember(scope, {
-      identityId: "other-guest",
-      addedBy: "other-owner",
-      addedAt: 2,
-    });
+    await addSessionMember(scope, memberRow("other-guest", 2, "other-owner"));
     const sibling = { ...scope, agentId: "main", sessionKey: "agent:main:members" };
     await upsertSessionEntryCore(sibling, { sessionId: "main-members", updatedAt: 1 });
-    await addSessionMember(sibling, {
-      identityId: "main-guest",
-      addedBy: "main-owner",
-      addedAt: 3,
-    });
+    await addSessionMember(sibling, memberRow("main-guest", 3, "main-owner"));
     expect((await readSessionMembersInWorker(scope)).members).toEqual([
-      { identityId: "other-guest", addedBy: "other-owner", addedAt: 2 },
+      memberRow("other-guest", 2, "other-owner"),
     ]);
     expect(database.agentId).toBe("main");
   });
@@ -200,10 +188,8 @@ it("keeps process-local incognito membership with its native owner", async () =>
       updatedAt: 1,
       incognito: true,
     });
-    await addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 });
-    expect((await readSessionMembersInWorker(scope)).members).toEqual([
-      { identityId: "guest", addedBy: "owner", addedAt: 2 },
-    ]);
+    await addSessionMember(scope, memberRow("guest", 2));
+    expect((await readSessionMembersInWorker(scope)).members).toEqual([memberRow("guest", 2)]);
   });
 });
 
@@ -232,8 +218,8 @@ it.each(["session.members.list", "session.members.listEvidence"] as const)(
       await captureRuntimeConfigAsyncReader()();
       const scope = { agentId: "main", sessionKey: "agent:main:worker-members" };
       await upsertSessionEntryCore(scope, { sessionId: "worker-members", updatedAt: 1 });
-      await addSessionMember(scope, { identityId: "zoe", addedBy: "owner", addedAt: 2 });
-      await addSessionMember(scope, { identityId: "alice", addedBy: "owner", addedAt: 3 });
+      await addSessionMember(scope, memberRow("zoe", 2));
+      await addSessionMember(scope, memberRow("alice", 3));
       const requestContext = context(vi.fn());
       await initializeSessionReadContext(requestContext);
       const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -245,10 +231,7 @@ it.each(["session.members.list", "session.members.listEvidence"] as const)(
         for (let round = 0; round < 2; round++) {
           const result = await call(method, { sessionKey: scope.sessionKey }, requestContext);
           expect(result[0]?.[1]).toMatchObject({
-            members: [
-              { identityId: "alice", addedBy: "owner", addedAt: 3 },
-              { identityId: "zoe", addedBy: "owner", addedAt: 2 },
-            ],
+            members: [memberRow("alice", 3), memberRow("zoe", 2)],
           });
         }
         expect(
@@ -273,7 +256,7 @@ it("rechecks the current manager after the membership read yields", async () => 
       updatedAt: 1,
       createdActor: { type: "human", source: "profile", id: "owner" },
     });
-    await addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 });
+    await addSessionMember(scope, memberRow("guest", 2));
     const client = identifiedClient("owner");
     const requestContext = context(vi.fn());
     await initializeSessionReadContext(requestContext);
@@ -344,7 +327,7 @@ it("commits aliased worker membership and participant facts before publishing, a
           expectedSessionId: entry.sessionId,
           expectedEntry,
         }),
-      ).toEqual({ inserted: true, member: { identityId: "guest", addedBy: "owner", addedAt: 2 } });
+      ).toEqual({ inserted: true, member: memberRow("guest", 2) });
       expect(changes.at(-1)).toMatchObject({
         sessionKey: scope.sessionKey,
         facts: { kind: "member", identityId: "guest", present: true },
@@ -416,11 +399,9 @@ it("commits aliased worker membership and participant facts before publishing, a
           throw new Error("revoked manager");
         }),
       ).rejects.toThrow("revoked manager");
-      expect(await removeSessionMember(scope, "guest", undefined, entry.sessionId)).toEqual({
-        identityId: "guest",
-        addedBy: "owner",
-        addedAt: 2,
-      });
+      expect(await removeSessionMember(scope, "guest", undefined, entry.sessionId)).toEqual(
+        memberRow("guest", 2),
+      );
       expect(changes.at(-1)).toMatchObject({
         sessionKey: scope.sessionKey,
         facts: { kind: "member", identityId: "guest", present: false },
@@ -557,7 +538,7 @@ it.each([
         updatedAt: 1,
         category: " Work ",
       });
-      await addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 });
+      await addSessionMember(scope, memberRow("guest", 2));
       const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
       const aliasedScope = {
         agentId: "other",
@@ -733,15 +714,13 @@ it.each([
           );
           open.mockRestore();
           corruptReceipt.mockRestore();
-          await addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 3 });
+          await addSessionMember(scope, memberRow("guest", 3));
           await expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(
             "Session access facts are unavailable",
           );
           return;
         }
-        await expect(run()).resolves.toEqual(
-          mutation === "category" ? 2 : { identityId: "guest", addedBy: "owner", addedAt: 2 },
-        );
+        await expect(run()).resolves.toEqual(mutation === "category" ? 2 : memberRow("guest", 2));
         expect(changes).toEqual(
           mutation === "category"
             ? [scope.sessionKey, aliasedScope.sessionKey].map((sessionKey) =>
