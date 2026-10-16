@@ -38,3 +38,8 @@ export { AgentHarnessProjectionSettlement } from "../agents/harness/projection-s
 export { makeZeroUsageSnapshot } from "../agents/usage.js";
 export { resolveStoredSessionPermissionPolicy } from "../agents/tool-fs-policy.js";
 export { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+
+// Persistence owners in official harness plugins call this at their own write
+// edge: a tool-free reply that only restates the injected finalization
+// instruction must never reach the transcript or the retry's identity.
+export { isEchoedSettledTurnFinalizationAssistant } from "../agents/harness/settled-turn-finalization-result.js";

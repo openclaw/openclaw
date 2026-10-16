@@ -80,11 +80,13 @@ export function createJournalSession(
   attempt: AttemptParamsLike,
   messages: AgentMessage[] = [],
   resultContentSourceByToolName?: ReadonlyMap<string, "network">,
+  echoSuppressionInstruction?: string,
 ) {
   const session = createFakeSession();
   const journal = createAttemptTranscriptJournal({
     abortSession: () => session.abort(),
     attempt,
+    ...(echoSuppressionInstruction ? { echoSuppressionInstruction } : {}),
     messages,
     sdkSessionId: "sdk-session",
   });
@@ -122,6 +124,7 @@ export function emitReplayGroup(targetSession: FakeSession): void {
 export async function createFixture(
   trigger?: string,
   resultContentSourceByToolName?: ReadonlyMap<string, "network">,
+  echoSuppressionInstruction?: string,
 ): Promise<AttemptTranscriptJournalFixture> {
   const tempDir = sessionDirs.make();
   const target: SessionTranscriptTargetParams = {
@@ -186,6 +189,7 @@ export async function createFixture(
     attempt,
     [],
     resultContentSourceByToolName,
+    echoSuppressionInstruction,
   );
   return { attempt, bridge, journal, recorder, session, target, tempDir };
 }

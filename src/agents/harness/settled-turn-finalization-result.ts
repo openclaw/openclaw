@@ -1,6 +1,8 @@
 import { isSilentReplyText } from "../../auto-reply/tokens.js";
 import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
+import { log } from "../embedded-agent-runner/logger.js";
 import { resolveFinalAssistantVisibleText } from "../embedded-agent-runner/run/helpers.js";
+import { isRecoveryInstructionEcho } from "../recovery-nudge-text.js";
 import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
 import type {
   AgentHarnessAttemptResult,
@@ -25,11 +27,28 @@ function assistantContainsToolCall(
 }
 
 /**
+ * True when a tool-free finalizer reply only restates the instruction this
+ * attempt injected. Persistence owners check it at the write edge so refused
+ * bytes never reach the transcript or the next model call's context.
+ */
+export function isEchoedSettledTurnFinalizationAssistant(
+  assistant: AgentHarnessSettledTurnFinalizationResult["assistant"],
+  instruction?: string,
+): boolean {
+  if (instruction === undefined || instruction.trim().length === 0) {
+    return false;
+  }
+  const text = resolveFinalAssistantVisibleText(assistant);
+  return text !== undefined && isRecoveryInstructionEcho(text, instruction);
+}
+
+/**
  * Validates the deliberately narrow finalizer result before core turns it into
  * a terminal reply. Capability and delivery fields cannot cross this contract.
  */
 export function assertSettledTurnFinalizationResult(
   result: AgentHarnessSettledTurnFinalizationResult,
+  instruction?: string,
 ): AgentHarnessSettledTurnFinalizationResult {
   const unknownKey = Object.keys(result).find(
     (key) => !ALLOWED_SETTLED_FINALIZATION_RESULT_KEYS.has(key),
@@ -54,15 +73,25 @@ export function assertSettledTurnFinalizationResult(
   ) {
     throw new Error("Settled-turn finalization returned an invalid assistant message index");
   }
-  resolveSettledTurnFinalizationText(result);
+  resolveSettledTurnFinalizationText(result, instruction);
   return result;
 }
 
 export function resolveSettledTurnFinalizationText(
   result: AgentHarnessSettledTurnFinalizationResult,
+  instruction?: string,
 ): string {
   const text = resolveFinalAssistantVisibleText(result.assistant);
   if (!text || isSilentReplyText(text)) {
+    throw new EmptySettledTurnFinalizationError(result);
+  }
+  if (isRecoveryInstructionEcho(text, instruction)) {
+    // The finalizer restated the recovery nudge the runner injected instead of
+    // answering the run, so the turn is unanswered and re-enters the existing
+    // bounded tool-free recovery rather than publishing the restatement.
+    log.warn(
+      "settled-turn finalization echoed the recovery instruction — refusing it as an answer",
+    );
     throw new EmptySettledTurnFinalizationError(result);
   }
   return text;
@@ -74,6 +103,7 @@ export function resolveSettledTurnFinalizationText(
  */
 export function projectSettledTurnFinalizationAttemptResult(
   result: AgentHarnessAttemptResult,
+  instruction?: string,
 ): AgentHarnessSettledTurnFinalizationResult {
   const terminal =
     "terminal" in result ? result.terminal : normalizeAgentRunAttemptTerminal(result);
@@ -122,19 +152,22 @@ export function projectSettledTurnFinalizationAttemptResult(
   if (!assistant) {
     throw new Error("Settled-turn finalization attempt returned no completed assistant message");
   }
-  return assertSettledTurnFinalizationResult({
-    assistant,
-    ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
-    ...(result.assistantTranscriptOwned
-      ? {
-          assistantTranscriptOwned: true,
-          ...(result.assistantTranscriptIdempotencyKey
-            ? { assistantTranscriptIdempotencyKey: result.assistantTranscriptIdempotencyKey }
-            : {}),
-        }
-      : result.lastAssistantTextMessageIndex !== undefined
-        ? { assistantMessageIndex: result.lastAssistantTextMessageIndex }
-        : {}),
-    ...(result.diagnosticTrace ? { diagnosticTrace: result.diagnosticTrace } : {}),
-  });
+  return assertSettledTurnFinalizationResult(
+    {
+      assistant,
+      ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
+      ...(result.assistantTranscriptOwned
+        ? {
+            assistantTranscriptOwned: true,
+            ...(result.assistantTranscriptIdempotencyKey
+              ? { assistantTranscriptIdempotencyKey: result.assistantTranscriptIdempotencyKey }
+              : {}),
+          }
+        : result.lastAssistantTextMessageIndex !== undefined
+          ? { assistantMessageIndex: result.lastAssistantTextMessageIndex }
+          : {}),
+      ...(result.diagnosticTrace ? { diagnosticTrace: result.diagnosticTrace } : {}),
+    },
+    instruction,
+  );
 }

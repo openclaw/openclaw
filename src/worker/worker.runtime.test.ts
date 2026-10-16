@@ -59,6 +59,15 @@ import { listRunningSessions, waitForExecScope } from "../agents/bash-process-re
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { hasModelFallbackStop } from "../agents/failover-error.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
+import {
+  REASONING_ONLY_RETRY_BODY,
+  SETTLED_TOOL_TERMINAL_CONTINUATION_BODY,
+} from "../agents/recovery-nudge-text.js";
+
+// A finalizer answer that quotes a different recovery nudge before reporting the
+// requested result. Only the settled-tool instruction was injected, so the worker
+// must keep this answer rather than treat it as an echo of the global catalog.
+const DIAGNOSTIC_TERMINAL_REPLY = `${REASONING_ONLY_RETRY_BODY} The disk has 12 GB free.`;
 import * as agentSessionSdk from "../agents/sessions/sdk.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -156,6 +165,8 @@ type InferencePlan =
   | "oversized-text"
   | "oversized-error"
   | "empty-terminal"
+  | "echoed-terminal"
+  | "diagnostic-terminal"
   | { args: Record<string, unknown>; toolCallId: string; toolName: string };
 type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"];
 
@@ -675,6 +686,14 @@ class FakeWorkerGateway {
       this.sendEmptyTerminalTurn(socket, frame.params);
       return;
     }
+    if (plan === "echoed-terminal") {
+      this.sendTextTurn(socket, frame.params, "stop", SETTLED_TOOL_TERMINAL_CONTINUATION_BODY);
+      return;
+    }
+    if (plan === "diagnostic-terminal") {
+      this.sendTextTurn(socket, frame.params, "stop", DIAGNOSTIC_TERMINAL_REPLY);
+      return;
+    }
     this.sendTextTurn(socket, frame.params, plan === "length" ? "length" : "stop");
   }
 
@@ -734,6 +753,7 @@ class FakeWorkerGateway {
     socket: WebSocket,
     identity: WorkerInferenceStartParams,
     stopReason: "stop" | "length" = "stop",
+    text = "worker reply",
   ): void {
     this.sendInferenceEvent(socket, identity, 1, {
       type: "start",
@@ -744,15 +764,10 @@ class FakeWorkerGateway {
     this.sendInferenceEvent(socket, identity, 3, {
       type: "text_delta",
       contentIndex: 0,
-      delta: "worker reply",
+      delta: text,
     });
     this.sendInferenceEvent(socket, identity, 4, { type: "text_end", contentIndex: 0 });
-    this.sendTerminal(
-      socket,
-      identity,
-      5,
-      assistantMessage([{ type: "text", text: "worker reply" }], stopReason),
-    );
+    this.sendTerminal(socket, identity, 5, assistantMessage([{ type: "text", text }], stopReason));
   }
 
   private sendToolTurn(
@@ -994,6 +1009,67 @@ describe("worker runtime", () => {
     expect(gateway.liveEventRequests.at(-1)).toMatchObject({
       event: { kind: "lifecycle", payload: { phase: "finishing", error: expect.any(String) } },
     });
+  });
+
+  it("re-asks once when the finalizer restates the recovery nudge", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["safe-tool", "empty-terminal", "echoed-terminal", "text"],
+    });
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    expect(gateway.inferenceRequests).toHaveLength(4);
+    expect(gateway.inferenceRequests[3]?.context.tools ?? []).toEqual([]);
+    // The refused reply must not survive into the re-ask context: only the newly
+    // injected instruction may carry that wording, never an assistant turn.
+    const retryMessages = (gateway.inferenceRequests[3]?.context.messages ?? []) as Array<{
+      role?: string;
+    }>;
+    expect(
+      retryMessages.filter(
+        (message) =>
+          message.role === "assistant" &&
+          JSON.stringify(message).includes(SETTLED_TOOL_TERMINAL_CONTINUATION_BODY),
+      ),
+    ).toEqual([]);
+    const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
+    expect(messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "worker reply" }],
+    });
+    // The rejected restatement must never reach the committed transcript.
+    expect(JSON.stringify(messages)).not.toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_BODY);
+    // ...nor any live preview the gateway could forward to a channel.
+    const liveAssistantTexts = gateway.liveEventRequests.flatMap(({ event }) =>
+      event.kind === "assistant" ? [event.payload.text] : [],
+    );
+    expect(liveAssistantTexts.join("\n")).not.toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_BODY);
+    expect(liveAssistantTexts.join("\n")).toContain("worker reply");
+  });
+
+  it("keeps a finalizer answer that quotes a nudge it did not receive", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["safe-tool", "empty-terminal", "diagnostic-terminal"],
+    });
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    expect(gateway.inferenceRequests).toHaveLength(3);
+    const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
+    expect(messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: DIAGNOSTIC_TERMINAL_REPLY }],
+    });
+  });
+
+  it("finalizes worker tool outcomes with a failure after two echoed continuations", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["safe-tool", "empty-terminal", "echoed-terminal", "echoed-terminal"],
+    });
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "failed" });
+    expect(gateway.inferenceRequests).toHaveLength(4);
+    expect(gateway.liveEventRequests.at(-1)).toMatchObject({
+      event: { kind: "lifecycle", payload: { phase: "finishing", error: expect.any(String) } },
+    });
+    expect(
+      JSON.stringify(gateway.acceptedTranscriptRequests.flatMap((request) => request.messages)),
+    ).not.toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_BODY);
   });
 
   registerWorkerBackgroundExecLifecycleTests({

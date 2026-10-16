@@ -625,6 +625,11 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     suppressNextUserMessagePersistence:
       prepareInitialUserTurnReplay !== undefined || attempt.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: attempt.suppressTranscriptOnlyAssistantPersistence,
+    // The restricted finalization attempt sends the recovery instruction as its
+    // prompt, so an answer that restates it is refused: drop it at the write edge
+    // rather than persisting refused text and withdrawing it afterwards.
+    suppressEchoedAssistantPersistence:
+      attempt.operation === "settled-tool-finalization" ? attempt.prompt : undefined,
     assistantErrorTranscript: attempt.assistantErrorTranscript,
     skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",
     prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,

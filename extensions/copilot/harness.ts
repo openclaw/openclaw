@@ -795,7 +795,7 @@ export function createCopilotAgentHarness(
 
     finalizeSettledTurn: async ({ attempt }) => {
       const result = await runHarnessAttempt(attempt, "settled-tool-finalization");
-      return projectSettledTurnFinalizationAttemptResult(result);
+      return projectSettledTurnFinalizationAttemptResult(result, attempt.prompt);
     },
 
     reset: (params: AgentHarnessResetParams): Promise<void> =>

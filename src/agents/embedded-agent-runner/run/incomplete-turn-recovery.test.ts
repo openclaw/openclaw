@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  RECOVERY_REPLY_DELIVERY_CONTRACT,
+  isRecoveryInstructionEcho,
+} from "../../recovery-nudge-text.js";
+import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
@@ -11,10 +15,8 @@ import {
 } from "./incomplete-turn-recovery.js";
 import { resolveIncompleteTurnPayloadText } from "./incomplete-turn-resolution.js";
 
-const EMPTY_RESPONSE_RETRY_INSTRUCTION =
-  "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
-const REASONING_ONLY_RETRY_INSTRUCTION =
-  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+const EMPTY_RESPONSE_RETRY_INSTRUCTION = `The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch. ${RECOVERY_REPLY_DELIVERY_CONTRACT}`;
+const REASONING_ONLY_RETRY_INSTRUCTION = `The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch. ${RECOVERY_REPLY_DELIVERY_CONTRACT}`;
 
 function emptyAssistant(overrides: Parameters<typeof buildEmbeddedRunnerAssistant>[0] = {}) {
   return buildEmbeddedRunnerAssistant({
@@ -198,5 +200,85 @@ describe("incomplete-turn recovery policy", () => {
         attempt: emptyAttempt(assistant),
       }),
     ).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it.each([
+    ["the empty-response nudge", EMPTY_RESPONSE_RETRY_INSTRUCTION],
+    ["the reasoning-only nudge", REASONING_ONLY_RETRY_INSTRUCTION],
+  ])("flags a reply that restates %s", (_label, instruction) => {
+    expect(isRecoveryInstructionEcho(`Let me plan this out. ${instruction}`)).toBe(true);
+  });
+
+  it("keeps a reply that shares only one sentence of the nudge wording", () => {
+    expect(
+      isRecoveryInstructionEcho(
+        "Wait, the system says: The previous attempt did not produce a user-visible answer, so I must answer now.",
+      ),
+    ).toBe(false);
+    // A genuine answer can open with the nudge's first sentence and still
+    // deliver the requested result; a single shared passage is not an echo.
+    expect(
+      isRecoveryInstructionEcho(
+        "The previous attempt did not produce a user-visible answer because the provider stopped early. The disk has 12 GB free.",
+      ),
+    ).toBe(false);
+  });
+
+  it("matches only the instruction that was actually injected", () => {
+    expect(
+      isRecoveryInstructionEcho(
+        "The previous assistant turn stopped for tool use but contained no tool call, so nothing ran. Continue from the current state: call the tool you need.",
+        EMPTY_RESPONSE_RETRY_INSTRUCTION,
+      ),
+    ).toBe(false);
+    expect(
+      isRecoveryInstructionEcho(
+        `Let me plan this out. ${EMPTY_RESPONSE_RETRY_INSTRUCTION}`,
+        EMPTY_RESPONSE_RETRY_INSTRUCTION,
+      ),
+    ).toBe(true);
+  });
+
+  it("flags the delivery contract when the reply restates it", () => {
+    expect(isRecoveryInstructionEcho(`Understood. ${RECOVERY_REPLY_DELIVERY_CONTRACT}`)).toBe(true);
+  });
+
+  it("keeps an answer that only reuses one generic run of the wording", () => {
+    expect(
+      isRecoveryInstructionEcho(
+        "The previous attempt did not complete because the process was killed, so I retried and it finished.",
+      ),
+    ).toBe(false);
+    expect(
+      isRecoveryInstructionEcho(
+        "I finished the tool calls but did not produce a summary in the previous step, so I wrote one now.",
+      ),
+    ).toBe(false);
+    expect(
+      isRecoveryInstructionEcho(
+        "The previous assistant turn completed the migration before the logs rolled over.",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps a short fragment of a nudge quoted inside planning", () => {
+    expect(
+      isRecoveryInstructionEcho(
+        'the system says "Continue from the current transcript" so here goes',
+      ),
+    ).toBe(false);
+    expect(isRecoveryInstructionEcho("Do not restart from scratch.")).toBe(false);
+  });
+
+  it("keeps planning prose and a plain answer", () => {
+    expect(
+      isRecoveryInstructionEcho(
+        "I continued from the current state and produced the final answer after checking the logs.",
+      ),
+    ).toBe(false);
+    expect(isRecoveryInstructionEcho("Nothing needs cleanup; the disk has 12 GB free.")).toBe(
+      false,
+    );
+    expect(isRecoveryInstructionEcho("")).toBe(false);
   });
 });

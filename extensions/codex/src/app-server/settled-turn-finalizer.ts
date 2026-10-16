@@ -1,3 +1,4 @@
+import { isEchoedSettledTurnFinalizationAssistant } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import type {
   AgentHarnessV2,
   AgentHarnessSettledTurnFinalizationResult,
@@ -112,6 +113,14 @@ export async function runCodexSettledTurnFinalization(
   // The host distinguishes authored silence from missing output. Preserve the
   // sentinel for its optional/required policy without mirroring a non-answer.
   if (!text || isSilentReplyText(text)) {
+    return { assistant, ...(bounded.usage ? { usage: bounded.usage } : {}) };
+  }
+  // A tool-free reply that only restates the prompt this run injected is
+  // transport noise. Refuse it here, before the mirror writes it, so the
+  // rejected text never takes the settled-finalizer identity the bounded retry
+  // has to reuse; core classifies the unowned result as unanswered and
+  // re-enters recovery.
+  if (isEchoedSettledTurnFinalizationAssistant(assistant, attempt.prompt)) {
     return { assistant, ...(bounded.usage ? { usage: bounded.usage } : {}) };
   }
 

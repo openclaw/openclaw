@@ -115,6 +115,10 @@ export function createWorkerTranscriptRuntime(
 ) {
   const pendingTranscriptMessages: WorkerTranscriptMessage[] = [];
   let failedCommit: { error: unknown } | undefined;
+  // While held, persisted messages are parked instead of queued. An internal pass
+  // whose assistant output may still be rejected must not reach the authoritative
+  // transcript before that decision is made.
+  let heldTranscriptMessages: WorkerTranscriptMessage[] | undefined;
   const onMessagePersisted = (message: AgentMessage) => {
     const projected = toWorkerTranscriptMessage(message, "transcript");
     if (!projected) {
@@ -131,6 +135,10 @@ export function createWorkerTranscriptRuntime(
     }
     if (!isWorkerTranscriptMessageFrameSafe(projected.message)) {
       throw new Error("Worker transcript message exceeds the protocol payload limit.");
+    }
+    if (heldTranscriptMessages) {
+      heldTranscriptMessages.push(projected.message);
+      return;
     }
     pendingTranscriptMessages.push(projected.message);
   };
@@ -169,5 +177,25 @@ export function createWorkerTranscriptRuntime(
     );
     return result;
   };
-  return { onMessagePersisted, withSessionWriteSettlement };
+  const beginTranscriptHold = () => {
+    heldTranscriptMessages = [];
+  };
+  // Releasing a hold commits the parked messages through the same session-write
+  // queue that owns ordinary flushes.
+  const commitTranscriptHold = () => {
+    const parked = heldTranscriptMessages ?? [];
+    heldTranscriptMessages = undefined;
+    pendingTranscriptMessages.push(...parked);
+    return withSessionWriteSettlement(() => undefined);
+  };
+  const discardTranscriptHold = () => {
+    heldTranscriptMessages = undefined;
+  };
+  return {
+    onMessagePersisted,
+    withSessionWriteSettlement,
+    beginTranscriptHold,
+    commitTranscriptHold,
+    discardTranscriptHold,
+  };
 }

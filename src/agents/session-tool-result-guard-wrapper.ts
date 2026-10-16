@@ -47,6 +47,7 @@ type GuardedSessionManager = SessionManager &
       | "flushPendingToolResultsAsync"
       | "clearPendingToolResults"
       | "setNextUserMessagePersistence"
+      | "setEchoedAssistantInstruction"
     >
   > & {
     /** Refresh the exact owning run when a caller reuses this guarded manager. */
@@ -111,6 +112,7 @@ export function guardSessionManager(
     preparedUserTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
+    suppressEchoedAssistantPersistence?: string;
     assistantErrorTranscript?: AssistantErrorTranscript;
     /** Finalization keeps transcript normalization but must not run plugin write hooks. */
     skipBeforeMessageWriteHooks?: boolean;
@@ -160,6 +162,7 @@ export function guardSessionManager(
         replayKey: preparedUserReplayKey,
       },
     );
+    guardedSessionManager.setEchoedAssistantInstruction?.(opts?.suppressEchoedAssistantPersistence);
     return guardedSessionManager;
   }
 
@@ -334,6 +337,7 @@ export function guardSessionManager(
     // prompt reinjects it, keep it model-only; a different queued input clears this above.
     suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
+    suppressEchoedAssistantPersistence: opts?.suppressEchoedAssistantPersistence,
     assistantErrorTranscript: opts?.assistantErrorTranscript,
     onMessagePersisted: opts?.onMessagePersisted,
     withCompactionPersistence: opts?.withCompactionPersistence,
@@ -377,6 +381,7 @@ export function guardSessionManager(
   guardedSessionManager.flushPendingToolResultsAsync = guard.flushPendingToolResultsAsync;
   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
   guardedSessionManager.setNextUserMessagePersistence = guard.setNextUserMessagePersistence;
+  guardedSessionManager.setEchoedAssistantInstruction = guard.setEchoedAssistantInstruction;
   guardedSessionManager.setTranscriptRunContext = (
     runId,
     prepare,
