@@ -549,7 +549,7 @@ function renderModelControls(
     update(props);
   } else {
     const view = mountSolidComponent(ChatModelControls, props, container);
-    modelControlsUpdates.set(container, view.update);
+    modelControlsUpdates.set(container, (next) => view.update(next));
   }
   return container;
 }

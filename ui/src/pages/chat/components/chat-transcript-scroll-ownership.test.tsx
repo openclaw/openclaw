@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import type { JSX } from "@solidjs/web";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
@@ -638,12 +639,12 @@ describe("chat transcript scroll ownership", () => {
   });
 
   it.each([
-    ["wheel", null, () => null, false],
-    ["downward wheel", null, () => null, false],
-    ["stationary wheel", null, () => null, false],
-    ["pointer", null, () => null, false],
-    ["latest", null, () => null, false],
-    ["automatic follow", null, () => null, true],
+    ["wheel", null, (): JSX.Element => null, false],
+    ["downward wheel", null, (): JSX.Element => null, false],
+    ["stationary wheel", null, (): JSX.Element => null, false],
+    ["pointer", null, (): JSX.Element => null, false],
+    ["latest", null, (): JSX.Element => null, false],
+    ["automatic follow", null, (): JSX.Element => null, true],
     ["text input", "ArrowUp", () => <input />, true],
     ["range input", "Home", () => <input type="range" />, true],
     ["range Space", " ", () => <input type="range" />, false],
@@ -661,7 +662,7 @@ describe("chat transcript scroll ownership", () => {
       "editable child",
       "ArrowUp",
       () => (
-        <div contentEditable="true">
+        <div contenteditable="true">
           <span>Text</span>
         </div>
       ),
@@ -689,7 +690,7 @@ describe("chat transcript scroll ownership", () => {
       true,
     ],
     ["transcript text", "PageUp", () => <span>History</span>, false],
-    ["readonly content", "End", () => <div contentEditable="false">History</div>, false],
+    ["readonly content", "End", () => <div contenteditable="false">History</div>, false],
     // The pane keyboard suite covers native-control/platform variants.
     // Retain downward nested scrolling and media boundaries in restoration.
     ["native video", "End", () => <video controls></video>, true],

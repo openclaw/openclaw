@@ -463,6 +463,7 @@ describe("streaming Markdown DOM", () => {
             activated = true;
             return () => connections.push(false);
           }
+          return undefined;
         });
         return <button>{props.label}</button>;
       }

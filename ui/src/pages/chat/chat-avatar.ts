@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
+import type { DirectiveResult } from "lit/directive.js";
 import { isReservedSystemAgentId } from "../../../../src/system-agent/agent-id.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
@@ -56,7 +57,7 @@ export function renderChatAvatar(
   user?: { name?: string | null; avatar?: string | null },
   sender?: SenderIdentity | null,
   channelAvatar?: ChannelSenderAvatarSource,
-) {
+): TemplateResult | DirectiveResult | typeof nothing {
   const normalized = normalizeRoleForGrouping(role);
   // Attributed multi-user messages show the author's own avatar (profile
   // upload → gateway Gravatar proxy → initials), not the local viewer's.

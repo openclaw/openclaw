@@ -2,6 +2,7 @@
 // Contract for full-message eligibility: the Gateway marks every display-
 // capped projection; pending inputs share assistant expansion without gaining
 // transcript mutation actions.
+import { For } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import { markdownBlocksRef } from "../../../components/markdown-element-refs-solid.ts";
@@ -149,19 +150,21 @@ describe("user message disclosure", () => {
     const view = mountSolid(
       (props: { text: string; expanded: boolean; presented: boolean }) => (
         <SolidContentPresentation value={() => props.presented}>
-          {["first", "second"].map((key) => (
-            <MessageMarkdown
-              markdown={props.text}
-              messageKey={key}
-              options={{
-                role: "user",
-                isStreaming: false,
-                isUserMessageExpanded: () => props.expanded,
-                onToggleUserMessageExpanded: vi.fn(),
-              }}
-              markdownOptions={{}}
-            />
-          ))}
+          <For each={["first", "second"]}>
+            {(key) => (
+              <MessageMarkdown
+                markdown={props.text}
+                messageKey={key}
+                options={{
+                  role: "user",
+                  isStreaming: false,
+                  isUserMessageExpanded: () => props.expanded,
+                  onToggleUserMessageExpanded: vi.fn(),
+                }}
+                markdownOptions={{}}
+              />
+            )}
+          </For>
         </SolidContentPresentation>
       ),
       { text: markdown, expanded: false, presented: true },

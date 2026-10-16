@@ -2,6 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
@@ -11,7 +12,6 @@ import {
   configureNativeKeyTarget,
   nativeControlNavigationCases,
 } from "./test-helpers/chat-scroll-input.tsx";
-import { render } from "./test-helpers/chat-transcript-native.tsx";
 
 function createFocusedPane() {
   const { pane } = createTestChatPane({
@@ -72,10 +72,11 @@ describe("chat pane keyboard focus", () => {
       state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
       pane.historyAutoLoadBlocked = true;
       vi.stubGlobal("IntersectionObserver", undefined);
-      const thread = document.createElement("div");
-      render(content(), thread);
+      const { container } = mountSolid(() => (
+        <div onKeyDown={(event) => pane.handleTranscriptHistoryIntent(event)}>{content()}</div>
+      ));
+      const thread = container.firstElementChild!;
       const restorePlatform = configureNativeKeyTarget(thread.firstElementChild!, fixture);
-      thread.addEventListener("keydown", (event) => pane.handleTranscriptHistoryIntent(event));
       try {
         thread.firstElementChild!.dispatchEvent(
           new KeyboardEvent("keydown", {
