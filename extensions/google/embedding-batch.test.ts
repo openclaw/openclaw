@@ -94,7 +94,7 @@ function defaultBatchResponse(stage: BatchStage): Response {
     case "download":
       return jsonl({ key: "r0", response: { embedding: { values: [1, 0, 0] } } });
   }
-  throw new Error(`Unexpected batch stage: ${stage}`);
+  throw new Error("Unexpected batch stage");
 }
 
 const outputFile = { response: { responsesFile: "files/out-0" } };

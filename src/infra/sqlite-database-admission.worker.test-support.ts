@@ -124,7 +124,8 @@ export function createSqliteWorkerBackend(
       return { sql, threadId };
     }
     if (command.type === "retirePath") {
-      return void retireSqliteDatabaseAdmissionForPath(command.input.path);
+      retireSqliteDatabaseAdmissionForPath(command.input.path);
+      return undefined;
     }
     if (command.type === "mutate") {
       database.exec("CREATE TABLE worker_publication (value)");

@@ -13,7 +13,8 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import type { PluginHookSkillChangedEvent } from "../../plugins/hook-types.js";
+import { addTestHook, createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
   CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS as clawHubMarkers,
@@ -552,10 +553,10 @@ describe("skill archive install", () => {
       const { workspaceDir, extractedRoot, install } = await fixture(
         versionedSkillFileContent("Before Update", "1.0.0"),
       );
-      const handler = vi.fn<(...args: unknown[]) => void>();
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([{ hookName: "skill_changed", handler }]),
-      );
+      const handler = vi.fn<(event: PluginHookSkillChangedEvent) => void>();
+      const registry = createMockPluginRegistry([]);
+      addTestHook({ registry, pluginId: "test-plugin", hookName: "skill_changed", handler });
+      initializeGlobalHookRunner(registry);
       if (mode === "update") {
         await install("hook-update", {
           mode: "install",
