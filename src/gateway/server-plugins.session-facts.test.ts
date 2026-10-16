@@ -102,13 +102,13 @@ function bindFacts(fixture: Fixture) {
   return {
     inScope,
     consume,
-    read(sessionKeys: readonly string[] = [sessionKey], service = false) {
+    read: (sessionKeys: readonly string[] = [sessionKey], service = false) => {
       return inScope(
         () => runtime.gateway.readSessionFacts({ sessionKeys }),
         service ? undefined : fixture.client,
       );
     },
-    selected(selection: RuntimeSessionFactsSelection = {}, client = fixture.client) {
+    selected: (selection: RuntimeSessionFactsSelection = {}, client = fixture.client) => {
       return consume(async (snapshot) => snapshot, client, {
         archived: false,
         sortBy: "activity",

@@ -167,8 +167,7 @@ function createAddServerHarness(
   sessions.patch = patch;
   state.sessions = sessions;
   const container = document.createElement("div");
-  const query = <T extends Element = HTMLElement>(selector: string) =>
-    container.querySelector<T>(selector);
+  const query = (selector: string) => container.querySelector(selector);
   document.body.append(container);
   onTestFinished(() => {
     container.remove();
@@ -180,7 +179,10 @@ function createAddServerHarness(
   let paint = () => {};
   const host = new ChatComposerCapabilityHost(() => {
     paint();
-    if (submitted && !query<HTMLButtonElement>('button[type="submit"]')?.disabled) {
+    if (
+      submitted &&
+      !container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled
+    ) {
       settled.resolve();
     }
   });
@@ -215,11 +217,14 @@ function createAddServerHarness(
       },
     ) {
       const form = query("form");
-      query<HTMLInputElement>(`input.settings-segmented__input[value="${scope}"]`)!.click();
+      container
+        .querySelector<HTMLInputElement>(`input.settings-segmented__input[value="${scope}"]`)!
+        .click();
       expect(query("form")).toBe(form);
-      query<HTMLInputElement>('[name="mcp-name"]')!.value = "docs";
-      query<HTMLSelectElement>('[name="mcp-transport"]')!.value = server.transport;
-      query<HTMLInputElement>('[name="mcp-target"]')!.value = server.target;
+      container.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "docs";
+      container.querySelector<HTMLSelectElement>('[name="mcp-transport"]')!.value =
+        server.transport;
+      container.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = server.target;
       submitted = true;
       query("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       await settled.promise;

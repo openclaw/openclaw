@@ -445,7 +445,9 @@ it.each([
     const update = await renderUpdate({
       isCurrentTarget: overlays.captureUpdateTarget(),
       ...(entry === "existing" ? { existingRun: run } : {}),
-      startGatewayUpdate: () => (operation = overlays.runUpdate()),
+      startGatewayUpdate: () => {
+        operation = overlays.runUpdate();
+      },
       onCheckStatus: () => (statusOperation = overlays.refreshUpdateStatus()),
       watchUpdateProgress: createUpdateProgressWatcher({ gateway: harness.gateway, overlays }),
     });

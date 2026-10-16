@@ -1,8 +1,7 @@
-import { once } from "node:events";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import { promisify } from "node:util";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -11,13 +10,14 @@ import {
   claimCodexAppServerLiveThread,
   isCodexAppServerLiveThreadClaimed,
   isCodexAppServerLiveThreadProtected,
+  retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import {
   CodexNativeProcessAuthority,
   readCodexRetainedBackgroundCommands,
 } from "./native-process-authority.js";
-import { isJsonObject, type JsonObject } from "./protocol.js";
+import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 import * as sessionBinding from "./session-binding.js";
 import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
@@ -27,11 +27,6 @@ import {
   createParams,
   resetThreadLifecycleTestFixtures,
 } from "./thread-lifecycle.test-fixtures.js";
-import {
-  failNextWarmPublication,
-  retainWarmThread,
-  warmPluginConfig,
-} from "./thread-lifecycle.warm-cleanup.test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 vi.unmock("node:child_process");
@@ -61,73 +56,96 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
       vi.stubEnv("HOME", native.env.HOME);
       vi.stubEnv("CODEX_HOME", native.codexHome);
+      const trace: JsonObject[] = [];
+      const record = (event: string, fields: Record<string, JsonValue | undefined> = {}) => {
+        trace.push({
+          sequence: trace.length + 1,
+          event,
+          ...Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)),
+        });
+      };
+      context.onTestFinished(() => {
+        console.log("CODEX_NATIVE_WARM_PROOF", JSON.stringify({ scenario, trace }));
+      });
       let backgroundRequested = false;
       let providerRequests = 0;
       const providerFailures: unknown[] = [];
-      const server = http.createServer(async (request, response) => {
-        try {
-          let body = "";
-          for await (const chunk of request.setEncoding("utf8")) {
-            body += chunk;
-          }
-          if (request.method !== "POST" || request.url !== "/v1/responses") {
-            response.writeHead(404).end();
-            return;
-          }
-          expect(request.headers.authorization).toBeUndefined();
-          const parsed: unknown = JSON.parse(body);
-          expect(isJsonObject(parsed)).toBe(true);
-          providerRequests += 1;
-          const launch = backgroundWork && !backgroundRequested;
-          backgroundRequested ||= launch;
-          const item = launch
-            ? {
-                type: "function_call",
-                call_id: "native-background-command",
-                name: "exec_command",
-                arguments: JSON.stringify({
-                  cmd: "echo BACKGROUND_READY; while [ ! -f finish-background ]; do /bin/sleep 0.1; done; echo BACKGROUND_DONE",
-                  shell: "/bin/bash",
-                  login: false,
-                  yield_time_ms: 1000,
-                  max_output_tokens: 200,
-                }),
-              }
-            : {
-                type: "message",
-                role: "assistant",
-                id: `native-answer-${providerRequests}`,
-                content: [{ type: "output_text", text: "NATIVE_CONTINUATION_OK" }],
-              };
-          const events = [
-            { type: "response.created", response: { id: `native-response-${providerRequests}` } },
-            { type: "response.output_item.done", item },
-            {
-              type: "response.completed",
-              response: {
-                id: `native-response-${providerRequests}`,
-                usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+      const server = http.createServer((request, response) => {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          try {
+            if (request.method !== "POST" || request.url !== "/v1/responses") {
+              response.writeHead(404).end();
+              return;
+            }
+            expect(request.headers.authorization).toBeUndefined();
+            const parsed: unknown = JSON.parse(body);
+            expect(isJsonObject(parsed)).toBe(true);
+            providerRequests += 1;
+            const launch = backgroundWork && !backgroundRequested;
+            backgroundRequested ||= launch;
+            const item = launch
+              ? {
+                  type: "function_call",
+                  call_id: "native-background-command",
+                  name: "exec_command",
+                  arguments: JSON.stringify({
+                    cmd: "echo BACKGROUND_READY; while [ ! -f finish-background ]; do /bin/sleep 0.1; done; echo BACKGROUND_DONE",
+                    shell: "/bin/bash",
+                    login: false,
+                    yield_time_ms: 1000,
+                    max_output_tokens: 200,
+                  }),
+                }
+              : {
+                  type: "message",
+                  role: "assistant",
+                  id: `native-answer-${providerRequests}`,
+                  content: [{ type: "output_text", text: "NATIVE_CONTINUATION_OK" }],
+                };
+            const events = [
+              { type: "response.created", response: { id: `native-response-${providerRequests}` } },
+              { type: "response.output_item.done", item },
+              {
+                type: "response.completed",
+                response: {
+                  id: `native-response-${providerRequests}`,
+                  usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+                },
               },
-            },
-          ];
-          response.writeHead(200, { "Content-Type": "text/event-stream" });
-          response.end(
-            events
-              .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-              .join(""),
-          );
-        } catch (error) {
-          providerFailures.push(error);
-          response.writeHead(500).end();
-        }
+            ];
+            record("loopback-provider-response", { action: launch ? "exec_command" : "answer" });
+            response.writeHead(200, { "Content-Type": "text/event-stream" });
+            response.end(
+              events
+                .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+                .join(""),
+            );
+          } catch (error) {
+            providerFailures.push(error);
+            response.writeHead(500).end();
+          }
+        });
       });
       context.onTestFinished(async () => {
         server.closeAllConnections();
         if (server.listening) {
-          await promisify(server.close.bind(server))();
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
         }
       });
-      await once(server.listen(0, "127.0.0.1"), "listening");
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.removeListener("error", reject);
+          resolve();
+        });
+      });
       const address = server.address();
       if (!address || typeof address === "string") {
         throw new Error("Missing loopback provider address");
@@ -187,15 +205,26 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         timeoutMs: 20_000,
       });
       context.onTestFinished(async () => {
-        expect(await client.closeAndWait()).toMatchObject({ exited: true });
+        const outcome = await client.closeAndWait();
+        record("native-process-exit", { exited: outcome.exited });
+        expect(outcome.exited).toBe(true);
       });
       expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
+      record("native-runtime", {
+        version: CODEX_APP_SERVER_VERSION,
+        sha256: createHash("sha256")
+          .update(await fs.readFile(native.command))
+          .digest("hex"),
+        operatorCredentials: false,
+        provider: "scripted loopback",
+      });
       const requests: { method: string; threadId?: string }[] = [];
       const originalRequest = client.request.bind(client);
       vi.spyOn(client, "request").mockImplementation((method, params, options) => {
         const threadId =
           isJsonObject(params) && typeof params.threadId === "string" ? params.threadId : undefined;
         requests.push({ method, threadId });
+        record("native-rpc", { method, ...(threadId ? { threadId } : {}) });
         return originalRequest(method, params, options);
       });
       const params = {
@@ -222,7 +251,20 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         appServer,
         userMcpServersEnabled: false,
         signal: AbortSignal.timeout(75_000),
-        pluginThreadConfig: warmPluginConfig(() => pluginFingerprint),
+        pluginThreadConfig: {
+          enabled: true,
+          requiresCurrentPolicyCheck: true,
+          inputFingerprint: "stable-input",
+          build: async () => ({
+            enabled: true,
+            fingerprint: pluginFingerprint,
+            inputFingerprint: "stable-input",
+            diagnostics: [],
+            configPatch: {},
+            policyContext: { fingerprint: "empty-app-policy", apps: {}, pluginAppIds: {} },
+            provisionalAppIds: [],
+          }),
+        },
       };
       const authority = new CodexNativeProcessAuthority(
         params.hostCapabilities,
@@ -245,6 +287,11 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
           isJsonObject(event.turn) &&
           typeof event.threadId === "string"
         ) {
+          record("native-turn-completed", {
+            threadId: event.threadId,
+            turnId: event.turn.id,
+            status: event.turn.status,
+          });
           completions.get(event.threadId)?.resolve(event.turn);
         }
         if (
@@ -253,6 +300,15 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
           event.item.type === "commandExecution"
         ) {
           const item = event.item;
+          record(notification.method, {
+            threadId: event.threadId,
+            turnId: event.turnId,
+            itemId: item.id,
+            processId: item.processId,
+            status: item.status,
+            exitCode: item.exitCode,
+            output: item.aggregatedOutput,
+          });
           if (notification.method === "item/started" && typeof item.id === "string") {
             commands.set(item.id, typeof item.processId === "string" ? item.processId : null);
           } else if (notification.method === "item/completed") {
@@ -291,8 +347,16 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         expect(consume().size).toBe(1);
         authority.release();
         expect(isCodexAppServerLiveThreadProtected(client, first.threadId)).toBe(true);
+        record("native-background-confirmed", { threadId: first.threadId });
       }
-      expect(await retainWarmThread(client, first)).toBe(true);
+      expect(
+        await retainCodexAppServerLiveThread(
+          client,
+          first.threadId,
+          undefined,
+          first.liveThreadConfigFingerprint,
+        ),
+      ).toBe(true);
       const siblingParams = {
         ...params,
         sessionId: "sibling",
@@ -300,7 +364,14 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         sessionFile: path.join(root, "sibling.jsonl"),
       };
       const siblingBinding = await startOrResumeThread({ ...common, params: siblingParams });
-      expect(await retainWarmThread(client, siblingBinding)).toBe(true);
+      expect(
+        await retainCodexAppServerLiveThread(
+          client,
+          siblingBinding.threadId,
+          undefined,
+          siblingBinding.liveThreadConfigFingerprint,
+        ),
+      ).toBe(true);
       const sibling = await claimCodexAppServerLiveThread(client, siblingBinding.threadId);
       expect(sibling).toBeDefined();
       context.onTestFinished(() => sibling?.release(siblingBinding.threadId));
@@ -308,25 +379,55 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
       const saved = bindingStore.read(sessionBinding.sessionBindingIdentity(params));
       let publicationClaimed = false;
       if (publicationFailure) {
+        const resolveBinding = sessionBinding.resolveCodexSessionBinding;
         const readerFailure = new Error("injected warm publication reader settlement failure");
-        const fault = failNextWarmPublication(readerFailure);
+        const fault = vi
+          .spyOn(sessionBinding, "resolveCodexSessionBinding")
+          .mockImplementationOnce(async (input) => {
+            const resolved = await resolveBinding(input);
+            const withCurrent = resolved.authority.withCurrent;
+            return {
+              ...resolved,
+              authority: {
+                ...resolved.authority,
+                withCurrent: async (consume) => {
+                  const result = await withCurrent(consume);
+                  if (
+                    result !== null &&
+                    typeof result === "object" &&
+                    "liveThreadOwnership" in result &&
+                    result.liveThreadOwnership
+                  ) {
+                    record("warm-publication-fault", { threadId: first.threadId });
+                    throw readerFailure;
+                  }
+                  return result;
+                },
+              },
+            };
+          });
         try {
           await expect(startOrResumeThread(common)).rejects.toBe(readerFailure);
         } finally {
           fault.mockRestore();
         }
         publicationClaimed = isCodexAppServerLiveThreadClaimed(client, first.threadId);
+        record("failed-publication-claim-state", { claimed: publicationClaimed });
       } else {
         pluginFingerprint = "changed-policy";
         await expect(startOrResumeThread(common)).rejects.toThrow(
           `Codex thread ${first.threadId} is claimed by active work; stop it first.`,
         );
+        record("protected-rotation-refused", { threadId: first.threadId });
         expect(bindingStore.read(sessionBinding.sessionBindingIdentity(params))).toEqual(saved);
         pluginFingerprint = "original-policy";
       }
       sibling!.assertCurrent();
+      record("sibling-owner-current-after-refusal", { threadId: siblingBinding.threadId });
       const resumed = await startOrResumeThread(common);
-      expect(resumed).toMatchObject({ threadId: first.threadId, lifecycle: { action: "resumed" } });
+      expect(resumed.threadId).toBe(first.threadId);
+      expect(resumed.lifecycle.action).toBe("resumed");
+      record("warm-retry-prepared", { threadId: resumed.threadId });
       await runTurn(resumed.threadId);
       expect(publicationClaimed).toBe(false);
       const history = await client.request("thread/read", {
@@ -334,6 +435,7 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         includeTurns: true,
       });
       expect(JSON.stringify(history.thread.turns)).toContain("NATIVE_CONTINUATION_OK");
+      record("native-continuation-persisted", { threadId: resumed.threadId });
       const transitionRequests = requests.slice(before);
       if (backgroundWork) {
         expect(
@@ -342,12 +444,14 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
           ),
         ).toBe(false);
       } else {
-        expect(transitionRequests).toEqual(
-          expect.arrayContaining([
-            { method: "thread/unsubscribe", threadId: first.threadId },
-            { method: "thread/resume", threadId: first.threadId },
-          ]),
-        );
+        expect(transitionRequests).toContainEqual({
+          method: "thread/unsubscribe",
+          threadId: first.threadId,
+        });
+        expect(transitionRequests).toContainEqual({
+          method: "thread/resume",
+          threadId: first.threadId,
+        });
       }
       expect(
         transitionRequests.some(
@@ -358,6 +462,7 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
       sibling!.assertCurrent();
       await runTurn(siblingBinding.threadId);
       sibling!.assertCurrent();
+      record("sibling-owner-current-after-native-turn", { threadId: siblingBinding.threadId });
       if (backgroundWork) {
         const inventory = await client.request("thread/backgroundTerminals/list", {
           threadId: first.threadId,
@@ -369,6 +474,11 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         }
         expect(commands.has(background.itemId)).toBe(true);
         expect(isCodexAppServerLiveThreadProtected(client, first.threadId)).toBe(true);
+        record("background-survived-continuation", {
+          threadId: first.threadId,
+          itemId: background.itemId,
+          processId: background.processId,
+        });
         await fs.writeFile(path.join(native.cwd, "finish-background"), "finish\n");
         await expect(commandFinished.promise).resolves.toMatchObject({
           status: "completed",
@@ -377,10 +487,12 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         });
         expect(isCodexAppServerLiveThreadProtected(client, first.threadId)).toBe(false);
         expect(authority.commands.size).toBe(0);
+        record("background-settled-successfully", { threadId: first.threadId });
       }
       expect(client.getCloseError()).toBeUndefined();
       expect(providerFailures).toEqual([]);
       await resumed.liveThreadOwnership?.release(resumed.threadId);
+      record("proof-complete", { providerRequests, siblingIntact: true });
     },
   );
 });

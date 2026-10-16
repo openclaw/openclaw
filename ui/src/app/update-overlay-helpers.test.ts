@@ -7,7 +7,6 @@ import {
   UpdateScheduleStateSchema,
 } from "../../../packages/gateway-protocol/src/schema/config.js";
 import type { GatewayHelloOk } from "../api/gateway.ts";
-import type { UpdateScheduleState } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
 import {
   projectUpdateSentinel,
@@ -23,19 +22,9 @@ import {
 } from "./update-schedule-dto.ts";
 import { formatUpdateCampaignLabel } from "./update-schedule-projection.ts";
 
-afterEach(() => vi.restoreAllMocks());
-
-const AVAILABLE = { currentVersion: "2026.8.1", latestVersion: "2026.8.2", channel: "stable" };
-const IMMUTABLE = {
-  root: "/opt/openclaw",
-  currentSha: "a".repeat(40),
-  currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
-};
-const EMPTY_STATUS = {
-  updateStatusBanner: null,
-  recordedUpdateAttempt: null,
-  heldUpdateCampaignId: null,
-};
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("update schedule hydration", () => {
   it("preserves additive git availability and the hello schedule DTO", () => {
@@ -89,7 +78,17 @@ describe("update schedule hydration", () => {
       },
     } as GatewayHelloOk;
 
-    expect(readUpdateAvailable(hello)).toEqual(hello.snapshot.updateAvailable);
+    expect(readUpdateAvailable(hello)).toMatchObject({
+      currentSha: "a".repeat(40),
+      upstreamRef: "origin/main",
+      upstreamSha: "b".repeat(40),
+      repositoryUrl: "https://github.com/example/openclaw",
+      commitsBehind: 3,
+      commits: [
+        { sha: "b0b0b0b", subject: "Improve update scheduling" },
+        { sha: "a0a0a0a", subject: "Tighten update checks" },
+      ],
+    });
     expect(readUpdateSchedule(hello)).toEqual(updateSchedule);
   });
 
@@ -106,16 +105,39 @@ describe("update schedule hydration", () => {
       },
     } as const;
 
-    const label = (campaign: Partial<NonNullable<UpdateScheduleState["campaign"]>>, now = 1_000) =>
+    expect(formatUpdateCampaignLabel(schedule, 1_000)).toBe(
+      "Waiting for active work · forced update in 0:54",
+    );
+    expect(
       formatUpdateCampaignLabel(
-        { ...schedule, campaign: { ...schedule.campaign, ...campaign } },
-        now,
-      );
-    expect(label({})).toBe("Waiting for active work · forced update in 0:54");
-    expect(label({ state: "countdown", applyAtMs: 762_000 })).toBe("Updating in 12:41");
-    expect(label({}, 56_000)).toBe("Waiting for active work · forced update in 0:00");
-    expect(label({ holdUntilMs: 762_000 })).toBe("Update held · resumes in 12:41");
-    expect(label({ state: "applying", holdUntilMs: 762_000 })).toBe("Applying update…");
+        {
+          ...schedule,
+          campaign: { ...schedule.campaign, state: "countdown", applyAtMs: 762_000 },
+        },
+        1_000,
+      ),
+    ).toBe("Updating in 12:41");
+    expect(formatUpdateCampaignLabel(schedule, 56_000)).toBe(
+      "Waiting for active work · forced update in 0:00",
+    );
+    expect(
+      formatUpdateCampaignLabel(
+        {
+          ...schedule,
+          campaign: { ...schedule.campaign, holdUntilMs: 762_000 },
+        },
+        1_000,
+      ),
+    ).toBe("Update held · resumes in 12:41");
+    expect(
+      formatUpdateCampaignLabel(
+        {
+          ...schedule,
+          campaign: { ...schedule.campaign, state: "applying", holdUntilMs: 762_000 },
+        },
+        1_000,
+      ),
+    ).toBe("Applying update…");
   });
 
   it.each([
@@ -149,7 +171,9 @@ describe("update schedule hydration", () => {
       install: {
         kind: "immutable",
         immutable: {
-          ...IMMUTABLE,
+          root: "/opt/openclaw",
+          currentSha: "a".repeat(40),
+          currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
           ...invalid,
         },
       },
@@ -176,10 +200,16 @@ describe("update schedule hydration", () => {
   // field must never blank the overlay.
   it("keeps rendering when a newer Gateway adds an unknown field", () => {
     const withFutureField = {
-      ...AVAILABLE,
+      currentVersion: "2026.8.1",
+      latestVersion: "2026.8.2",
+      channel: "stable",
       releaseNotesUrl: "https://example.invalid/notes",
     };
-    expect(readUpdateAvailableValue(withFutureField)).toEqual(AVAILABLE);
+    expect(readUpdateAvailableValue(withFutureField)).toEqual({
+      currentVersion: "2026.8.1",
+      latestVersion: "2026.8.2",
+      channel: "stable",
+    });
 
     const scheduleWithFutureField = {
       channel: "dev",
@@ -199,16 +229,23 @@ describe("update schedule hydration", () => {
       '{"currentVersion":"2026.8.1","latestVersion":"2026.8.2","channel":"stable","__proto__":{"polluted":true},"constructor":"x","toString":"y"}',
     );
     const parsed = readUpdateAvailableValue(hostile);
-    expect(parsed).toEqual(AVAILABLE);
+    expect(parsed).toEqual({
+      currentVersion: "2026.8.1",
+      latestVersion: "2026.8.2",
+      channel: "stable",
+    });
     expect(Object.hasOwn(parsed as object, "toString")).toBe(false);
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 
-  // Schema lengths count graphemes, not UTF-16 code units.
+  // Canonical maxLength counts grapheme clusters; String#length counts UTF-16
+  // code units, so a length-based copy of that rule drops valid emoji subjects.
   it("preserves a commit subject the canonical schema accepts but String#length overcounts", () => {
     const subject = "\u{1F44D}".repeat(100);
     const payload = {
-      ...AVAILABLE,
+      currentVersion: "2026.8.1",
+      latestVersion: "2026.8.2",
+      channel: "stable",
       commits: [{ sha: "abc1234", subject }],
     };
     expect(subject.length).toBeGreaterThan(120);
@@ -235,11 +272,18 @@ describe("update schedule hydration", () => {
       sha: `sha${index}`,
       subject: `commit ${index}`,
     }));
-    expect(readUpdateAvailableValue({ ...AVAILABLE, commits })?.commits).toEqual(
-      commits.slice(0, 5),
-    );
+    expect(
+      readUpdateAvailableValue({
+        currentVersion: "2026.8.1",
+        latestVersion: "2026.8.2",
+        channel: "stable",
+        commits,
+      })?.commits,
+    ).toEqual(commits.slice(0, 5));
   });
 
+  // Drift guard: whatever the canonical schema accepts must still reach the
+  // overlay. This fails if a schema change outgrows the reader.
   it.each([
     [
       "availability",
@@ -270,6 +314,8 @@ describe("update schedule hydration", () => {
         install: { kind: "package" },
         target: { kind: "package", version: "2026.8.1-beta.1" },
       },
+      UpdateScheduleStateSchema,
+      readUpdateScheduleValue,
     ],
     [
       "schedule with a prepared immutable generation",
@@ -279,7 +325,9 @@ describe("update schedule hydration", () => {
         install: {
           kind: "immutable",
           immutable: {
-            ...IMMUTABLE,
+            root: "/opt/openclaw",
+            currentSha: "a".repeat(40),
+            currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
             prepared: {
               sha: "b".repeat(40),
               path: `/opt/openclaw/releases/${"b".repeat(40)}`,
@@ -289,6 +337,8 @@ describe("update schedule hydration", () => {
           },
         },
       },
+      UpdateScheduleStateSchema,
+      readUpdateScheduleValue,
     ],
     [
       "schedule with diverged git install and campaign",
@@ -317,10 +367,12 @@ describe("update schedule hydration", () => {
           updatedAtMs: 5,
         },
       },
+      UpdateScheduleStateSchema,
+      readUpdateScheduleValue,
     ],
-  ])("round-trips canonical-valid %s unchanged", (_label, payload) => {
-    expect(Value.Check(UpdateScheduleStateSchema, payload)).toBe(true);
-    expect(readUpdateScheduleValue(payload)).toEqual(payload);
+  ])("round-trips canonical-valid %s unchanged", (_label, payload, schema, read) => {
+    expect(Value.Check(schema, payload)).toBe(true);
+    expect(read(payload)).toEqual(payload);
   });
 });
 
@@ -374,7 +426,11 @@ describe("update status localization", () => {
           },
         },
       },
-      EMPTY_STATUS,
+      {
+        updateStatusBanner: null,
+        recordedUpdateAttempt: null,
+        heldUpdateCampaignId: null,
+      },
     );
 
     expect(projected.recordedUpdateAttempt).toEqual({
@@ -458,7 +514,7 @@ describe("update status localization", () => {
             },
           },
         },
-        EMPTY_STATUS,
+        { updateStatusBanner: null, recordedUpdateAttempt: null, heldUpdateCampaignId: null },
       );
 
       const detail = projected.failure?.attempt?.failure?.detail;

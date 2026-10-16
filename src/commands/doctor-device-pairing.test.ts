@@ -21,7 +21,9 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const noteMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: exercise doctor response handling without opening network connections.
 vi.mock("../gateway/call.js", () => ({ callGateway: callGatewayMock }));
+// mock-isolation: capture user-facing notes without terminal output.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
 
 function requireNoteMessage(): string {

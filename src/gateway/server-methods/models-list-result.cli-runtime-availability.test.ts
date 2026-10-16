@@ -217,7 +217,7 @@ it.each([
   ["CLI pin", api, cli, api, true, false, false, undefined],
 ] as const)(
   "uses the selected execution owner for %s",
-  async ([, provider, pinProvider, sharedProvider, expired, noRefresh, available, reason]) =>
+  async (_name, provider, pinProvider, sharedProvider, expired, noRefresh, available, reason) =>
     withOpenClawTestState({ layout: "state-only", prefix: "cli-pin-identity-" }, async (state) => {
       const modelId = "claude-haiku-4-5";
       const cfg: OpenClawConfig = {

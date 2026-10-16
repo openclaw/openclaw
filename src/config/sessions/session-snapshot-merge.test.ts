@@ -13,53 +13,6 @@ const initial: SessionEntry = {
   model: "claude-opus-4-6",
 };
 
-const interruptedAndRecoveryRuns = [
-  { runId: "interrupted-run", lifecycleGeneration: "generation-1" },
-  { runId: "recovery-run", lifecycleGeneration: "generation-1" },
-];
-
-const claims = (...tokens: string[]) => ({ lifecycleGeneration: "generation-1", tokens });
-const runFence = (runId: string, lifecycleGeneration = "generation-1") => ({
-  runId,
-  lifecycleGeneration,
-});
-const recoveryState = (state: Partial<NonNullable<SessionEntry["mainRestartRecovery"]>> = {}) => ({
-  cycleId: "cycle-1",
-  revision: 1,
-  chargedAttempts: 1,
-  ...state,
-});
-
-function snapshot(
-  entry: SessionEntry,
-  updatedAt: number,
-  patch: Partial<SessionEntry> = {},
-): SessionEntry {
-  return { ...entry, updatedAt, ...patch };
-}
-
-function modelSelection(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
-    ...initial,
-    providerOverride: "openai",
-    modelOverride: "gpt-5.4",
-    modelOverrideSource: "user",
-    ...overrides,
-  };
-}
-
-function recovery(
-  state: Partial<NonNullable<SessionEntry["mainRestartRecovery"]>> = {},
-  entry: Partial<SessionEntry> = {},
-): SessionEntry {
-  return {
-    ...initial,
-    abortedLastRun: true,
-    mainRestartRecovery: recoveryState(state),
-    ...entry,
-  };
-}
-
 describe("session snapshot merge", () => {
   it("projects same-provider model changes as an atomic pair", () => {
     const next = { ...initial, model: "claude-sonnet-4-6", updatedAt: 2 };
@@ -78,9 +31,14 @@ describe("session snapshot merge", () => {
   it.each([undefined, "inherit"] as const)(
     "preserves a required creation sandbox against a %s patch",
     (sandbox) => {
-      expect(mergeSessionEntry({ ...initial, sandbox: "required" }, { sandbox })).toMatchObject({
+      const existing: SessionEntry = {
+        ...initial,
         sandbox: "required",
-      });
+      };
+      const patch: Partial<SessionEntry> = {};
+      Object.assign(patch, { sandbox });
+
+      expect(mergeSessionEntry(existing, patch)).toMatchObject({ sandbox: "required" });
     },
   );
 
@@ -88,19 +46,18 @@ describe("session snapshot merge", () => {
     expect(mergeSessionEntry(initial, { sandbox: "required" })).not.toHaveProperty("sandbox");
   });
 
-  it("retains an absent creation surface through merge and transcript rollover", () => {
-    for (const createdSurface of [undefined, "plugin-dock"] as const) {
-      expect(
-        mergeSessionEntry(
-          { ...initial, createdSurface: undefined },
-          {
-            sessionId: "new-transcript",
-            createdSurface,
-          },
-        ).createdSurface,
-      ).toBeUndefined();
-    }
-  });
+  it.each([undefined] as const)(
+    "retains creation surface %s through merge and transcript rollover",
+    (createdSurface) => {
+      const existing = { ...initial, createdSurface };
+      for (const surface of [undefined, "plugin-dock"] as const) {
+        expect(
+          mergeSessionEntry(existing, { sessionId: "new-transcript", createdSurface: surface })
+            .createdSurface,
+        ).toBe(createdSurface);
+      }
+    },
+  );
 
   it("keeps a concurrently changed model pair", () => {
     const next = { ...initial, model: "claude-sonnet-4-6", updatedAt: 2 };
@@ -133,7 +90,9 @@ describe("session snapshot merge", () => {
         activeModel: "openai/gpt-fallback",
       },
     };
-    const next = snapshot(initialOverride, 2, {
+    const next = {
+      ...initialOverride,
+      updatedAt: 2,
       providerOverride: undefined,
       modelOverride: undefined,
       modelOverrideSource: undefined,
@@ -143,8 +102,10 @@ describe("session snapshot merge", () => {
       authProfileOverrideSource: undefined,
       fallbackNotice: undefined,
       liveModelSwitchPending: true,
-    });
-    const current = snapshot(initialOverride, 3, {
+    };
+    const current: SessionEntry = {
+      ...initialOverride,
+      updatedAt: 3,
       modelOverride: "gpt-new",
       modelOverrideSource: "user",
       authProfileOverride: "openai:user",
@@ -154,7 +115,7 @@ describe("session snapshot merge", () => {
         selectedModel: "openai/gpt-new",
         activeModel: "openai/gpt-fallback",
       },
-    });
+    };
 
     expect(mergeSessionSnapshotChanges({ initial: initialOverride, next, current })).toEqual(
       current,
@@ -162,10 +123,18 @@ describe("session snapshot merge", () => {
   });
 
   it("re-arms a winning explicit model switch after the prior signal clears", () => {
-    const initialOverride = modelSelection({
+    const initialOverride: SessionEntry = {
+      ...initial,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
       liveModelSwitchPending: true,
-    });
-    const next = { ...initialOverride, updatedAt: 2, modelOverride: "gpt-5.5" };
+    };
+    const next: SessionEntry = {
+      ...initialOverride,
+      updatedAt: 2,
+      modelOverride: "gpt-5.5",
+    };
     const current = { ...initialOverride, updatedAt: 3 };
     delete current.liveModelSwitchPending;
 
@@ -185,23 +154,41 @@ describe("session snapshot merge", () => {
   });
 
   it("preserves concurrently consumed unchanged model-dependent state", () => {
-    const initialOverride = modelSelection({
+    const initialOverride: SessionEntry = {
+      ...initial,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
       liveModelSwitchPending: true,
       thinkingLevel: "high",
-    });
-    const next = { ...initialOverride, updatedAt: 2, modelOverride: "gpt-5.5" };
-    const current = snapshot(initialOverride, 3, {
+    };
+    const next: SessionEntry = {
+      ...initialOverride,
+      updatedAt: 2,
+      modelOverride: "gpt-5.5",
+    };
+    const current: SessionEntry = {
+      ...initialOverride,
+      updatedAt: 3,
       thinkingLevel: "low",
-    });
+    };
     delete current.liveModelSwitchPending;
 
     const merged = mergeSessionSnapshotChanges({ initial: initialOverride, next, current });
 
-    expect(merged).toEqual({ ...current, modelOverride: "gpt-5.5" });
+    expect(merged).toMatchObject({
+      modelOverride: "gpt-5.5",
+      thinkingLevel: "low",
+    });
+    expect(merged.liveModelSwitchPending).toBeUndefined();
   });
 
   it("clears stale model-dependent state with the winning model selection", () => {
-    const initialOverride = modelSelection({
+    const initialOverride: SessionEntry = {
+      ...initial,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
       modelProvider: "openai",
       model: "gpt-5.4",
       fallbackNotice: {
@@ -231,8 +218,10 @@ describe("session snapshot merge", () => {
         messageCount: 1,
         unwindowedMessageCount: 1,
       },
-    });
-    const next = snapshot(initialOverride, 2, {
+    };
+    const next: SessionEntry = {
+      ...initialOverride,
+      updatedAt: 2,
       modelOverride: "gpt-5.5",
       modelProvider: undefined,
       model: undefined,
@@ -240,8 +229,10 @@ describe("session snapshot merge", () => {
       contextTokens: undefined,
       contextTokensSource: undefined,
       contextBudgetStatus: undefined,
-    });
-    const current = snapshot(initialOverride, 3, {
+    };
+    const current: SessionEntry = {
+      ...initialOverride,
+      updatedAt: 3,
       modelProvider: "openai",
       model: "gpt-5.4-mini",
       fallbackNotice: {
@@ -251,63 +242,88 @@ describe("session snapshot merge", () => {
       },
       contextTokens: 80_000,
       contextTokensSource: "runtime",
-    });
+    };
 
     const merged = mergeSessionSnapshotChanges({ initial: initialOverride, next, current });
 
-    expect(merged).toEqual({
+    expect(merged).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "user",
+    });
+    expect(merged.modelProvider).toBeUndefined();
+    expect(merged.model).toBeUndefined();
+    expect(merged.fallbackNotice).toBeUndefined();
+    expect(merged.contextTokens).toBeUndefined();
+    expect(merged.contextTokensSource).toBeUndefined();
+    expect(merged.contextBudgetStatus).toBeUndefined();
+  });
+
+  it("does not reject a model switch after concurrent runtime metadata refresh", () => {
+    const initialOverride: SessionEntry = {
+      ...initial,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
+      contextTokens: 100_000,
+    };
+    const next: SessionEntry = {
       ...initialOverride,
-      updatedAt: 3,
       modelOverride: "gpt-5.5",
       modelProvider: undefined,
       model: undefined,
-      fallbackNotice: undefined,
       contextTokens: undefined,
-      contextTokensSource: undefined,
-      contextBudgetStatus: undefined,
-    });
-  });
+    };
+    const current: SessionEntry = {
+      ...initialOverride,
+      updatedAt: 3,
+      model: "gpt-5.4-mini",
+      contextTokens: 80_000,
+    };
 
-  it.each<{
-    name: string;
-    initial: Partial<SessionEntry>;
-    next: Partial<SessionEntry>;
-    current: Partial<SessionEntry>;
-    conflict: boolean;
-  }>([
-    {
-      name: "accepts a model switch after concurrent runtime metadata refresh",
-      initial: { contextTokens: 100_000 },
-      next: {
-        modelOverride: "gpt-5.5",
-        modelProvider: undefined,
-        model: undefined,
-        contextTokens: undefined,
-      },
-      current: { model: "gpt-5.4-mini", contextTokens: 80_000 },
-      conflict: false,
-    },
-    {
-      name: "rejects a model switch after a concurrent thinking override",
-      initial: { thinkingLevel: "xhigh" },
-      next: { modelOverride: "gpt-5.5", thinkingLevel: "high" },
-      current: { thinkingLevel: "low" },
-      conflict: true,
-    },
-  ])("$name", ({ initial: seed, next, current, conflict }) => {
-    const before = modelSelection(seed);
     expect(
       sessionSnapshotTouchedFieldsConflict({
-        initial: before,
-        next: { ...before, ...next },
-        current: snapshot(before, 3, current),
+        initial: initialOverride,
+        next,
+        current,
         touchedFields: ["providerOverride", "modelOverride", "modelOverrideSource"],
       }),
-    ).toBe(conflict);
+    ).toBe(false);
+  });
+
+  it("rejects a model switch after a concurrent thinking override", () => {
+    const initialOverride: SessionEntry = {
+      ...initial,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
+      thinkingLevel: "xhigh",
+    };
+    const next: SessionEntry = {
+      ...initialOverride,
+      modelOverride: "gpt-5.5",
+      thinkingLevel: "high",
+    };
+    const current: SessionEntry = {
+      ...initialOverride,
+      updatedAt: 3,
+      thinkingLevel: "low",
+    };
+
+    expect(
+      sessionSnapshotTouchedFieldsConflict({
+        initial: initialOverride,
+        next,
+        current,
+        touchedFields: ["providerOverride", "modelOverride", "modelOverrideSource"],
+      }),
+    ).toBe(true);
   });
 
   it("blocks stale model-dependent state after a concurrent selection", () => {
-    const next = snapshot(initial, 2, {
+    const next: SessionEntry = {
+      ...initial,
+      updatedAt: 2,
       modelProvider: "openai",
       model: "gpt-5.4",
       fallbackNotice: {
@@ -317,12 +333,14 @@ describe("session snapshot merge", () => {
       },
       contextTokens: 100_000,
       thinkingLevel: "medium",
-    });
-    const current = snapshot(initial, 3, {
+    };
+    const current: SessionEntry = {
+      ...initial,
+      updatedAt: 3,
       providerOverride: "openai",
       modelOverride: "gpt-5.5",
       modelOverrideSource: "user",
-    });
+    };
 
     expect(mergeSessionSnapshotChanges({ initial, next, current })).toEqual(current);
   });
@@ -338,129 +356,310 @@ describe("session snapshot merge", () => {
     expect(mergeSessionSnapshotChanges({ initial, next, current })).toEqual(current);
   });
 
-  it.each<{
-    name: string;
-    initial: SessionEntry;
-    current: Partial<SessionEntry>;
-    next?: Partial<SessionEntry>;
-    clear?: boolean;
-    reassertAbortedLastRun?: boolean;
-    expected?: Partial<SessionEntry>;
-  }>([
-    {
-      name: "preserves the aggregate when a restart marker wins a stale healthy clear",
-      initial: recovery(
-        { revision: 2, chargedAttempts: 0, foregroundClaims: claims("owner-1") },
-        { restartRecoveryRuns: [runFence("run-1")] },
-      ),
-      current: { restartRecoveryRuns: [runFence("run-1"), runFence("run-1", "generation-2")] },
-    },
-    {
-      name: "preserves the safe-tools guard when a newer recovery owner wins a stale clear",
-      initial: recovery({}, { restartRecoveryForceSafeTools: true }),
-      current: { mainRestartRecovery: recoveryState({ revision: 2 }) },
-    },
-    {
-      name: "preserves recovery when the safe-tools guard is acquired during fence cleanup",
-      initial: recovery({ revision: 3 }, { restartRecoveryRuns: interruptedAndRecoveryRuns }),
-      current: {
-        abortedLastRun: false,
-        restartRecoveryRuns: [runFence("interrupted-run")],
-        restartRecoveryForceSafeTools: true,
+  it("preserves the recovery aggregate when a restart marker wins a stale healthy clear", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      abortedLastRun: true,
+      restartRecoveryRuns: [{ runId: "run-1", lifecycleGeneration: "generation-1" }],
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 2,
+        chargedAttempts: 0,
+        foregroundClaims: {
+          lifecycleGeneration: "generation-1",
+          tokens: ["owner-1"],
+        },
       },
-    },
-    {
-      name: "clears recovery after lifecycle settlement consumes its run fence",
-      initial: recovery({ revision: 3 }, { restartRecoveryRuns: interruptedAndRecoveryRuns }),
-      current: { abortedLastRun: false, restartRecoveryRuns: [runFence("interrupted-run")] },
-      expected: {
-        abortedLastRun: false,
-        restartRecoveryRuns: undefined,
-        mainRestartRecovery: undefined,
+    };
+    const next: SessionEntry = {
+      ...initialRecovery,
+      updatedAt: 2,
+      abortedLastRun: false,
+      restartRecoveryRuns: undefined,
+      mainRestartRecovery: undefined,
+    };
+    const current: SessionEntry = {
+      ...initialRecovery,
+      updatedAt: 3,
+      restartRecoveryRuns: [
+        ...(initialRecovery.restartRecoveryRuns ?? []),
+        { runId: "run-1", lifecycleGeneration: "generation-2" },
+      ],
+    };
+
+    const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
+
+    expect(merged.abortedLastRun).toBe(true);
+    expect(merged.restartRecoveryRuns).toEqual(current.restartRecoveryRuns);
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
+  });
+
+  it("preserves the safe-tools guard when a newer recovery owner wins a stale clear", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      abortedLastRun: true,
+      restartRecoveryForceSafeTools: true,
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 1,
+        chargedAttempts: 1,
       },
-    },
-    {
-      name: "preserves every concurrent owner and interruption until lifecycle settlement",
-      initial: recovery(),
-      current: {
-        mainRestartRecovery: recoveryState({
-          revision: 3,
-          foregroundClaims: claims("owner-1", "owner-2"),
-        }),
+    };
+    const next: SessionEntry = {
+      ...initialRecovery,
+      updatedAt: 2,
+      abortedLastRun: false,
+      restartRecoveryForceSafeTools: undefined,
+      mainRestartRecovery: undefined,
+    };
+    const current: SessionEntry = {
+      ...initialRecovery,
+      updatedAt: 3,
+      mainRestartRecovery: {
+        ...initialRecovery.mainRestartRecovery!,
+        revision: 2,
       },
-    },
-    {
-      name: "reasserts a terminal abort after another owner marks the session healthy",
-      initial: recovery({ revision: 3, foregroundClaims: claims("owner-1", "owner-2") }),
-      current: {
-        abortedLastRun: false,
-        mainRestartRecovery: recoveryState({ revision: 4, foregroundClaims: claims("owner-2") }),
+    };
+
+    const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
+
+    expect(merged.restartRecoveryForceSafeTools).toBe(true);
+    expect(merged.abortedLastRun).toBe(true);
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
+  });
+
+  it("preserves recovery state when the safe-tools guard is acquired during fence cleanup", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      abortedLastRun: true,
+      restartRecoveryRuns: [
+        { runId: "interrupted-run", lifecycleGeneration: "generation-1" },
+        { runId: "recovery-run", lifecycleGeneration: "generation-1" },
+      ],
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 3,
+        chargedAttempts: 1,
       },
-      clear: false,
+    };
+    const next: SessionEntry = {
+      ...initialRecovery,
+      updatedAt: 2,
+      abortedLastRun: false,
+      restartRecoveryRuns: undefined,
+      restartRecoveryForceSafeTools: undefined,
+      mainRestartRecovery: undefined,
+    };
+    const current: SessionEntry = {
+      ...structuredClone(initialRecovery),
+      updatedAt: 3,
+      abortedLastRun: false,
+      restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "generation-1" }],
+      restartRecoveryForceSafeTools: true,
+    };
+
+    const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
+
+    expect(merged.restartRecoveryForceSafeTools).toBe(true);
+    expect(merged.restartRecoveryRuns).toEqual(current.restartRecoveryRuns);
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
+  });
+
+  it("clears recovery after lifecycle settlement consumes its run fence", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      abortedLastRun: true,
+      restartRecoveryRuns: [
+        { runId: "interrupted-run", lifecycleGeneration: "generation-1" },
+        { runId: "recovery-run", lifecycleGeneration: "generation-1" },
+      ],
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 3,
+        chargedAttempts: 1,
+      },
+    };
+    const next: SessionEntry = {
+      ...initialRecovery,
+      updatedAt: 2,
+      abortedLastRun: false,
+      restartRecoveryRuns: undefined,
+      mainRestartRecovery: undefined,
+    };
+    const current: SessionEntry = {
+      ...structuredClone(initialRecovery),
+      updatedAt: 3,
+      abortedLastRun: false,
+      restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "generation-1" }],
+    };
+
+    const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
+
+    expect(merged.abortedLastRun).toBe(false);
+    expect(merged.restartRecoveryRuns).toBeUndefined();
+    expect(merged.mainRestartRecovery).toBeUndefined();
+  });
+
+  it("preserves every concurrent owner and interruption until lifecycle settlement", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      abortedLastRun: true,
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 1,
+        chargedAttempts: 1,
+      },
+    };
+    const next: SessionEntry = {
+      ...initialRecovery,
+      updatedAt: 2,
+      abortedLastRun: false,
+      mainRestartRecovery: undefined,
+    };
+    const current: SessionEntry = {
+      ...initialRecovery,
+      updatedAt: 3,
+      mainRestartRecovery: {
+        ...initialRecovery.mainRestartRecovery!,
+        revision: 3,
+        foregroundClaims: {
+          lifecycleGeneration: "generation-1",
+          tokens: ["owner-1", "owner-2"],
+        },
+      },
+    };
+
+    const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
+
+    expect(merged.abortedLastRun).toBe(true);
+    expect(merged.restartRecoveryRuns).toBeUndefined();
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
+    expect(merged.mainRestartRecovery?.foregroundClaims?.tokens).toEqual(["owner-1", "owner-2"]);
+  });
+
+  it("reasserts a terminal abort after another owner marks the session healthy", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      abortedLastRun: true,
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 3,
+        chargedAttempts: 1,
+        foregroundClaims: {
+          lifecycleGeneration: "generation-1",
+          tokens: ["owner-1", "owner-2"],
+        },
+      },
+    };
+    const next: SessionEntry = {
+      ...structuredClone(initialRecovery),
+      updatedAt: 2,
+    };
+    const current: SessionEntry = {
+      ...structuredClone(initialRecovery),
+      updatedAt: 3,
+      abortedLastRun: false,
+      mainRestartRecovery: {
+        ...initialRecovery.mainRestartRecovery!,
+        revision: 4,
+        foregroundClaims: {
+          lifecycleGeneration: "generation-1",
+          tokens: ["owner-2"],
+        },
+      },
+    };
+
+    const merged = mergeSessionSnapshotChanges({
+      initial: initialRecovery,
+      next,
+      current,
       reassertAbortedLastRun: true,
-      expected: { abortedLastRun: true },
-    },
-    {
-      name: "does not attach a stale terminal abort to a replacement recovery cycle",
-      initial: recovery({
+    });
+
+    expect(merged.abortedLastRun).toBe(true);
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
+  });
+
+  it("does not attach a stale terminal abort to a replacement recovery cycle", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      abortedLastRun: true,
+      mainRestartRecovery: {
         cycleId: "cycle-old",
         revision: 2,
-        foregroundClaims: { lifecycleGeneration: "generation-old", tokens: ["old-owner"] },
-      }),
-      current: {
-        abortedLastRun: false,
-        mainRestartRecovery: recoveryState({
-          cycleId: "cycle-new",
-          chargedAttempts: 0,
-          foregroundClaims: { lifecycleGeneration: "generation-new", tokens: ["new-owner"] },
-        }),
+        chargedAttempts: 1,
+        foregroundClaims: {
+          lifecycleGeneration: "generation-old",
+          tokens: ["old-owner"],
+        },
       },
-      clear: false,
+    };
+    const current: SessionEntry = {
+      ...structuredClone(initialRecovery),
+      updatedAt: 3,
+      abortedLastRun: false,
+      mainRestartRecovery: {
+        cycleId: "cycle-new",
+        revision: 1,
+        chargedAttempts: 0,
+        foregroundClaims: {
+          lifecycleGeneration: "generation-new",
+          tokens: ["new-owner"],
+        },
+      },
+    };
+
+    const merged = mergeSessionSnapshotChanges({
+      initial: initialRecovery,
+      next: { ...structuredClone(initialRecovery), updatedAt: 2 },
+      current,
       reassertAbortedLastRun: true,
-    },
-    {
-      name: "preserves a concurrent foreground claim over a partial recovery update",
-      initial: recovery({ chargedAttempts: 0 }),
-      next: {
-        mainRestartRecovery: recoveryState({
-          revision: 2,
-          reservation: { runId: "recovery-1", attempt: 1, lifecycleGeneration: "generation-1" },
-        }),
+    });
+
+    expect(merged.abortedLastRun).toBe(false);
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
+  });
+
+  it("preserves a concurrent foreground claim over a partial recovery update", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      abortedLastRun: true,
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 1,
+        chargedAttempts: 0,
       },
-      current: {
-        mainRestartRecovery: recoveryState({
-          revision: 2,
-          chargedAttempts: 0,
-          foregroundClaims: claims("owner-1"),
-        }),
+    };
+    const next: SessionEntry = {
+      ...initialRecovery,
+      updatedAt: 2,
+      mainRestartRecovery: {
+        ...initialRecovery.mainRestartRecovery!,
+        revision: 2,
+        chargedAttempts: 1,
+        reservation: {
+          runId: "recovery-1",
+          attempt: 1,
+          lifecycleGeneration: "generation-1",
+        },
       },
-      clear: false,
-    },
-  ])(
-    "$name",
-    ({ initial: before, next, current, clear = true, expected, reassertAbortedLastRun }) => {
-      const latest = snapshot(before, 3, current);
-      const proposed = snapshot(
-        before,
-        2,
-        clear
-          ? {
-              abortedLastRun: false,
-              mainRestartRecovery: undefined,
-              restartRecoveryRuns: undefined,
-              restartRecoveryForceSafeTools: undefined,
-              ...next,
-            }
-          : next,
-      );
-      expect(
-        mergeSessionSnapshotChanges({
-          initial: before,
-          next: proposed,
-          current: latest,
-          reassertAbortedLastRun,
-        }),
-      ).toEqual({ ...latest, ...expected });
-    },
-  );
+    };
+    const current: SessionEntry = {
+      ...initialRecovery,
+      updatedAt: 3,
+      mainRestartRecovery: {
+        ...initialRecovery.mainRestartRecovery!,
+        revision: 2,
+        foregroundClaims: {
+          lifecycleGeneration: "generation-1",
+          tokens: ["owner-1"],
+        },
+      },
+    };
+
+    const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
+
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
+    expect(merged.mainRestartRecovery?.reservation).toBeUndefined();
+  });
 });

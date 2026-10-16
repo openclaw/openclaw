@@ -301,6 +301,7 @@ it.each(["default", "explicit"] as const)(
       mode === "explicit"
         ? [
             "--",
+            "--prerequisite-check",
             "--only",
             "linux",
             "--provider",
@@ -310,9 +311,9 @@ it.each(["default", "explicit"] as const)(
             "--api-key-env",
             "CUSTOM_ANTHROPIC_KEY",
           ]
-        : [];
+        : ["--prerequisite-check"];
     const env = mode === "explicit" ? { CUSTOM_ANTHROPIC_KEY: secret } : { OPENAI_API_KEY: secret };
-    const result = runPrerequisiteCli([...args, "--prerequisite-check", "--json"], env);
+    const result = runPrerequisiteCli([...args, "--json"], env);
     expect(result).toMatchObject({
       status: 0,
       stderr: "",

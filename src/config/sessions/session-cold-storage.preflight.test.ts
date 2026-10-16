@@ -30,6 +30,7 @@ vi.mock("../../state/openclaw-agent-db-readonly.js", async (importOriginal) => (
   ...(await importOriginal<typeof import("../../state/openclaw-agent-db-readonly.js")>()),
   withOpenClawAgentDatabaseReadOnly: observed.nativeRead,
 }));
+// mock-isolation: control queued metadata admission without native worker resources.
 vi.mock("./session-transcript-worker-runtime.js", () => ({
   withSessionHistoryWorkerDatabase: async (
     options: OpenClawAgentDatabaseOptions,

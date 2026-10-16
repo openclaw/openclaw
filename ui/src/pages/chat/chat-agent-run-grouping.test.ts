@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
-import type { StreamRunRenderItem } from "./chat-thread-grouping.ts";
+import type {
+  ActivityRunRenderItem,
+  StreamRunRenderItem,
+  WorkGroupRenderItem,
+} from "./chat-thread-grouping.ts";
 
 function group(
   role: "assistant" | "tool" | "user",
@@ -38,37 +42,10 @@ function userBoundary(sendId = "send-1"): MessageGroup {
   });
 }
 
-function streamRun(
-  key: string,
-  runId: string,
-  boundaryId: string,
-  part: { key?: string; startedAt?: number } & (
-    | { kind?: "reading-indicator" }
-    | { kind: "stream"; text: string; isStreaming: true }
-  ) = {},
-): StreamRunRenderItem {
-  return {
-    kind: "stream-run",
-    key,
-    runId,
-    boundaryId,
-    parts: [{ kind: "reading-indicator", key, startedAt: 1, runId, boundaryId, ...part }],
-  };
-}
-
-type RunItem = Parameters<typeof coalesceAgentRunFrames>[0][number];
 type AgentRunFrameRenderItem = Extract<
   ReturnType<typeof coalesceAgentRunFrames>[number],
   { kind: "agent-run-frame" }
 >;
-
-function activity(key: string, groups: MessageGroup[]): RunItem {
-  return { kind: "activity-run", key, groups };
-}
-
-function runFrame(parts: RunItem[], sendId = "send-1") {
-  return requireFrame(coalesceAgentRunFrames([userBoundary(sendId), ...parts])[1]);
-}
 
 function requireFrame(
   value: ReturnType<typeof coalesceAgentRunFrames>[number] | undefined,
@@ -110,38 +87,67 @@ describe("coalesceAgentRunFrames", () => {
 
   it("keeps one lifecycle-stable frame key while preserving semantic part keys", () => {
     const runId = "run-1";
-    const stream = streamRun("stream-run:run-1", runId, "send:send-1", {
-      kind: "stream",
-      key: "stream:run-1",
-      text: "Working on it.",
-      isStreaming: true,
-    });
+    const stream: StreamRunRenderItem = {
+      kind: "stream-run",
+      key: "stream-run:run-1",
+      runId,
+      boundaryId: "send:send-1",
+      parts: [
+        {
+          kind: "stream",
+          key: "stream:run-1",
+          text: "Working on it.",
+          startedAt: 1,
+          isStreaming: true,
+          runId,
+          boundaryId: "send:send-1",
+        },
+      ],
+    };
     const tool = group("tool", "tool:run-1", runId);
-    const toolingActivity = activity("activity:tool:run-1", [tool]);
+    const activity: ActivityRunRenderItem = {
+      kind: "activity-run",
+      key: "activity:tool:run-1",
+      groups: [tool],
+    };
     const final = group("assistant", "assistant:run-1", runId);
-    const work: RunItem = {
+    const work: WorkGroupRenderItem = {
       kind: "work-group",
       key: "work:assistant:run-1",
       groups: [tool],
       durationMs: 1,
     };
-    const streaming = runFrame([stream]);
-    const tooling = runFrame([stream, toolingActivity]);
-    const history = runFrame([work, final]);
+    const boundary = userBoundary();
+
+    const streaming = requireFrame(coalesceAgentRunFrames([boundary, stream])[1]);
+    const tooling = requireFrame(coalesceAgentRunFrames([boundary, stream, activity])[1]);
+    const history = requireFrame(coalesceAgentRunFrames([boundary, work, final])[1]);
 
     expect(streaming.key).toBe(tooling.key);
     expect(tooling.key).toBe(history.key);
     expect(history.key).toContain(JSON.stringify([runId, "send:send-1"]));
-    expect(tooling.parts.map((part) => part.key)).toEqual([stream.key, toolingActivity.key]);
+    expect(tooling.parts.map((part) => part.key)).toEqual([stream.key, activity.key]);
     expect(history.parts.map((part) => part.key)).toEqual([work.key, final.key]);
   });
 
   it("keeps the live send frame identity when a hidden boundary materializes in history", () => {
     const runId = "run-heartbeat-handoff";
-    const stream = streamRun("stream-run:heartbeat-handoff", runId, `send:${runId}`, {
-      key: "reading:heartbeat-handoff",
-    });
-    const live = runFrame([stream], runId);
+    const stream: StreamRunRenderItem = {
+      kind: "stream-run",
+      key: "stream-run:heartbeat-handoff",
+      runId,
+      boundaryId: `send:${runId}`,
+      parts: [
+        {
+          kind: "reading-indicator",
+          key: "reading:heartbeat-handoff",
+          startedAt: 1,
+          runId,
+          boundaryId: `send:${runId}`,
+        },
+      ],
+    };
+    const live = requireFrame(coalesceAgentRunFrames([userBoundary(runId), stream])[1]);
     const persistedBoundary = group("assistant", "persisted-after-heartbeat", runId, {
       api: "cli",
       idempotencyKey: `cli-assistant:${runId}`,
@@ -169,7 +175,11 @@ describe("coalesceAgentRunFrames", () => {
     };
     const first = group("tool", "recovered-tool-1", runId);
     const second = group("tool", "recovered-tool-2", runId);
-    const historyActivity = activity("activity:recovered-tools", [first, second]);
+    const historyActivity: ActivityRunRenderItem = {
+      kind: "activity-run",
+      key: "activity:recovered-tools",
+      groups: [first, second],
+    };
 
     const live = requireFrame(coalesceAgentRunFrames([recoveryNotice, first, second])[1]);
     const history = requireFrame(coalesceAgentRunFrames([recoveryNotice, historyActivity])[1]);
@@ -183,22 +193,44 @@ describe("coalesceAgentRunFrames", () => {
   it("remounts a large live stream after steer without destabilizing ordinary frames", () => {
     const runId = "run-steered";
     const boundaryId = "send:steer-run";
-    const working = streamRun("stream-run:working", runId, boundaryId, { key: "working" });
-    const streamed = streamRun("stream-run:stream-after-steer", runId, boundaryId, {
-      kind: "stream",
-      key: "working:after:steer-run",
-      text: "Large terminal response",
-      startedAt: 2,
-      isStreaming: true,
-    });
+    const working: StreamRunRenderItem = {
+      kind: "stream-run",
+      key: "stream-run:working",
+      runId,
+      boundaryId,
+      parts: [{ kind: "reading-indicator", key: "working", startedAt: 1, runId, boundaryId }],
+    };
+    const streamed: StreamRunRenderItem = {
+      kind: "stream-run",
+      key: "stream-run:stream-after-steer",
+      runId,
+      boundaryId,
+      parts: [
+        {
+          kind: "stream",
+          key: "working:after:steer-run",
+          text: "Large terminal response",
+          startedAt: 2,
+          isStreaming: true,
+          runId,
+          boundaryId,
+        },
+      ],
+    };
 
-    expect(runFrame([working], "steer-run").key).not.toBe(runFrame([streamed], "steer-run").key);
+    expect(
+      requireFrame(coalesceAgentRunFrames([userBoundary("steer-run"), working])[1]).key,
+    ).not.toBe(requireFrame(coalesceAgentRunFrames([userBoundary("steer-run"), streamed])[1]).key);
   });
 
-  it("does not compose across forwarded sessions_send input", () => {
-    const boundary = group("assistant", "forwarded", "run-1", {
-      provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-    });
+  it.each([
+    {
+      name: "forwarded sessions_send input",
+      boundary: group("assistant", "forwarded", "run-1", {
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      }),
+    },
+  ])("does not compose across $name", ({ boundary }) => {
     const items = coalesceAgentRunFrames([
       userBoundary(),
       group("assistant", "before", "run-1"),
@@ -226,10 +258,21 @@ describe("coalesceAgentRunFrames", () => {
     { name: "metadata-less peer", boundary: group("user", "peer", undefined) },
   ])("gives a restored run segment a unique key after a $name boundary", ({ boundary }) => {
     const runId = "run-1";
-    const restoredStream = streamRun("stream-run:restored", runId, "send:send-1", {
-      key: "reading:restored",
-      startedAt: 3,
-    });
+    const restoredStream: StreamRunRenderItem = {
+      kind: "stream-run",
+      key: "stream-run:restored",
+      runId,
+      boundaryId: "send:send-1",
+      parts: [
+        {
+          kind: "reading-indicator",
+          key: "reading:restored",
+          startedAt: 3,
+          runId,
+          boundaryId: "send:send-1",
+        },
+      ],
+    };
     const items = coalesceAgentRunFrames([
       userBoundary(),
       group("assistant", "before", runId),
@@ -242,23 +285,27 @@ describe("coalesceAgentRunFrames", () => {
 
     expect(frames).toHaveLength(2);
     expect(frames[0]?.key).not.toBe(frames[1]?.key);
-    expect(frames[0]?.key).toBe(runFrame([group("assistant", "before", runId)]).key);
+    expect(frames[0]?.key).toBe(
+      requireFrame(coalesceAgentRunFrames([userBoundary(), group("assistant", "before", runId)])[1])
+        .key,
+    );
   });
 
   it.each([
     {
       name: "persisted keyed commentary",
-      key: "commentary-stop",
-      message: {
-        stopReason: "stop",
-        openclawStreamFallback: {
-          replacementText: "I will inspect it.",
-          source: "segment",
-          itemId: "commentary-1",
-        },
-      },
-      tool: "commentary-tool",
-      owner: null,
+      parts: [
+        group("assistant", "commentary-stop", "run-1", {
+          stopReason: "stop",
+          openclawStreamFallback: {
+            replacementText: "I will inspect it.",
+            source: "segment",
+            itemId: "commentary-1",
+          },
+        }),
+        group("tool", "commentary-tool", "run-1"),
+      ],
+      outcome: { kind: "completed", actionOwner: null },
     },
     {
       name: "provider speech cannot replace a completed frame answer",
@@ -273,105 +320,116 @@ describe("coalesceAgentRunFrames", () => {
     },
     {
       name: "Codex reasoning mirror",
-      key: "reasoning",
-      message: {
-        stopReason: "stop",
-        __openclaw: { mirrorOrigin: "codex-app-server", runId: "run-1" },
-      },
-      tool: "reasoning-tool",
-      owner: null,
+      parts: [
+        group("assistant", "reasoning", "run-1", {
+          stopReason: "stop",
+          __openclaw: { mirrorOrigin: "codex-app-server", runId: "run-1" },
+        }),
+        group("tool", "reasoning-tool", "run-1"),
+      ],
+      outcome: { kind: "completed", actionOwner: null },
     },
     {
       name: "attachment-only final followed by work",
-      key: "final-document",
-      message: {
-        phase: "final_answer",
-        content: [
-          {
-            type: "attachment",
-            attachment: {
-              kind: "document",
-              url: "https://files.example.test/report.pdf",
-              label: "report.pdf",
-              mimeType: "application/pdf",
+      parts: [
+        group("assistant", "final-document", "run-1", {
+          phase: "final_answer",
+          content: [
+            {
+              type: "attachment",
+              attachment: {
+                kind: "document",
+                url: "https://files.example.test/report.pdf",
+                label: "report.pdf",
+                mimeType: "application/pdf",
+              },
             },
-          },
-        ],
-      },
-      tool: "trailing-tool",
-      owner: "final-document",
+          ],
+        }),
+        group("tool", "trailing-tool", "run-1"),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "final-document" } },
     },
     {
       name: "image-only final",
-      key: "final-image",
-      message: {
-        stopReason: "stop",
-        content: [{ type: "image", url: "https://files.example.test/banner.png" }],
-      },
-      owner: "final-image",
+      parts: [
+        group("assistant", "final-image", "run-1", {
+          stopReason: "stop",
+          content: [{ type: "image", url: "https://files.example.test/banner.png" }],
+        }),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "final-image" } },
     },
     {
       name: "omitted-image-only final",
-      key: "final-omitted-image",
-      message: {
-        stopReason: "stop",
-        content: [{ type: "image", omitted: true, bytes: 12 * 1024 }],
-      },
-      owner: "final-omitted-image",
+      parts: [
+        group("assistant", "final-omitted-image", "run-1", {
+          stopReason: "stop",
+          content: [{ type: "image", omitted: true, bytes: 12 * 1024 }],
+        }),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "final-omitted-image" } },
     },
     {
       name: "reasoning-only final",
-      key: "thinking",
-      message: {
-        stopReason: "stop",
-        content: [{ type: "thinking", thinking: "I am considering the request." }],
-      },
-      owner: null,
+      parts: [
+        group("assistant", "thinking", "run-1", {
+          stopReason: "stop",
+          content: [{ type: "thinking", thinking: "I am considering the request." }],
+        }),
+      ],
+      outcome: { kind: "completed", actionOwner: null },
     },
     {
       name: "mixed-phase answer followed by work",
-      key: "mixed-final",
-      message: {
-        content: ["commentary", "final_answer"].map((phase) => ({
-          type: "text",
-          text: phase === "commentary" ? "Checking" : "Finished.",
-          textSignature: JSON.stringify({ v: 1, id: phase, phase }),
-        })),
-      },
-      tool: "trailing-tool",
-      owner: "mixed-final",
+      parts: [
+        group("assistant", "mixed-final", "run-1", {
+          content: ["commentary", "final_answer"].map((phase) => ({
+            type: "text",
+            text: phase === "commentary" ? "Checking" : "Finished.",
+            textSignature: JSON.stringify({ v: 1, id: phase, phase }),
+          })),
+        }),
+        group("tool", "trailing-tool", "run-1"),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "mixed-final" } },
     },
-  ])(
-    "records $name without deriving completion from the last part",
-    ({ key, message, tool, owner }) => {
-      const parts = [group("assistant", key, "run-1", message)];
-      if (tool) {
-        parts.push(group("tool", tool, "run-1"));
-      }
-      expect(runFrame(parts)).toMatchObject({
-        outcome: { kind: "completed", actionOwner: owner ? { key: owner } : null },
-      });
-    },
-  );
+  ])("records $name without deriving completion from the last part", ({ parts, outcome }) => {
+    const frame = requireFrame(coalesceAgentRunFrames([userBoundary(), ...parts])[1]);
 
-  it("marks an interrupted partial failed for placement abort", () => {
-    const frame = runFrame([
-      group("assistant", "partial", "run-1", {
-        content: "Partial answer",
-        stopReason: "stop",
-        openclawAbort: { aborted: true },
-      }),
-    ]);
+    expect(frame).toMatchObject({ outcome });
+  });
+
+  it.each([
+    { name: "placement abort", terminal: { stopReason: "stop", openclawAbort: { aborted: true } } },
+  ])("marks an interrupted partial failed for $name", ({ terminal }) => {
+    const frame = requireFrame(
+      coalesceAgentRunFrames([
+        userBoundary(),
+        group("assistant", "partial", "run-1", { content: "Partial answer", ...terminal }),
+      ])[1],
+    );
 
     expect(frame.outcome).toEqual({ kind: "failed" });
   });
 
   it("does not join promptless tools to a stream with a different explicit boundary", () => {
     const tool = group("tool", "old-tool", "run-1");
-    const stream = streamRun("stream:steered", "run-1", "send:steer", {
-      key: "reading:steered",
-      startedAt: 2,
-    });
+    const stream: StreamRunRenderItem = {
+      kind: "stream-run",
+      key: "stream:steered",
+      runId: "run-1",
+      boundaryId: "send:steer",
+      parts: [
+        {
+          kind: "reading-indicator",
+          key: "reading:steered",
+          startedAt: 2,
+          runId: "run-1",
+          boundaryId: "send:steer",
+        },
+      ],
+    };
     const items = coalesceAgentRunFrames([tool, stream]);
     expect(items[0]).toBe(tool);
     expect(requireFrame(items[1])).toMatchObject({
