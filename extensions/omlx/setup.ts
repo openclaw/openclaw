@@ -181,6 +181,23 @@ async function prepareNonInteractive(ctx: NonInteractiveContext) {
   const baseUrl = normalizeOptionalSecretInput(ctx.opts.customBaseUrl);
   const apiKey = normalizeOptionalSecretInput(ctx.opts.customApiKey);
   const replaceAuth = ctx.opts.customApiKey !== undefined;
+  const configured = ctx.config.models?.providers?.omlx;
+  const sameEndpoint =
+    !baseUrl ||
+    baseUrl.replace(/\/+$/, "") ===
+      (configured?.baseUrl ?? OMLX_DEFAULT_BASE_URL).trim().replace(/\/+$/, "");
+  const auth = configured?.request?.auth;
+  const hasSavedAuth =
+    sameEndpoint &&
+    (configured?.apiKey !== undefined ||
+      (auth !== undefined && auth.mode !== "provider-default") ||
+      [configured?.headers, configured?.request?.headers].some((headers) =>
+        Object.entries(headers ?? {}).some(
+          ([name, value]) =>
+            name.trim().toLowerCase() === "authorization" &&
+            Boolean(typeof value === "string" ? value.trim() : value),
+        ),
+      ));
   if (!modelId) {
     ctx.runtime.error(
       "oMLX setup requires --custom-model-id. List model IDs at the server's /v1/models endpoint.",
@@ -188,19 +205,14 @@ async function prepareNonInteractive(ctx: NonInteractiveContext) {
     return null;
   }
   const resolved =
-    replaceAuth && !apiKey
+    (!replaceAuth && hasSavedAuth) || (replaceAuth && !apiKey)
       ? null
       : await ctx.resolveApiKey({
           provider: OMLX_PROVIDER_ID,
           flagValue: apiKey,
           flagName: "--custom-api-key",
           envVar: OMLX_API_KEY_ENV_VAR,
-          allowProfile:
-            !baseUrl ||
-            baseUrl.replace(/\/+$/, "") ===
-              (ctx.config.models?.providers?.omlx?.baseUrl ?? OMLX_DEFAULT_BASE_URL)
-                .trim()
-                .replace(/\/+$/, ""),
+          allowProfile: sameEndpoint,
           required: false,
         });
   const listing = await listOmlxModels({

@@ -659,28 +659,38 @@ describe("oMLX setup through the inference catalog", () => {
     expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
   });
 
-  it("retains existing configured credentials on a noninteractive rerun", async () => {
+  it.each([
+    { apiKey: "existing-fixture-key", custom: false, authorization: "Bearer existing-fixture-key" },
+    { apiKey: "omlx-local", custom: false, authorization: null },
+    { apiKey: undefined, custom: true, authorization: null },
+  ])("keeps saved auth when the noninteractive key flag is omitted %j", async (scenario) => {
     const fetchMock = fixture();
+    vi.stubEnv("OMLX_API_KEY", "ambient-key");
     const ctx = nonInteractiveContext();
+    ctx.resolveApiKey = vi.fn(async () => ({ key: "ambient-key", source: "env" as const }));
     ctx.config = {
       models: {
         providers: {
           omlx: {
             baseUrl: "http://127.0.0.1:8000/v1",
-            apiKey: "existing-fixture-key",
+            apiKey: scenario.apiKey,
+            request: scenario.custom
+              ? { auth: { mode: "header", headerName: "X-oMLX-Key", value: "saved-header-key" } }
+              : undefined,
             models: [],
           },
         },
       },
     };
+    await expect(validateOmlxNonInteractive(ctx)).resolves.toBe(true);
+    const headers = new Headers(fetchMock.mock.lastCall?.[1]?.headers);
+    expect(headers.get("authorization")).toBe(scenario.authorization);
+    expect(headers.get("x-omlx-key")).toBe(scenario.custom ? "saved-header-key" : null);
+    expect(ctx.resolveApiKey).not.toHaveBeenCalled();
     const result = await configureOmlxNonInteractive(ctx);
-    expect(result?.models?.providers?.omlx?.apiKey).toBe("existing-fixture-key");
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        headers: { Authorization: "Bearer existing-fixture-key" },
-      }),
-    );
+    if (scenario.apiKey !== undefined) {
+      expect(result?.models?.providers?.omlx?.apiKey).toBe(scenario.apiKey);
+    }
     expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
   });
 });
