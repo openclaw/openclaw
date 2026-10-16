@@ -132,7 +132,9 @@ export function PaletteSessionSettingsView(properties: {
   const retry = nativeListener("click", () => properties.options.preferences.retry());
   function SettingsPlaces() {
     onSettled(() => {
-      if (focusTarget) focusTargets[focusTarget]?.focus({ preventScroll: true });
+      if (focusTarget) {
+        focusTargets[focusTarget]?.focus({ preventScroll: true });
+      }
     });
     const back = nativeListener("click", () => showPlaces(false));
     const connect = nativeListener("click", () => properties.options.onConnectMachine());
@@ -266,7 +268,9 @@ export function PaletteSessionSettingsView(properties: {
 
   function SettingsSummary() {
     onSettled(() => {
-      if (focusTarget === "workspace") focusTargets.workspace?.focus({ preventScroll: true });
+      if (focusTarget === "workspace") {
+        focusTargets.workspace?.focus({ preventScroll: true });
+      }
     });
     const place = () => properties.options.draft.place;
     const workspace = nativeListener("click", (event) => showPlaces(true, event.detail > 0));

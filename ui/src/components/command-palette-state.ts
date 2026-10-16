@@ -174,11 +174,7 @@ export class CommandPaletteState {
     );
     this.gateway = new GatewayPageBinding(this.changed, {
       getGateway: () => this.context?.gateway,
-      invalidateRequests: () => {
-        this.clearSessionSearch();
-        this.clearCatalogSearch();
-        this.scheduleSessionSearch(this.draft.message);
-      },
+      invalidateRequests: this.handleAgentSelection,
       onSnapshot: () => this.synchronizePresentationScope(),
       ensureInitialData: () => this.scheduleSessionSearch(this.draft.message),
     });
