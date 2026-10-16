@@ -124,10 +124,7 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
   publishStateRuntimeSchemaAdmission(db, true);
 }
 
-export const stateEngineSchema = {
-  id: "state",
-  version: OPENCLAW_STATE_SCHEMA_VERSION,
-  sqlite: "",
+const statePostgresSchema = {
   postgres: runtime.eagerSql,
   postgresFragments: runtime.fragments.map((fragment): PostgresSchemaFragment => {
     const { activation } = fragment;
@@ -142,6 +139,21 @@ export const stateEngineSchema = {
       activation,
     };
   }),
+};
+
+export const stateEngineSchema = {
+  id: "state",
+  version: OPENCLAW_STATE_SCHEMA_VERSION,
+  sqlite: "",
+  ...statePostgresSchema,
+  postgresMigrations: [
+    {
+      version: 25,
+      sql: runtime.operatorRecoveryV25Sql,
+      fromSchema: statePostgresSchema,
+      schema: statePostgresSchema,
+    },
+  ],
 };
 
 export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: string): void {

@@ -274,7 +274,9 @@ it("keeps shared auth discovery warm and observes machine-state worker writes", 
       throw new Error("rollback");
     }, current.options),
   ).toThrow("rollback");
-  expect(await readSharedAuthProfileRows(context)).toBe(changed);
+  const afterRollback = await readSharedAuthProfileRows(context);
+  expect(afterRollback).toEqual(changed);
+  expect(await readSharedAuthProfileRows(context)).toBe(afterRollback);
 
   updateConfigMachineState("authProfiles.state", () => undefined, current.options);
   deleteConfigMachineState(authKey, current.options);

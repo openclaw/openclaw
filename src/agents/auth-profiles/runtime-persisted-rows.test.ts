@@ -171,7 +171,11 @@ it.each(["agent", "shared-state"] as const)(
         throw new Error("rollback");
       }),
     ).toThrow("rollback");
-    expect(await resolve()).toBe(first);
+    // Rollback retires staged admission facts; the next read restores durable rows.
+    const afterRollback = await resolve();
+    expect(afterRollback).toEqual(first);
+    expect(await resolve()).toBe(afterRollback);
+    expect(read).toHaveBeenCalledTimes(2);
 
     transact(() =>
       writeAuthProfileJsonCell(database, "state", kind, {
@@ -182,7 +186,7 @@ it.each(["agent", "shared-state"] as const)(
       status: "readable",
       raw: { lastGood: { example: "example:key" } },
     });
-    expect(read).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(3);
     transact(() => {
       deleteAuthProfileJsonCell(database, "state", kind);
       deleteAuthProfileJsonCell(database, "store", kind);
@@ -191,7 +195,7 @@ it.each(["agent", "shared-state"] as const)(
       store: { status: "missing", reason: "row" },
       state: { status: "missing", reason: "row" },
     });
-    expect(read).toHaveBeenCalledTimes(3);
+    expect(read).toHaveBeenCalledTimes(4);
   },
 );
 

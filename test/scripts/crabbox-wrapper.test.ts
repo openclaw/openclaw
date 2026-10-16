@@ -4591,8 +4591,10 @@ process.on("exit", () => {
     ["aws", true, "transport"],
     ["aws", false, "transport"],
     ["aws", false, "arbitrary"],
+    ["aws", false, "reuse"],
     ["blacksmith-testbox", true, "transport"],
     ["blacksmith-testbox", false, "transport"],
+    ["blacksmith-testbox", false, "reuse"],
     ["blacksmith-testbox", false, "captured-base"],
     ["blacksmith-testbox", false, "graph"],
     ["blacksmith-testbox", false, "frozen"],
@@ -4849,7 +4851,7 @@ process.on("exit", () => {
         prepareReceiver?: (receiver: string) => void,
       ) => {
         const receiver = path.join(root, name);
-        if (source === origin && nativeSeed) {
+        if (!existsSync(receiver) && source === origin && nativeSeed) {
           git(root, ["clone", "-q", `file://${origin}`, receiver]);
           if (lstatSync(path.join(producer, "source-dir")).isSymbolicLink()) {
             rmSync(path.join(receiver, "source-dir"), { recursive: true });
@@ -4891,13 +4893,13 @@ process.on("exit", () => {
               "stale child\n",
             );
           }
-        } else {
+        } else if (!existsSync(receiver)) {
           mkdirSync(receiver);
         }
         prepareReceiver?.(receiver);
         const transport =
           provider === "blacksmith-testbox" ? path.join(root, `${name}-transport`) : receiver;
-        if (transport !== receiver) {
+        if (transport !== receiver && !existsSync(transport)) {
           mkdirSync(path.join(transport, ".git"), { recursive: true });
           symlinkSync(
             realpathSync(receiver),
@@ -4954,6 +4956,27 @@ process.on("exit", () => {
         expect(git(imported.receiver, ["rev-parse", "HEAD^"])).toBe(base);
         expect(git(producer, ["rev-parse", "origin/main"])).toBe(sharedBase);
         expect(git(producer, ["diff", "--name-only", sharedBase, "HEAD"])).toContain("mode.sh");
+        return;
+      }
+      if (scenario === "reuse") {
+        const sent = runSender();
+        const first = receive("reused", sent.remoteCommand, sent.bundle);
+        expect(first.result.status, failureDetail(first.result)).toBe(0);
+        expect(git(first.receiver, ["rev-parse", "--is-shallow-repository"])).toBe("true");
+        // The old private Git owner is removed during promotion. A second import
+        // must work without origin and leave no alternate pointing at that owner.
+        const reused = receive(
+          "reused",
+          sent.remoteCommand,
+          sent.bundle,
+          path.join(root, "unavailable-origin"),
+        );
+        expect(reused.result.status, failureDetail(reused.result)).toBe(0);
+        expect(reused.result.stdout).toBe("transport fixture reached\n");
+        expect(git(reused.receiver, ["rev-parse", "origin/main"])).toBe(base);
+        expect(git(reused.receiver, ["rev-parse", "HEAD^"])).toBe(base);
+        expect(existsSync(path.join(reused.receiver, ".git/objects/info/alternates"))).toBe(false);
+        git(reused.receiver, ["fsck", "--connectivity-only", "--no-dangling"]);
         return;
       }
       if (scenario !== "transport" && scenario !== "arbitrary") {
@@ -5824,7 +5847,7 @@ const original = cp.spawnSync;
 const fault = ${JSON.stringify({ phase, code, errno, signal, stderr })};
 cp.spawnSync = (command, args, options) => {
   const fetchIndex = args.indexOf("fetch");
-  if (command !== "git" || fetchIndex < 0 || args.slice(fetchIndex + 1).includes("origin") !== (fault.phase === "base-fetch"))
+  if (command !== "git" || fetchIndex < 0 || args.slice(fetchIndex + 1).some(arg => arg.endsWith(":refs/remotes/origin/main")) !== (fault.phase === "base-fetch"))
     return original(command, args, options);
   return { status: fault.code || fault.signal ? null : 128, signal: fault.signal ?? null,
     stdout: Buffer.alloc(0), stderr: Buffer.from(fault.stderr ?? "PRIVATE_SENTINEL\\n"),

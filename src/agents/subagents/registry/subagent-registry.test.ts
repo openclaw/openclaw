@@ -58,7 +58,10 @@ import {
   registerRestartDrainCompletionSettlementTest,
 } from "./subagent-registry.native-settlement.test-support.js";
 import { registerSupersededNativeTimingTest } from "./subagent-registry.native-termination.test-support.js";
-import { registerSubagentRegistrationPersistenceTests } from "./subagent-registry.persistence.test-support.js";
+import {
+  prepareSubagentRecoveryFixture,
+  registerSubagentRegistrationPersistenceTests,
+} from "./subagent-registry.persistence.test-support.js";
 import {
   activateSubagentRegistryWithRecoveryRuntime,
   registerRestoredLegacyAuthorityTests,
@@ -1212,20 +1215,20 @@ describe("subagent registry seam flow", () => {
       try {
         if (source.startsWith("restored")) {
           mocks.resolveAgentTimeoutMs.mockReturnValue(60_000);
-          mockRestoredRuns(() => [
-            createSubagentRunRecord({
-              runId,
-              childSessionIdentity: {
-                sessionId: "sess-child",
-                lifecycleRevision: "revision-child",
-              },
-              task: "resume near explicit timeout",
-              runTimeoutSeconds: duration / 1_000,
-              createdAt,
-              startedAt: createdAt,
-              sessionStartedAt: createdAt,
-            }),
-          ]);
+          const restored = createSubagentRunRecord({
+            runId,
+            childSessionIdentity: {
+              sessionId: "sess-child",
+              lifecycleRevision: "revision-child",
+            },
+            task: "resume near explicit timeout",
+            runTimeoutSeconds: duration / 1_000,
+            createdAt,
+            startedAt: createdAt,
+            sessionStartedAt: createdAt,
+          });
+          await prepareSubagentRecoveryFixture(restored, { entries: mocks.entries });
+          mockRestoredRuns(() => [restored]);
           await hydrateAndActivateRegistry();
         } else {
           await mod.registerSubagentRun({
@@ -1962,6 +1965,7 @@ describe("subagent registry seam flow", () => {
         lastAttemptAt: Date.parse("2026-03-24T11:59:40Z"),
       },
     });
+    await prepareSubagentRecoveryFixture(restored, { entries: mocks.entries });
     mocks.restoreSubagentRunsFromDisk.mockImplementation(async ({ runs }) => {
       runs.set(runId, restored);
       return 1;

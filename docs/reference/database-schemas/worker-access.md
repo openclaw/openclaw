@@ -6458,6 +6458,7 @@ Runtime auth discovery retains canonical credential and health rows in its exist
 Gateway cache. Auth-cell writes and generic machine-state writes to the two auth
 keys invalidate those rows through the database owner's committed admission
 receipts; unrelated writes leave them warm. Receipts carry no credential payload.
+Rollback retires staged facts, so the next discovery reloads durable rows once.
 A write overtaking a discovery read invalidates its cached result on the next
 lookup. Credential use still checks the live credential authority at the effect;
 canonical reads, maintenance, and pinned snapshots retain their existing paths.
