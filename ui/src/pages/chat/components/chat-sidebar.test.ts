@@ -425,7 +425,12 @@ describe("markdown sidebar", () => {
 
   it("shows a failed attachment download and lets the user retry", async () => {
     let failDownload!: (reason: Error) => void;
-    const download = vi.fn(() => new Promise<Blob>((_resolve, reject) => (failDownload = reject)));
+    const download = vi.fn(
+      () =>
+        new Promise<Blob>((_resolve, reject) => {
+          failDownload = reject;
+        }),
+    );
     const panel = Object.assign(document.createElement("openclaw-chat-detail-panel"), {
       content: {
         kind: "attachment",
@@ -469,14 +474,16 @@ describe("markdown sidebar", () => {
         title: "report.zip",
         download: (requestSignal: AbortSignal) => {
           signal = requestSignal;
-          return new Promise<Blob>((resolve) => (finishDownload = resolve));
+          return new Promise<Blob>((resolve) => {
+            finishDownload = resolve;
+          });
         },
       };
       const createObjectURL = vi.fn();
       vi.stubGlobal(
         "URL",
         class extends URL {
-          static createObjectURL = createObjectURL;
+          static override createObjectURL = createObjectURL;
         },
       );
       container.append(panel);

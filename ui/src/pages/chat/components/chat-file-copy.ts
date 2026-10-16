@@ -24,7 +24,7 @@ export function createFileCopy(content: () => SidebarContent | null, isConnected
       clear();
       setFeedback({});
     },
-    copy(action: FileCopyAction) {
+    copy: (action: FileCopyAction) => {
       const file = content();
       if (file?.kind !== "file") {
         return;

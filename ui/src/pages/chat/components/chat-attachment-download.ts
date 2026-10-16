@@ -30,7 +30,7 @@ export function createAttachmentDownload(
       setPending(false);
       setError(null);
     },
-    async onDownload() {
+    onDownload: async () => {
       const attachment = content();
       if (attachment?.kind !== "attachment" || !attachment.download || request) {
         return;
