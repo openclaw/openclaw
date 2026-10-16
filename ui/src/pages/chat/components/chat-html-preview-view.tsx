@@ -1,11 +1,11 @@
-import type { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
+import type { LazyCustomElementRequests } from "../../../app/lazy-custom-element.ts";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { SessionFileSource } from "./chat-sidebar-content-types.ts";
 
 export type PreviewProps = {
-  state: LazyCustomElementRequestController["visibleState"];
+  state: LazyCustomElementRequests["visibleState"];
   onRetry: () => void;
   content: string;
   sourceIdentity: string;

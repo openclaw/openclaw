@@ -38,6 +38,7 @@ import type {
   SubagentRunMutationOptions,
 } from "./subagent-registry-persistence.types.js";
 import { readFullSubagentRuns } from "./subagent-registry-read-cache.js";
+import { isRetiredSubagentExecution } from "./subagent-registry-restart-recovery-helpers.js";
 import {
   consumeFreshSubagentRegistryRows,
   publishSubagentRunsAfterAtomicStore,
@@ -232,7 +233,6 @@ export async function runSubagentRegistryWorkerWrite<T>(
         assertCurrent: write.assertCurrent,
         createAdmission: () => {
           let phase: "waiting" | "transaction" | "commit" = "waiting";
-          const eventPhases = new Map<number, "transaction" | "commit">();
           const authorityName =
             write.kind === "registry" ? "Queued registry write" : "Subagent completion write";
           admission = createSqliteWorkerOperationAdmission((request, grant) => {
@@ -250,15 +250,7 @@ export async function runSubagentRegistryWorkerWrite<T>(
               typeof facts.eventIndex === "number"
             ) {
               const event = write.terminalEvents?.[facts.eventIndex];
-              if (
-                !event ||
-                phase !== "transaction" ||
-                !(
-                  (request.stage === "transaction" && !eventPhases.has(facts.eventIndex)) ||
-                  (request.stage === "commit" &&
-                    eventPhases.get(facts.eventIndex) === "transaction")
-                )
-              ) {
+              if (!event || phase !== "transaction" || request.stage !== "commit") {
                 throw new Error("Subagent terminal event admission requested out of order");
               }
               write.assertCurrent();
@@ -266,7 +258,6 @@ export async function runSubagentRegistryWorkerWrite<T>(
               if (!grant()) {
                 throw new Error("Subagent terminal event admission expired");
               }
-              eventPhases.set(facts.eventIndex, request.stage);
               return;
             }
             if (
@@ -385,8 +376,8 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
     if (
       !current ||
       !isSameSubagentRunOwner(current, recovery.expected) ||
-      current.execution.status !== "terminal" ||
-      !current.requesterSettleWake ||
+      (!(current.execution.status === "terminal" && current.requesterSettleWake) &&
+        !isRetiredSubagentExecution(current)) ||
       getGatewayContextResolver(current) !== recovery.previousResolver ||
       recovery.previousResolver() !== undefined ||
       recovery.resolver() !== recovery.gateway

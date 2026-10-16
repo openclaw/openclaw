@@ -139,7 +139,7 @@ COMMIT;
 Use a disposable schema for this readiness check; it does not enable shared-state
 PostgreSQL support or migrate an existing store.
 
-Both engines use the same shared-state schema version (currently 24). Every
+Both engines use the same shared-state schema version (currently 25). Every
 future version change must supply both engines' forward migration and catalog
 equivalence proof together. JSON stays canonical: a query/index projection is
 derived once in TypeScript and committed in the same statement as its JSON.
@@ -151,6 +151,14 @@ It contains forward DDL only; the caller supplies the transaction, namespace,
 and version publication. PostgreSQL conformance verifies the upgraded index
 definitions against a fresh schema and preserves retained rows and local indexes.
 This readiness artifact does not enable shared-state PostgreSQL runtime support.
+
+Schema 25 adds `state-v24-v25.postgres.sql`, a metadata-only forward migration
+registered with the existing PostgreSQL engine owner. It updates the shared-state
+version and content markers; the engine owner publishes its version in the same
+transaction. The catalog and retained rows are unchanged. Version publication
+fences older readers that would discard recovered subagent operator restrictions.
+Conformance checks cover catalog equivalence and upgrading a retained state-24
+database through the shared-state owner.
 
 Generation refuses unsupported shared-state tables, columns, defaults, CHECKs,
 indexes, and foreign keys with their exact source and reason. Text uses C

@@ -606,6 +606,38 @@ export function presentSessionRow(
   materialized: ReturnType<typeof materializeSessionRow>,
   options: Partial<ReturnType<typeof readSessionRowInputs>["presentation"]> & { now: number },
 ): GatewaySessionRow {
+  return presentPreparedSessionRow(materialized, {
+    ...options,
+    subagentRuns:
+      options.subagentRuns ??
+      buildSubagentRunReadIndexFromRuns({
+        ...materialized.source.subagentRunInputs,
+        now: options.now,
+      }),
+  });
+}
+
+export type PreparedSessionRow = {
+  row: GatewaySessionRow;
+  source: Pick<
+    ReturnType<typeof materializeSessionRow>["source"],
+    | "entry"
+    | "parsedKey"
+    | "freshSessionTotalTokens"
+    | "usageByFallbackModel"
+    | "estimatedCostUsd"
+    | "lightweight"
+    | "childLinks"
+  >;
+};
+
+export function presentPreparedSessionRow(
+  materialized: PreparedSessionRow,
+  options: Partial<ReturnType<typeof readSessionRowInputs>["presentation"]> & {
+    now: number;
+    subagentRuns: SessionListRowContext["subagentRuns"];
+  },
+): GatewaySessionRow {
   const row = { ...materialized.row };
   const { source } = materialized;
   const { entry, freshSessionTotalTokens } = source;
@@ -613,8 +645,7 @@ export function presentSessionRow(
   // Stamp the temporal projection, not the reusable materialized inputs.
   // Completed list caches retain this sample when they replay the finished row.
   row.snapshotAt = now;
-  const subagentRuns =
-    options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });
+  const { subagentRuns } = options;
   const { subagentRun, subagentOwner, fields } = projectGatewaySessionRunState({
     key: row.key,
     parsedKey: source.parsedKey,

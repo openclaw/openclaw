@@ -65,6 +65,10 @@ the resolved selection explicitly; they never resolve the connection again. A
 different selection in the same process is refused. Restart the process after
 changing the connection or engine.
 
+Offline port commands scope their source and target selections to each worker
+task, including resource cleanup, so reusing an idle worker does not change the
+Gateway's process selection.
+
 Stores without PostgreSQL support still use SQLite. Incognito storage remains memory-only.
 The supported PostgreSQL families are:
 
@@ -97,9 +101,12 @@ connection or admission fails.
 
 Doctor can acquire offline maintenance custody and run data-only state migrations
 on PostgreSQL. A live or unverifiable Gateway owner still prevents maintenance;
-state writes use the existing PostgreSQL writer advisory lock. State schema
-migrations remain a separate Doctor capability: the schema-migration runner
-still requires PostgreSQL-aware migration backup and repair integration.
+state writes use the existing PostgreSQL writer advisory lock. Registered state
+schema migrations retain a full, exact state-family backup and matching anchor
+before the version runner begins. Each migration supplies its predecessor backup
+descriptor; a missing descriptor refuses the migration. The engine validates the exact
+destination schema before commit and publication. Failed migrations roll back
+transactionally, while their `.postgres.bak` exports remain available for recovery.
 
 Use `openclaw database port` to move existing supported data between engines.
 Changing `database.engine` alone does not migrate existing data. Omitting

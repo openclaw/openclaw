@@ -91,6 +91,7 @@ export type SessionListFilterParams = {
   entriesSorted?: boolean;
   getTarget: SessionListTargetLookup;
   getModelFacts?: SessionListModelFactsLookup;
+  getSearchModelIdentity?: (key: string) => ReturnType<typeof resolveSessionModelIdentityRef>;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   opts: SessionsListParams;
   now: number;
@@ -170,6 +171,30 @@ function createActivityPulse(opts: SessionsListParams): SessionActivityPulse | u
     ...(opts.activeMinutes === undefined ? {} : { started: 0 }),
     running: 0,
   };
+}
+
+/** Plugin metadata stays with its owner; workers consume this prepared identity. */
+export function resolveSessionListSearchModelIdentity(
+  params: SessionListFilterParams,
+  key: string,
+) {
+  const target = expectDefined(params.getTarget(key), "search row owner");
+  const metadataSnapshot = readPreparedGatewayModelCatalogMetadata(
+    params.modelCatalog instanceof Map ? params.modelCatalog.get(target.agentId) : undefined,
+  );
+  const context = params.getRowContext();
+  const subagentRun = context.subagentRuns.getDisplaySubagentRun(target.storeKey ?? key);
+  return resolveSessionModelIdentityRef(
+    params.cfg,
+    target.entry,
+    target.agentId,
+    subagentRun?.model,
+    {
+      allowPluginNormalization: false,
+      manifestPlugins: metadataSnapshot,
+      configuredDefaultModelByAgent: context.configuredDefaultModelByAgent,
+    },
+  );
 }
 
 export function* filterSessionEntries(
@@ -312,9 +337,6 @@ export function* filterSessionEntries(
           return true;
         }
         const agentId = target.agentId;
-        const metadataSnapshot = readPreparedGatewayModelCatalogMetadata(
-          params.modelCatalog instanceof Map ? params.modelCatalog.get(agentId) : undefined,
-        );
         const run = projectGatewaySessionRunState({
           key: storeKey,
           entry,
@@ -348,18 +370,9 @@ export function* filterSessionEntries(
         const source = expectDefined(params.getModelFacts, "prepared search row model facts")(key);
         // Derived model aliases are not agent-key matches.
         if (!search.startsWith("agent:")) {
-          const subagentRun = getRowContext().subagentRuns.getDisplaySubagentRun(storeKey);
-          const resolvedModel = resolveSessionModelIdentityRef(
-            cfg,
-            entry,
-            agentId,
-            subagentRun?.model,
-            {
-              allowPluginNormalization: false,
-              manifestPlugins: metadataSnapshot,
-              configuredDefaultModelByAgent: getRowContext().configuredDefaultModelByAgent,
-            },
-          );
+          const resolvedModel = params.getSearchModelIdentity
+            ? params.getSearchModelIdentity(key)
+            : resolveSessionListSearchModelIdentity(params, key);
           const models: Array<string | undefined> = [];
           for (const identity of [resolvedModel, source.selectedModel, source.rowModelIdentity]) {
             addSessionListSearchModelFields(models, identity);

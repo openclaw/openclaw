@@ -1,5 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { identity, selectionRow, type Row } from "./session-row-projection-record.js";
+import {
+  identity,
+  selectionRow,
+  type Row,
+  type SelectionRow,
+} from "./session-row-projection-record.js";
 import type { createSessionRowRefresh } from "./session-row-projection-refresh.js";
 import type { prepareSessionRowScopes } from "./session-row-scope.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
@@ -19,7 +24,7 @@ export function createSessionRowRecents(owner: {
   >;
   assertActive: () => void;
 }) {
-  let selection: ReturnType<typeof createSessionRowSelection> | undefined;
+  let selection: ReturnType<typeof createSessionRowSelection<SelectionRow>> | undefined;
   const pending = new Set<string>();
   const track = (row: Row) => {
     const id = identity(row);

@@ -1824,6 +1824,7 @@ describe("openclaw state database", () => {
       { kind: "predicate-columns-v21", path: fixture.databasePath },
       { kind: "portable-identity-columns-v22", path: fixture.databasePath },
       { kind: "task-run-indexes-v24", path: fixture.databasePath },
+      { kind: "subagent-operator-recovery-v25", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -2144,6 +2145,7 @@ describe("openclaw state database", () => {
       { kind: "portable-identity-columns-v22", path: seeded.databasePath },
       { kind: "meeting-transcript-start-time", path: seeded.databasePath },
       { kind: "task-run-indexes-v24", path: seeded.databasePath },
+      { kind: "subagent-operator-recovery-v25", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
@@ -2485,7 +2487,9 @@ describe("openclaw state database", () => {
     `);
     legacy.close();
 
-    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
+    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
+      { kind: "subagent-operator-recovery-v25", path: databasePath },
+    ]);
 
     openOpenClawStateDatabase(options);
     closeOpenClawStateDatabaseForTest();

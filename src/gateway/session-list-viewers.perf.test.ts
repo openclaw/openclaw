@@ -175,6 +175,9 @@ test("preserves viewer pages across publications while bounding shared predicate
           opts: { ...opts, ownerFirst: false, search: "agent:main:b" },
         });
         expect(searched.sessions.map((row) => row.sessionId)).toEqual(["b"]);
+        // Search captures plugin-owned model facts at most once; warm pages stay worker-only.
+        expect(selectEntries.mock.calls.length).toBeLessThanOrEqual(1);
+        selectEntries.mockClear();
         const clock = vi.spyOn(Date, "now").mockReturnValue(60_000);
         try {
           const recent = () =>

@@ -10,12 +10,13 @@ import {
   githubAuthorizationMethod,
   type AuthorizationOperation,
   type GitHubAuthorizationState,
-  type GitHubIdentityHost,
+  type GitHubIdentityDependencies,
   type RequestOwner,
-} from "./github-identity-controller-shared.ts";
+} from "./github-identity-shared.ts";
 
 type AuthorizationPollResult = ToolsGitHubAuthorizePollResult | UsersGitHubAuthorizePollResult;
-type AuthorizationHost = GitHubIdentityHost & {
+type AuthorizationDependencies = GitHubIdentityDependencies & {
+  publish: () => void;
   isCurrent: (owner: RequestOwner) => boolean;
   begin: (owner: RequestOwner) => void;
   finish: (owner: RequestOwner, succeeded: boolean) => void;
@@ -28,23 +29,18 @@ type AuthorizationHost = GitHubIdentityHost & {
 
 // The device flow owns timers and cancellation; callers own connection/access fences
 // and the distinct personal-credential or shared-configuration mutation boundary.
-export class GitHubDeviceAuthorizationController {
-  state: GitHubAuthorizationState = { phase: "idle" };
-  private operation: AuthorizationOperation | null = null;
-  constructor(private readonly host: AuthorizationHost) {}
+export function createGitHubDeviceAuthorization(deps: AuthorizationDependencies) {
+  let state: GitHubAuthorizationState = { phase: "idle" };
+  let activeOperation: AuthorizationOperation | null = null;
 
-  get active(): boolean {
-    return this.operation !== null;
+  function isCurrent(operation: AuthorizationOperation) {
+    return activeOperation === operation && deps.isCurrent(operation.owner);
   }
 
-  private isCurrent(operation: AuthorizationOperation) {
-    return this.operation === operation && this.host.isCurrent(operation.owner);
-  }
-
-  retire(notifyServer: boolean) {
-    const operation = this.operation;
-    this.operation = null;
-    this.state = { phase: "idle" };
+  function retire(notifyServer: boolean) {
+    const operation = activeOperation;
+    activeOperation = null;
+    state = { phase: "idle" };
     if (!operation) {
       return;
     }
@@ -57,22 +53,22 @@ export class GitHubDeviceAuthorizationController {
     }
   }
 
-  restore(owner: RequestOwner, start: ToolsGitHubAuthorizeStartResult) {
-    if (this.active || !this.host.isCurrent(owner)) {
+  function restore(owner: RequestOwner, pending: ToolsGitHubAuthorizeStartResult) {
+    if (activeOperation !== null || !deps.isCurrent(owner)) {
       return;
     }
     const operation: AuthorizationOperation = {
       owner,
       controller: new AbortController(),
-      start,
-      displayExpiresAtMs: Date.now() + start.expiresInMs,
+      start: pending,
+      displayExpiresAtMs: Date.now() + pending.expiresInMs,
     };
-    this.operation = operation;
-    this.present(operation, "code");
-    this.schedule(operation, start.pollAfterMs);
+    activeOperation = operation;
+    present(operation, "code");
+    schedule(operation, pending.pollAfterMs);
   }
 
-  private present(
+  function present(
     operation: AuthorizationOperation,
     phase: "code" | "pending" | "network_error" | "cancelling" | "finishing" | "cancel_error",
     slowedDown?: boolean,
@@ -80,21 +76,21 @@ export class GitHubDeviceAuthorizationController {
     if (!operation.start) {
       return;
     }
-    this.state = {
+    state = {
       ...operation.start,
       displayExpiresAtMs: operation.displayExpiresAtMs ?? Date.now(),
       phase,
       ...(operation.cancelError ? { message: operation.cancelError } : {}),
       ...(slowedDown ? { slowedDown: true } : {}),
     };
-    this.host.requestUpdate();
+    deps.publish();
   }
 
-  async start(owner: RequestOwner) {
+  async function start(owner: RequestOwner) {
     const operation: AuthorizationOperation = { owner, controller: new AbortController() };
-    this.operation = operation;
-    this.state = { phase: "starting" };
-    this.host.requestUpdate();
+    activeOperation = operation;
+    state = { phase: "starting" };
+    deps.publish();
     try {
       const target = owner.target;
       const result = await owner.client.request<ToolsGitHubAuthorizeStartResult>(
@@ -104,46 +100,46 @@ export class GitHubDeviceAuthorizationController {
       );
       operation.start = result;
       operation.displayExpiresAtMs = Date.now() + result.expiresInMs;
-      if (!this.isCurrent(operation)) {
+      if (!isCurrent(operation)) {
         cancelAuthorizationRequest(operation);
         return;
       }
       if (operation.cancelRequested) {
-        await this.finishCancellation(operation);
+        await finishCancellation(operation);
         return;
       }
-      this.present(operation, "code");
-      this.schedule(operation, result.pollAfterMs);
+      present(operation, "code");
+      schedule(operation, result.pollAfterMs);
     } catch (error) {
-      if (!this.isCurrent(operation)) {
+      if (!isCurrent(operation)) {
         return;
       }
-      this.operation = null;
-      this.state = { phase: "failed", message: formatUiError(error) };
-      this.host.requestUpdate();
+      activeOperation = null;
+      state = { phase: "failed", message: formatUiError(error) };
+      deps.publish();
     }
   }
 
-  async cancel() {
-    const operation = this.operation;
+  async function cancel() {
+    const operation = activeOperation;
     if (!operation || operation.cancelRequested || operation.cancelInFlight) {
       return;
     }
     operation.cancelRequested = true;
     operation.cancelError = undefined;
     if (operation.start) {
-      this.present(operation, "cancelling");
+      present(operation, "cancelling");
     } else {
-      this.state = { phase: "cancelling" };
-      this.host.requestUpdate();
+      state = { phase: "cancelling" };
+      deps.publish();
     }
     if (operation.start?.requestId) {
-      await this.finishCancellation(operation);
+      await finishCancellation(operation);
     }
   }
 
-  private async finishCancellation(operation: AuthorizationOperation) {
-    if (!operation.start?.requestId || operation.cancelInFlight || !this.isCurrent(operation)) {
+  async function finishCancellation(operation: AuthorizationOperation) {
+    if (!operation.start?.requestId || operation.cancelInFlight || !isCurrent(operation)) {
       return;
     }
     operation.cancelInFlight = true;
@@ -152,35 +148,35 @@ export class GitHubDeviceAuthorizationController {
         githubAuthorizationMethod(operation.owner, "cancel"),
         { requestId: operation.start.requestId },
       );
-      if (!this.isCurrent(operation)) {
+      if (!isCurrent(operation)) {
         return;
       }
       if (result.cancelled) {
-        this.retire(false);
-        this.host.finish(operation.owner, false);
-        this.host.requestUpdate();
+        retire(false);
+        deps.finish(operation.owner, false);
+        deps.publish();
         return;
       }
       operation.cancelTooLate = true;
-      this.present(operation, "finishing");
+      present(operation, "finishing");
     } catch (error) {
-      if (!this.isCurrent(operation)) {
+      if (!isCurrent(operation)) {
         return;
       }
       operation.cancelRequested = false;
       operation.cancelError = formatUiError(error);
-      this.present(operation, "cancel_error");
+      present(operation, "cancel_error");
     } finally {
       operation.cancelInFlight = false;
     }
     // A cancellation made during start has no poll timer yet.
     if (operation.timer === undefined && !operation.pollInFlight) {
-      this.schedule(operation, operation.start!.pollAfterMs);
+      schedule(operation, operation.start!.pollAfterMs);
     }
   }
 
-  private schedule(operation: AuthorizationOperation, delayMs: number) {
-    if (!this.isCurrent(operation) || !operation.start) {
+  function schedule(operation: AuthorizationOperation, delayMs: number) {
+    if (!isCurrent(operation) || !operation.start) {
       return;
     }
     if (operation.timer !== undefined) {
@@ -189,15 +185,15 @@ export class GitHubDeviceAuthorizationController {
     operation.timer = setTimeout(
       () => {
         operation.timer = undefined;
-        if (this.isCurrent(operation)) {
-          void this.poll(operation);
+        if (isCurrent(operation)) {
+          void poll(operation);
         }
       },
       resolveSafeTimeoutDelayMs(delayMs, { minMs: 0 }),
     );
   }
 
-  private async requestPoll(operation: AuthorizationOperation) {
+  async function requestPoll(operation: AuthorizationOperation) {
     const request = () =>
       operation.owner.client.request<AuthorizationPollResult>(
         githubAuthorizationMethod(operation.owner, "poll"),
@@ -207,10 +203,10 @@ export class GitHubDeviceAuthorizationController {
     if (operation.owner.target.kind === "personal") {
       return { result: await request(), refreshError: null };
     }
-    if (!this.host.runExternalMutation) {
+    if (!deps.runExternalMutation) {
       throw new Error("Shared GitHub configuration is unavailable.");
     }
-    const mutation = await this.host.runExternalMutation(
+    const mutation = await deps.runExternalMutation(
       (client) => {
         if (client !== operation.owner.client) {
           throw new Error("Connection changed before GitHub authorization was checked.");
@@ -218,7 +214,7 @@ export class GitHubDeviceAuthorizationController {
         return request();
       },
       {
-        canDispatch: () => this.isCurrent(operation),
+        canDispatch: () => isCurrent(operation),
         dispatchError: "Access changed before GitHub authorization was checked.",
         shouldRefresh: (result) => result.status === "success",
       },
@@ -232,20 +228,20 @@ export class GitHubDeviceAuthorizationController {
     };
   }
 
-  private async poll(operation: AuthorizationOperation) {
-    if (!operation.start?.requestId || !this.isCurrent(operation)) {
+  async function poll(operation: AuthorizationOperation) {
+    if (!operation.start?.requestId || !isCurrent(operation)) {
       return;
     }
-    this.present(
+    present(
       operation,
       operation.cancelTooLate ? "finishing" : operation.cancelError ? "cancel_error" : "pending",
     );
     operation.pollInFlight = true;
-    this.host.begin(operation.owner);
+    deps.begin(operation.owner);
     let succeeded = false;
     try {
-      const { result, refreshError } = await this.requestPoll(operation);
-      if (!this.isCurrent(operation)) {
+      const { result, refreshError } = await requestPoll(operation);
+      if (!isCurrent(operation)) {
         return;
       }
       if (
@@ -260,27 +256,35 @@ export class GitHubDeviceAuthorizationController {
             : result.status === "network_error"
               ? "network_error"
               : "pending";
-        this.present(operation, phase, result.status === "slow_down");
-        this.schedule(operation, result.retryAfterMs);
+        present(operation, phase, result.status === "slow_down");
+        schedule(operation, result.retryAfterMs);
         return;
       }
       if (result.status === "success") {
-        this.host.applySuccess(operation.owner, result, refreshError);
-        this.host.authorizationSucceeded?.();
-        this.state = { phase: "idle" };
+        deps.applySuccess(operation.owner, result, refreshError);
+        deps.authorizationSucceeded?.();
+        state = { phase: "idle" };
         succeeded = true;
       } else {
-        this.state = { phase: result.status };
+        state = { phase: result.status };
       }
-      this.operation = null;
+      activeOperation = null;
     } catch (error) {
-      if (this.isCurrent(operation)) {
-        this.operation = null;
-        this.state = { phase: "failed", message: formatUiError(error) };
+      if (isCurrent(operation)) {
+        activeOperation = null;
+        state = { phase: "failed", message: formatUiError(error) };
       }
     } finally {
       operation.pollInFlight = false;
-      this.host.finish(operation.owner, succeeded);
+      deps.finish(operation.owner, succeeded);
     }
   }
+  return {
+    state: () => state,
+    active: () => activeOperation !== null,
+    retire,
+    restore,
+    start,
+    cancel,
+  };
 }

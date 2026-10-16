@@ -342,7 +342,6 @@ class LocalSqliteSnapshotProvider {
       return { ref: { path: snapshotRefPath }, manifest };
     } catch (error) {
       await publishedDirectory?.close().catch(() => undefined);
-      publishedDirectory = undefined;
       if (snapshotDirectoryCreated) {
         publishedIdentity ??= await fs.lstat(snapshotDir, { bigint: true }).catch(() => undefined);
       }

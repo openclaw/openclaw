@@ -26,6 +26,8 @@ import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
 import { resolveUserProfileReference } from "../state/user-profile-list.js";
+import { matchUserProfileReference } from "../state/user-profiles-internal.js";
+import type { UserProfileDisplay } from "../state/user-profiles.types.js";
 import { buildControlUiResourcePath } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
@@ -36,6 +38,42 @@ import type { SessionEntryPair } from "./session-list-order.js";
 
 export type SessionActorProfileIdentity = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;
 export type SessionIdentityProjection = ReturnType<typeof createSessionIdentityProjection>;
+
+/** A complete display snapshot leaves unknown profiles unresolved without reading host state. */
+class PreparedSessionProfileIdentities extends Map<
+  string,
+  SessionActorProfileIdentity | undefined
+> {
+  constructor(displays: ReadonlyMap<string, UserProfileDisplay>) {
+    super();
+    for (const id of displays.keys()) {
+      const display = resolveCurrentUserProfileDisplay(id, (key) => displays.get(key));
+      this.set(id, display.kind === "resolved" ? display : undefined);
+    }
+  }
+
+  resolveReference(reference: string, allowedProfileIds?: ReadonlySet<string>) {
+    const allowed = (profile: SessionActorProfileIdentity | undefined) =>
+      profile && (!allowedProfileIds || allowedProfileIds.has(profile.profileId));
+    const exact = this.get(reference);
+    return matchUserProfileReference(
+      reference,
+      allowed(exact) ? exact?.profileId : undefined,
+      (prefix) =>
+        [...this].flatMap(([id, profile]) =>
+          profile && allowed(profile) && id.toLowerCase().startsWith(prefix)
+            ? [profile.profileId]
+            : [],
+        ),
+    );
+  }
+}
+
+export function createPreparedSessionProfileIdentities(
+  displays: ReadonlyMap<string, UserProfileDisplay>,
+) {
+  return new PreparedSessionProfileIdentities(displays);
+}
 
 /** The row owner invalidates these facts on profile/config publication; entry replacement is exact. */
 export function createSessionIdentityProjection() {
@@ -130,7 +168,7 @@ export function projectSessionParticipant(
   if (identity.type !== "profile") {
     return { identity };
   }
-  if (!profiles.has(identity.id)) {
+  if (!profiles.has(identity.id) && !(profiles instanceof PreparedSessionProfileIdentities)) {
     const display = resolveCurrentUserProfileDisplay(identity.id);
     profiles.set(identity.id, display.kind === "resolved" ? display : undefined);
   }
@@ -319,10 +357,10 @@ export function* resolveSessionListProfileReference(
       }
     }
   }
-  const durable = resolveUserProfileReference(
-    reference,
-    allowedProfileIds ? { allowedProfileIds } : {},
-  );
+  const durable =
+    identities instanceof PreparedSessionProfileIdentities
+      ? identities.resolveReference(reference, allowedProfileIds)
+      : resolveUserProfileReference(reference, allowedProfileIds ? { allowedProfileIds } : {});
   if (!durable.ok) {
     return durable;
   }

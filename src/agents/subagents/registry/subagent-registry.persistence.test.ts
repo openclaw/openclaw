@@ -40,6 +40,7 @@ import {
   createCanonicalSubagentRunFixture,
   expectDeferredSubagentAnnouncement,
   gateSubagentRequesterSettlement,
+  prepareSubagentRecoveryFixture,
   readSubagentSessionStore,
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
@@ -368,13 +369,15 @@ describe("subagent registry persistence", () => {
     },
   ] as const)("$name", async ({ runId, cleanup, reject }) => {
     const childSessionKey = `agent:main:subagent:${runId}`;
-    await persistRuns([
-      endedRun(runId, {
-        childSessionKey,
-        childSessionIdentity: { sessionId: `sess-${runId}` },
-        cleanup,
-      }),
-    ]);
+    const run = endedRun(runId, {
+      childSessionKey,
+      childSessionIdentity: { sessionId: `sess-${runId}` },
+      cleanup,
+    });
+    await fixture.allocateStateDir();
+    await prepareSubagentRecoveryFixture(run, { stateDir: fixture.stateDir });
+    saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+    await writeChildSessionEntry({ sessionKey: childSessionKey, sessionId: `sess-${runId}` });
     const announcement = createDeferred<"retryable">();
     const releaseAnnouncement = () =>
       reject ? announcement.reject(new Error("announce boom")) : announcement.resolve("retryable");

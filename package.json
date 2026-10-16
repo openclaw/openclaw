@@ -8,7 +8,7 @@
       "postgres"
     ],
     "schemaVersions": {
-      "state": 24,
+      "state": 25,
       "agent": 27
     }
   },

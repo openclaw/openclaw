@@ -12,6 +12,7 @@ import {
   preparePostgresRestore,
   readBackupEngine,
 } from "../../snapshot/database-backup.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { admitDatabasePortDescriptor } from "./port-descriptor.js";
 import { sqliteDatabasePortProvider } from "./port-provider.js";
@@ -46,9 +47,9 @@ describe.skipIf(!connection)("shared-state database port", () => {
     for (const fragment of descriptor.fragments ?? []) {
       source.exec(fragment.sqlite);
     }
-    source.exec(`PRAGMA user_version = 24;
-      INSERT INTO schema_meta VALUES ('primary', 'global', 24, NULL, NULL, 1, 1);
-      INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '24', 1);
+    source.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
+      INSERT INTO schema_meta VALUES ('primary', 'global', ${OPENCLAW_STATE_SCHEMA_VERSION}, NULL, NULL, 1, 1);
+      INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION}', 1);
       INSERT INTO state_leases VALUES ('test', 'lease', 'synthetic', 2, 1, NULL, 1, 1);
       INSERT INTO secret_store_entries VALUES ('team', '', 'synthetic', 'retained', 'secret', 1, 1, NULL, NULL, NULL);
       INSERT INTO plugin_blob_entries VALUES ('test', 'test', 'ttl', '{}', X'00ff80', 1, 2);
@@ -65,7 +66,7 @@ describe.skipIf(!connection)("shared-state database port", () => {
       source.prepare("INSERT INTO user_preferences VALUES ('profile', ?, '{}', 1)").run(key);
     }
     expect(descriptor.inspectSqliteSource!(source)).toEqual({
-      version: 24,
+      version: OPENCLAW_STATE_SCHEMA_VERSION,
       migrationRequired: false,
       pendingColumns: {},
     });

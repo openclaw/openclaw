@@ -1,8 +1,9 @@
-import { createMemo } from "@solidjs/signals";
+import { createMemo, untrack } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { Match, Switch } from "solid-js";
+import { Match, onSettled, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
@@ -420,6 +421,27 @@ export function BrowserPanelChrome(
     tabsInHeader: boolean;
   },
 ) {
+  // Resource callbacks retain this viewport's synchronous browser owner.
+  const controller = untrack(() => props.controller);
+  let viewport!: HTMLDivElement;
+  onSettled(() => {
+    const observer =
+      typeof ResizeObserver === "function"
+        ? new ResizeObserver(([entry]) => {
+            if (entry) {
+              controller.handleViewportResize(entry.contentRect.width, entry.contentRect.height);
+            }
+          })
+        : undefined;
+    observer?.observe(viewport);
+    // SAFETY: Native wheel events are WheelEvents; cancel local scrolling before they bubble.
+    const handleWheel = (event: Event) => controller.handleWheel(event as WheelEvent);
+    const stopWheel = listen(viewport, "wheel", handleWheel, { passive: false });
+    return () => {
+      observer?.disconnect();
+      stopWheel();
+    };
+  });
   const panelId = `browser-tab-panel-${generateUUID()}`;
   const rendersTabStrip = createMemo(
     () =>
@@ -472,12 +494,7 @@ export function BrowserPanelChrome(
         </div>
       ) : null}
       <div
-        ref={(element) => {
-          // Remote scrolling must cancel local scrolling before the event bubbles.
-          element.addEventListener("wheel", (event) => props.controller.handleWheel(event), {
-            passive: false,
-          });
-        }}
+        ref={(element) => (viewport = element)}
         id={panelId}
         class="bp-viewport"
         role="tabpanel"

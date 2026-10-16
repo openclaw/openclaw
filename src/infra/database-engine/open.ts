@@ -89,10 +89,13 @@ export function openEngineStore(ref: {
   prepareAnchor: () => void;
   inspectSqlite: () => { hasExistingData: boolean; hasEngineAnchor: boolean };
   existingOnly?: boolean;
+  /** Inspection admits the declared source schema without running its migration. */
+  existingVersion?: boolean;
   admitPostgres?: (db: PostgresSqlConnection, fresh: boolean) => void;
   closeOnFailure?: (db: PostgresSqlConnection, error: unknown) => never;
 }): EngineConnection {
-  const { anchor, schema } = ref;
+  const { anchor } = ref;
+  let schema = ref.schema;
   observeConnection(anchor);
   const postgres = ref.input !== undefined && schema.postgres !== undefined;
   const known = getSqliteDatabaseAdmission(anchor, admissionKey);
@@ -221,14 +224,24 @@ export function openEngineStore(ref: {
               );
             }
             if (meta.version !== schema.version) {
-              invalidateLocalSqliteSchemaAdmissions(db);
-              stageSqliteTransactionState(db, {
-                stage: () => {},
-                rollback: () => {},
-                commit: () => publishSqliteDatabaseSchemaChange(db),
-                invalidate: () => publishSqliteDatabaseSchemaChange(db),
-              });
-              adapter.schema.migrate(store, Number(meta.version), db);
+              if (ref.existingVersion) {
+                const source = schema.postgresMigrations?.find(
+                  (step) => step.version === Number(meta.version) + 1,
+                )?.fromSchema;
+                if (!source) {
+                  throw new Error("Missing PostgreSQL source schema for inspection");
+                }
+                schema = { ...schema, ...source, version: Number(meta.version) };
+              } else {
+                invalidateLocalSqliteSchemaAdmissions(db);
+                stageSqliteTransactionState(db, {
+                  stage: () => {},
+                  rollback: () => {},
+                  commit: () => publishSqliteDatabaseSchemaChange(db),
+                  invalidate: () => publishSqliteDatabaseSchemaChange(db),
+                });
+                adapter.schema.migrate(store, Number(meta.version), db);
+              }
             }
           }
           admit(!meta);

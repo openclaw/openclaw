@@ -20,7 +20,7 @@ import type { ApplicationContext, ApplicationNavigationOptions } from "./context
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import {
   ensureCustomElementDefined,
-  type LazyCustomElementRequestController,
+  type LazyCustomElementRequests,
   type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
 import { lazyShellEvent, type LazyShellEvent } from "./lazy-shell-action.ts";
@@ -33,7 +33,7 @@ type CommandPaletteShellHost = {
   readonly commandPaletteTarget?: CommandPaletteTargetDetail;
   chatNavigationOptions(face: "chat"): ApplicationNavigationOptions | undefined;
   navigate(routeId: "chat", options?: ApplicationNavigationOptions): void;
-  readonly lazyCustomElements: LazyCustomElementRequestController;
+  readonly lazyCustomElements: LazyCustomElementRequests;
 };
 
 type CommandPaletteShellActions = {

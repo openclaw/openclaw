@@ -186,6 +186,8 @@ export function resolveSessionChildOwners(params: {
   const latest = subagentRuns.getDisplaySubagentRun(key);
   const keep =
     params.hasActiveRun ||
+    subagentRuns.isDisplayLiveRun(latest) ||
+    subagentRuns.isDisplayQueuedRun(latest) ||
     (latest
       ? shouldKeepSubagentRunChildLink(latest, {
           activeDescendants: subagentRuns.countActiveDescendantRuns(key),

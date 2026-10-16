@@ -6,10 +6,18 @@ import {
   type RuntimeConfigCapability,
 } from "../../lib/config/runtime-config-capability.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { GitHubIdentityController } from "./github-identity-controller.js";
+import { cleanupSolid } from "../../test-helpers/solid-cleanup.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import {
+  createGitHubIdentityForTest,
+  type TestGitHubIdentity,
+} from "./github-identity.test-support.ts";
 
 const confirmation = vi.hoisted(() => ({ show: vi.fn(async () => true) }));
-vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: confirmation.show }));
+vi.mock("../../components/confirm-dialog.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/confirm-dialog.ts")>()),
+  showConfirmDialog: confirmation.show,
+}));
 
 beforeEach(() => {
   confirmation.show.mockReset().mockResolvedValue(true);
@@ -73,8 +81,7 @@ function createRuntimeConfig(client: GatewayBrowserClient) {
 }
 
 function createMutationController(client: GatewayBrowserClient) {
-  return new GitHubIdentityController({
-    requestUpdate: vi.fn(),
+  return createGitHubIdentityForTest({
     runExternalMutation: async (task) => ({
       ok: true,
       value: await task(client),
@@ -84,6 +91,7 @@ function createMutationController(client: GatewayBrowserClient) {
 }
 
 afterEach(() => {
+  cleanupSolid();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -127,13 +135,12 @@ function createController(behavior: { beforeDispatch?: () => void; refreshError?
       return { ok: false, reason: "error", error: String(error) };
     }
   };
-  const host = { requestUpdate: vi.fn(), runExternalMutation };
-  return { controller: new GitHubIdentityController(host), client, requests };
+  const host = { runExternalMutation };
+  return { controller: createGitHubIdentityForTest(host), client, requests };
 }
 
-function createStatusOnlyController(): GitHubIdentityController {
-  return new GitHubIdentityController({
-    requestUpdate: vi.fn(),
+function createStatusOnlyController(): TestGitHubIdentity {
+  return createGitHubIdentityForTest({
     runExternalMutation: async () => ({
       ok: false,
       reason: "unavailable",
@@ -143,10 +150,10 @@ function createStatusOnlyController(): GitHubIdentityController {
 }
 
 function sync(
-  controller: GitHubIdentityController,
+  controller: TestGitHubIdentity,
   client: GatewayBrowserClient,
   config: Record<string, unknown> = {},
-  overrides: Partial<Parameters<GitHubIdentityController["sync"]>[0]> & {
+  overrides: Partial<Parameters<TestGitHubIdentity["sync"]>[0]> & {
     agentId?: string;
     scope?: "system" | "agent";
   } = {},
@@ -158,6 +165,7 @@ function sync(
       kind: "shared",
       agentId: overrides.agentId ?? "main",
       scope: overrides.scope ?? "system",
+      profileId: "profile-a",
       config,
     },
     statusReadable: true,
@@ -168,7 +176,7 @@ function sync(
   });
 }
 
-describe("GitHubIdentityController", () => {
+describe("TestGitHubIdentity", () => {
   it("keeps independent controller drafts isolated and clears only the inherited target", async () => {
     const { controller, client, requests } = createController();
     const config = authorConfig("System Author", "Agent Author");
@@ -179,36 +187,58 @@ describe("GitHubIdentityController", () => {
     system.controller.setDraft("token", "system-token");
     sync(controller, client, config, { scope: "agent" });
 
-    expect(controller.draft.token).toBe("agent-token");
+    expect(controller.read().draft.token).toBe("agent-token");
     await controller.inherit();
     expect(confirmation.show).toHaveBeenCalled();
     expect(requests).toContainEqual({
       method: "tools.github.configure",
       params: { scope: "agent", agentId: "main", mode: "inherit" },
     });
-    expect(controller.scope).toBe("agent");
-    expect(controller.draft).toEqual({ token: "", name: "", email: "" });
+    expect(controller.read().scope).toBe("agent");
+    expect(controller.read().draft).toEqual({ token: "", name: "", email: "" });
     sync(system.controller, system.client, config);
-    expect(system.controller.draft).toMatchObject({ name: "System Author", token: "system-token" });
+    expect(system.controller.read().draft).toMatchObject({
+      name: "System Author",
+      token: "system-token",
+    });
     expect(system.requests).toEqual([]);
   });
 
-  it("deletes a stored handoff when configurability changes before dispatch", async () => {
-    const behavior: { beforeDispatch?: () => void } = {};
-    const { controller, client, requests } = createController(behavior);
-    behavior.beforeDispatch = () => sync(controller, client, {}, { configurable: false });
-    sync(controller, client);
-    controller.setDraft("token", "one-use-token");
+  it.each(["access", "profile"] as const)(
+    "deletes a stored handoff when %s changes before dispatch",
+    async (change) => {
+      const behavior: { beforeDispatch?: () => void } = {};
+      const { controller, client, requests } = createController(behavior);
+      behavior.beforeDispatch = () =>
+        sync(
+          controller,
+          client,
+          {},
+          change === "access"
+            ? { configurable: false }
+            : {
+                target: {
+                  kind: "shared",
+                  scope: "system",
+                  agentId: "main",
+                  config: {},
+                  profileId: "profile-b",
+                },
+              },
+        );
+      sync(controller, client);
+      controller.setDraft("token", "one-use-token");
 
-    await controller.configure();
+      await controller.configure();
 
-    expect(requests.map((entry) => entry.method)).toEqual([
-      "secrets.store.set",
-      "secrets.store.delete",
-    ]);
-    expect(controller.configurable).toBe(false);
-    expect(controller.error).toBeNull();
-  });
+      expect(requests.map((entry) => entry.method)).toEqual([
+        "secrets.store.set",
+        "secrets.store.delete",
+      ]);
+      expect(controller.read().configurable).toBe(change === "profile");
+      expect(controller.read().error).toBeNull();
+    },
+  );
 
   it("keeps a consumed handoff successful while surfacing its refresh warning", async () => {
     vi.stubGlobal("crypto", {
@@ -234,11 +264,11 @@ describe("GitHubIdentityController", () => {
     expect(requests[1]?.params).not.toHaveProperty("token");
     expect(requests[0]?.params.name).toMatch(/^github-setup-[a-f0-9]{32}$/u);
     expect(requests[1]?.params.secretName).toBe(requests[0]?.params.name);
-    expect(controller.status).toEqual(availableStatus("system"));
+    expect(controller.read().status).toEqual(availableStatus("system"));
     expect(requests[1]?.params).toMatchObject({ agentId: "main" });
-    expect(controller.draft.token).toBe("");
-    expect(controller.error).toContain("GitHub identity was updated");
-    expect(controller.error).toContain("authoritative config refresh unavailable");
+    expect(controller.read().draft.token).toBe("");
+    expect(controller.read().error).toContain("GitHub identity was updated");
+    expect(controller.read().error).toContain("authoritative config refresh unavailable");
   });
 
   it("config.set drains drafts before managed and refreshes both edits", async () => {
@@ -289,10 +319,9 @@ describe("GitHubIdentityController", () => {
     order.length = 0;
     runtimeConfig.patchForm(["pendingEdit"], "managed");
     const host = {
-      requestUpdate: vi.fn(),
       runExternalMutation: runtimeConfig.runExternalMutation,
     };
-    const controller = new GitHubIdentityController(host);
+    const controller = createGitHubIdentityForTest(host);
     sync(controller, client, runtimeConfig.state.configForm ?? {});
     const unsubscribe = runtimeConfig.subscribe(() => {
       sync(controller, client, runtimeConfig.state.configForm ?? {});
@@ -308,10 +337,10 @@ describe("GitHubIdentityController", () => {
         "tools.github.configure",
         "config.get",
       ]);
-      expect(controller.busy).toBe(false);
-      expect(controller.status).toEqual(availableStatus("system"));
-      expect(controller.scope).toBe("system");
-      expect(controller.draft).toEqual({
+      expect(controller.read().busy).toBe(false);
+      expect(controller.read().status).toEqual(availableStatus("system"));
+      expect(controller.read().scope).toBe("system");
+      expect(controller.read().draft).toEqual({
         token: "",
         name: "Managed Author",
         email: "",
@@ -341,8 +370,8 @@ describe("GitHubIdentityController", () => {
     await expect(controller.configure()).resolves.toBeUndefined();
 
     expect(requests).toEqual([]);
-    expect(controller.busy).toBe(false);
-    expect(controller.error).toContain("Web Crypto is required");
+    expect(controller.read().busy).toBe(false);
+    expect(controller.read().error).toContain("Web Crypto is required");
   });
 
   it("does not dispatch without the required operator scopes", async () => {
@@ -369,20 +398,24 @@ describe("GitHubIdentityController", () => {
     sync(controller, client, authorConfig("System One", "Agent One"), { scope: "agent" });
     controller.setDraft("name", "Active Agent Edit");
     sync(controller, client, authorConfig("System Two", "Agent Two"), { scope: "agent" });
-    expect(controller.draft.name).toBe("Active Agent Edit");
+    expect(controller.read().draft.name).toBe("Active Agent Edit");
     sync(controller, client, authorConfig("System Two", "Agent Two"));
-    expect(controller.draft.name).toBe("System Two");
+    expect(controller.read().draft.name).toBe("System Two");
   });
 
-  it("keeps the PAT fallback visible while a save is busy", () => {
+  it("keeps the PAT fallback visible while a save is busy", async () => {
+    const pending = createDeferredCore<unknown>();
     const { controller, client } = createController();
+    vi.spyOn(client, "request").mockReturnValueOnce(pending.promise);
     sync(controller, client);
     controller.showPatFallback();
-    controller.busy = true;
-
+    controller.setDraft("token", "synthetic-pat");
+    const saving = controller.configure();
     controller.hidePatFallback();
-
-    expect(controller.patVisible).toBe(true);
+    flush();
+    expect(controller.read().patVisible).toBe(true);
+    pending.resolve({ ok: true });
+    await saving;
   });
 
   it("requires the explicit new-run disclosure before removing a selected identity", async () => {
@@ -401,6 +434,24 @@ describe("GitHubIdentityController", () => {
     expect(requests).toEqual([]);
   });
 
+  it("resets the shared profile draft and rejects its pending removal confirmation", async () => {
+    const confirmed = createDeferredCore<boolean>();
+    confirmation.show.mockReturnValueOnce(confirmed.promise);
+    const { controller, client, requests } = createController();
+    const config = authorConfig("System Author", "Agent Author");
+    sync(controller, client, config);
+    controller.setDraft("token", "old-profile-token");
+    controller.setDraft("name", "Old Profile Author");
+    const removal = controller.inherit();
+    sync(controller, client, config, {
+      target: { kind: "shared", scope: "system", agentId: "main", config, profileId: "profile-b" },
+    });
+    confirmed.resolve(true);
+    await removal;
+    expect(requests).toEqual([]);
+    expect(controller.read().draft).toEqual({ token: "", name: "System Author", email: "" });
+  });
+
   it("invalidates an in-flight status on effective identity change and verifies once", async () => {
     const first = createDeferredCore<ReturnType<typeof availableStatus>>();
     const second = createDeferredCore<ReturnType<typeof availableStatus>>();
@@ -416,13 +467,13 @@ describe("GitHubIdentityController", () => {
     sync(controller, client, config("ghp_22222222222222222222222222222222"));
     await Promise.resolve();
     expect(request).toHaveBeenCalledTimes(2);
-    expect(controller.draft.name).toBe("dirty author");
+    expect(controller.read().draft.name).toBe("dirty author");
 
     first.resolve(availableStatus("system"));
     second.resolve(availableStatus("system"));
     await initial;
     await Promise.resolve();
-    expect(controller.status).toEqual(availableStatus("system"));
+    expect(controller.read().status).toEqual(availableStatus("system"));
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -433,8 +484,8 @@ describe("GitHubIdentityController", () => {
     const controller = createStatusOnlyController();
     sync(controller, client);
     await controller.verify();
-    expect(controller.status).toBeNull();
-    expect(controller.error).toContain("different target");
+    expect(controller.read().status).toBeNull();
+    expect(controller.read().error).toContain("different target");
   });
 
   it("waits for each authoritative poll deadline and adopts successful OAuth status", async () => {
@@ -469,27 +520,26 @@ describe("GitHubIdentityController", () => {
     const runtimeConfig = createRuntimeConfig(client);
     await runtimeConfig.ensureLoaded();
     request.mockClear();
-    const controller = new GitHubIdentityController({
-      requestUpdate: vi.fn(),
+    const controller = createGitHubIdentityForTest({
       runExternalMutation: runtimeConfig.runExternalMutation,
     });
     sync(controller, client);
 
     await controller.startAuthorization();
-    expect(controller.authorization).toMatchObject({ phase: "code", userCode: "ABCD-1234" });
+    expect(controller.read().authorization).toMatchObject({ phase: "code", userCode: "ABCD-1234" });
     await vi.advanceTimersByTimeAsync(4_999);
     expect(pollTimes).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     expect(pollTimes).toEqual([1_800_000_005_000]);
-    expect(controller.authorization).toMatchObject({ phase: "pending", slowedDown: true });
+    expect(controller.read().authorization).toMatchObject({ phase: "pending", slowedDown: true });
     expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(9_999);
     expect(pollTimes).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(pollTimes).toEqual([1_800_000_005_000, 1_800_000_015_000]);
-    expect(controller.status).toEqual(availableStatus("system"));
-    expect(controller.authorization).toEqual({ phase: "idle" });
+    expect(controller.read().status).toEqual(availableStatus("system"));
+    expect(controller.read().authorization).toEqual({ phase: "idle" });
     expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(1);
     controller.dispose();
     runtimeConfig.dispose();
@@ -500,6 +550,18 @@ describe("GitHubIdentityController", () => {
     { label: "connection generation changes", overrides: { clientRevision: 2 } },
     { label: "administrator access is lost", overrides: { authorizable: false } },
     { label: "selected scope changes", overrides: { scope: "agent" as const } },
+    {
+      label: "shared profile changes",
+      overrides: {
+        target: {
+          kind: "shared" as const,
+          scope: "system" as const,
+          agentId: "main",
+          config: {},
+          profileId: "profile-b",
+        },
+      },
+    },
   ])("cancels the exact authorization when $label", async ({ overrides }) => {
     vi.useFakeTimers();
     vi.setSystemTime(1_800_000_000_000);
@@ -520,7 +582,7 @@ describe("GitHubIdentityController", () => {
     expect(request).toHaveBeenCalledWith("tools.github.authorize.cancel", {
       requestId: authorizationCode.requestId,
     });
-    expect(controller.authorization).toEqual({ phase: "idle" });
+    expect(controller.read().authorization).toEqual({ phase: "idle" });
     await vi.advanceTimersByTimeAsync(10_000);
     expect(request.mock.calls.some(([method]) => method === "tools.github.authorize.poll")).toBe(
       false,
@@ -548,7 +610,7 @@ describe("GitHubIdentityController", () => {
     expect(
       request.mock.calls.filter(([method]) => method === "tools.github.authorize.cancel"),
     ).toHaveLength(1);
-    expect(controller.authorization).toEqual({ phase: "idle" });
+    expect(controller.read().authorization).toEqual({ phase: "idle" });
   });
 
   it("keeps a too-late cancellation alive and adopts the in-flight success", async () => {
@@ -580,11 +642,11 @@ describe("GitHubIdentityController", () => {
     );
 
     await controller.cancelAuthorization();
-    expect(controller.authorization).toMatchObject({ phase: "finishing" });
+    expect(controller.read().authorization).toMatchObject({ phase: "finishing" });
     poll.resolve({ status: "success", githubStatus: availableStatus("system") });
-    await vi.waitFor(() => expect(controller.authorization).toEqual({ phase: "idle" }));
+    await vi.waitFor(() => expect(controller.read().authorization).toEqual({ phase: "idle" }));
 
-    expect(controller.status).toEqual(availableStatus("system"));
+    expect(controller.read().status).toEqual(availableStatus("system"));
   });
 
   it("keeps authorization pending and surfaces a cancellation network failure", async () => {
@@ -607,7 +669,7 @@ describe("GitHubIdentityController", () => {
     await controller.startAuthorization();
 
     await controller.cancelAuthorization();
-    expect(controller.authorization).toMatchObject({
+    expect(controller.read().authorization).toMatchObject({
       phase: "cancel_error",
       message: expect.stringContaining("Gateway unavailable"),
     });
@@ -617,6 +679,6 @@ describe("GitHubIdentityController", () => {
       { requestId: authorizationCode.requestId },
       expect.anything(),
     );
-    expect(controller.authorization).toMatchObject({ phase: "cancel_error" });
+    expect(controller.read().authorization).toMatchObject({ phase: "cancel_error" });
   });
 });

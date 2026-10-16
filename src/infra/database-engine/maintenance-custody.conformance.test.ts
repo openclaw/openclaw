@@ -5,7 +5,6 @@ import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { prepareDoctorDatabaseMigrations } from "../../commands/doctor-schema-migrations.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -184,27 +183,6 @@ describe.skipIf(!connection)("PostgreSQL Doctor maintenance custody", () => {
       expect(formatGatewayLockFailure(refusal)).toContain("Gateway owner lease is still active");
     } finally {
       await gateway!.release();
-    }
-  });
-
-  it("keeps schema migration blocked with an actionable state-family backup requirement", async () => {
-    const lock = await maintenanceLock(env);
-    expect(lock).not.toBeNull();
-    try {
-      const pathname = resolveOpenClawStateSqlitePath(env);
-      await expect(
-        lock!.run(() =>
-          prepareDoctorDatabaseMigrations({
-            env,
-            pendingDatabasePaths: [pathname],
-            databasePaths: [pathname],
-          }),
-        ),
-      ).rejects.toThrow(
-        "Keep the current database and retry with an OpenClaw version that supports state-family PostgreSQL backups",
-      );
-    } finally {
-      await lock!.release();
     }
   });
 });
