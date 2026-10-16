@@ -8,7 +8,7 @@ import {
 } from "../daemon/runtime-pin-store.js";
 import { deleteConfigMachineState } from "../state/config-machine-state-write.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -17,6 +17,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
@@ -52,16 +53,21 @@ export function initializeFreshDaemonRuntimePinMigration(env: NodeJS.ProcessEnv)
   if (withDaemonRuntimePinStore(env, false, hasReceipt)) {
     return;
   }
-  const legacyPin = withExistingOpenClawStateDatabaseReadOnly(
-    ({ db }) =>
-      executeSqliteQueryTakeFirstSync(
+  const legacyPin = withExistingOpenClawStateDatabaseCurrentReadOnly(
+    ({ db }) => {
+      // Released pre-pin schemas have no source table to migrate.
+      if (getAdmittedSqliteSchemaFacts(db)?.tables.has("config_machine_state") === false) {
+        return undefined;
+      }
+      return executeSqliteQueryTakeFirstSync(
         db,
         getNodeSqliteKysely<Pick<DB, "config_machine_state">>(db)
           .selectFrom("config_machine_state")
           .select("state_key")
           .where("state_key", "like", "daemon-runtime-pin:%")
           .limit(1),
-      ),
+      );
+    },
     { env },
   );
   if (legacyPin) {
