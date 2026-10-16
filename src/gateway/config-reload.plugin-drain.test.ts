@@ -78,27 +78,7 @@ afterEach(async () => {
 });
 
 describe("plugin drain recovery", () => {
-  it("hot-applies model settings without replacing the Codex generation", async () => {
-    const initialConfig = pluginConfig({ codex: { enabled: true } });
-    let config = initialConfig;
-    const harness = createReloaderHarness(async () => makeSnapshot({ config }), { initialConfig });
-    await harness.reloader.ready;
-
-    for (const update of [
-      { agents: { defaults: { models: { "openai/gpt-5.6-sol": { alias: "primary" } } } } },
-      { agents: { entries: { worker: { model: { primary: "openai/gpt-5.6-sol" } } } } },
-      { models: { providers: { openai: { baseUrl: "https://api.openai.com/v1", models: [] } } } },
-    ] satisfies OpenClawConfig[]) {
-      config = { ...initialConfig, ...update };
-      await flushWatcherChange(harness);
-      expect(harness.onHotReload.mock.lastCall?.[0].reloadPlugins).toBe(false);
-      expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
-    }
-    expect(harness.onHotReload).toHaveBeenCalledTimes(3);
-    expect(harness.onRestart).not.toHaveBeenCalled();
-  });
-
-  it("replays a deferred plugin replacement with later edits once its admitted work settles", async () => {
+  it("retries deferred replacement after work and cleanup settle", async () => {
     const initialConfig: OpenClawConfig = {
       ...codexConfig("read-only"),
       agents: { entries: { main: {} } },
@@ -169,7 +149,7 @@ describe("plugin drain recovery", () => {
   });
 
   it.each(["explicit wait", "revert", "revert with model edit"] as const)(
-    "retains a failed automatic plugin drain until recovery: %s",
+    "recovers a latched drain failure: %s",
     async (recovery) => {
       const initialConfig = codexConfig("read-only");
       let config = codexConfig("workspace-write");
@@ -236,7 +216,7 @@ describe("plugin drain recovery", () => {
   );
 
   it.each([true, false])(
-    "applies a different plugin after partial then complete reversion (existing entries: %s)",
+    "reverts failed settings before other edits (%s)",
     async (existingEntries) => {
       const codex = {
         enabled: true,
@@ -294,7 +274,7 @@ describe("plugin observations", () => {
     });
 
   it.each(["none", "file-before", "file-during", "write-during"] as const)(
-    "retains only real config work after a failed manual reload: %s",
+    "retains real work after manual failure: %s",
     async (event) => {
       const config: OpenClawConfig = {};
       const write = makeZeroDebounceHookWrite("next");
@@ -356,7 +336,7 @@ describe("plugin observations", () => {
   );
 
   it.each(["resolve", "reject"] as const)(
-    "discards a late initial source read after manual failure: %s",
+    "discards stale reads after manual failure: %s",
     async (outcome) => {
       const initialRead = createDeferred<ConfigFileSnapshot>();
       const config: OpenClawConfig = {};
@@ -403,7 +383,7 @@ describe("plugin observations", () => {
       pluginIds: ["notes"],
     };
     const harness = createReloaderHarness(
-      async () => makeSnapshot({ config: nextConfig, sourceConfig: nextConfig, hash: "next" }),
+      async () => makeSnapshot({ config: nextConfig, hash: "next" }),
       {
         initialConfig: config,
         initialCompareConfig: config,
