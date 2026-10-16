@@ -183,6 +183,13 @@ describe("subagent registry sqlite store", () => {
     await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
       const run = createRun({ model: "original-model" });
       const keys = [run.requesterSessionKey];
+      const readFull = async () =>
+        (await getSubagentRunsSnapshotForChildSession(new Map(), run.childSessionKey)).get(
+          run.runId,
+        );
+      const cached = () => getSubagentSessionListRunsSnapshotForSessions(new Map(), keys);
+      const persist = (record?: SubagentRunRecord) =>
+        persistRegistryFixture(new Map(record ? [[record.runId, record]] : []), [run.runId]);
       saveRuns(run);
       const now = Date.now();
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
@@ -191,20 +198,16 @@ describe("subagent registry sqlite store", () => {
       try {
         await prepareSubagentSessionListReadCache();
         queries.mockClear();
-        const first = getSubagentSessionListRunsSnapshotForSessions(new Map(), keys);
+        const first = cached();
         expect(first.size).toBe(1);
         expect(queries).not.toHaveBeenCalled();
-        expect(getSubagentSessionListRunsSnapshotForSessions(new Map(), keys)).toEqual(first);
+        expect(cached()).toEqual(first);
         expect(getSubagentSessionListRunsSnapshotForRead(new Map(), keys)).toEqual(first);
         expect(queries).not.toHaveBeenCalled();
 
         const replaced = { ...run, model: "updated-model" };
-        persistRegistryFixture(new Map([[run.runId, replaced]]), [run.runId]);
-        expect(
-          (await getSubagentRunsSnapshotForChildSession(new Map(), run.childSessionKey)).get(
-            run.runId,
-          ),
-        ).toMatchObject({
+        persist(replaced);
+        expect(await readFull()).toMatchObject({
           model: replaced.model,
           task: run.task,
           completion: run.completion,
@@ -212,7 +215,7 @@ describe("subagent registry sqlite store", () => {
         });
         queries.mockClear();
         clock.mockReturnValue(now + 60_000);
-        const refreshed = getSubagentSessionListRunsSnapshotForSessions(new Map(), keys);
+        const refreshed = cached();
         expect(refreshed.get(run.runId)?.model).toBe(replaced.model);
         expect(refreshed.get(run.runId)).not.toHaveProperty("task");
         expect(refreshed.get(run.runId)).not.toHaveProperty("completion");
@@ -228,17 +231,11 @@ describe("subagent registry sqlite store", () => {
         ).toBe(replaced.model);
 
         const published = { ...replaced, model: "published-model" };
-        persistRegistryFixture(new Map([[run.runId, published]]), [run.runId]);
-        expect(
-          getSubagentSessionListRunsSnapshotForSessions(new Map(), keys).get(run.runId)?.model,
-        ).toBe(published.model);
-        expect(
-          (await getSubagentRunsSnapshotForChildSession(new Map(), run.childSessionKey)).get(
-            run.runId,
-          )?.task,
-        ).toBe(run.task);
+        persist(published);
+        expect(cached().get(run.runId)?.model).toBe(published.model);
+        expect((await readFull())?.task).toBe(run.task);
         expect(loadSubagentRegistryFromSqlite().get(run.runId)?.model).toBe(published.model);
-        persistRegistryFixture(new Map(), [run.runId]);
+        persist();
         expect(getSubagentSessionListRunsSnapshotForRead(new Map(), keys).size).toBe(0);
         expect(
           (await getSubagentRunsSnapshotForChildSession(new Map(), run.childSessionKey)).size,
@@ -408,40 +405,20 @@ describe("subagent registry sqlite store", () => {
     },
   ])(
     "restores $name terminal reply in completion and pending delivery after restart",
-    async ({ name, terminalReply, resultText }) => {
-      const runId = `run-restart-${name}`;
+    async ({ terminalReply, resultText }) => {
+      const base = createRun();
       const run = createRun({
-        runId,
-        childSessionKey: `agent:main:subagent:${name}`,
-        completion: {
-          required: true,
-          resultText,
-          capturedAt: 260,
-          terminalReply,
-        },
+        completion: { ...base.completion!, resultText, terminalReply },
         delivery: {
           status: "pending",
-          createdAt: 270,
-          attemptCount: 0,
-          payload: {
-            requesterSessionKey: "agent:main:main",
-            requesterDisplayKey: "main",
-            childSessionKey: `agent:main:subagent:${name}`,
-            childRunId: runId,
-            task: "check terminal reply restart",
-            startedAt: 110,
-            endedAt: 250,
-            outcome: { status: "ok" },
-            expectsCompletionMessage: true,
-            terminalReply,
-          },
+          payload: { ...base.delivery!.payload!, terminalReply },
         },
       });
 
       saveRuns(run);
       closeOpenClawStateDatabaseForTest();
 
-      const restored = loadSubagentRegistryFromSqlite().get(runId);
+      const restored = loadSubagentRegistryFromSqlite().get(run.runId);
       expect(restored?.completion).toMatchObject({ terminalReply, resultText });
       expect(restored?.delivery).toMatchObject({
         status: "pending",
@@ -451,6 +428,16 @@ describe("subagent registry sqlite store", () => {
   );
 
   it("preserves legacy retained results until Doctor promotes canonical completion state", async () => {
+    const expectCanonical = (record: SubagentRunRecord | undefined) => {
+      expect(record?.completion).toMatchObject({
+        required: true,
+        resultText: "NO_REPLY",
+        fallbackResultText: "legacy retained result",
+      });
+      for (const field of ["frozenResultText", "fallbackFrozenResultText"]) {
+        expect(record?.delivery?.payload).not.toHaveProperty(field);
+      }
+    };
     const run = createRun({
       completion: { required: true, resultText: "NO_REPLY" },
       delivery: {
@@ -484,33 +471,19 @@ describe("subagent registry sqlite store", () => {
     closeOpenClawStateDatabaseForTest();
     expect(repairOpenClawStateDatabaseSchema().warnings).toEqual([]);
 
-    const restored = loadSubagentRegistryFromSqlite().get(run.runId);
-    expect(restored?.completion).toMatchObject({
-      resultText: "NO_REPLY",
-      fallbackResultText: "legacy retained result",
-    });
-    expect(restored?.delivery?.payload).not.toHaveProperty("frozenResultText");
-    expect(restored?.delivery?.payload).not.toHaveProperty("fallbackFrozenResultText");
-
+    expectCanonical(loadSubagentRegistryFromSqlite().get(run.runId));
     const stored = readPayload(run.runId) as { payload_json: string };
-    const storedPayload = JSON.parse(stored.payload_json) as SubagentRunRecord;
-    expect(storedPayload.completion).toMatchObject({
-      required: true,
-      resultText: "NO_REPLY",
-      fallbackResultText: "legacy retained result",
-    });
-    expect(storedPayload.delivery?.payload).not.toHaveProperty("frozenResultText");
-    expect(storedPayload.delivery?.payload).not.toHaveProperty("fallbackFrozenResultText");
-
+    expectCanonical(JSON.parse(stored.payload_json));
     closeOpenClawStateDatabaseForTest();
-    expect(loadSubagentRegistryFromSqlite().get(run.runId)?.completion).toMatchObject({
-      resultText: "NO_REPLY",
-      fallbackResultText: "legacy retained result",
-    });
+    expectCanonical(loadSubagentRegistryFromSqlite().get(run.runId));
   });
 
   it("loads a canonical lightweight session-list projection", async () => {
-    const run = createRun({
+    const projection = {
+      runId: "run-one",
+      childSessionKey: "agent:main:subagent:one",
+      requesterSessionKey: "agent:main:main",
+      createdAt: 100,
       childAgentId: "main",
       model: "openai/gpt-5.6",
       swarmRunId: "stable-collector",
@@ -520,32 +493,6 @@ describe("subagent registry sqlite store", () => {
       runTimeoutSeconds: 7_200,
       endedReason: "subagent-error",
       cleanupCompletedAt: 300,
-      execution: {
-        status: "terminal",
-        interruptionReason: "gateway-restart",
-        startedAt: 110,
-        endedAt: 250,
-        outcome: { status: "error", error: "full payload detail" },
-      },
-      delivery: {
-        status: "suspended",
-        disposition: "intentional_non_delivery",
-        suspendedAt: 275,
-        suspendedReason: "expiry",
-      },
-      task: "x".repeat(8_192),
-    });
-    saveRuns(run);
-
-    expect(readCompact().get(run.runId)).toEqual({
-      runId: run.runId,
-      swarmRunId: "stable-collector",
-      childSessionKey: run.childSessionKey,
-      childAgentId: "main",
-      requesterSessionKey: run.requesterSessionKey,
-      model: "openai/gpt-5.6",
-      generation: 3,
-      createdAt: 100,
       execution: {
         status: "terminal",
         interruptionReason: "gateway-restart",
@@ -553,96 +500,88 @@ describe("subagent registry sqlite store", () => {
         endedAt: 250,
         outcome: { status: "error" },
       },
-      sessionStartedAt: 105,
-      accumulatedRuntimeMs: 90,
-      runTimeoutSeconds: 7_200,
-      endedReason: "subagent-error",
-      cleanupCompletedAt: 300,
       delivery: {
         status: "suspended",
         disposition: "intentional_non_delivery",
         suspendedAt: 275,
       },
+    } as const;
+    const run = createRun({
+      ...projection,
+      execution: {
+        ...projection.execution,
+        outcome: { status: "error", error: "full payload detail" },
+      },
+      delivery: { ...projection.delivery, suspendedReason: "expiry" },
+      task: "x".repeat(8_192),
     });
+    saveRuns(run);
+    expect(readCompact().get(run.runId)).toEqual(projection);
   });
 
-  it.each([{ first: "terminal", last: "invalid", admitted: false }])(
-    "uses the last duplicate JSON key: $first then $last",
-    ({ first, last, admitted }) => {
-      for (const completionTarget of [undefined, "parent"] as const) {
-        const run = createRun({ completionTarget });
-        saveRuns(run);
-        const original = bindSubagentRunRecord(run).payload_json;
-        const payload = original
-          .replace('"execution":{', `"execution":{"status":"${first}"},"execution":{`)
-          .replace('"status":"terminal","startedAt"', `"status":"${last}","startedAt"`);
-        writePayload(run.runId, payload);
-        expect(loadSubagentRegistryFromSqlite().has(run.runId), "canonical row eligibility").toBe(
-          admitted,
-        );
-        expect(readCompact().has(run.runId), "compact row eligibility").toBe(admitted);
-      }
-    },
-  );
-
-  it.each(["parent"] as const)(
-    "omits retained bodies from every duplicate envelope (completion target: %s)",
-    (completionTarget) => {
-      const marker = "retained-duplicate-body:" + "x".repeat(2_048);
-      const run = createRun({
-        completionTarget,
-        task: marker,
-        execution: { status: "terminal", outcome: { status: "ok", error: marker } },
-        completion: { required: true, resultText: marker },
-        delivery: { status: "pending", lastError: marker },
-      });
+  it("uses the last duplicate JSON key: terminal then invalid", () => {
+    for (const completionTarget of [undefined, "parent"] as const) {
+      const run = createRun({ completionTarget });
       saveRuns(run);
-      let payload = bindSubagentRunRecord(run)
-        .payload_json.replace('"execution":', '"execution":{"status":"invalid"},"execution":')
-        .replace('"completion":', '"completion":{"required":false},"completion":')
-        .replace('"delivery":', '"delivery":{"status":"failed"},"delivery":');
-      if (completionTarget === "parent") {
-        payload = payload.replace(
-          '"parentCompletion":',
-          '"parentCompletion":{"completionTarget":"parent"},"parentCompletion":',
-        );
-      }
+      const original = bindSubagentRunRecord(run).payload_json;
+      const payload = original
+        .replace('"execution":{', '"execution":{"status":"terminal"},"execution":{')
+        .replace('"status":"terminal","startedAt"', '"status":"invalid","startedAt"');
       writePayload(run.runId, payload);
-      expect(loadSubagentRegistryFromSqlite().get(run.runId)).toMatchObject({
+      expect(loadSubagentRegistryFromSqlite().has(run.runId), "canonical row eligibility").toBe(
+        false,
+      );
+      expect(readCompact().has(run.runId), "compact row eligibility").toBe(false);
+    }
+  });
+
+  it("omits retained bodies from every duplicate parent envelope", () => {
+    const marker = "retained-duplicate-body:" + "x".repeat(2_048);
+    const run = createRun({
+      completionTarget: "parent",
+      task: marker,
+      execution: { status: "terminal", outcome: { status: "ok", error: marker } },
+      completion: { required: true, resultText: marker },
+      delivery: { status: "pending", lastError: marker },
+    });
+    saveRuns(run);
+    const payload = bindSubagentRunRecord(run)
+      .payload_json.replace('"execution":', '"execution":{"status":"invalid"},"execution":')
+      .replace('"completion":', '"completion":{"required":false},"completion":')
+      .replace('"delivery":', '"delivery":{"status":"failed"},"delivery":')
+      .replace(
+        '"parentCompletion":',
+        '"parentCompletion":{"completionTarget":"parent"},"parentCompletion":',
+      );
+    writePayload(run.runId, payload);
+    expect(loadSubagentRegistryFromSqlite().get(run.runId)).toMatchObject({
+      execution: { status: "terminal" },
+      delivery: { status: "pending" },
+    });
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      expect(readCompact().get(run.runId)).toMatchObject({
         execution: { status: "terminal" },
         delivery: { status: "pending" },
       });
-      const parse = vi.spyOn(JSON, "parse");
-      try {
-        expect(readCompact().get(run.runId)).toMatchObject({
-          execution: { status: "terminal" },
-          delivery: { status: "pending" },
-        });
-        expect(parse.mock.calls.some(([text]) => text.includes("retained-duplicate-body:"))).toBe(
-          false,
-        );
-      } finally {
-        parse.mockRestore();
-      }
-      expect(readPayload(run.runId)?.payload_json).toBe(payload);
-    },
-  );
+      expect(parse.mock.calls.some(([text]) => text.includes("retained-duplicate-body:"))).toBe(
+        false,
+      );
+    } finally {
+      parse.mockRestore();
+    }
+    expect(readPayload(run.runId)?.payload_json).toBe(payload);
+  });
 
-  it.each(["parent"] as const)(
-    "retains yielded pause reason in cold compact reads (completion target: %s)",
-    (completionTarget) => {
-      const run = createRun({ pauseReason: "sessions_yield", completionTarget });
-      saveRuns(run);
-      closeOpenClawStateDatabaseForTest();
+  it("retains yielded pause reason in cold compact parent reads", () => {
+    const run = createRun({ pauseReason: "sessions_yield", completionTarget: "parent" });
+    saveRuns(run);
+    closeOpenClawStateDatabaseForTest();
 
-      const compact = loadSubagentSessionListRunsFromSqlite(
-        undefined,
-        openOpenClawStateDatabase(),
-      ).get(run.runId);
-      expect(compact?.pauseReason).toBe("sessions_yield");
-      expect(resolveSubagentDisplayStatus(compact!)).toBe("waiting for external continuation");
-    },
-  );
+    const compact = readCompact().get(run.runId);
+    expect(compact?.pauseReason).toBe("sessions_yield");
+    expect(resolveSubagentDisplayStatus(compact!)).toBe("waiting for external continuation");
+  });
 
   it("rejects writes outside the canonical nested state", async () => {
     const missingState = createRun({ execution: undefined });
