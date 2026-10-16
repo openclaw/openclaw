@@ -6,6 +6,11 @@ let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
 let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
 
 const TEST_CFG = {};
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
 
 const mockState = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
@@ -98,15 +103,24 @@ async function createMattermostProviderFailure(
 ): Promise<Error> {
   const { createMattermostClient } =
     await vi.importActual<typeof import("./client.js")>("./client.js");
+  fetchWithSsrFGuardMock.mockImplementationOnce(
+    async (
+      params: Parameters<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>[0],
+    ) => {
+      params.beforeRequest?.();
+      return {
+        response: new Response(JSON.stringify({ message }), {
+          status,
+          statusText,
+          headers: { "content-type": "application/json" },
+        }),
+        release: async () => {},
+      };
+    },
+  );
   const client = createMattermostClient({
     baseUrl: "https://mattermost.example.com",
     botToken: "test-bot-token",
-    fetchImpl: async () =>
-      new Response(JSON.stringify({ message }), {
-        status,
-        statusText,
-        headers: { "content-type": "application/json" },
-      }),
   });
   try {
     await client.request("/teams/team-first/channels/name/release-alerts");
