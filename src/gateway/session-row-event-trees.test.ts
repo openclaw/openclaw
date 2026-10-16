@@ -10,6 +10,7 @@ import {
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -28,7 +29,7 @@ import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscript
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { rolePolicyConfig } from "./session-sharing.test-utils.js";
+import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 type TreeEventPayload = {
@@ -66,20 +67,9 @@ it.each(["sessions.list", "sessions.subscribe"])(
       const peers = ["reader", "other"].map((connId) => {
         const send = vi.fn();
         const client = {
+          ...sharingPolicyClient({ scopes: ["operator.admin"] }),
           connId,
           usesSharedGatewayAuth: false,
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            client: {
-              id: "openclaw-control-ui",
-              version: "test",
-              platform: "test",
-              mode: "webchat",
-            },
-            role: "operator",
-            scopes: ["operator.admin"],
-          },
           socket: {
             readyState: WebSocket.OPEN,
             bufferedAmount: 0,
@@ -191,21 +181,23 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
     const parent = "agent:main:parent";
     const child = "agent:main:subagent:child";
     const creator = { type: "human" as const, source: "profile" as const, id: profiles[0]!.id };
-    for (const [key, parentSessionKey, visibility] of [
-      [root, undefined, "shared"],
-      [parent, root, "draft"],
-      [child, parent, "shared"],
-    ] as const) {
+    const writeRow = (key: string, fields: Partial<InternalSessionEntry>) =>
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: key },
         {
           sessionId: key,
           updatedAt: now - 100,
           createdActor: creator,
-          parentSessionKey,
-          visibility,
+          visibility: "shared",
+          ...fields,
         },
       );
+    for (const [key, parentSessionKey, visibility] of [
+      [root, undefined, "shared"],
+      [parent, root, "draft"],
+      [child, parent, "shared"],
+    ] as const) {
+      writeRow(key, { parentSessionKey, visibility });
     }
     const connection = createGatewayConnectionState({
       scheduler: createTestGatewayScheduler(),
@@ -468,18 +460,8 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
       expect(peers[0]!.ancestors.get(root)!.ancestorRevision).not.toBe(revisionBeforeDelete);
 
       // Corrupt lineage must not amplify one child update or loop indefinitely.
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: root },
-        {
-          sessionId: root,
-          updatedAt: now - 100,
-          createdActor: creator,
-          visibility: "shared",
-          parentSessionKey: child,
-        },
-      );
-      emitSessionsChanged(context, { sessionKey: child, reason: "patch" });
-      await flushPendingSessionsChangedEvents(context);
+      writeRow(root, { parentSessionKey: child });
+      await publishChild();
       const cyclicPayload = payloadFor(peers[0]!);
       expect(
         [
@@ -489,21 +471,9 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
       ).toEqual(expect.arrayContaining([root, parent]));
       await assertListParity(peers[0]!);
 
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: root },
-        {
-          sessionId: root,
-          updatedAt: now - 100,
-          createdActor: creator,
-          visibility: "shared",
-          parentSessionKey: "agent:main:missing-intermediary",
-        },
-      );
-      emitSessionsChanged(context, { sessionKey: child, reason: "patch" });
-      await flushPendingSessionsChangedEvents(context);
-      expect(JSON.parse(peers[0]!.send.mock.lastCall![0]).payload).not.toHaveProperty(
-        "ancestorSessions",
-      );
+      writeRow(root, { parentSessionKey: "agent:main:missing-intermediary" });
+      await publishChild();
+      expect(payloadFor(peers[0]!)).not.toHaveProperty("ancestorSessions");
       expect(payloadFor(peers[0]!)).not.toHaveProperty("ancestorSessionRefs");
 
       // An oversized chain retains the child snapshot but never certifies a partial bundle.
@@ -512,19 +482,9 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
         ...Array.from({ length: 64 }, (_, index) => `agent:main:ancestor-${index}`),
       ];
       for (const [index, key] of chain.entries()) {
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: key },
-          {
-            sessionId: key,
-            updatedAt: now - 100,
-            createdActor: creator,
-            visibility: "shared",
-            parentSessionKey: chain[index + 1],
-          },
-        );
+        writeRow(key, { parentSessionKey: chain[index + 1] });
       }
-      emitSessionsChanged(context, { sessionKey: child, reason: "patch" });
-      await flushPendingSessionsChangedEvents(context);
+      await publishChild();
       for (const peer of peers) {
         const payload = JSON.parse(peer.send.mock.lastCall![0]).payload;
         expect(payload.session.key).toBe(child);

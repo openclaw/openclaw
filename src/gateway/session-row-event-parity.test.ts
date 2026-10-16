@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -44,44 +45,34 @@ it("delivers nested event rows identical to the full list for each viewer and cl
     const controller = "agent:main:unloaded-controller";
     const navigationParent = "agent:main:unloaded-navigation";
     const creator = { type: "human" as const, source: "profile" as const, id: profiles[0]!.id };
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: key },
-      {
-        sessionId: "parent-session",
-        updatedAt: now - 100,
-        status: "done",
-        visibility: "shared",
-        createdActor: creator,
-        agentHarnessId: "codex",
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        label: "Parent",
-        startedAt: now - 100,
-      },
-    );
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: childKey },
-      {
-        sessionId: "child-session",
-        updatedAt: now - 50,
-        visibility: "draft",
-        createdActor: creator,
-        parentSessionKey: key,
-      },
-    );
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: lineageKey },
-      {
-        sessionId: "lineage-session",
-        updatedAt: now - 100,
-        endedAt: now - 100,
-        status: "done",
-        visibility: "shared",
-        createdActor: creator,
-        spawnedBy: controller,
-        parentSessionKey: navigationParent,
-      },
-    );
+    const writeRow = (
+      sessionKey: string,
+      sessionId: string,
+      fields: Partial<InternalSessionEntry>,
+    ) =>
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId, updatedAt: now - 100, createdActor: creator, visibility: "shared", ...fields },
+      );
+    writeRow(key, "parent-session", {
+      status: "done",
+      agentHarnessId: "codex",
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      label: "Parent",
+      startedAt: now - 100,
+    });
+    writeRow(childKey, "child-session", {
+      updatedAt: now - 50,
+      visibility: "draft",
+      parentSessionKey: key,
+    });
+    writeRow(lineageKey, "lineage-session", {
+      endedAt: now - 100,
+      status: "done",
+      spawnedBy: controller,
+      parentSessionKey: navigationParent,
+    });
     const connection = createGatewayConnectionState({
       scheduler: createTestGatewayScheduler(),
       bootId: "row-parity",
@@ -137,11 +128,7 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       const exec = vi.spyOn(DatabaseSync.prototype, "exec");
       const expected = await Promise.all(
         peers.map(async ({ client }) => {
-          const result = await listSessions({
-            client,
-            context,
-            request,
-          });
+          const result = await listSessions({ client, context, request });
           return result.sessions.find((row) => row.key === key)!;
         }),
       );
