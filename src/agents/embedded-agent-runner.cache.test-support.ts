@@ -39,12 +39,10 @@ export function buildEmbeddedCachePrompt(suffix: string, sections = 48): string 
   return lines.join("\n");
 }
 
-function resolveProviderBaseUrl(model: LiveResolvedModel["model"]): string | undefined {
-  const candidate = model.baseUrl;
-  return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : undefined;
-}
-
-function resolveDefaultProviderBaseUrl(model: LiveResolvedModel["model"]): string {
+function resolveProviderBaseUrl(model: LiveResolvedModel["model"]): string {
+  if (typeof model.baseUrl === "string" && model.baseUrl.trim().length > 0) {
+    return model.baseUrl;
+  }
   if (model.provider === "anthropic") {
     return "https://api.anthropic.com/v1";
   }
@@ -54,21 +52,13 @@ function resolveDefaultProviderBaseUrl(model: LiveResolvedModel["model"]): strin
   return "https://example.invalid/v1";
 }
 
+const positiveInteger = (value: unknown, fallback: number) =>
+  typeof value === "number" && Number.isFinite(value) ? Math.max(1, Math.trunc(value)) : fallback;
+
 function buildEmbeddedModelDefinition(model: LiveResolvedModel["model"]) {
   // Live model discovery can return partial metadata; embedded runner tests need
   // a complete config model definition.
-  const contextWindowCandidate = model.contextWindow;
-  const maxTokensCandidate = model.maxTokens;
-  const reasoningCandidate = model.reasoning;
-  const inputCandidate = model.input;
-  const contextWindow =
-    typeof contextWindowCandidate === "number" && Number.isFinite(contextWindowCandidate)
-      ? Math.max(1, Math.trunc(contextWindowCandidate))
-      : 128_000;
-  const maxTokens =
-    typeof maxTokensCandidate === "number" && Number.isFinite(maxTokensCandidate)
-      ? Math.max(1, Math.trunc(maxTokensCandidate))
-      : 8_192;
+  const { input: inputCandidate, reasoning } = model;
   const input: Array<"text" | "image"> =
     Array.isArray(inputCandidate) &&
     inputCandidate.every((value) => value === "text" || value === "image")
@@ -78,11 +68,11 @@ function buildEmbeddedModelDefinition(model: LiveResolvedModel["model"]) {
     id: model.id,
     name: model.id,
     api: resolveEmbeddedModelApi(model),
-    reasoning: typeof reasoningCandidate === "boolean" ? reasoningCandidate : false,
+    reasoning: typeof reasoning === "boolean" ? reasoning : false,
     input,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
-    maxTokens,
+    contextWindow: positiveInteger(model.contextWindow, 128_000),
+    maxTokens: positiveInteger(model.maxTokens, 8_192),
   };
 }
 
@@ -109,8 +99,6 @@ export function normalizeLiveUsage(
   }
   const input = usage.input ?? 0;
   const output = usage.output ?? 0;
-  const cacheRead = usage.cacheRead ?? 0;
-  const cacheWrite = usage.cacheWrite ?? 0;
   const totalTokens =
     "totalTokens" in usage && typeof usage.totalTokens === "number"
       ? usage.totalTokens
@@ -124,8 +112,8 @@ export function normalizeLiveUsage(
   return {
     input,
     output,
-    cacheRead,
-    cacheWrite,
+    cacheRead: usage.cacheRead ?? 0,
+    cacheWrite: usage.cacheWrite ?? 0,
     totalTokens,
     cost,
   };
@@ -142,8 +130,6 @@ export function buildEmbeddedRunnerConfig(
 ): OpenClawConfig {
   const provider = params.model.provider;
   const modelKey = `${provider}/${params.model.id}`;
-  const providerBaseUrl =
-    resolveProviderBaseUrl(params.model) ?? resolveDefaultProviderBaseUrl(params.model);
   return {
     models: {
       providers: {
@@ -151,7 +137,7 @@ export function buildEmbeddedRunnerConfig(
           api: resolveEmbeddedModelApi(params.model),
           auth: "api-key",
           apiKey: params.apiKey,
-          baseUrl: providerBaseUrl,
+          baseUrl: resolveProviderBaseUrl(params.model),
           models: [buildEmbeddedModelDefinition(params.model)],
         },
       },

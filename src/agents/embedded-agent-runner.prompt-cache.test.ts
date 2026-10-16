@@ -141,6 +141,13 @@ function responseFor(
       },
     ];
   } else {
+    const message = (value: string) => ({
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: value, annotations: [] }],
+      status: "completed",
+      id: `msg_${id}`,
+    });
     const items: Array<Record<string, unknown>> = tool
       ? calls.map((call) =>
           Object.assign(
@@ -154,23 +161,9 @@ function responseFor(
             failure ? { async: true } : {},
           ),
         )
-      : [
-          {
-            type: "message",
-            role: "assistant",
-            content: [{ type: "output_text", text, annotations: [] }],
-            status: "completed",
-            id: `msg_${id}`,
-          },
-        ];
+      : [message(text)];
     if (failure) {
-      items.push({
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: FAILED_ASSISTANT_TEXT, annotations: [] }],
-        status: "completed",
-        id: `msg_${id}`,
-      });
+      items.push(message(FAILED_ASSISTANT_TEXT));
     }
     output = items;
     events = [
@@ -602,12 +595,7 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                   agentId: "main",
                   sessionId,
                   sessionKey,
-                  sessionTarget: {
-                    agentId: "main",
-                    sessionId,
-                    sessionKey,
-                    storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
-                  },
+                  sessionTarget: target,
                   agentDir: state.agentDir(),
                   workspaceDir: state.workspaceDir,
                   config,
@@ -706,14 +694,9 @@ describe("provider prefix across admitted Gateway agent turns", () => {
               "raw user envelope capture reached the request observer",
             ).toBeGreaterThan(0);
             const firstPrefix = requests[0]!.prefix.history.join("");
-            expect(
-              firstPrefix.includes("hook before"),
-              "plugin prepend hook reached provider",
-            ).toBe(true);
-            expect(firstPrefix.includes("hook after"), "plugin append hook reached provider").toBe(
-              true,
-            );
-            expect(firstPrefix.includes(PNG), "image reached provider").toBe(true);
+            expect(firstPrefix, "plugin prepend hook reached provider").toContain("hook before");
+            expect(firstPrefix, "plugin append hook reached provider").toContain("hook after");
+            expect(firstPrefix, "image reached provider").toContain(PNG);
             expect(
               requests
                 .find((request) => request.turn === 2)!

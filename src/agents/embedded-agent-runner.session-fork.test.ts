@@ -494,6 +494,8 @@ function assistant(content: AssistantMessage["content"]): AssistantMessage {
 
 it("forks the canonical completed async tool fragments and outcomes in order", async () => {
   const payloads: unknown[] = [];
+  const reviewFork = (question: string) =>
+    runEmbeddedSessionFork({ ...loopIdentity, model: loopModel, question, assertCurrent() {} });
   const ready = createDeferredCore();
   const resultPublished = createDeferredCore();
   const parentResponse = createAssistantMessageEventStream();
@@ -566,14 +568,7 @@ it("forks the canonical completed async tool fragments and outcomes in order", a
     parentResponse.end();
     await run;
     await subscription.waitForPendingEvents();
-    await expect(
-      runEmbeddedSessionFork({
-        ...loopIdentity,
-        model: loopModel,
-        question: "Review completed turn",
-        assertCurrent() {},
-      }),
-    ).resolves.toBe("Review answer");
+    await expect(reviewFork("Review completed turn")).resolves.toBe("Review answer");
     expect(payloads.at(-1)).toEqual({
       input: [
         expect.objectContaining({
@@ -598,14 +593,7 @@ it("forks the canonical completed async tool fragments and outcomes in order", a
     });
     cleanupSessionResources(loopIdentity.sessionId);
     emit({ type: "message_end", message: assistant([{ type: "text", text: "OLD_RUN" }]) });
-    await expect(
-      runEmbeddedSessionFork({
-        ...loopIdentity,
-        model: loopModel,
-        question: "After reset",
-        assertCurrent() {},
-      }),
-    ).rejects.toThrow("requires a parent turn");
+    await expect(reviewFork("After reset")).rejects.toThrow("requires a parent turn");
     const nextParent = wrapStreamFnWithSessionFork(transport, {
       ...loopIdentity,
       runId: "replacement-run",
@@ -616,12 +604,7 @@ it("forks the canonical completed async tool fragments and outcomes in order", a
       {},
     );
     emit({ type: "message_end", message: assistant([{ type: "text", text: "OLD_RUN" }]) });
-    await runEmbeddedSessionFork({
-      ...loopIdentity,
-      model: loopModel,
-      question: "Review replacement",
-      assertCurrent() {},
-    });
+    await reviewFork("Review replacement");
     expect(payloads.at(-1)).toEqual({
       input: [
         { role: "user", content: "Replacement parent", timestamp: 2 },
