@@ -12,6 +12,7 @@ import {
   openOpenClawAgentDatabaseReadOnly,
   withOpenClawAgentDatabaseReadOnly,
 } from "../../state/openclaw-agent-db-readonly.js";
+import { withOpenClawAgentDatabaseWrite } from "../../state/openclaw-agent-db-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
@@ -29,6 +30,8 @@ import {
 import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
+import type { SessionMaintenanceMetadataResult } from "./session-accessor.sqlite-lifecycle-types.js";
+import { runSessionEntryWorkerMutation } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   measureSessionSchemaProbes,
   measureSqliteSchemaProbes,
@@ -156,24 +159,58 @@ it("refreshes admitted session readers after worker commits without schema or fr
       mainKey: "main",
       statements: 0,
     });
-    runOpenClawAgentWriteTransaction((database) => {
-      setCanonicalSqliteSessionMainKey(database, "intermediate");
-      setCanonicalSqliteSessionMainKey(database, "configured");
-      expect(readCanonicalSessionMainKey(database)).toBe("configured");
-      expect(readCanonicalSessionMainKey(reader.database)).toBe("main");
-    }, options);
+    let fixtureWriteStarted = false;
+    let configured: Promise<void> | undefined;
+    await runSessionEntryWorkerMutation<SessionMaintenanceMetadataResult>(
+      { ...options, path: writer.path },
+      undefined,
+      () => {},
+      (maintenance) =>
+        maintenance.execute({
+          type: "session.maintenance.metadata",
+          input: { kind: "maintenance-statistics" },
+        }),
+      {
+        identityAgentId: options.agentId,
+        beforeCommit() {
+          // The real maintenance connection holds SQLite until this grant returns.
+          configured = withOpenClawAgentDatabaseWrite(
+            options,
+            () => {
+              fixtureWriteStarted = true;
+              runOpenClawAgentWriteTransaction((database) => {
+                setCanonicalSqliteSessionMainKey(database, "intermediate");
+                setCanonicalSqliteSessionMainKey(database, "configured");
+                expect(readCanonicalSessionMainKey(database)).toBe("configured");
+                expect(readCanonicalSessionMainKey(reader.database)).toBe("main");
+              }, options);
+            },
+            writer.db,
+          );
+          expect(fixtureWriteStarted).toBe(false);
+        },
+      },
+    );
+    await configured;
+    expect(fixtureWriteStarted).toBe(true);
     expect(readCanonicalSessionMainKey(reader.database)).toBe("configured");
     expect(await worker.execute({ type: "mainKey", input: undefined })).toEqual({
       mainKey: "configured",
       statements: 0,
     });
-    expect(() =>
-      runOpenClawAgentWriteTransaction((database) => {
-        setCanonicalSqliteSessionMainKey(database, "abandoned");
-        expect(readCanonicalSessionMainKey(database)).toBe("abandoned");
-        throw new Error("rollback main key");
-      }, options),
-    ).toThrow("rollback main key");
+    await withOpenClawAgentDatabaseWrite(
+      options,
+      () => {
+        expect(() =>
+          runOpenClawAgentWriteTransaction((database) => {
+            setCanonicalSqliteSessionMainKey(database, "abandoned");
+            expect(readCanonicalSessionMainKey(database)).toBe("abandoned");
+            throw new Error("rollback main key");
+          }, options),
+        ).toThrow("rollback main key");
+      },
+      writer.db,
+    );
     expect((await worker.execute({ type: "mainKey", input: undefined })).mainKey).toBe(
       "configured",
     );
@@ -225,11 +262,16 @@ it("refreshes admitted session readers after worker commits without schema or fr
       });
       try {
         expect(read()?.sessionId).toBe("probe");
-        writeSessionEntry(writer, "agent:main:probe", {
-          sessionId: "probe",
-          updatedAt: 1,
-          label: "current",
-        });
+        await withOpenClawAgentDatabaseWrite(
+          options,
+          (database) =>
+            writeSessionEntry(database, "agent:main:probe", {
+              sessionId: "probe",
+              updatedAt: 1,
+              label: "current",
+            }),
+          writer.db,
+        );
         expect(publications).toEqual([
           {
             prepared: expect.objectContaining({
