@@ -114,7 +114,16 @@ export function resolveToolSearchCatalogTool(
   return matches.length === 1 ? (matches[0]?.tool as AnyAgentTool | undefined) : undefined;
 }
 
-function compactDirectoryDescription(normalized: string, maxChars: number): string {
+function compactDirectoryDescription(description: string, maxChars: number): string {
+  // Collapsing whitespace only shrinks text, so a normalized raw window longer than the
+  // limit already proves truncation without normalizing the whole description.
+  const window = description.slice(0, maxChars * 4);
+  let normalized = window.replace(/\s+/g, " ").trimStart();
+  if (window.length === description.length) {
+    normalized = normalized.trimEnd();
+  } else if (normalized.length <= maxChars + 1) {
+    normalized = description.replace(/\s+/g, " ").trim();
+  }
   if (normalized.length <= maxChars) {
     return normalized;
   }
@@ -128,10 +137,7 @@ function formatToolDirectoryIdentifier(value: string | undefined): string | unde
 
 type ToolDirectoryRow = { label: string; description: string };
 
-function prepareToolDirectoryRow(
-  entry: ToolSearchCatalogEntry,
-  withDescription: boolean,
-): ToolDirectoryRow | undefined {
+function prepareToolDirectoryRow(entry: ToolSearchCatalogEntry): ToolDirectoryRow | undefined {
   if (entry.source !== "openclaw") {
     return undefined;
   }
@@ -142,8 +148,7 @@ function prepareToolDirectoryRow(
   const ownerName = formatToolDirectoryIdentifier(entry.sourceName);
   return {
     label: `- ${name}${ownerName ? ` (${ownerName})` : ""}`,
-    // Normalize once; shrinking passes only re-truncate.
-    description: withDescription ? entry.description.replace(/\s+/g, " ").trim() : "",
+    description: entry.description,
   };
 }
 
@@ -178,7 +183,7 @@ function formatToolSearchCatalogDirectory(
         (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
     );
   const rows = listedEntries
-    .map((entry) => prepareToolDirectoryRow(entry, initialDescriptionMaxChars > 0))
+    .map(prepareToolDirectoryRow)
     .filter((row): row is ToolDirectoryRow => row !== undefined);
   let descriptionMaxChars = initialDescriptionMaxChars;
   const renderRows = () => rows.map((row) => formatToolDirectoryRow(row, descriptionMaxChars));
